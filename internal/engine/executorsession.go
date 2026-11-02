@@ -61,6 +61,22 @@ func (k executorKeep) Policy(ctx context.Context) (sandbox.SessionPolicy, error)
 	return k.engine.executorPolicy(ctx)
 }
 
+// Keeps is whether the revision this node runs keeps sessions, read off the
+// company it holds with no round trip ([sandbox.SessionKeep.Keeps]): the hint
+// that spares a launch its sealing, and a loss its read of another host's box,
+// where nothing would be kept. A node with no object store keeps nothing, as
+// [executorKeep.Policy] says; the take itself asks Policy, the fleet's word.
+func (k executorKeep) Keeps() bool {
+	if k.engine.Objects() == nil {
+		return false
+	}
+	c := k.engine.Company()
+	if c == nil || c.Config == nil {
+		return true
+	}
+	return c.Config.TurnEngine.ConversationSession.KeepsSessions()
+}
+
 // executorPolicy is `turn_engine.conversation_session`'s switch and per-seat
 // budget, as the revision the fleet's activation pointer names states them
 // ([Engine.fleetCompany]), or why this node cannot know them.

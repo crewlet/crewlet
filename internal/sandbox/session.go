@@ -98,8 +98,11 @@ import (
 // # The switch
 //
 // `turn_engine.conversation_session.enabled: false` keeps nothing — no capture
-// is taken or stamped — and still records every end, which is the account and
-// not the session ([SessionPolicy.Keep]).
+// is taken or stamped ([SessionPolicy.Keep], the fleet's word) — and prepares
+// nothing for one: no launch seals what it handed its box, and no loss asks
+// another node's host to read a box, holding the seat's mail for a take that
+// would keep nothing ([Coordinator.capturing], this node's word). It still
+// records every end, which is the account and not the session.
 
 // SessionWrites is the executor log's writes a coordinator records through: the
 // estate router's (internal/estate's ExecutorWrites), so a node without `data`
@@ -118,6 +121,14 @@ type SessionKeep interface {
 	// cannot know — every node applies the budget a capture carries, so no
 	// node's own revision may decide it.
 	Policy(ctx context.Context) (SessionPolicy, error)
+
+	// Keeps is whether the revision THIS NODE runs keeps sessions: a hint,
+	// read without a round trip, for the steps that only prepare a capture —
+	// sealing what a launch handed its box, asking another node's host to
+	// read a lost run's box — so a company that keeps none costs a launch
+	// and a loss nothing for one. Never the word: a take keeps nothing until
+	// Policy says so ([Coordinator.capturing]).
+	Keeps() bool
 
 	// SealHanded seals the secrets a launch handed its box, encoded
 	// ([HandedSecrets]), for the run's row, bound to its turn
@@ -425,8 +436,9 @@ type spooledCapture struct {
 	file  string
 }
 
-// spoolPrefix names this package's spools in the node's temporary directory, so
-// a spool a crash left behind is found again ([Coordinator.sweepSpools]).
+// spoolPrefix names this package's spools in the node's spool directory
+// ([CoordinatorOptions.SpoolDir]), so a spool a crash left behind is found
+// again ([Coordinator.sweepSpools]).
 const spoolPrefix = "crewlet-session-"
 
 // takeCapture takes the session of run's job out of box — see the file comment
@@ -442,7 +454,7 @@ const spoolPrefix = "crewlet-session-"
 func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	at capturePoint) (*spooledCapture, *SessionKept) {
 
-	if c.sessions == nil || c.keep == nil {
+	if !c.keepsSessions() {
 		return nil, nil
 	}
 	taker, ok := runner.(SessionTaker)
@@ -450,7 +462,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	c.sweepSpools()
-	ctx, cancel := c.takeContext(ctx)
+	ctx, cancel, by := c.takeContext(ctx)
 	defer cancel()
 	// THE ROW AS IT STANDS, for the ordinals, what the job was handed and
 	// what it had been told: the reader's copy may be the claim's, from
@@ -483,20 +495,20 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	policy, err := c.keep.Policy(ctx)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, fmt.Sprintf("the company's session policy "+
-			"could not be read off the revision the fleet runs: %v", err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, fmt.Sprintf("the company's session "+
+			"policy could not be read off the revision the fleet runs: %v", err))
 	}
 	if !policy.Keep {
 		return nil, nil
 	}
 	scrub, err := c.scrubValues(ctx, current, box)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, err.Error())
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, err.Error())
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executordomain.SessionMaxBytes})
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, takeRefusal(ctx, err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, takeRefusal(ctx, err))
 	}
 	if taken.Body == nil {
 		return nil, nil
@@ -511,7 +523,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	stampCtx, stampCancel := detached(ctx)
+	stampCtx, stampCancel := stampContext(ctx, by)
 	took, stampErr := c.pending.StampCapture(stampCtx, run.TurnID, stamp)
 	stampCancel()
 	if stampErr != nil || !took {
@@ -525,9 +537,9 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken)
 	if err != nil {
-		return nil, c.finishCapture(ctx, run, stamp, CaptureRefused, takeRefusal(ctx, err))
+		return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 	}
-	digestCtx, digestCancel := detached(ctx)
+	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
 	digestCancel()
 	if keepErr != nil {
@@ -543,17 +555,43 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
 }
 
-// takeContext is the context a take runs under: its own budget
-// ([SessionTakeBudget]), and never past where the read it is part of must stop
-// to leave its pause and its answer their room ([discardGrace]) — so a take cut
-// short never costs the box its pause, which is what stops a job its turn's cap
-// ended.
-func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// takeContext is the context a take runs under, and the instant by which its
+// own records must be made: its own budget ([SessionTakeBudget]), and never
+// past where the read it is part of must stop to leave those records their
+// room — the stamp of what came of it, the digest it leaves in the box
+// ([stampContext]) — and after them its pause and its answer theirs
+// ([discardGrace] each). So nothing a take does, cut short or not, costs the
+// box its pause, which is what stops a job its turn's cap ended. by is zero
+// where the read has no deadline.
+func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)
-	if d, ok := ctx.Deadline(); ok && d.Add(-discardGrace).Before(deadline) {
-		deadline = d.Add(-discardGrace)
+	var by time.Time
+	if d, ok := ctx.Deadline(); ok {
+		by = d.Add(-discardGrace)
+		if last := by.Add(-discardGrace); last.Before(deadline) {
+			deadline = last
+		}
 	}
-	return context.WithDeadline(ctx, deadline)
+	take, cancel := context.WithDeadline(ctx, deadline)
+	return take, cancel, by
+}
+
+// stampContext is the context one of a take's own records is made under —
+// a stamp of the capture, the digest of its archive left in the box: one of
+// its own ([detached]), since the take's budget may be what ended the take and
+// the stamp is what says so, and never past by, where the read the take is
+// part of needs the rest of its time for the box's pause
+// ([Coordinator.takeContext]). by zero bounds it by its own grace alone.
+func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	stamp, cancel := detached(ctx)
+	if by.IsZero() {
+		return stamp, cancel
+	}
+	bounded, cancelBounded := context.WithDeadline(stamp, by)
+	return bounded, func() {
+		cancelBounded()
+		cancel()
+	}
 }
 
 // takeRefusal is why a take was refused, in the words its stamp keeps: the
@@ -580,7 +618,7 @@ func takeRefusal(ctx context.Context, err error) string {
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
 	taken TakenSession) (*spooledCapture, error) {
 
-	file, err := os.CreateTemp(os.TempDir(), spoolPrefix+"*")
+	file, err := os.CreateTemp(c.spoolDirectory(), spoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
@@ -594,23 +632,37 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name()}, nil
 }
 
-// sweepSpools removes, once per coordinator, every spool in the node's temporary
-// directory older than a capture can take: what a crash between a take and its
-// keep left behind. Never a younger one, which may be another coordinator's of
-// this very process, still under way.
+// spoolDirectory is where this coordinator's spools wait:
+// [CoordinatorOptions.SpoolDir], or the node's temporary directory.
+func (c *Coordinator) spoolDirectory() string {
+	if c.spoolDir != "" {
+		return c.spoolDir
+	}
+	return os.TempDir()
+}
+
+// sweepSpools removes every spool in the node's spool directory older than a
+// capture can take — twice [SessionCaptureBudget] — which is what a crash
+// between a take and its keep left behind; never a younger one, which may be a
+// keep of this very process still under way.
+//
+// ON EVERY TAKE, not once a process: a node that restarts soon after a crash
+// finds that crash's spools young at its first take, and swept once, it left
+// them on the node's disk — a few dozen mebibytes each, in a temporary
+// directory that may be memory — until its next restart, weeks away. Swept at
+// every take, they go at the first take after they age past the cutoff. A
+// glob of one directory, beside a take that reads a whole session.
 func (c *Coordinator) sweepSpools() {
-	c.spoolSweep.Do(func() {
-		matches, err := filepath.Glob(filepath.Join(os.TempDir(), spoolPrefix+"*"))
-		if err != nil {
-			return
+	matches, err := filepath.Glob(filepath.Join(c.spoolDirectory(), spoolPrefix+"*"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-2 * SessionCaptureBudget)
+	for _, name := range matches {
+		if info, statErr := os.Stat(name); statErr == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(name)
 		}
-		cutoff := time.Now().Add(-2 * SessionCaptureBudget)
-		for _, name := range matches {
-			if info, statErr := os.Stat(name); statErr == nil && info.ModTime().Before(cutoff) {
-				_ = os.Remove(name)
-			}
-		}
-	})
+	}
 }
 
 // keepLater keeps a spooled capture off the frame that took it, on the
@@ -638,7 +690,7 @@ func (c *Coordinator) keepLater(spooled *spooledCapture) {
 // removes its spool.
 func (c *Coordinator) dropSpool(spooled *spooledCapture, why string) {
 	defer func() { _ = os.Remove(spooled.file) }()
-	c.finishCapture(c.keepLife, spooled.run, spooled.stamp, CaptureRefused, why)
+	c.finishCapture(c.keepLife, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
 }
 
 // keepCapture uploads a spooled capture into the object it was sealed for,
@@ -652,27 +704,27 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	run, stamp := spooled.run, spooled.stamp
 	minted, err := c.keep.MintedAt(ctx, run.TurnID, run.WorkKey, run.WorkSince)
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
 			fmt.Sprintf("the turn's operations could not be minted: %v", err))
 	}
 	stamp.Minted = minted
 	if why := c.overBudget(ctx, run, spooled.spool.Size, stamp.SeatBudget); why != "" {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused, why)
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, why)
 	}
 	body, err := os.Open(spooled.file)
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
 			fmt.Sprintf("the spooled session could not be read back on this node: %v", err))
 	}
 	sealed, err := c.keep.Upload(ctx, spooled.spool, body)
 	_ = body.Close()
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused, uploadRefusal(err))
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, uploadRefusal(err))
 	}
 	stamp.Object, stamp.ObjectHash = sealed.Object.Key.String(), string(sealed.Object.Hash)
 	stamp.ObjectSize, stamp.ContentKey = sealed.Object.Size, sealed.ContentKey
 	outcome, why := c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey, run.WorkKey, stamp)
-	return c.finishCapture(ctx, run, stamp, outcome, why)
+	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
 }
 
 // overBudget is why a capture of size bytes cannot fit the seat's budget beside
@@ -760,26 +812,40 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 }
 
 // capturesLoss reports whether a lost run's ending reads its box for its
-// session: a coordinator that keeps sessions, a run whose job was in a box, a
-// loss that leaves the box behind ([LossCause.leavesBox] — a box lost with its
-// host, or with a node that left, has nothing left to read), and no take of
-// this job made once it had ended.
+// session: a company that keeps sessions ([Coordinator.capturing]), a run whose
+// job was in a box, a loss that leaves the box behind ([LossCause.leavesBox] — a
+// box lost with its host, or with a node that left, has nothing left to read),
+// and no take of this job made once it had ended.
 func (c *Coordinator) capturesLoss(run PendingRun) bool {
-	if !c.keepsSessions() || run.SandboxID == "" || !run.lost() || keptWhole(run) {
+	if !c.capturing() || run.SandboxID == "" || !run.lost() || keptWhole(run) {
 		return false
 	}
 	return run.Lost == nil || run.Lost.Cause.leavesBox()
 }
 
 // capturesStop reports whether a stopped run's read takes its session: a
-// coordinator that keeps sessions, and a job that started in a box.
+// company that keeps sessions ([Coordinator.capturing]), and a job that started
+// in a box.
 func (c *Coordinator) capturesStop(run PendingRun) bool {
-	return c.keepsSessions() && run.SandboxID != "" && run.CommandID != ""
+	return c.capturing() && run.SandboxID != "" && run.CommandID != ""
 }
 
 // keepsSessions reports whether this coordinator records on an executor log: an
-// engine's, never a test's built without one.
+// engine's, never a test's built without one. It is the WIRING, which every
+// turn's end needs whatever the company says; whether a session is worth
+// preparing to keep is [Coordinator.capturing].
 func (c *Coordinator) keepsSessions() bool { return c.sessions != nil && c.keep != nil }
+
+// capturing reports whether a capture is worth PREPARING: a coordinator that
+// records on an executor log, of a company that keeps sessions as this node's
+// revision says ([SessionKeep.Keeps]). With the switch off, a launch seals
+// nothing for a scrub no capture would make, a loss asks no other node's host
+// to read a box for a take that would keep nothing — holding the seat's mail
+// for the minutes a silent host costs — and a stop reads its run's spend on
+// the frame that decided it, as it did before sessions were kept. The take
+// itself keeps nothing until the fleet's revision says so
+// ([SessionKeep.Policy]).
+func (c *Coordinator) capturing() bool { return c.keepsSessions() && c.keep.Keeps() }
 
 // keptWhole reports whether run's row already holds a capture of its current
 // job taken once the job had ended, whatever came of it: nothing since has
@@ -847,13 +913,14 @@ func loginValuesOf(raw []byte) []string {
 }
 
 // refuseUnplaced stamps a capture refused before it held a place — the session
-// could not be read, or the policy or what the box was handed not known — so a
-// later launch, and the turn's end, know the launch's latest attempt failed
-// rather than reading an older capture as its latest.
+// could not be read, or the policy or what the box was handed not known — so
+// the turn's end, and whatever reads the row's newest capture, know the
+// launch's latest attempt failed rather than reading an older capture as its
+// latest.
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]): the take's budget may be what ended
-// it, and the stamp is what tells a later launch so.
-func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRun,
+// UNDER A CONTEXT OF ITS OWN, by by at the latest ([stampContext]): the take's
+// budget may be what ended it, and the stamp is what says so.
+func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
 	at capturePoint, why string) *SessionKept {
 
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
@@ -861,7 +928,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRu
 		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
-	stampCtx, cancel := detached(ctx)
+	stampCtx, cancel := stampContext(ctx, by)
 	defer cancel()
 	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
 		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID, "error", err.Error())
@@ -871,13 +938,14 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRu
 
 // finishCapture stamps how a capture came out and reports it.
 //
-// UNDER A CONTEXT OF ITS OWN: the capture's budget may be what ended it, and
-// the stamp is what tells a later launch so.
-func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp SessionCapture,
+// UNDER A CONTEXT OF ITS OWN, by by at the latest where a take is still
+// stamping it ([stampContext]; zero off the read): the capture's budget may be
+// what ended it, and the stamp is what says so.
+func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
 	stamp.State, stamp.Reason = state, redact.Secrets(why)
-	stampCtx, cancel := detached(ctx)
+	stampCtx, cancel := stampContext(ctx, by)
 	defer cancel()
 	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
 		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID,

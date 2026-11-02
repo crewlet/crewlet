@@ -111,6 +111,9 @@ type sessionKeep struct {
 	mu     sync.Mutex
 	policy SessionPolicy
 	putErr error
+	// sealErr, when set, fails every seal once its archive has streamed into
+	// the spool: a spool left half written.
+	sealErr error
 	// gate, when set, holds every upload until it is closed: a keep that
 	// takes its time.
 	gate chan struct{}
@@ -122,6 +125,12 @@ func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.policy, nil
+}
+
+func (k *sessionKeep) Keeps() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.policy.Keep
 }
 
 func (k *sessionKeep) SealHanded(turnID string, handed []byte) (string, error) {
@@ -144,6 +153,12 @@ func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (execu
 	n, err := io.Copy(dst, archive)
 	if err != nil {
 		return executordomain.SealedSpool{}, err
+	}
+	k.mu.Lock()
+	sealErr := k.sealErr
+	k.mu.Unlock()
+	if sealErr != nil {
+		return executordomain.SealedSpool{}, sealErr
 	}
 	return executordomain.SealedSpool{Key: objstore.KeyAt(time.Now()), ContentKey: "k1", Size: n}, nil
 }
@@ -196,6 +211,8 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	rig.coordinator.sessions, rig.coordinator.keep = writes, keep
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
 	rig.coordinator.captureTick = time.Millisecond
+	// ITS SPOOLS ITS OWN, so what a case leaves in them is the case's to see.
+	rig.coordinator.spoolDir = t.TempDir()
 	// THE ENGINE'S ACCOUNTS OF A STOP AND A LOSS, as its hooks answer them.
 	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) (executordomain.Ending, error) {
 		return executordomain.Ending{Outcome: executordomain.OutcomeStopped, StoppedBy: run.Stop.By}, nil
@@ -243,6 +260,16 @@ func (r *coordRig) launchKept(t *testing.T, turnID string) PendingRun {
 
 // awaitKeeps waits for every keep under way ([Coordinator.keepLater]).
 func (r *coordRig) awaitKeeps() { r.coordinator.keeping.Wait() }
+
+// spools are the spools left in the rig's spool directory.
+func (r *coordRig) spools(t *testing.T) []string {
+	t.Helper()
+	left, err := filepath.Glob(filepath.Join(r.coordinator.spoolDirectory(), spoolPrefix+"*"))
+	if err != nil {
+		t.Fatalf("listing the spools: %v", err)
+	}
+	return left
+}
 
 // collectHeld collects turnID's finished job and leaves its row in place: the
 // resume is refused, so the claim goes back with everything the collection
@@ -391,8 +418,9 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 //
 // Mutation: take the session after the pause (the fake reads no paused box),
 // pack it on demand for a job that packed its own, drop what the box was
-// handed from the scrub, stamp before the record lands, or leave the record's
-// fields off `executor_collected`, and a check here goes red.
+// handed from the scrub, stamp before the record lands, leave the record's
+// fields off `executor_collected`, or leave the spool behind the keep, and a
+// check here goes red.
 func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
@@ -438,12 +466,8 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 		recs[0].HarnessSession != "s-1" || recs[0].HarnessVersion != "2.1.310" || recs[0].SessionNotKept != "" {
 		t.Errorf("the launch's record is %+v, want the session it ran and what was taken of it", recs)
 	}
-	if spools, _ := filepath.Glob(filepath.Join(os.TempDir(), spoolPrefix+"*")); len(spools) > 0 {
-		for _, name := range spools {
-			if info, err := os.Stat(name); err == nil && time.Since(info.ModTime()) < time.Minute {
-				t.Logf("a spool younger than this case remains, maybe another case's: %s", name)
-			}
-		}
+	if left := rig.spools(t); len(left) != 0 {
+		t.Errorf("the kept session's spool is left on the node's disk: %v", left)
 	}
 }
 
@@ -936,19 +960,25 @@ func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
 // now, and final; and a job its turn's cap ended while it still ran, packed now
 // as it stood and NOT final, since it went on working until its box was paused.
 //
+// AND A JOB WHOSE POLL CANNOT SAY WHETHER IT STILL WORKS is taken for one that
+// does: packed as it stands and not final, so a collection retried after it
+// takes the job again rather than passing over what it did meanwhile.
+//
 // Mutation: read a job that never packed as one with nothing to take, call a
-// cap-ended job's capture final, or take its archive as its script left it,
-// and a row below differs.
+// cap-ended job's capture final, take its archive as its script left it, or
+// take a job whose poll failed for one that had ended, and a row below
+// differs.
 func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name            string
-		capped, packed  bool
-		wantPack, final bool
+		name                      string
+		capped, packed, pollFails bool
+		wantPack, final           bool
 	}{
 		{name: "packed by its script", packed: true, final: true},
 		{name: "ended without packing", wantPack: true, final: true},
 		{name: "ended at its turn's cap while it ran", capped: true, wantPack: true},
+		{name: "at its turn's cap, its poll unanswered", capped: true, pollFails: true, wantPack: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -957,6 +987,21 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 				rig.launchUntil("t1", rig.now.Add(-time.Minute))
 				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
 				rig.coordinator.countRun("swe", StatusRunning)
+				if tc.pollFails {
+					// A POLL THAT CANNOT SAY is a job taken for one still
+					// working: packed as it stands, and not final.
+					rig.runner.PollErr = errors.New("the box's exec did not answer")
+				}
+				// PAST ITS TURN'S CAP a resume that fails after the collection
+				// is the turn's last, and the run is ended rather than handed
+				// back: its row stays, its ending decided, until this node's
+				// retry finishes it — which this case never fires.
+				rig.resumer.failWith(errors.New("held for the case to read the row"))
+				payload, ev := rig.completion("t1")
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Logf("OnCompleted: %v", err)
+				}
+				rig.awaitKeeps()
 			} else {
 				rig.launchKept(t, "t1")
 				res := Result{Success: true, SessionID: "s-1"}
@@ -964,8 +1009,8 @@ func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
 					res.Captured = &rig.runner.Session.Archive
 				}
 				rig.runner.Finish(res)
+				collectHeld(t, rig, "t1")
 			}
-			collectHeld(t, rig, "t1")
 			takes := rig.runner.Takes()
 			if len(takes) != 1 || takes[0].Pack != tc.wantPack {
 				t.Fatalf("takes %+v, want one, packed now: %v", takes, tc.wantPack)

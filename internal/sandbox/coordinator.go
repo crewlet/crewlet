@@ -723,6 +723,14 @@ type CoordinatorOptions struct {
 	Sessions SessionWrites
 	Keep     SessionKeep
 
+	// SpoolDir is the directory a capture's sealed session waits in between
+	// its take and its keep ([Coordinator.spool]), and the one whose leftover
+	// spools a take sweeps ([Coordinator.sweepSpools]). Empty is the node's
+	// temporary directory (os.TempDir), which is where the engine keeps them;
+	// a test names a directory of its own, so what is left in it is the
+	// case's to see.
+	SpoolDir string
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -810,12 +818,12 @@ type Coordinator struct {
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
 	// [Coordinator.Stop] lets the ones under way finish for
-	// [sessionKeepDrain], then ends them. spoolSweep runs
-	// [Coordinator.sweepSpools] once.
-	keepLife   context.Context
-	endKeeps   context.CancelFunc
-	keeping    sync.WaitGroup
-	spoolSweep sync.Once
+	// [sessionKeepDrain], then ends them. spoolDir is
+	// [CoordinatorOptions.SpoolDir], resolved.
+	keepLife context.Context
+	endKeeps context.CancelFunc
+	keeping  sync.WaitGroup
+	spoolDir string
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -976,6 +984,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		refresh:       opts.Refresh,
 		sessions:      opts.Sessions,
 		keep:          opts.Keep,
+		spoolDir:      opts.SpoolDir,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
 		captureTick:   captureWaitTick,
@@ -1799,7 +1808,10 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// and a collection's only where its turn's cap has passed — ENDED, a job
 	// the cap ended while it ran. A job still working is one whose session
 	// is packed as it stands and is not final ([readCapture]); a poll that
-	// cannot say is taken for one still working, which only packs again.
+	// cannot say is taken for one still working, which only packs again —
+	// for the capture alone: ENDED stays a poll that answered, since it
+	// marks the run's result as cut off at the cap, which a poll that did
+	// not answer has not shown.
 	ended, running := false, false
 	switch {
 	case read == BoxReadStop:
@@ -1808,7 +1820,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	case run.PastDeadline(c.now()):
 		state, pollErr := runner.Poll(ctx, box, run.Handle())
 		ended = pollErr == nil && state == JobRunning
-		running = ended
+		running = pollErr != nil || state == JobRunning
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
