@@ -450,16 +450,29 @@ var codeLogNegligible = map[code.OpKind]string{
 		"a person runs, one record each, a later one widening the purge already open",
 	// AN EXPUNGE'S TWO RECORDS, appended by the repository's maintainer
 	// (internal/code/compact's expunge loop, polling code.ReadExpungeDue),
-	// come at the rate of the purge above, which is the one thing this build
-	// expunges for: a schedule of the maintainer's own — an expunge keeping
-	// a grace, ExpungeBegin.Grace not 0 — would append them at a rate of its
-	// own, which the day must price once it exists.
-	code.OpExpungeBegin: "the begin of an expunge serving a person's purge: its repository's " +
-		"maintainer begins a cycle for each purge asked, as many as its live packs need — one or " +
-		"two for a repository at the default ceiling (code.MaxExpungeOutputs) — each begin naming " +
-		"at most code.MaxExpungeInputs packs it retires and code.MaxExpungeOutputs it writes",
-	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, " +
-		"retiring its dropping packs and adding their rescue, each at most code.MaxExpungeOutputs",
+	// come at two rates, each bounded by what it frees rather than by the
+	// clock: a person's purge above, and the maintainer's own WEEKLY
+	// SCHEDULE (code.ExpungeInterval) — at most one cycle a repository a
+	// week, and only once what no ref, no drop within code.PruneGrace and no
+	// row in flight reaches, in the packs older than the grace, is more than
+	// a quarter (code.ExpungeShare) of the repository's live bytes and at
+	// least code.ExpungeMinBytes. A cycle takes that garbage out, so a
+	// repository is due again only once another quarter of it has become
+	// unreachable and aged past the grace: even a repository churning that
+	// fast appends a begin and a commit a week, beside the 21 000 pushes of
+	// the reference company's week. A clean scan's record is its own op
+	// below.
+	code.OpExpungeBegin: "the begin of an expunge: one for each cycle its repository's maintainer runs — " +
+		"serving a person's purge, as many as its live packs need (one or two for a repository at the " +
+		"default ceiling, code.MaxExpungeOutputs), or on its own weekly schedule at most one a repository " +
+		"every code.ExpungeInterval (more only where internal/code/compact's ExpungeInputByteCap splits one), " +
+		"and only once more " +
+		"than a quarter (code.ExpungeShare) and at least code.ExpungeMinBytes of the repository's live bytes " +
+		"lie unreachable in packs past their grace — each begin naming at most code.MaxExpungeInputs packs it " +
+		"retires and code.MaxExpungeOutputs it writes",
+	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, at the begin's rate " +
+		"— a purge's, or the weekly schedule's — retiring its dropping packs and adding their rescue, each at " +
+		"most code.MaxExpungeOutputs",
 	// A CLEAN SCAN is its maintainer's record that a repository owes no
 	// expunge, which takes the repository out of every git node's weekly
 	// listing for code.ExpungeInterval: one a repository a week at the most,
