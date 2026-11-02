@@ -319,7 +319,12 @@ describe("the feed", () => {
   test("a tick nobody ran never reads as a run", () => {
     expect(scheduleVerb(run())).toBe("ran");
     expect(scheduleVerb(run({ runs: 12 }))).toBe("ran 12 times");
-    for (const outcome of ["skipped_catchup", "skipped_paused", "something_new"]) {
+    for (const outcome of [
+      "skipped_catchup",
+      "skipped_paused",
+      "skipped_superseded",
+      "something_new",
+    ]) {
       for (const runs of [1, 3]) {
         expect(scheduleVerb(run({ outcome, runs }))).not.toMatch(/\bran\b/);
       }
@@ -327,6 +332,14 @@ describe("the feed", () => {
     expect(scheduleVerb(run({ outcome: "skipped_catchup" }))).toBe("skipped a missed tick");
     expect(scheduleVerb(run({ outcome: "skipped_catchup", runs: 3 }))).toBe(
       "skipped 3 missed ticks",
+    );
+    // A FIRE A LATER ONE REPLACED is the usage history's own skip, said in
+    // words rather than as the engine's raw outcome.
+    expect(scheduleVerb(run({ outcome: "skipped_superseded" }))).toBe(
+      "skipped a tick a later run replaced",
+    );
+    expect(scheduleVerb(run({ outcome: "skipped_superseded", runs: 2 }))).toBe(
+      "skipped 2 ticks later runs replaced",
     );
   });
 
