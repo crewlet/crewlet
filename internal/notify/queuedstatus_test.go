@@ -114,3 +114,29 @@ func TestAMessageThatAsksTheSeatNothingIsNotQueued(t *testing.T) {
 		t.Fatal("a room message that asks the seat nothing raised a queued line")
 	}
 }
+
+// AN ANNOUNCEMENT THAT ARRIVES AFTER ITS MESSAGE WAS PICKED UP QUEUES NOTHING.
+// The wake and its announcement travel separately, so the turn can start, and
+// settle the message, before the node hears it was waiting.
+//
+// Mutation: drop the settled check, and the late wait holds the line up as
+// "queued" when that turn ends, for a message already answered.
+func TestALateAnnouncementForASettledMessageQueuesNothing(t *testing.T) {
+	p := quiet()
+	d := driver(t, p, notify.StatusAddressed)
+	s := d.Begin(t.Context(), "pm", "turn-1", "execute", chatMeta(nil))
+	p.shownAtLeast(t, 1)
+	d.Dequeue(t.Context(), "pm", []string{"wake-1"})
+	if d.Queue(t.Context(), "pm", "wake-1", chatMeta(nil)) {
+		t.Fatal("a message already picked up was queued again")
+	}
+	s.End(t.Context(), false)
+	if p.clears() != 1 {
+		t.Fatalf("the line was cleared %d times when the turn ended, want once", p.clears())
+	}
+	for _, line := range p.shown() {
+		if line == "is queued behind its current task" {
+			t.Fatal("the line said queued for a message already picked up")
+		}
+	}
+}

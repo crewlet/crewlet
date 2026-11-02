@@ -380,7 +380,8 @@ type StatusOptions struct {
 	Mode    StatusMode
 	Phrases Phrases
 
-	// Now is the clock; only used for logging cadence, so a test need not
+	// Now is the clock: how long a settled message is remembered
+	// ([StatusDriver.Dequeue]). Nil is the wall clock, so a test need not
 	// supply one.
 	Now func() time.Time
 }
@@ -402,6 +403,7 @@ type StatusDriver struct {
 	poster  StatusPoster
 	mode    StatusMode
 	phrases Phrases
+	now     func() time.Time
 
 	mu       sync.Mutex
 	sessions map[statusKey]*session
@@ -410,7 +412,18 @@ type StatusDriver struct {
 	// queuedSeq orders the waits this driver has queued, across every
 	// conversation, so a message can say how many tasks are ahead of it.
 	queuedSeq uint64
+
+	// settled remembers the wakes [StatusDriver.Dequeue] was told about,
+	// for [settledFor], so an announcement that arrives AFTER the turn that
+	// picked its message up (the two travel separately) queues nothing: a
+	// wait added then would hold the line up as "queued" once that turn
+	// ends, for a message already answered.
+	settled map[string]time.Time
 }
+
+// settledFor is how long a settled wake is remembered: far longer than an
+// announcement takes to arrive, and short enough that the map stays small.
+const settledFor = 5 * time.Minute
 
 // NewStatusDriver builds the driver for one backend.
 //
@@ -430,10 +443,15 @@ func NewStatusDriver(opts StatusOptions) *StatusDriver {
 	if phrases.pools == nil {
 		phrases = NewPhrases(nil)
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &StatusDriver{
 		poster:   opts.Poster,
 		mode:     mode,
 		phrases:  phrases,
+		now:      now,
 		sessions: map[statusKey]*session{},
 	}
 }
@@ -709,6 +727,10 @@ func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata 
 		d.mu.Unlock()
 		return false
 	}
+	if _, done := d.settled[handle+"\x00"+wake]; done {
+		d.mu.Unlock()
+		return false
+	}
 	d.queuedSeq++
 	if s, live := d.sessions[key]; live {
 		if !slices.ContainsFunc(s.waits, func(w wait) bool { return w.wake == wake }) {
@@ -744,6 +766,7 @@ func (d *StatusDriver) Dequeue(ctx context.Context, handle string, wakes []strin
 		return
 	}
 	d.mu.Lock()
+	d.rememberSettled(handle, wakes)
 	var gone, again []*session
 	removed := false
 	for key, s := range d.sessions {
@@ -773,6 +796,23 @@ func (d *StatusDriver) Dequeue(ctx context.Context, handle string, wakes []strin
 		s.wake()
 	}
 	d.retire(ctx, gone)
+}
+
+// rememberSettled records wakes a dispatch has finished with, and forgets the
+// ones older than [settledFor]. Caller holds the driver's mutex.
+func (d *StatusDriver) rememberSettled(handle string, wakes []string) {
+	now := d.now()
+	if d.settled == nil {
+		d.settled = map[string]time.Time{}
+	}
+	for key, at := range d.settled {
+		if now.Sub(at) > settledFor {
+			delete(d.settled, key)
+		}
+	}
+	for _, wake := range wakes {
+		d.settled[handle+"\x00"+wake] = now
+	}
 }
 
 // queuedAhead is how many tasks are ahead of a queued indicator's earliest
