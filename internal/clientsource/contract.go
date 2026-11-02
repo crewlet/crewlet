@@ -234,6 +234,10 @@ var contract = []Entry{
 	{"McpValueAnswer", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
 	{"McpValueReload", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
 	{"McpValueRefusal", ReadInterface, "internal/api/mcpapi.TestTheReplaceValueReadsWhatTheRouteSends"},
+	{"McpHeldCall", ReadInterface, "internal/api/queries.TestTheInboxReadsWhatAHeldCallSends"},
+	{"McpApprovalAnswer", ReadInterface, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpApprovalOutcome", ReadUnion, "internal/api/mcpapi.TestTheApprovalReadsWhatTheRouteSends"},
+	{"McpChangesAnswer", ReadInterface, "internal/api/mcpapi.TestTheReviewReadsWhatTheRouteSends"},
 
 	// tools.ts
 	{"ToolRow", ReadInterface, "internal/api/queries.TestTheCatalogueIsWhatTheToolScreensRead"},
