@@ -2169,6 +2169,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// The background passes, after the node exists: each is a fleet
 	// singleton claimed under its own incarnation.
 	e.startLearningBackground(ctx)
+	// THE INBOUND EDGE'S MAILBOX FIRST, because the feeds below publish
+	// onto it ahead of the router that consumes it. See
+	// [Engine.ensureInboundMailbox].
+	if e.Company() != nil {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return nil, fmt.Errorf("engine: %w", err)
+		}
+	}
 	// BEFORE notifications, because a feed publishes onto the same inbound
 	// edge the service consumes: started after, the changes committed in
 	// the window between would reach the record and wake nobody.
@@ -3083,6 +3091,19 @@ func (e *Engine) seatFence(handle string) func() error {
 	}
 }
 
+// wakes is the queue every producer of a seat's wake publishes through: the
+// node's ([node.Node.Wakes]), which confirms the seat's mailbox, its inbox and
+// its priority lane, before a wake is sent to it, so a wake published while
+// boot or an apply has not made the mailbox yet is retried rather than
+// discarded by the stream. An engine built with no node (`crewlet validate`)
+// has no mailboxes to confirm and publishes on its queue as it is.
+func (e *Engine) wakes() queue.EventQueue {
+	if e.node == nil {
+		return e.backends.Queue
+	}
+	return e.node.Wakes()
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -3097,7 +3118,7 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 	}
 	subject := topics.AgentInbox(id)
 	for _, ev := range evs {
-		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+		if err := e.wakes().Publish(ctx, subject, ev); err != nil {
 			// THE SEAT BY NAME, not only the subject it is addressed by.
 			// A mailbox is named by the seat's id, so a failure reported
 			// as the subject alone hands whoever reads it a uuid and no

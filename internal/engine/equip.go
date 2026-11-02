@@ -186,7 +186,7 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 	if c == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
 	}
-	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.backends.Queue,
+	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.wakes(),
 		a2a.Options{Directory: agentSeats{org: c.Org}})
 	if err != nil {
 		// Logged rather than returned: a company without agent-to-agent
