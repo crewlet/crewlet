@@ -425,6 +425,54 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 	})
 }
 
+// THE LINE THE RUN'S HOOK PRINTED IS A NOTE AS THE HARNESS RECORDED IT. The
+// line saying whose notes reached the run names every sender, and five run
+// past the hundred and sixty bytes the live transcript shows of a line: its
+// entry is the line whole, its size its own and nothing cut, with nothing the
+// harness did not write after it — and a token it quotes is redacted, as every
+// entry's text is.
+//
+// Mutation: read the hook's line as the live transcript renders it, and the
+// entry is cut short of its senders and marked as whole, or carries a count of
+// lines nobody wrote.
+func TestTheLineTheRunsHookPrintedIsANoteAsTheHarnessRecordedIt(t *testing.T) {
+	t.Parallel()
+	senders := "ada.lovelace-analytical-engine, grace.hopper-compilers, " +
+		"margaret.hamilton-flight-software, katherine.johnson-orbits, dorothy.vaughan-fortran"
+	line := "5 notes from " + senders + " reached the run"
+	if len(line) <= 160 {
+		t.Fatalf("the hook's line is %d bytes, and has to run past the live view's 160", len(line))
+	}
+	quoted := "1 note from eve reached the run with " + plantedToken
+	record := []string{
+		`{"type":"system","subtype":"informational","content":` +
+			jsonText(t, "PostToolBatch says: crewlet: "+line+"\nand the hook went on") +
+			`,"timestamp":"2026-10-30T12:00:03.100Z"}`,
+		`{"type":"system","subtype":"informational","content":` +
+			jsonText(t, "Stop says: crewlet: "+quoted) + `,"timestamp":"2026-10-30T12:00:04.100Z"}`,
+	}
+	described, raw := claudeCaptureOf(t, record, nil)
+	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		opener(bytes.NewReader(raw)), 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	sameEntries(t, got.Entries, []shown{
+		{kind: executor.EntryNote, text: line},
+		{kind: executor.EntryNote, text: redact.Secrets(quoted)},
+	})
+	if len(got.Entries) > 1 {
+		if e := got.Entries[0]; e.Bytes != len(line) || e.Cut {
+			t.Errorf("the hook's line states %d bytes, cut %v; want its own %d, whole", e.Bytes, e.Cut,
+				len(line))
+		}
+		if e := got.Entries[1]; strings.Contains(e.Text, plantedToken) || e.Bytes != len(quoted) {
+			t.Errorf("the hook's line quoting a token reads %q stating %d bytes, want it redacted, "+
+				"stating the %d the harness recorded", e.Text, e.Bytes, len(quoted))
+		}
+	}
+}
+
 // A RECORD OF NO SHAPE THIS READ KNOWS IS SAID, NEVER READ AS SILENCE. A line
 // of Claude Code's record that is JSON but no object — an array, a number — is
 // no record; a person's or the model's record whose message is no object, or

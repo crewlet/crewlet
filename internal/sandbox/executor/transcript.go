@@ -929,10 +929,18 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note,
 		// which the live transcript shows as `[steer]`: a note in its own
 		// right here, since a release that keeps no hook context leaves it
-		// the note's one trace.
+		// the note's one trace. ITS OWN LINE, as the harness recorded it, for
+		// the entry to redact, bound and state the size of as every entry's
+		// text is — never the live view's rendering of it, which is cut to a
+		// phase event's line and counts the lines after it in words the
+		// harness never wrote, and was redacted whole for every record of
+		// the kind, those before the page included.
 		if said, ok := claudeSteerSaid(rec.Subtype, rec.Content); ok {
-			if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, said); err != nil {
-				return err
+			hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
+			if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
+				if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, hookLine); err != nil {
+					return err
+				}
 			}
 		}
 	}

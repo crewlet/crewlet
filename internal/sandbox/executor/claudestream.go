@@ -270,21 +270,31 @@ var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
 	claudeEventFinish + `) says: crewlet: `)
 
 // claudeSteerLine is the transcript line for a system message of subtype, its
-// content raw: `[steer]` and what the run's own hook said, for the line it
-// prints as it hands the model a note, and nothing for any other.
+// content raw: `[steer]` and what the run's own hook said — its first line,
+// redacted whole and bounded as a live transcript's line is ([firstLine]) — for
+// the line it prints as it hands the model a note, and nothing for any other.
 func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 	said, ok := claudeSteerSaid(subtype, raw)
 	if !ok {
 		return "", false
 	}
-	return "[steer] " + said, true
+	line := firstLine(said, transcriptDetailLimit)
+	if line == "" {
+		return "", false
+	}
+	return "[steer] " + line, true
 }
 
 // claudeSteerSaid is what the run's own hook said in a system message of
-// subtype, its content raw, as it handed the model a note — its line after the
-// event's opening, bounded as a transcript line is — and false for every other
-// system message. ONE READING of the line, for the live transcript
-// ([claudeSteerLine]) and for a captured session's ([ReadTranscript]).
+// subtype, its content raw, as it handed the model a note — the content after
+// the event's opening, AS THE HARNESS RECORDED IT — and false for every other
+// system message. ONE READING of which message that is and where what the
+// hook said begins, for the live transcript ([claudeSteerLine]) and for a
+// captured session's ([ReadTranscript]); each shows it in its own way, which
+// is why neither the redaction nor a bound is here. The live view redacts the
+// whole of it and cuts a line for a phase event; a captured session's reader
+// redacts and bounds an entry's text as it hands the entry out, and only then
+// — a record before the page it is reading is counted and never redacted.
 func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if subtype != "informational" {
 		return "", false
@@ -297,8 +307,7 @@ func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if loc == nil {
 		return "", false
 	}
-	said := firstLine(content[loc[1]:], transcriptDetailLimit)
-	return said, said != ""
+	return content[loc[1]:], true
 }
 
 // claudeBlocks is a message's content as blocks; a plain-string content (a
