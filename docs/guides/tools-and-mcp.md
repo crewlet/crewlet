@@ -791,8 +791,10 @@ mcp_servers:
   past the engine, so a level could not hold there, and a tool at `approve`
   would run without anybody asked. So a box listing is refused for a server
   whose every tool is not certain to run at `allow`: one whose entry says
-  `default: allow` and holds no tool back. A level written on a server a box
-  lists is refused at that box's entry. The seat still reaches the server's
+  `default: allow` and holds no tool back. A server whose entry sets no `tools`
+  is not one, since each tool it does not mark read-only starts at `approve`:
+  every server a box lists says `default: allow`. A level written on a server
+  a box lists is refused at that box's entry. The seat still reaches the server's
   tools over the bridge, each at its level. A stored revision that breaks the
   rule runs, its boxes given no such server, and warns.
 - **A change of level restarts the server's instances**, as a change to its

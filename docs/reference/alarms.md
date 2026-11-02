@@ -53,8 +53,7 @@ is said at 30 days and again at 7, and a limit turns into
 
 These are about one MCP server rather than the node:
 
-`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long`, `mcp_tools_refused`, `mcp_oauth_needs_sign_in` and `mcp_oauth_expiring`.
-`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long`, `mcp_tools_refused` and `mcp_approval_waiting`.
+`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long`, `mcp_tools_refused`, `mcp_oauth_needs_sign_in`, `mcp_oauth_expiring` and `mcp_approval_waiting`.
 
 Each lists the servers it stands on in `entries`, carrying the server's
 name as `key` and as each log line's `entry`, and an entry about one
