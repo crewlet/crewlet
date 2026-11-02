@@ -443,7 +443,7 @@ func TestIdentityWrapsTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	_, ident := newHTTPTransport(Spec{
 		Name: "remote", URL: "https://mcp.example.com/",
-	}, slog.New(slog.DiscardHandler))
+	}, slog.New(slog.DiscardHandler), dialing{})
 	if ident.base != httpx.Transport() {
 		t.Errorf("identity base = %T, want the one httpx shares", ident.base)
 	}
@@ -519,7 +519,7 @@ func TestTheConfiguredHeadersGoToTheConfiguredOriginAlone(t *testing.T) {
 	t.Cleanup(srv.Close)
 	spec := httpSpec("vendor", "https://mcp.example.com/mcp")
 	spec.Headers = map[string]string{"Authorization": "Bearer sk-origin-test-token"}
-	_, ident := newHTTPTransport(spec, discardLogger())
+	_, ident := newHTTPTransport(spec, discardLogger(), dialing{})
 	ident.base = srv.Client().Transport
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/elsewhere", nil)
 	if err != nil {

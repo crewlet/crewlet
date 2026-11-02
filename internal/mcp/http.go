@@ -10,6 +10,7 @@ import (
 	"maps"
 	"mime"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -60,7 +61,8 @@ const maxBufferedErrorBody = 1 << 20
 const protocolVersionHeader = "Mcp-Protocol-Version"
 
 // newHTTPTransport builds the streamable transport and the round tripper that
-// carries the seat's identity.
+// carries the seat's identity, over d's transport ([httpx.Transport] when it
+// names none).
 //
 // DisableStandaloneSSE is on deliberately. The standalone GET stream exists to
 // deliver server-initiated notifications — tools/prompts/resources list
@@ -71,13 +73,18 @@ const protocolVersionHeader = "Mcp-Protocol-Version"
 //
 // A REDIRECT IS FOLLOWED WITHIN THE CONFIGURED ORIGIN ALONE ([sameOrigin]):
 // see [httpIdentity.redirect].
-func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity) {
+func newHTTPTransport(spec Spec, log *slog.Logger, d dialing) (sdk.Transport, *httpIdentity) {
+	base := d.base
+	if base == nil {
+		base = httpx.Transport()
+	}
 	ident := &httpIdentity{
-		base:    httpx.Transport(),
+		base:    base,
 		headers: maps.Clone(spec.Headers),
 		origin:  originOf(spec.URL),
 		server:  spec.Name,
 		log:     log,
+		trace:   d.trace,
 	}
 	// Connect runs under the startup budget; everything after it under the
 	// per-call one. See the deadline field.
@@ -87,6 +94,16 @@ func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity
 		HTTPClient:           &http.Client{Transport: ident, CheckRedirect: ident.redirect},
 		DisableStandaloneSSE: true,
 	}, ident
+}
+
+// dialing is how one connection to a server is made, beyond its spec: the
+// transport an HTTP connection rides and the trace its requests report to,
+// both unset for a server the engine runs (the shared transport, no trace). A
+// test sets them, to time each stage of a connection of its own
+// ([Test]).
+type dialing struct {
+	base  http.RoundTripper
+	trace *httptrace.ClientTrace
 }
 
 // maxRedirects bounds the redirects one request follows within its server's
@@ -167,6 +184,9 @@ type httpIdentity struct {
 	origin origin
 	server string
 	log    *slog.Logger
+	// trace, when set, is told of each request's connection
+	// ([dialing.trace]).
+	trace *httptrace.ClientTrace
 
 	// protocolVersion is set once, after the handshake settles. Atomic
 	// because the session's requests run on their own goroutines.
@@ -214,6 +234,9 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	var cancel context.CancelFunc
 	if d := time.Duration(h.deadline.Load()); d > 0 {
 		ctx, cancel = context.WithTimeout(ctx, d)
+	}
+	if h.trace != nil {
+		ctx = httptrace.WithClientTrace(ctx, h.trace)
 	}
 	// Clone: RoundTrippers must not mutate the request they are handed.
 	req = req.Clone(ctx)
@@ -287,9 +310,11 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 			"method", req.Method, "url", redact.URL(req.URL.String()),
 			"response_body", boundedBody(body))
 	}
+	challenge := resp.Header.Get("WWW-Authenticate")
 	h.failed.Store(&answerFailure{status: resp.StatusCode, class: classOfStatus(resp.StatusCode,
-		bearerChallenge(resp.Header.Get("WWW-Authenticate")), req.Header.Get("Authorization") != "",
-		bytes.Contains(bytes.ToLower(body), []byte("protocol version")))})
+		bearerChallenge(challenge), req.Header.Get("Authorization") != "",
+		bytes.Contains(bytes.ToLower(body), []byte("protocol version"))),
+		challenge: textcut.Bytes(challenge, maxChallenge)})
 	if len(body) > maxBufferedErrorBody {
 		// NOT CLOSED, and that is what keeps the deadline correct: the
 		// rest of the body is still to be read, and cancelOnClose fires
@@ -315,7 +340,18 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 type answerFailure struct {
 	status int
 	class  FailureClass
+	// challenge is the answer's WWW-Authenticate header, cut to
+	// [maxChallenge]: where a server that wants a sign-in says where its
+	// protected-resource metadata is (RFC 9728), which an address check
+	// reads ([CheckAddress]).
+	challenge string
 }
+
+// maxChallenge bounds the WWW-Authenticate header kept from a failed answer.
+// REASONED: a Bearer challenge names a realm, a scope list, an error and a
+// metadata address, a few hundred bytes; 2 KiB keeps a long scope list whole
+// and refuses a server's choice of how much this process holds.
+const maxChallenge = 2 << 10
 
 // webPage reports whether resp is an HTML page: what a login page, a proxy or
 // a captive portal answers in front of a server.
