@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -228,6 +229,111 @@ func TestALifecycleChangeKeepsEveryGate(t *testing.T) {
 			!gates[0].Gate.Equal(gate) {
 			t.Fatalf("after a %s, the gates read %+v, want main's %+v", req.Kind, gates, gate)
 		}
+	}
+}
+
+// sourcesOf is who set each of the repository name's rules, by pattern, as a
+// read of its detail asking for its gates answers them — failing the case
+// where a source names no rule of the detail's row, or a rule has none.
+func (n *node) sourcesOf(name string) map[string]code.RuleSource {
+	n.t.Helper()
+	detail, err := n.reader.Read(n.t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name,
+		Gates: true})
+	if err != nil {
+		n.t.Fatalf("read %s's detail: %v", name, err)
+	}
+	out := map[string]code.RuleSource{}
+	for _, s := range detail.Repo.RuleSources {
+		out[s.Pattern] = s
+	}
+	if len(out) != len(detail.Repo.Protections) {
+		n.t.Fatalf("%s answers the sources %+v for the rules %+v, want one a rule", name,
+			detail.Repo.RuleSources, detail.Repo.Protections)
+	}
+	for _, p := range detail.Repo.Protections {
+		if _, ok := out[p.Pattern]; !ok {
+			n.t.Fatalf("%s's rule %s answers no source among %+v", name, p.Pattern, detail.Repo.RuleSources)
+		}
+	}
+	return out
+}
+
+// A RULE NAMES WHO LAST CHANGED IT, AND WHEN. A person's protect request sets
+// main's rule under their seat and an agent's sets release/*'s under its
+// handle, each at its record's instant; a settings change that edits only the
+// description, and another pattern's protection, carry every rule they do not
+// change with the source it had; a gate added to main moves main's source to
+// that record and leaves release/*'s. A declared repository's rules are the
+// configuration's, naming nobody, and a re-activation that changes only its
+// description keeps them so. A node that replays the same records from zero
+// holds the same sources.
+//
+// Mutation: stamp every rule a record writes with the record's own source
+// (rulesSourced's comparison dropped) — the release protection moves main's
+// source to the agent, red.
+func TestARuleNamesWhoLastChangedItAndWhen(t *testing.T) {
+	t.Parallel()
+	a, b := newTwoNodes(t)
+	a.chart = testChart()
+	set := func(stage, pattern string, got map[string]code.RuleSource, by string, kind code.ActorKind) {
+		t.Helper()
+		switch s := got[pattern]; {
+		case s.SetBy != by || s.SetByKind != kind:
+			t.Fatalf("%s: %s reads set by %q (%s), want %q (%s)", stage, pattern, s.SetBy, s.SetByKind, by, kind)
+		case s.SetAt.IsZero():
+			t.Fatalf("%s: %s reads set at no instant", stage, pattern)
+		}
+	}
+
+	id := a.made(lcPerson, "gated", unitOwned("eng"))
+	a.lands(lcProtect(lcPerson, id, "refs/heads/main", persons))
+	first := a.sourcesOf("gated")
+	set("a person protected main", "refs/heads/main", first, "founder", code.ActorOperator)
+
+	a.lands(lcProtect(agent("cto"), id, "refs/heads/release/*", persons))
+	second := a.sourcesOf("gated")
+	set("an agent protected release/*", "refs/heads/release/*", second, "cto", code.ActorAgent)
+	if second["refs/heads/main"] != first["refs/heads/main"] {
+		t.Fatalf("protecting release/* moved main's source from %+v to %+v", first["refs/heads/main"],
+			second["refs/heads/main"])
+	}
+	if !second["refs/heads/release/*"].SetAt.After(first["refs/heads/main"].SetAt) {
+		t.Errorf("release/* reads set at %s, not after main's %s", second["refs/heads/release/*"].SetAt,
+			first["refs/heads/main"].SetAt)
+	}
+
+	described := "the gated one"
+	a.lands(lcSettings(lcPerson, id, code.RepoChange{Description: &described}))
+	if third := a.sourcesOf("gated"); !maps.Equal(third, second) {
+		t.Fatalf("a description change moved the sources %+v to %+v", second, third)
+	}
+
+	a.lands(lcGate(lcPerson, id, "refs/heads/main", nil, gateTo(aGate())))
+	gated := a.sourcesOf("gated")
+	set("a person gated main", "refs/heads/main", gated, "founder", code.ActorOperator)
+	switch {
+	case !gated["refs/heads/main"].SetAt.After(second["refs/heads/release/*"].SetAt):
+		t.Errorf("main's gate reads set at %s, not after the release protection's %s",
+			gated["refs/heads/main"].SetAt, second["refs/heads/release/*"].SetAt)
+	case gated["refs/heads/release/*"] != second["refs/heads/release/*"]:
+		t.Errorf("gating main moved release/*'s source from %+v to %+v", second["refs/heads/release/*"],
+			gated["refs/heads/release/*"])
+	}
+
+	a.ensure("web", gatedSettings(aGate()), t1)
+	declared := a.sourcesOf("web")
+	set("declared", "refs/heads/main", declared, "", code.ActorConfig)
+	redescribed := gatedSettings(aGate())
+	redescribed.Description = "the web app"
+	a.ensure("web", redescribed, t1)
+	if again := a.sourcesOf("web"); !maps.Equal(again, declared) {
+		t.Fatalf("a re-activation that changed the description moved the sources %+v to %+v", declared, again)
+	}
+
+	b.drain()
+	if got, want := tableRows(t, b.db, "code_protections"), tableRows(t, a.db, "code_protections"); !slices.Equal(got,
+		want) {
+		t.Errorf("code_protections replayed on another node holds\n\t%v\nwant\n\t%v", got, want)
 	}
 }
 

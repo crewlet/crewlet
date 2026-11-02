@@ -328,6 +328,19 @@ archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
 
+**Every rule names who last changed it, and when.** The rules are carried
+whole by every record that carries a repository's settings — its create, a
+settings change, a restore — and each rule's row keeps the decider of the
+record that last CHANGED it (its push controls or its gate) and that
+record's instant: a seat by its handle, a person by their human seat, an
+unbound credential by its login, and nobody for a rule the company document
+declares, whose source is the configuration. A record that carries a rule
+unchanged, as a description edit or another pattern's protection does,
+leaves the rule's source as it was. A read of one repository in detail that
+asks for its gates answers each rule's source beside them (`rule_sources`:
+`pattern`, `set_by`, `set_by_kind` and `set_at`), and Settings › Code and the
+repository's Settings tab draw it under each rule.
+
 A declared repository's rules change only with its declaration. Those of a
 repository a tool made change one pattern at a time through a lifecycle
 request, where a seat may add a rule or tighten one and only a person removes

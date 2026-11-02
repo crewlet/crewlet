@@ -2572,6 +2572,12 @@ type RepoDetail struct {
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
+	// RuleSources are who set each of its rules and when ([RuleSource]),
+	// every rule's — a gate's or none — in pattern order, and to the read
+	// that asks for the gates alone: the two are a rule in detail, which the
+	// row never carries, read in the same transaction as the rules it does,
+	// so every source names a rule of the row.
+	RuleSources []RuleSource `json:"rule_sources,omitempty"`
 	// Expunge is where the repository's expunges stand ([ExpungeState]):
 	// the one open, the purge a person asked for and not yet served, and the
 	// last one committed — the repository's own row, read with the rest of
@@ -2583,6 +2589,28 @@ type RepoDetail struct {
 	// with its expunge in one seek of its row, never on the [RepoRef] every
 	// push and fetch reads, which needs only [RepoRef.Mirrored].
 	Remotes RemoteState `json:"remotes,omitzero"`
+}
+
+// RuleSource is who set one of a repository's rules and when, named by the
+// rule's pattern: the decider of the record that last CHANGED the rule — its
+// push controls or its gate — and that record's instant (code_protections,
+// replicated 0141). A record that carries the rule unchanged, as every
+// settings change carries every rule, leaves its source as it was
+// ([rulesSourced]).
+//
+// A READ'S ANSWER, never a record's field: the columns are derived from what
+// every record already carries, its envelope's decider and its broker
+// instant, so none of it takes a versionedFields row (0141 states the
+// condition the derivation holds under).
+type RuleSource struct {
+	Pattern string `json:"pattern"`
+	// SetBy is the decider as the record names it: a seat's handle (SetByKind
+	// agent), a person's human seat or an unbound credential's login
+	// (operator, iam.ActorFor), and "" where the configuration set it
+	// (config), which no principal decides.
+	SetBy     string    `json:"set_by,omitempty"`
+	SetByKind ActorKind `json:"set_by_kind"`
+	SetAt     time.Time `json:"set_at"`
 }
 
 // RemoteState is a repository's other hosts as its row holds them
