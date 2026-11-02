@@ -412,6 +412,7 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code
 	deadline, err := r.budget()
 	if err != nil {
 		// THE FACTS BEFORE THEM SPENT the read's whole budget.
+		//nolint:nilerr // budget's one error is the read's git spent, which the facts answer as an omission.
 		return code.RevisionClasses{}, code.OmittedOutOfTime, nil
 	}
 	lx := &lexer{want: want, blob: r.s.classedBlob}

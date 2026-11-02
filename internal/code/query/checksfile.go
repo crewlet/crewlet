@@ -54,7 +54,7 @@ func (r *read) checksFileRead(ctx context.Context, objs found) (code.GitAnswer, 
 	})
 	narrow := fmt.Errorf("%w: reading %s did not finish in the read's %s of git", code.ErrSliceTooLarge,
 		target.id, r.s.gitBudget)
-	if err := r.failed(ctx, "read of a checks file", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "read of a checks file", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}
 	if out.buf.Len() != int(target.size) {

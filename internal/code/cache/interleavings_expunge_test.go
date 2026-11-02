@@ -812,18 +812,34 @@ func (x *expungeRun) fsck(repo string) {
 }
 
 // reachable is every commit repo's live refs reach, as git walks them in the
-// repository's work tree, which holds every commit the run made.
+// repository's work tree, which holds every commit the run made — read under
+// the case's context, a git that fails ending the case.
 func (x *expungeRun) reachable(repo string) map[string]bool {
+	out, err := x.reachableIn(x.in.t.Context(), repo)
+	if err != nil {
+		x.in.fatalf("%v", err)
+	}
+	return out
+}
+
+// reachableIn is [expungeRun.reachable] under ctx, answering git's failure:
+// the committer's decide reads it under the call it decides, on the
+// expunger's goroutine, where ending the case is not its to do.
+func (x *expungeRun) reachableIn(ctx context.Context, repo string) (map[string]bool, error) {
 	targets := x.in.w.log.liveTargets(repo)
 	out := map[string]bool{}
 	if len(targets) == 0 {
-		return out
+		return out, nil
 	}
 	args := append([]string{"rev-list"}, targets...)
-	for _, oid := range strings.Fields(x.in.w.client.Run(x.in.t, x.in.w.repos[repo].work, args...)) {
+	stdout, stderr, err := x.in.w.client.TryContext(ctx, x.in.w.repos[repo].work, nil, args...)
+	if err != nil {
+		return nil, fmt.Errorf("git %s in %s: %w\n%s", strings.Join(args, " "), repo, err, stderr)
+	}
+	for _, oid := range strings.Fields(stdout) {
 		out[oid] = true
 	}
-	return out
+	return out, nil
 }
 
 // expungeCommitter is a repository's committer as an interleaving's expunger
@@ -914,7 +930,10 @@ func (e expungeCommitter) Expunge(ctx context.Context, p code.ExpungeProposal) (
 		if err := x.in.w.keepOutputs(ctx, slices.Concat(b.Add, b.Dropping)); err != nil {
 			return code.ExpungeResult{}, err
 		}
-		scan := x.reachable(b.RepoID)
+		scan, err := x.reachableIn(ctx, b.RepoID)
+		if err != nil {
+			return code.ExpungeResult{}, err
+		}
 		pos := x.in.w.log.expungeBegin(b.RepoID, expungeRowsOf(b.Add), expungeRowsOf(b.Dropping), b.Retire...)
 		x.mu.Lock()
 		x.seq++

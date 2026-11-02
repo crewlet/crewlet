@@ -923,12 +923,12 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	if q.Cursor == "" {
 		// THE TARGETS DUE A READING, on the first page alone: at most one a
 		// branch the repository's changes target, so bounded by its refs.
-		if err := r.dueCheckTargets(ctx, tx, repoID, refresh, &pg, out); err != nil {
+		if err = r.dueCheckTargets(ctx, tx, repoID, refresh, &pg, out); err != nil {
 			return err
 		}
 		// ITS PROTECTED TARGETS' TIP WORK (tipwork.go), on the first page
 		// alone too: one a target holding a landing its tip checks owe.
-		if err := r.dueTips(ctx, tx, repoID, required, &pg, out); err != nil {
+		if err = r.dueTips(ctx, tx, repoID, required, &pg, out); err != nil {
 			return err
 		}
 	}

@@ -279,7 +279,7 @@ func (m *Mirrors) pushBatch(ctx context.Context, s cache.Synced, sc *cache.Scrat
 	case len(rejected) > 0:
 		return fmt.Errorf("the other host rejected %s", strings.Join(rejected, ", "))
 	case res.Exit != 0:
-		return errors.New("git push exited 1 naming no rejected ref: " + strings.TrimSpace(string(res.Stderr)))
+		return errors.New("git push exited 1 naming no rejected ref: " + strings.TrimSpace(res.Stderr))
 	}
 	return nil
 }

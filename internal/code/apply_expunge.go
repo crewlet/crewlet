@@ -205,7 +205,7 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 		return 0, fmt.Errorf("code: the begin at %s: %w", at.position, err)
 	}
 	if len(b.DropLayers) == 0 {
-		if _, err := tx.ExecContext(ctx, beginCountersSQL, moved.goneLive.packs, moved.addedLive.packs,
+		if _, err = tx.ExecContext(ctx, beginCountersSQL, moved.goneLive.packs, moved.addedLive.packs,
 			moved.goneLive.bytes, moved.addedLive.bytes, moved.goneLive.objects, moved.addedLive.objects,
 			b.DropEpoch, b.ExpungeID, at.packed, b.RepoID); err != nil {
 			return 0, fmt.Errorf("code: count the begin at %s: %w", at.position, err)

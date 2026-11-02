@@ -1,6 +1,7 @@
 package query
 
 import (
+	"slices"
 	"unicode"
 	"unicode/utf8"
 )
@@ -72,7 +73,7 @@ func (l *literal) write(p []byte) {
 	// themselves.
 	for len(l.carry) > 0 && len(p) > 0 && !l.found {
 		take := min(utf8.UTFMax-len(l.carry), len(p))
-		buf := append(l.carry[:len(l.carry):len(l.carry)], p[:take]...)
+		buf := slices.Concat(l.carry, p[:take])
 		if !utf8.FullRune(buf) {
 			l.carry, p = append(l.carry[:0], buf...), p[take:]
 			continue

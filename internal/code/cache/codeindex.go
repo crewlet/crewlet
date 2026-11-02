@@ -18,13 +18,14 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"golang.org/x/sys/unix"
 )
 
 // THE CODE INDEX (DerivedCodeIndex, M6-D12): the trigram index of a
@@ -231,7 +232,7 @@ func (c *Cache) indexHolder(repoID string) (holder, passesOn bool) {
 // none, where the node's bound on mappings is held whole by readers, or where
 // a file of it cannot be read — which also drops the index for the indexer to
 // build again; a search answers each by reading the tip with git grep.
-func (c *Cache) CodeIndex(s Synced) (*CodeIndexView, bool) {
+func (c *Cache) CodeIndex(ctx context.Context, s Synced) (*CodeIndexView, bool) {
 	if c.handedOut(s, "a read of the code index") != nil {
 		return nil, false
 	}
@@ -261,7 +262,7 @@ func (c *Cache) CodeIndex(s Synced) (*CodeIndexView, bool) {
 			return nil, false
 		case err != nil:
 			c.log.Warn("code_cache_codeindex_unreadable", "repo", e.id, "incarnation", inc.n, "error", err)
-			c.dropCodeIndex(e, inc, rec)
+			c.dropCodeIndex(ctx, e, inc, rec)
 			return nil, false
 		}
 		e.mu.Lock()
@@ -357,7 +358,9 @@ func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) (
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
+		// Read-only, and mapped by the time it closes: a close's error has
+		// nothing left to lose.
+		defer func() { _ = f.Close() }()
 		info, err := f.Stat()
 		if err != nil {
 			return nil, err
@@ -365,7 +368,7 @@ func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) (
 		if info.Size() != size || size == 0 {
 			return nil, fmt.Errorf("%s is %d bytes, and the index names it at %d", rel, info.Size(), size)
 		}
-		if err := c.maps.reserve(); err != nil {
+		if err = c.maps.reserve(); err != nil {
 			return nil, err
 		}
 		data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
@@ -446,8 +449,10 @@ func (c *Cache) setCodeIndex(inc *incarnation, rec *codeIndexState) {
 }
 
 // dropCodeIndex drops inc's code index where it is still rec, and writes the
-// state that names it no more.
-func (c *Cache) dropCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) {
+// state that names it no more — under ctx's values but never its
+// cancellation: the drop is already made in memory, so a write the caller's
+// ending cut would leave the state naming an index nothing keeps.
+func (c *Cache) dropCodeIndex(ctx context.Context, e *entry, inc *incarnation, rec *codeIndexState) {
 	e.mu.Lock()
 	stale := inc.codeIndexRecord() != rec || inc.discarded
 	if !stale {
@@ -455,7 +460,7 @@ func (c *Cache) dropCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) {
 	}
 	e.mu.Unlock()
 	if !stale {
-		if err := c.persist(context.WithoutCancel(context.Background()), e, inc, false); err != nil {
+		if err := c.persist(context.WithoutCancel(ctx), e, inc, false); err != nil {
 			c.log.Warn("code_cache_codeindex_drop_failed", "repo", e.id, "error", err)
 		}
 	}
@@ -466,11 +471,11 @@ func (c *Cache) dropCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) {
 type IndexOutcome string
 
 const (
-	// IndexCurrent: the index already answers for the branch's tip.
+	// IndexCurrent means the index already answers for the branch's tip.
 	IndexCurrent IndexOutcome = "current"
-	// IndexBuilt: the index now answers for the branch's tip.
+	// IndexBuilt means the index now answers for the branch's tip.
 	IndexBuilt IndexOutcome = "built"
-	// IndexNone: the repository keeps no index here — its search is grep,
+	// IndexNone means the repository keeps no index here — its search is grep,
 	// or its default branch names no commit.
 	IndexNone IndexOutcome = "none"
 )
@@ -499,7 +504,7 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	e.mu.Unlock()
 	if s.Repo.Search != code.SearchIndexed {
 		if rec != nil {
-			c.dropCodeIndex(e, inc, rec)
+			c.dropCodeIndex(ctx, e, inc, rec)
 		}
 		return IndexNone, nil
 	}
@@ -516,7 +521,7 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	}
 	var view *CodeIndexView
 	if rec != nil {
-		if view, _ = c.CodeIndex(s); view == nil {
+		if view, _ = c.CodeIndex(ctx, s); view == nil {
 			e.mu.Lock()
 			rec = inc.codeIndexRecord()
 			e.mu.Unlock()
@@ -789,7 +794,9 @@ func (c *Cache) catBlobs(ctx context.Context, s Synced, oids []codeindex.OID, to
 	ctx, cancel := context.WithCancel(ctx)
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	done := make(chan error, 1)
+	// done closes as the process ends: its error reaches the blob reads
+	// through the pipe it closes the output with, and nothing else needs it.
+	done := make(chan struct{})
 	go func() {
 		for _, oid := range oids {
 			if _, err := io.WriteString(inW, oid.String()+"\n"); err != nil {
@@ -806,7 +813,7 @@ func (c *Cache) catBlobs(ctx context.Context, s Synced, oids []codeindex.OID, to
 		})
 		_ = outW.CloseWithError(errors.Join(err, io.EOF))
 		_ = inR.Close()
-		done <- err
+		close(done)
 	}()
 	r := bufio.NewReader(outR)
 	blob = func(want codeindex.OID) ([]byte, error) {
@@ -1021,7 +1028,7 @@ func (c *Cache) seedCodeIndex(e *entry, replaced, inc *incarnation) {
 	c.setCodeIndex(inc, rec)
 }
 
-// IndexFailed: the copy could not be synced or its index built, and the
+// IndexFailed means the copy could not be synced or its index built, and the
 // indexer's next look tries again.
 const IndexFailed IndexOutcome = "failed"
 
@@ -1044,6 +1051,7 @@ func (c *Cache) indexer(ctx context.Context) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	//nolint:contextcheck // c.life only cancels ctx, which stays Start's: Stop must end the indexer however long Start's ctx lives.
 	defer context.AfterFunc(c.life, cancel)()
 	var ticks <-chan time.Time
 	if c.knobs != nil && c.knobs.indexTicks != nil {
@@ -1161,7 +1169,7 @@ func (c *Cache) indexHeld(ctx context.Context, repoID string) (IndexOutcome, err
 		return "", err
 	}
 	if !slices.Contains(order[:min(len(order), code.IndexHolders)], c.placement.Node) {
-		c.dropIndexOf(repoID)
+		c.dropIndexOf(ctx, repoID)
 		return IndexNone, nil
 	}
 	s, err := c.Sync(ctx, repoID, statelog.Freshness{Level: statelog.ReadStale})
@@ -1174,7 +1182,7 @@ func (c *Cache) indexHeld(ctx context.Context, repoID string) (IndexOutcome, err
 
 // dropIndexOf drops the code index of repoID's current copy, where this node
 // holds one that keeps an index; it syncs nothing.
-func (c *Cache) dropIndexOf(repoID string) {
+func (c *Cache) dropIndexOf(ctx context.Context, repoID string) {
 	c.mu.Lock()
 	e := c.entries[repoID]
 	c.mu.Unlock()
@@ -1189,7 +1197,7 @@ func (c *Cache) dropIndexOf(repoID string) {
 	}
 	e.mu.Unlock()
 	if rec != nil {
-		c.dropCodeIndex(e, inc, rec)
+		c.dropCodeIndex(ctx, e, inc, rec)
 	}
 }
 
@@ -1241,7 +1249,7 @@ func (c *Cache) trimCodeIndexes(ctx context.Context) bool {
 		}
 		c.log.Info("code_cache_index_trimmed", "repo", cand.e.id, "bytes", cand.rec.bytes(),
 			"share", c.codeIndexShare())
-		c.dropCodeIndex(cand.e, cand.inc, cand.rec)
+		c.dropCodeIndex(ctx, cand.e, cand.inc, cand.rec)
 		dropped = true
 	}
 	return dropped

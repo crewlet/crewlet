@@ -2127,10 +2127,10 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —
 			// under the CLAIMANT's lease, which the claim stamped on the
 			// row ([PendingStore.ClaimForResume]).
-			taken, err := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
-			if err != nil {
+			taken, takeErr := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
+			if takeErr != nil {
 				return fmt.Errorf("sandbox: recording that run %s's turn took its answer: %w",
-					run.TurnID, err)
+					run.TurnID, takeErr)
 			}
 			if !taken {
 				return fmt.Errorf("sandbox: run %s is no longer the claim that holds its answer: "+
@@ -2155,7 +2155,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// without: "this node cannot resume this run" is the resumer's own
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
 	// path below like every other failed resume.
-	if err := c.resume.Resume(ctx, ResumeRequest{
+	if err = c.resume.Resume(ctx, ResumeRequest{
 		Run: run, State: state, Bridged: bridged, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,

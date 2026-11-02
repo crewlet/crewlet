@@ -93,6 +93,7 @@ func (c *Compactor) Compact(ctx context.Context, cand code.CompactionCandidate) 
 	defer c.compacting.Unlock()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	//nolint:contextcheck // c.life only cancels ctx, which stays the caller's: Stop must end the compaction however long the caller's ctx lives.
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
 	reserved, ok := c.claimCompaction(cand.ID)

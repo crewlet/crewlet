@@ -153,7 +153,7 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 	}
 	narrow := fmt.Errorf("%w: listing %q did not finish in the read's %s of git: list a directory below it, "+
 		"or without recursion", code.ErrSliceTooLarge, dir, r.s.gitBudget)
-	if err := r.failed(ctx, "listing of a tree", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "listing of a tree", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}
 	if start > 0 && start >= total {

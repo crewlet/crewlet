@@ -143,7 +143,7 @@ func (r *Retention) expireIn(ctx context.Context, now time.Time, id string, page
 			return false, nil
 		}
 		p.Commands, cmds = cmds[:n], cmds[n:]
-		switch turn, err := pace.wait(ctx); {
+		switch turn, err := pace.wait(ctx); { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		case err != nil:
 			return false, err
 		case !turn:

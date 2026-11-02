@@ -1437,7 +1437,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 	// install before it produces a token, so a seat with no headroom must
 	// learn that now and fall back to its own tools rather than after the
 	// job has died mid-run having delivered nothing.
-	if err := sandboxHeadroom(ctx, e.remainingFor(company, seat.Handle()),
+	if err = sandboxHeadroom(ctx, e.remainingFor(company, seat.Handle()),
 		company.Config.TurnEngine.SandboxMinBudgetTokens); err != nil {
 		return sandbox.LaunchResult{}, err
 	}
@@ -1447,7 +1447,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 	// or torn down under a zero TTL — so this call provisions a fresh one
 	// and the work re-seeds from the pushed branch.
 	reuse := ""
-	if existing, found, err := pending.Get(ctx, t.RunID); err == nil && found {
+	if existing, found, err := pending.Get(ctx, t.RunID); err == nil && found { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		reuse = existing.SandboxID
 	}
 
@@ -1491,7 +1491,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 		Env:             env,
 		CredentialFiles: coding.files,
 	})
-	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
+	if err = sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
 		return sandbox.LaunchResult{}, err
 	}
 

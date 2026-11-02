@@ -51,23 +51,12 @@ func (e estate) Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksRe
 	return e.d.Served().PublishChecks(ctx, r)
 }
 
-// order is a git order a case sets: every repository's the same.
-type order struct {
-	mu    sync.Mutex
-	nodes []string
-}
+// order is the git order a case fixes when it builds its runner: every
+// repository's the same, and never moved under the runner, so it needs no
+// lock.
+type order struct{ nodes []string }
 
-func (o *order) GitOrder(string) ([]string, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return slices.Clone(o.nodes), nil
-}
-
-func (o *order) set(nodes ...string) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.nodes = nodes
-}
+func (o *order) GitOrder(string) ([]string, error) { return slices.Clone(o.nodes), nil }
 
 // tokens mints a token naming the attempt it is for.
 type tokens struct{}

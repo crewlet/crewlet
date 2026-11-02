@@ -66,9 +66,9 @@ const (
 	// owner or path owners — taking a glob from a path owner, where a merge
 	// gate sets owners_approve, a person's alone ([gatingOwnersTaken]).
 	LifecycleSettings LifecycleKind = "settings"
-	// LifecycleArchive makes it read-only, and LifecycleUnarchive takes it
-	// back.
-	LifecycleArchive   LifecycleKind = "archive"
+	// LifecycleArchive makes it read-only.
+	LifecycleArchive LifecycleKind = "archive"
+	// LifecycleUnarchive takes an archived one back: writable again.
 	LifecycleUnarchive LifecycleKind = "unarchive"
 	// LifecycleDelete deletes it, restorable until its purge.
 	LifecycleDelete LifecycleKind = "delete"
@@ -101,28 +101,28 @@ func (k LifecycleKind) Valid() bool { return slices.Contains(LifecycleKinds(), k
 type LifecycleRefusal string
 
 const (
-	// LifecycleNotPermitted: the actor may not ask this of this repository
+	// LifecycleNotPermitted means the actor may not ask this of this repository
 	// ([lifecycleRefusal]).
 	LifecycleNotPermitted LifecycleRefusal = "not_permitted"
-	// LifecycleConfigManaged: code.repos declares the repository, and a
+	// LifecycleConfigManaged means code.repos declares the repository, and a
 	// configuration-managed repository takes no tool's write.
 	LifecycleConfigManaged LifecycleRefusal = "config_managed"
-	// LifecycleNameTaken: the name is another repository's, a deleted one's
+	// LifecycleNameTaken means the name is another repository's, a deleted one's
 	// until its purge, or an old name still redirecting to one.
 	LifecycleNameTaken LifecycleRefusal = "name_taken"
-	// LifecycleScratchLimit: the seat holds code.scratch.max_per_seat scratch
+	// LifecycleScratchLimit means the seat holds code.scratch.max_per_seat scratch
 	// repositories, a deleted one counting until its purge.
 	LifecycleScratchLimit LifecycleRefusal = "scratch_limit"
-	// LifecycleRepoLimit: the code log holds config.CodeMaxRepos project
+	// LifecycleRepoLimit means the code log holds config.CodeMaxRepos project
 	// repositories, declared ones and every status short of purged included.
 	LifecycleRepoLimit LifecycleRefusal = "repo_limit"
-	// LifecycleRepoDeleted: the repository is deleted (and this is not its
+	// LifecycleRepoDeleted means the repository is deleted (and this is not its
 	// restore), being purged, or purged.
 	LifecycleRepoDeleted LifecycleRefusal = "repo_deleted"
-	// LifecycleStale: the repository moved between the decide and its apply —
+	// LifecycleStale means the repository moved between the decide and its apply —
 	// a rename another rename beat to the repository.
 	LifecycleStale LifecycleRefusal = "stale"
-	// LifecycleRefDeleted: the seat's branch a hold names is absent or a
+	// LifecycleRefDeleted means the seat's branch a hold names is absent or a
 	// tombstone at the decide's snapshot, which is at or past the turn's read
 	// of it ([LifecycleRequest.Seen]) — so it was deleted after the turn read
 	// it. A hold's alone: the turn's request is refused before it reads or
@@ -1419,7 +1419,7 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 	result, err := s.publisher.Publish(ctx, statelog.Request{
 		Subject: subject.statelog(), Scope: statelog.ScopeSet{Paths: scope},
 		OpID: req.OpID, Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 			d = lifecycleDecision{}
 			cp, err := checkpointIn(ctx, tx)
 			if err != nil {
@@ -1455,7 +1455,7 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 			switch {
 			case err != nil:
 				return statelog.Decision{}, err
-			case taken && !(holder == req.RepoID && redirect.Valid):
+			case taken && (holder != req.RepoID || !redirect.Valid):
 				// ITS OWN REDIRECTING OLD NAME may be taken back; any other
 				// holder keeps the name.
 				d.refuse(LifecycleNameTaken, "%s", s.takenDetail(ctx, tx, req.Name, holder, redirect))
@@ -1966,6 +1966,7 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 		// stands now, at the first copy's position — and its rule read back
 		// with it, never the one this call's decide resolved, which nothing
 		// published.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		back, rule, err := s.readRepo(ctx, id, pattern)
 		if err != nil {
 			return LifecycleResult{}, err

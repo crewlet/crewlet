@@ -649,17 +649,17 @@ func (r *Runner) consider(ctx context.Context, company Company, w *walking, c co
 		}
 	}
 	if !r.reserve(w, cell) {
-		slot.Release()
+		slot.Release(ctx)
 		return time.Time{}
 	}
 	started := r.now()
 	if !r.claim(ctx, c, cell, started) {
-		slot.Release()
+		slot.Release(ctx)
 		r.release(cell)
 		return time.Time{}
 	}
 	r.wg.Add(1)
-	go func() {
+	go func() { //nolint:contextcheck // The run is the runner's, not this walk's: it runs under r.life, so a walk that ends never cuts the box it started, and records its ending under Stop's context.
 		defer r.wg.Done()
 		defer r.release(cell)
 		r.run(c, cell, started, slot)

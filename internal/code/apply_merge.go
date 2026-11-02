@@ -155,7 +155,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	// already is a push landed — which only this merge's own record, met
 	// again past the version guard, could have landed — and the change is
 	// never merged by a record whose push the history skips.
-	landed, err := keySet(ctx, tx, pushesAppliedSQL, []string{m.MergeID})
+	landed, err := pushesApplied(ctx, tx, []string{m.MergeID})
 	if err != nil {
 		return 0, fmt.Errorf("code: read whether the merge at %s landed its push: %w", at.position, err)
 	}
@@ -175,7 +175,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 		next.mergedOperator = m.Principal.OperatorID
 	}
 	next.version, next.position = row.version+1, at.packed
-	if err := writeChanges(ctx, tx, at.maxVariables, changeMerged, []*changeRow{&next}); err != nil {
+	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, []*changeRow{&next}); err != nil {
 		return 0, fmt.Errorf("code: merge change %s at %s: %w", m.ChangeID, at.position, err)
 	}
 	rows := 1
@@ -196,7 +196,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	// 3 THE LANDING AND THE GREEN ROW, as the decide's snapshot judged the
 	// target.
 	if m.Protected {
-		if err := writeLandings(ctx, tx, at, m.RepoID, []landing{{target: m.TargetRef, ordinal: 1,
+		if err = writeLandings(ctx, tx, at, m.RepoID, []landing{{target: m.TargetRef, ordinal: 1,
 			kind: LandedDirect, change: m.ChangeID, base: m.BaseOID, commit: m.CommitOID, by: by,
 			green: m.Green}}); err != nil {
 			return 0, err
@@ -204,7 +204,7 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 		rows++
 	}
 	if m.Green {
-		if err := advanceGreen(ctx, tx, at, m.RepoID, m.TargetRef, m.CommitOID); err != nil {
+		if err = advanceGreen(ctx, tx, at, m.RepoID, m.TargetRef, m.CommitOID); err != nil {
 			return 0, err
 		}
 		rows++

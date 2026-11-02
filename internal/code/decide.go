@@ -539,7 +539,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	// THE BRANCHES THE BATCH'S CHANGES PROPOSE INTO, where no command of it
 	// names them: an open is judged by its target's head as well as its
 	// source's, and the working state holds only the refs commands name.
-	if err := w.readTargets(ctx, tx, repoID, changeTargets(batch, open, repo)); err != nil {
+	if err = w.readTargets(ctx, tx, repoID, changeTargets(batch, open, repo)); err != nil {
 		return nil, nil, batchMoves{}, 0, err
 	}
 	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
@@ -1007,7 +1007,7 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 	}
 	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
 		packs: repo.livePacks, occupied: map[string]string{}, touched: map[string]bool{}}
-	if err := w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
+	if err = w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
 		return nil, err
 	}
 	if w.expiry, err = expiryRowsIn(ctx, tx, repoID, repo, batch, open); err != nil {

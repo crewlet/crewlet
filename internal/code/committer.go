@@ -658,7 +658,7 @@ func newCommitter(o CommitterOptions, announcements int) (*Committer, error) {
 		c.announcements = make(chan announcement, announcements)
 		c.announcerDone = make(chan struct{})
 		c.endAnnouncements = sync.OnceFunc(func() { close(c.announcements) })
-		go c.announcer()
+		go c.announcer(c.life)
 	}
 	return c, nil
 }

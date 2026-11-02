@@ -490,6 +490,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	d := mergeDecision{version: repo.version}
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, m.RepoID, repo, found, retention)
 		if err != nil {
 			return mergeDecision{}, err
@@ -747,6 +748,7 @@ func (c *Committer) mergeAnswer(ctx context.Context, p MergeProposal, last merge
 	res statelog.Result, err error) (MergeResult, *types.ChangeMerged, error) {
 
 	if err != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		out, err := c.refusedMerge(ctx, p, err)
 		return out, nil, err
 	}

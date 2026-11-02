@@ -107,20 +107,20 @@ func (r Reply) Answers() string { return r.Request }
 type Outcome string
 
 const (
-	// OutcomeSearched: the node answered its lines.
+	// OutcomeSearched means the node answered its lines.
 	OutcomeSearched Outcome = "searched"
-	// OutcomeUnready: the node could not answer it now, for a reason about
+	// OutcomeUnready means the node could not answer it now, for a reason about
 	// the node (code.ErrGitUnready); its runner-up is asked.
 	OutcomeUnready Outcome = "unready"
-	// OutcomeNotPermitted: the node judged the asker's grant and it does not
+	// OutcomeNotPermitted means the node judged the asker's grant and it does not
 	// cover the repository (code.ErrNotPermitted) — a chart that moved since
 	// the asker's listing.
 	OutcomeNotPermitted Outcome = "not_permitted"
-	// OutcomeNoRef: the repository holds no such ref or commit
+	// OutcomeNoRef means the repository holds no such ref or commit
 	// (code.ErrRefNotFound, code.ErrObjectNotFound): nothing in it to search
 	// at what the query names.
 	OutcomeNoRef Outcome = "no_ref"
-	// OutcomeFailed: the node refused it for any other reason — a request
+	// OutcomeFailed means the node refused it for any other reason — a request
 	// this build reads otherwise than its asker's; its runner-up is asked.
 	OutcomeFailed Outcome = "failed"
 )

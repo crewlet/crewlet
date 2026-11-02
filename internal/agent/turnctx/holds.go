@@ -266,7 +266,7 @@ func (h *Holds) takeWritten(ctx context.Context, keys []string) (again bool, err
 		return true, nil
 	}
 	h.mu.Unlock()
-	written := append(fresh, owed...)
+	written := slices.Concat(fresh, owed)
 	if err := write(ctx, written); err != nil {
 		return false, err
 	}

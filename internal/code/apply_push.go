@@ -149,7 +149,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	for _, e := range p.Pushes {
 		ids = append(ids, e.PushID)
 	}
-	applied, err := keySet(ctx, tx, pushesAppliedSQL, ids)
+	applied, err := pushesApplied(ctx, tx, ids)
 	if err != nil {
 		return 0, fmt.Errorf("code: read the applied pushes at %s: %w", at.position, err)
 	}
@@ -446,7 +446,7 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 		return 0, fmt.Errorf("code: the push at %s: %w", at.position, err)
 	}
 	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
-		if err := tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
+		if err = tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
 			return 0, fmt.Errorf("code: read %s's next change at %s: %w", repoID, at.position, err)
 		}
 	}
@@ -1136,6 +1136,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
 			return 0, fmt.Errorf("code: purge %s at %s: %w", p.RepoID, at.position, err)
@@ -1181,27 +1182,28 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	return deleted + int(n), nil
 }
 
-// keySet reads the keys among keys a statement over json_each finds.
-func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[string]bool, error) {
+// pushesApplied is the push ids among ids that the history holds already: a
+// push landed ([pushesAppliedSQL]).
+func pushesApplied(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error) {
 	out := map[string]bool{}
-	if len(keys) == 0 {
+	if len(ids) == 0 {
 		return out, nil
 	}
-	list, err := jsonList(keys)
+	list, err := jsonList(ids)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, query, list)
+	rows, err := tx.QueryContext(ctx, pushesAppliedSQL, list)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		out[k] = true
+		out[id] = true
 	}
 	return out, rows.Err()
 }

@@ -634,7 +634,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 		if len(reads) != 1 || reads[0].Asker != c.want {
 			t.Errorf("%s asked as %+v, want %+v", name, reads, c.want)
 		}
-		if want := builtin.CodeAskerOf(mustActor(t, c.ctx)); want != c.want {
+		if want := builtin.CodeAskerOf(mustActor(c.ctx, t)); want != c.want {
 			t.Errorf("%s converts to %+v through CodeAskerOf, want %+v", name, want, c.want)
 		}
 	}
@@ -653,7 +653,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 }
 
 // mustActor is the actor the operator surface writes ctx's principal down as.
-func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
+func mustActor(ctx context.Context, t *testing.T) builtin.Actor {
 	t.Helper()
 	a, err := builtin.PrincipalActor(ctx, nil)
 	if err != nil {

@@ -386,7 +386,7 @@ func (l *Loop) Start() {
 	l.mu.Unlock()
 	go l.passes()
 	for range l.turnsAtOnce {
-		go l.turns()
+		go l.turns(l.life)
 	}
 	l.log.Info("code_home_started", "node", l.o.NodeID, "workers", workers, "backstop", l.backstop,
 		"concurrency", l.turnsAtOnce, "own_reads", OwnReads(l.o.Share.Units()))
@@ -665,20 +665,21 @@ func (l *Loop) signal() {
 	}
 }
 
-// turns works the queue, one pair at a time, until the loop stops.
-func (l *Loop) turns() {
+// turns works the queue, one pair at a time, until life — the loop's, which
+// Stop ends — does.
+func (l *Loop) turns(life context.Context) {
 	defer l.wg.Done()
 	for {
 		k, floor, ok := l.next()
 		if !ok {
 			select {
-			case <-l.life.Done():
+			case <-life.Done():
 				return
 			case <-l.ready:
 			}
 			continue
 		}
-		l.turn(k, floor)
+		l.turn(life, k, floor)
 	}
 }
 
@@ -702,16 +703,16 @@ func (l *Loop) next() (turnKey, statelog.Position, bool) {
 	return k, floor, true
 }
 
-// turn works one pair under a context one [Backstop] long, counts it, and
-// queues it once more where it was asked for again meanwhile.
-func (l *Loop) turn(k turnKey, floor statelog.Position) {
+// turn works one pair under a context one [Backstop] long, inside life,
+// counts it, and queues it once more where it was asked for again meanwhile.
+func (l *Loop) turn(life context.Context, k turnKey, floor statelog.Position) {
 	l.mu.Lock()
 	w := l.workers[k.worker]
 	l.mu.Unlock()
-	ctx, cancel := context.WithTimeout(l.life, l.backstop)
+	ctx, cancel := context.WithTimeout(life, l.backstop)
 	began := l.now()
 	err := w.Work(ctx, k.repo, floor)
-	cut := ctx.Err() != nil && l.life.Err() == nil
+	cut := ctx.Err() != nil && life.Err() == nil
 	cancel()
 	outcome := outcomeWorked
 	switch {
@@ -719,12 +720,12 @@ func (l *Loop) turn(k turnKey, floor statelog.Position) {
 		outcome = outcomeCut
 		l.log.Info("code_home_turn_cut", "worker", w.Name(), "repo", k.repo, "took", l.now().Sub(began),
 			"detail", "the repository's work outlasted its turn; the next pass lists what is left of it")
-	case err != nil && l.life.Err() == nil:
+	case err != nil && life.Err() == nil:
 		outcome = outcomeFailed
 		l.log.Warn("code_home_turn_failed", "worker", w.Name(), "repo", k.repo, "error", err,
 			"detail", "the next pass lists what is left of the repository's work")
 	}
-	if l.o.Metrics != nil && l.life.Err() == nil {
+	if l.o.Metrics != nil && life.Err() == nil {
 		l.o.Metrics.Add(metrics.CodeHomePasses, 1, metrics.Attrs{"worker": w.Name(), "outcome": outcome})
 	}
 	l.mu.Lock()

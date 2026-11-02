@@ -321,7 +321,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 
 	var made int64
 	for i, out := range c.Add {
-		if err := out.Check(); err != nil {
+		if err = out.Check(); err != nil {
 			d.refusal, d.detail = RefusalPackTooLarge, fmt.Sprintf("output %d (pack %s): %v", i, out.PackID, err)
 			return d, nil
 		}

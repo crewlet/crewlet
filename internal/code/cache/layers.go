@@ -2074,6 +2074,7 @@ func (c *Cache) runInstaller(ctx context.Context) {
 	// lifetime, whichever ends first: Stop waits for the tasks (enter).
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	//nolint:contextcheck // c.life only cancels ctx, which stays Start's: Stop must end every task however long Start's ctx lives.
 	defer context.AfterFunc(c.life, cancel)()
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
@@ -2427,8 +2428,8 @@ func (c *Cache) fetchForInstall(ctx context.Context, id string, row code.LayerRo
 		return layerFetch{row: row, err: err, outcome: layerFailed}
 	}
 	share := c.installer.share
-	err = c.fetchParts(ctx, st, files, func(ctx context.Context) ([]byte, func(), error) {
-		if err := share.Acquire(ctx, 1); err != nil {
+	err = c.fetchParts(ctx, st, files, func(ctx context.Context) (_ []byte, _ func(), err error) {
+		if err = share.Acquire(ctx, 1); err != nil {
 			return nil, nil, err
 		}
 		buf, err := c.fetches.take(ctx)
@@ -2505,11 +2506,14 @@ const (
 // incarnation (swap.go's layer step), under the repository's write lock, and
 // answers what became of it: made, the copy or its chain moved under the
 // install since it planned at gen — which leaves the downloads unplaced — the
-// canary refusing what it added, or the swap failing.
+// canary refusing what it added, or the swap failing. The lock is waited for
+// under ctx, as the swap runs: the installer's, which Stop ends with the
+// cache's lifetime (runInstaller), so a wait outliving it would only hold a
+// placement no swap could make.
 func (c *Cache) placeBySwap(ctx context.Context, e *entry, inc *incarnation, gen uint64, rows []code.LayerRow,
 	fetched []*stagedLayer) chainPlacement {
 
-	if err := c.acquireWrite(c.life, e); err != nil {
+	if err := c.acquireWrite(ctx, e); err != nil {
 		return placementFailed
 	}
 	defer c.releaseWrite(e, writeExclusive)

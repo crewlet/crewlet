@@ -157,7 +157,7 @@ func TestAReviewersListingWalksOnlyTheAsksStillWaiting(t *testing.T) {
 	open := func(source string) code.ChangeResult {
 		t.Helper()
 		if source != featureRef && source != releaseRef {
-			n.push(web, entry(uuid.Must(uuid.NewV7()).String(), set(source, code.ZeroOID, oidOf(source))))
+			n.push(web, entry(uuid.Must(uuid.NewV7()).String(), set(source, code.ZeroOID, oidOf(source)))) //nolint:contextcheck // the harness publishes under the test's context, which ctx is
 		}
 		res, err := c.ProposeChange(ctx, opening(web, source, mainRef, dev))
 		requireChanged(t, res, err)

@@ -447,6 +447,7 @@ func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time
 			return stale("%s's import has landed %d chunks, and this is chunk %d: a chunk lands only in its turn",
 				repo.name, repo.importSeq, c.Seq)
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		cmds, refusal, detail, err := decideMoves(ctx, tx, repoID, repo, c.Packs, c.Commands, limits, now)
 		if err != nil || refusal != "" {
 			d.refusal, d.detail = refusal, detail
@@ -686,7 +687,7 @@ func (c *Committer) appliedRemote(ctx context.Context, w remoteWrite, opID strin
 	var landed map[string]bool
 	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		landed, err = keySet(ctx, tx, pushesAppliedSQL, []string{opID})
+		landed, err = pushesApplied(ctx, tx, []string{opID})
 		return err
 	}); err != nil {
 		failed := fmt.Errorf("code: the record of operation %s applied at %s and its push row could not be "+

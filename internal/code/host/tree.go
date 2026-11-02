@@ -50,6 +50,14 @@ const maxEntryMode = 11
 // errBadTree is a tree whose bytes are not git's tree format.
 var errBadTree = errors.New("host: not a tree as git writes one")
 
+// cutTree is errBadTree for an entry its read ended inside, what naming the
+// part cut short: the read's error is told, NEVER WRAPPED — io.EOF is the
+// tree's end to parseTree, so an error wrapping it would read a tree cut
+// mid-entry as whole.
+func cutTree(what string, err error) error {
+	return fmt.Errorf("%w: %s (%v)", errBadTree, what, err) //nolint:errorlint // told, never wrapped: see above
+}
+
 // parseTree reads the raw tree r — git's own format, as `cat-file --batch`
 // sends a tree's contents — handing each entry to each as it is read, in the
 // order the tree holds them. An entry that does not parse is errBadTree naming
@@ -71,7 +79,7 @@ func parseTree(r io.Reader, each func(treeEntry) error) error {
 		var e treeEntry
 		e.mode, e.name = mode, name
 		if _, err := io.ReadFull(br, e.id[:]); err != nil {
-			return fmt.Errorf("%w: the entry %q ends before its object id (%v)", errBadTree, name, err)
+			return cutTree(fmt.Sprintf("the entry %q ends before its object id", name), err)
 		}
 		if err := each(e); err != nil {
 			return err
@@ -89,7 +97,7 @@ func readMode(br *bufio.Reader) (string, error) {
 		case errors.Is(err, io.EOF) && len(mode) == 0:
 			return "", io.EOF
 		case err != nil:
-			return "", fmt.Errorf("%w: an entry's mode ends with no space (%v)", errBadTree, err)
+			return "", cutTree("an entry's mode ends with no space", err)
 		case c == ' ' && len(mode) > 0:
 			return string(mode), nil
 		case c < '0' || c > '7' || len(mode) == maxEntryMode:
@@ -118,7 +126,7 @@ func readName(br *bufio.Reader) (string, error) {
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		default:
-			return "", fmt.Errorf("%w: an entry's name ends with no NUL (%v)", errBadTree, err)
+			return "", cutTree("an entry's name ends with no NUL", err)
 		}
 	}
 }
@@ -407,7 +415,10 @@ func (b *batchReader) Write(p []byte) (int, error) {
 				p = p[len(p):]
 				continue
 			}
-			line := append(b.header, p[:j]...)
+			// THE HEADER'S BUFFER IS THE LINE'S, read before anything is
+			// appended to it again.
+			b.header = append(b.header, p[:j]...)
+			line := b.header
 			b.header = b.header[:0]
 			p = p[j+1:]
 			if err := b.answer(line); err != nil {

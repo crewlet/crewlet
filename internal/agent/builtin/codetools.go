@@ -2233,6 +2233,7 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if s := strings.TrimSpace(argString(args, "since")); s != "" {
 		since, err := time.Parse(time.RFC3339, s)
 		if err != nil {
+			//nolint:nilerr // A tool failure is a RESULT the model reads.
 			return failed(fmt.Sprintf("%s: `since` is a time in RFC 3339, such as 2026-10-01T00:00:00Z — "+
 				"not %q.", t.Name(), clip(s))), nil
 		}

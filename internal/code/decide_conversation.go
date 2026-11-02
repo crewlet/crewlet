@@ -696,6 +696,7 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	var d conversationDecision
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return conversationDecision{}, err

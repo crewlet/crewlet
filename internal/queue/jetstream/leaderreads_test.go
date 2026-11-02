@@ -368,6 +368,7 @@ func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 		{"a group's acknowledgement floor",
 			jsapitest.ConsumerInfo(probeDomain().Name, domainGroupName(probeDomain().Name, "feed")),
 			func(ctx context.Context, q *Queue) error {
+				//nolint:contextcheck // Opening the log is the case's setup, under the test's context: ctx is the deadline-less read under test.
 				log, err := q.DomainLog(t.Context(), probeDomain().Name)
 				if err != nil {
 					return err

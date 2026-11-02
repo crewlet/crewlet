@@ -101,7 +101,7 @@ func (r *read) mergeBase(ctx context.Context, base, head string, tooLong error) 
 		Args: []string{"merge-base", base, head}, Config: r.s.o.Cache.ServeConfig(),
 		Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
-	if err := r.failed(ctx, "merge base", res, err, tooLong); err != nil {
+	if err = r.failed(ctx, "merge base", res, err, tooLong); err != nil {
 		return "", err
 	}
 	if res.Exit == 1 {
@@ -126,7 +126,7 @@ func (r *read) sides(ctx context.Context, base, head string) (behind, ahead int,
 		Args:   append([]string{"rev-list", "--left-right", "--count"}, base+"..."+head),
 		Config: r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if err := r.failed(ctx, "count of the commits on each side", res, err, r.walkTooLong(base, head)); err != nil {
+	if err = r.failed(ctx, "count of the commits on each side", res, err, r.walkTooLong(base, head)); err != nil {
 		return 0, 0, err
 	}
 	left, right, ok := strings.Cut(strings.TrimSpace(string(res.Stdout)), "\t")

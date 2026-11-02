@@ -268,6 +268,7 @@ func (c *Compactor) Expunge(ctx context.Context, cand code.ExpungeCandidate) (Ou
 	defer c.expunging.Unlock()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	//nolint:contextcheck // c.life only cancels ctx, which stays the caller's: Stop must end the cycle however long the caller's ctx lives.
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	if !c.claimExpunge(cand.ID) {
 		c.log.Debug("code_expunge_busy", "repo", cand.Name,
@@ -395,7 +396,7 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 			return OutcomeNotDue, nil
 		}
 	} else {
-		if out, err := c.due(ctx, cand, s, drops, limits); out != "" {
+		if out, err := c.due(ctx, cand, s, drops, limits); out != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			return out, err
 		}
 		p = planExpunge(c.o.Cache.Packs(s), arrivedBy(c.now().Add(-code.PruneGrace)), cap)
@@ -595,7 +596,7 @@ func (c *Compactor) sortIn(ctx context.Context, s cache.Synced, sc *cache.Scratc
 		Args: []string{"pack-objects", "--revs", "--local", "--non-empty",
 			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
 		Stdin:  strings.NewReader(keep.String()),
-		Config: CompactConfig(limits.MaxBlobBytes),
+		Config: PackConfig(limits.MaxBlobBytes),
 		// THE WALK FROM EVERY TIP reads the repository's whole history,
 		// whatever few packs the inputs are: a deadline sized by them alone
 		// would cut a large repository's walk short.
@@ -649,7 +650,7 @@ func (c *Compactor) packDropping(ctx context.Context, adm *cache.Admission, sc *
 		Args: []string{"pack-objects", "--stdin-packs", "--non-empty",
 			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
 		Stdin:    strings.NewReader(list.String()),
-		Config:   CompactConfig(limits.MaxBlobBytes),
+		Config:   PackConfig(limits.MaxBlobBytes),
 		Deadline: gitproc.PackWorkDeadline(p.packBytes()),
 	})
 	if err != nil {
@@ -1031,7 +1032,7 @@ func (c *Compactor) rescueIn(ctx context.Context, s cache.Synced, sc *cache.Scra
 		Args: []string{"pack-objects", "--revs", "--local", "--non-empty",
 			"--max-pack-size=" + strconv.FormatInt(cut, 10), "--delta-base-offset", "--quiet", "objects/pack/pack"},
 		Stdin:  strings.NewReader(in.String()),
-		Config: CompactConfig(limits.MaxBlobBytes),
+		Config: PackConfig(limits.MaxBlobBytes),
 		// THE WALK IS THE WHOLE HISTORY's where the scan's tips are not
 		// known — a cycle resumed — and what moved since the scan otherwise.
 		Deadline: gitproc.PackWorkDeadline(packBytes) + gitproc.HistoryWalk(s.Repo.LiveObjects),

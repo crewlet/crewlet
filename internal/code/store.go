@@ -827,7 +827,7 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	for rules.Next() {
 		var id, direct, gate string
 		var p Protection
-		if err := rules.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
+		if err = rules.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
@@ -1280,7 +1280,7 @@ func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, er
 	for rows.Next() {
 		var p Protection
 		var direct, gate string
-		if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
+		if err = rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
 		}
 		p.DirectPush = DirectPush(direct)
@@ -1373,7 +1373,7 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	for rows.Next() {
 		var r RuleGate
 		var column string
-		if err := rows.Scan(&r.Pattern, &column); err != nil {
+		if err = rows.Scan(&r.Pattern, &column); err != nil {
 			return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
 		}
 		// NEVER AN EMPTY COLUMN, which the statement leaves out: one here is

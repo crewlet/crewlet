@@ -663,6 +663,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	d := changeDecision{version: repo.version}
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return changeDecision{}, err

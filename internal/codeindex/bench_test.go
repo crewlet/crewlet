@@ -297,7 +297,6 @@ func segmentPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order [
 			break
 		}
 	}
-	buf = nil
 	var out bytes.Buffer
 	if err := codeindex.WriteSegment(&out, builder); err != nil {
 		b.Fatal(err)
@@ -360,9 +359,10 @@ func identifier(rng *rand.Rand, data []byte) (string, bool) {
 	lines := bytes.Split(data, []byte("\n"))
 	line := lines[rng.IntN(len(lines))]
 	var words []string
-	for _, w := range bytes.FieldsFunc(line, func(r rune) bool {
-		return !(r == '_' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9')
-	}) {
+	word := func(r rune) bool {
+		return r == '_' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9'
+	}
+	for _, w := range bytes.FieldsFunc(line, func(r rune) bool { return !word(r) }) {
 		if 6 <= len(w) && len(w) <= 40 {
 			words = append(words, string(w))
 		}

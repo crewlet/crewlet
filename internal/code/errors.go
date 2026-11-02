@@ -221,7 +221,7 @@ func (e *ErrGitUnready) Error() string {
 type UnreadyReason string
 
 const (
-	// UnreadySyncing: the node is BRINGING ITS COPY UP and another node
+	// UnreadySyncing means the node is BRINGING ITS COPY UP and another node
 	// answers meanwhile — the copy could not be brought to what the read
 	// needs inside its budget, or before the read's answer fell due (a cold
 	// copy downloading the repository, which goes on under the cache's
@@ -233,7 +233,7 @@ const (
 	// fill would only meet again, and which a node already holding a copy
 	// may still answer around.
 	UnreadySyncing UnreadyReason = "syncing"
-	// UnreadyShare: the node's git capacity for seats' reads is spent — its
+	// UnreadyShare means the node's git capacity for seats' reads is spent — its
 	// seat git-work share ([GitShare]) held past [GitShareWait], its read
 	// lane busy past gitproc.SlotWait, or the read's waits for either, or its
 	// git, running past the instant its answer fell due ([AnswerDue]) — or,
@@ -241,23 +241,23 @@ const (
 	// writes' lane holds at once (internal/estate's gitWritesHeld). The node
 	// holds its copy, synced, and is only busy.
 	UnreadyShare UnreadyReason = "share"
-	// UnreadyNoChart: the read is a seat's, and the node holds no chart to
+	// UnreadyNoChart means the read is a seat's, and the node holds no chart to
 	// judge a seat's grant by (no epoch installed yet: at boot, or before a
 	// first apply). Not "this seat may not read it", which a node holding a
 	// chart answers.
 	UnreadyNoChart UnreadyReason = "no_chart"
-	// UnreadyBehindConfig: the read is a seat's, and the node is confirmed
+	// UnreadyBehindConfig means the read is a seat's, and the node is confirmed
 	// behind the company's configuration (shed or stuck): it judges no seat's
 	// grant from the chart the fleet replaced, which may be the revision that
 	// revoked it.
 	UnreadyBehindConfig UnreadyReason = "behind_config"
-	// UnreadyNotHeld: the node holds no copy of the repository and the read
+	// UnreadyNotHeld means the node holds no copy of the repository and the read
 	// is not its walk's effective home's ([GitQuery.Home]), the one node a
 	// walk lets fill a copy — so it starts nothing and the walk asks the
 	// next node, rather than every node the walk reaches downloading the
 	// repository for a read one node answers.
 	UnreadyNotHeld UnreadyReason = "not_held"
-	// UnreadyNodeFailed: the node failed the read FOR A REASON OF ITS OWN,
+	// UnreadyNodeFailed means the node failed the read FOR A REASON OF ITS OWN,
 	// and nothing here is bringing a copy up for it — its sync of the
 	// repository failed on nothing the code log, the object store or the
 	// rows said (its disk refusing a write, its cache stopping), or one of
@@ -265,7 +265,7 @@ const (
 	// healthy node takes over a few ids. Another git node's fill may serve
 	// the read.
 	UnreadyNodeFailed UnreadyReason = "node_failed"
-	// UnreadyIndexBuilding: the read is a search of a `search: indexed`
+	// UnreadyIndexBuilding means the read is a search of a `search: indexed`
 	// repository's default branch ([GitSearch]) asked of its walk's home, the
 	// first of the repository's [IndexHolders], whose index does not yet
 	// answer for the tip — its indexer is building it — so the walk asks the

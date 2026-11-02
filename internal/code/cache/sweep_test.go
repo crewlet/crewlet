@@ -414,10 +414,9 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	clk := newClock()
 	repo := w.repo(t, 1)
 	var rows []code.PackRow
-	var tip string
 	for range 3 {
-		oid, row := w.push(t, repo, "refs/heads/main", nil)
-		rows, tip = append(rows, row), oid
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		rows = append(rows, row)
 	}
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
@@ -448,15 +447,15 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	every := map[string]bool{"multi-pack-index": true, "bitmap": true, "commit-graph": true, "memo": true}
 	before := w.log.state()
 
-	oid, row := w.push(t, repo, "refs/heads/main", nil)
-	rows, tip = append(rows, row), oid
+	_, row := w.push(t, repo, "refs/heads/main", nil)
+	rows = append(rows, row)
 	held("a delta that adds a pack", w.sync(t, c, repo), every)
 
 	w.tag(t, repo, "v1", false)
 	held("a delta that only moves refs", w.sync(t, c, repo), every)
 
-	oid, row = w.push(t, repo, "refs/heads/main", nil)
-	rows, tip = append(rows, row), oid
+	tip, row := w.push(t, repo, "refs/heads/main", nil)
+	rows = append(rows, row)
 	w.sync(t, c, repo)
 	// THE INDEX OF PUSHES is built over the push rows, which none of those
 	// moved: every delta above folded its push as a run, and every run is

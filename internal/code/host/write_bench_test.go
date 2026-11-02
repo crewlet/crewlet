@@ -1257,7 +1257,7 @@ func (bp *besidePusher) paced(ctx context.Context, n int) ([]time.Duration, erro
 		d, err := bp.push(ctx)
 		switch {
 		case err != nil && ctx.Err() != nil:
-			return took, nil
+			return took, nil //nolint:nilerr // a push ctx's end cut is the pacing's end, never its failure
 		case err != nil:
 			return took, err
 		}

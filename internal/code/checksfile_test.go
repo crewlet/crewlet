@@ -41,7 +41,7 @@ func faultsOf(t *testing.T, err error) []*config.Fault {
 	}
 	var faults []*config.Fault
 	for _, e := range joined.Unwrap() {
-		f, ok := e.(*config.Fault)
+		f, ok := e.(*config.Fault) //nolint:errorlint // each element must BE a fault, not wrap one: a wrap adds text config.Problems renders as a line of its own (config's leafFault)
 		if !ok {
 			t.Fatalf("the refusal joins a %T, not a *config.Fault: %v", e, e)
 		}

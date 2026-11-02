@@ -180,7 +180,7 @@ func TestEveryOutputIsUploadedAtOnce(t *testing.T) {
 // it, held to its seal (code.CheckBundle) as every stored pack is — with its
 // pack section under code.MaxPackBytes.
 //
-// Mutation: drop pack.writeReverseIndex from CompactConfig, and the build
+// Mutation: drop pack.writeReverseIndex from PackConfig, and the build
 // writes no reverse index, so no output can be laid out.
 func TestACompactionOutputFitsTheBundleRule(t *testing.T) {
 	t.Parallel()

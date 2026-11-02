@@ -36,7 +36,7 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 				return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: mainOID,
 					Merge: &code.MergeAnswer{}}, nil
 			}
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 				writerTurn(t), builtin.CodeRevertChangeTool, map[string]any{"change": "site!7", "merge": true})
 			if got.Failed {
 				t.Fatalf("the revert answered %q", got.Output)

@@ -74,7 +74,7 @@ func ParseCursor(s string) (Group, error) {
 	// surface quotes alone: what is wrong with the cursor they handed back.
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the cursor does not decode (%v) — hand back a page's `next` unchanged",
+		return nil, fmt.Errorf("%w: the cursor does not decode (%w) — hand back a page's `next` unchanged",
 			ErrBadCursor, err)
 	}
 	var g []string

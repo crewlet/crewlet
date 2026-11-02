@@ -185,9 +185,10 @@ type Churn struct {
 // ring is the slot each of a window's heatBuckets buckets counts, zero for a
 // bucket never written: the window's arithmetic, kept once, beside which each
 // kind of window keeps its counts (servedWindow, churnWindow). Concrete types
-// rather than one generic window: the cache's writers gate types every value
-// a call in this package is handed (internal/sourcetree/decltype), and a type
-// parameter is a value it cannot type.
+// rather than one generic window, because add is all the two share: each sums
+// its buckets into an answer of its own — a Use, whose bytes saturate, and a
+// Churn — and Go gives an instantiation no methods of its own, so a generic
+// window would still spell out each kind's sum beside it.
 type ring [heatBuckets]int64
 
 // claim is the bucket slot is counted in, and whether that bucket last counted

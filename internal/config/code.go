@@ -726,7 +726,9 @@ func validDomainName(s string) bool {
 			return false
 		}
 		for i := 0; i < len(label); i++ {
-			if c := label[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+			switch c := label[i]; {
+			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '-':
+			default:
 				return false
 			}
 		}

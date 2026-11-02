@@ -398,7 +398,7 @@ func withOnce(list []string, more ...string) []string {
 }
 
 // reviewer is p as the parties a routing names.
-func (p Party) reviewer() Reviewer { return Reviewer{Handle: p.Handle, Kind: p.Kind} }
+func (p Party) reviewer() Reviewer { return Reviewer(p) }
 
 // Person reports whether handle is a person's, as r names it.
 func (r *ChangeRouting) Person(handle string) bool {

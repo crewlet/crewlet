@@ -262,7 +262,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// is a merge of its base, never forced, and what may move its target is
 	// its gate's to say, in the record's decide (landing.Merge).
 	if l.Merge == nil {
-		if err := s.forceAndStale(ctx, &l, cmds, rules, refuse); err != nil {
+		if err = s.forceAndStale(ctx, &l, cmds, rules, refuse); err != nil {
 			return landed{}, unchecked(err)
 		}
 	}

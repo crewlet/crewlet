@@ -347,7 +347,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.WrapEstate != nil {
 		seam = o.WrapEstate(seam)
 	}
-	var reads Reads = func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	reads := func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 		return f.data.Served().Read(ctx, q)
 	}
 	if o.WrapReads != nil {

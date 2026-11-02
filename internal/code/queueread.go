@@ -171,13 +171,14 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 	)
 	for rows.Next() {
 		var detail string
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		e, err := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &detail)...) })
 		if err != nil {
 			return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
 		}
 		entries, details = append(entries, e), append(details, detail)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
 	}
 	numbers, err := numbersOf(ctx, tx, entries)
@@ -563,6 +564,7 @@ func (r *Reader) greens(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return err
 	}
 	if q.Target != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		green, found, err := greenIn(ctx, tx, named.ref.ID, q.Target)
 		if err != nil || !found {
 			return err

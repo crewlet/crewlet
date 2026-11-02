@@ -383,7 +383,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// each — where it is a seat's branch — is held as a read is, and a source
 	// the resolve finds missing is held with no read, as a write's is: both in
 	// one read and one Take.
-	if refusal := t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
+	if refusal = t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
 		return *refusal, nil
 	}
 	op := opIDFor(actor, tool, changeVerb, repo.ID, args)
@@ -405,7 +405,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out.Change = code.ChangeRef(repo.Name, res.Number)
 	}
 	if len(reviewers) > 0 {
-		t.deps.askOpened(ctx, turn, c, repo, op, res, reviewers, &out)
+		t.deps.askOpened(ctx, c, repo, op, res, reviewers, &out)
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
@@ -445,7 +445,7 @@ func reviewersArg(tool, arg string, args map[string]any, asker code.Principal) (
 // the answer beside the change it was made of, never as the open's failure:
 // the change WAS opened, and a call made again to finish the ask opens nothing
 // twice.
-func (d CodeDeps) askOpened(ctx context.Context, turn *turnctx.Turn, c codeCaller, repo code.RepoRef,
+func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo code.RepoRef,
 	openOp string, opened code.ChangeResult, reviewers []string, out *codeChangeWriteAnswer) {
 
 	if opened.Outcome != statelog.OutcomeApplied && opened.Outcome != statelog.OutcomePending {
@@ -709,7 +709,7 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 		held = change.detail.SourceRef
 	}
 	if held != "" {
-		if refusal := d.branch(ctx, turn, tool, c, repo, true, held); refusal != nil {
+		if refusal = d.branch(ctx, turn, tool, c, repo, true, held); refusal != nil {
 			return *refusal, nil
 		}
 	}

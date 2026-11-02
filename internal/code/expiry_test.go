@@ -640,6 +640,8 @@ func TestAnExpiryOfNothingIdleIsCountedKept(t *testing.T) {
 	props := &proposals{c: c}
 	// THE SEAT PUSHES IT AGAIN AFTER THE PAGE: the holds are read after the
 	// page, so the push lands between the listing and the proposal.
+	//
+	//nolint:contextcheck // The push is the seat's, another party's, under the test's context: never the pass's ctx.
 	pushed := func(ctx context.Context, keys []string) (map[string]bool, error) {
 		n.pushAt(idleSince, id, seatPush(newPushID(), "dev", set(seatBranch, oidOf("x"), oidOf("x2"))))
 		return holdsNone(ctx, keys)
@@ -754,6 +756,8 @@ func TestARefHoldTakenDuringAPassIsNeverLost(t *testing.T) {
 			id := n.made(lcPerson, "web", unitOwned("eng"))
 			n.pushAt(idleSince, id, seatSets(seatBranch, oidOf("x")))
 			// THE TURN HOLDS THE BRANCH JUST AFTER THE PASS READ ITS HOLDS.
+			//
+			//nolint:contextcheck // The read and the holds are the turn's, another party's, under the test's context: never the pass's ctx.
 			late := func(ctx context.Context, keys []string) (map[string]bool, error) {
 				_, read := n.readRef("web", seatBranch)
 				if archived {

@@ -145,8 +145,9 @@ func aConversationSurvivesItsWriter(t *testing.T, c Cluster) {
 	}
 	done := make(chan answer, 1)
 	go func() {
-		res, err := c.ConverseThrough(rc.ctx, r, say)
-		done <- answer{res, err}
+		var a answer
+		a.res, a.err = c.ConverseThrough(rc.ctx, r, say)
+		done <- a
 	}()
 	select {
 	case <-reached:

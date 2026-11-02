@@ -2247,7 +2247,7 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		return err
 	}
 	c := MirrorCandidate{ID: id, To: remotes.mirrorTo()}
-	if err := tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
+	if err = tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
 		return fmt.Errorf("code: read repository %s's name: %w", id, err)
 	}
 	green, err := greenRowsIn(ctx, tx, id)
@@ -2636,6 +2636,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		// history holds: another repository's push, or one past
 		// PushHistory, is no row of this history, which is an answer with
 		// none.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := pushIn(ctx, tx, q.Push)
 		if err != nil {
 			return fmt.Errorf("code: read %s's push %s: %w", q.Repo, q.Push, err)
@@ -3432,7 +3433,7 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			synced  int64
 			version int64
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
+		if err = rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
 			return fmt.Errorf("code: list the pull mirrors: %w", err)
 		}
 		if c.From, err = remoteOf[MirrorSource](from); err != nil {
@@ -3467,7 +3468,7 @@ func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *
 			c  MirrorCandidate
 			to string
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &to); err != nil {
+		if err = rows.Scan(&c.ID, &c.Name, &to); err != nil {
 			return false, fmt.Errorf("code: list the push mirrors: %w", err)
 		}
 		if c.To, err = remoteOf[MirrorTarget](to); err != nil {

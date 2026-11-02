@@ -119,7 +119,7 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 	}
 	narrow := fmt.Errorf("%w: reading %s did not finish in the read's %s of git: read fewer of its lines",
 		code.ErrSliceTooLarge, blob, r.s.gitBudget)
-	if err := r.failed(ctx, "read of a file", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "read of a file", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}
 	pg := pages.asked

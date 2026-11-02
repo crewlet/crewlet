@@ -228,7 +228,7 @@ type ChecksWriter struct {
 var checkFlights = flightBounds{
 	key: MaxCheckWritesWaiting, node: ChecksWriterNodeWrites, bytes: ChecksWriterNodeBytes,
 	keyBound: "MaxCheckWritesWaiting", nodeBound: "ChecksWriterNodeWrites", bytesBound: "ChecksWriterNodeBytes",
-	noun: "repository", writes: "check writes", closed: stoppingChecks,
+	noun: "repository", writes: "check writes", closed: errChecksWriterStopping,
 }
 
 // NewChecksWriter builds a checks writer, refusing what it cannot work
@@ -467,9 +467,9 @@ func (r ChecksRequest) weight() (int, error) {
 	return len(encoded), nil
 }
 
-// stoppingChecks is the refusal of a write a stopping writer decides nothing
-// of.
-var stoppingChecks = fmt.Errorf("%w: the checks writer is stopping", ErrNotServing)
+// errChecksWriterStopping is the refusal of a write a stopping writer decides
+// nothing of.
+var errChecksWriterStopping = fmt.Errorf("%w: the checks writer is stopping", ErrNotServing)
 
 // checksAgain is what a write refused busy or unavailable is told to do.
 const checksAgain = "send the write again"
@@ -505,7 +505,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest, weight int)
 	}
 	if !w.flights.begin() {
 		hold.release()
-		return ChecksResult{}, stoppingChecks, false
+		return ChecksResult{}, errChecksWriterStopping, false
 	}
 	type answer struct {
 		res ChecksResult
@@ -515,7 +515,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest, weight int)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the repository's next check write deciding beside a record still in flight.
 	go func() {
 		defer w.flights.done()
-		res, err, own := w.write(r, seats)
+		res, own, err := w.write(r, seats)
 		// THE TURN IS RELEASED ONCE THE ANSWER IS KNOWN — the record applied
 		// here, or the wait for it gave up — and before the announcement,
 		// which no write of the repository waits on.
@@ -675,7 +675,7 @@ type checksLanded struct {
 // write publishes one write of a repository's checks and answers it — under
 // the writer's own lifetime and one CommitBudget — with what landed of its
 // own record.
-func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, error, checksLanded) {
+func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, checksLanded, error) {
 	ctx, cancel := context.WithTimeout(w.flights.life, CommitBudget)
 	defer cancel()
 	op := r.op()
@@ -706,8 +706,9 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 		},
 	})
 	if err != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := w.refused(ctx, r, err)
-		return res, err, checksLanded{}
+		return res, checksLanded{}, err
 	}
 	if decided && len(last.dropped) > 0 {
 		w.log.DebugContext(ctx, "code_check_dispatch_attempts_dropped", "repo", repoID, "op_id", r.OpID,
@@ -747,21 +748,21 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 			if last.refusal == CheckRefusalClaimed && last.row != nil {
 				out.Holder = last.row.Runner
 			}
-			return out, nil, checksLanded{}
+			return out, checksLanded{}, nil
 		case decided && last.unchanged:
 			out := ChecksResult{Outcome: statelog.OutcomeApplied, Unchanged: true, Row: last.row}
 			if last.row != nil {
 				out.Holder = last.row.Runner
 				out.Position = statelog.Later(last.row.Queued, last.row.Finished)
 			}
-			return out, nil, checksLanded{}
+			return out, checksLanded{}, nil
 		}
-		return ChecksResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
-			"record, and its decide neither refused nor found it unchanged", r.OpID), checksLanded{}
+		return ChecksResult{}, checksLanded{}, fmt.Errorf("code: the publish of operation %s answered applied "+
+			"with no record, and its decide neither refused nor found it unchanged", r.OpID)
 	case statelog.OutcomePending:
-		return ChecksResult{Outcome: statelog.OutcomePending, Position: res.Position}, nil, checksLanded{}
+		return ChecksResult{Outcome: statelog.OutcomePending, Position: res.Position}, checksLanded{}, nil
 	}
-	return ChecksResult{Outcome: statelog.OutcomeUnknown}, nil, checksLanded{}
+	return ChecksResult{Outcome: statelog.OutcomeUnknown}, checksLanded{}, nil
 }
 
 // decideChecks is one round of a write's decide, in ONE snapshot — see the
@@ -777,6 +778,7 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	var d checksDecision
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return checksDecision{}, err
@@ -797,7 +799,7 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	case r.Rerun != nil:
 		return decideRerun(ctx, tx, *r.Rerun, r.Asker, repo, seats, d, named, now)
 	case r.Report != nil:
-		d, err := decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
+		d, err = decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
 		if err != nil || d.payload == nil {
 			return d, err
 		}
@@ -904,12 +906,12 @@ func headChangeIn(ctx context.Context, tx *sql.Tx, d *checksDecision, key CheckK
 			return changeRow{}, false, fmt.Errorf("code: read the live change into %s at %s: %w", key.Target,
 				key.OID, err)
 		}
-		if err := d.changeRead(ctx, tx, change.id); err != nil {
+		if err = d.changeRead(ctx, tx, change.id); err != nil {
 			return changeRow{}, false, err
 		}
 		found = true
 	case row != nil && row.Purpose == PurposeHead && row.ChangeID != "":
-		if err := d.changeRead(ctx, tx, row.ChangeID); err != nil {
+		if err = d.changeRead(ctx, tx, row.ChangeID); err != nil {
 			return changeRow{}, false, err
 		}
 		if change, found, err = changeRowIn(ctx, tx, row.ChangeID); err != nil {
@@ -1096,7 +1098,7 @@ func decideFinished(f CheckFinished, d checksDecision, held bool, named func(Che
 // a second ending of the attempt. told is whom the record tells (its
 // routing, nil for none: routeFailedHead).
 func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelog.Result,
-	replacing CheckState, told *ChangeRouting) (ChecksResult, error, checksLanded) {
+	replacing CheckState, told *ChangeRouting) (ChecksResult, checksLanded, error) {
 
 	key, at := r.Key(), res.Position
 	var (
@@ -1134,7 +1136,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		readError = fmt.Errorf("code: the record of operation %s applied at %s and its attempt's row could not "+
 			"be read: %w", r.OpID, at, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", key.RepoID, "op_id", r.OpID, "error", readError)
-		return ChecksResult{}, readError, checksLanded{}
+		return ChecksResult{}, checksLanded{}, readError
 	}
 	wrote := held
 	switch {
@@ -1150,13 +1152,13 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		w.log.ErrorContext(ctx, "code_checks_unanswerable", "repo", key.RepoID, "op_id", r.OpID,
 			"position", at.String())
 		return ChecksResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the write's record applied "+
-			"at %s and the attempt's row this node holds does not carry it", at)}, nil, checksLanded{}
+			"at %s and the attempt's row this node holds does not carry it", at)}, checksLanded{}, nil
 	}
 	out := ChecksResult{Outcome: statelog.OutcomeApplied, Position: at, Row: &row, Holder: row.Runner}
 	// A RETRY COLLAPSED ONTO AN EARLIER LANDING is that landing's, whose call
 	// counted and announced it.
 	if res.Collapsed {
-		return out, nil, checksLanded{}
+		return out, checksLanded{}, nil
 	}
 	own := checksLanded{fresh: true}
 	// THE ENDING ANNOUNCED IS THE ONE THE ROW KEEPS: an ending the join set
@@ -1172,7 +1174,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		}
 		own.endings = append(own.endings, ending)
 	}
-	return out, nil, own
+	return out, own, nil
 }
 
 // endingOf is the announcement of row's ending — the attempt key, of the
@@ -1230,7 +1232,7 @@ func failedHeadOwnerIn(ctx context.Context, tx *sql.Tx, row CheckRow) (Party, er
 // one it recorded ended — skipped, or errored for a file that does not run —
 // is announced, as a single queue's would be, where the row keeps it.
 func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res statelog.Result,
-	attempts []CheckQueued) (ChecksResult, error, checksLanded) {
+	attempts []CheckQueued) (ChecksResult, checksLanded, error) {
 
 	d := r.Dispatched
 	var held bool
@@ -1280,15 +1282,15 @@ func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res
 		err = fmt.Errorf("code: the dispatch of operation %s applied at %s and its target's reading could not "+
 			"be read: %w", r.OpID, res.Position, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", d.RepoID, "op_id", r.OpID, "error", err)
-		return ChecksResult{}, err, checksLanded{}
+		return ChecksResult{}, checksLanded{}, err
 	}
 	if !held {
 		w.log.ErrorContext(ctx, "code_checks_unanswerable", "repo", d.RepoID, "op_id", r.OpID,
 			"position", res.Position.String())
 		return ChecksResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the dispatch's record applied "+
-			"at %s and this node holds no reading of target %s", res.Position, d.Target)}, nil, checksLanded{}
+			"at %s and this node holds no reading of target %s", res.Position, d.Target)}, checksLanded{}, nil
 	}
-	return ChecksResult{Outcome: statelog.OutcomeApplied, Position: res.Position}, nil, own
+	return ChecksResult{Outcome: statelog.OutcomeApplied, Position: res.Position}, own, nil
 }
 
 // announce publishes an applied ending's event on this node's event stream,

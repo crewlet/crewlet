@@ -84,8 +84,8 @@ const logContentType = "text/plain; charset=utf-8"
 // cell: given back the moment the box is closed, before the ending is
 // recorded, since what it bounds is boxes.
 func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.Time, slot *RemoteSlot) {
-	defer slot.Release()
 	ctx := r.life
+	defer slot.Release(ctx)
 	if r.o.Faults != nil {
 		if err := r.o.Faults.Hit(ctx, codefault.CheckAfterClaim, 0); err != nil {
 			return
@@ -93,7 +93,7 @@ func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.T
 	}
 	a := &attempt{r: r, c: c, cell: cell, claimed: claimed}
 	f, opID := a.run(ctx)
-	slot.Release()
+	slot.Release(ctx)
 	if f == nil {
 		return
 	}
@@ -627,7 +627,7 @@ func (r *Runner) finish(ctx context.Context, f code.CheckFinished, opID string) 
 				"attempt", f.Attempt, "error", err.Error())
 			return
 		}
-		why := ""
+		var why string
 		if err != nil {
 			why = err.Error()
 		} else {

@@ -57,7 +57,7 @@ func TestOnlyAPersonImports(t *testing.T) {
 	}
 
 	writer := &codeWrites{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 		builtin.CodeImportRepoTool, args(nil))
 	var refused *builtin.DecisionRefused
 	if !got.Failed || !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonSeatRefused {

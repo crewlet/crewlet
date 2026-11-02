@@ -98,12 +98,12 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return fmt.Errorf("code: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
 	}
-	err = eachRow(rows, func(s scanner) error {
+	err = eachRow(rows, func(s scanner) (err error) {
 		var (
 			number       int64
 			title, state string
 		)
-		if err := s.Scan(&number, &title, &state); err != nil {
+		if err = s.Scan(&number, &title, &state); err != nil {
 			return err
 		}
 		c.Merged = append(c.Merged, name(number, title, state))
@@ -115,12 +115,12 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if rows, err = tx.QueryContext(ctx, commitHeadsSQL, q.Commit, repo.ID, MaxCommitChanges+1); err != nil {
 		return fmt.Errorf("code: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
 	}
-	err = eachRow(rows, func(s scanner) error {
+	err = eachRow(rows, func(s scanner) (err error) {
 		var (
 			n, number    int64
 			title, state string
 		)
-		if err := s.Scan(&n, &number, &title, &state); err != nil {
+		if err = s.Scan(&n, &number, &title, &state); err != nil {
 			return err
 		}
 		c.Revisions = append(c.Revisions, CommitRevision{Change: name(number, title, state), N: n})

@@ -889,7 +889,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case p.Land != nil:
 		return decideLand(ctx, tx, *p.Land, repo, seats, limits, d)
 	case p.Green != nil:
-		return decideGreen(ctx, tx, *p.Green, repo, d)
+		return decideGreen(ctx, tx, *p.Green, d)
 	case p.Broken != nil:
 		return decideBroken(ctx, tx, *p.Broken, repo, seats, d)
 	}
@@ -992,6 +992,7 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	// record goes on to its routing below: a person's dequeue tells the
 	// change's authors and its enqueuer as a seat's does.
 	if kind != PartyPerson {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		why, err := whyNoDequeue(ctx, tx, p, entry, repo, seats)
 		if err != nil {
 			return queueDecision{}, err
