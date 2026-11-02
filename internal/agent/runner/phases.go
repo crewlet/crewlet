@@ -224,6 +224,13 @@ type Config struct {
 	// runner built outside an engine.
 	Ask RunAsk
 
+	// Hold is what records a call the executor's run makes to a tool at
+	// Needs approval as the question it parks on (internal/agent/builtin's
+	// CallHold, ADR-0077), installed on that run's surface alone. Nil holds
+	// none, and the surface refuses every such call, which is what every
+	// other phase's surface does.
+	Hold tools.Holder
+
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
 	// REVIEWER — the turn's own conversation the engine drives — and by the
@@ -1576,6 +1583,9 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
+	if hold := r.holderFor(ph); hold != nil {
+		surface = surface.WithHolder(hold)
+	}
 	if r.cfg.Metrics != nil {
 		surface = surface.WithCounter(r.cfg.Metrics)
 	}
@@ -1593,6 +1603,17 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	r.guard = guard.skills()
 	r.mu.Unlock()
 	return surface.WithGuard(guard.tools()), nil
+}
+
+// holderFor is what records a call to a tool at Needs approval on phase ph's
+// surface: the executor's alone, which has a run whose row the call parks on
+// (ADR-0077). Every other phase runs inside the turn on the engine host and
+// gets none, so its surface refuses such a call ([tools.Holder]).
+func (r *Runner) holderFor(ph phase.Phase) tools.Holder {
+	if ph != phase.Execute {
+		return nil
+	}
+	return r.cfg.Hold
 }
 
 // discovers reports whether a phase is offered the discovery pair,

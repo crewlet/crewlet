@@ -29,7 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 
 | Prefix | Who calls it | Without `api.public` | With `api.public` |
 |---|---|---|---|
-| `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
+| `/webhooks/*` | Vendors (deliveries, and the MCP sign-in's client metadata document) and a person's browser returning from a vendor's app flow or sign-in (`/webhooks/slack-oauth`, `/webhooks/github-app`, `/webhooks/mcp-oauth`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A box exporting its executor's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, calling each of the seat's MCP servers (`/mcp/{token}/server/{server}`), polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) and reporting each of its own skills it loads (`/mcp/{token}/skill`) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
@@ -371,7 +371,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/tokens/breakdown` | The token-spend rollup by phase / model / provider entry / worker / seat — the live 24 hours, or any window of up to 90 company days from the replicated usage domain (see [below](#token-spend-breakdown)) |
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
-| `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
+| `GET` | `/schedules` | Configured role/unit schedules + next-run + the company's recent fires and what became of each |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, the fleet's activation and each node's config record — the revision it last attempted, how that went and the revision it runs — and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `admin`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/executors` | Every seat's [executor](../concepts/code-sandbox.md) the engine still holds a record of, read from the executors' durable record in the [coordination store](../concepts/coordination.md) (see [below](#get-executors)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
@@ -389,6 +389,12 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/mcp-servers/{name}/check` | Test one MCP server where it runs, calling no tool: on every node, or with `seat` one agent's instance on the node holding the seat; recorded as the server's latest test. **Takes `tools.check`**, an administrator's at any recency (see [below](#post-mcp-serversnamecheck)) |
 | `POST` | `/mcp-checks` | Test a draft MCP server entry before it is saved, as a write would leave it. **Takes `tools.check`**, and `config.write` and `secrets.write` on top, decided before the body is read (see [below](#post-mcp-checks)) |
 | `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
+| `PUT` | `/mcp-servers/{name}/values/{key}` | Store one header or variable of an MCP server, tested first by default, sealed write-only and read through a `${VAR}` the key is pointed at. **Takes `secrets.write`**, and `config.write` on top, both at a recent step-up and decided before the body is read; never the assistant (see [below](#put-mcp-serversnamevalueskey)) |
+| `PUT` | `/mcp-servers/{name}/tools` | Set the level each tool of an MCP server runs at (`allow` or `blocked`), as one revision of the company document; `?dry_run=true` checks it. **Takes `config.write`**, at a recent step-up for a write (see [below](#put-mcp-serversnametools)) |
+| `POST` | `/mcp-servers/{name}/oauth` | Start signing the company in to a remote MCP server with OAuth: answers the address the person's browser is sent to, once. **Takes `secrets.write`**: an administrator, a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are), never Ask Crewlet (see [below](#post-mcp-serversnameoauth)) |
+| `GET` | `/mcp-sign-ins/{id}` | Where a sign-in is: `pending`, `completing`, `approved` or `failed`, and why. **Takes `config.read`** (see [below](#get-mcp-sign-insid)) |
+| `DELETE` | `/mcp-servers/{name}/oauth` | Sign the company out of an MCP server: the grant is revoked at its vendor where it offers that, forgotten here, and the server stopped on every node. **Takes `secrets.write`**, as the start does (see [below](#delete-mcp-serversnameoauth)) |
+| `POST` | `/mcp-servers/{name}/changes` | Accept, or keep blocked, tools an MCP server changed since their levels were decided, each by the digest of the definition reviewed. **Takes `config.write`**, at a recent step-up (see [below](#post-mcp-serversnamechanges)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -461,6 +467,8 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
+| `GET` | `/webhooks/mcp-oauth` | Where a vendor sends the browser back after an MCP server sign-in: finishes the sign-in its signed state names (see [below](#get-webhooksmcp-oauth)) |
+| `GET` | `/webhooks/mcp-oauth/client-metadata.json` | The engine's OAuth client metadata document, the client id a `cimd` sign-in is made as (see [below](#get-webhooksmcp-oauthclient-metadatajson)) |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
 | `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
@@ -886,7 +894,8 @@ person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
-`question_context`, `decision`, `reply` and `bridge_calls`. A status reader receives the rest with **`body_withheld:
+`question_context`, `decision`, `held_call`, `held_arguments`, `reply` and `bridge_calls` (`held_call` also
+to the person the question is put to, `held_arguments` never). A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
 call stale and asks for a body it will not be sent. A work item a call or a
 turn names (`work_item`, an `llm_history` entry's `work_item` and `task_id`
@@ -1001,7 +1010,7 @@ The policy depends on what was served:
 | Response | `Content-Security-Policy` |
 |---|---|
 | The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; require-trusted-types-for 'script'; trusted-types 'none'` (Trusted Types enforced with no policy, since the dashboard writes no markup or script sink), then `frame-src` naming the artifact origin on a deployment that serves artifacts |
-| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app), [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) and [`/webhooks/mcp-oauth`](#get-webhooksmcp-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
 These matter because a script running on this origin acts with the signed-in
@@ -2507,7 +2516,8 @@ write.
   "sandbox": [
     {"seat": "pm", "name": "PM", "segments": ["roles", 0, "sandbox", "mcp", "servers", 0]}
   ],
-  "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"]
+  "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"],
+  "oauth": true
 }
 ```
 
@@ -2515,7 +2525,17 @@ write.
 and `name` is the display name. `secrets` lists the values the store holds
 that nothing reads once the server is gone, which is what `delete_secrets` may
 name: a variable a node takes from its environment is never listed, since the
-store holds nothing to delete. Every list is names, never a value.
+store holds nothing to delete. Every list is names, never a value. `oauth` is
+whether somebody holds an [OAuth grant](../guides/tools-and-mcp.md#signing-in-with-oauth)
+for the server, which the removal gives up.
+
+**The grant goes after the revision is written, before any value:** it is
+revoked at its vendor where it offers that and forgotten here, as a
+[sign-out](#delete-mcp-serversnameoauth) does, and the company's own OAuth
+client authenticates that revocation with the secret the server's entry names,
+which `delete_secrets` may be about to delete. The answer's `oauth` is
+`{revocation, said}` (`revoked`, `not_offered` or `failed`, and the vendor's
+words where it refused), or `null` where nobody held a grant.
 
 **The values go after the revision is written,** never before, so a removal
 that loses its write deletes nothing. Each is asked again of the fleet's
@@ -2536,7 +2556,7 @@ and who removed it, as `DELETE /secrets/{name}` does.
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
 dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
-cleared, secrets}`, where `removed` is the server's name and `cleared` is
+cleared, secrets, oauth}`, where `removed` is the server's name and `cleared` is
 `{mcp_env, sandbox}` as above. Refusals: `404 no_such_entity`,
 `409 revision_advanced`, `403 config_managed` (a managed document),
 `403 unauthorized` for a caller without `secrets.write` (the Dashboard
@@ -2586,7 +2606,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
 | `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry` or `done` |
 | `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`, `models` for a model's credential the Models page wrote, and `mcp` for an MCP server's header or variable [stored from its page](#put-mcp-serversnamevalueskey); see [the secret store](../concepts/secret-store.md#the-design)), and `write_only` (whether no reveal answers the value: one stored from Settings › MCP & tools is); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -2656,6 +2676,15 @@ record it.
 the route answers what a listing answers for one name, so a browser, a crawl or
 a link preview cannot pull a credential out by accident.
 
+**A value stored write-only is never revealed.** The headers and variables
+[Settings › MCP & tools stores](#put-mcp-serversnamevalueskey) are sealed on a
+row marked write-only: the engine resolves it for the `${VAR}` references that
+name it, and both reveals refuse it `403 write_only`, naming it under `names`,
+before anything is opened (the batched read refuses its whole request). The
+listing and one row's metadata carry `write_only`. The mark is the row's: a
+later `PUT /secrets/{name}` of the same name keeps it, a rekey re-seals the row
+with it, and only `DELETE /secrets/{name}` clears it.
+
 **Every value is sealed under the node's keyring.** The store has no plaintext
 mode, and there is no node without a keyring to ask about: `crewlet validate`
 refuses a Tier A file with no `secrets.keys`, and the engine refuses to start
@@ -2663,7 +2692,8 @@ without one.
 
 **Every refusal here is the engine's envelope** — `error`, the sentence
 `message` a screen shows, and the route's own detail beside them:
-`reserved_name`, `invalid_name`, `invalid_query` (on a write or a reveal of
+`reserved_name`, `write_only` (a reveal naming a value stored write-only,
+with its `names`), `invalid_name`, `invalid_query` (on a write or a reveal of
 several names carrying any query parameter, with a `detail` naming each and a
 `hint`), `invalid_body` (a reveal or a write of several names that names none,
 too many, or a field it does not read, and a write of several whose names or
@@ -5544,11 +5574,11 @@ REST route calls, so the two surfaces cannot diverge:
 | `tokens` | `{days, since, until, previous, seat}` | `GET /tokens/breakdown`. With no parameters, the live 24-hour window from the projection; with any, whole company days from the replicated usage domain — every data node's, up to 90 days, within the 181-day horizon (see [Token Spend Breakdown](#token-spend-breakdown)) |
 | `token_series` | `{days, since, until, previous, seat, group, bucket, groups}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE, by company day or ISO week from the usage domain. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error. By `unit`, each band of `by_group` carries `parts`: the seats that spent in that unit over the window, biggest first, each `{group, handle, ...bucket}` keyed as `group=seat` keys a band, and summing to the band, so a team's bar can be split by seat from the same answer. Every other grouping, and the residual row that folds several units, carries none |
 | `seat_activity` | `{seat?, days?, previous?}` | `GET /agents/activity`. Every seat's TURNS over the `days` (1 to 90, default 7) company days ending today, summed across every data node from the replicated usage domain — so the answer is the same on whichever node is asked and still counts a node that has left. `{since, until, days, previous_since?, previous_until?, seats, quantile_resolution}`; each seat is `{handle, role, agent_id, in_chart, turns, failed, reviewed, first_pass, first_pass_pct?, sent_back, p50_ms?, p90_ms?, tokens, per_day, last_turn_at?, previous?}`. `first_pass_pct` is `first_pass` over REVIEWED turns (0–100) and is ABSENT when none was reviewed — a 0% for a seat nobody reviewed would be a verdict nobody gave. `sent_back` counts reviews that sent work back. `p50_ms` and `p90_ms` are read from the merged turn-duration histogram and are within `quantile_resolution` (0.06) of the true value; absent when no turn ended. `per_day` is every day of the window, oldest first, a quiet day included as zeros. `previous` (with `previous=true`) is the seat's `{turns, failed, reviewed, first_pass, sent_back, tokens, per_day}` over the same number of days before, `per_day` being every one of those days, oldest first — so a profile draws the fortnight its week-on-week figure is made over from this one answer. Every AGENT seat of the current chart has a row, a quiet one with zeros ("took no turns" is a measurement); a seat that has left the chart appears with `in_chart: false` while its days are in the window; a human seat has none. `seat=` narrows to one handle, and a handle with no rows answers one row of zeros rather than none; a human seat's handle is refused (`bad_params`, naming the person), because the engine runs no turns for a person and a zero row would say one took none. Ordered by handle |
-| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
+| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's fires and what became of each, newest first, fifty to a page, read from the replicated usage history (every data node's fires, kept 181 days; see [`GET /schedules`](#get-schedules) for each run's fields and outcomes). Registered on every node that reads the usage domain. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the dispatch ledger keys a fire on: hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours, so "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says older fires are past this page (the read takes one row more than the page to know), so a schedule that has fired exactly fifty times is not called cut |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each, and each agent's MCP tools against the tool budget. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -5571,7 +5601,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_comments` | `{item, cursor?, limit?, thread?, with_root?, read_level, …}` | `GET /worklet/comments`. One page of an item's THREAD, newest page first and each page in the order it was written: `{item, key, title, comments, next_cursor?, key_collision?}` plus the coverage half. `next_cursor` reads the page before and is absent when this page reaches the first comment; it continues from `work_item`'s own `comments_cursor` exactly, since both are the same read. `limit` defaults to the detail's 20 and is held to 50. `thread` names a comment and narrows every page to its conversation: the comments replying to it and the answers to it when it is an ask, with the comment itself only when `with_root` is true. Narrowed in the read rather than by the caller, so `next_cursor` is present only when that conversation goes back further: a page of the whole thread kept to one question's replies carried the task's cursor, and a question nobody had replied to offered earlier replies. Each comment's `author` is who wrote it (a person as their seat, beside `author_kind`), so a pane draws a name with no second lookup. `key_collision` says the item's key opens another task, as on `work_item`. Its own question beside `work_item` because nothing followed that cursor, so every comment older than the twentieth was unreachable, and because a pane that draws a conversation wants the thread without the history, links and fields a detail assembles |
 | `decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions`. What waits on ONE PERSON's decision: the open asks put to them (to their own record, a person's seat) and the executors parked on a question put to them (`awaiting_clarification` or `reseed`), newest first, at most 50. `{handle, items: [{kind: "ask"\|"run", at, ask?, run?}], total, capped, oldest_at?}`: `total` counts every one, not the page; `capped` says the ask count stopped at the engine's ceiling, so `total` is a floor; `oldest_at` is when the longest-waiting began. An ask is `work_my_work`'s `asked_of_me` row and a run is `executors`' row. The same scope rule as `work_my_work`: absent is the caller's own record, and a named one is resolved first (a login to the record its holder's work is kept under) and then takes whoever leads them, or `admin`. Your own asks need no app at all, so a person without `worklet` still sees what they were asked. On a company that does not run Worklet (Jira, or none), the asks are left out and the parked runs are still answered, with no `read_level` or `complete` beside them, since no tracker was read |
 | `answered_decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions/answered`. What ONE PERSON decided lately: the asks put to them and closed in the last seven days (`worklet.AnsweredWindow`), by them or by somebody else, or resolved without an answer, newest closing first, at most 50. `{handle, items: [{at, ask, answer, followed_up?}], since, truncated, read_level, complete}`: `ask` is the row `decisions` listed while it was open, with `open: false` and no `answer_with`; `answer` is `{by, by_kind?, at, comment?, choice?, body, resolved?}`, where `by` is whoever closed it (not always the person asked), `choice` the option chosen by id and `body` the answer's words; `followed_up` is the asker's first record on the task after the commit that closed the ask (`{at, kind, excerpt?, fields?, comment_id?}`, `work_activity`'s fields), absent while there is none, and left out for a reader the tracker shows no task to, since it is the task's record rather than the question's. An executor's question is listed only for the person who answered it (ADR-0068), never for the rest of the people it was put to: it is listed beside them as `{at, run, answer}`, with no `ask` and no `followed_up`: `run` is `{turn_id, launch_id, agent_handle, question, question_context?, decision?, asked_at, work_item?}` and `answer` is the same shape, read from the `executor_answered` record the fleet's event log keeps, found by who answered it (answers the run took, given by that person, shown to whoever reads the run's seat trail and to the person who answered). `since` is the start of the window and `truncated` says it held more than the page. The same scope rule as `decisions`, and the same answer without the app: your own are listed whether or not you hold `worklet`. A company that does not run Worklet is answered its run questions alone, with no `read_level`. Served from the index replicated migration 0052 adds, one person's closed asks |
-| `company_feed` | `{kinds, actor, limit, cursor, read_level, …}` | `GET /feed`. What the company DID, newest first: `completed`, `created` and `handoff` from Worklet, `page` (created or saved) from Doclet, and `schedule` fires from the usage domain, never a chat message, which is conversation rather than something the company did and is readable only where its room is. `kinds` is a comma list, empty for every kind this node keeps; asking for one it keeps no source for is `bad_params`. A kind is kept only where the company runs its half: a company on Jira keeps no Worklet kinds and a company on Confluence no `page` kind, and the feed answers the kinds it does keep (the `schedule` runs on every company), never refusing whole for the half it leaves out. Which halves a company runs is the org answer's [`services`](#get-org). `limit` is 1–50 (default 20). `{rows: [{kind, at, work?, page?, schedule?}], next_cursor?, complete, read_level}`. A Worklet row carries its task's key and title, and, by kind, the task's running `spend` (`{tokens, turns}`, tokens only) and `first_pass` (no reviewer sent it back), the create's `origin` (`{surface, conversation}`: the chat surface the filing turn was woken on), or the hand-off's `from`, `to`, `reassignments` and `reassignment_budget`. A `schedule` row is a RUN, a fire the scheduler dispatched and never a tick it skipped (those stay in `schedule_runs`), and consecutive runs of one schedule for one runner that no other row falls between are ONE row: `schedule.runs` counts them (at least 1) and `schedule.since` is the oldest one's instant (set when `runs` is above 1). A page that folds many runs reads its source again from where it stopped, at most four reads per source; past that the page is answered short, never out of order. MERGED BY INSTANT, CURSORED PER SOURCE: `next_cursor` resumes each source exactly where this page stopped consuming it, so a scroll never repeats or skips a row however the three interleave, and is absent once every source is read to its end. A `read_level=session` floor names Worklet's log (this is a Worklet session question); the Doclet half is read at the dashboard's own level |
+| `company_feed` | `{kinds, actor, limit, cursor, read_level, …}` | `GET /feed`. What the company DID, newest first: `completed`, `created` and `handoff` from Worklet, `page` (created or saved) from Doclet, and `schedule` fires from the usage domain, never a chat message, which is conversation rather than something the company did and is readable only where its room is. `kinds` is a comma list, empty for every kind this node keeps; asking for one it keeps no source for is `bad_params`. A kind is kept only where the company runs its half: a company on Jira keeps no Worklet kinds and a company on Confluence no `page` kind, and the feed answers the kinds it does keep (the `schedule` runs on every company), never refusing whole for the half it leaves out. Which halves a company runs is the org answer's [`services`](#get-org). `limit` is 1–50 (default 20). `{rows: [{kind, at, work?, page?, schedule?}], next_cursor?, complete, read_level}`. A Worklet row carries its task's key and title, and, by kind, the task's running `spend` (`{tokens, turns}`, tokens only) and `first_pass` (no reviewer sent it back), the create's `origin` (`{surface, conversation}`: the chat surface the filing turn was woken on), or the hand-off's `from`, `to`, `reassignments` and `reassignment_budget`. A `schedule` row is a RUN, a fire the scheduler dispatched and its seat ran, never a tick it skipped or a fire a later one ran in place of (those stay in `schedule_runs`), and consecutive runs of one schedule for one runner that no other row falls between are ONE row: `schedule.runs` counts them (at least 1) and `schedule.since` is the oldest one's instant (set when `runs` is above 1). A page that folds many runs reads its source again from where it stopped, at most four reads per source; past that the page is answered short, never out of order. MERGED BY INSTANT, CURSORED PER SOURCE: `next_cursor` resumes each source exactly where this page stopped consuming it, so a scroll never repeats or skips a row however the three interleave, and is absent once every source is read to its end. A `read_level=session` floor names Worklet's log (this is a Worklet session question); the Doclet half is read at the dashboard's own level |
 | `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /worklet/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced: `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the twenty-seven change kinds and nothing else: one this build does not have is refused `bad_params` naming the set, by this route and by a seat's `task_activity` alike, because a filter matching nothing answers an empty feed that reads exactly like a quiet company. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `task` answers that task's WHOLE history, the changes it had before it moved projects included, and a `container` named beside it is a check rather than a filter: it must be the project the task is filed in, and any other is refused `bad_params` naming the one it is — a tracker holder reads the whole tracker, so a container would keep out nothing the reader is not owed, and as a filter it hid every change written while the task sat elsewhere. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle, which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, as `kinds` is: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. Each kind named is read as its own newest-first range and the ranges are merged into one page, so an audit of several kinds costs a page of each rather than every commit those kinds ever wrote, at any age of the company. The `q` gate is on what the query would SCAN, never on which keys were named: `container=workspace&q=` and a five-year `since` both name a key and narrow nothing. `fields` is what MOVED, in the same `{from, to}` shape for every kind, the full list of names a task's own row draws on is there too, and `keys` names the tasks those deltas point at; `ask` is the question a commit asked or answered, in `work_inbox`'s shape and read the same way; see [`GET /worklet/activity`](#routes). `subject_key_collision` says the record's `subject_key` opens ANOTHER task (one that claimed the key first), so a link to the subject goes by `subject_id`. A `cursor` or a position `since` must be on Worklet's own log, and one from another domain's log (or a `cursor` that is not a position) is refused `bad_params` rather than picking a page by a number from elsewhere |
 | `work_my_work` | `{handle}` | `GET /worklet/my-work`. Seven lists, each bounded at 20 so no block crowds out another: the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL (`{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}`), by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight (the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on), so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule: whoever leads them, or `admin`, with `worklet`; see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
 | `work_inbox` | `{handle, unread, primary_only, snoozed, reasons, limit, cursor, since}` | `GET /worklet/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `actor` is who made the change and `actor_kind` its kind: a person as their seat, a credential nobody is bound through under its login. `comment_id` and `turn_id` are the comment the change wrote and the turn that made it; `ask` is the question the notice is about (the ask itself for `asked`, the ask it answered for `answered`), as `{comment, asked_of, open, answered_by, answered_at, resolved, choice, decision}`, read NOW, so an ask somebody has since answered reads `open: false`. `snoozed` is `exclude` (the default), `include` (snoozed notices kept and marked) or `only` (just what was put off); a snooze whose time has come is back under every scope and is not `only`. `snoozed`, `unread`, `primary_only` and `reasons` all narrow the SCAN rather than the page, by the same rules the marks are computed with, so a page holds `limit` notices whenever the scope does: they used to be applied to the page after it was read while the cursor was taken before, so a person with their newest fifty notices snoozed or read opened an empty page with a cursor behind it. `subject_key` is the key the notice's task held when it was written, and `task` is that task's id: the subject for a task commit, and the task a lead put first for a `prioritised` notice, whose `subject_id` is the PERSON whose list it is; a notice naming no task carries none. `subject_key_collision` says the stored key now opens a task OTHER than `task` (asked of the stored key itself, so a notice about a duplicate moved since is still flagged), and the notice is then reached by `task`; it is never set on a notice that names no task, whose key is the only address it has. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies (the primary split classifies the same rows), and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence, and a position on THIS log: a `since` or a `cursor` from another domain's log, or a `cursor` that is not a position, is `bad_params`, because both are compared against Worklet's own sequence numbers and one from another log would pick a page by a number that means nothing here. Same scope rule as `work_my_work` |
@@ -6180,9 +6210,12 @@ a label derived from it follows the same rule.
 - **`tool_sources`** is where the seat's tools come from, in the tool
   registry's own origin grammar: `builtin` first, then `mcp:<server>` for each
   server the seat is granted, in the order `mcp_servers` declares them. A
-  shared server is granted to every agent seat; a `shared: false` template only
-  to a seat that declares credentials for it under `mcp_env`, its own or its
-  unit's — the rule the engine starts a seat's own server instances by. It is
+  server is granted by its entry's `access` (every agent seat where it has
+  none), or, for one reading each agent's own vendor credential, by the
+  integration lane the seat is on at
+  ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)):
+  the rule the engine builds the seat's surface and starts its own server
+  instances by, and never a seat's `mcp_env` block, which holds values. It is
   the GRANT, not what is running: a server that failed to start is still
   listed, and the node heartbeat's MCP report is what says it failed.
 
@@ -9467,11 +9500,12 @@ failure somebody has to act on:
 | `state` | Means |
 |---|---|
 | `disabled` | The configuration turns the server off (`enabled: false`): nothing is started for it and no seat is granted it. Decided before anything a node reports, so a node still on an earlier revision that runs it shows only in its own cell until it applies this one |
+| `needs_sign_in` | The server is [signed in to with OAuth](../guides/tools-and-mcp.md#signing-in-with-oauth) and nobody holds a grant for it, its vendor refused to renew the grant or let it run out, or nothing serves it and the nodes hold it back for a sign-in (its grant was made for an address the server is no longer configured at): nothing is started for it until somebody signs in. Decided next, before the other counts |
 | `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
 | `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
 | `waiting` | Nothing was launched and nothing failed, and some seat's instance is waiting for its provisioned credential. Only where nothing else decides: a server serving one seat while another waits is `running`, and one with a failure beside a wait is `partial` or `failing` |
-| `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
+| `not_started` | Every reporting node started nothing for it — a per-seat template granted to no seat a live node holds |
 | `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
@@ -9570,6 +9604,13 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
         "fix": {"kind": "restart", "server": "github", "seat": "backend-dev"}}
      ]}
   ],
+  "approvals": [
+    {"id": "0190f3a8-6b1c-7d2e-9f00-1a2b3c4d5e6f", "at": "2026-11-01T09:02:11Z",
+     "server": "github", "tool": "gh_merge_pull_request", "raw": "merge_pull_request",
+     "digest": "sha256:9c1f…", "seat": "backend-dev", "turn_id": "…", "launch_id": "…",
+     "item": "ENG-42", "args": {"owner": "acme", "repo": "web", "pullNumber": 71},
+     "status": "waiting", "answer": "", "answered_by": "", "answered_at": null}
+  ],
   "builtin": [
     {"key": "work", "label": "Work items",
      "description": "Worklet, the company's tracker: read, file, discuss and move work.",
@@ -9581,7 +9622,16 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
         "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
         "group": "work", "gate": "worklet"}
      ]}
-  ]
+  ],
+  "agents": [
+    {"seat": "backend-dev", "name": "Backend Dev", "unit": "Engineering", "unit_key": "eng",
+     "servers": [
+       {"server": "github", "reason": "integration", "tools": 26, "state": "partial"},
+       {"server": "linear", "reason": "unit", "tools": 31, "state": "running"}
+     ],
+     "mcp_tools": 57, "builtin_tools": 34, "over_budget": false}
+  ],
+  "tool_budget": 100
 }
 ```
 
@@ -9613,9 +9663,82 @@ longest began; `null` for a refused name, which carries no instant), `seat`
 | `restart` | `mcp_server_failing` and `mcp_server_partial` | [`POST /mcp-servers/{name}/retry`](#post-mcp-serversnameretry) on `fix.server`, with `fix.seat` where it names one agent's instance. A server nothing serves is restarted whole; a partial one only for the agent whose instance is down, so the agents it serves keep their sessions (a shared server's instance restarts on every node) |
 | `integration` | `mcp_server_waiting_long` | The integration that mints `fix.seat`'s credential for `fix.server`, which the server's [detail](#get-mcp-serversname) names in `resolved.binding` |
 | `edit` | `mcp_tools_refused` | The server's configuration: a shorter `tool_prefix`, or one, as each name's `message` in `refused_tools` says |
+| `sign_in` | `mcp_oauth_needs_sign_in` and `mcp_oauth_expiring` | Signing the company in to `fix.server` again: [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth) |
+| `approve` | `mcp_approval_waiting` | The calls `fix.seat`'s run holds for approval on `fix.server`, each answered with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid) by its id in `approvals` |
+| `review` | `mcp_tools_changed` | The changes in `fix.server`'s [detail](#get-mcp-serversname) `changes`, each accepted or kept blocked with [`POST /mcp-servers/{name}/changes`](#post-mcp-serversnamechanges) |
 
 The list is always present, and empty on a node that runs no state log, which
 evaluates no alarm: ask a data node.
+
+`oauth`, on each server row of an administrator's reading, is the server's
+[OAuth sign-in](../guides/tools-and-mcp.md#signing-in-with-oauth), `null` for a
+server not signed in to with OAuth. It is the grant's public half and never a
+token or the client's secret:
+
+```json
+{"grant": "authorization_code", "status": "connected", "client": "dcr",
+ "client_id": "registered-client-id", "issuer": "https://auth.example.com",
+ "resource": "https://mcp.example.com/mcp", "scopes": ["read", "offline_access"],
+ "connected_by": "jane.doe", "connected_at": "2026-11-01T09:00:00Z",
+ "expires_at": "2027-01-30T09:00:00Z", "failure": null}
+```
+
+`grant` is `authorization_code` (a person signs the company in) or
+`client_credentials` (the engine signs in as the company's
+[service identity](../guides/tools-and-mcp.md#signing-in-as-a-service-identity)).
+A service identity is always `connected`, with `client` `""` (it registers
+nothing), the configured `client_id` and `scopes`, and `issuer`, `resource`,
+`connected_by`, `connected_at`, `expires_at` and `failure` empty: nobody signs
+in to it, and a credential its vendor refuses fails the server's instances
+(the row's `state`), never asks for a sign-in.
+
+`status` is `connected` (the engine renews it as the server is used),
+`needs_sign_in` (nobody has signed in: `client_id` is then the company's own
+client's, or `""`, and the scopes are the ones the configuration asks for),
+`expired` (past the end its vendor stated) or `refresh_failed` (its vendor
+refused to renew it, `failure` carrying `{said, at}` in the vendor's words,
+bounded and redacted). `expires_at` is `null` where the vendor stated no end.
+`resource` is the server address the grant was issued for (RFC 8707), the only
+one its tokens are sent to.
+`callback_url` and `client_metadata_url`, on the answer itself, are the two
+addresses a vendor that allowlists them is given: where it sends a person back
+after a sign-in, and the engine's client metadata document (the client id a
+`cimd` sign-in is made as). Each is `""` on an engine with no public address.
+A member's reading carries neither, and no `oauth`; it carries the state.
+
+`approvals`, in an administrator's reading only, are the calls agents' runs
+hold for a person's approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs)),
+the longest waiting first: each while its run is parked on it (`status:
+"waiting"`), and once an answer is recorded until the run carries on to its
+next job (`"answered"`, with the `answer` (`once`, `always` or `deny`),
+`answered_by` and `answered_at`, as the answer's seal opens on this node).
+`id` is what the call is answered by; `tool` is the tool as the run called it
+and `raw` the server's own name for it, which Always allow sets the level of;
+`digest` names the definition the run was offered; `item` is the key of the
+work item the run was on, or `null`. `args` are what the call would send,
+opened from their seal under this node's fleet keyring, `null` where they do
+not open here. A member's reading carries no `approvals`. Always present.
+
+`agents`, in an administrator's reading only, is every agent seat in the
+chart's order with the MCP tools its grants hand it, and `tool_budget` the
+count past which an agent is flagged: 100, the engine's own, which no setting
+moves ([Each agent's tools, and the budget](../guides/tools-and-mcp.md#each-agents-tools-and-the-budget)).
+`unit` and `unit_key` are the name and key of the unit the seat sits in, both
+`null` for a seat at the root of the chart. `servers` is every server the
+configuration declares whose grant reaches the seat, on or off, in name order:
+`reason` is why, as the server's [`reaches`](#get-mcp-serversname) says it
+(`every_agent`, `unit`, `seat` or `integration`); `tools` is how many tools it
+offers the agent, every tool the live nodes' listings name at a level other
+than `blocked` (a tool refused its name is never listed), the whole listing
+for each agent a per-agent server reaches, and `0` for a server turned off,
+which is granted to nobody; and `state` is the server's own, its row's.
+`mcp_tools` counts each tool name once, so a name two of the agent's servers
+list counts once; `builtin_tools` is how many of the engine's own tools every
+agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
+above `tool_budget`. A server's tools count while it is down, since they come
+back with it. `agents` is `null` while the answering node has not read the
+fleet's listings yet, a moment after it starts, which is not an agent holding
+no tools.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -9734,9 +9857,47 @@ it under, so a node that drained, died or restarted stops counting at once.
   fleet. `input_schema` and `output_schema` are the definition's schemas, or
   `null` where none is kept: a tool that publishes no output schema, schemas
   past 64 KiB, or a tool past its listing's 1 MiB of schemas (kept in name
-  order).
+  order). `level` is the level the tool runs at, `allow` or `blocked`, decided
+  by the server's entry by `raw` (`tools.levels`, else `tools.default`, else
+  the level its hints start it at), and `custom` whether `tools.levels` names
+  it: `allow`, `approve` (offered, and each call held for a person's answer)
+  or `blocked`. A blocked tool is listed here and offered to no agent ([Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level));
+  for a server the configuration does not declare, `level` says what the nodes
+  did. `held` is a tool its level would run unasked whose definition changed
+  since that level was decided, or that the server added after its first
+  listing: its `level` answers `approve`, and each call asks a person until
+  somebody accepts the change (`changes`). `removed` is a tool the server no
+  longer lists, kept, named by the definition accepted for it, with no
+  instances or nodes, until somebody accepts that it went.
 - `tool_count` is how many tools the server lists, never fewer than `tools`
   holds: a node's listing names at most 256 of them.
+- `baseline` is the level of every tool `tools.levels` does not name: the
+  entry's `tools.default`, or `null` where it sets none, which leaves each such
+  tool at the level its hints start it at (`allow` for one whose `risk` is
+  `read_only`, `approve` for every other). `unlisted_levels` are the
+  tools `tools.levels` names that no live node's listing names, sorted: a level
+  that decides nothing, most often a name written with the `tool_prefix` or
+  spelled otherwise than the server spells it. Empty where the listings cannot
+  say: no live node lists the server, or one lists more than its 256.
+- `changes` is every change the server made to its tools since their levels
+  were decided ([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)),
+  by `tool` (the server's own name), then by definition: one for each tool it
+  lists under a definition nobody accepted (two nodes listing two such
+  definitions make two changes), and one for each accepted tool no live node
+  lists, judged only where every live listing is whole. `kinds` is `added` or
+  `removed` alone, or the parts of the definition that moved: `title`,
+  `description`, `schema`, `annotations`. `before` is the definition accepted
+  (`null` for an added tool) and `after` the one listed now (`null` for a
+  removed tool), each `{digest, title, description, annotations, risk,
+  risk_declared, external, input_schema, output_schema}` read off the hints
+  the server declared, `before` with `accepted_by` (`null` for the server's
+  first listing), `accepted_at` and `first_listing`, `after` with
+  `instances`. `loosened` is a change whose hints claim less risk than the
+  accepted ones; `held` whether it holds the tool at Needs approval now;
+  `seen_at` when the fleet first stored the definition listed now (`null` for
+  a removal, or a definition whose schemas are not kept). Empty for a server
+  whose first listing has not been accepted yet. The administrator's reading
+  only.
 - `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
   are what the server said of itself in its handshake, from the listing that
   changed last; `null` and `""` where no live node's listing carries them. Both
@@ -9771,6 +9932,31 @@ it under, so a node that drained, died or restarted stops counting at once.
   made for (`""` for a shared server), `ok`, and `nodes`, each as a test
   answers it but without its tools. `null` where the server was never tested.
   An administrator's reading only.
+- `values` is every header (a remote server) or variable (a local one) the
+  server is sent, and the secret of the OAuth client it signs in with, by name
+  and never by value: `key` as the document spells it (`oauth.client_secret`
+  for the client's secret), `as` (`header`, `env`, or `oauth` for the client's
+  secret, which goes to the authorization server alone), `variable`, the one variable it reads (`""` for
+  a value written in the document, one reading several, or a key an
+  integration binds per agent), `set` (whether the secret store holds every
+  variable it reads; a literal is set, and a key bound per agent is never set
+  at the server's level), `stored_at` and `stored_by` from the variable's row
+  (`null` where the store holds none), `optional` (`optional_keys` names it),
+  and `bound_by`, the integration that hands each agent its own value under
+  the key, `null` for one the document sets. What
+  [`PUT /mcp-servers/{name}/values/{key}`](#put-mcp-serversnamevalueskey)
+  stores. An administrator's reading only.
+- `reaches` is every agent seat the server's grant reaches, in the chart's
+  order, each `{seat, reason, via}`: `seat` its handle, and `reason`
+  `every_agent` (the entry has no `access`), `unit` (a unit `access.units`
+  names holds it; `via` is that unit's key, the nearest one named), `seat`
+  (`access.seats` names it) or `integration` (the server reads each agent's
+  own vendor credential and the seat is on at its lane; `via` is the lane).
+  `via` is `null` for the other two. The grant itself, whether or not the
+  server is on: a server turned off reaches these seats again once it is
+  turned back on. Empty for a server the configuration does not declare
+  ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
+  An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
   configuration does not declare: `auth` (`integration` for a per-agent server
@@ -9784,7 +9970,9 @@ it under, so a node that drained, died or restarted stops counting at once.
   `declared` in `seat_credentials` or `recognised` from its address or command,
   and the `keys` it is started with, `{field, key}` by name; `null` for none);
   `box_seats` (the seats whose executor box is given the server through
-  `sandbox.mcp.servers`, each with the `cell` its box runs in); and `warnings`
+  `sandbox.mcp.servers`, each with the `cell` its box runs in; a seat the
+  server is not granted to is given nothing, so it is not one, and nor is any
+  seat while the server holds a tool back at a level other than `allow`); and `warnings`
   (placements expected to fail, `{kind, seat, cell, message}`:
   `private_address_in_cloud_box` for a server on a private network given to a
   box in the `e2b` cell, which runs outside that network, and `command_in_box`
@@ -9873,7 +10061,9 @@ server that lists nothing.
   "calls": {"calls": [{"at": "2026-11-01T08:58:12Z", "seat": "backend-dev",
                        "turn_id": "6c1f0e2a-5b7d-4e8f-9a1b-2c3d4e5f6a7b", "tool": "get_issue",
                        "outcome": "answered", "refusal": "", "duration_ms": 412}],
-            "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}}
+            "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}},
+  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github"},
+              {"seat": "pm", "reason": "integration", "via": "github"}]
 }
 ```
 
@@ -9895,10 +10085,14 @@ A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`,
 cell's `error` and `wait` sentences and the seats they name, and
 `unlisted_annotations`, which is about a configuration only an administrator
 reads. The list's `nodes` and `builtin` are as an administrator reads them. It
-carries no `alarms`: each alarm's detail quotes a failure or a wait sentence.
+carries no `alarms`: each alarm's detail quotes a failure or a wait sentence,
+and no `agents` or `tool_budget`: which servers an agent holds is read off the
+configuration's grants, as a seat's `tool_sources` on the org chart is, which
+no other reader is given either.
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
-(every field), `tool_count`, `server_info`, `last_success` and:
+(every field, `held` and `removed` included), `tool_count`, `server_info`,
+`last_success` and:
 
 - `instances`, each without its `wait` (the variables a waiting instance waits
   for), and each `failure` and `last_failure` as `{class, at, node, seat}`,
@@ -9915,7 +10109,8 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
   the `seats` that called it: how often a tool is used tells a member whether
   it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions`, `dependants` and `calls`.
+It leaves out `instructions`, `dependants`, `calls`, `reaches` and `changes`:
+a change is reviewed by who may decide it.
 
 ```json
 {
@@ -10088,11 +10283,27 @@ guard's refusals included.
 
 Tests a **draft** MCP server entry before it is saved, for the test step of the
 add and edit flows. The body is the entry as `PUT /config/mcp-servers/{name}`
-would take it, and the seat for a per-agent one:
+would take it, the seat for a per-agent one, and the values typed for its keys
+that are not stored yet:
 
 ```json
-{"entity": {"name": "wiki", "command": "wiki-mcp", "env": {"WIKI_TOKEN": "${WIKI_TOKEN}"}}, "seat": ""}
+{"entity": {"name": "wiki", "transport": "http", "url": "https://wiki.example.com/mcp"},
+ "seat": "", "values": {"Authorization": "Bearer <token>"}}
 ```
+
+**`values`** holds what the server would be sent under each key, whole, as
+[`PUT /mcp-servers/{name}/values/{key}`](#put-mcp-serversnamevalueskey) stores
+it once the entry is written. Each key reads, for the test, the variable that
+route would store its value under in the company the draft makes (the key's own
+`${VAR}` where only it reads one, else `MCP_<SERVER>_<KEY>`), ahead of anything
+the store holds under that name; a key it would refuse (one an integration
+fills for each agent, a name no header or variable can have, a derived name
+another field already reads) is refused here with the same answer. Each value
+is trimmed and must be one line; together they hold at most 64 KiB (one stored
+value's bound), past which the answer is `413`. **A value is never written,
+recorded, logged or answered**. The entry and every value cross the fleet's
+broker sealed under the fleet's keyring, each bound to the one test. A key whose
+value is already stored needs no entry here: the draft's `${VAR}` resolves it.
 
 A draft runs what a write would: a command on the engine host, or an address
 dialled with the values the entry names, each `${VAR}` resolved from the secret
@@ -10169,6 +10380,345 @@ An address the configuration's own rule refuses (plain http to a public host, a
 user name or password in it) stops at the `address` stage, dialling nothing.
 Every call is one `mcp_server_acted` with the action `probe`, naming the
 address with its credentials withheld.
+
+### `PUT /mcp-servers/{name}/values/{key}`
+
+Stores one header of a remote server, or one variable of a local one, from the
+server's page: what the server is sent under `key`, whole (`"Bearer <API
+key>"`, as the curated catalogue's format says), as `{"value": "..."}`. The
+value is sealed **write-only** in the fleet's secret store and the key reads it
+through a `${VAR}`, so no credential is written into the company document and
+no route ever answers the value again.
+
+| Query | Meaning |
+|---|---|
+| `seat=<handle>` | One seat's value of a per-agent server (`shared: false`), written into that seat's `mcp_env` block for the server, which the engine lays over the server's own keys. Only a seat already granted the server takes one: storing a value never grants it. Refused `400 invalid_query` for a shared server |
+| `test=true\|false` | Test the value before storing it (the default). A per-agent server's own value can only be tested as one of its seats, so without `seat` it is stored with `test=false` or refused `400 invalid_query` |
+
+**Who may.** `secrets.write` on the route and `config.write` in it, both an
+administrator's at a recent step-up, decided before the body is read: the
+value is a credential and its pointer a write of the document. The assistant
+never takes `secrets.write`, so it never stores one. A managed document
+(`api.auth.company_writers`) refuses it `403 config_managed`, before the body
+too.
+
+**The OAuth client's secret.** `key` `oauth.client_secret` stores the secret of
+the company's own OAuth client the server signs in with (a
+[service identity's](../guides/tools-and-mcp.md#signing-in-as-a-service-identity),
+or `client: own`'s), pointing `oauth.client_secret` at its variable; it is
+listed in the detail's `values` with `as: "oauth"`. A service identity's is
+tested by signing in with it. A person's sign-in sends its client's secret only
+when the grant renews, which a test does not do, so `test=true` is refused
+`400 invalid_query` there: store it with `test=false`. A server whose sign-in
+has no secret (no `oauth` block, `client: cimd` or `dcr`) is refused `409
+conflict`, and so is a `seat`: a sign-in is the company's.
+
+**Which variable.** The key's own variable where it already reads exactly one
+that nothing else in the document reads, so rotating it changes nobody else's
+credential; otherwise `MCP_<SERVER>_<KEY>`, and `_<SEAT>` for a seat's value,
+upper-snaked. A derived name another field already reads is refused `409
+conflict` naming the fields (`readers`), since a value sealed there would
+reach them too. A key an integration hands each agent its own value under
+(`seat_credentials`, or a server the engine recognises) is refused `409
+conflict`: nobody stores it.
+
+**In this order**, each step only when the one before it passed:
+
+1. The pointer the write would make is held to every rule a write of the
+   document is (`422 validation_error` with `problems`).
+2. The test (unless `test=false`): the entry as the fleet's active revision
+   states it, turned on whatever its `enabled` says, with the key reading the
+   value, where the server runs (on every node for a shared server, on the
+   seat's holder for a seat's value), as
+   [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck) tests it and
+   calling no tool. The entry is sent with the test, as a draft's is, so no
+   node needs to have applied it: a value stored straight after its entry's
+   write is tested, not refused. The entry and the value travel to the other
+   nodes sealed under the fleet's keyring. It is never recorded as the
+   server's latest test. A test
+   that fails stores nothing and answers `422 value_test_failed` with the
+   `stage` and the `class` it stopped at, the `node`, the whole `check` and a
+   problem at `values.<key>`; one no node answered is `503`.
+3. The seal: write-only, its `source` `mcp`. Past the test, the write finishes
+   whatever the caller does.
+4. The pointer as one revision, applied to the document as it stands then (a
+   write that landed while the value was tested is kept), or, where the key
+   already read the variable, a re-activation of the revision that reads it
+   ([ADR-0070](#a-secret-write-re-activates-the-revision-that-reads-it)): the
+   running server is started with the new value either way. A pointer refused
+   here (the document changed the key meanwhile, for one) answers with
+   `stored: true` and the `variable`: the value is stored and nothing reads it
+   yet, and the same request sent again finishes it.
+
+```json
+{
+  "server": "linear", "key": "Authorization", "seat": "",
+  "variable": "MCP_LINEAR_AUTHORIZATION",
+  "tested": true,
+  "check": {"server": "linear", "seat": "", "draft": false, "ok": true, "...": "as POST /mcp-servers/{name}/check answers"},
+  "pointed": true,
+  "reload": {"revision_id": "rev-0192", "epoch": 14},
+  "values": [
+    {"key": "Authorization", "as": "header", "variable": "MCP_LINEAR_AUTHORIZATION", "set": true,
+     "stored_at": "2026-11-02T09:00:00Z", "stored_by": "jane-founder", "optional": false, "bound_by": null}
+  ]
+}
+```
+
+- `pointed` is whether the document was written to read the variable, and
+  `reload` the revision that resolves the new value: the write's, or the
+  re-activation's, with `error` and `detail` where a re-activation did not
+  land (the value is sealed either way).
+- `values` are the server's values, or with `seat` that seat's, as
+  [`GET /mcp-servers/{name}`](#get-mcp-serversname) answers them.
+
+The body is read strictly (`400 invalid_body` for a field it does not read, no
+`value`, an empty one, or one holding a line break or a NUL, since a header's
+or a variable's value is one line), and any other query parameter is `400
+invalid_query`. `404 not_found` for a server the configuration does not
+declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
+for a seat the server is not granted to. **No answer, log line or audit record
+carries the value**, a refusal included: every call is one `mcp_server_acted`
+with the action `store_value`, naming the `key` and the `variable`, and a
+test's sentences withhold the values the server was started with.
+
+### `PUT /mcp-servers/{name}/tools`
+
+Sets the level each tool of a server runs at, from the server's Tools tab, as
+one revision of the company document (`mcp_servers[].tools`): `allow` offers a
+tool to every agent the server reaches, `blocked` never offers it to an agent
+([Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level)).
+
+```json
+{"default": "blocked", "levels": {"search_issues": "allow", "get_issue": "allow", "merge_pull_request": "approve", "delete_repository": null},
+ "_summary": "github: block every tool but the two reads"}
+```
+
+- `levels` names each tool by the server's own name for it (`raw` on
+  [`GET /mcp-servers/{name}`](#get-mcp-serversname)), never with the
+  `tool_prefix`. A tool the body leaves out keeps its level; `null` removes a
+  tool's own level, so it runs at the default.
+- `default` sets the level of every tool `levels` does not name; `null`
+  removes it, which leaves each such tool at the level its hints start it at
+  (`allow` for a tool the server marks read-only, `approve` for every other).
+  Left out, it stays.
+- A body that names neither is `400 invalid_body`, and so is any other field,
+  or a level that is not a string.
+
+**A change, not a replacement**, so the write takes no `If-Match`: it is made on
+the document as it stands when it is written, and two people setting two
+tools' levels both land. `_summary` (or `X-Summary`) is the revision's audit
+summary, required of a write and asked last.
+
+**Who may.** `config.write`, an administrator's: a write at a recent step-up,
+and a check (`?dry_run=true`) at the read's proof, as every configuration write.
+The assistant proposes one for a person to approve. A managed document
+(`api.auth.company_writers`) refuses it `403 config_managed`.
+
+**The whole document is validated**, as any write of it is: a level other than
+`allow`, `approve` or `blocked`, or a key that names no tool (empty, or holding a space),
+is `422 validation_error` with the problem at
+`mcp_servers.<i>.tools.levels.<tool>`. A level that leaves a server some
+role's `sandbox.mcp.servers` lists with a tool that is not certain to run at
+`allow` (any level but `allow`, or no `default: allow`) is refused at that box
+entry (`roles.<i>.sandbox.mcp.servers.<j>`): a box reaches a server whole.
+`404 no_such_entity` for a server the configuration does not declare.
+
+```json
+{
+  "server": "github", "dry_run": false,
+  "default": "blocked",
+  "levels": {"get_issue": "allow", "search_issues": "allow"},
+  "unlisted": ["get_issue"], "listing": "read",
+  "revision_id": "rev-0193", "epoch": 15, "warnings": [], "derived": {}
+}
+```
+
+- `default` is `tools.default` as written, `null` where unset; `levels` every
+  tool's own level now.
+- `unlisted` are the tools `levels` names that no live node's listing of the
+  server names, as `unlisted_levels` on the detail: **kept**, since a server
+  may list the tool later, and **said**, since a level that decides nothing is
+  most often misspelled. `listing` is `unavailable` where this node could not
+  read the fleet's listings, which leaves `unlisted` empty.
+- The rest is the configuration's own answer: a write's `revision_id`,
+  `epoch`, `warnings` and `derived`, or a check's `valid`,
+  `base_revision_id`, `warnings` and `derived`, with `dry_run: true`.
+
+The engine applies the revision as any other: each node restarts its
+instances of the server, and files every tool not left `blocked`, a tool at
+`approve` with each call held for a person. Every call
+is one `mcp_server_acted` with the action `set_tools`, a check marked
+`dry_run`; the revision names the levels.
+
+
+### `POST /mcp-servers/{name}/changes`
+
+Decides changes an MCP server made to its tools since their levels were
+decided, from the server's Drift review
+([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)):
+
+```json
+{"accept": {"search_issues": "9f2c…", "close_issue": null}, "block": {"delete_repository": "41aa…"}}
+```
+
+Each key is the server's own name for a tool, and each value the digest of
+the definition reviewed, the change's `after.digest` in the
+[detail](#get-mcp-serversname)'s `changes`, or `null` for a removal. **Accept**
+records the definition as the one the tool's level holds for, so an allowed
+tool runs unasked again; a removal accepted keeps a record of it, and the
+tool listed again after is one the server added. **Block** sets the tool's
+level to `blocked` on the server's entry, as one revision under the request's
+`_summary` (one naming the tools is written where none is sent), and records
+the definition the decision was taken on. Decided as `config.write` at a recent
+step-up, since accepting a change can let a tool run unasked again; a block on
+an operator-managed document is refused `403 config_managed`.
+
+Refused `409 stale_version`, with `tools` naming them, when a named definition
+is not one the fleet lists for the tool now and nobody has accepted (the
+server swapped it since the review, somebody decided it, or a removal is
+named for a tool still listed): nothing is decided, the rest of the body
+included. Read the changes again. `400 invalid_body` for a body that decides
+nothing or decides one tool twice, `404 not_found` for a server the company
+does not declare, `503 unavailable` where this node cannot read the fleet's
+listing of the server.
+
+```json
+{"server": "github", "accepted": ["close_issue", "search_issues"], "blocked": ["delete_repository"], "moved": [], "revision": {"revision_id": "…", "epoch": 7, "warnings": []}}
+```
+
+`accepted` and `blocked` are the tools decided, sorted; `moved` the ones
+somebody else decided between this node's read and its write, for which
+nothing was written; `revision` the configuration's answer to the block, `null`
+where nothing was blocked. Every call is one `mcp_server_acted` with the action
+`review_changes`, naming the tools accepted and kept blocked.
+
+### `POST /mcp-approvals/{id}`
+
+Answers a call an agent's run made to an MCP tool at Needs approval
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs),
+[ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-run-in-the-shape-a-runs-ask-does.md)),
+which waits parked on the run's record. `{id}` is the held call's, as
+`approvals` in [`GET /mcp-servers`](#get-mcp-servers) and `held_call.id` on
+the run's [executors board](#get-executors) row name it.
+
+```json
+{"answer": "once"}
+```
+
+`answer` is `once` (make the call), `always` (make it, and set the tool to
+`allow` on its server's entry from now on) or `deny` (do not make it; the run
+is told the call was refused as `forbidden`). `always` takes an optional
+`_summary` for the revision it writes; without one the revision is summarised
+as the tool allowed in answer to the held call.
+
+Decided as `tools.approve`: an administrator, or a lead of the seat whose run
+made the call, a person and never an agent seat or Ask Crewlet. The route
+admits on the caller's own record and decides again on the run's seat once the
+call is read. `always` is also a configuration write, decided as
+`config.write` at its recent step-up (`403 step_up_required` otherwise), and
+written as [`PUT /mcp-servers/{name}/tools`](#put-mcp-serversnametools)
+writes a level, before the answer is sent, so a refused write answers nothing.
+Where the server changed the tool since its level was decided and lists the
+definition the call was made under, `always` also accepts that definition, as
+[`POST /mcp-servers/{name}/changes`](#post-mcp-serversnamechanges) would, so
+a tool held only for its change runs unasked from then on.
+
+`202 Accepted` with:
+
+```json
+{
+  "id": "0190f3a8-6b1c-7d2e-9f00-1a2b3c4d5e6f",
+  "server": "github", "tool": "gh_merge_pull_request", "seat": "backend-dev",
+  "turn_id": "…", "launch_id": "…", "answer": "once",
+  "outcome": "pending", "answer_id": "0190f3a9-…",
+  "revision": null
+}
+```
+
+`outcome` is `pending`: the answer is on the control topic of the node
+holding the seat, which records it, makes or refuses the call at most once,
+and carries the run on with the result. `unknown` is an answer whose delivery
+may or may not have landed; answering again is safe, since the seat records
+one answer. `revision` is the configuration's own answer to the level
+`always` wrote (`revision_id`, `epoch`, `warnings`, `derived`), `null` for
+`once` and `deny`.
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `invalid_body` | An `answer` other than `once`, `always` or `deny`, or a field the route does not read |
+| `403` | `unauthorized` | The authority table refused: the caller neither administers nor leads the seat, or is an agent seat or Ask Crewlet (`reason` and `grants` say which) |
+| `403` | `step_up_required` | `always` without a recent step-up |
+| `404` | `not_found` | No active run holds a call under `{id}`: its run ended, or the id names none |
+| `409` | `stale_version` | The call is not waiting any more: it was answered, or its run moved on to another question. Nothing was answered |
+| `503` | `unavailable` | The node holds no run record, or could not read the runs |
+
+Every call, refused ones included, is audited as one
+`mcp_server_acted` with `action: "approve"`, the server, the
+seat, the `tool`, the `approval` id and the `answer`, never the arguments.
+
+### `POST /mcp-servers/{name}/oauth`
+
+Starts signing the company in to a remote MCP server whose entry carries
+[`oauth`](../guides/tools-and-mcp.md#signing-in-with-oauth). The engine reads
+the server's sign-in metadata (as [`POST /mcp-probe`](#post-mcp-probe) does),
+refuses an authorization server that does not offer PKCE `S256` or the
+registration the entry names, registers now where the client is `dcr`, mints a
+PKCE verifier it keeps, and answers `201` with the address the person's browser
+is sent to:
+
+```json
+{"id": "018f3a9c-0000-7000-8000-0000000000aa", "server": "linear", "status": "pending", "detail": "",
+ "started_at": "2026-11-02T09:00:00Z", "expires_at": "2026-11-02T09:15:00Z",
+ "authorize_url": "https://auth.example.com/authorize?response_type=code&client_id=...&code_challenge_method=S256&state=..."}
+```
+
+The address names the client, the callback (`/webhooks/mcp-oauth`), the
+challenge, the scopes, the server as the resource (RFC 8707), and a `state`
+that is the sign-in's id signed under the fleet keyring. It is answered here
+and nowhere else; the verifier never leaves the engine. A second start for one
+server replaces the first. The sign-in is good for 15 minutes.
+
+**Takes `secrets.write`**: an administrator with a [recent
+proof](#some-gestures-ask-how-recently-you-proved-who-you-are), and never Ask
+Crewlet, which never takes the verb. Refusals: `404 not_found` for a server
+the configuration does not declare; `409 conflict` for one with no `oauth`
+block, one that signs in as a service identity (`grant: client_credentials`,
+which nobody signs in to), an engine with no public address (`api.external_url`, or
+`api.public.external_url` where the public listener is on), or a server whose
+metadata or vendor rules the sign-in out (no `S256`, the registration not
+offered, the company's own client's secret not set), each saying what to
+change; `502 vendor_refused` where the server or its authorization server
+could not be read or refused to register the engine. Every call is one
+`mcp_server_acted` with the action `sign_in`.
+
+### `GET /mcp-sign-ins/{id}`
+
+Where a sign-in is, for the page that polls it: `pending` until the vendor
+sends the browser back, `completing` while the code is exchanged, `approved`
+once the grant is kept, `failed` with `detail` saying why (the vendor's own
+words where it refused). The record answers for ten minutes after the sign-in
+expires; an unknown or lapsed id is `404 not_found`. `authorize_url` is always
+`""` here. **Takes `config.read`**.
+
+### `DELETE /mcp-servers/{name}/oauth`
+
+Signs the company out of a server: the refresh token is revoked at the
+authorization server where it publishes a revocation endpoint (RFC 7009), the
+grant is deleted here (its sealed row and its public record), and the revision
+is re-activated so every node stops the server, which then needs a sign-in.
+
+```json
+{"server": "linear", "revocation": "revoked", "said": ""}
+```
+
+`revocation` is `revoked`, `not_offered` where the vendor publishes no
+revocation endpoint (the grant is forgotten here and lapses there), or
+`failed` where the vendor could not be asked or refused, `said` carrying its
+words; the grant is forgotten here whatever it answered. A server nobody is
+signed in to is `404 not_found`. **Takes `secrets.write`**, as the start does,
+and is one `mcp_server_acted` with the action `sign_out`. Removing the server
+(`DELETE /config/mcp-servers/{name}`) gives its grant up the same way.
 
 ### `GET /fleet`
 
@@ -10586,6 +11136,16 @@ has (never with `inform`), or `null` for an open question answered in words.
 All three are the run's body, sent to the people its question is put to as the
 question always was, and answered with [`answer_executor`](#answering-a-parked-executor)
 (`choice` names one of `decision.options`).
+
+A run whose question is a call held for approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+also carries `held_call`, `{id, server, tool, raw, digest, held_at}`, sent with
+the question to the people it is put to, and `held_arguments`, what the call
+would send, opened from its seal under this node's fleet keyring (`null` where
+it does not open here), sent only to whom the run's body goes (an
+administrator and the seat's lead, who are who may approve it). Both are
+absent on any other run. Its `decision` offers `once`, `always` and `deny`,
+and it is answered only with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid):
+`answer_executor` refuses it.
 
 `declined_answers` names the answers the run's question let go of, by the id
 of the delivery each arrived in, which `answer_executor` answers as `answer_id`. An
@@ -11202,8 +11762,10 @@ below it are absence of measurement rather than measurement of absence.
 Backs the dashboard's **Schedules** view. Returns every configured
 role/unit [schedule](../concepts/scheduling.md) with its cron, effective
 timezone, target → resolved runner handles, and a per-request `next_run`
-(computed from the cron), plus the most recent rows from the
-`scheduled_runs` dispatch ledger.
+(computed from the cron), plus the company's 50 most recent fires across
+every schedule (`recent_runs`), read from the replicated usage history: every
+data node's fires, each with what became of it, kept 181 days. One schedule's
+own fires are [`schedule_runs`](#queries).
 
 ```json
 {
@@ -11221,22 +11783,33 @@ timezone, target → resolved runner handles, and a per-request `next_run`
   "recent_runs": [
     {
       "scope_type": "unit", "scope_id": "backend", "scope_name": "backend",
-      "schedule_name": "daily-standup", "target_handle": "backend-dev",
-      "scheduled_at": "2026-06-08T07:30:00+00:00",
-      "fired_at": "2026-06-08T07:30:02+00:00", "outcome": "fired"
+      "schedule_name": "daily-standup", "fire_label": "20260608T0930",
+      "target_handle": "backend-dev",
+      "scheduled_at": "2026-06-08T07:30:00Z",
+      "fired_at": "2026-06-08T07:30:02Z", "outcome": "fired",
+      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
     }
   ]
 }
 ```
 
 A run's `outcome` is `fired`, `skipped_catchup` (a missed tick outside the
-catchup window) or `skipped_paused` (the runner seat was
-[paused](../concepts/agent-runtime.md#pausing-a-seat) when the fire came due).
-`recent_runs` is empty when the dispatch ledger cannot be read (the
-configured list and `next_run` still render). A schedule with no next fire —
-disabled, an unparseable cron or timezone (`problem` says which), or a date
-the calendar never reaches — carries **no** `next_run` key, never a zero
-instant.
+catchup window), `skipped_paused` (the runner seat was
+[paused](../concepts/agent-runtime.md#pausing-a-seat) when the fire came due),
+or `skipped_superseded`: the fire waited in its seat's inbox while the seat
+could not work, and a later fire of the same schedule
+[ran in its place](../concepts/scheduling.md#fires-that-wait-in-a-seats-inbox).
+The first three are what the scheduler recorded; the last is recorded by the
+seat's node, usually a different node and often a later day, and joined to
+the fire by `trace_id`, so a fire reads the same on every node. `scheduled_at`
+and `fire_label` are the tick the fire stands for (the label is the schedule's
+local wall-clock minute, the dispatch ledger's at-most-once key), which on a
+catch-up is earlier than `fired_at`. A fire reaches the history within the
+usage publisher's 15-second tick. `recent_runs` is empty when the usage
+history cannot be read here (the configured list and `next_run` still
+render). A schedule with no next fire (disabled, an unparseable cron or
+timezone, which `problem` names, or a date the calendar never reaches)
+carries **no** `next_run` key, never a zero instant.
 
 `scope_id` is the scope's **identity** — a seat's agent id for a role schedule,
 a unit's key for a unit one — which is what the at-most-once ledger keys a fire
@@ -11625,6 +12198,34 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 ### `GET /webhooks/slack-oauth`
 
 The OAuth install landing every agent's Slack app redirects to. An install begun with **Install** on the Slack integration's Agents tab carries a `state` the engine signed (the seat, its app, a single-use nonce and a 15-minute expiry): the page verifies and spends it, exchanges the `code` for the bot token, refuses a token that belongs to another agent's app, and seals it under the seat's own name. A link used twice, edited or expired is refused with what to do instead, and neither the code nor the token is ever shown. An install made from the app's own settings page carries no state, and the page says where to copy the bot token. A link from the retired `crewlet slack provision` is answered `410` with where installs are made now. A refusal Slack sends back is said in the page's own words (the install was cancelled, or Slack didn't approve it) and its code is logged as `slack_oauth_refused`, never shown; no answer is cached (`Cache-Control: no-store`). Unauthenticated by design, since a browser redirect carries no engine credential. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
+
+### `GET /webhooks/mcp-oauth`
+
+Where a vendor sends the person's browser back after they consent to an MCP
+server sign-in begun with [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth).
+Unauthenticated by design, since a redirect carries no engine credential: what
+it does is decided by the `state` alone, which the engine signed under the
+fleet keyring and spends once on any node (a second arrival with the same
+state, an edited one or one past its 15 minutes is refused with where to start
+again, and no code is exchanged for it). Where the authorization server names
+itself in its answers (RFC 9207) the `iss` must be the one the sign-in was
+started at. The code is exchanged with the verifier the engine kept, a grant
+that carries no refresh token is refused, and the grant is sealed for the
+company and the revision re-activated so every node starts the server under
+it. Every query value is bounded before anything reads it, and the page shows
+none of them: it names the server signed in to, or why the sign-in was not
+finished. It is served with `Cache-Control: no-store`, `Referrer-Policy:
+no-referrer` and a policy that allows its one inline style by hash and no
+script (see [Security headers on every response](#security-headers-on-every-response)).
+
+### `GET /webhooks/mcp-oauth/client-metadata.json`
+
+The engine's OAuth client metadata document: a public client named `Crewlet`
+(no secret, `token_endpoint_auth_method: none`, PKCE its proof) whose one
+redirect is `/webhooks/mcp-oauth`, at the engine's public address. Its own
+address is the `client_id` a `cimd` sign-in is made as, which an authorization
+server that reads such documents fetches. `404 not_found` on an engine with no
+public address. Cached for an hour.
 
 ### `/webhooks/github`
 

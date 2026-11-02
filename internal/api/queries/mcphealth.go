@@ -90,10 +90,15 @@ const (
 	// credential from one of the company's integrations
 	// ([config.MCPServer.SeatBindings]).
 	MCPAuthIntegration MCPAuth = "integration"
+	// MCPAuthOAuth is a remote server the company signs in to with OAuth
+	// ([config.MCPOAuth]): the engine sends an access token, issued under a
+	// person's grant or to the company's service identity, which the
+	// server's `oauth.grant` tells apart.
+	MCPAuthOAuth MCPAuth = "oauth"
 )
 
 // MCPAuths is every value, for a reader's copy.
-var MCPAuths = []MCPAuth{MCPAuthNone, MCPAuthHeaders, MCPAuthIntegration}
+var MCPAuths = []MCPAuth{MCPAuthNone, MCPAuthHeaders, MCPAuthIntegration, MCPAuthOAuth}
 
 // MCPRunsOnEngineHost is where a local server runs: on the engine's host, each
 // node that runs an instance of it starting its command. A remote server runs
@@ -115,8 +120,9 @@ type MCPResolved struct {
 	// reads, null for a server that reads none.
 	Binding *MCPBinding `json:"binding"`
 	// BoxSeats are the seats whose executor box is given the server
-	// (`sandbox.mcp.servers`), each with the cell its box runs in. ALWAYS A
-	// LIST.
+	// (`sandbox.mcp.servers`, for a seat the server is granted to, while
+	// every tool of it is allowed), each with the cell its box runs in.
+	// ALWAYS A LIST.
 	BoxSeats []MCPBoxSeat `json:"box_seats"`
 	// Warnings are placements the engine expects to fail, each naming the
 	// seat and why. ALWAYS A LIST.
@@ -190,8 +196,8 @@ type MCPPlacementWarning struct {
 }
 
 // resolvedOf is what the engine decides about server from the company
-// document it is declared in.
-func resolvedOf(company *config.Company, server *config.MCPServer) MCPResolved {
+// document it is declared in and the chart roster built from it.
+func resolvedOf(company *config.Company, roster *org.Organization, server *config.MCPServer) MCPResolved {
 	out := MCPResolved{
 		Auth:     authOf(server),
 		Timeouts: timeoutsOf(server),
@@ -202,9 +208,11 @@ func resolvedOf(company *config.Company, server *config.MCPServer) MCPResolved {
 	if server.Kind() == config.TransportStdio {
 		out.RunsOn = MCPRunsOnEngineHost
 	}
-	if company == nil || !server.IsEnabled() {
+	if company == nil || !server.IsEnabled() || !server.Tools.AllowsEveryTool() {
 		// A SERVER TURNED OFF IS GIVEN TO NO BOX ([config.MCPServer.IsEnabled]),
-		// so it has no box to warn about either.
+		// and nor is one holding any tool back from the agents
+		// ([config.MCPToolPolicy.AllowsEveryTool]), which a box would reach
+		// whole: neither has a box to warn about.
 		return out
 	}
 	for box := range company.SeatBoxes() {
@@ -212,6 +220,12 @@ func resolvedOf(company *config.Company, server *config.MCPServer) MCPResolved {
 			continue
 		}
 		handle := box.Seat.Seat().Handle()
+		if roster == nil || !server.Grants(roster.AgentSeatByHandle(handle)) {
+			// A BOX IS GIVEN ONLY A SERVER ITS SEAT IS GRANTED
+			// ([config.MCPServer.Grants]), so a listing the grant does not
+			// back gives it nothing.
+			continue
+		}
 		out.BoxSeats = append(out.BoxSeats, MCPBoxSeat{Seat: handle, Cell: string(box.Cell)})
 		if w, ok := placementWarning(server, handle, box.Cell); ok {
 			out.Warnings = append(out.Warnings, w)
@@ -256,6 +270,8 @@ func privateAddress(raw string) bool {
 // authOf is how the engine proves who it is to server.
 func authOf(server *config.MCPServer) MCPAuth {
 	switch {
+	case server.OAuth != nil:
+		return MCPAuthOAuth
 	case len(server.SeatBindings()) > 0:
 		return MCPAuthIntegration
 	case server.Kind() == config.TransportHTTP && len(server.Headers) > 0,

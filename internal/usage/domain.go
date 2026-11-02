@@ -194,12 +194,13 @@ func (Domain) NodeGate(statelog.Envelope) bool { return false }
 // them is in the identity claim.
 func (Domain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"usage_turns":         statelog.Divergent,
-		"usage_tokens":        statelog.Divergent,
-		"usage_reads":         statelog.Divergent,
-		"usage_schedule_runs": statelog.Divergent,
-		"usage_person_tokens": statelog.Divergent,
-		"usage_tool_calls":    statelog.Divergent,
+		"usage_turns":               statelog.Divergent,
+		"usage_tokens":              statelog.Divergent,
+		"usage_reads":               statelog.Divergent,
+		"usage_schedule_runs":       statelog.Divergent,
+		"usage_schedule_superseded": statelog.Divergent,
+		"usage_person_tokens":       statelog.Divergent,
+		"usage_tool_calls":          statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,

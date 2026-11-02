@@ -261,6 +261,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
 		existing.QuestionContext, existing.Decision = "", nil
+		// And the call it held, made or not: a held call is the job's, and
+		// what the next job does is its own.
+		existing.HeldCall = nil
 		// And whom it was put to: the audience is the question's, and a
 		// question that is gone waits on nobody.
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
@@ -686,6 +689,69 @@ func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fenc
 		return true
 	})
 	return won || (err == nil && taken), err
+}
+
+// ErrHeldCallUnclaimed is a held call's mark or result asked of a row that is
+// not the claim of its answer: the run moved on, was let go of, or another
+// lease fenced it. Nothing was written, and the call is not to be made.
+var ErrHeldCallUnclaimed = errors.New("sandbox: the run is not the claim that holds the held call's answer")
+
+// heldClaim reports whether run is the claim of launch's answer that may make
+// its held call: [PendingStore.MarkHeldCall]'s terms.
+func heldClaim(run PendingRun, launch string, fence Fence) bool {
+	return run.Status == StatusResumed && run.LaunchID == launch && run.Answer != nil &&
+		run.HeldCall != nil && run.HeldCall.LaunchID == launch && !superseded(run, fence)
+}
+
+// MarkHeldCall records that a claim's resume is making its run's held call. See
+// the contract on [PendingStore].
+func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {
+	var held HeldCall
+	claimed := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if claimed = heldClaim(*run, launch, fence); !claimed {
+			return false
+		}
+		held = *run.HeldCall
+		if held.Calling() {
+			return false
+		}
+		held.CallingAt = s.clock()
+		run.HeldCall = &held
+		return true
+	})
+	switch {
+	case err != nil:
+		return HeldCall{}, false, err
+	case !claimed:
+		return HeldCall{}, false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
+	}
+	return held, won, nil
+}
+
+// RecordHeldResult records what a marked held call returned. See the contract on
+// [PendingStore].
+func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
+	claimed, made := false, false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if claimed = heldClaim(*run, launch, fence) && run.HeldCall.Calling(); !claimed {
+			return false
+		}
+		if made = run.HeldCall.Made(); made {
+			return false
+		}
+		held := *run.HeldCall
+		held.Result, held.MadeAt = sealed, s.clock()
+		run.HeldCall = &held
+		return true
+	})
+	switch {
+	case err != nil:
+		return false, err
+	case !claimed:
+		return false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
+	}
+	return won || made, nil
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still
@@ -1122,7 +1188,17 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 			return false
 		}
 		run.Question, run.QuestionContext = ask.Question, ask.Context
-		run.Decision, run.Audience, run.Branch = ask.Decision, ask.To, ask.Branch
+		run.Decision, run.Audience = ask.Decision, ask.To
+		if ask.Held != nil {
+			// A HELD CALL NAMES NO BRANCH, since the run did not choose to
+			// stop: the branch an earlier question named stays for the
+			// job that carries the work on.
+			held := *ask.Held
+			held.LaunchID = launch
+			run.HeldCall = &held
+		} else {
+			run.Branch = ask.Branch
+		}
 		refusal = AskNotRunning
 		return true
 	})
@@ -1163,7 +1239,7 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	candidates := calls[head : len(calls)-1]
 	ordinary := 0
 	for _, call := range candidates {
-		if !EndsRun(call.Name) {
+		if !call.Ends() {
 			ordinary++
 		}
 	}
@@ -1173,9 +1249,9 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	kept = append(kept, calls[:head]...)
 	for _, call := range candidates {
 		switch {
-		case !EndsRun(call.Name) && dropOrdinary > 0:
+		case !call.Ends() && dropOrdinary > 0:
 			dropOrdinary--
-		case EndsRun(call.Name) && dropAny > 0:
+		case call.Ends() && dropAny > 0:
 			dropAny--
 		default:
 			kept = append(kept, call)

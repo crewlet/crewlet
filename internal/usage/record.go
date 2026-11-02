@@ -38,8 +38,8 @@ import (
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
-// highest version: 2, a seat's calls per MCP tool.
-const RecordVersion = 2
+// highest version: 3, a schedule fire's tick and the fires a seat did not run.
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -47,10 +47,12 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a usage record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it:
-// a seat-day's calls per MCP tool and the count its cap dropped, at 2. A
-// build at 1 has no table for them, and applying such a record there would
-// keep the seat-day's other figures and lose its calls for good, so it
-// retains the record instead and applies it once it can.
+// a seat-day's calls per MCP tool and the count its cap dropped, at 2; a
+// schedule fire's tick (when it was due, and its label) and a schedule-day's
+// fires its seats did not run, at 3. A build below
+// either has no column for it, and applying such a record there would keep
+// the rest of the day and lose the field for good, so it retains the record
+// instead and applies it once it can.
 //
 // ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
 // older build decodes a field it has no home for AROUND — it reads the
@@ -68,6 +70,9 @@ const baseRecordVersion = 1
 var versionedFields = statelog.RecordFields{
 	{Name: "Record.Tools", Since: 2, Path: []string{"tools"}},
 	{Name: "Record.ToolsElided", Since: 2, Path: []string{"tools_elided"}},
+	{Name: "Fire.ScheduledAt", Since: 3, Path: []string{"fires", "scheduled_at"}},
+	{Name: "Fire.FireLabel", Since: 3, Path: []string{"fires", "fire_label"}},
+	{Name: "Record.Superseded", Since: 3, Path: []string{"superseded"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -371,8 +376,16 @@ type Record struct {
 	Tools       []ToolCalls `json:"tools,omitempty"`
 	ToolsElided int         `json:"tools_elided,omitempty"`
 
-	// Fires are a schedule's dispatches.
+	// Fires are a schedule's dispatches, as this node's scheduler recorded
+	// them.
 	Fires []Fire `json:"fires,omitempty"`
+
+	// Superseded are the fires of a schedule a seat on this node did not
+	// run, because a later fire of it ran in its place: whichever node's
+	// scheduler sent them, filed on the day this node recorded it. The
+	// schedule's history joins each to its fire by the trace
+	// ([ScheduleRuns]).
+	Superseded []Superseded `json:"superseded,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
 	// losslessly through a node that cannot interpret them.
@@ -449,11 +462,26 @@ type ToolCalls struct {
 
 // Fire is one dispatch a schedule made.
 type Fire struct {
+	At time.Time `json:"at"`
+
+	// ScheduledAt is the instant the fire was due, and FireLabel that tick
+	// as the dispatch ledger keys it: the schedule's local wall-clock
+	// minute. On a catch-up both name the tick being made up rather than
+	// the moment it ran.
+	ScheduledAt time.Time `json:"scheduled_at,omitzero"`
+	FireLabel   string    `json:"fire_label,omitempty"`
+
+	Target  string `json:"target,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	TraceID string `json:"trace_id,omitempty"`
+	TurnID  string `json:"turn_id,omitempty"`
+}
+
+// Superseded is one fire a seat did not run: the trace the fire was sent
+// under, and when the seat's node recorded that it ran a later fire instead.
+type Superseded struct {
+	TraceID string    `json:"trace_id"`
 	At      time.Time `json:"at"`
-	Target  string    `json:"target,omitempty"`
-	Outcome string    `json:"outcome,omitempty"`
-	TraceID string    `json:"trace_id,omitempty"`
-	TurnID  string    `json:"turn_id,omitempty"`
 }
 
 // knownKeys are the top-level keys this build writes, so Extra holds exactly
@@ -462,7 +490,7 @@ type Fire struct {
 var knownKeys = []string{
 	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
 	"handle", "role", "tokens", "turns", "reads", "reads_elided", "tools",
-	"tools_elided", "fires",
+	"tools_elided", "fires", "superseded",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -546,8 +574,8 @@ func (r Record) validateBody() error {
 			return fmt.Errorf("usage: the seat record on %s carries no turns — "+
 				"its row is the head every apply's guard reads", r.Subject)
 		}
-		if len(r.Fires) > 0 {
-			return fmt.Errorf("usage: the seat record on %s carries fires", r.Subject)
+		if len(r.Fires) > 0 || len(r.Superseded) > 0 {
+			return fmt.Errorf("usage: the seat record on %s carries a schedule's fires", r.Subject)
 		}
 		if len(r.Reads) > ReadsPerSeatDay {
 			return fmt.Errorf("usage: the seat record on %s carries %d reads and a "+
@@ -565,13 +593,33 @@ func (r Record) validateBody() error {
 			return fmt.Errorf("usage: the schedule record on %s carries a seat's "+
 				"spend, turns, reads or tool calls", r.Subject)
 		}
+		return r.validateSuperseded()
 	case KindPerson:
 		if r.Turns != nil || len(r.Reads) > 0 || r.ReadsElided != 0 || len(r.Fires) > 0 ||
-			len(r.Tools) > 0 || r.ToolsElided != 0 || r.Handle != "" {
+			len(r.Superseded) > 0 || len(r.Tools) > 0 || r.ToolsElided != 0 || r.Handle != "" {
 			return fmt.Errorf("usage: the person record on %s carries a seat's turns, "+
 				"reads, tool calls or handle, or a schedule's fires; a person's day is "+
 				"its spend alone, named by its subject", r.Subject)
 		}
+	}
+	return nil
+}
+
+// validateSuperseded refuses a schedule-day's superseded fires no reader could
+// join: one that names no trace, or a trace named twice (the key the estate
+// holds them under).
+func (r Record) validateSuperseded() error {
+	seen := make(map[string]bool, len(r.Superseded))
+	for _, sup := range r.Superseded {
+		switch {
+		case strings.TrimSpace(sup.TraceID) == "":
+			return fmt.Errorf("usage: the schedule record on %s carries a superseded "+
+				"fire that names no trace", r.Subject)
+		case seen[sup.TraceID]:
+			return fmt.Errorf("usage: the schedule record on %s carries the superseded "+
+				"fire %s twice", r.Subject, sup.TraceID)
+		}
+		seen[sup.TraceID] = true
 	}
 	return nil
 }

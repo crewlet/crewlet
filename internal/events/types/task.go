@@ -62,6 +62,14 @@ type TaskAssigned struct {
 	// again", and it is what the fire's label names ([SummaryFor]), so two
 	// fires of one schedule read alike.
 	Schedule string `json:"schedule,omitempty"`
+	// ScopeType and ScopeID are the scope that owns [TaskAssigned.Schedule]:
+	// with the name, the schedule's identity as the dispatch ledger keys a
+	// fire on it. A name alone is not one, since two units can each declare
+	// a `standup`. They are what a fire the seat does not run is recorded
+	// under ([ScheduledFireSuperseded]), so the schedule's history can say
+	// so whichever node keeps the record.
+	ScopeType ScheduleScope `json:"scope_type,omitempty"`
+	ScopeID   string        `json:"scope_id,omitempty"`
 	// TimeoutSeconds is the schedule's wall-clock cap for this fire; zero
 	// is no cap, which the one producer never sends (a schedule with none
 	// of its own carries the default).

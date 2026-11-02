@@ -1,10 +1,12 @@
 // Package sqlledger is the durable [schedule.Ledger] over the `scheduled_runs`
-// table.
+// table: this node's audit record of what its scheduler dispatched.
 //
-// It is what makes at-most-once survive a restart, and the reason scheduling
-// requires a store at all: the in-memory twin's claim lives in one process, so
-// a fleet running it would fire every schedule once per node, and a restart
-// would re-fire whatever the catchup window still covers.
+// The fleet's at-most-once claim is the coordination store's (see
+// [schedule.SharedClaimer]); what this table is for is the record. The usage
+// domain derives every schedule's history from it (store.DB.UsageForDay), so a
+// fire this node sent reaches every data node, joined with what became of it.
+// Nothing reads the table's history through this package: a claim, a purge
+// and the one yes or no the catchup pass asks are the whole of what it does.
 //
 // It sits beside the scheduler rather than in internal/store because the SQL
 // is what the LEDGER means, not what the store does — and because keeping it
@@ -20,20 +22,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// DB is the database surface this ledger needs — three statements, no
-// transaction management, no schema.
+// DB is the database surface this ledger needs: two statements and one read,
+// no transaction management, no schema.
 //
 // Narrow and consumer-defined so the ledger can be handed a *sql.DB, a
 // *sql.Tx or a *sql.Conn without any of them having to know about it, and so
 // nothing here can reach past the one table it owns.
 type DB interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Ledger is the `scheduled_runs` dispatch ledger.
@@ -98,99 +99,30 @@ func (l *Ledger) Claim(ctx context.Context, run schedule.Run) (bool, error) {
 	return n > 0, nil
 }
 
-// recentSQL orders by fired_at descending and then by the identity tuple.
+// minuteClaimedSQL asks for any row of one minute, whatever its runner.
 //
-// The tiebreak is not decoration: two rows can share a microsecond, and
-// without a total order this backend and the memory twin hand a dashboard
-// different pages for the same data. Both certified drivers compare TEXT
-// byte-wise by default, which is the same order Go's cmp.Compare gives the
-// twin — so the two agree without either of them naming a collation.
-const recentSQL = `
-SELECT scope_type, scope_id, schedule_name, fire_label, target_handle,
-       scheduled_at, fired_at, outcome, trace_id
-FROM scheduled_runs
-ORDER BY fired_at DESC, scope_type, scope_id, schedule_name, fire_label, target_handle
-LIMIT ?`
+// The four columns are the leading columns of the table's primary key, so the
+// read is one probe of that index rather than a scan of the ledger.
+const minuteClaimedSQL = `
+SELECT EXISTS (
+	SELECT 1 FROM scheduled_runs
+	WHERE scope_type = ? AND scope_id = ? AND schedule_name = ? AND fire_label = ?
+)`
 
-// Recent returns the newest rows first, at most limit of them.
-func (l *Ledger) Recent(ctx context.Context, limit int) ([]schedule.Run, error) {
+// MinuteClaimed reports whether any row holds the minute, for any runner or
+// for none.
+func (l *Ledger) MinuteClaimed(ctx context.Context, minute schedule.FireMinute) (bool, error) {
 	if l == nil || l.db == nil {
-		return nil, ErrNoDB
+		return false, ErrNoDB
 	}
-	if limit <= 0 {
-		// Not passed to SQL: SQLite reads a negative LIMIT as unbounded,
-		// so a caller whose page size arrived as -1 would pull the whole
-		// table. The contract says a non-positive limit returns nothing.
-		return nil, nil
+	var held bool
+	if err := l.db.QueryRowContext(ctx, minuteClaimedSQL,
+		string(minute.Scope), minute.ScopeID, minute.ScheduleName, minute.FireLabel,
+	).Scan(&held); err != nil {
+		return false, fmt.Errorf("sqlledger: read %s/%s/%s: %w",
+			minute.ScopeID, minute.ScheduleName, minute.FireLabel, err)
 	}
-	return l.scanRuns(ctx, "recent", recentSQL, limit)
-}
-
-// scanRuns reads a run listing. ONE DECODER for both listings, because the
-// column order, the instant decoding and the two typed enums are the half a
-// second copy gets subtly wrong — and a listing that decoded an outcome
-// differently from its sibling would show one schedule's history in a
-// vocabulary the rest of the screen does not use.
-func (l *Ledger) scanRuns(ctx context.Context, what, query string, args ...any) (
-	[]schedule.Run, error) {
-
-	rows, err := l.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("sqlledger: %s: %w", what, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var out []schedule.Run
-	for rows.Next() {
-		var (
-			run         schedule.Run
-			scope       string
-			outcome     string
-			scheduledAt int64
-			firedAt     int64
-		)
-		if err := rows.Scan(&scope, &run.ScopeID, &run.ScheduleName, &run.FireLabel,
-			&run.TargetHandle, &scheduledAt, &firedAt, &outcome, &run.TraceID); err != nil {
-			return nil, fmt.Errorf("sqlledger: %s: scan: %w", what, err)
-		}
-		run.Scope = types.ScheduleScope(scope)
-		run.Outcome = schedule.Outcome(outcome)
-		run.ScheduledAt = store.DecodeTime(scheduledAt)
-		run.FiredAt = store.DecodeTime(firedAt)
-		out = append(out, run)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlledger: %s: %w", what, err)
-	}
-	return out, nil
-}
-
-// recentForSQL is recentSQL narrowed to one schedule's identity tuple.
-//
-// The SAME ORDER and the same columns, written as one statement each rather
-// than one statement with a conditional WHERE: the two differ by a predicate
-// and share an ORDER BY that is part of the Ledger contract, and a builder
-// that composed them would be the place that clause silently stops matching.
-const recentForSQL = `
-SELECT scope_type, scope_id, schedule_name, fire_label, target_handle,
-       scheduled_at, fired_at, outcome, trace_id
-FROM scheduled_runs
-WHERE scope_type = ? AND scope_id = ? AND schedule_name = ?
-ORDER BY fired_at DESC, scope_type, scope_id, schedule_name, fire_label, target_handle
-LIMIT ?`
-
-// RecentFor returns one schedule's newest rows first, at most limit of them.
-func (l *Ledger) RecentFor(ctx context.Context, scope types.ScheduleScope,
-	scopeID, name string, limit int) ([]schedule.Run, error) {
-
-	if l == nil || l.db == nil {
-		return nil, ErrNoDB
-	}
-	if limit <= 0 {
-		return nil, nil
-	}
-	return l.scanRuns(ctx, "recent for "+name, recentForSQL,
-		string(scope), scopeID, name, limit)
+	return held, nil
 }
 
 const purgeSQL = `DELETE FROM scheduled_runs WHERE fired_at < ?`

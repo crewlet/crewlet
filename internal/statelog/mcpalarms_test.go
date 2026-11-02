@@ -40,6 +40,16 @@ func mcpKinds(r statelog.Reading) map[statelog.Kind][]string {
 	return out
 }
 
+// mcpEntries is the entries kind stands on in a reading.
+func mcpEntries(r statelog.Reading, kind statelog.Kind) []statelog.AlarmEntry {
+	for _, a := range statelog.Evaluate(r) {
+		if a.Kind == kind {
+			return a.Entries
+		}
+	}
+	return nil
+}
+
 // EACH KIND RAISES AFTER ITS SPAN AND CLEARS, judged per server: the outage at
 // the restart schedule's ceiling plus a beat, failing where nothing serves and
 // partial where something does; the wait at a provisioning pass plus a beat,
@@ -81,6 +91,31 @@ func TestEachMCPKindRaisesAfterItsSpanAndClears(t *testing.T) {
 			[]statelog.Kind{statelog.KindMCPServerFailing, statelog.KindMCPServerWaitingLong}},
 		"a refused name, at once": {statelog.MCPServerCondition{Server: "github", Started: 1,
 			Refused: []string{"gh_read.file"}, RefusedCount: 1}, []statelog.Kind{statelog.KindMCPToolsRefused}},
+		"a server with no sign-in held, at once, in place of failing": {statelog.MCPServerCondition{
+			Server: "github", Failed: 1, DownSince: mcpAt.Add(-time.Hour), SignIn: &statelog.MCPSignInCondition{}},
+			[]statelog.Kind{statelog.KindMCPOAuthNeedsSignIn}},
+		"a sign-in its vendor refused to renew": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			SignIn: &statelog.MCPSignInCondition{Held: true, Failure: "invalid_grant", FailedAt: mcpAt}},
+			[]statelog.Kind{statelog.KindMCPOAuthNeedsSignIn}},
+		"a held sign-in renewing": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			SignIn: &statelog.MCPSignInCondition{Held: true}}, nil},
+		"a held sign-in the nodes hold the server back for": {statelog.MCPServerCondition{Server: "github",
+			Failed: 1, DownSince: mcpAt.Add(-time.Hour), SignIn: &statelog.MCPSignInCondition{Held: true},
+			Down: statelog.MCPInstanceNote{Node: "node-a", Class: statelog.MCPNeedsSignInClass,
+				Said: "its sign-in was made for another address"}},
+			[]statelog.Kind{statelog.KindMCPOAuthNeedsSignIn}},
+		"a sign-in a second past the notice": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			SignIn: &statelog.MCPSignInCondition{Held: true,
+				Expiry: mcpAt.Add(statelog.MCPSignInNotice + time.Second)}}, nil},
+		"a sign-in exactly the notice from running out": {statelog.MCPServerCondition{Server: "github",
+			Started: 1, SignIn: &statelog.MCPSignInCondition{Held: true, Expiry: mcpAt.Add(statelog.MCPSignInNotice)}},
+			[]statelog.Kind{statelog.KindMCPOAuthExpiring}},
+		"a sign-in that ran out": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			SignIn: &statelog.MCPSignInCondition{Held: true, Expiry: mcpAt.Add(-time.Hour)}},
+			[]statelog.Kind{statelog.KindMCPOAuthExpiring}},
+		"a changed tool held, at once": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			Changes: 1, Change: statelog.MCPChangeNote{Tool: "get_issue", Kind: "changed"}},
+			[]statelog.Kind{statelog.KindMCPToolsChanged}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -107,6 +142,10 @@ func TestTheMCPSpansAreTheSchedulesTheyWaitOut(t *testing.T) {
 	t.Parallel()
 	if want := mcp.RestartCeiling + coord.ReconcileInterval; statelog.MCPOutageGrace != want {
 		t.Errorf("MCPOutageGrace = %v, want the restart ceiling plus a heartbeat (%v)", statelog.MCPOutageGrace, want)
+	}
+	if statelog.MCPNeedsSignInClass != string(mcp.FailNeedsSignIn) {
+		t.Errorf("MCPNeedsSignInClass = %q, want the client's class %q", statelog.MCPNeedsSignInClass,
+			mcp.FailNeedsSignIn)
 	}
 	if want := integration.DefaultSchedule.WaitingMax + coord.ReconcileInterval; statelog.MCPWaitingGrace != want {
 		t.Errorf("MCPWaitingGrace = %v, want the longest wait between passes plus a heartbeat (%v)",
@@ -228,5 +267,62 @@ func TestAnMCPKindStandsPerServerAndHandsOverWhenTheLastInstanceFalls(t *testing
 		Started: 1, Refused: []string{"lin_a"}, RefusedCount: 1})
 	if got := statelog.Evaluate(statelog.Reading{MCPServers: unstamped}); len(got) != 0 {
 		t.Errorf("an unstamped reading raised %v", kindsOf(got))
+	}
+}
+
+// A SIGN-IN'S ALARM SAYS WHY, IN THE VENDOR'S WORDS where it refused, and when
+// a grant runs out; and the failing alarm stands aside for it, since no
+// restart ends a sign-in nobody made.
+//
+// Mutation: drop the vendor's words, or let failing stand beside it, and this
+// fails.
+func TestAnMCPSignInAlarmSaysWhyAndStandsInPlaceOfFailing(t *testing.T) {
+	t.Parallel()
+	refused := statelog.MCPServerCondition{Server: "linear", Failed: 2, DownSince: mcpAt.Add(-time.Hour),
+		SignIn: &statelog.MCPSignInCondition{Held: true, FailedAt: mcpAt.Add(-time.Hour),
+			Failure: "the vendor refused to renew the sign-in: invalid_grant: token revoked"}}
+	got := mcpKinds(servers(refused))
+	if _, failing := got[statelog.KindMCPServerFailing]; failing || len(got) != 1 {
+		t.Fatalf("raised %v, want the sign-in alarm alone", got)
+	}
+	entries := mcpEntries(servers(refused), statelog.KindMCPOAuthNeedsSignIn)
+	if len(entries) != 1 || !strings.Contains(entries[0].Detail, "invalid_grant: token revoked") ||
+		!entries[0].Since.Equal(mcpAt.Add(-time.Hour)) {
+		t.Fatalf("entry = %+v, want the vendor's words and when it refused", entries)
+	}
+	expiring := statelog.MCPServerCondition{Server: "linear", Started: 1,
+		SignIn: &statelog.MCPSignInCondition{Held: true, Expiry: mcpAt.Add(3 * 24 * time.Hour)}}
+	entries = mcpEntries(servers(expiring), statelog.KindMCPOAuthExpiring)
+	if len(entries) != 1 || !strings.Contains(entries[0].Detail, statelog.Spoken(3*24*time.Hour)) ||
+		!entries[0].Since.Equal(mcpAt.Add(3*24*time.Hour-statelog.MCPSignInNotice)) {
+		t.Fatalf("entry = %+v, want when it runs out", entries)
+	}
+}
+
+// A CHANGED TOOL'S ENTRY SAYS WHICH TOOL, HOW, AND WHETHER IT LOOSENED: the tool
+// the change seen first names, whether it was added or changed, how many tools
+// wait in all, and that a change claims less risk than before, dated by when
+// the fleet first saw it (ADR-0078).
+//
+// Mutation: drop the loosened clause or the count, and this fails.
+func TestAChangedToolsEntrySaysWhichToolAndWhetherItLoosened(t *testing.T) {
+	t.Parallel()
+	seen := mcpAt.Add(-time.Hour)
+	got := statelog.Evaluate(servers(statelog.MCPServerCondition{Server: "github", Started: 1,
+		Changes: 3, Loosened: 1, ChangeSince: seen,
+		Change: statelog.MCPChangeNote{Tool: "get_issue", Kind: "changed", Loosened: true}}))
+	changed, ok := find(got, statelog.KindMCPToolsChanged)
+	if !ok || len(changed.Entries) != 1 {
+		t.Fatalf("raised %+v, want mcp_tools_changed on github", got)
+	}
+	e := changed.Entries[0]
+	for _, says := range []string{"get_issue on github changed since its level was decided",
+		"3 of its tools wait so in all", "it now claims to be less risky than before"} {
+		if !strings.Contains(e.Detail, says) {
+			t.Errorf("the entry says %q, want it to say %q", e.Detail, says)
+		}
+	}
+	if !e.Since.Equal(seen) {
+		t.Errorf("the entry is dated %s, want when the fleet first saw the change (%s)", e.Since, seen)
 	}
 }

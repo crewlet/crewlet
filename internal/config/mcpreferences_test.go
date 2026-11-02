@@ -12,9 +12,9 @@ import (
 const referencesDoc = `
 name: Acme
 mcp_servers:
-  - {name: tracker, command: tracker-mcp, shared: false}
-  - {name: search, command: search-mcp}
-  - {name: github, transport: http, url: "https://api.example.com/mcp", shared: false}
+  - {name: tracker, command: tracker-mcp, shared: false, tools: {default: allow}}
+  - {name: search, command: search-mcp, tools: {default: allow}}
+  - {name: github, transport: http, url: "https://api.example.com/mcp", shared: false, tools: {default: allow}}
 roles:
   - name: CEO
     handle: ceo

@@ -637,7 +637,7 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, he
 			continue
 		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
-			"detail", "the seat no longer declares this per-role server")
+			"detail", "the seat is no longer granted this per-role server, or the revision no longer declares it")
 	}
 }
 
@@ -715,7 +715,8 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bo
 }
 
 // seatSurface is the registry one seat's turns are built against: the epoch's
-// surface cloned, with the seat's own live catalogue filed into it.
+// surface as the seat holds it ([grantedSurface]: the shared servers it is
+// granted, and no other), with the seat's own live catalogue filed into it.
 //
 // CLONED, not shared: the seat's own tools must not reach a peer seat, and
 // the epoch's registry is read by every other seat on this node. Filed from
@@ -723,7 +724,7 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bo
 // claim and every apply build the same surface from the same children —
 // whichever pass happened to start them.
 func seatSurface(ctx context.Context, c *Company, s *seatChildren) *tools.Registry {
-	reg := c.Tools.Clone()
+	reg := grantedSurface(c, c.Org.AgentSeatByHandle(s.handle))
 	for _, registration := range s.bridge.Registrations() {
 		if err := reg.RegisterMCP(registration); err != nil {
 			log.WarnContext(ctx, "mcp_tool_refused", "seat", s.handle,

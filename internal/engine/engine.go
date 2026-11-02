@@ -82,6 +82,13 @@ type Company struct {
 	// nil on an epoch built without an engine, whose runs offer none.
 	AskTool runner.RunAsk
 
+	// HoldTool records a call an executor's run makes to a tool at Needs
+	// approval as the question it parks on (ADR-0077), installed on that
+	// run's surface alone ([runner.Config.Hold]). Built with AskTool; nil
+	// on an epoch built without an engine or without the fleet keyring's
+	// cipher, whose runs are refused every such call.
+	HoldTool tools.Holder
+
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
 	// or a boot's reading of the boot row's `served_at`
@@ -249,8 +256,9 @@ func (c *Company) Seats() []placement.Seat {
 // because the seat's own surface is a fact about this node's leases and not
 // about the configuration: only the node that claimed the seat has its
 // per-role children. Pass [Engine.seatRegistry]; nil falls back to the
-// epoch's shared surface, which is the correct answer for a seat that
-// declares no per-role server and for any caller that holds no lease.
+// epoch's shared surface as the seat holds it ([grantedSurface]), which is the
+// correct answer for a seat granted no per-role server and for any caller that
+// holds no lease.
 func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
@@ -265,7 +273,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
-		reg = c.Tools
+		reg = grantedSurface(c, role)
 	}
 	// REFUSED HERE TOO, for the reason [turn.Run] refuses it: this field
 	// arms submit_work's own citation check, and a caller that omits it
@@ -362,6 +370,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// epoch's builtins: its evidence is checked against the same
 		// tracker and knowledge base a work item's decision is.
 		Ask: c.AskTool,
+		// AND ITS WAY TO PARK ON A CALL THAT NEEDS APPROVAL, recorded on
+		// the same row through the same desk.
+		Hold: c.HoldTool,
 		// The turn's note box, opened by the caller because the caller is
 		// what files it where a person's note can find it.
 		Steer: in.Steer,

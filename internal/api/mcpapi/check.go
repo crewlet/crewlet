@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // TESTING A SERVER, AND CHECKING AN ADDRESS BEFORE ONE IS ADDED.
@@ -38,8 +42,11 @@ import (
 //     resolved from the secret store), so it is decided as that write too,
 //     `config.write` and `secrets.write`, before anything is read past the
 //     body ([mayRunDraft]); the draft is held to the configuration's own dry
-//     run, and a refused one is answered as its write would be. Never
-//     recorded.
+//     run, and a refused one is answered as its write would be. The values
+//     typed for its keys and not stored yet are tested with it, each read
+//     through the variable `PUT /mcp-servers/{name}/values/{key}` would store
+//     it under in the company the draft makes, and sealed across the fleet as
+//     that route's value is. Never recorded.
 //   - `POST /mcp-probe` checks an address before a server is added at it:
 //     what the server is, and how it is signed in to. The address is the
 //     caller's, dialled as the server would be once added, so it is decided
@@ -75,10 +82,18 @@ var ErrSeatRequired = errors.New("mcpapi: a per-agent MCP server is tested for o
 // CheckRequest is a test somebody asked for.
 type CheckRequest struct {
 	Server string
-	// Draft is the entry as a write would leave it, nil for the saved one.
-	Draft *config.MCPServer
+	// Entry is the entry to test, sent with the test so that no node needs to
+	// have applied it: a draft, or for a value under test the entry as the
+	// fleet's active revision states it. Nil tests the saved server each node
+	// runs, which is recorded as its latest test.
+	Entry *config.MCPServer
+	// Draft is whether Entry is not written yet.
+	Draft bool
 	Seat  string
-	By    iam.Actor
+	// Values are the values tested before they are stored, each its own
+	// key's; none for a test of what is stored.
+	Values []ValueTry
+	By     iam.Actor
 }
 
 // Check is what a test found, every sentence redacted and bounded.
@@ -108,11 +123,13 @@ type checkRequest struct {
 }
 
 // draftRequest is the body `POST /mcp-checks` reads: the draft entry, as
-// `PUT /config/mcp-servers/{name}` would take it, and the seat a per-agent
-// one is tested for.
+// `PUT /config/mcp-servers/{name}` would take it, the seat a per-agent one is
+// tested for, and the values typed for its keys, which are tested and never
+// written.
 type draftRequest struct {
-	Entity json.RawMessage `json:"entity"`
-	Seat   string          `json:"seat"`
+	Entity json.RawMessage   `json:"entity"`
+	Seat   string            `json:"seat"`
+	Values map[string]string `json:"values"`
 }
 
 // probeRequest is the body `POST /mcp-probe` reads.
@@ -123,6 +140,11 @@ type probeRequest struct {
 // maxCheckBody bounds a test's body: one entry of the configuration, whose
 // launch, headers and annotations are a few kilobytes.
 const maxCheckBody = 64 << 10
+
+// maxDraftBody bounds a draft's test: its entry and the values typed for it,
+// which together hold no more than one stored value's bound
+// ([secrets.MaxValueBytes]) at their longest JSON spelling.
+const maxDraftBody = maxCheckBody + maxValueBody
 
 // CheckAnswer is what `POST /mcp-servers/{name}/check` and `POST /mcp-checks`
 // answer: what each node found, and from the first node that found the
@@ -170,7 +192,7 @@ type CheckedTool struct {
 	External     bool     `json:"external"`
 	// StartingLevel is the level the tool starts at when the server is
 	// added ([mcp.StartingLevel]).
-	StartingLevel mcp.StartLevel `json:"starting_level"`
+	StartingLevel mcp.Level `json:"starting_level"`
 	// Refused is why it would not be offered under its name, "" when it
 	// would.
 	Refused mcp.NameRefusal `json:"refused"`
@@ -249,7 +271,12 @@ func (s *Service) serveDraftCheck(w http.ResponseWriter, r *http.Request, rec *t
 		return
 	}
 	var req draftRequest
-	if !decodeBody(w, r, &req, `{"entity": {...}, "seat": "<handle>"}`) {
+	const shape = `{"entity": {...}, "seat": "<handle>", "values": {"<key>": "..."}}`
+	if !decodeBodyWithin(w, r, &req, shape, maxDraftBody) {
+		return
+	}
+	typed, ok := draftValues(w, req.Values)
+	if !ok {
 		return
 	}
 	var named struct {
@@ -285,7 +312,49 @@ func (s *Service) serveDraftCheck(w http.ResponseWriter, r *http.Request, rec *t
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	s.check(w, r, CheckRequest{Server: named.Name, Draft: draft, Seat: req.Seat, By: by})
+	// EACH VALUE UNDER THE VARIABLE IT WOULD BE STORED UNDER, placed in the
+	// company the draft would make as `PUT /mcp-servers/{name}/values/{key}`
+	// would place it once the entry is written: a key no value may take is
+	// refused here as it would be there.
+	tried := make([]ValueTry, 0, len(typed))
+	for _, v := range typed {
+		slot, slotErr := next.MCPValueSlot(named.Name, "", v.key)
+		if slotErr != nil {
+			refuseSlot(w, named.Name, "", v.key, slotErr)
+			return
+		}
+		tried = append(tried, ValueTry{Key: slot.Key, Variable: slot.Variable, Value: v.value})
+	}
+	s.check(w, r, CheckRequest{Server: named.Name, Entry: draft, Draft: true, Seat: req.Seat, Values: tried,
+		By: by})
+}
+
+// typedValue is one value typed for a draft's key.
+type typedValue struct{ key, value string }
+
+// draftValues reads the values typed for a draft, in key order, each held to
+// what a stored value is held to ([checkValue]) and all of them together to
+// one stored value's bound; ok is false when the refusal has been answered.
+// No refusal quotes a value.
+func draftValues(w http.ResponseWriter, values map[string]string) ([]typedValue, bool) {
+	out := make([]typedValue, 0, len(values))
+	total := 0
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		value, refusal := checkValue(values[key])
+		if refusal != nil {
+			refusal.answer(w, "the value typed for "+quoted(key))
+			return nil, false
+		}
+		total += len(value)
+		out = append(out, typedValue{key: key, value: value})
+	}
+	if total > secrets.MaxValueBytes {
+		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
+			httpjson.Detail{"detail": fmt.Sprintf("the values typed for the draft hold %d bytes together, "+
+				"over the %d one stored value may hold: test them a few at a time", total, secrets.MaxValueBytes)})
+		return nil, false
+	}
+	return out, true
 }
 
 // check runs one test and answers it, or the refusal it met.
@@ -341,7 +410,12 @@ func mayRunDraft(w http.ResponseWriter, r *http.Request, guard authz.Guard) bool
 // decodeBody reads a gesture's JSON body into out, refusing a field the route
 // does not read; an empty body leaves out as it is.
 func decodeBody(w http.ResponseWriter, r *http.Request, out any, shape string) bool {
-	raw, err := httpjson.ReadBody(w, r, maxCheckBody)
+	return decodeBodyWithin(w, r, out, shape, maxCheckBody)
+}
+
+// decodeBodyWithin is [decodeBody] for a body of at most limit bytes.
+func decodeBodyWithin(w http.ResponseWriter, r *http.Request, out any, shape string, limit int64) bool {
+	raw, err := httpjson.ReadBody(w, r, limit)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return false

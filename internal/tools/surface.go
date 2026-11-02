@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -47,6 +48,11 @@ type Surface struct {
 	// nil ([Surface.WithCounter]).
 	counter Counter
 
+	// holder records a call to a tool at Needs approval as a question a
+	// person answers, or nil where nothing can wait on one
+	// ([Surface.WithHolder]).
+	holder Holder
+
 	mu     sync.Mutex
 	active []string
 	called []Call
@@ -80,6 +86,47 @@ type Guard interface {
 	// (this layer has no idea what any of them mean), and canonical
 	// ([toolargs]), the form the tool read.
 	Observe(tool string, args toolargs.Args)
+}
+
+// Holder records a call to a tool at Needs approval ([Entry.NeedsApproval]) as
+// a question a person answers, and says to the caller what became of it.
+//
+// ONLY AN EXECUTOR'S SURFACE HAS ONE, because only an executor has a run to
+// park: its question rides the run's row, its harness ends its turn, and the
+// person's answer carries the run on (ADR-0068, ADR-0077). Every other phase
+// runs inside a turn on the engine host that cannot wait days for a person, so
+// its surface has none, and a call it makes to such a tool is refused here.
+//
+// Consumer-defined and one method wide, so this layer knows nothing about
+// runs, rows or seals: it hands over the call and reports what comes back.
+type Holder interface {
+	// Hold records call as the question its run's job parks on, and
+	// returns what the caller is told: held true where it is recorded (the
+	// run now waits on a person and its harness is to end its turn), false
+	// with the reason where it was not, and nothing was asked.
+	Hold(ctx context.Context, turn *turnctx.Turn, call HeldCall) (result Result, held bool)
+}
+
+// HeldCall is one call a [Holder] is handed: the tool as the surface resolved
+// it, and its arguments in their canonical form ([Surface.ArgsOf]), which are
+// what a person approves and what runs once they do.
+type HeldCall struct {
+	Name  string
+	Entry Entry
+	Args  map[string]any
+	// Changed is a call held because the tool's definition changed since
+	// its level was decided ([Entry.Unreviewed]), not because of the level:
+	// the question says so, since what releases the tool for good is
+	// accepting the change.
+	Changed bool
+}
+
+// WithHolder installs what records a call to a tool at Needs approval, and
+// returns the surface. Set once, by the frame that builds an executor's
+// surface; a surface without one refuses every such call ([Holder]).
+func (s *Surface) WithHolder(h Holder) *Surface {
+	s.holder = h
+	return s
 }
 
 // WithGuard installs the required-skill gate and returns the surface.
@@ -279,7 +326,22 @@ func (s *Surface) ToolDefs() []llm.ToolDef {
 // cannot have, which is a thing to tell it about, and an error here would tear
 // down a turn over a hallucinated name.
 func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
-	return s.execute(ctx, call.Name, s.ArgsOf(call.Name, call.Arguments), s.turn, false)
+	return s.execute(ctx, call.Name, s.ArgsOf(call.Name, call.Arguments), s.turn, false, false)
+}
+
+// RunApproved makes a call to a tool at Needs approval that a person approved:
+// exactly [Surface.Execute] for a tool this surface resolves, offered to the
+// model or not, without the approval it already has. Its caller is the one
+// that carries a held call's run on with the person's answer (internal/agent/
+// runner), and it makes the call once, as the person approved it: the name and
+// the arguments recorded when it was held.
+//
+// THE TOOL IS RESOLVED NOW, against this surface's universe, never against
+// what it was when the call was held: a tool blocked since is filed nowhere
+// and answers not found, and the caller holds the definition to the one the
+// person read ([mcp.Definition.Digest]) before it calls this.
+func (s *Surface) RunApproved(ctx context.Context, name string, raw map[string]any) (toolloop.ToolResult, error) {
+	return s.execute(ctx, name, s.ArgsOf(name, raw), s.turn, false, true)
 }
 
 // ArgsOf is a call's arguments in the canonical form, made ONCE, at the
@@ -316,18 +378,21 @@ func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 			turn = s.turn.WithCalls(calls)
 			defer s.turn.CallLog().Absorb(calls)
 		}
-		return s.execute(ctx, name, args, turn, true)
+		return s.execute(ctx, name, args, turn, true, false)
 	}
 }
 
 // execute is [Surface.Execute] as turn — the surface's own, or a view of it
 // whose call log is an admitted call's ([Surface.Admit]). admitted is false for
 // a call nobody admitted, which the run's log records once it has returned.
+// approved is true only for a held call a person approved
+// ([Surface.RunApproved]), which runs whether or not the tool is offered and
+// is not held again.
 //
 // It takes the call's name and its canonical arguments ([Surface.ArgsOf]),
 // never the call as the model sent it, so no step here can read the raw form.
 func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
-	turn *turnctx.Turn, admitted bool,
+	turn *turnctx.Turn, admitted, approved bool,
 ) (toolloop.ToolResult, error) {
 
 	// THE TOOL SPAN LIVES HERE, not in toolloop, because this is the frame
@@ -348,7 +413,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	offered := slices.Contains(s.active, name)
 	s.mu.Unlock()
 	e, known := s.universe.Lookup(name)
-	if !known || !offered {
+	if !known || (!offered && !approved) {
 		// The two readings are DIFFERENT and the model can act on the
 		// difference: a name that exists but was not offered is something
 		// to activate, a name that does not exist is something to stop
@@ -393,6 +458,10 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 			return toolloop.ToolResult{Output: reason, Failed: true,
 				Cause: RefusalForbidden, Source: e.Origin}, nil
 		}
+	}
+
+	if asks, changed := e.asksFirst(); asks && !approved {
+		return s.hold(ctx, span, name, e, args, turn, changed), nil
 	}
 
 	if server, ok := e.FromMCP(); ok {
@@ -469,6 +538,78 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
 		Origin: e.Origin, Server: server, Source: e.Origin,
 	}, nil
+}
+
+// hold decides a call to a tool at Needs approval, which never runs here: an
+// executor's surface records it as the question its run parks on ([Holder]),
+// and every other phase is refused it.
+//
+// # Why a phase on the engine host is refused rather than parked
+//
+// A reviewer, a delegated worker, the onboarding pass and the side passes each
+// run inside one turn on the engine host, with the seat's other work queued
+// behind it, and none of them has a run whose row a question rides or whose
+// answer could carry it on days later. Parking the whole turn instead would
+// hold the seat for as long as a person takes. So the call is refused as
+// FORBIDDEN, as a call refused for where it was made, and the model is told
+// that the seat's own run, its executor, can ask (the series' question 4).
+//
+// # What is recorded
+//
+// The call, FAILED either way, since nothing it asked for happened: a held
+// call counted as made would satisfy the delivery gate for a message nobody
+// sent. A held one carries [toolloop.ToolResult.Held], which tells the run's
+// record that it ended the job, and is recorded without its arguments, which
+// ride the run's row sealed.
+func (s *Surface) hold(ctx context.Context, span trace.Span, name string, e Entry,
+	args toolargs.Args, turn *turnctx.Turn, changed bool) toolloop.ToolResult {
+
+	if s.holder == nil {
+		seat := "this agent"
+		if handle := turn.Handle(); handle != "" {
+			seat = handle
+		}
+		why := "it needs a person's approval before each call"
+		if changed {
+			why = "its definition changed since it was allowed, so it needs a person's " +
+				"approval before each call until somebody accepts the change"
+		}
+		msg := fmt.Sprintf("%s was not called: %s, "+
+			"and this %s phase cannot wait for an answer. Only %s's own run, its executor, can "+
+			"ask a person to approve a call. Carry on without it, or leave the call to that run.",
+			name, why, s.Phase(), seat)
+		s.record(Call{Name: name, Args: args.Map(), Output: msg, Failed: true, Cause: RefusalForbidden})
+		span.SetAttributes(
+			attribute.Bool("crewlet.tool_failed", true),
+			attribute.String("crewlet.tool_outcome", "refused_needs_approval"))
+		return toolloop.ToolResult{Output: msg, Failed: true, Cause: RefusalForbidden, Source: e.Origin}
+	}
+	res, held := s.holder.Hold(ctx, turn, HeldCall{Name: name, Entry: e, Args: args.Map(), Changed: changed})
+	cause := res.Cause
+	if held || cause == nil {
+		// HELD IS NOT A FAILURE OF ANYBODY'S, but the call did not happen,
+		// so it is recorded failed with the class of a call refused for
+		// where it was made, and marked held.
+		cause = RefusalForbidden
+	}
+	recorded := args.Map()
+	if held {
+		// ITS ARGUMENTS ARE NOT IN THE TURN'S LEDGER: they ride the run's
+		// row sealed, opened for who may approve the call, and the
+		// ledger is read by everybody who reads the seat's trail. The
+		// call a person approves is recorded whole once it is made.
+		recorded = nil
+	}
+	s.record(Call{Name: name, Args: recorded, Output: res.Output, Failed: true, Cause: cause})
+	outcome := "held_for_approval"
+	if !held {
+		outcome = "not_held"
+	}
+	span.SetAttributes(
+		attribute.Bool("crewlet.tool_failed", true),
+		attribute.String("crewlet.tool_outcome", outcome))
+	return toolloop.ToolResult{Output: res.Output, Failed: true, Cause: cause, Held: held,
+		Source: e.Origin}
 }
 
 // outcomeFor names the two readings of a call that never reached a tool. The

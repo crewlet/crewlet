@@ -142,7 +142,7 @@ func TestAnImportToARunningNodeWarnsAboutTheCharter(t *testing.T) {
 	fleet := coordmemory.NewFleet()
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
-		Secrets: fleetsecrets.New(fleet, fixtureCipher),
+		Secrets: fleetsecrets.New(fleet, fixtureCipher), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (map[string]configapi.SeatHolder, error) {
 			return map[string]configapi.SeatHolder{}, nil
 		},

@@ -47,7 +47,9 @@ var ErrReservedName = errors.New(
 	"that name is reserved for the engine's own keys")
 
 // estateOwners are the subsystems that keep key material in the store, each
-// under its own first path segment. There is one: the identity estate (`iam/`).
+// under its own first path segment: the identity estate (`iam/`), and the MCP
+// servers' OAuth grants (`mcp/`), each a refresh token the engine renews a
+// server's access with and no person reads back (internal/mcp/oauth).
 //
 // A CLOSED SET, so a name is reserved by its first segment rather than by
 // whatever a caller happened to put a slash in. An owner joins it BEFORE it
@@ -56,7 +58,7 @@ var ErrReservedName = errors.New(
 // deletable by anybody holding the grant, and decrypted into every node's
 // `${VAR}` snapshot — which is exactly the exposure the namespace exists to
 // close.
-var estateOwners = []string{"iam"}
+var estateOwners = []string{"iam", "mcp"}
 
 // Reserved reports whether a name is in the engine's own namespace — the
 // question every operator surface asks before it touches a row.

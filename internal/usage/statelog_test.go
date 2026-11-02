@@ -3,6 +3,7 @@ package usage_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +29,8 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE: a seat-day's tool calls and what
-			// their cap dropped, at 2. Each row brings a record carrying it
+			// their cap dropped, at 2; a fire's tick and a schedule-day's
+			// fires its seats did not run, at 3. Each row brings a record carrying it
 			// alone ([carryingSuiteField]); a kind this build's successor
 			// adds is a row keyed on the kind's value, and brings its
 			// record the same way.
@@ -44,14 +46,19 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 
 // carryingSuiteField builds a valid record carrying exactly one versioned
 // field, with its version left for the encoder to stamp: a seat-day of the
-// suite's own shape, with one tool's calls or with a count its cap dropped.
+// suite's own shape, with one tool's calls or with a count its cap dropped, or
+// a schedule-day of it, with a fire's tick or a fire its seat did not run.
 //
 // A row added to the table without a case here fails the suite rather than
 // passing unexamined: a record that did not carry the field would be stamped
 // at 1 and reported as the path being wrong, which is a fixture fault dressed
 // as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	body, err := encodeSuiteRecord(string(usage.KindSeat), "carrying", "", 0)
+	kind := usage.KindSeat
+	if strings.HasPrefix(field.Name, "Fire.") || field.Name == "Record.Superseded" {
+		kind = usage.KindSchedule
+	}
+	body, err := encodeSuiteRecord(string(kind), "carrying", "", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +73,13 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Failed: 1, TotalMS: 300, LastAt: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)}}
 	case "Record.ToolsElided":
 		rec.ToolsElided = 3
+	case "Fire.ScheduledAt":
+		rec.Fires[0].ScheduledAt = rec.Fires[0].At
+	case "Fire.FireLabel":
+		rec.Fires[0].FireLabel = "20260923T0900"
+	case "Record.Superseded":
+		rec.Superseded = []usage.Superseded{{TraceID: "trace-superseded",
+			At: time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add a case that sets it "+
 			"and nothing else versioned", field.Name)

@@ -67,6 +67,9 @@
 // from an exfiltration, and the name is the whole of what can be logged,
 // because logging the value would be the leak.
 //
+// Neither answers a write-only value ([secrets.ErrWriteOnly]): both refuse it
+// `403 write_only`, naming it. The listing marks such rows `write_only`.
+//
 // The second exists for one reader: a CLI run resolving a company document's
 // `${VAR}` references through a running node, which reads the variables its
 // command reads that the node lists, and asks for them together rather than
@@ -506,6 +509,9 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, secrets.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
+	case errors.Is(err, secrets.ErrWriteOnly):
+		s.refuseWriteOnly(w, r, []string{name})
+		return
 	case err != nil:
 		s.fail(w, r, "open the secret", err)
 		return
@@ -603,7 +609,12 @@ func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	values, err := s.store.Values(r.Context(), names)
-	if err != nil {
+	var writeOnly *fleetsecrets.WriteOnlyError
+	switch {
+	case errors.As(err, &writeOnly):
+		s.refuseWriteOnly(w, r, writeOnly.Names)
+		return
+	case err != nil:
 		s.fail(w, r, "open the secrets", err)
 		return
 	}
@@ -624,6 +635,31 @@ func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 		"by", by.Name, "operator", by.OperatorID)
 	w.Header().Set("Cache-Control", "no-store")
 	httpjson.Write(w, http.StatusOK, map[string]any{"values": values, "missing": missing})
+}
+
+// refuseWriteOnly answers a reveal naming write-only values `403 write_only`,
+// logged by name as a reveal is.
+func (s *Service) refuseWriteOnly(w http.ResponseWriter, r *http.Request, names []string) {
+	by := auth.AttributionOf(r.Context())
+	log.WarnContext(r.Context(), "secret_reveal_refused", "names", names,
+		"reason", "write_only", "by", by.Name, "operator", by.OperatorID)
+	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeWriteOnly, httpjson.Detail{
+		"names": names,
+		"detail": strings.Join(names, ", ") + " " + plural(len(names), "is", "are") +
+			" stored write-only: the engine reads " + plural(len(names), "it", "them") +
+			" for the ${VAR} references that name " + plural(len(names), "it", "them") +
+			", and no route answers " + plural(len(names), "it", "them") + ".",
+		"hint": "A value stored from Settings › MCP & tools is never read back. Store a new " +
+			"one to replace it, or remove it.",
+	})
+}
+
+// plural is one or many, by n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // put serves PUT /secrets/{name} — store or rotate one value.
@@ -1136,6 +1172,7 @@ func render(row secrets.Record) map[string]any {
 		"updated_by_kind": row.UpdatedByKind,
 		"operator_id":     row.OperatorID,
 		"source":          row.Source,
+		"write_only":      row.WriteOnly,
 	}
 }
 

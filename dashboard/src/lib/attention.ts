@@ -578,6 +578,33 @@ const MCP_ALARM_WORDS: Record<
     title: (e) => `Some of ${e.key}'s tools are not offered`,
     detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
   },
+  mcp_oauth_needs_sign_in: {
+    severity: "critical",
+    icon: "triangle-alert",
+    title: (e) => `${e.key} needs somebody to sign in`,
+    detail: () => "No agent can call its tools until an administrator signs the company in to it.",
+  },
+  mcp_oauth_expiring: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) => `${e.key}'s sign-in runs out soon`,
+    detail: () => "Sign in again before it runs out, or the agents lose its tools.",
+  },
+  mcp_approval_waiting: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) =>
+      e.seat
+        ? `${e.seat} is waiting for approval to use ${e.key}`
+        : `A call to ${e.key} is waiting for approval`,
+    detail: () => "Its run is parked until somebody allows or denies the call.",
+  },
+  mcp_tools_changed: {
+    severity: "caution",
+    icon: "settings",
+    title: (e) => `${e.key} changed a tool since it was allowed`,
+    detail: () => "Each changed tool asks before every call until somebody reviews the change.",
+  },
 };
 
 /**

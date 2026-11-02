@@ -128,6 +128,18 @@ type Callable interface {
 // session in turn and refuses honestly between them — so a restart that lists
 // the same tools changes no registry anywhere.
 type Tool struct {
+	Definition
+	srv *server
+}
+
+// Definition is one tool as its server lists it, under the name and with the
+// hints its entry gives it: what a reader of the server's listing is shown.
+//
+// IT CANNOT BE CALLED. A [Tool] is a Definition its server is called through;
+// a tool the entry blocks ([Levels]) is kept as a Definition alone
+// ([Bridge.BlockedTools]), so the type a blocked tool has is one no catalogue
+// takes and no caller can send a call through.
+type Definition struct {
 	name        string // the catalogue name: prefix applied
 	raw         string // the name the server knows it by
 	title       string // the tool's own title, "" where it gives none
@@ -135,8 +147,10 @@ type Tool struct {
 	parameters  map[string]any
 	output      map[string]any // the output schema, nil where it gives none
 	annotations Annotations
-	digest      string // the server's definition, hashed ([digestOf])
-	srv         *server
+	declared    Annotations // the hints as the server declared them, no override applied
+	digest      string      // the server's definition, hashed ([digestOf])
+	parts       Parts       // each part of it, hashed apart ([partsOf])
+	level       Level       // what its entry, or else its hints, set it at ([Levels.Of])
 }
 
 var _ Callable = (*Tool)(nil)
@@ -150,27 +164,32 @@ var _ Callable = (*Tool)(nil)
 // that came back exactly as it went down. A tool whose description, schema
 // or hints moved IS rebuilt, so a registry is told to take the new one.
 //
+// A tool the entry BLOCKS ([Spec.Levels]) is never built as a Tool: it is
+// returned as a [Definition] beside the rest, in the listing's order, and
+// left out of the server's contribution, so no catalogue holds it, no model
+// is offered or lists it, and no call through a catalogue reaches it. It is
+// judged first, so a blocked tool whose name no model could be handed either
+// is blocked rather than refused: the operator's decision is the one that
+// holds it back.
+//
 // A tool whose name, prefix included, no model can be handed is REFUSED here
 // and returned beside the rest, never built ([nameRefusal]): left out of the
 // server's contribution, it is not offered, not callable, and shadows no
 // tool of another server that could be.
 //
 // The caller holds the bridge's lock.
-func (s *server) toolsFor(defs []toolDef) ([]*Tool, []RefusedTool) {
+func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition, refused []RefusedTool) {
 	kept := make(map[string]*Tool, len(s.tools))
 	for _, t := range s.tools {
 		kept[t.raw] = t
 	}
-	excluded := make(map[string]struct{}, len(s.spec.ExcludeTools))
-	for _, name := range s.spec.ExcludeTools {
-		excluded[name] = struct{}{}
-	}
 	out := make([]*Tool, 0, len(defs))
-	var refused []RefusedTool
 	for _, def := range defs {
-		// Excludes match the SERVER's name, before the prefix: an operator
-		// writing them has the server's listing in front of them.
-		if _, skip := excluded[def.Name]; skip {
+		// Levels match the SERVER's name, before the prefix: an operator
+		// setting them has the server's listing in front of them.
+		if s.spec.Levels.Blocks(def.Name) {
+			d := definitionOf(def, s.spec)
+			blocked = append(blocked, &d)
 			continue
 		}
 		name := s.spec.ToolPrefix + def.Name
@@ -188,23 +207,25 @@ func (s *server) toolsFor(defs []toolDef) ([]*Tool, []RefusedTool) {
 		out = append(out, fresh)
 	}
 	sortRefused(refused)
-	return out, refused
+	return out, blocked, refused
 }
 
 // sameAs reports whether two tools would put the same thing in front of a
-// model (name, description, schema and hints) and describe the same
-// definition: its digest, which also covers the title and the output schema a
-// listing shows. A tool kept across a restart whose title moved would leave
-// the fleet's listing naming the old one.
+// model (name, description, schema and hints), describe the same definition
+// (its digest, which also covers the title and the output schema a listing
+// shows) and run at the same level. A tool kept across a restart whose title
+// moved would leave the fleet's listing naming the old one, and one kept at
+// its old level would run at a level nobody set.
 func (t *Tool) sameAs(other *Tool) bool {
 	return t.name == other.name && t.raw == other.raw &&
 		t.description == other.description &&
 		t.annotations == other.annotations &&
-		t.digest == other.digest &&
+		t.digest == other.digest && t.level == other.level &&
 		reflect.DeepEqual(t.parameters, other.parameters)
 }
 
-func newTool(s *server, def toolDef, spec Spec) *Tool {
+// definitionOf is def under the name and with the hints spec gives it.
+func definitionOf(def toolDef, spec Spec) Definition {
 	name := spec.ToolPrefix + def.Name
 
 	// An override may be keyed by EITHER name. The raw one is what the server
@@ -217,7 +238,24 @@ func newTool(s *server, def toolDef, spec Spec) *Tool {
 	} else if override, ok := spec.AnnotationOverrides[name]; ok {
 		ann = ann.Merge(override)
 	}
+	return Definition{
+		name:        name,
+		raw:         def.Name,
+		title:       def.Title,
+		description: def.Description,
+		parameters:  maps.Clone(def.InputSchema),
+		output:      maps.Clone(def.OutputSchema),
+		annotations: ann,
+		declared:    def.Annotations,
+		digest:      digestOf(def),
+		parts:       partsOf(def),
+		// THE HINTS THE OPERATOR'S OVERRIDES LEAVE, so the level a tool
+		// starts at is read from the same hints its risk is shown by.
+		level: spec.Levels.Of(def.Name, ann),
+	}
+}
 
+func newTool(s *server, def toolDef, spec Spec) *Tool {
 	if len(def.InputSchema) > 0 {
 		if kind, ok := def.InputSchema["type"]; !ok || kind != "object" {
 			// The spec requires a tool's inputSchema to be an object
@@ -234,52 +272,72 @@ func newTool(s *server, def toolDef, spec Spec) *Tool {
 					"told what this tool's arguments are")
 		}
 	}
-	return &Tool{
-		name:        name,
-		raw:         def.Name,
-		title:       def.Title,
-		description: def.Description,
-		parameters:  maps.Clone(def.InputSchema),
-		output:      maps.Clone(def.OutputSchema),
-		annotations: ann,
-		digest:      digestOf(def),
-		srv:         s,
-	}
+	return &Tool{Definition: definitionOf(def, spec), srv: s}
 }
 
 // Name is the catalogue name, with the server's tool_prefix applied.
-func (t *Tool) Name() string { return t.name }
+func (d *Definition) Name() string { return d.name }
 
 // RawName is the name the server itself uses, which is what goes on the wire.
-func (t *Tool) RawName() string { return t.raw }
+func (d *Definition) RawName() string { return d.raw }
 
 // Description is what the model is told the tool does.
-func (t *Tool) Description() string { return t.description }
+func (d *Definition) Description() string { return d.description }
 
 // Parameters is the tool's JSON Schema, as the server published it.
-func (t *Tool) Parameters() map[string]any { return t.parameters }
+func (d *Definition) Parameters() map[string]any { return d.parameters }
 
 // Annotations are the server's behavioural hints with operator overrides
 // applied. Tri-state: see annotations.go.
-func (t *Tool) Annotations() Annotations { return t.annotations }
+func (d *Definition) Annotations() Annotations { return d.annotations }
 
 // Title is the tool's own display name, else the one its annotations carry,
 // else "". Never shown to a model: a person reads it in the listing.
-func (t *Tool) Title() string {
-	if t.title != "" {
-		return t.title
+func (d *Definition) Title() string {
+	if d.title != "" {
+		return d.title
 	}
-	return t.annotations.Title
+	return d.annotations.Title
 }
 
 // OutputSchema is the JSON Schema of the tool's structured result, as the
 // server published it, or nil where it published none.
-func (t *Tool) OutputSchema() map[string]any { return t.output }
+func (d *Definition) OutputSchema() map[string]any { return d.output }
 
 // Digest names the server's definition of the tool (see digest.go): two tools
 // with one digest are one definition, wherever and by whichever instance they
 // were listed.
-func (t *Tool) Digest() string { return t.digest }
+func (d *Definition) Digest() string { return d.digest }
+
+// Declared are the hints as the server declared them, before any override the
+// operator laid over them: the server's own claim about the tool, which is
+// what its definition's digest covers and what a change to it is judged by.
+func (d *Definition) Declared() Annotations { return d.declared }
+
+// Parts names each part of the server's definition apart ([Parts]): which of
+// them differ between two definitions of the tool is what the server changed.
+func (d *Definition) Parts() Parts { return d.parts }
+
+// Level is the level the tool runs at: its own in the entry's levels, else the
+// entry's default, else the level its hints start it at ([Levels.Of]). A
+// filed [Tool] is at [LevelAllow] or [LevelApprove]; only a blocked
+// Definition reads [LevelBlocked].
+func (d *Definition) Level() Level { return d.level }
+
+// Unreviewed reports whether the definition the server lists for this tool is
+// not the one its level was decided on (ADR-0078): one it changed, or added
+// after its first listing, that nobody has accepted since. Such a tool asks a
+// person before each call until somebody does, whatever level it is at. The
+// bridge's owner decides it ([Supervision.Unreviewed]); false where it decides
+// nothing.
+//
+// ASKED AT EACH CALL, never fixed when the tool is filed: the decision moves
+// when a person accepts the change, which files nothing, and a tool filed
+// once must not keep the answer it was filed with.
+func (t *Tool) Unreviewed() bool {
+	unreviewed := t.srv.b.sup.Unreviewed
+	return unreviewed != nil && unreviewed(t.Server(), t.raw, t.digest)
+}
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.

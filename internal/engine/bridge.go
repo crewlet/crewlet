@@ -174,6 +174,7 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			Server:     call.Server,
 			Source:     call.Source,
 			Refusal:    string(call.Refusal()),
+			Held:       call.Held,
 		},
 		Spent: l.spent(),
 	})
@@ -191,9 +192,11 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	// rather than at its next pass ([sandbox.Waiter.Nudge]). After the call
 	// is on the row, so the poll that finds the run done collects a log
 	// that holds its submission, and a row that holds its question (the
-	// ask was recorded before its call returned). A call the gate refused
-	// is no end (the run goes on) and tells nobody.
-	if l.nudge != nil && sandbox.EndsRun(call.Name) && !call.Failed {
+	// ask was recorded before its call returned), as does a call held for a
+	// person's approval, recorded as the job's question before its call
+	// returned. A call the gate refused is no end (the run goes on) and
+	// tells nobody.
+	if l.nudge != nil && ((sandbox.EndsRun(call.Name) && !call.Failed) || call.Held) {
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
 	return nil

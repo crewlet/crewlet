@@ -53,7 +53,7 @@ is said at 30 days and again at 7, and a limit turns into
 
 These are about one MCP server rather than the node:
 
-`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long` and `mcp_tools_refused`.
+`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long`, `mcp_tools_refused`, `mcp_oauth_needs_sign_in`, `mcp_oauth_expiring`, `mcp_approval_waiting` and `mcp_tools_changed`.
 
 Each lists the servers it stands on in `entries`, carrying the server's
 name as `key` and as each log line's `entry`, and an entry about one
@@ -66,8 +66,16 @@ the server serves and `mcp_server_partial` when some do; an agent's
 instance held back 5m 15s (the longest an integration waits between two passes it
 still owes, plus one heartbeat) raises `mcp_server_waiting_long`; and a
 tool no agent can be handed under its name raises `mcp_tools_refused` as
-soon as a node lists it. The MCP servers answer (`GET /mcp-servers`)
-carries the four with the gesture that fixes each.
+soon as a node lists it. A call an agent's run holds for a person's approval
+raises `mcp_approval_waiting` once it has waited 10m (a third of the default
+pause TTL a parked run's box is kept for), read off the runs' own records rather
+than the heartbeat, its entry naming the seat whose run waits. A tool a server
+changed since its level was decided, or added after its first listing, that its
+level would let run unasked raises `mcp_tools_changed` as soon as the fleet's
+listings name it, read off the listings and what was accepted of them rather than
+the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
+The MCP servers answer (`GET /mcp-servers`) carries each of them with the
+gesture that fixes it.
 
 | Alarm | What it means | What to do |
 |---|---|---|
@@ -107,6 +115,10 @@ carries the four with the gesture that fixes each.
 | `mcp_server_partial` | Some instances of an MCP server serve, and one that does not has been down for longer than the restart schedule's ceiling plus a heartbeat: one node, one agent's credentials or one child that keeps dying, rather than the server. | The agents and nodes whose instance serves are not affected. Fix what the failure names, usually one node's environment or one agent's credentials; Restart on the alarm (`POST /mcp-servers/<name>/retry`, with `seat` for one agent's instance) tries it now rather than on the five-minute schedule. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
 | `mcp_server_waiting_long` | An agent's instance of an MCP server has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat, for a credential that integration mints. A wait is no failure and the server's state does not count it as one, but the agent is offered none of the server's tools meanwhile. | Open the integration that mints the agent's credential (Settings › Integrations): its last pass says what it is waiting for. The instance starts once the credential is sealed and reaches its node; until then that agent is offered none of the server's tools. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
 | `mcp_tools_refused` | An MCP server lists a tool that cannot be offered under its name: with the server's `tool_prefix` it is longer than the harnesses take, it holds a character a model's tool name cannot, or a built-in has the name. | The server's Tools tab says why each name is refused. A name too long for the harnesses fits with a shorter `tool_prefix`, or none; a name a built-in holds needs a prefix; a name with characters a model cannot read is the server's own to change. No agent is offered those tools until then. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_oauth_needs_sign_in` | An MCP server signed in to with OAuth is not started: nobody has signed in to it, or its vendor refused to renew the sign-in (the detail quotes the vendor). It stands in place of `mcp_server_failing` and `mcp_server_partial` for the server. No agent is offered the server's tools until somebody signs in. | Sign in on the server's page (`POST /mcp-servers/<name>/oauth`), as an administrator who can approve the server's access at its vendor. The engine renews the sign-in from then on. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_oauth_expiring` | An MCP server's OAuth sign-in runs out within seven days, where its vendor said when. The engine renews the access the sign-in grants, but only a person signing in again renews the sign-in itself. | Sign in again on the server's page (`POST /mcp-servers/<name>/oauth`) before then; a new sign-in replaces the grant, and the agents keep the server throughout. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_approval_waiting` | An agent's run called one of an MCP server's tools at Needs approval, and the call has waited for a person's answer for longer than a third of the default pause TTL. The run is parked and its seat free; its work waits on the answer. | Answer the call from the Inbox or the server's page (`POST /mcp-approvals/<id>`, the ids in `GET /mcp-servers` `approvals`): Allow once, Always allow (which sets the tool to run without asking, at a recent step-up) or Deny. The run stays parked, its seat free, until somebody does. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_tools_changed` | An MCP server changed one of its tools since its level was decided (its description, schema, annotations or title), or added one after its first listing, and the tool's level would let it run without asking. It asks a person before each call until somebody accepts the change. | Review each change on the server's page, the definition its level was decided on beside the one listed now (`GET /mcp-servers/<name>` `changes`), and accept it or keep the tool blocked (`POST /mcp-servers/<name>/changes`, at a recent step-up). A change that claims less risk than before is the one to read first. Until then each changed tool asks before every call. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already

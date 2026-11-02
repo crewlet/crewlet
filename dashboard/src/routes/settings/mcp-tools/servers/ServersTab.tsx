@@ -14,6 +14,7 @@ import {
   Button,
   Callout,
   Card,
+  IconButton,
   StatCard,
   StatGroup,
   TableTwoLineCell,
@@ -22,6 +23,7 @@ import {
 } from "@crewlethq/ui";
 import {
   ActivityGlyph,
+  PencilGlyph,
   PlusGlyph,
   ServerGlyph,
   ShieldCheckGlyph,
@@ -183,7 +185,7 @@ function ServersTable({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
       empty={{
         title: "No MCP server yet",
         hint: admin
-          ? "Add one by its address, or as a local command."
+          ? "Add one from the catalogue, by its address, or as a local command."
           : "An admin adds the servers the agents use.",
         icon: "server",
         ...(admin
@@ -268,7 +270,19 @@ function ServersTable({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
                 action: true,
                 shrink: true,
                 cell: (s: McpMemberServerStatus) =>
-                  s.configured ? <ServerMenu server={s} onFlow={onFlow} /> : null,
+                  s.configured ? (
+                    <span className="mcp-row-actions">
+                      <IconButton
+                        className="mcp-row-edit"
+                        size="sm"
+                        variant="ghost"
+                        label={`Edit ${s.title}`}
+                        icon={<PencilGlyph size="sm" />}
+                        onClick={() => onFlow("edit", s.name, { step: "connection" })}
+                      />
+                      <ServerMenu server={s} onFlow={onFlow} />
+                    </span>
+                  ) : null,
               },
             ]
           : []),

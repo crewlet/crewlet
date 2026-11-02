@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
 )
@@ -77,6 +78,12 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	holdShape(t, "McpCheckStepView", rowsOf(t, checked[0]["steps"]), false)
 	holdShape(t, "McpCheckFailure", one(checked[0]["failure"]), false)
 	holdShape(t, "McpServerInfo", one(checked[0]["server_info"]), false)
+	holdShape(t, "McpValueState", rowsOf(t, admin["values"]), false)
+	holdShape(t, "McpReach", rowsOf(t, admin["reaches"]), false)
+	changes := rowsOf(t, admin["changes"])
+	holdShape(t, "McpChangeView", changes, false)
+	holdShape(t, "McpAcceptedView", one(changes[0]["before"]), false)
+	holdShape(t, "McpListedView", one(changes[0]["after"]), false)
 
 	member := asMap(t, queries.MemberMCPServer(detail))
 	holdShape(t, "McpMemberServerAnswer", []map[string]any{member}, false)
@@ -100,6 +107,9 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 		"McpCallOutcome":          stringsOf(mcp.CallOutcomes),
 		"McpTestStage":            stringsOf(mcp.TestStages),
 		"McpStepState":            stringsOf(mcp.StepStates),
+		"McpValueAs":              stringsOf(config.MCPValueAses),
+		"McpReachReason":          stringsOf(config.MCPReachReasons()),
+		"McpToolLevel":            stringsOf(config.MCPToolLevels),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)
 		if err != nil {

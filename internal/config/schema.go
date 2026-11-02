@@ -494,7 +494,12 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, se
 	case reflect.Slice, reflect.Array:
 		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), nil, secret)}
 	case reflect.Map:
-		return map[string]any{"type": []any{"object", "null"}, "additionalProperties": g.fieldSchema(t.Elem(), nil, secret)}
+		// A MAP FIELD'S DIRECTIVES ARE ITS VALUES' RULE: a key is any text
+		// the decoder reads, while a value can be a closed set (a tool's
+		// level by its name), which the tag on the field is the one place
+		// to state.
+		return map[string]any{"type": []any{"object", "null"},
+			"additionalProperties": g.fieldSchema(t.Elem(), directives, secret)}
 	case reflect.Struct:
 		return g.ref(t, secret)
 	case reflect.Interface:

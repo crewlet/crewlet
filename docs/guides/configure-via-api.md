@@ -485,6 +485,12 @@ printf %s "$NEW_VALUE" | curl -X PUT $CREWLET_URL/secrets/GITLAB_TOKEN -H "$AUTH
 curl -X POST $CREWLET_URL/config/reload -H "$AUTH" -H "X-Summary: rotate the leaked GitLab token"
 ```
 
+An MCP server's header or variable stored from its page
+([`PUT /mcp-servers/{name}/values/{key}`](../reference/api-endpoints.md#put-mcp-serversnamevalueskey))
+is refused too (`403 config_managed`), since it writes the key's `${VAR}` into
+the document: the managing system names the variable, and a rotation of its
+value goes through `/secrets` as above.
+
 The full list of what is refused and what stays open, and why, is in
 [Managed configuration](../concepts/configuration.md#managed-configuration).
 

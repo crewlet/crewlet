@@ -524,6 +524,18 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
+	// THE CALL A PERSON APPROVED IS MADE HERE, once, through the surface the
+	// run carries on with, as the last step before the relaunch: after every
+	// check that could refuse the relaunch, so a round refused here never
+	// made it, and before the prompt, which tells the run what it returned
+	// (ADR-0077).
+	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
+		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
+			r.steerReturn(ctx, Launched{}, fresh)
+			return turn.Work{Calls: logged, Inherited: len(logged)}, describe(surface),
+				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
+		}
+	}
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
 	// the message that woke the turn is ([Asked.Continuation]).

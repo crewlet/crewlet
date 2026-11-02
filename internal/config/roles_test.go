@@ -113,7 +113,7 @@ providers:
   sandbox:
     fake: true
 mcp_servers:
-  - {name: gitlab, command: glab, args: [mcp, serve], shared: false}
+  - {name: gitlab, command: glab, args: [mcp, serve], shared: false, tools: {default: allow}}
 roles:
   - name: Agent SWE
     handle: swe
@@ -130,6 +130,7 @@ roles:
     project: ENGP
     integrations:
       mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot}
+      gitlab: {enabled: true}
     sandbox:
       max_turns: 40
       pause_ttl_seconds: 0

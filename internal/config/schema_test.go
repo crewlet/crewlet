@@ -173,6 +173,18 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// node would run.
 		{"Tracker", "backend", strs(TrackerBackends)},
 		{"Knowledge", "backend", strs(KnowledgeBackends)},
+		// AN MCP TOOL'S LEVEL, the default's here and one tool's below,
+		// whose values a map holds: a level the schema offered and the
+		// validator refused would be a block an editor passed that no node
+		// enforces.
+		{"MCPToolPolicy", "default", strs(MCPToolLevels)},
+	}
+	policy, _ := defs["MCPToolPolicy"].(map[string]any)
+	props, _ := policy["properties"].(map[string]any)
+	levels, _ := props["levels"].(map[string]any)
+	value, _ := levels["additionalProperties"].(map[string]any)
+	if got := closedSet(t, value); strings.Join(got, ",") != strings.Join(strs(MCPToolLevels), ",") {
+		t.Fatalf("MCPToolPolicy.levels' values enum = %v, validators accept %v", got, strs(MCPToolLevels))
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -560,6 +572,7 @@ mcp_servers:
     shared: false
     command: glab
     args: [mcp, serve]
+    tools: {default: allow}
   - name: gh
     transport: http
     shared: false
@@ -587,7 +600,7 @@ units:
       - name: CTO
         handle: cto
         llm: [oc, default]
-        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}}
+        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}, gitlab: {enabled: true, access_level: 30}}
         sandbox:
           max_turns: 0
           pause_ttl_seconds: 600

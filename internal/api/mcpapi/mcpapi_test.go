@@ -64,7 +64,8 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
+		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,8 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
+		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,8 +339,9 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatalf("an admin read %d %v", code, body)
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
-		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
-		"last_failure", "resolved", "usage", "calls", "last_check")
+		"baseline", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
+		"instance_nodes", "last_success", "last_failure", "resolved", "usage", "calls", "last_check", "values",
+		"reaches", "changes")
 	instance := body["instances"].([]any)[0].(map[string]any)
 	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
 		"wait", "last_failure", "last_answer")
@@ -360,11 +363,11 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	tool := body["tools"].([]any)[0].(map[string]any)
 	holdKeys(t, "a tool", tool, "name", "raw", "title", "description", "annotations", "risk",
 		"risk_declared", "external", "digest", "definitions", "instances", "nodes", "input_schema",
-		"output_schema")
+		"output_schema", "level", "custom", "held", "removed")
 	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
 		t.Errorf("the tool answered %v", tool)
 	}
-	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "sandbox", "secrets")
+	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "oauth", "sandbox", "secrets")
 	// THE SERVER'S ACTIVITY, key for key: counts per tool, and each recent
 	// call's who, when, which and how it ended, never its arguments or its
 	// result.

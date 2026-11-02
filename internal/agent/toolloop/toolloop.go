@@ -258,6 +258,14 @@ type ToolResult struct {
 	// never persists a partial conversation cannot resume one.
 	Suspend bool
 
+	// Held marks a call to a tool at Needs approval that was NOT made: an
+	// executor's run recorded it as a question for a person, and parks on
+	// their answer once its harness ends its turn (internal/tools'
+	// [Surface], ADR-0077). Failed is set beside it, since nothing the call
+	// asked for happened; Held is what tells the run's record that the call
+	// ended the job, as a submission or a question does.
+	Held bool
+
 	// Origin is where the tool that ANSWERED came from — the registry's
 	// grammar, `builtin` or `mcp:<server>` — and Server the bare MCP server
 	// name for an `mcp:` origin. Set by the surface, which is the one frame

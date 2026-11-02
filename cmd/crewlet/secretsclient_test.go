@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -1332,5 +1333,34 @@ func TestAFailedFlushRevokesNothing(t *testing.T) {
 	}
 	if held, _ := client.Values(t.Context(), []string{"TOKEN"}); held["TOKEN"] != "v" {
 		t.Errorf("a refused flush left %v, want the value sealed", held)
+	}
+}
+
+// A write-only value fails a CLI read naming why, never blaming the token.
+// Mutation: let refusedTheToken take any 403, and this is red.
+func TestAWriteOnlyValueFailsTheReadNamingWhy(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	sum := make([]byte, 32)
+	sum[0] = 1
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleetsecrets.New(fleet, cipher).SetWriteOnly(t.Context(), "MCP_LINEAR_AUTHORIZATION",
+		"Bearer lin_api_not-a-real-key", secrets.Author{Name: "jane-founder", Kind: "human"},
+		secrets.SourceMCP, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	client := secretsNodeOver(t, fleet, cipher)
+	values, err := client.Values(t.Context(), []string{"MCP_LINEAR_AUTHORIZATION"})
+	if err == nil || values != nil {
+		t.Fatalf("a write-only value was answered: %v, %v", values, err)
+	}
+	if refusedTheToken(err) {
+		t.Errorf("a write-only refusal was taken for a refused token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "write-only") || strings.Contains(err.Error(), "lin_api") {
+		t.Errorf("the refusal does not say why, or carries the value: %v", err)
 	}
 }

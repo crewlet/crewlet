@@ -9327,55 +9327,6 @@ a.live-row:focus-visible {
   overflow: hidden;
 }
 
-/* SETTINGS › TOOLS & MCP › ADD AN MCP SERVER. The two choices sit side by
-   side where the dialog has the width and stack on a phone; a pair row is a
-   name, a value twice its width and the remove control, aligned on the
-   fields rather than on their labels so the × sits beside the boxes. */
-.mcp-add-pair {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
-  gap: var(--spacing-3);
-}
-.mcp-add-pairs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  min-width: 0;
-}
-.mcp-add-pairs > legend {
-  padding: 0;
-  margin-bottom: var(--spacing-1);
-}
-.mcp-add-pair-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
-  gap: var(--spacing-2);
-  align-items: end;
-}
-.mcp-add-pair-remove {
-  margin-bottom: var(--spacing-1);
-}
-/* Whether the row may be unset: under the row, across it, since it is about
-   the pair rather than either box. */
-.mcp-add-pair-optional {
-  grid-column: 1 / -1;
-}
-.mcp-add-pairs-error {
-  color: var(--color-feedback-danger-ink);
-}
-@media (width < 640px) {
-  .mcp-add-pair-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .mcp-add-pair-row > :nth-child(2) {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-}
-
 /* ---- Signing in ----------------------------------------------------------
    The screens a browser is on BEFORE it holds a session the frame can use
    (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on

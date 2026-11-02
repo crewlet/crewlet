@@ -79,6 +79,7 @@ const server = (
   command: "",
   args: [],
   url: "",
+  oauth: null,
   state: "running",
   started: 0,
   failed: 0,
@@ -185,6 +186,8 @@ const builtinTool = (name: string, row: Partial<ToolRow>): ToolRow => ({
 /** The administrator's `mcp_servers_status`. */
 export const ADMIN_STATUS: McpServersStatusAnswer = {
   reading: "admin",
+  callback_url: "https://crewlet.example.com/webhooks/mcp-oauth",
+  client_metadata_url: "https://crewlet.example.com/webhooks/mcp-oauth/client-metadata.json",
   servers: SERVERS,
   nodes: [
     { id: "node-a", reported: true },
@@ -245,6 +248,39 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
       ],
     },
   ],
+  approvals: [],
+  agents: [
+    {
+      seat: "backend-engineer",
+      name: "Backend Engineer",
+      unit: null,
+      unit_key: null,
+      servers: [
+        { server: "docs", reason: "every_agent", tools: 0, state: "disabled" },
+        { server: "github", reason: "integration", tools: 42, state: "running" },
+        { server: "linear", reason: "every_agent", tools: 23, state: "partial" },
+        { server: "search", reason: "seat", tools: 5, state: "running" },
+      ],
+      mcp_tools: 70,
+      builtin_tools: 3,
+      over_budget: false,
+    },
+    {
+      seat: "pm",
+      name: "Product Manager",
+      unit: null,
+      unit_key: null,
+      servers: [
+        { server: "docs", reason: "every_agent", tools: 0, state: "disabled" },
+        { server: "github", reason: "integration", tools: 42, state: "running" },
+        { server: "linear", reason: "every_agent", tools: 23, state: "partial" },
+      ],
+      mcp_tools: 65,
+      builtin_tools: 3,
+      over_budget: false,
+    },
+  ],
+  tool_budget: 100,
 };
 
 /** A member's row of a server: the administrator's, its launch line and sentences left out. */
@@ -286,6 +322,10 @@ export const LINEAR_DETAIL: McpServerAnswer = {
       nodes: ["node-a"],
       input_schema: { type: "object" },
       output_schema: null,
+      level: "allow",
+      custom: false,
+      held: false,
+      removed: false,
     },
     {
       name: "linear_delete_issue",
@@ -302,12 +342,18 @@ export const LINEAR_DETAIL: McpServerAnswer = {
       nodes: ["node-a"],
       input_schema: { type: "object" },
       output_schema: null,
+      level: "allow",
+      custom: false,
+      held: false,
+      removed: false,
     },
   ],
   tool_count: 2,
+  baseline: "allow",
+  unlisted_levels: [],
   server_info: { name: "linear-mcp", version: "2.1.0", protocol: "2026-07-28" },
   instructions: "Search before you create an issue.",
-  dependants: { mcp_env: [], sandbox: [], secrets: ["LINEAR_TOKEN"] },
+  dependants: { mcp_env: [], sandbox: [], secrets: ["LINEAR_TOKEN"], oauth: false },
   instances: [
     {
       seat: "",
@@ -398,6 +444,9 @@ export const LINEAR_DETAIL: McpServerAnswer = {
     coverage: { nodes: [{ id: "node-a", answered: true, error: "" }], complete: true },
   },
   last_check: null,
+  values: [],
+  reaches: [{ seat: "backend-dev", reason: "every_agent", via: null }],
+  changes: [],
 };
 
 /** Linear whole, as a member reads it. */

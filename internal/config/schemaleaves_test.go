@@ -279,8 +279,10 @@ func schemaSites(t *testing.T, root reflect.Type) []schemaSite {
 			sites = append(sites, site)
 			visit(typ.Elem(), append(slices.Clone(path), "[]"), pointer+"/items", nil)
 		case reflect.Map:
+			// A map field's directives are its values' rule, as the
+			// generator reads them.
 			sites = append(sites, site)
-			visit(typ.Elem(), append(slices.Clone(path), "{}"), pointer+"/additionalProperties", nil)
+			visit(typ.Elem(), append(slices.Clone(path), "{}"), pointer+"/additionalProperties", directives)
 		default:
 			sites = append(sites, site)
 		}

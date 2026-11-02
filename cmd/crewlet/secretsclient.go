@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
@@ -93,6 +94,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 			UpdatedByKind string         `json:"updated_by_kind"`
 			OperatorID    string         `json:"operator_id"`
 			Source        secrets.Source `json:"source"`
+			WriteOnly     bool           `json:"write_only"`
 		} `json:"secrets"`
 	}
 	if err := c.listing(ctx, &body); err != nil {
@@ -108,7 +110,7 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 		out = append(out, secrets.Record{
 			Name: row.Name, KeyID: row.KeyID, UpdatedAt: at,
 			UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
-			OperatorID: row.OperatorID, Source: row.Source,
+			OperatorID: row.OperatorID, Source: row.Source, WriteOnly: row.WriteOnly,
 		})
 	}
 	return out, nil
@@ -471,9 +473,10 @@ func (c *secretsClient) refusal(status int, path string, header http.Header, raw
 // this command sent: 401, or 403. A node that is down, draining or failing
 // answers the same for any token, and naming the token then sends an operator
 // to change one that works.
+// A `403 write_only` refuses the value, not the token.
 func refusedTheToken(err error) bool {
 	var refusal *nodeRefusal
-	return errors.As(err, &refusal) &&
+	return errors.As(err, &refusal) && refusal.Code != string(httpjson.CodeWriteOnly) &&
 		(refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)
 }
 

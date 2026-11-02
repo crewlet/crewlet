@@ -150,6 +150,7 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: docs
+    tools: {default: allow}
     transport: http
     url: "${DOCS_URL}"
 roles:

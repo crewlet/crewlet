@@ -31,6 +31,13 @@ import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.t
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
+  findOpener,
+  firstInvalid,
+  focusWhenShown,
+  openerNow,
+  pageHeading,
+} from "~/lib/wizardFocus.ts";
+import {
   introducedWarnings,
   managedSentence,
   unsettledSentence,
@@ -75,7 +82,6 @@ import {
   type NextDocument,
 } from "./draft.ts";
 import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
-import { findOpener, firstInvalid, focusWhenShown, openerNow, pageHeading } from "./focus.ts";
 import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";

@@ -82,7 +82,8 @@ func restartSurface(t *testing.T, restarter mcpapi.Restarter, audit *recordedAud
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Audit: audit})
+		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +249,22 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/check": authz.ActionToolsCheck,
 		"POST /mcp-checks":               authz.ActionToolsCheck,
 		"POST /mcp-probe":                authz.ActionToolsCheck,
+		// A STORED VALUE IS A CREDENTIAL, never the assistant's: its
+		// pointer's config.write is asked in the handler (values.go).
+		"PUT /mcp-servers/{name}/values/{key}": authz.ActionSecretWrite,
+		// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as any write of
+		// it: checked on dry_run and summarised (tools.go).
+		"PUT /mcp-servers/{name}/tools": authz.ActionConfigWrite,
+		// A SIGN-IN MAKES THE CREDENTIAL, as a stored value does.
+		"POST /mcp-servers/{name}/oauth":   authz.ActionSecretWrite,
+		"DELETE /mcp-servers/{name}/oauth": authz.ActionSecretWrite,
+		"GET /mcp-sign-ins/{id}":           authz.ActionConfigRead,
+		// A CHANGED TOOL'S REVIEW, which can let a tool run unasked again
+		// (changes.go).
+		"POST /mcp-servers/{name}/changes": authz.ActionConfigWrite,
+		// A HELD CALL'S ANSWER, decided again on the run's seat once the
+		// handler has read it (approvals.go).
+		"POST /mcp-approvals/{id}": authz.ActionToolsApprove,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {
@@ -259,10 +276,18 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/check": authz.EffectRewrites,
 		"POST /mcp-checks":               authz.EffectReads,
 		"POST /mcp-probe":                authz.EffectReads,
+		"POST /mcp-servers/{name}/oauth": authz.EffectCreates,
+		"POST /mcp-approvals/{id}":       authz.EffectRewrites,
 	} {
 		if got := mux.policies[pattern]; got.Effect != effect {
 			t.Errorf("%s declares effect %q, want %q", pattern, got.Effect, effect)
 		}
+	}
+	if tools := mux.policies["PUT /mcp-servers/{name}/tools"]; !tools.DryRun || !tools.Summary {
+		t.Errorf("PUT /mcp-servers/{name}/tools declares %+v, want a dry run and a summary", tools)
+	}
+	if changes := mux.policies["POST /mcp-servers/{name}/changes"]; changes.DryRun || !changes.Summary {
+		t.Errorf("POST /mcp-servers/{name}/changes declares %+v, want a summary and no dry run", changes)
 	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))
@@ -272,7 +297,8 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		t.Error("a surface with no restarter was built")
 	}
 	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
-		Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}}); err == nil {
+		Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{},
+		Values: valueStore(t), SignIns: &fakeSignIns{}}); err == nil {
 		t.Error("a surface with no audit was built")
 	}
 }

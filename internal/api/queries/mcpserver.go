@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcpreview"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -38,6 +39,12 @@ type MCPListingReader interface {
 	// MCPToolSchemas reads the schemas stored under digests, leaving out a
 	// digest the store holds nothing under.
 	MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error)
+
+	// MCPAccepted is the definition every server's tools' levels were
+	// decided on (internal/coord's mcpaccepted.go), as this node holds
+	// them. An error is a copy that has not been read yet, never a fleet
+	// that has accepted nothing.
+	MCPAccepted(ctx context.Context) ([]coord.MCPAcceptedTool, error)
 }
 
 // MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole, the admin's
@@ -55,13 +62,28 @@ type MCPServerAnswer struct {
 	// running no instance of it that has listed has none. ALWAYS A LIST.
 	Listed []MCPServerListing `json:"listed"`
 
-	// Tools is every tool a live node's instances list, by name: each
-	// once, its instances and nodes summed across the fleet. ALWAYS A
-	// LIST. ToolCount is how many tools the server lists, as the node
-	// counting the most counts them, never fewer than are here: a node
-	// names at most [coord.MaxMCPListedTools].
+	// Tools is every tool a live node's instances list, by name, blocked
+	// ones included: each once, its instances and nodes summed across the
+	// fleet, at the level it runs at. ALWAYS A LIST. ToolCount is how many
+	// tools the server lists, as the node counting the most counts them,
+	// never fewer than are here: a node names at most
+	// [coord.MaxMCPListedTools].
 	Tools     []MCPToolView `json:"tools"`
 	ToolCount int           `json:"tool_count"`
+
+	// Baseline is the level of every tool the entry's `tools.levels` does
+	// not name: its `tools.default`, or null where it sets none (or the
+	// configuration does not declare the server), which leaves each such
+	// tool at the level its hints start it at ([mcp.StartingLevel]): allow
+	// for a tool the server marks read-only, approve for every other.
+	Baseline *config.MCPToolLevel `json:"baseline"`
+
+	// UnlistedLevels are the tools `tools.levels` names that no live
+	// node's listing names, sorted ([UnlistedLevels]): a level that decides
+	// nothing, misspelled or naming a tool the server no longer lists.
+	// Empty where the listings cannot say, because no live node lists the
+	// server or one lists more tools than its listing names. ALWAYS A LIST.
+	UnlistedLevels []string `json:"unlisted_levels"`
 
 	// ServerInfo is what the server said of itself in its handshake, and
 	// Instructions what it offers a client for using it, both as the
@@ -111,6 +133,59 @@ type MCPServerAnswer struct {
 	// whichever node ([coord.MCPCheck]): null where it was never tested, or
 	// where the apply that removed it removed its test with it.
 	LastCheck *MCPCheckView `json:"last_check"`
+
+	// Values are the headers or variables the server is sent, by name
+	// ([MCPValueState]). Always a list.
+	Values []MCPValueState `json:"values"`
+
+	// Reaches is every agent seat the server's grant reaches, each with why
+	// ([config.MCPServer.Reach]), in the chart's order. THE GRANT, WHETHER OR
+	// NOT THE SERVER IS ON: a server turned off reaches these seats again
+	// when it is turned back on, and its row's state says it is off. Always
+	// a list; empty for a server the configuration does not declare.
+	Reaches []MCPReachView `json:"reaches"`
+
+	// Changes is every change the server made to its tools since their
+	// levels were decided, by tool (ADR-0078): a tool it added after its
+	// first listing, one it lists under another definition than the one
+	// accepted, and one it stopped listing. Each waits for somebody to
+	// accept or block it (`POST /mcp-servers/{name}/changes`). Empty for a
+	// server whose first listing has not been accepted yet. ALWAYS A LIST,
+	// the administrator's reading only.
+	Changes []MCPChangeView `json:"changes"`
+}
+
+// MCPReachView is one agent seat a server reaches, and why: through `access`
+// (every agent, a unit named, the seat named) or, for a server reading each
+// agent's own vendor credential, the integration lane the seat is on at.
+type MCPReachView struct {
+	// Seat is the seat's handle.
+	Seat   string                `json:"seat"`
+	Reason config.MCPReachReason `json:"reason"`
+	// Via is the key of the unit that grants it, for `unit`, and the lane the
+	// seat is on at, for `integration`; null otherwise.
+	Via *string `json:"via"`
+}
+
+// reachesOf is every agent seat of roster that server's grant reaches, in the
+// chart's order ([org.Organization.AllRoles]).
+func reachesOf(server *config.MCPServer, roster *org.Organization) []MCPReachView {
+	out := []MCPReachView{}
+	if roster == nil {
+		return out
+	}
+	for seat := range roster.AllRoles() {
+		reach, ok := server.Reach(seat)
+		if !ok {
+			continue
+		}
+		view := MCPReachView{Seat: seat.Handle(), Reason: reach.Reason}
+		if reach.Via != "" {
+			view.Via = &reach.Via
+		}
+		out = append(out, view)
+	}
+	return out
 }
 
 // MCPUsageDays is how many company days a server's usage and recent calls
@@ -244,6 +319,30 @@ type MCPToolView struct {
 	// removed a moment ago.
 	InputSchema  map[string]any `json:"input_schema"`
 	OutputSchema map[string]any `json:"output_schema"`
+	// Level is the level the tool runs at, as the server's entry decides
+	// it by the server's own name for the tool ([config.MCPToolPolicy.Level])
+	// and, where the entry sets neither the tool's level nor a default, as
+	// its hints start it ([mcp.StartingLevel], read from the same hints its
+	// Risk is); and Custom whether `tools.levels` names it rather than
+	// leaving it at the [MCPServerAnswer.Baseline]. A blocked tool is listed
+	// and offered to no agent; a tool at approve is offered, and each call
+	// waits for a person's answer. For a server the configuration does not
+	// declare, what the nodes did: blocked where a listing says no instance
+	// filed it, its starting level otherwise.
+	Level  config.MCPToolLevel `json:"level"`
+	Custom bool                `json:"custom"`
+	// Held is a tool whose definition changed since its level was decided
+	// (or that the server added since), which its level would let run
+	// unasked and which asks a person first until somebody accepts the
+	// change: its Level answers approve. Removed is a tool the server no
+	// longer lists, kept, named by what was accepted of it, until somebody
+	// accepts that it went ([MCPServerAnswer.Changes]).
+	Held    bool `json:"held"`
+	Removed bool `json:"removed"`
+
+	// starting is the level the tool's hints start it at, which the entry's
+	// levels are laid over ([config.MCPToolPolicy.Level]).
+	starting config.MCPToolLevel
 }
 
 // ErrMCPDetailUnavailable is a detail asked of a node that holds no copy of
@@ -298,14 +397,19 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			listings = append(listings, l)
 		}
 	}
-	status := s.mcpStatusOf(leases)
+	grants, err := s.mcpGrants(ctx)
+	if err != nil {
+		return MCPServerAnswer{}, err
+	}
+	status := s.mcpStatusOf(leases, grants)
 	at := slices.IndexFunc(status.Servers, func(r MCPServerRow) bool { return r.Name == name })
 	if at < 0 && len(listings) == 0 {
 		return MCPServerAnswer{}, fmt.Errorf("%w: no MCP server %q is configured, reported or listed", ErrNotFound, name)
 	}
 	out := MCPServerAnswer{
 		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
-		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{},
+		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
+		Reaches: []MCPReachView{}, UnlistedLevels: []string{}, Changes: []MCPChangeView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -320,14 +424,22 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			RefusedTools: []MCPRefusedTool{}, ShadowedTools: []MCPShadowedTool{}, Nodes: []MCPServerNode{}}
 	}
 	var organization *org.Organization
+	var entry *config.MCPServer
 	if s.Company != nil {
 		company, roster := s.Company()
 		organization = roster
 		if company != nil {
 			if i := slices.IndexFunc(company.MCPServers, func(m config.MCPServer) bool { return m.Name == name }); i >= 0 {
-				resolved := resolvedOf(company, &company.MCPServers[i])
+				entry = &company.MCPServers[i]
+				resolved := resolvedOf(company, roster, entry)
 				out.Resolved = &resolved
+				out.Reaches = reachesOf(entry, roster)
 			}
+			values, valuesErr := s.mcpValues(ctx, company, name)
+			if valuesErr != nil {
+				return MCPServerAnswer{}, valuesErr
+			}
+			out.Values = values
 		}
 	}
 	if out.Server.Configured {
@@ -350,13 +462,18 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		out.Listed = append(out.Listed, MCPServerListing{
 			Node: l.Node, At: l.At, Instances: l.Instances, Tools: l.ToolCount,
 		})
-		out.ToolCount = max(out.ToolCount, l.ToolCount)
 	}
 	if latest := latestIdentified(listings); latest != nil {
 		out.ServerInfo, out.Instructions = latest.Info, latest.Instructions
 	}
-	tools, kept := mergeListedTools(listings)
-	schemas, err := s.MCPListings.MCPToolSchemas(ctx, kept)
+	accepted, err := s.MCPListings.MCPAccepted(ctx)
+	if err != nil {
+		return MCPServerAnswer{}, err
+	}
+	review := reviewOf(name, listings, accepted, entry)
+	tools, counted, kept := serverTools(listings, entry)
+	digests := slices.Compact(slices.Sorted(slices.Values(slices.Concat(kept, changeDigests(review.Changes)))))
+	schemas, err := s.MCPListings.MCPToolSchemas(ctx, digests)
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -365,8 +482,16 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			tools[i].InputSchema, tools[i].OutputSchema = schemaObject(schema.Input), schemaObject(schema.Output)
 		}
 	}
-	out.Tools = tools
-	out.ToolCount = max(out.ToolCount, len(out.Tools))
+	out.Tools, out.ToolCount = tools, counted
+	if entry != nil {
+		if entry.Tools.Default != "" {
+			baseline := entry.Tools.Default
+			out.Baseline = &baseline
+		}
+		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
+	}
+	out.Tools = reviewTools(out.Tools, review, schemas)
+	out.Changes = changeViews(review, schemas)
 	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -481,6 +606,34 @@ func latestIdentified(listings []coord.MCPListing) *coord.MCPListing {
 	return latest
 }
 
+// serverTools is every tool one server's live listings name, each once at the
+// level it runs at, and how many tools they count in all, never fewer than are
+// named (a node names at most [coord.MaxMCPListedTools]); kept are the digests
+// whose schemas are stored ([mergeListedTools]).
+//
+// THE ONE READING OF A SERVER'S TOOLS, which its page lists and each agent's
+// count is taken from ([Sources.mcpAgents]), so the two never disagree on which
+// tools a server offers. The entry's own decision is laid over what the nodes
+// did, each tool at the level the entry gives it by the server's own name or,
+// where the entry sets neither, the level its hints start it at
+// ([config.MCPToolPolicy.Level]); a server no entry declares (nil) keeps what
+// the nodes did.
+func serverTools(listings []coord.MCPListing, entry *config.MCPServer) (tools []MCPToolView, counted int,
+	kept []string,
+) {
+	tools, kept = mergeListedTools(listings)
+	if entry != nil {
+		for i := range tools {
+			tools[i].Level, tools[i].Custom = entry.Tools.Level(tools[i].Raw, tools[i].starting)
+		}
+	}
+	counted = len(tools)
+	for _, l := range listings {
+		counted = max(counted, l.ToolCount)
+	}
+	return tools, counted, kept
+}
+
 // mergeListedTools is every tool the listings name, each once by name, sorted:
 // the definition most instances list shown, the instances and nodes summed.
 // Its schemas are left for the caller to read, under kept: the digests shown
@@ -528,8 +681,16 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 		if shown.SchemaKept {
 			kept = append(kept, shown.Digest)
 		}
-		hints := annotationsOf(shown.Hints)
+		// WHAT THE NODES DID, for a server no entry decides: a tool any
+		// listing says was left unfiled reads as blocked. The caller lays
+		// the entry's own decision over it where the server is declared.
+		hints := mcpreview.Annotations(shown.Hints)
 		risk := mcp.RiskOf(hints)
+		starting := config.MCPToolLevel(mcp.StartingLevel(risk))
+		level := starting
+		if slices.ContainsFunc(definitions, func(d *definition) bool { return d.tool.Blocked }) {
+			level = config.MCPToolBlocked
+		}
 		out = append(out, MCPToolView{
 			Name: shown.Name, Raw: shown.Raw, Title: shown.Title, Description: shown.Description,
 			Annotations: ToolHints{
@@ -538,29 +699,39 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 			},
 			Risk: risk.Risk, RiskDeclared: risk.Declared, External: risk.External,
 			Digest: shown.Digest, Definitions: len(definitions), Instances: instances,
-			Nodes: slices.Sorted(maps.Keys(nodes[name])),
+			Nodes: slices.Sorted(maps.Keys(nodes[name])), Level: level, starting: starting,
 		})
 	}
 	slices.Sort(kept)
 	return out, slices.Compact(kept)
 }
 
-// annotationsOf reads a listing's hint words back into the engine's tri-state.
-// A word this build does not write is unknown: never read as an assertion.
-func annotationsOf(h coord.MCPToolHints) mcp.Annotations {
-	word := func(w string) mcp.Hint {
-		switch w {
-		case coord.HintYes:
-			return mcp.Yes
-		case coord.HintNo:
-			return mcp.No
+// UnlistedLevels is every tool a policy's `levels` names that the detail's
+// listing does not, sorted: a level that decides nothing, because the name is
+// misspelled (a prefixed name, where a level takes the server's own) or the
+// server no longer lists the tool. Always a list.
+//
+// JUDGED ONLY WHERE THE LISTING CAN SAY: no live node listing the server says
+// nothing about its tools (it is off, or has not started), and a node listing
+// more tools than its record names ([coord.MaxMCPListedTools]) may list the
+// tool past the cut, so either answers none. A level the fleet's union does
+// not name is named by no instance: a per-agent server's children each list
+// what their own credentials reach, and one child listing the tool is enough.
+func UnlistedLevels(policy config.MCPToolPolicy, detail MCPServerAnswer) []string {
+	out := []string{}
+	if len(detail.Listed) == 0 || len(detail.Tools) < detail.ToolCount {
+		return out
+	}
+	listed := make(map[string]struct{}, len(detail.Tools))
+	for _, t := range detail.Tools {
+		listed[t.Raw] = struct{}{}
+	}
+	for _, tool := range slices.Sorted(maps.Keys(policy.Levels)) {
+		if _, ok := listed[tool]; !ok {
+			out = append(out, tool)
 		}
-		return mcp.Unknown
 	}
-	return mcp.Annotations{
-		ReadOnly: word(h.ReadOnly), Destructive: word(h.Destructive),
-		Idempotent: word(h.Idempotent), OpenWorld: word(h.OpenWorld),
-	}
+	return out
 }
 
 // schemaObject decodes a stored schema, nil for none or one that is not a

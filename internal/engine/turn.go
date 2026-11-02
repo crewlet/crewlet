@@ -1955,6 +1955,8 @@ func (d *Dispatcher) noteSuperseded(ctx context.Context, handle string, evs, tri
 			continue
 		}
 		rec := events.New(types.ScheduledFireSuperseded{
+			ScopeType:    fire.ScopeType,
+			ScopeID:      fire.ScopeID,
 			ScheduleName: fire.Schedule,
 			TargetHandle: handle,
 			TaskID:       fire.TaskID,

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,6 +23,12 @@ const methodListTools = "tools/list"
 type hintTable struct {
 	mu     sync.Mutex
 	byTool map[string]Annotations
+
+	// ttl is the shortest `ttlMs` a page of the current listing stated,
+	// and stated whether any page stated one: how long the server says the
+	// listing stays fresh (relist.go).
+	ttl    time.Duration
+	stated bool
 }
 
 func newHintTable() *hintTable { return &hintTable{byTool: map[string]Annotations{}} }
@@ -29,6 +37,38 @@ func (h *hintTable) record(name string, a Annotations) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.byTool[name] = a
+}
+
+// beginListing starts a listing's walk: the hint its pages state is read
+// afresh.
+func (h *hintTable) beginListing() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ttl, h.stated = 0, false
+}
+
+// recordTTL takes one page's `ttlMs`, keeping the shortest a walk's pages
+// state. A negative one is a server's mistake, read as none at all: fresh for
+// no time.
+func (h *hintTable) recordTTL(ms int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ttl := time.Duration(max(ms, 0)) * time.Millisecond
+	if ms > int64(math.MaxInt64/time.Millisecond) {
+		ttl = time.Duration(math.MaxInt64)
+	}
+	if !h.stated || ttl < h.ttl {
+		h.ttl = ttl
+	}
+	h.stated = true
+}
+
+// listingTTL is how long the server said the listing last walked stays fresh,
+// and whether it said.
+func (h *hintTable) listingTTL() (time.Duration, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.ttl, h.stated
 }
 
 func (h *hintTable) lookup(name string) (Annotations, bool) {
@@ -78,8 +118,12 @@ func annotationsFromSDK(a *sdk.ToolAnnotations) Annotations {
 // the server serialized it, before the SDK decodes it into a lossy struct.
 //
 // This is a deliberate reach past the SDK's typed surface, and it is confined
-// to exactly one question: which annotation keys were present. Everything else
-// on the connection passes through untouched.
+// to two questions about a tools/list result: which annotation keys were
+// present, and how long the server says the listing stays fresh (`ttlMs`).
+// The one thing it changes is that hint, which it hands the SDK as zero, so
+// the SDK's cache never answers a listing the engine asks for in the server's
+// stead (relist.go): the engine lists on its own schedule. Everything else on
+// the connection passes through untouched.
 //
 // What wrapping COSTS, stated because it is invisible otherwise: the SDK
 // probes its own connections for an unexported clientConnection interface, and
@@ -167,7 +211,7 @@ func (c *probeConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 	delete(c.pending, resp.ID.Raw())
 	c.mu.Unlock()
 	if wanted && resp.Error == nil {
-		c.recordListing(resp.Result)
+		resp.Result = c.recordListing(resp.Result)
 	}
 	return msg, nil
 }
@@ -178,16 +222,23 @@ func (c *probeConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 // to decode the same bytes and will fail the call properly. Logging it at
 // debug keeps the probe from inventing a second, differently-worded failure
 // for one wire error.
-func (c *probeConn) recordListing(result json.RawMessage) {
+//
+// It answers the result as the SDK is to read it: the same bytes, unless the
+// server stated a `ttlMs`, which goes to the SDK as zero (see probeTransport).
+func (c *probeConn) recordListing(result json.RawMessage) json.RawMessage {
 	var payload struct {
 		Tools []struct {
 			Name        string          `json:"name"`
 			Annotations json.RawMessage `json:"annotations"`
 		} `json:"tools"`
+		TTLMs *json.Number `json:"ttlMs"`
 	}
 	if err := json.Unmarshal(result, &payload); err != nil {
 		c.log.Debug("annotation_probe_undecodable", "error", err.Error())
-		return
+		return result
+	}
+	if payload.TTLMs != nil {
+		result = c.recordTTL(result, *payload.TTLMs)
 	}
 	for _, t := range payload.Tools {
 		if t.Name == "" {
@@ -200,4 +251,30 @@ func (c *probeConn) recordListing(result json.RawMessage) {
 		}
 		c.hints.record(t.Name, ann)
 	}
+	return result
+}
+
+// recordTTL takes the `ttlMs` a page stated and answers the page with it as
+// zero. A hint that is not a whole number of milliseconds is a server's
+// mistake, read as none stated and passed on as it came, for the SDK to judge.
+func (c *probeConn) recordTTL(result json.RawMessage, said json.Number) json.RawMessage {
+	ms, err := said.Int64()
+	if err != nil {
+		c.log.Debug("listing_ttl_undecodable", "ttl_ms", said.String(), "error", err.Error())
+		return result
+	}
+	c.hints.recordTTL(ms)
+	if ms == 0 {
+		return result
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(result, &fields); err != nil {
+		return result
+	}
+	fields["ttlMs"] = json.RawMessage("0")
+	rewritten, err := json.Marshal(fields)
+	if err != nil {
+		return result
+	}
+	return rewritten
 }

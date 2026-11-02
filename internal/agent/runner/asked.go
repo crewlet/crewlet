@@ -44,6 +44,12 @@ type Asked struct {
 	// labelled it for this seat; nil for an answer by turn. See
 	// [Asked.answered].
 	Label *provenance.Label
+
+	// Held is the call to a tool at Needs approval the question was about,
+	// nil for a question the run asked itself (ADR-0077): made, at most
+	// once, as the run is carried on ([makeHeld]), and what became
+	// of it is the answer the run is told.
+	Held *HeldCall
 }
 
 // answered is the answer as the run reads it, under the fence token b of the
@@ -85,6 +91,9 @@ func (a Asked) asked(b provenance.Boundary) string {
 // from where it stopped. Short, because the conversation already holds the
 // task, the work so far and the question.
 func (a Asked) Continuation(b provenance.Boundary) string {
+	if a.Held != nil {
+		return a.heldContinuation(b)
+	}
 	var w strings.Builder
 	w.WriteString("## Your question was answered\n\n")
 	if a.Question != "" {
@@ -107,30 +116,36 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 // checkout, and a text that implied one would send it looking for files that
 // are gone. Git is the durable state, so the branch is what it is pointed at.
 func (a Asked) Reseed(b provenance.Boundary) string {
+	if a.Held != nil {
+		return a.heldReseed(b)
+	}
 	var w strings.Builder
 	w.WriteString("## A run before you on this task asked a question, and it was answered\n\n")
 	if a.Question != "" {
 		w.WriteString("It stopped to ask: " + a.asked(b) + "\n\n")
 	}
 	w.WriteString(a.answered(b) + "\n\n")
+	w.WriteString(a.freshMachine("with this answer incorporated"))
+	return w.String()
+}
+
+// freshMachine is where a fresh run carrying the work on finds it, and what it
+// is to finish the task with (with: "with this answer incorporated").
+func (a Asked) freshMachine(with string) string {
 	switch {
 	case !a.BoxKept && a.Branch != "":
-		w.WriteString("Its box has since been reclaimed, so its working tree and its memory " +
+		return "Its box has since been reclaimed, so its working tree and its memory " +
 			"of the task are gone: you are on a FRESH machine. Check out the existing branch `" +
-			a.Branch + "` it pushed, re-read the code there, and finish the task with this " +
-			"answer incorporated.")
+			a.Branch + "` it pushed, re-read the code there, and finish the task " + with + "."
 	case !a.BoxKept:
-		w.WriteString("Its box has since been reclaimed, so its working tree and its memory " +
+		return "Its box has since been reclaimed, so its working tree and its memory " +
 			"of the task are gone: you are on a FRESH machine. Check out the work-in-progress " +
-			"branch it pushed earlier, re-read the code there, and finish the task with this " +
-			"answer incorporated.")
+			"branch it pushed earlier, re-read the code there, and finish the task " + with + "."
 	case a.Branch != "":
-		w.WriteString("Its work in progress is on the git branch `" + a.Branch + "`. If the " +
+		return "Its work in progress is on the git branch `" + a.Branch + "`. If the " +
 			"working tree in front of you is not that branch's, check it out first and re-read " +
-			"the code there; then finish the task with this answer incorporated.")
-	default:
-		w.WriteString("Finish the task with this answer incorporated, starting from whatever " +
-			"work in progress it left in the repository.")
+			"the code there; then finish the task " + with + "."
 	}
-	return w.String()
+	return "Finish the task " + with + ", starting from whatever work in progress it left in " +
+		"the repository."
 }

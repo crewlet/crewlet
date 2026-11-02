@@ -1,18 +1,22 @@
 /**
- * Every flow a server's action opens, by the address (`?flow=`): restart,
- * disable or enable, and remove. One place mounts them, for the list and the
- * server page alike, so an alarm's fix and a menu item open the same dialog.
- * An administrator's alone: a member is offered none.
+ * Every flow a server's action opens, by the address (`?flow=`): test, store
+ * a value, restart, disable or enable, and remove. One place mounts them, for
+ * the list and the server page alike, so an alarm's fix and a menu item open
+ * the same dialog. An administrator's alone: a member is offered none. The
+ * add and edit wizard is a page of its own, which `McpTools` draws in the
+ * page's place.
  */
 
 import { useState } from "react";
 import { ConfirmModal, useToast } from "@crewlethq/ui";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { setEnabled, restartServer } from "../api.ts";
-import type { McpData } from "../data.ts";
+import { useServerDetail, type McpData } from "../data.ts";
 import type { useFlow } from "../parts.tsx";
 import { writeRefusalWords } from "../words.ts";
 import { RemoveDialog } from "./RemoveDialog.tsx";
+import { TestDialog } from "./TestDialog.tsx";
+import { ValueDialog } from "./ValueDialog.tsx";
 
 type FlowState = ReturnType<typeof useFlow>;
 
@@ -35,6 +39,20 @@ export function Flows({
   if (!server || !server.configured || !flow.flow) return null;
   const done = () => data.reload();
   switch (flow.flow) {
+    case "test":
+      return (
+        <TestDialog
+          server={server}
+          seat={flow.seat}
+          data={data}
+          onClose={flow.close}
+          onDone={done}
+        />
+      );
+    case "value":
+      return flow.key ? (
+        <StoredValue server={server} valueKey={flow.key} onClose={flow.close} onDone={done} />
+      ) : null;
     case "restart":
       return (
         <RestartDialog
@@ -176,6 +194,38 @@ function RestartDialog({
       } a fresh session now, and one that is down is tried at once rather than at its next attempt. A call in flight when its session ends is refused, since it may have taken effect. Nothing in the configuration changes.`}
       confirmLabel="Restart"
       cancelLabel="Cancel"
+    />
+  );
+}
+
+/**
+ * The value dialog over the server's own answer, which lists each key it is
+ * sent and whether the store holds it: the same read the server's page makes,
+ * so it is the one already in hand.
+ */
+function StoredValue({
+  server,
+  valueKey,
+  onClose,
+  onDone,
+}: {
+  server: McpMemberServerStatus;
+  valueKey: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const detail = useServerDetail(server.name);
+  const values = detail.data?.reading === "admin" ? detail.data.values : [];
+  return (
+    <ValueDialog
+      server={server}
+      valueKey={valueKey}
+      value={values.find((v) => v.key === valueKey) ?? null}
+      onClose={onClose}
+      onDone={() => {
+        onDone();
+        void detail.reload({ quiet: true });
+      }}
     />
   );
 }

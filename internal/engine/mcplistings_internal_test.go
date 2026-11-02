@@ -132,10 +132,13 @@ func fakeListing(server, node string, epoch int64, tools ...string) nodeListing 
 	}
 	for _, name := range tools {
 		digest := testDigest(server + "/" + name)
+		hints := coord.MCPToolHints{ReadOnly: coord.HintYes, Destructive: coord.HintNo,
+			Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown}
+		part := digest[:coord.MCPToolPartLength]
 		out.listing.Tools = append(out.listing.Tools, coord.MCPListedTool{
 			Name: name, Raw: name, Description: "does " + name, Digest: digest, SchemaKept: true, Instances: 1,
-			Hints: coord.MCPToolHints{ReadOnly: coord.HintYes, Destructive: coord.HintNo,
-				Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+			Hints: hints, Declared: hints,
+			Parts: coord.MCPToolParts{Title: part, Description: part, Schema: part, Hints: part},
 		})
 		out.schemas[digest] = coord.MCPToolSchema{Digest: digest, Input: []byte(`{"type":"object"}`),
 			At: out.listing.At}

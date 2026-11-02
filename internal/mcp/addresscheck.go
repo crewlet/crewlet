@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,6 +95,59 @@ type OAuthDiscovery struct {
 	// Failure is why the discovery stopped short, nil where it read both
 	// documents.
 	Failure *Failure
+
+	// Endpoints are the addresses a sign-in is made at, as the documents
+	// published them: nil unless both documents were read. FOR THE ENGINE'S
+	// OWN SIGN-IN (internal/mcp/oauth), never shown: an address here is
+	// written as published, its query included, and every request the
+	// engine sends to one goes through [ServerNamedClient].
+	Endpoints *OAuthEndpoints
+}
+
+// OAuthEndpoints are where a server's sign-in is made, read from its
+// protected-resource metadata (RFC 9728) and its authorization server's
+// metadata (RFC 8414): addresses a third party published, each dialled by the
+// engine through [ServerNamedClient] alone.
+type OAuthEndpoints struct {
+	// Server is the server's own address, the one the documents were read
+	// for: every other address here is judged against its origin.
+	Server string
+	// Resource is the resource the protected-resource metadata names, which
+	// a token is asked for (RFC 8707).
+	Resource string
+	// Issuer is the authorization server, as its metadata names itself.
+	Issuer string
+	// Authorization is where a person's browser is sent to consent, Token
+	// where a code and a refresh token are exchanged, Registration where a
+	// client registers (RFC 7591, "" where none is offered) and Revocation
+	// where a token is revoked (RFC 7009, "" where none is offered).
+	Authorization string
+	Token         string
+	Registration  string
+	Revocation    string
+	// ClientIDMetadataDocument is whether the authorization server reads a
+	// client's metadata document from its client id.
+	ClientIDMetadataDocument bool
+	// PKCEMethods are the code challenge methods it offers.
+	PKCEMethods []string
+	// TokenAuthMethods are how a client may authenticate at its token
+	// endpoint, nil where it says nothing (which RFC 8414 reads as
+	// client_secret_basic).
+	TokenAuthMethods []string
+	// GrantTypes are the grants the authorization server says it issues
+	// tokens by, empty where it says nothing.
+	GrantTypes []string
+	// IssuerInResponse is whether it names itself in each authorization
+	// response (RFC 9207), which a sign-in then requires.
+	IssuerInResponse bool
+	// Scopes are the scopes the resource lists, else the authorization
+	// server's, at most [maxScopes]; ResourceScopes is whether they are the
+	// resource's own.
+	Scopes         []string
+	ResourceScopes bool
+	// OfflineAccess is whether the authorization server lists the
+	// offline_access scope (OpenID Connect's ask for a refresh token).
+	OfflineAccess bool
 }
 
 // The bounds of an address check.
@@ -156,7 +210,7 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 		out.Failure = discoveryFailure("", err)
 		return out
 	}
-	f := fetcher{typed: originOfURL(typed)}
+	f := fetcher{server: raw}
 	var prm struct {
 		Resource             string   `json:"resource"`
 		AuthorizationServers []string `json:"authorization_servers"`
@@ -169,7 +223,17 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 	}
 	out.ResourceMetadata = redact.URL(read)
 	out.Resource = word(prm.Resource)
-	out.Scopes = words(prm.ScopesSupported, maxScopes)
+	out.Scopes = words(prm.ScopesSupported)
+	resourceScopes := len(out.Scopes) > 0
+	// THE RESOURCE IS THE SERVER'S OWN (RFC 9728, 3.3): metadata naming
+	// another resource would have a token asked for, and audience-bound to,
+	// somebody else's server, and nothing in it is used.
+	if !ResourceServes(prm.Resource, raw) {
+		out.Failure = &Failure{Class: FailNotMCP, At: time.Now().UTC(), Said: fmt.Sprintf(
+			"the server's protected-resource metadata names the resource %s, which is not the "+
+				"server at %s", redact.URL(word(prm.Resource)), redact.URL(raw))}
+		return out
+	}
 	for _, issuer := range prm.AuthorizationServers[:min(len(prm.AuthorizationServers), maxAuthorizationServers)] {
 		out.AuthorizationServers = append(out.AuthorizationServers, redact.URL(word(issuer)))
 	}
@@ -181,9 +245,15 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 	issuer := prm.AuthorizationServers[0]
 	var asm struct {
 		Issuer                        string   `json:"issuer"`
+		AuthorizationEndpoint         string   `json:"authorization_endpoint"`
+		TokenEndpoint                 string   `json:"token_endpoint"`
 		RegistrationEndpoint          string   `json:"registration_endpoint"`
+		RevocationEndpoint            string   `json:"revocation_endpoint"`
 		ClientIDMetadataDocument      bool     `json:"client_id_metadata_document_supported"`
 		CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
+		TokenEndpointAuthMethods      []string `json:"token_endpoint_auth_methods_supported"`
+		GrantTypesSupported           []string `json:"grant_types_supported"`
+		IssuerParameterSupported      bool     `json:"authorization_response_iss_parameter_supported"`
 		ScopesSupported               []string `json:"scopes_supported"`
 	}
 	addresses, err := authorizationServerAddresses(issuer)
@@ -204,7 +274,7 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 	}
 	out.Issuer = redact.URL(word(issuer))
 	if len(out.Scopes) == 0 {
-		out.Scopes = words(asm.ScopesSupported, maxScopes)
+		out.Scopes = words(asm.ScopesSupported)
 	}
 	switch {
 	case asm.ClientIDMetadataDocument:
@@ -219,7 +289,79 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 			out.PKCE = true
 		}
 	}
+	out.Endpoints = &OAuthEndpoints{
+		Server: raw, Resource: prm.Resource, Issuer: asm.Issuer,
+		Authorization: asm.AuthorizationEndpoint, Token: asm.TokenEndpoint,
+		Registration: asm.RegistrationEndpoint, Revocation: asm.RevocationEndpoint,
+		ClientIDMetadataDocument: asm.ClientIDMetadataDocument,
+		PKCEMethods:              words(asm.CodeChallengeMethodsSupported),
+		TokenAuthMethods:         words(asm.TokenEndpointAuthMethods),
+		GrantTypes:               words(asm.GrantTypesSupported),
+		IssuerInResponse:         asm.IssuerParameterSupported,
+		Scopes:                   slices.Clone(out.Scopes),
+		ResourceScopes:           resourceScopes,
+		OfflineAccess:            slices.Contains(asm.ScopesSupported, "offline_access"),
+	}
 	return out
+}
+
+// ResourceServes reports whether resource, as a server's protected-resource
+// metadata names it, is the server at raw: the same origin, and a path that
+// is the server's own or one above it. RFC 9728 asks for the identifier the
+// metadata was read for; a vendor that names its origin for a server under a
+// path is naming the same resource, and one naming another origin or another
+// path is not.
+func ResourceServes(resource, raw string) bool {
+	r, err := url.Parse(resource)
+	if err != nil || r.Host == "" || r.RawQuery != "" || r.Fragment != "" {
+		return false
+	}
+	server, err := url.Parse(raw)
+	if err != nil || !sameOrigin(r, originOfURL(server)) {
+		return false
+	}
+	scope := strings.TrimSuffix(r.EscapedPath(), "/")
+	path := strings.TrimSuffix(server.EscapedPath(), "/")
+	return scope == "" || path == scope || strings.HasPrefix(path, scope+"/")
+}
+
+// ServerNamedClient is the client a request to address, which a server at
+// server or its metadata named, is sent with, and the address parsed: on the
+// server's own origin, the client its address is dialled with (the
+// operator's, ADR-0072); on any other, https alone and through the
+// public-address guard ([httpx.Guarded]). Neither follows a redirect, and
+// each request is bounded by budget.
+//
+// THE ONE RULE for every address a sign-in reaches, the metadata this check
+// reads and the token, registration and revocation endpoints a sign-in
+// sends to, so no request a remote party named is dialled another way.
+func ServerNamedClient(server, address string, budget time.Duration) (*http.Client, *url.URL, error) {
+	typed, err := url.Parse(server)
+	if err != nil || typed.Host == "" {
+		return nil, nil, fmt.Errorf("the server %s is not an address", redact.URL(word(server)))
+	}
+	u, err := url.Parse(address)
+	if err != nil || u.Host == "" {
+		return nil, nil, &badDocument{address: redact.URL(word(address)), class: FailNotMCP,
+			why: "is not an address"}
+	}
+	client := httpx.Client(budget)
+	if !sameOrigin(u, originOfURL(typed)) {
+		// THE SERVER NAMED IT: an address on another origin is reached
+		// through the guard, over TLS or not at all (ADR-0072).
+		if !strings.EqualFold(u.Scheme, "https") {
+			return nil, nil, &badDocument{address: redact.URL(u.String()), class: FailNotMCP,
+				why: "is not an https address, and an address a server's sign-in names on another " +
+					"origin is reached over https alone"}
+		}
+		client = httpx.Guarded(budget)
+	}
+	// NO REDIRECT IS FOLLOWED: a document or an endpoint is at the address
+	// that names it, and a redirect would be one more address the server
+	// chose for the engine to reach.
+	noRedirects := *client
+	noRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &noRedirects, u, nil
 }
 
 // discoveryFailure is a failed discovery as the answer carries it: classed by
@@ -314,9 +456,10 @@ func challengeParam(challenge, name string) string {
 
 // fetcher reads metadata documents for one check.
 type fetcher struct {
-	// typed is the typed address's origin: a document on it is fetched as
-	// the operator's address is, and any other through the guard.
-	typed origin
+	// server is the typed address: a document on its origin is fetched as
+	// the operator's address is, and any other through the guard
+	// ([ServerNamedClient]).
+	server string
 }
 
 // errNoDocument is a list of addresses none of which answered a document.
@@ -343,26 +486,11 @@ func (f fetcher) first(ctx context.Context, addresses []string, v any) (string, 
 
 // fetch reads one metadata document into v.
 func (f fetcher) fetch(ctx context.Context, address string, v any) error {
-	u, err := url.Parse(address)
-	if err != nil || u.Host == "" {
-		return &badDocument{address: redact.URL(word(address)), class: FailNotMCP, why: "is not an address"}
+	noRedirects, u, err := ServerNamedClient(f.server, address, metadataFetchBudget)
+	if err != nil {
+		return err
 	}
 	shown := redact.URL(u.String())
-	client := httpx.Client(metadataFetchBudget)
-	if !sameOrigin(u, f.typed) {
-		// THE SERVER NAMED IT: an address on another origin is fetched
-		// through the guard, over TLS or not at all (ADR-0072).
-		if !strings.EqualFold(u.Scheme, "https") {
-			return &badDocument{address: shown, class: FailNotMCP,
-				why: "is not an https address, and a sign-in's metadata on another origin is read over https alone"}
-		}
-		client = httpx.Guarded(metadataFetchBudget)
-	}
-	// NO REDIRECT IS FOLLOWED: a metadata document is published at the
-	// address that names it, and a redirect would be one more address the
-	// server chose for the engine to reach.
-	noRedirects := *client
-	noRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return &badDocument{address: shown, class: FailNotMCP, why: "is not an address a request can be sent to"}
@@ -414,8 +542,11 @@ func unwrapURLError(err error) error {
 // word is s cut to [maxMetadataWord], on a character boundary.
 func word(s string) string { return textcut.Bytes(s, maxMetadataWord) }
 
-// words is the first n of in, each cut by [word], and an empty list for none.
-func words(in []string, n int) []string {
+// words is the first [maxScopes] of in, each cut by [word], and an empty list
+// for none: the most of any list a metadata document gives that an answer or
+// a sign-in carries.
+func words(in []string) []string {
+	n := maxScopes
 	out := make([]string, 0, min(len(in), n))
 	for _, s := range in[:min(len(in), n)] {
 		out = append(out, word(s))

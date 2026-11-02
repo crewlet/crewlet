@@ -991,6 +991,20 @@ func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, f
 	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
 }
 
+func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {
+	if s.called("MarkHeldCall") {
+		return HeldCall{}, false, errRefusedCall
+	}
+	return s.inner.MarkHeldCall(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
+	if s.called("RecordHeldResult") {
+		return false, errRefusedCall
+	}
+	return s.inner.RecordHeldResult(ctx, turnID, launch, sealed, fence)
+}
+
 func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
 	if s.called("ClearHandBack") {
 		return false, errRefusedCall

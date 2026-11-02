@@ -104,11 +104,13 @@ mcp_servers:
   - name: docs
     command: docs-mcp
     args: ["--read-only"]
+    tools: {default: allow}
     env:
       DOCS_TOKEN: "${DOCS_TOKEN}"
   - name: intranet
     transport: http
     url: http://10.0.0.5:8080/mcp
+    tools: {default: allow}
     headers:
       X-Intranet-Key: "${INTRANET_KEY}"
   - name: github
@@ -239,10 +241,11 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 	}
 	leaks := map[string][]string{
 		"the list": {`"command":`, `"args":`, `"url":`, `"error":`, `"error_seat":`, `"wait":`,
-			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, "docs-mcp", "--read-only", "github-mcp-server",
+			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, `"approvals":`, "docs-mcp", "--read-only", "github-mcp-server",
 			"10.0.0.5", "launch-sentinel", "Bearer rejected", "GITHUB_TOKEN", "alarm-sentinel"},
 		"github's detail": {`"command":`, `"args":`, `"url":`, `"error":`, `"wait":`, `"said":`, `"reason":`,
-			`"instructions":`, `"dependants":`, `"keys":`, `"last_check":`, "github-mcp-server", "launch-sentinel",
+			`"instructions":`, `"dependants":`, `"keys":`, `"last_check":`, `"values":`, `"bound_by":`,
+			"github-mcp-server", "launch-sentinel",
 			"GITHUB_TOKEN", "said-sentinel", "wait-sentinel", "reason-sentinel", "instructions-sentinel",
 			"check-sentinel", github.Resolved.Binding.Keys[0].Key},
 		"docs's detail": {`"command":`, `"args":`, `"box_seats":`, `"warnings":`, `"dependants":`, "docs-mcp",
@@ -321,7 +324,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		under("tools", nil), under("tools[]", []string{"name", "raw", "title", "description", "annotations",
 			"annotations.read_only", "annotations.destructive", "annotations.idempotent",
 			"annotations.open_world", "risk", "risk_declared", "external", "digest", "definitions",
-			"instances", "nodes", "input_schema", "output_schema"})[1:],
+			"instances", "nodes", "input_schema", "output_schema", "level", "custom", "held", "removed"})[1:],
 		under("server_info", []string{"name", "title", "version", "protocol"}),
 		under("instances", nil), under("instances[]", []string{"seat", "node", "state", "since", "restarts",
 			"tools", "last_answer"})[1:],
@@ -344,10 +347,12 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 	}{
 		{"mcp_servers_status", status, queries.MemberMCPStatus(status), statusKeys,
 			[]string{"servers[].command", "servers[].nodes[].error", "servers[].nodes[].wait", "alarms",
-				"alarms[].entries[].detail"}},
+				"alarms[].entries[].detail", "approvals", "agents", "agents[].servers[].server",
+				"agents[].mcp_tools", "tool_budget"}},
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
-				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls"}},
+				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls",
+				"reaches", "changes", "changes[].before.accepted_by"}},
 	} {
 		admin, member := keyPaths(asMap(t, tc.admin)), keyPaths(asMap(t, tc.member))
 		for _, key := range tc.without {

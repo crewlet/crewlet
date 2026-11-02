@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -327,6 +328,8 @@ func (o *Organization) AgentHandleByID(id uuid.UUID) string {
 //  4. A unit lead AUTO-MANAGES any direct member that no direct member of
 //     the same unit already manages.
 //  5. A manages entry naming a UNIT KEY expands to the handles in it.
+//  6. Each seat records the keys of the units it sits in ([Role.UnitKeys]),
+//     after step 1 has settled where that is.
 //
 // Steps 4 and 5 both read manages through ONE resolver ([managesIndex]),
 // built once after step 1 has settled who sits where. Auto-management runs
@@ -350,8 +353,36 @@ func (o *Organization) Normalize() {
 	index := o.managesIndex()
 	o.autoManageByLead(index)
 	o.expandManages(index)
+	o.placeSeats()
 	for r := range o.AllRoles() {
 		r.Contact.Normalize()
+	}
+}
+
+// placeSeats records, on every seat, the keys of the units it sits in: its own
+// unit's first, then each enclosing unit's ([Role.UnitKeys]).
+//
+// Recomputed whole on every pass, so a second pass lands on the same answer.
+// A unit with no key adds nothing, since nothing can name it.
+func (o *Organization) placeSeats() {
+	for _, r := range o.Roles {
+		r.UnitKeys = nil
+	}
+	var place func(u *Unit, outer []string)
+	place = func(u *Unit, outer []string) {
+		chain := outer
+		if key := u.Key(); key != "" {
+			chain = append([]string{key}, outer...)
+		}
+		for _, r := range u.Roles {
+			r.UnitKeys = slices.Clone(chain)
+		}
+		for _, c := range u.Children {
+			place(c, chain)
+		}
+	}
+	for _, u := range o.Units {
+		place(u, nil)
 	}
 }
 

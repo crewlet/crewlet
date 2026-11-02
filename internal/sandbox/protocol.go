@@ -87,6 +87,14 @@
 // whose seal does not open is never handed to a turn or attributed to anybody.
 // See answerseal.go.
 //
+// AND A CALL TO A TOOL AT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK
+// DOES (ADR-0077): the job's question is the call ([PendingRun.HeldCall]), its
+// arguments sealed beside it ([CallSeal]); only its approval route answers it,
+// never a chat reply ([ConversationRef.Answers]) or an answer by turn that does
+// not name it ([Coordinator.AnswerByTurn]); and the resume that makes the call
+// marks it first, so no attempt at the same answer makes it twice
+// ([PendingStore.MarkHeldCall]). See heldcall.go.
+//
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
 // keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to

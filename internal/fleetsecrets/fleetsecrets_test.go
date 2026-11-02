@@ -672,3 +672,76 @@ func TestACreatesRetryReclaimsOnlyItsOwnRows(t *testing.T) {
 		t.Error("a reclaim wrote a row nothing created")
 	}
 }
+
+// A ROW THE ENGINE REPLACES IS REWRITTEN ONLY AT THE VERSION IT WAS READ AT: an
+// MCP server's grant renewed on two nodes at once keeps the one renewal that
+// read the row last, and the other is told it lost rather than writing the
+// vendor's retired token back over the one it issued after.
+func TestAnEngineRowIsRewrittenOnlyAtTheVersionItWasReadAt(t *testing.T) {
+	t.Parallel()
+	const name = "mcp/linear/refresh"
+	s, _ := fleetStore(t, ring(t, "k1"))
+	estate := s.Estate()
+	if _, found, err := estate.Held(t.Context(), name); err != nil || found {
+		t.Fatalf("an unwritten row reads found=%t (%v), want absent", found, err)
+	}
+	if created, err := estate.Create(t.Context(), name, "grant-1", nodeA, secrets.SourceMCPSignIn,
+		clock); err != nil || !created {
+		t.Fatalf("Create: (%v, %v)", created, err)
+	}
+	first, found, err := estate.Held(t.Context(), name)
+	if err != nil || !found || first.Value != "grant-1" {
+		t.Fatalf("Held = %+v, %t, %v", first, found, err)
+	}
+	if wrote, err := estate.Swap(t.Context(), name, "grant-2", first.Version, nodeA,
+		secrets.SourceMCPSignIn, clock); err != nil || !wrote {
+		t.Fatalf("the first swap at the read version: (%v, %v)", wrote, err)
+	}
+	if wrote, err := estate.Swap(t.Context(), name, "grant-stale", first.Version, nodeB,
+		secrets.SourceMCPSignIn, clock); err != nil || wrote {
+		t.Fatalf("a swap at a version that moved wrote=%t (%v), want a lost race", wrote, err)
+	}
+	if held, _, err := estate.Held(t.Context(), name); err != nil || held.Value != "grant-2" {
+		t.Errorf("after the lost race the row reads %q (%v), want the first swap's", held.Value, err)
+	}
+	if removed, err := estate.Delete(t.Context(), name); err != nil || !removed {
+		t.Fatalf("Delete: (%v, %v)", removed, err)
+	}
+	if wrote, err := estate.Swap(t.Context(), name, "grant-3", first.Version+1, nodeA,
+		secrets.SourceMCPSignIn, clock); err != nil || wrote {
+		t.Errorf("a swap over a deleted row wrote=%t (%v), want a lost race", wrote, err)
+	}
+	if removed, err := estate.Delete(t.Context(), name); err != nil || removed {
+		t.Errorf("deleting an absent row reported removed=%t (%v)", removed, err)
+	}
+}
+
+// AN MCP GRANT IS THE ENGINE'S, so no operator gesture reaches it: it is never
+// listed, revealed, set or deleted through the operator's view, and never
+// lands in the ${VAR} snapshot a child process is handed values from.
+func TestAnMCPGrantIsUnreachableFromTheOperatorsView(t *testing.T) {
+	t.Parallel()
+	const name = "mcp/linear/refresh"
+	s, _ := fleetStore(t, ring(t, "k1"))
+	if _, err := s.Estate().Create(t.Context(), name, "grant", nodeA, secrets.SourceMCPSignIn,
+		clock); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Get(t.Context(), name); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("a reveal of the grant answered %v, want ErrReservedName", err)
+	}
+	if _, err := s.Unset(t.Context(), name); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("an operator's delete of the grant answered %v, want ErrReservedName", err)
+	}
+	if values, err := s.All(t.Context()); err != nil || len(values) != 0 {
+		t.Errorf("the snapshot holds %d values (%v), want none", len(values), err)
+	}
+	if rows, err := s.List(t.Context()); err != nil || len(rows) != 0 {
+		t.Errorf("the operator's listing holds %+v (%v), want nothing", rows, err)
+	}
+	for _, other := range []string{"GITLAB_TOKEN", "iamx/x", "mcp//refresh"} {
+		if _, err := s.Estate().Delete(t.Context(), other); !errors.Is(err, secrets.ErrInvalidName) {
+			t.Errorf("the engine's view deleted %q (%v)", other, err)
+		}
+	}
+}

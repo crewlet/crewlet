@@ -8,8 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -169,6 +172,49 @@ func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engi
 
 // MCPChecks is the engine's read of each MCP server's latest test.
 func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
+
+// MCPApprovals is the answer desk over the fleet's runs and this node's
+// queue, the one `answer_executor` answers a run through; untyped nil without
+// a fleet store or a queue, which answers an approval unavailable.
+func (r engineRuntime) MCPApprovals() mcpapi.Approvals {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil || backends.Queue == nil {
+		return nil
+	}
+	return sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(backends.Fleet), Queue: backends.Queue,
+		Seal: r.engine.AnswerSeal()}
+}
+
+// MCPAccepted is the fleet's store of accepted definitions; untyped nil
+// without a fleet store, which answers a review unavailable.
+func (r engineRuntime) MCPAccepted() AcceptedStore {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil {
+		return nil
+	}
+	return backends.Fleet
+}
+
+// MCPValues is the fleet's secret store under the engine's keyring; untyped
+// nil without a fleet store, which [mcpapi.New] refuses.
+func (r engineRuntime) MCPValues() mcpapi.ValueStore {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil {
+		return nil
+	}
+	return fleetsecrets.New(backends.Fleet, r.engine.Cipher())
+}
+
+// MCPSignIns is the engine's OAuth sign-in of an MCP server, its refusals
+// mapped onto the routes' ([mcpSignIns]).
+func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engine} }
+
+// MCPGrants is the engine's read of each MCP server's OAuth grant.
+func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
+
+// MCPLanding is the engine finishing a sign-in where the vendor sends the
+// person back, its refusals mapped onto the page's ([mcpLanding]).
+func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
 
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.

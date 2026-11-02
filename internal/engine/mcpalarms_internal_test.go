@@ -100,7 +100,7 @@ func TestAnMCPServersConditionIsTheFleetsHeartbeats(t *testing.T) {
 		"node-c": {},
 	}
 
-	got := mcpConditions(c, statuses)
+	got := mcpConditions(c, statuses, nil)
 	if len(got) != 2 || got[0].Server != "docs" || got[1].Server != "github" {
 		t.Fatalf("conditions = %+v, want docs and github: archive is turned off", got)
 	}

@@ -24,13 +24,13 @@ import { QueryState } from "~/components/common.tsx";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
-import { AddMcpServerDialog } from "../AddMcpServerDialog.tsx";
 import { BuiltinCatalogue, builtinRows } from "./builtin/Catalogue.tsx";
 import { useMcpData, type McpData } from "./data.ts";
 import { Flows } from "./flows/Flows.tsx";
 import { useFlow, type OnFlow } from "./parts.tsx";
 import { ServerPage } from "./server/ServerPage.tsx";
 import { AddServerButton, ServersTab } from "./servers/ServersTab.tsx";
+import { WizardPage } from "./wizard/WizardPage.tsx";
 import "~/styles/mcp.css";
 
 /** The views of the list page, as `?view=` names them (servers is no key at all). */
@@ -164,6 +164,26 @@ export function McpTools({
     );
   }
 
+  // THE WIZARD IS A PAGE OF ITS OWN, in place of the list or the server's
+  // page, so its steps have the room. Adding a server and editing one are the
+  // same wizard; an edit opens filled in, at the step its action is about.
+  const editing = flow.flow === "edit" && target ? data.server(target) : null;
+  if (data.admin && (flow.flow === "add" || (editing && editing.configured))) {
+    return (
+      <WizardPage
+        key={editing ? `edit-${editing.name}` : "add"}
+        data={data}
+        editing={editing}
+        step={flow.step}
+        onClose={flow.close}
+        onSaved={(name) => {
+          nav.to(["settings", "mcp-tools", "servers", name]);
+          data.reload();
+        }}
+      />
+    );
+  }
+
   const page = server ? data.server(server) : null;
   return (
     <>
@@ -182,19 +202,7 @@ export function McpTools({
       ) : null}
       {!server ? <ListPage data={data} onFlow={open} /> : null}
 
-      {/* THE SHIPPED ADD DIALOG, until the wizard replaces it. */}
-      {data.admin && flow.flow === "add" ? (
-        <AddMcpServerDialog
-          taken={new Set(data.servers.filter((s) => s.configured).map((s) => s.name))}
-          nodeOnly={new Set(data.servers.filter((s) => !s.configured).map((s) => s.name))}
-          onClose={flow.close}
-          onAdded={(name) => {
-            nav.to(["settings", "mcp-tools", "servers", name]);
-            data.reload();
-          }}
-        />
-      ) : null}
-      {data.admin && target && flow.flow && flow.flow !== "add" ? (
+      {data.admin && target && flow.flow && flow.flow !== "add" && flow.flow !== "edit" ? (
         <Flows
           data={data}
           name={target}

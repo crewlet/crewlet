@@ -5,6 +5,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -16,15 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // MCPServerState is one server's condition across the fleet, decided here
 // from every node's report so a screen never re-derives it.
 //
-// SEVEN VALUES, because each calls for something different from the person
+// EIGHT VALUES, because each calls for something different from the person
 // reading it: nothing to do, a node to look at, a server to fix, a grant to
-// write, a provisioning pass to let finish, a fleet that has not said, and a
-// server somebody turned off on purpose.
+// write, a provisioning pass to let finish, a fleet that has not said, a
+// server somebody turned off on purpose, and a sign-in to make.
 type MCPServerState string
 
 const (
@@ -36,6 +38,12 @@ const (
 	// an earlier revision that runs it shows in its own cell until it
 	// applies this one.
 	MCPDisabled MCPServerState = "disabled"
+	// MCPNeedsSignIn is a server signed in to with OAuth that nobody holds a
+	// grant for, or whose grant its vendor refused to renew or let run out:
+	// nothing is started for it until somebody signs in, which is the one
+	// thing to do. DECIDED AFTER [MCPDisabled] and before anything a node
+	// reports, whose counts are its instances held back for it.
+	MCPNeedsSignIn MCPServerState = "needs_sign_in"
 	// MCPRunning — every instance any node launched is serving: it
 	// started, listed its tools and was up at its node's last beat.
 	MCPRunning MCPServerState = "running"
@@ -70,7 +78,7 @@ const (
 
 // MCPServerStates is every state, for the gate holding the dashboard's copy.
 var MCPServerStates = []MCPServerState{
-	MCPDisabled, MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
+	MCPDisabled, MCPNeedsSignIn, MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
 }
 
 // Valid reports whether s is a state this build sends.
@@ -100,7 +108,79 @@ type MCPStatusAnswer struct {
 	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
 	// log, which evaluates no alarm.
 	Alarms []MCPAlarm `json:"alarms"`
+	// CallbackURL is where a vendor sends a person back after a sign-in,
+	// and ClientMetadataURL the engine's client metadata document (the
+	// client id a cimd sign-in is made as): the two addresses a vendor
+	// that allowlists them is given. "" where the engine has no public
+	// address.
+	CallbackURL       string `json:"callback_url"`
+	ClientMetadataURL string `json:"client_metadata_url"`
+	// Approvals are the calls agents' runs hold for a person's approval
+	// (ADR-0077), the longest waiting first: each while its run waits on
+	// it, and once answered until the run carries on to its next job.
+	// ALWAYS A LIST, and the administrator's alone: what a held call would
+	// send is the seat's trail.
+	Approvals []MCPApproval `json:"approvals"`
+	// Agents is every agent seat in the chart's order, each with the
+	// servers its grants reach and how many MCP tools they hand it
+	// ([MCPAgentTools]), and ToolBudget the count past which an agent is
+	// flagged ([MCPToolBudget]). Agents is NULL where this node cannot read
+	// the fleet's listings yet, which is not an agent holding no tools.
+	Agents     []MCPAgentTools `json:"agents"`
+	ToolBudget int             `json:"tool_budget"`
 }
+
+// MCPApproval is one call to a tool at Needs approval that an agent's run
+// holds for a person's answer (`POST /mcp-approvals/{id}`), as an
+// administrator reads it.
+type MCPApproval struct {
+	// ID is what the approval is answered by.
+	ID string `json:"id"`
+	// At is when the call was held.
+	At time.Time `json:"at"`
+	// Server is the MCP server, Tool the tool as the run called it (its
+	// prefix applied), Raw the server's own name for it, which Always
+	// allow sets the level of, and Digest the definition the run was
+	// offered.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	Raw    string `json:"raw"`
+	Digest string `json:"digest"`
+	// Seat is the agent whose run made the call; TurnID and LaunchID the
+	// run and the question.
+	Seat     string `json:"seat"`
+	TurnID   string `json:"turn_id"`
+	LaunchID string `json:"launch_id"`
+	// Item is the key of the work item the run was on, null where it was on
+	// none.
+	Item *string `json:"item"`
+	// Args are what the call would send, opened from their seal: null where
+	// the seal does not open on this node.
+	Args map[string]any `json:"args"`
+	// Status is `waiting` while the run waits on the answer, and
+	// `answered` once one is recorded and the run is carried on with it.
+	Status MCPApprovalStatus `json:"status"`
+	// Answer, AnsweredBy and AnsweredAt are the recorded answer: `once`,
+	// `always` or `deny`, who gave it and when, as its seal opens; empty
+	// and null while waiting, and where the seal does not open here.
+	Answer     string     `json:"answer"`
+	AnsweredBy string     `json:"answered_by"`
+	AnsweredAt *time.Time `json:"answered_at"`
+}
+
+// MCPApprovalStatus is where a held call's answer stands.
+type MCPApprovalStatus string
+
+const (
+	// MCPApprovalWaiting is a call whose run waits on its answer.
+	MCPApprovalWaiting MCPApprovalStatus = "waiting"
+	// MCPApprovalAnswered is a call whose answer is recorded, its run being
+	// carried on with it.
+	MCPApprovalAnswered MCPApprovalStatus = "answered"
+)
+
+// MCPApprovalStatuses is every status, for the gate holding a reader's copy.
+var MCPApprovalStatuses = []MCPApprovalStatus{MCPApprovalWaiting, MCPApprovalAnswered}
 
 // BuiltinGroup is one shelf of the built-in catalogue.
 type BuiltinGroup struct {
@@ -159,6 +239,9 @@ type MCPServerRow struct {
 	Command   string   `json:"command"`
 	Args      []string `json:"args"`
 	URL       string   `json:"url"`
+	// OAuth is the server's OAuth sign-in, null for a server the
+	// configuration does not sign in to with OAuth ([MCPOAuthView]).
+	OAuth *MCPOAuthView `json:"oauth"`
 
 	State MCPServerState `json:"state"`
 	// Started, Failed and Waiting are summed over the nodes that report;
@@ -262,10 +345,11 @@ type MCPServerNode struct {
 //
 // EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
 // server's state and its tools are what tell a member why an agent lacks one.
-// The configuration's reader reads the whole answer, the launch commands and
-// the first line of each failure included, which is the configuration and what
-// became of it (`/config` shows the same reader the same commands); anybody
-// else reads [MemberMCPStatusAnswer], which names none of that.
+// The configuration's reader reads the whole answer, the launch commands, the
+// first line of each failure and the servers each agent's grants reach
+// included, which is the configuration and what became of it (`/config` shows
+// the same reader the same commands); anybody else reads
+// [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -274,20 +358,80 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
-	status := s.mcpStatusOf(leases)
+	grants, err := s.mcpGrants(ctx)
+	if err != nil {
+		// UNKNOWN, as an unreadable lease table is: "needs a sign-in"
+		// drawn over a store blip would send somebody to sign in again.
+		return nil, err
+	}
+	status := s.mcpStatusOf(leases, grants)
 	if MCPReading(ctx) != ReadingAdmin {
 		// NO ALARM ON A MEMBER'S READING: each one quotes a failure or a
 		// wait sentence, which that reading leaves out.
 		return MemberMCPStatus(status), nil
 	}
 	status.Alarms = s.mcpAlarms()
+	if status.Approvals, err = s.mcpApprovals(ctx); err != nil {
+		return nil, err
+	}
+	// THE ADMIN'S ALONE, as a seat's tool sources are on the org chart: which
+	// servers an agent holds is read off the configuration's grants.
+	status.Agents = s.mcpAgents(ctx, leases, status)
 	return status, nil
 }
 
-// mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
-// one reading of every server's row, which a server's detail answers its own
-// row from.
-func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
+// mcpApprovals is every call the fleet's runs hold for a person's approval,
+// the longest waiting first, each as [MCPApproval] reads it; empty where this
+// node holds no run record.
+func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
+	out := []MCPApproval{}
+	if s.Sandbox == nil {
+		return out, nil
+	}
+	runs, err := s.Sandbox.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the runs, which hold the calls waiting for approval, could not "+
+			"be read: %w", ErrUnavailable, err)
+	}
+	for _, run := range runs {
+		held := run.HeldCall
+		if held == nil || held.LaunchID != run.LaunchID {
+			continue
+		}
+		row := MCPApproval{ID: held.ID, At: held.HeldAt, Server: held.Server, Tool: held.Tool,
+			Raw: held.Raw, Digest: held.Digest, Seat: run.AgentHandle, TurnID: run.TurnID,
+			LaunchID: run.LaunchID, Args: s.heldArguments(run), Status: MCPApprovalWaiting}
+		if item := run.WorkItem; item != nil {
+			key := cmp.Or(item.Key, item.ID)
+			row.Item = &key
+		}
+		if run.Answer != nil {
+			row.Status = MCPApprovalAnswered
+			at := run.Answer.RecordedAt
+			row.AnsweredAt = &at
+			if s.RunAnswers != nil {
+				if words, err := s.RunAnswers.Open(run); err == nil {
+					row.Answer, row.AnsweredBy = words.Choice, words.By
+				}
+			}
+		} else if !slices.Contains(sandbox.Awaiting, run.Status) {
+			// NOT YET PARKED, or ending: the job made the call and its
+			// harness has not ended yet, or the run ends without an answer.
+			// Not a call a person can answer yet, or any more.
+			continue
+		}
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b MCPApproval) int {
+		return cmp.Or(a.At.Compare(b.At), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
+}
+
+// mcpStatusOf is `mcp_servers_status` read off the presence leases given and
+// the servers' OAuth grants: the one reading of every server's row, which a
+// server's detail answers its own row from.
+func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPGrant) MCPStatusAnswer {
 
 	type report struct {
 		node     string
@@ -312,12 +456,19 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 	slices.SortFunc(reports, func(a, b report) int { return cmp.Compare(a.node, b.node) })
 
 	out := MCPStatusAnswer{
-		Reading: ReadingAdmin,
-		Servers: []MCPServerRow{},
-		Nodes:   make([]MCPStatusNode, 0, len(reports)),
-		Builtin: s.builtinGroups(),
-		Alarms:  []MCPAlarm{},
+		Reading:    ReadingAdmin,
+		Servers:    []MCPServerRow{},
+		Nodes:      make([]MCPStatusNode, 0, len(reports)),
+		Builtin:    s.builtinGroups(),
+		Alarms:     []MCPAlarm{},
+		Approvals:  []MCPApproval{},
+		Agents:     []MCPAgentTools{},
+		ToolBudget: MCPToolBudget,
 	}
+	if s.MCPGrants != nil {
+		out.CallbackURL, out.ClientMetadataURL = s.MCPGrants.MCPSignInAddresses()
+	}
+	now := s.clock()
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})
 	}
@@ -331,8 +482,11 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		company, roster := s.Company()
 		if company != nil {
 			for i := range company.MCPServers {
-				rows[company.MCPServers[i].Name] = configuredRow(&company.MCPServers[i])
-				prefixes[company.MCPServers[i].Name] = company.MCPServers[i].ToolPrefix
+				server := &company.MCPServers[i]
+				row := configuredRow(server)
+				row.OAuth = oauthView(server, grants[server.Name], now)
+				rows[server.Name] = row
+				prefixes[server.Name] = server.ToolPrefix
 			}
 			organization = roster
 		}
@@ -401,7 +555,14 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		row.RefusedTools, row.ShadowedTools = refusedTools(refused, prefixes[name]), shadowedTools(shadowed)
 		row.RefusedCount = max(row.RefusedCount, len(row.RefusedTools))
 		row.ShadowedCount = max(row.ShadowedCount, len(row.ShadowedTools))
-		row.State = mcpState(row.Enabled, anyReported, row.Started, row.Failed, row.Waiting)
+		// A SERVER HELD BACK FOR A SIGN-IN on the nodes needs one too, whatever
+		// its grant record says: one made for an address the server is no
+		// longer configured at is never handed to it.
+		needsSignIn := row.OAuth != nil && (row.OAuth.Status != MCPOAuthConnected ||
+			(row.Started == 0 && slices.ContainsFunc(row.Nodes, func(c MCPServerNode) bool {
+				return c.Failed > 0 && c.ErrorClass == mcp.FailNeedsSignIn
+			})))
+		row.State = mcpState(row.Enabled, needsSignIn, anyReported, row.Started, row.Failed, row.Waiting)
 		out.Servers = append(out.Servers, *row)
 	}
 	return out
@@ -467,14 +628,20 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 // the configuration's decision, and the only counts left are a node's that has
 // not applied it yet.
 //
+// A SERVER NOBODY IS SIGNED IN TO NEEDS A SIGN-IN whatever its counts say
+// ([MCPNeedsSignIn]): its instances are held back for it, and a sign-in is the
+// one gesture that changes them.
+//
 // A WAITING INSTANCE DECIDES THE STATE ONLY WHERE NOTHING ELSE DOES: a server
 // serving some seats while another's credential is minted is running, since
 // nothing is wrong with it, and one with a failure is partial or failing
 // whatever waits beside it, since the failure is what somebody has to act on.
-func mcpState(enabled, anyReported bool, started, failed, waiting int) MCPServerState {
+func mcpState(enabled, needsSignIn, anyReported bool, started, failed, waiting int) MCPServerState {
 	switch {
 	case !enabled:
 		return MCPDisabled
+	case needsSignIn:
+		return MCPNeedsSignIn
 	case !anyReported:
 		return MCPUnreported
 	case started > 0 && failed > 0:
