@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
@@ -95,6 +96,12 @@ roles:
 // Mutation: leave the url's references off the server the box is handed, or
 // render a server's url secret into a stdio server's fields, and a check below
 // goes red.
+//
+// BOTH SERVERS ALLOW EVERY TOOL, so both reach the box: a server holding a tool
+// back at Needs approval is kept out of it and reached over the bridge instead
+// ([sandboxMCP]), and a case whose servers were kept out read an empty
+// configuration — the stdio check below passing only because its server was not
+// there to read. So the case first asserts both are in the box.
 func TestAnMCPServersURLSecretIsHandedToTheScrub(t *testing.T) {
 	t.Parallel()
 	company := specCompany(t, `
@@ -109,10 +116,12 @@ mcp_servers:
     transport: http
     shared: false
     url: "https://mcp.example.com/api/mcp/s/${ZAPIER_MCP_SECRET}/mcp"
+    tools: {default: allow}
   - name: search
     command: "search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY}"
+    tools: {default: allow}
 roles:
   - name: CEO
     handle: ceo
@@ -127,6 +136,13 @@ roles:
 	got, withheld := sandboxMCP(env, company, seat, gate, nil)
 	if len(withheld) != 0 {
 		t.Fatalf("withheld = %+v: every reference resolves", withheld)
+	}
+	for _, server := range []string{"zapier", "search"} {
+		if _, inBox := got[server]; !inBox {
+			t.Fatalf("the box was handed %v, without %s: a server the box is not handed hands "+
+				"the scrub nothing, and every check below would read nothing", slices.Sorted(maps.Keys(got)),
+				server)
+		}
 	}
 	if secrets := got["zapier"].Secrets; !slices.Equal(secrets, []string{"zapier-path-secret-value"}) {
 		t.Errorf("the box's zapier server hands the scrub %q, want what its url's reference resolved to",
