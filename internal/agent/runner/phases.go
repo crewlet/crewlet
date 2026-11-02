@@ -300,6 +300,15 @@ type RunAsk interface {
 type Resume struct {
 	State execstate.State
 
+	// Continued says the box of the job State parked said it took up the
+	// session its launch continued, by the bridge token its harness dialled
+	// (sandbox.LaunchRecord.SessionStart): the one word on which session the
+	// job ran in that its model could not forge. False where it started a
+	// session of its own in that one's place, where its launch continued none,
+	// and where it said nothing — which every rebuild of the run's skill guard
+	// from State takes for a session of its own ([Resume.parked]).
+	Continued bool
+
 	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent
 	// produced.
@@ -350,6 +359,26 @@ type Resume struct {
 	// resumed turn opens every phase with them ([Runner.steered]), and the
 	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
 	Steered []steer.Read
+}
+
+// parked is the job's parked state as the session it ran in holds it: State,
+// whose skills — those its launch armed the guard of the session it chose with
+// ([execstate.State.LoadedSkills]) — are that session's only where its box said
+// it took the session up ([Resume.Continued]). Where the box started one of its
+// own, or said nothing, the session read none of them, and every guard rebuilt
+// for it — the collection's, a relaunch carrying the round on, a send-back that
+// continues the job's session — holds only what the job itself loaded, replayed
+// off its calls ([Runner.rebuiltSurface]).
+//
+// THE SAFE DIRECTION FOR A WORD THAT NEVER CAME: a guard short of a skill
+// refuses a call and asks the run to load the skill again; one holding a skill
+// its session never read lets through a call the skill exists to hold back.
+func (r Resume) parked() execstate.State {
+	state := r.State
+	if !r.Continued {
+		state.LoadedSkills = nil
+	}
+	return state
 }
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the

@@ -324,13 +324,17 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 // guarded is a seat whose surface carries one required skill covering
 // slack_post, relaunching its executor in round 2 of its turn — with what its
 // launcher says the relaunch continues, the job before's parked state and
-// calls, the turn's closed rounds, and how the launch decides.
+// calls, whether that job's box said it took up the session its launch chose
+// (its record's word, [runner.Resume.Continued]), the turn's closed rounds, how
+// the launch decides, and what the relaunched job's own box says it started.
 type guarded struct {
-	basis   runner.SessionBasis
-	state   execstate.State
-	bridged []runner.BridgedCall
-	history []ledger.Iteration
-	decides func(runner.AgentRunRequest) runner.SessionDecision
+	basis     runner.SessionBasis
+	state     execstate.State
+	bridged   []runner.BridgedCall
+	continued bool
+	history   []ledger.Iteration
+	decides   func(runner.AgentRunRequest) runner.SessionDecision
+	says      *bool
 }
 
 // loadSkill is a call that loaded the seat's one required skill.
@@ -366,14 +370,14 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &probingLauncher{basis: g.basis}
-	launcher.decides = g.decides
+	launcher.decides, launcher.says = g.decides, g.says
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg, Models: models, Skills: registry,
 		Launcher: launcher, Task: "post the summary",
-		Resume: &runner.Resume{State: state, Bridged: g.bridged},
+		Resume: &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued},
 		Turn: runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", Seat: role, Org: organization}},
 		Sessions: sessions,
@@ -393,14 +397,19 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 // point its capture was saved — so its guard holds those and the covered tool
 // runs. Not a load another session made: an earlier round's, in a session this
 // one never was, or one the job made after the capture, which the restored
-// session never saw. And a session of the run's own read no skill, whether the
-// relaunch meant to start one or its launch found it could not continue the
-// session after all: its guard is empty, and the tool is refused until it loads
-// one. Armed as the launch decides, before the run makes a call.
+// session never saw. Not the skills the job before's launch was armed with
+// where that job's box said it started a session of its own in place of the one
+// its launch chose (its record's word): the session the relaunch continues is
+// that one, which read none of them. And a session of the run's own read no
+// skill, whether the relaunch meant to start one or its launch found it could
+// not continue the session after all: its guard is empty, and the tool is
+// refused until it loads one. Armed as the launch decides, before the run makes
+// a call.
 //
-// Mutation: rebuild a continued relaunch's guard from the turn's loads, arm it
-// before the launch decides, or keep a fresh one's from the session it meant
-// to continue, and a row goes red.
+// Mutation: rebuild a continued relaunch's guard from the turn's loads, take
+// the job before's armed skills whatever its box said, arm it before the launch
+// decides, or keep a fresh one's from the session it meant to continue, and a
+// row goes red.
 func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 	t.Parallel()
 	earlierRound := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{loadSkill(1).Call}}}
@@ -409,8 +418,10 @@ func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 		g       guarded
 		refused bool
 	}{
-		"its launch armed it with the load": {g: guarded{basis: keptBasis,
+		"its launch armed it with the load": {g: guarded{basis: keptBasis, continued: true,
 			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}},
+		"its launch armed it, and its box started a session of its own": {g: guarded{basis: keptBasis,
+			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}, refused: true},
 		"its own job loaded it before the save": {g: guarded{basis: keptBasis,
 			bridged: []runner.BridgedCall{loadSkill(1)}}},
 		"an earlier round's session loaded it": {g: guarded{basis: keptBasis, history: earlierRound},
@@ -431,6 +442,92 @@ func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 			if bridged[0].Failed != tc.refused {
 				t.Fatalf("slack_post failed %v (%q), want refused %v", bridged[0].Failed, bridged[0].Result,
 					tc.refused)
+			}
+		})
+	}
+}
+
+// A RUN WHOSE BOX STARTS A SESSION OF ITS OWN IS HELD TO A FRESH GUARD BEFORE
+// ITS FIRST CALL. The launch decided to continue the session of the job before,
+// which loaded the skill, and armed the run's guard with it; the run's box then
+// found it could not take that session up — an archive that did not unpack, an
+// import OpenCode refused — and started one of its own, which it says by the
+// token its harness dials before it makes a call. That session's model has read
+// no skill, so the call is refused until it loads one, and the phase's record
+// states the fresh brief its run was handed in the continuation's place. A box
+// that says it took the session up keeps the guard its launch armed.
+//
+// Mutation: ignore the box's word, or re-arm on it whichever session it names,
+// and a case goes red; publish nothing on a fall back, and the record says the
+// run read a continuation it never did.
+func TestARunWhoseBoxStartsASessionOfItsOwnIsHeldToAFreshGuard(t *testing.T) {
+	t.Parallel()
+	fellBack, tookItUp := false, true
+	for name, tc := range map[string]struct {
+		says    *bool
+		refused bool
+	}{
+		"its box started a session of its own": {says: &fellBack, refused: true},
+		"its box took the session up":          {says: &tookItUp},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := guarded{basis: keptBasis, continued: true, says: tc.says,
+				state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}.relaunch(t)
+			bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
+			if bridged[0].Failed != tc.refused {
+				t.Fatalf("slack_post failed %v (%q), want refused %v", bridged[0].Failed, bridged[0].Result,
+					tc.refused)
+			}
+		})
+	}
+}
+
+// A RUN THAT FELL BACK IS RECORDED READING THE FRESH BRIEF. Its launch published
+// the continuation it handed the run as the round's opening frame; the run's box
+// then started a session of its own on the fresh brief instead, and says so
+// before the run's first call — so the round's record then states the fresh
+// brief, the prompt the run did read. A box that took the session up publishes
+// nothing more.
+//
+// Mutation: publish nothing on the box's word, or publish on either word, and a
+// case goes red.
+func TestARunThatFellBackIsRecordedReadingTheFreshBrief(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"first pass"}`)}})
+	parked, _ := launched.Suspended()
+	fellBack, tookItUp := false, true
+	for name, tc := range map[string]struct {
+		says      *bool
+		published int
+	}{
+		"its box started a session of its own": {says: &fellBack, published: 3},
+		"its box took the session up":          {says: &tookItUp, published: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pub := newCapture()
+			relauncher := &probingLauncher{basis: keptBasis}
+			relauncher.says = tc.says
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				pub: pub, resume: &runner.Resume{State: parked.State, Bridged: bridged, Answer: "first pass done",
+					Continued: true}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			history := []ledger.Iteration{{Iteration: 1, Calls: ledgerOf(bridged)}}
+			if _, _, err := collector.Execute(t.Context(), 2, "the test still fails on CI", history); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			again := relauncher.last(t)
+			published := pub.promptsFor("execute")
+			if len(published) != tc.published {
+				t.Fatalf("the relaunch published %d prompts, want %d", len(published), tc.published)
+			}
+			if last := published[len(published)-1]; tc.published == 3 && !strings.Contains(last, again.Brief) {
+				t.Errorf("the round's last frame states %q, want the fresh brief its run read", last)
 			}
 		})
 	}

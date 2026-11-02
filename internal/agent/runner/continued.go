@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -47,8 +48,11 @@ import (
 // through the point its capture was saved at, where the launch restores it —
 // because the continued model has those bodies in front of it; none for a run
 // that starts a session of its own. Armed once the launch has decided, before
-// the run starts. Within a turn only: the next turn's first launch continues
-// nothing yet.
+// the run starts, and put right where the run's box finds as it starts that it
+// cannot take the session up after all and starts one of its own: its box says
+// so before the run's first call ([Runner.sessionStarted]), and its job's record
+// keeps what it said for every later rebuild of the guard ([Resume.Continued]).
+// Within a turn only: the next turn's first launch continues nothing yet.
 
 // sessionBasis asks the turn's launcher which kept session this relaunch
 // continues ([SessionProber]). A launcher that cannot say continues none.
@@ -175,10 +179,14 @@ type launchBriefs struct {
 // fresh brief — where the phase's record does not carry it already: the
 // started record carries the fresh brief, which a run that continues its
 // session never reads.
+//
+// What it decided is kept in decided, which the box's word on the session it
+// started is read against ([Runner.sessionStarted]).
 func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, system prompts.Prompt,
-	surface *tools.Surface, caps roundCaps, b launchBriefs) func(SessionDecision) {
+	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(SessionDecision) {
 
 	return func(d SessionDecision) {
+		decided.set(d)
 		handed := b.fresh
 		switch {
 		case d.Continues && d.Kept && b.kept != nil:
@@ -198,6 +206,62 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			}
 		}
 		emit.prompted(ctx, phase.Execute, round, system, handed, caps)
+	}
+}
+
+// launchDecided is how a launch decided its run takes up a session, as the
+// runner keeps it between the launch's word ([AgentRunRequest.Decided]) and the
+// word of the run's box on the session it started ([AgentRunRequest.Started]):
+// the first is told before the run starts and the second as its harness first
+// reaches the seat's tools, on another goroutine.
+type launchDecided struct {
+	mu sync.Mutex
+	d  SessionDecision
+}
+
+func (l *launchDecided) set(d SessionDecision) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.d = d
+}
+
+func (l *launchDecided) get() SessionDecision {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.d
+}
+
+// sessionStarted is what a launch tells the runner once the run's box has said
+// which session it started ([AgentRunRequest.Started]): before any call of the
+// run is made, by the token its harness dials, which its model cannot forge.
+//
+// A BOX THAT STARTED THE SESSION ITS LAUNCH CHOSE changes nothing: the guard was
+// armed for that session as the launch decided ([Runner.sessionDecided]). One
+// that started a session of its own in place of the one the launch continued —
+// an archive that did not unpack, an import OpenCode refused — runs a model that
+// has read no skill, so its guard is put right before that first call: EMPTY,
+// as a fresh launch's is, and never the continued session's, which would let a
+// call through on a skill the model never read. And the prompt the run was
+// handed was the fresh brief, in the continuation's place, which the phase's
+// record then states ([emitter.prompted]).
+//
+// The parked state the launch records keeps the chosen session's skills, as the
+// launch armed them; every later rebuild of the guard reads, beside it, what the
+// box said on the job's record ([Resume.Continued]), and takes the skills only
+// where it says the session was continued.
+func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, system prompts.Prompt,
+	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(bool) {
+
+	// THE TURN'S VALUES AND NEVER ITS CANCELLATION: the box speaks once the
+	// launching segment has parked, whose context ends with it, and the frame
+	// is owed to the round's record all the same.
+	base := context.WithoutCancel(ctx)
+	return func(continued bool) {
+		if d := decided.get(); !d.Continues || continued {
+			return
+		}
+		r.armSession(surface, nil, nil)
+		emit.prompted(base, phase.Execute, round, system, b.fresh, caps)
 	}
 }
 

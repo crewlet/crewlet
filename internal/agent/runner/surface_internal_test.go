@@ -204,16 +204,40 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 // A COLLECTED RUN'S GUARD HOLDS WHAT THE RUN LOADED. A collection rebuilds the
 // run's surface as the run left it, guard included, by the one rebuild every
 // segment that re-enters a run makes (rebuiltSurface): the skills the launch
-// recorded, and then every skill the run loaded over the bridge. A
-// reopened run and a carried-on run go on calling through that guard; the
-// collection calls nothing through it, and is rebuilt the same way because a
-// rebuild of its own is how the collection came to drift from the other two.
+// recorded — where the run's box said it took up the session its launch chose,
+// as the job's record keeps it — and then every skill the run loaded over the
+// bridge. A reopened run and a carried-on run go on calling through that guard;
+// the collection calls nothing through it, and is rebuilt the same way because
+// a rebuild of its own is how the collection came to drift from the other two.
+// And where the box started a session of its own in that one's place, or said
+// nothing, the session read none of what the launch recorded: the guard holds
+// what the run loaded alone.
 //
 // Mutation: leave the run's bridged loads out of the collection's rebuild, and
 // its guard holds only what the launch recorded; replay a failed load, and it
-// holds a skill the run never read.
+// holds a skill the run never read; take the launch's record whatever the box
+// said, and a session of the run's own holds a skill it never read.
 func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 	t.Parallel()
+	for name, tc := range map[string]struct {
+		continued bool
+		want      []string
+	}{
+		"its box took the session up":          {continued: true, want: []string{"chat-conventions", "release-notes"}},
+		"its box started a session of its own": {want: []string{"chat-conventions"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			collectedGuard(t, tc.continued, tc.want)
+		})
+	}
+}
+
+// collectedGuard collects a run whose launch recorded one skill and which
+// loaded another over the bridge — its box having said it took up the session
+// its launch chose where continued — and holds its rebuilt guard to want.
+func collectedGuard(t *testing.T, continued bool, want []string) {
+	t.Helper()
 	registry := skills.NewRegistry()
 	for _, s := range []skills.Skill{
 		{Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
@@ -245,6 +269,7 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 		Skills:   registry,
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Resume: &Resume{
+			Continued: continued,
 			State: execstate.State{
 				Version: execstate.Version, Round: 1,
 				ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
@@ -266,9 +291,8 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 	if _, _, err := r.Resume(context.Background(), nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if got, want := r.loadedSkills(), []string{"chat-conventions", "release-notes"}; !slices.Equal(got, want) {
-		t.Errorf("the collected run's guard holds %v, want what the launch recorded and what "+
-			"the run loaded over the bridge, %v", got, want)
+	if got := r.loadedSkills(); !slices.Equal(got, want) {
+		t.Errorf("the collected run's guard holds %v, want %v", got, want)
 	}
 }
 

@@ -36,13 +36,20 @@ type playLauncher struct {
 	// ([runner.AgentRunRequest.Decided]); nil decides as a launch whose box
 	// takes up what it was asked to continue ([decidedAsAsked]).
 	decides func(runner.AgentRunRequest) runner.SessionDecision
+	// says is what each launch's box says it started, told to the runner
+	// after the launch decides, as a real box's first request to its bridge
+	// tells it ([runner.AgentRunRequest.Started]): that it continued the
+	// session the launch chose, or started one of its own in that one's
+	// place. Nil says nothing, as a box whose harness has not reached its
+	// bridge yet.
+	says *bool
 }
 
 func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	time.Sleep(l.took)
 	l.mu.Lock()
 	l.reqs = append(l.reqs, req)
-	err, decides, n := l.err, l.decides, len(l.reqs)
+	err, decides, says, n := l.err, l.decides, l.says, len(l.reqs)
 	l.mu.Unlock()
 	if err != nil {
 		return runner.Launched{}, err
@@ -53,6 +60,9 @@ func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequ
 			decided = decides(req)
 		}
 		req.Decided(decided)
+	}
+	if says != nil && req.Started != nil {
+		req.Started(*says)
 	}
 	// EACH LAUNCH A JOB OF ITS OWN, named as a store names one.
 	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", n)}, nil

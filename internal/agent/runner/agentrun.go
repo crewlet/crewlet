@@ -185,6 +185,19 @@ type AgentRunRequest struct {
 	// does not.
 	Decided func(SessionDecision)
 
+	// Started is told which session the job's box started, once its harness
+	// first reaches the seat's tools and before any call of the run is made
+	// there: the session the launch decided to continue (continued), or one
+	// of its own its script started in that one's place, its restore having
+	// failed in the box. The box says it by the token its harness dials
+	// (internal/api/mcpbridge, started.go), which its model cannot forge. The
+	// runner holds the run's guard to that session, and where it is one of
+	// its own, publishes the fresh brief the run was handed in the
+	// continuation's place ([Runner.sessionStarted]). A launcher calls it
+	// after Decided, at most once per opening of the job's tools; a box whose
+	// harness never reaches them never says, and its run makes no call.
+	Started func(continued bool)
+
 	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
 	// again immediately before it opens anything: the prompt built since
 	// the phase opened can take a model call of its own, and a seat that
@@ -362,7 +375,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	briefs := launchBriefs{fresh: user, freshReported: true}
 	if basis.Continues() {
 		briefs.kept = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
-		briefs.state, briefs.bridged = r.cfg.Resume.State, r.cfg.Resume.Bridged
+		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
+		// the session this continues is that job's, and holds the skills its
+		// launch armed only where its box said it took them up.
+		briefs.state, briefs.bridged = r.cfg.Resume.parked(), r.cfg.Resume.Bridged
 	}
 	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
@@ -397,13 +413,15 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	began := time.Now()
 	caps := roundCaps{max: runRound, ceiling: runRound}
 	emit.started(ctx, phase.Execute, round, system, user, surface, caps)
+	decided := &launchDecided{}
 
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System:     system.Text,
 		Brief:      user.Text,
 		Notes:      fresh,
 		Session:    briefs.kept,
-		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs),
+		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
+		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
@@ -565,6 +583,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if inPlace != "" {
 		briefs.inPlace = continued
 	}
+	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
 		Brief:  reseed.Text,
@@ -578,7 +597,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			ContextTokens: basis.ContextTokens,
 		},
 		Session:    briefs.kept,
-		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs),
+		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
+		Started:    r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
@@ -677,16 +697,24 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // says the run's bridged calls have cost so far ([NewBridgedSpendFrom]).
 // spent is that total and bridged the row's calls, in any order.
 //
+// AND ITS GUARD, THE SESSION'S ITS BOX STARTED: the skills its launch armed
+// only where the job's record says its box took up the session the launch
+// continued (continued, [Resume.Continued]), and none but its own loads
+// otherwise, a record that says nothing included ([Resume.parked]). A box that
+// has not said yet says it on its first request to this opening, which
+// [ReopenedRun.Started] is told, before any call there is made.
+//
 // It launches nothing and parks nothing: the run is going already, and its
 // collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
 // NEVER READ, exactly as the launch's is not when the run is collected in
 // another process: the collection replays submit_work from the run's durable
 // log ([Runner.resumeAgentRun]).
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
-	bridged []BridgedCall, spent Bridged,
-) (*tools.Surface, *BridgedSpend, error) {
+	bridged []BridgedCall, spent Bridged, continued bool,
+) (ReopenedRun, error) {
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
+	held := Resume{State: state, Continued: continued}.parked()
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
@@ -698,13 +726,39 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 			func() turn.Surface { return describe(surface) }))
 
 	meter := NewBridgedSpendFrom(spent)
-	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), state, snapshot, submit, history,
+	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
 		inAdmissionOrder(bridged))
 	if err != nil {
-		return nil, nil, err
+		return ReopenedRun{}, err
 	}
 	surface = built
-	return surface, meter, nil
+	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, 0, nil)
+	return ReopenedRun{Surface: surface, Meter: meter,
+		Started: func(boxContinued bool) {
+			var loaded []string
+			if boxContinued {
+				loaded = state.LoadedSkills
+			}
+			r.armSession(surface, loaded, own)
+		}}, nil
+}
+
+// ReopenedRun is an executor run's tool surface as a node that took the run
+// over rebuilt it ([Runner.ReopenAgentRun]): the surface, the meter its
+// session's calls are counted on, and what its guard is held to once the run's
+// box says which session it started.
+type ReopenedRun struct {
+	Surface *tools.Surface
+	Meter   *BridgedSpend
+
+	// Started holds the run's guard to the session its box says it started,
+	// on its first request to the opening this node serves, before any call
+	// there: the skills its launch armed and the job's own loads where it
+	// continued the session its launch chose, the job's own loads alone where
+	// it started one of its own (internal/api/mcpbridge, Session.Started). The
+	// box's word over the record's, which a box that had not said when the run
+	// was taken over left empty.
+	Started func(continued bool)
 }
 
 // rebuiltSurface is a run's surface rebuilt by a later segment, as the run
