@@ -502,7 +502,7 @@ func owedEntriesIn(ctx context.Context, tx *sql.Tx, repoID string) ([]queueEntry
 }
 
 // The owed closes' reads, by the index partial on exactly them (replicated
-// 0139), its predicate spelled as declared: a repository's, and the active
+// 0141), its predicate spelled as declared: a repository's, and the active
 // repositories holding one, grouped on the index's leading column.
 const (
 	owedClosesSQL = `SELECT ` + entryColumns + `, close_op FROM code_queue INDEXED BY code_queue_close_owed_idx
