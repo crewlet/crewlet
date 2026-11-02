@@ -381,14 +381,17 @@ export default defineConfig({
       // socket's questions.
       "/llm": { target: "http://localhost:8000" },
       // Settings › MCP & tools' routes (routes/settings/mcp-tools/api.ts):
-      // one server whole, its restart, test and stored values; the catalogue a
-      // server is added from; a draft's test; an address checked before it
-      // is added. The servers' list is the socket's question.
+      // one server whole, its restart, test, stored values, levels and
+      // changed tools; the catalogue a server is added from; a draft's test;
+      // an address checked before it is added; and the answer to a call a
+      // run holds for approval (lib/heldCall.ts). The servers' list is the
+      // socket's question.
       "/mcp-servers": { target: "http://localhost:8000" },
       "/mcp-catalogue": { target: "http://localhost:8000" },
       "/mcp-checks": { target: "http://localhost:8000" },
       "/mcp-probe": { target: "http://localhost:8000" },
       "/mcp-sign-ins": { target: "http://localhost:8000" },
+      "/mcp-approvals": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they

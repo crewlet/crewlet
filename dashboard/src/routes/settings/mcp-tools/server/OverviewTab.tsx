@@ -1,5 +1,6 @@
 /**
- * A server's Overview: what is wrong and its one fix, each instance's
+ * A server's Overview: the calls its tools hold for a person's approval, each
+ * answerable in place, what is wrong and its one fix, each instance's
  * condition (one per agent for a per-agent server, read from the nodes
  * holding them at query time), when it last answered, and the identity and
  * instructions the server reports in its handshake.
@@ -10,6 +11,7 @@
  * says so rather than claim a model reads it.
  */
 
+import { useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -21,10 +23,11 @@ import {
   Tooltip,
 } from "@crewlethq/ui";
 import { ActivityGlyph, FileTextGlyph, ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
-import type { McpMemberServerStatus } from "~/contract/mcp.ts";
+import type { McpApproval, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
+import { ApprovalCard } from "../flows/ApprovalCard.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { Alarms } from "../servers/Alarms.tsx";
 import { failureWords, INSTANCE } from "../words.ts";
@@ -39,6 +42,56 @@ function unanswered(detail: ServerDetail): string {
       ? `${plural(held, "instance")} there ${held === 1 ? "is" : "are"}`
       : "what runs there is"
   } not listed.`;
+}
+
+/**
+ * The calls this server's tools hold for a person's answer, as the decision
+ * rows the Inbox draws. AN ANSWERED CALL STAYS as the line saying what was
+ * answered, until the page is drawn afresh: the engine drops a call from the
+ * answer once its run carries on, which would take the line away mid-read.
+ */
+export function HeldCalls({
+  server,
+  detail,
+  data,
+}: {
+  server: McpMemberServerStatus;
+  detail: ServerDetail;
+  data: McpData;
+}) {
+  const all =
+    data.answer?.reading === "admin"
+      ? data.answer.approvals.filter((a) => a.server === server.name)
+      : [];
+  const [kept, setKept] = useState<ReadonlyMap<string, McpApproval>>(
+    () => new Map(all.filter((a) => a.status === "waiting").map((a) => [a.id, a])),
+  );
+  useEffect(() => {
+    setKept((was) => {
+      let next: Map<string, McpApproval> | null = null;
+      for (const a of all) {
+        if ((a.status === "waiting" || was.has(a.id)) && was.get(a.id) !== a) {
+          next ??= new Map(was);
+          next.set(a.id, a);
+        }
+      }
+      return next ?? was;
+    });
+  }, [all]);
+  return (
+    <>
+      {[...kept.values()].map((a) => (
+        <ApprovalCard
+          key={a.id}
+          approval={a}
+          server={server}
+          tool={detail.tools.find((t) => t.name === a.tool) ?? null}
+          seatName={data.seatName}
+          onAnswered={() => data.reload()}
+        />
+      ))}
+    </>
+  );
 }
 
 export function OverviewTab({
@@ -68,9 +121,10 @@ export function OverviewTab({
             ) : undefined
           }
         >
-          No agent is offered its tools. Its settings, secrets and grants are kept.
+          No agent is offered its tools. Its settings, secrets, grants and levels are kept.
         </Callout>
       ) : null}
+      {data.admin ? <HeldCalls server={server} detail={detail} data={data} /> : null}
       {data.admin ? (
         <Alarms
           data={data}

@@ -64,6 +64,7 @@ import { textBudget } from "~/lib/format.ts";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
+import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { TokenScope } from "./InlineToken.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
@@ -945,6 +946,9 @@ export function AnswerRunButton({
 }) {
   const write = useAct("answer_executor");
   const [open, setOpen] = useState(false);
+  // A RUN HOLDING A CALL FOR APPROVAL is answered through the approvals
+  // route: its own answer is refused for a held call.
+  if (run.held_call) return <HeldCallButtons id={run.held_call.id} />;
   return (
     <>
       <WriteButton
@@ -978,7 +982,7 @@ export function AnswerRunButton({
  */
 type AnsweredRun = Pick<
   ExecutorRow,
-  "turn_id" | "launch_id" | "question" | "question_context" | "decision"
+  "turn_id" | "launch_id" | "question" | "question_context" | "decision" | "held_call"
 >;
 
 /**

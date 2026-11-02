@@ -34,7 +34,11 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { McpMemberServersStatusAnswer, McpServersStatusAnswer } from "../contract/mcp.ts";
+import type {
+  McpHeldCall,
+  McpMemberServersStatusAnswer,
+  McpServersStatusAnswer,
+} from "../contract/mcp.ts";
 import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
@@ -879,6 +883,20 @@ export interface ExecutorRow {
   answered_at?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
+
+  /**
+   * The call this run holds for a person's approval (ADR-0077), which its
+   * question is about: answered through `POST /mcp-approvals/{id}`, never
+   * `answer_executor`, which refuses it. Absent on a run that holds none.
+   */
+  held_call?: McpHeldCall;
+  /**
+   * What that call would send, opened from its seal: the seat's trail, sent
+   * to an administrator and the seat's lead, who are who may approve it; null
+   * where its seal does not open on the answering node. Absent for every
+   * other reader, and on a run that holds no call.
+   */
+  held_arguments?: Record<string, unknown> | null;
 
   /**
    * What this run called through the MCP bridge, in order.

@@ -103,19 +103,15 @@ function Fix({
       );
     case "approve":
       return (
-        <ButtonLink size="small" variant="secondary" href={href(["inbox"])}>
+        <Button size="small" variant="secondary" onClick={() => onFlow("approve", server)}>
           {FIX.approve}
-        </ButtonLink>
+        </Button>
       );
     case "review":
       return (
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
-        >
+        <Button size="small" variant="secondary" onClick={() => onFlow("drift", server)}>
           {FIX.review}
-        </ButtonLink>
+        </Button>
       );
   }
 }
@@ -237,9 +233,11 @@ export function Alarms({
   /** The integration the server reads its agents' credentials from, where the page knows it. */
   integration?: string;
 }) {
+  // ON A SERVER'S PAGE a waiting call is answered in its own row over this
+  // list (the Overview's held calls), so its alarm would say it twice.
   const items = data.alarms.flatMap((alarm) =>
     alarm.entries
-      .filter((entry) => !server || entry.key === server)
+      .filter((entry) => !server || (entry.key === server && alarm.kind !== "mcp_approval_waiting"))
       .map((entry) => itemFor(alarm, entry, data, Boolean(server), integration, onFlow)),
   );
   return <AttentionList items={items} collapseAfter={3} />;

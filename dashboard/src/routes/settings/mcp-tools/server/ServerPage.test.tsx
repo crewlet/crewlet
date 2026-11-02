@@ -3,24 +3,30 @@
  * engine answered and what only an administrator reads stays theirs.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LayerHost } from "@crewlethq/ui";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import type { RestResult } from "~/lib/useRest.ts";
+import type { McpApprovalAnswer } from "~/contract/mcp.ts";
+import { answerHeldCall } from "~/lib/heldCall.ts";
+import { putEntity } from "~/protocol/configWrite.ts";
+import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
-import type { ServerDetail } from "../api.ts";
+import { setLevels, type ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
 import {
+  LINEAR_APPROVAL,
+  LINEAR_CHANGES,
   LINEAR_DETAIL,
   LINEAR_MEMBER_DETAIL,
   LINEAR_OAUTH,
   MCP_NOW,
+  MCP_ORG,
   SERVICE_OAUTH,
   mcpData,
   withOAuth,
 } from "../fixtures.ts";
-import type { OnFlow } from "../parts.tsx";
 import { ServerPage } from "./ServerPage.tsx";
 
 let detail: ServerDetail;
@@ -41,24 +47,53 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   getEntity: vi.fn(async () =>
     entry ? { kind: "entity", entity: entry, etag: '"r1"' } : { kind: "missing" },
   ),
+  putEntity: vi.fn(),
+}));
+vi.mock("../api.ts", async (actual) => ({
+  ...(await actual<typeof import("../api.ts")>()),
+  setLevels: vi.fn(async () => ({ kind: "ok", status: 200, value: {} })),
+}));
+vi.mock("~/lib/heldCall.ts", async (actual) => ({
+  ...(await actual<typeof import("~/lib/heldCall.ts")>()),
+  answerHeldCall: vi.fn(),
 }));
 
-function mountAt(tab: string, data: McpData, onFlow: OnFlow = () => {}) {
+function mountAt(tab: string, data: McpData, onFlow: (...a: unknown[]) => void = () => {}) {
   location.hash = `#/settings/mcp-tools/servers/linear${tab ? `?tab=${tab}` : ""}`;
+  // THE CHART the grant picker lists, as the store holds it.
+  const store = new Store();
+  store.applyOrg(MCP_ORG as never);
   render(
-    <TestClient>
-      <LayerHost>
-        <Router>
-          <ServerPage server={data.server("linear")!} data={data} onFlow={onFlow} />
-        </Router>
-      </LayerHost>
+    <TestClient store={store}>
+      <ToastProvider>
+        <LayerHost>
+          <Router>
+            <ServerPage server={data.server("linear")!} data={data} onFlow={onFlow} />
+          </Router>
+        </LayerHost>
+      </ToastProvider>
     </TestClient>,
   );
+}
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  });
+}
+
+/** Choose `option` in the kit select named `name`. */
+function choose(name: string, option: string | RegExp) {
+  fireEvent.click(screen.getByRole("combobox", { name }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ now: MCP_NOW, toFake: ["Date"] });
   entry = null;
+  vi.mocked(setLevels).mockClear();
+  vi.mocked(putEntity).mockReset();
+  vi.mocked(answerHeldCall).mockReset();
 });
 
 afterEach(() => {
@@ -236,4 +271,264 @@ test("the activity's counts are every reader's and its calls an administrator's"
   expect(screen.getByText("18")).toBeDefined();
   expect(screen.queryByText("Recent calls")).toBeNull();
   expect(screen.queryByText("Backend Engineer")).toBeNull();
+});
+
+// THE LEVELS ARE THE ENGINE'S, WRITTEN BY THE SERVER'S OWN NAME: a tool's
+// select sends its level keyed by `raw`, a custom one goes back to the
+// default with null, the default card sends `default` (null for "by its
+// hints"), and Set N shown sends every tool shown. A member reads the level
+// in words. Mutation: key a level by its prefixed name, and this is red.
+test("the tools' levels are set by the server's own name for each tool, and read by a member", async () => {
+  detail = LINEAR_DETAIL;
+  mountAt("tools", mcpData("admin"));
+  // The custom level's tag, beside the filter chip of the same name.
+  expect(screen.getAllByText("Custom")).toHaveLength(2);
+  choose("Level for linear_list_issues", "Blocked");
+  await settle();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { levels: { list_issues: "blocked" } },
+    "linear_list_issues set to Blocked",
+  );
+  choose("Level for linear_delete_issue", /Server default/);
+  await settle();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { levels: { delete_issue: null } },
+    "linear_delete_issue follows the server's default",
+  );
+  expect(screen.getByRole("combobox", { name: "Default level" }).textContent).toContain(
+    "By each tool's hints",
+  );
+  choose("Default level", "Needs approval");
+  await settle();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { default: "approve" },
+    "Linear's default set to Needs approval",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Set 2 shown" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Always allow" }));
+  await settle();
+  expect(setLevels).toHaveBeenLastCalledWith(
+    "linear",
+    { levels: { list_issues: "allow", delete_issue: "allow" } },
+    "2 tools set to Always allow",
+  );
+  cleanup();
+
+  detail = LINEAR_MEMBER_DETAIL;
+  mountAt("tools", mcpData("member"));
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByText("Default for this server")).toBeNull();
+  expect(screen.getByText("Needs approval")).toBeDefined();
+  expect(screen.getByText("Always allow")).toBeDefined();
+});
+
+// A REFUSED LEVEL SAYS THE ENGINE'S PROBLEM (a box that lists the server,
+// say) and changes nothing.
+test("a level the engine refuses is said in its words", async () => {
+  detail = LINEAR_DETAIL;
+  vi.mocked(setLevels).mockResolvedValueOnce({
+    kind: "refused",
+    status: 422,
+    code: "validation_error",
+    sentence: "The configuration is not valid.",
+    body: {
+      problems: [
+        {
+          path: "roles.0.sandbox.mcp.servers.0",
+          message: "Take linear out of the box first: a box runs every tool at Always allow.",
+        },
+      ],
+    },
+  });
+  mountAt("tools", mcpData("admin"));
+  choose("Level for linear_list_issues", "Needs approval");
+  await settle();
+  expect(screen.getAllByText(/Nothing was changed/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Take linear out of the box first/).length).toBeGreaterThan(0);
+});
+
+// WHO GETS IT: the table is the engine's `reaches` with each reason, the
+// picker writes the entry's `access` through the entity route, and a member
+// has no Access tab. Mutation: write the grant beside the entry's own
+// fields, or drop `access` for a chosen agent, and this is red.
+test("the access tab lists who the server reaches and writes who gets it on its entry", async () => {
+  detail = {
+    ...LINEAR_DETAIL,
+    reaches: [
+      {
+        seat: "backend-engineer",
+        reason: "seat",
+        via: null,
+        limited: {
+          off: false,
+          off_by: null,
+          tools: [{ tool: "delete_issue", level: "blocked", by: "eng" }],
+        },
+      },
+      {
+        seat: "pm",
+        reason: "unit",
+        via: "product",
+        limited: { off: true, off_by: null, tools: [] },
+      },
+    ],
+  };
+  entry = {
+    name: "linear",
+    url: "https://mcp.linear.app/mcp",
+    access: { seats: ["backend-engineer"] },
+  };
+  vi.mocked(putEntity).mockResolvedValue({
+    kind: "saved",
+    revisionId: "r2",
+    epoch: 3,
+    warnings: [],
+    derived: null,
+  });
+  mountAt("access", mcpData("admin"));
+  const tabs = screen.getByRole("tablist", { name: "Linear sections" });
+  expect(within(tabs).getByRole("tab", { name: /Access/ })).toBeDefined();
+  expect(screen.getByText("Granted to it")).toBeDefined();
+  expect(screen.getByText("Through product")).toBeDefined();
+  // A TEAM LEAD'S LIMIT, as the engine resolved it for each agent.
+  expect(screen.getByText("1 tool held back by eng's lead")).toBeDefined();
+  expect(screen.getByText("Turned off for it by its lead")).toBeDefined();
+  expect(screen.getByText("What each agent can call")).toBeDefined();
+  expect(await screen.findByRole("radio", { name: /Chosen teams and agents/ })).toBeDefined();
+  expect(
+    (screen.getByRole("radio", { name: /Chosen teams and agents/ }) as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(screen.queryByRole("button", { name: "Save access" })).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save access" }));
+  await settle();
+  expect(putEntity).toHaveBeenCalledWith(
+    "mcp-servers",
+    "linear",
+    {
+      name: "linear",
+      url: "https://mcp.linear.app/mcp",
+      access: { seats: ["backend-engineer", "pm"] },
+    },
+    '"r1"',
+    "Changed who reaches linear",
+    expect.anything(),
+  );
+  cleanup();
+
+  detail = LINEAR_MEMBER_DETAIL;
+  mountAt("access", mcpData("member"));
+  const memberTabs = screen.getByRole("tablist", { name: "Linear sections" });
+  expect(within(memberTabs).queryByRole("tab", { name: /Access/ })).toBeNull();
+  expect(screen.queryByText("What each agent can call")).toBeNull();
+});
+
+test("a grant the engine refuses says why and saves nothing", async () => {
+  detail = LINEAR_DETAIL;
+  entry = { name: "linear", url: "https://mcp.linear.app/mcp" };
+  vi.mocked(putEntity).mockResolvedValue({
+    kind: "problems",
+    problems: [
+      {
+        path: "roles.0.mcp_env.linear",
+        segments: ["roles", 0, "mcp_env", "linear"],
+        kind: "invalid",
+        message: "Backend Engineer's values for linear name a server it would no longer reach.",
+      },
+    ],
+  } as never);
+  mountAt("access", mcpData("admin"));
+  fireEvent.click(await screen.findByRole("radio", { name: /Chosen teams and agents/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save access" }));
+  await settle();
+  expect(screen.getByText("Nothing was saved")).toBeDefined();
+  expect(screen.getByText(/name a server it would no longer reach/)).toBeDefined();
+});
+
+// A HELD CALL IS ANSWERED ON ITS SERVER'S OVERVIEW, as the Inbox answers it,
+// and the tab says one waits. Mutation: answer through the run's own answer,
+// or drop the marker, and this is red.
+test("a call held for approval is answered on the server's overview, and its tab says it waits", async () => {
+  detail = LINEAR_DETAIL;
+  const answered: McpApprovalAnswer = {
+    id: LINEAR_APPROVAL.id,
+    server: "linear",
+    tool: "linear_delete_issue",
+    seat: "backend-engineer",
+    turn_id: "turn-1",
+    launch_id: "launch-1",
+    answer: "once",
+    outcome: "pending",
+    answer_id: "a-1",
+    revision: null,
+  };
+  vi.mocked(answerHeldCall).mockResolvedValue(answered);
+  const reload = vi.fn();
+  mountAt("", mcpData("admin", reload, { approvals: [LINEAR_APPROVAL] }));
+  expect(screen.getByRole("tab", { name: /1 waiting for approval/ })).toBeDefined();
+  expect(screen.getByText("Waiting for your approval")).toBeDefined();
+  expect(screen.getByText("linear_delete_issue")).toBeDefined();
+  expect(screen.getByText("ENG-12")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  await settle();
+  expect(answerHeldCall).toHaveBeenCalledWith(LINEAR_APPROVAL.id, "once");
+  expect(screen.getByText("Approval answered")).toBeDefined();
+  expect(reload).toHaveBeenCalled();
+  cleanup();
+
+  mountAt(
+    "activity",
+    mcpData("admin", () => {}, { approvals: [LINEAR_APPROVAL] }),
+  );
+  expect(screen.getByText("Calls held for approval")).toBeDefined();
+  expect(screen.getByText("Waiting")).toBeDefined();
+});
+
+// A CHANGED TOOL IS SAID ON THE TOOLS TAB: marked on its row and its tab, the
+// changes counted with a Review that opens the dialog, and a filter of them.
+test("a changed tool is marked on the tools tab, with a review of the changes", () => {
+  detail = {
+    ...LINEAR_DETAIL,
+    tools: LINEAR_DETAIL.tools.map((t) =>
+      t.raw === "delete_issue" ? { ...t, held: true, level: "approve" as const } : t,
+    ),
+    changes: LINEAR_CHANGES,
+  };
+  const onFlow = vi.fn();
+  mountAt("tools", mcpData("admin"), onFlow);
+  expect(screen.getByRole("tab", { name: /2 changed/ })).toBeDefined();
+  expect(screen.getByText("2 tools changed since their levels were decided")).toBeDefined();
+  expect(screen.getAllByText("Changed").length).toBeGreaterThan(1);
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  expect(onFlow).toHaveBeenCalledWith("drift");
+});
+
+// A TOOL A TEAM'S LEAD HOLDS BACK is marked on the Tools tab, naming who it is
+// held back for and how, from the engine's resolved limits. Mutation: read the
+// limits off the entry rather than `reaches[].limited`, and this is red.
+test("a tool a team's lead holds back is marked, with who it is held back for", () => {
+  detail = {
+    ...LINEAR_DETAIL,
+    reaches: [
+      {
+        seat: "backend-engineer",
+        reason: "every_agent",
+        via: null,
+        limited: {
+          off: false,
+          off_by: null,
+          tools: [{ tool: "list_issues", level: "approve", by: null }],
+        },
+      },
+      { seat: "pm", reason: "every_agent", via: null, limited: null },
+    ],
+  };
+  mountAt("tools", mcpData("admin"));
+  const row = screen.getByText("linear_list_issues").closest("tr, [role='row']") as HTMLElement;
+  expect(within(row).getByText("Held back")).toBeDefined();
+  expect(screen.queryAllByText("Held back")).toHaveLength(1);
 });

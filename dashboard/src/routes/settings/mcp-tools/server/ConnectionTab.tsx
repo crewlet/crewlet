@@ -41,24 +41,10 @@ import type { McpMemberServerStatus, McpOAuthView, McpValueState } from "~/contr
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDate } from "~/lib/format.ts";
-import { useRest } from "~/lib/useRest.ts";
-import { getEntity } from "~/protocol/configWrite.ts";
 import { CLIENT_SECRET, type ServerDetail } from "../api.ts";
-import type { McpData } from "../data.ts";
+import { useServerEntry, type McpData } from "../data.ts";
 import type { OnFlow } from "../parts.tsx";
 import { AUTH, OAUTH_CLIENT, OAUTH_STATUS } from "../words.ts";
-
-/** The entry as written, for an administrator: its tool prefix. */
-function useEntry(name: string, enabled: boolean) {
-  return useRest(
-    enabled ? `mcp-entity:${name}` : null,
-    async (signal) => {
-      const read = await getEntity("mcp-servers", name, signal);
-      return read.kind === "entity" ? read.entity : null;
-    },
-    { refetchOnFocus: true },
-  );
-}
 
 const seconds = (n: number, byDefault: boolean) =>
   `${Number.isInteger(n) ? n : n.toFixed(1)} s${byDefault ? " (the default)" : ""}`;
@@ -76,7 +62,7 @@ export function ConnectionTab({
 }) {
   const row = data.adminRow(server.name);
   const admin = detail.reading === "admin" && row !== null;
-  const entry = useEntry(server.name, admin && server.configured);
+  const entry = useServerEntry(server.name, admin && server.configured);
   const written = entry.data;
   const http = server.transport === "http";
   const all = detail.reading === "admin" ? detail.values : [];

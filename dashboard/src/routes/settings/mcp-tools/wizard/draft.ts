@@ -36,21 +36,34 @@ import type { KeyValueRow } from "@crewlethq/ui";
 import type {
   McpAuthMethod,
   McpCatalogueEntry,
+  McpCheckedTool,
   McpOAuthClient,
+  McpToolLevel,
   McpValueState,
 } from "~/contract/mcp.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { CLIENT_SECRET } from "../api.ts";
-import type { SignInChoice } from "../words.ts";
+import { accessEntity, accessOf, EVERY, type Access } from "../GrantPicker.tsx";
+import { LEVELS, type SignInChoice } from "../words.ts";
 
 /** Where a new server comes from. */
 export type Source = "catalogue" | "url" | "json" | "community";
 
 /** The wizard's steps, in order. An edit has no Source: a saved server is not re-sourced. */
-export type Step = "source" | "name" | "connection" | "signin" | "test" | "review";
+export type Step =
+  "source" | "name" | "connection" | "signin" | "access" | "approvals" | "test" | "review";
 
-const ADD_STEPS: readonly Step[] = ["source", "name", "connection", "signin", "test", "review"];
-const EDIT_STEPS: readonly Step[] = ["name", "connection", "signin", "test", "review"];
+const ADD_STEPS: readonly Step[] = [
+  "source",
+  "name",
+  "connection",
+  "signin",
+  "access",
+  "approvals",
+  "test",
+  "review",
+];
+const EDIT_STEPS: readonly Step[] = ADD_STEPS.filter((s) => s !== "source");
 
 /** The steps the wizard walks, adding or editing. */
 export function stepsFor(editing: boolean): readonly Step[] {
@@ -131,11 +144,21 @@ export interface Draft {
   /** A local server's variables. */
   env: ValueRow[];
   /**
-   * One instance for the company, or one per agent. Not chosen here: a
-   * server an integration signs in for each agent runs one per agent, and an
-   * edit keeps what the entry says.
+   * One instance for the company, or one per agent, chosen on Who gets it. A
+   * server an integration signs in for each agent runs one per agent.
    */
   shared: boolean;
+  /** Who gets it: every agent, or the teams and agents its `access` names. */
+  access: Access;
+  /**
+   * The level of every tool `levels` does not name (`tools.default`), or null
+   * to leave each such tool at the level its hints start it at.
+   */
+  baseline: McpToolLevel | null;
+  /** Each tool's own level, by the server's own name for it (`tools.levels`). */
+  levels: Readonly<Record<string, McpToolLevel>>;
+  /** The tools the draft's test listed, which the approvals step sets levels on. */
+  listed: readonly McpCheckedTool[];
   /**
    * The keys an integration fills for each agent, which an edit writes back
    * as the entry spells them and draws as no row.
@@ -166,6 +189,10 @@ export function emptyDraft(): Draft {
     headers: [],
     env: [],
     shared: true,
+    access: EVERY,
+    baseline: null,
+    levels: {},
+    listed: [],
     bound: [],
     detected: null,
     supported: null,
@@ -224,6 +251,21 @@ export function fixedValues(entry: McpCatalogueEntry | null): Record<string, str
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+const isLevel = (v: unknown): v is McpToolLevel =>
+  typeof v === "string" && (LEVELS as readonly string[]).includes(v);
+
+/** An entry's `tools` block as the draft holds it: its default and each tool's own level. */
+function levelsOf(block: unknown): Pick<Draft, "baseline" | "levels"> {
+  if (!isRecord(block)) return { baseline: null, levels: {} };
+  const levels = isRecord(block.levels)
+    ? Object.fromEntries(Object.entries(block.levels).filter(([, v]) => isLevel(v)))
+    : {};
+  return {
+    baseline: isLevel(block.default) ? block.default : null,
+    levels: levels as Record<string, McpToolLevel>,
+  };
+}
+
 /**
  * A draft of a saved server, for an edit: the entry as written, each key the
  * server is sent a row marked stored, and the catalogue entry the engine
@@ -266,6 +308,8 @@ export function fromServer(
     scopes: Array.isArray(oauth?.scopes) ? oauth.scopes.map(String).join(" ") : "",
     headers: http ? rows(entity.headers) : [],
     env: http ? [] : rows(entity.env),
+    access: accessOf(entity.access),
+    ...levelsOf(entity.tools),
     shared: entity.shared !== false,
     bound: [...bound],
     // The methods the entry offers and the one the server uses, which stays
@@ -346,6 +390,8 @@ const OWNED = [
   "tool_prefix",
   "shared",
   "oauth",
+  "access",
+  "tools",
 ] as const;
 
 /**
@@ -366,6 +412,19 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   if (d.toolPrefix.trim()) out.tool_prefix = d.toolPrefix.trim();
   // `shared` is written only to say false: unset is the shared default.
   if (!d.shared) out.shared = false;
+  // WHO GETS IT, left out for every agent. A server an integration signs in
+  // for takes its agents from the integration, and the engine refuses
+  // `access` on it.
+  const access = d.signIn === "integration" ? undefined : accessEntity(d.access);
+  if (access) out.access = access;
+  // THE LEVELS, left out where none is set: each tool then starts at the
+  // level its hints give it.
+  if (d.baseline !== null || Object.keys(d.levels).length > 0) {
+    out.tools = {
+      ...(d.baseline !== null ? { default: d.baseline } : {}),
+      ...(Object.keys(d.levels).length > 0 ? { levels: { ...d.levels } } : {}),
+    };
+  }
   const written = isRecord(base?.[d.transport === "http" ? "headers" : "env"])
     ? (base![d.transport === "http" ? "headers" : "env"] as Record<string, unknown>)
     : {};
@@ -453,6 +512,11 @@ export function stepOf(p: ConfigProblem, transport: Draft["transport"]): Step {
     case "name":
     case "description":
       return "name";
+    case "access":
+    case "shared":
+      return "access";
+    case "tools":
+      return "approvals";
     case "url":
     case "command":
     case "args":

@@ -331,6 +331,10 @@ describe("an engine problem", () => {
     expect(stepOf(at(["values", "API_KEY"]), "stdio")).toBe("connection");
     expect(stepOf(at(["values", "Authorization"]), "http")).toBe("signin");
     expect(stepOf(at(["roles", 0, "mcp_env"]), "http")).toBe("review");
+    expect(stepOf(at(["mcp_servers", 3, "access", "seats", 0]), "http")).toBe("access");
+    expect(stepOf(at(["mcp_servers", 3, "tools", "levels", "delete_issue"]), "http")).toBe(
+      "approvals",
+    );
     const problems = [at(["values", "Authorization"], "the server answered 401")];
     expect(problemAt(problems, "rows", "Authorization")).toBe("the server answered 401");
     expect(problemAt(problems, "rows", "X-Team")).toBeUndefined();
@@ -341,6 +345,64 @@ test("a name is made from an address's own domain", () => {
   expect(nameFromAddress("https://mcp.linear.app/mcp")).toBe("linear");
   expect(nameFromAddress("https://observability.mcp.cloudflare.com/mcp")).toBe("cloudflare");
   expect(nameFromAddress("not an address")).toBe("");
+});
+
+describe("who gets it and each tool's level", () => {
+  // THE GRANT AND THE LEVELS RIDE THE ENTRY as `access` and `tools`, each
+  // left out where it says nothing: every agent, and no level set.
+  // Mutation: write `access: {}` for every agent, or `tools: {}` with no
+  // level, and this is red.
+  test("are written on the entry, and left out where they say nothing", () => {
+    const d = fromCatalogue(entry(), emptyDraft());
+    const plain = entityOf(d, null);
+    expect(plain).not.toHaveProperty("access");
+    expect(plain).not.toHaveProperty("tools");
+    const chosen: Draft = {
+      ...d,
+      access: { every: false, units: ["eng"], seats: ["pm"], except: ["eng-intern"] },
+      baseline: "approve",
+      levels: { delete_issue: "blocked" },
+    };
+    const written = entityOf(chosen, null);
+    expect(written.access).toEqual({ units: ["eng"], seats: ["pm"], except: ["eng-intern"] });
+    expect(written.tools).toEqual({ default: "approve", levels: { delete_issue: "blocked" } });
+    expect(
+      entityOf({ ...d, baseline: null, levels: { list_issues: "allow" } }, null).tools,
+    ).toEqual({ levels: { list_issues: "allow" } });
+  });
+
+  // A SERVER AN INTEGRATION SIGNS IN FOR takes its agents from the
+  // integration, and the engine refuses `access` on it.
+  test("writes no grant for a server an integration signs in for", () => {
+    const d: Draft = {
+      ...fromCatalogue(entry({ integration: "github" }), emptyDraft()),
+      access: { every: false, units: [], seats: ["pm"], except: [] },
+    };
+    expect(d.signIn).toBe("integration");
+    expect(entityOf(d, null)).not.toHaveProperty("access");
+  });
+
+  // AN EDIT READS THEM BACK, and writes back exactly what it read.
+  test("an edit reads the grant and the levels off the entry and writes them back", () => {
+    const base = {
+      name: "linear",
+      transport: "http",
+      url: "https://mcp.linear.app/mcp",
+      access: { units: ["eng"] },
+      tools: { default: "blocked", levels: { list_issues: "allow", nonsense: "maybe" } },
+    };
+    const d = fromServer(base, [], null, "none");
+    expect(d.access).toEqual({ every: false, units: ["eng"], seats: [], except: [] });
+    expect(d.baseline).toBe("blocked");
+    expect(d.levels).toEqual({ list_issues: "allow" });
+    const written = entityOf(d, base);
+    expect(written.access).toEqual({ units: ["eng"] });
+    expect(written.tools).toEqual({ default: "blocked", levels: { list_issues: "allow" } });
+    // Every agent again: the grant is taken off the entry, not left as it was.
+    expect(
+      entityOf({ ...d, access: { every: true, units: [], seats: [], except: [] } }, base),
+    ).not.toHaveProperty("access");
+  });
 });
 
 describe("an OAuth sign-in", () => {

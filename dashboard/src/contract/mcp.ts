@@ -16,10 +16,12 @@
  * EXACTLY WHAT THE ENGINE SENDS, held in both directions by
  * `TestTheToolsScreenReadsWhatTheServerStatusSends` (the list, the state
  * union included) and `TestTheServerPageReadsWhatTheDetailSends` (a server
- * whole) in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
+ * whole) and `TestTheInboxReadsWhatAHeldCallSends` (a parked run's held call)
+ * in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
  * in `internal/api/configapi`, and in `internal/api/mcpapi`
  * `TestTheRestartReadsWhatTheRouteSends`, `TestTheWizardReadsWhatTheCatalogueSends`,
- * `TestTheTestReadsWhatTheCheckSends` and `TestTheReplaceValueReadsWhatTheRouteSends`.
+ * `TestTheTestReadsWhatTheCheckSends`, `TestTheReplaceValueReadsWhatTheRouteSends`,
+ * `TestTheApprovalReadsWhatTheRouteSends` and `TestTheReviewReadsWhatTheRouteSends`.
  */
 
 import type { Coverage } from "./coverage.ts";
@@ -382,7 +384,7 @@ export interface McpServersStatusAnswer {
 type McpApprovalStatus = "waiting" | "answered";
 
 /** One call to a tool at Needs approval, held for a person's answer (`POST /mcp-approvals/{id}`). */
-interface McpApproval {
+export interface McpApproval {
   /** What the approval is answered by. */
   id: string;
   /** When the call was held. */
@@ -409,7 +411,7 @@ interface McpApproval {
 }
 
 /** One agent seat's MCP tools, counted against `tool_budget`. */
-interface McpAgentTools {
+export interface McpAgentTools {
   /** The seat's handle. */
   seat: string;
   name: string;
@@ -428,7 +430,7 @@ interface McpAgentTools {
 }
 
 /** One server's part in an agent's tools. */
-interface McpAgentServer {
+export interface McpAgentServer {
   server: string;
   reason: McpReachReason;
   /** The tools it offers the agent: every one it lists at a level other than
@@ -532,7 +534,7 @@ export interface McpToolView {
  * The level a tool of an MCP server runs at: `allow` offers it, `approve`
  * offers it and holds each call for a person's answer, `blocked` never offers it.
  */
-type McpToolLevel = "allow" | "approve" | "blocked";
+export type McpToolLevel = "allow" | "approve" | "blocked";
 
 /** What the server said of itself in its handshake. */
 interface McpServerInfo {
@@ -824,7 +826,7 @@ interface McpListedView extends McpDefinitionView {
  * `description`, `schema`, `annotations`). Decided with
  * `POST /mcp-servers/{name}/changes` by `after.digest` (null for a removal).
  */
-interface McpChangeView {
+export interface McpChangeView {
   tool: string;
   kinds: string[];
   before: McpAcceptedView | null;
@@ -841,10 +843,10 @@ interface McpChangeView {
  * Why a server reaches an agent: no `access` (every agent), a unit or the seat
  * it names, or the integration lane a vendor-bound server's agents are on at.
  */
-type McpReachReason = "every_agent" | "unit" | "seat" | "integration";
+export type McpReachReason = "every_agent" | "unit" | "seat" | "integration";
 
 /** One agent seat a server reaches. */
-interface McpReach {
+export interface McpReach {
   /** The seat's handle. */
   seat: string;
   reason: McpReachReason;
@@ -1171,7 +1173,7 @@ export interface McpCatalogueAnswer {
 }
 
 /** One tool a test listed, as the engine would offer it. */
-interface McpCheckedTool {
+export interface McpCheckedTool {
   /** The name it would be offered under, prefix included. */
   name: string;
   /** The server's own name for it. */
@@ -1281,4 +1283,64 @@ export interface McpValueRefusal {
   class: McpFailureClass | "";
   node: string;
   check: McpCheckAnswer;
+}
+
+/**
+ * The call a parked executor's run holds for a person's approval, on its row
+ * of the executors board (`held_call`): who reads the run's question reads
+ * it, never what it would send (`held_arguments`, the seat's trail). It is
+ * answered through `POST /mcp-approvals/{id}`, never the run's own answer.
+ */
+export interface McpHeldCall {
+  /** What the approval is answered by. */
+  id: string;
+  server: string;
+  /** The tool as the run called it, its prefix applied. */
+  tool: string;
+  /** The server's own name for it. */
+  raw: string;
+  /** The definition the call was held on. */
+  digest: string;
+  /** When the call was held; "" where the row does not say. */
+  held_at: string;
+}
+
+/**
+ * How an answer to a held call travels. `pending`: on its way to the node
+ * holding the agent's seat, which makes or refuses the call and carries the
+ * run on. `unknown`: it may or may not have landed, and answering again is
+ * safe, since the seat records one answer.
+ */
+type McpApprovalOutcome = "pending" | "unknown";
+
+/** What `POST /mcp-approvals/{id}` answers: the call it answered, and how the answer travels. */
+export interface McpApprovalAnswer {
+  id: string;
+  server: string;
+  tool: string;
+  seat: string;
+  turn_id: string;
+  launch_id: string;
+  /** `once`, `always` or `deny`, as sent. */
+  answer: string;
+  outcome: McpApprovalOutcome;
+  /** The delivery's id, "" where none was minted. */
+  answer_id: string;
+  /** The configuration's answer to the level `always` wrote; null for `once` and `deny`. */
+  revision: Record<string, unknown> | null;
+}
+
+/**
+ * What `POST /mcp-servers/{name}/changes` answers: the tools whose decision
+ * was written, by the server's own name, and the ones somebody else decided
+ * between the read and the write, which are read again.
+ */
+export interface McpChangesAnswer {
+  server: string;
+  accepted: string[];
+  blocked: string[];
+  /** Decided by somebody else meanwhile: nothing was written for them. */
+  moved: string[];
+  /** The configuration's answer to the levels a block wrote; null where nothing was blocked. */
+  revision: Record<string, unknown> | null;
 }
