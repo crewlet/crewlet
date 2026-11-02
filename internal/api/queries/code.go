@@ -225,21 +225,17 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		q.Repo, q.Target = p.String("repo"), strings.TrimSpace(p.String("target"))
 	case code.ReadChecks:
 		q.Repo = p.String("repo")
-		checks, err := checksListing(p)
-		if err != nil {
+		if q.Checks, err = checksListing(p); err != nil {
 			return code.ReadQuery{}, err
 		}
-		q.Checks = checks
 	case code.ReadCheck:
 		// ONE ATTEMPT IS THE PATH'S — its repository, its commit, its check
 		// and its attempt — beside the branch it was checked for, which a
 		// path cannot carry (codechecks.go).
 		q.Repo = p.String("name")
-		attempt, err := checkAttempt(p)
-		if err != nil {
+		if q.Checks, err = checkAttempt(p); err != nil {
 			return code.ReadQuery{}, err
 		}
-		q.Checks = attempt
 	default:
 		q.Repo = p.String("name")
 	}
