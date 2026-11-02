@@ -1318,8 +1318,18 @@ sequenceDiagram
    it decided, and built again over the copy the begin left
    ([What git prints](#what-git-prints-and-what-it-means)), since it may rely
    on an object the begin made dropping.
-2. **Between the two**, compaction goes on with the live packs, and a
-   publication of the repository waits for the commit.
+2. **Between the two, the repository's compaction and publication wait.**
+   Its maintainer runs one rewrite of a repository at a time, so from the
+   scan to the commit — one cycle — it builds no merge of the repository and
+   publishes none of its layers. A busy repository's pack count grows by its
+   pushes for that long, which its pushes feel only where the growth reaches
+   the pack bound: those carrying objects are then refused
+   `compaction_behind` until the cycle ends and compaction catches up
+   ([Compaction](#compaction)). Only an expunge a stopped cycle left open
+   sits beside compactions, until the next pass finishes it: the committer
+   decides a merge of live packs then as ever, since a merge drops nothing
+   and no dropping pack is its input, and refuses a publication until the
+   commit.
 3. **The commit retires the dropping packs** into the table of retired
    packs, and keeps live, as a **rescue**, whatever of them a push that
    landed between the scan and the begin reaches again. Its one precondition
