@@ -2035,6 +2035,51 @@ var secretCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE WRITE-ONLY MARK IS A FACT OF THE ROW, kept by every write a store
+	// takes: a backend that dropped it would hand a value stored never to
+	// be read back to the next reveal, and nothing would say so.
+	name: "a write-only row stays marked through a put, a create and an update",
+	fn: func(h *fleetHarness) {
+		marked := coord.SecretRecord{Name: "MCP_LINEAR_AUTHORIZATION", Value: "v1:sealed",
+			KeyID: "key-1", UpdatedAt: h.now(), Source: "mcp", WriteOnly: true}
+		if err := h.f.PutSecret(h.ctx, marked); err != nil {
+			h.t.Fatalf("PutSecret: %v", err)
+		}
+		if rec, _ := h.secret(marked.Name); !rec.WriteOnly {
+			h.t.Fatal("a put dropped the write-only mark")
+		}
+		rows, err := h.f.SecretValues(h.ctx)
+		if err != nil {
+			h.t.Fatalf("SecretValues: %v", err)
+		}
+		for _, row := range rows {
+			if row.Name == marked.Name && !row.WriteOnly {
+				h.t.Error("the listing dropped the write-only mark")
+			}
+		}
+		current, _ := h.secret(marked.Name)
+		resealed := marked
+		resealed.Value, resealed.KeyID = "v2:resealed", "key-2"
+		if wrote, err := h.f.UpdateSecret(h.ctx, resealed, current.Version); err != nil || !wrote {
+			h.t.Fatalf("UpdateSecret = (%v, %v)", wrote, err)
+		}
+		if rec, _ := h.secret(marked.Name); !rec.WriteOnly || rec.KeyID != "key-2" {
+			h.t.Errorf("an update dropped the mark or the key: %+v", rec)
+		}
+		created := marked
+		created.Name = "MCP_SENTRY_AUTHORIZATION"
+		if ok, err := h.f.CreateSecret(h.ctx, created); err != nil || !ok {
+			h.t.Fatalf("CreateSecret = (%v, %v)", ok, err)
+		}
+		if rec, _ := h.secret(created.Name); !rec.WriteOnly {
+			h.t.Error("a create dropped the write-only mark")
+		}
+		h.putSecret("PLAIN_TOKEN", "v1:sealed", "key-1")
+		if rec, _ := h.secret("PLAIN_TOKEN"); rec.WriteOnly {
+			h.t.Error("a row stored without the mark reads as write-only")
+		}
+	},
+}, {
 	// The store holds an ENVELOPE and has no key. Anything that mangled
 	// the bytes would produce a value that decrypts to nothing on the far
 	// side — an auth failure attributed to the vendor rather than to the

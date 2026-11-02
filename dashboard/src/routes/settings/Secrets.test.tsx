@@ -45,6 +45,7 @@ const body = {
       updated_at: "2026-08-23T15:00:00Z",
       updated_by: "founder",
       source: "setup",
+      write_only: false,
     },
     {
       name: "GITHUB_TOKEN",
@@ -52,6 +53,7 @@ const body = {
       updated_at: "2026-08-22T15:00:00Z",
       updated_by: "ops",
       source: "api",
+      write_only: false,
     },
   ],
 };
@@ -493,7 +495,7 @@ test("a credential's provenance is said as the path that wrote it", async () => 
   expect(provenance("cli")).toBe(
     "set with crewlet secrets set while its node's engine was stopped",
   );
-  for (const word of ["api", "setup", "provision", "cli", "llm-login"]) {
+  for (const word of ["api", "setup", "provision", "cli", "llm-login", "models", "mcp"]) {
     expect(provenance(word)).not.toMatch(/does not know/);
   }
   for (const word of ["migrated", "rekey", "gitlab-provision"]) {
@@ -503,6 +505,7 @@ test("a credential's provenance is said as the path that wrote it", async () => 
   // column and the peek both name it the one way.
   expect(sourceWords("api")).toBe("API");
   expect(sourceWords("setup")).toBe("Integration setup");
+  expect(sourceWords("mcp")).toBe("MCP & tools");
   expect(sourceWords("gitlab-provision")).toBe("gitlab-provision");
   expect(screen.getByText("Integration setup")).toBeDefined();
 });

@@ -5329,10 +5329,13 @@ export interface SecretRow {
   updated_by_kind?: string;
   operator_id?: string;
   /** Which write path last stored it, in that path's own word — `api`,
-   *  `setup`, `provision`, `cli` or `llm-login` — never a word the writer
-   *  chose.
+   *  `setup`, `provision`, `cli`, `llm-login`, `models` or `mcp` — never a
+   *  word the writer chose.
    *  What each means is `provenance` in routes/settings/Secrets.tsx. */
   source: string;
+  /** Whether no reveal answers the value: one stored from Settings › MCP &
+   *  tools, which the engine reads for its `${VAR}` and never hands back. */
+  write_only: boolean;
 }
 
 /**
