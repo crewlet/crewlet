@@ -1306,11 +1306,13 @@ type SandboxRuns interface {
 	// false, the record as the last decision read it.
 	//
 	// A DELETE TAKES THE RUN'S LOG WITH IT: the record goes first, at the
-	// version decided on, and then the log whatever it holds, so no reader
-	// ever finds a record whose log was removed under it. A log that
-	// could not be removed once the record went is still a landed delete —
-	// the decision did what it decided — and is left to the sweep (see the
-	// type's doc).
+	// version decided on, and then the log, so no reader ever finds a record
+	// whose log was removed under it. Never a log a record stands beside
+	// again by then — the turn launched anew in between, whose launch opens
+	// the log to its own job — so a new run's log is not taken by the
+	// removal of the run before it. A log that could not be removed once the
+	// record went is still a landed delete — the decision did what it
+	// decided — and is left to the sweep (see the type's doc).
 	MutateSandboxRun(ctx context.Context, turnID string,
 		decide func(current Record) (SandboxRunChange, error)) (Record, bool, error)
 
@@ -1361,6 +1363,13 @@ type SandboxRuns interface {
 	// (Record{}, false, nil), as a run that is gone answers
 	// MutateSandboxRun. So a write racing the run's end never leaves a log
 	// behind it.
+	//
+	// What a write does not do is read the record on an UPDATE: a log a
+	// removal left behind — its node stopped between the record's removal
+	// and the log's, which a store that removes both in one step never
+	// leaves — still takes an update until the sweep removes it. Nothing is
+	// lost by that: every reader of a log comes to it through a record, and
+	// a run's next launch opens the log to its own job whatever it held.
 	MutateSandboxRunLog(ctx context.Context, turnID string,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 }

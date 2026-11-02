@@ -161,29 +161,54 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	return 0, contended("create", kv.Bucket()+"/"+key)
 }
 
+// sweepPass is one walk of a bucket the sweep reads, and the purge that
+// removes what it finds.
+type sweepPass struct {
+	keys  map[string]jetstream.KeyValueEntry
+	purge *leaderPurge
+}
+
+// walkForSweep walks kv whole, values included, for the sweeps of its keys.
+//
+// NO INDEX: nothing certifies a sweep, because a key it misses is swept on the
+// next tick — so its pass ends on the quiet from the start rather than waiting
+// on removals no delivery will follow (see [passOver]).
+func walkForSweep(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue) (sweepPass, error) {
+	what := "the markers in " + kv.Bucket()
+	purge, err := newLeaderPurge(js, kv)
+	if err != nil {
+		return sweepPass{}, fmt.Errorf("coord/kv: sweep %s: %w", what, err)
+	}
+	keys, err := watchWalk(ctx, kv, jetstream.AllKeys, what)
+	if err != nil {
+		return sweepPass{}, err
+	}
+	return sweepPass{keys: keys, purge: purge}, nil
+}
+
 // sweepMarkers removes, from one bucket, every delete or purge marker written
-// before cutoff, reporting how many messages went.
+// before cutoff, reporting how many messages went: one pass of the bucket
+// ([walkForSweep]) and the sweep of it ([sweepMarkersIn]).
+func sweepMarkers(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	cutoff time.Time) (int64, error) {
+
+	pass, err := walkForSweep(ctx, js, kv)
+	if err != nil {
+		return 0, err
+	}
+	return sweepMarkersIn(ctx, kv, pass, cutoff)
+}
+
+// sweepMarkersIn removes, from one bucket's pass, every delete or purge marker
+// written before cutoff, reporting how many messages went.
 //
 // A failure stops the sweep of this bucket and reports what it had removed
 // beside the error: every marker left is swept on the next tick, and a sweep
 // that pressed on past a broker refusing it would only log the same refusal
 // once per marker.
-func sweepMarkers(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
-	cutoff time.Time) (int64, error) {
-
+func sweepMarkersIn(ctx context.Context, kv jetstream.KeyValue, walked sweepPass, cutoff time.Time) (int64, error) {
 	what := "the markers in " + kv.Bucket()
-	purge, err := newLeaderPurge(js, kv)
-	if err != nil {
-		return 0, fmt.Errorf("coord/kv: sweep %s: %w", what, err)
-	}
-	// NO INDEX: nothing certifies a sweep, because a marker it misses is
-	// swept on the next tick — so its pass ends on the quiet from the start
-	// rather than waiting on removals no delivery will follow (see
-	// [passOver]).
-	pass, err := watchWalk(ctx, kv, jetstream.AllKeys, what)
-	if err != nil {
-		return 0, err
-	}
+	pass, purge := walked.keys, walked.purge
 	// KEY ORDER, so two sweeps of one bucket walk it identically and a
 	// failure part-way names the same key on every retry.
 	keys := make([]string, 0, len(pass))
@@ -284,18 +309,29 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		errs  []error
 	)
 	for _, kv := range f.ageless {
-		n, err := sweepMarkers(ctx, f.js, kv, cutoff)
+		pass, err := walkForSweep(ctx, f.js, kv)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n, err := sweepMarkersIn(ctx, kv, pass, cutoff)
 		swept += n
 		if err != nil {
 			errs = append(errs, err)
 		}
-	}
-	// AND THE ONE VALUE A REMOVAL CAN LEAVE: a sandbox run's log whose
-	// record went while its node stopped before the log did.
-	n, err := f.sweepRunLogs(ctx, cutoff)
-	swept += n
-	if err != nil {
-		errs = append(errs, err)
+		if kv.Bucket() != f.runs.Bucket() {
+			continue
+		}
+		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a sandbox run's log
+		// whose record went while its node stopped before the log did —
+		// found in the SAME pass, which already carries every record key
+		// and every log key of the runs bucket, so the logs, up to half a
+		// megabyte each, are walked once a tick rather than twice.
+		n, err = f.sweepRunLogs(ctx, pass, cutoff)
+		swept += n
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return swept, errors.Join(errs...)
 }

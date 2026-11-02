@@ -530,7 +530,7 @@ Three hours is not what keeps an answer right. Nothing in the engine takes a mar
 The sweep removes only what it saw. It purges each key **through the marker's own revision**, and the broker applies that bound, so a record created again after the sweep's pass saw the marker has a later revision and is untouched. The client library's own sweep (`PurgeDeletes`) purges a key outright, and would take that new record with the marker.
 
 
-The same sweep removes a coding run's bridged tool log whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its log's. Whether the run has a record is read after the log is found, and the log is removed only as it was found, so a run written again under its turn keeps its log.
+The same sweep removes a coding run's bridged tool log whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its log's. It is found in the same pass of the runs' bucket the marker sweep makes, which already carries every record and every log, so a sweep walks the logs once: a log whose record that pass holds no value for is a candidate, its record is then read from the leader, and the log is removed only as the pass found it, so a run written again under its turn keeps its log. The removal that ends a run leaves a log alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job.
 
 ## The lease TTL bounds seats and presence only
 

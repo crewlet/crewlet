@@ -95,8 +95,8 @@ var runLogCases = []fleetCase{{
 		written, changed, err := h.f.MutateSandboxRunLog(h.ctx, "turn-1", func(current coord.Record, found bool) ([]byte, error) {
 			calls++
 			if calls == 1 {
-				_, ok, err := h.f.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(2))
-				if err := landedFor("the staged log write", ok, err); err != nil {
+				_, ok, werr := h.f.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(2))
+				if err := landedFor("the staged log write", ok, werr); err != nil {
 					return nil, err
 				}
 			}
@@ -128,8 +128,8 @@ var runLogCases = []fleetCase{{
 		for n, node := range nodes {
 			for i := range each {
 				wg.Go(func() {
-					_, ok, err := node.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(n*each+i))
-					if err := landedFor("an append", ok, err); err != nil {
+					_, ok, werr := node.MutateSandboxRunLog(h.ctx, "turn-1", appendMark(n*each+i))
+					if err := landedFor("an append", ok, werr); err != nil {
 						errs <- err
 					}
 				})
@@ -193,10 +193,10 @@ var runLogCases = []fleetCase{{
 			written, changed, err := h.f.MutateSandboxRunLog(h.ctx, turn, func(current coord.Record, found bool) ([]byte, error) {
 				if !removed {
 					removed = true
-					_, ok, err := h.f.MutateSandboxRun(h.ctx, turn, func(coord.Record) (coord.SandboxRunChange, error) {
+					_, ok, werr := h.f.MutateSandboxRun(h.ctx, turn, func(coord.Record) (coord.SandboxRunChange, error) {
 						return coord.SandboxRunChange{Delete: true}, nil
 					})
-					if err := landedFor("the staged removal", ok, err); err != nil {
+					if err := landedFor("the staged removal", ok, werr); err != nil {
 						return nil, err
 					}
 				}
