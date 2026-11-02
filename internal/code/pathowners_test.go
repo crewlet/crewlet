@@ -397,9 +397,10 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 
 // A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
 // included: a read of each kind this build reads, as everyReadAsked asks it,
-// that also names a commit, an inbox or an inbox page's cards — fields only a
-// `commit`, an `inbox` and a `notice_cards` read read — is refused naming the
-// field, never answered with it ignored. The engine's own reads validate
+// that also names a commit, an inbox, an inbox page's cards or the narrowing
+// to protected repositories — fields only a `commit`, an `inbox`, a
+// `notice_cards` and a `repos` read read — is refused naming the field, never
+// answered with it ignored. The engine's own reads validate
 // against lists of their own, and a field added after a list was written
 // passed it unseen.
 //
@@ -423,6 +424,7 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		{"notice_cards", code.ReadNoticeCards, func(q *code.ReadQuery) {
 			q.NoticeCards = []string{"0192f4c8-0000-7000-8000-000000000001"}
 		}},
+		{"protected", code.ReadRepos, func(q *code.ReadQuery) { q.Protected = true }},
 	} {
 		for _, kind := range code.ReadKinds() {
 			q, named := asks[kind]
