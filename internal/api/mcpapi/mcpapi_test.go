@@ -64,7 +64,8 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t), Audit: &recordedAudit{}})
+		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,8 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t), Audit: &recordedAudit{}})
+		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +367,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
 		t.Errorf("the tool answered %v", tool)
 	}
-	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "sandbox", "secrets")
+	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "oauth", "sandbox", "secrets")
 	// THE SERVER'S ACTIVITY, key for key: counts per tool, and each recent
 	// call's who, when, which and how it ended, never its arguments or its
 	// result.

@@ -26,6 +26,8 @@ import (
 func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 	t.Parallel()
 	s := serverSurface(t)
+	// SIGNED IN, so the written answer carries its McpGrantRevocation.
+	s.oauth.held = map[string]bool{"linear": true}
 
 	_, refused := removeServer(t, s, "linear", "?dry_run=true", "", nil)
 	code, checked := removeServer(t, s, "linear", "?dry_run=true", `{"clear": true}`, nil)
@@ -85,6 +87,7 @@ func TestTheRemoveDialogReadsWhatTheRemovalSends(t *testing.T) {
 		"McpEnvDependant":     slices.Concat(env, rows(cleared["mcp_env"])),
 		"McpSandboxDependant": slices.Concat(box, rows(cleared["sandbox"])),
 		"McpSecretDeletion":   append(rows(written["secrets"]), kept),
+		"McpGrantRevocation":  {object(written["oauth"])},
 	} {
 		holdDeclared(t, iface, sent)
 	}

@@ -38,7 +38,7 @@ func TestAnImportThroughARunningNodeReplacesAnUnsealedRevision(t *testing.T) {
 	plane := coordmemory.NewFleet()
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: fixtureCipher, Node: "core-1",
-		Secrets: fleetsecrets.New(plane, fixtureCipher),
+		Secrets: fleetsecrets.New(plane, fixtureCipher), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 

@@ -89,6 +89,11 @@ type surface struct {
 	// its keyring, for a case that seeds a value a removal may delete.
 	secrets *fleetsecrets.Store
 
+	// oauth is the engine's hold on each MCP server's OAuth grant the
+	// surface was handed ([configapi.Options.Grants]), for a case about a
+	// removal that revokes one.
+	oauth *fakeGrants
+
 	// grants are what the caller [surface.do] attaches carries: every one,
 	// unless a case about authority narrows them, so a case about what the
 	// surface DOES is never quietly a case about who may.
@@ -173,9 +178,10 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	s := &surface{
 		mux: http.NewServeMux(), configs: db.Configs(), db: db,
 		plane: fleet, grants: iam.AllGrants, secrets: fleetsecrets.New(fleet, cipher),
+		oauth: &fakeGrants{},
 	}
 	opts := configapi.Options{
-		Store: db, Plane: s.plane, Cipher: cipher, Secrets: s.secrets,
+		Store: db, Plane: s.plane, Cipher: cipher, Secrets: s.secrets, Grants: s.oauth,
 		Holders: s.holders, Node: thisNode,
 		Now: func() time.Time { return pinned },
 	}
@@ -1328,14 +1334,16 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 
 		return nil, nil
 	}
-	vault := fleetsecrets.New(fleet, cipher)
+	vault, oauth := fleetsecrets.New(fleet, cipher), &fakeGrants{}
 	for field, opts := range map[string]configapi.Options{
-		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault},
-		"Plane":   {Store: db, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault},
-		"Cipher":  {Store: db, Plane: fleet, Holders: nobody, Node: thisNode, Secrets: vault},
-		"Holders": {Store: db, Plane: fleet, Cipher: cipher, Node: thisNode, Secrets: vault},
-		"Node":    {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: " ", Secrets: vault},
-		"Secrets": {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault, Grants: oauth},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault, Grants: oauth},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody, Node: thisNode, Secrets: vault, Grants: oauth},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher, Node: thisNode, Secrets: vault, Grants: oauth},
+		"Node": {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: " ", Secrets: vault,
+			Grants: oauth},
+		"Secrets": {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode, Grants: oauth},
+		"Grants":  {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1347,7 +1355,7 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 		}
 	}
 	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
-		Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault}); err != nil {
+		Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault, Grants: oauth}); err != nil {
 		t.Errorf("a store, a plane, a keyring, a directory, a node and a credential "+
 			"store were refused: %v", err)
 	}

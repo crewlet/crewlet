@@ -167,7 +167,7 @@ func valueSurface(t *testing.T, checker mcpapi.Checker, docs *fakeDocuments, sto
 	t.Helper()
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return docs.company },
 		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: checker,
-		Documents: docs, Values: store, Audit: audit,
+		Documents: docs, Values: store, SignIns: &fakeSignIns{}, Audit: audit,
 		Now: func() time.Time { return time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +356,7 @@ func TestAValueIsDecidedBeforeItIsRead(t *testing.T) {
 	// guard refusing config.write alone is what tells them apart.
 	noConfigWrite, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return docs.company },
 		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: checker,
-		Documents: docs, Values: store, Audit: audit,
+		Documents: docs, Values: store, SignIns: &fakeSignIns{}, Audit: audit,
 		Guard: func(r *http.Request, p authz.Policy) authz.Decision {
 			if p.Action == authz.ActionConfigWrite {
 				return authz.Decision{Allowed: false}
