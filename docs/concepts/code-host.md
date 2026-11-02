@@ -7518,6 +7518,11 @@ and `code_apply_suggestions` applies the suggestions of the findings it names,
 on the change's source branch, at the head its caller read, as one engine
 write ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 
+- **The findings it names are read by their ids**, one read of the change
+  that seeks each of them, never a walk of the change's findings: those are
+  kept in the order they were raised, so the newest review's — the ones an
+  apply names — would be the last a walk reaches, and an apply would cost
+  what the change's whole review history does.
 - **Each suggestion goes where its finding was shown.** Its lines are placed in
   the head's file by the rule a finding is shown on a later revision by — the
   diff between the blob its lines were read in and the head's, every hunk above

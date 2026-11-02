@@ -139,7 +139,18 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 	}
 	switch q.Part {
 	case code.PartFindings:
-		out.Findings, out.Next = pageAfter(f.findings, code.FindingRow.Cursor, q.Cursor, limit)
+		if len(q.FindingIDs) == 0 {
+			out.Findings, out.Next = pageAfter(f.findings, code.FindingRow.Cursor, q.Cursor, limit)
+			break
+		}
+		// NARROWED TO THE FINDINGS NAMED, as the reader serves them: those
+		// the change holds, after the cursor, in id order.
+		for _, row := range f.findings {
+			if slices.Contains(q.FindingIDs, row.ID) && row.ID > q.Cursor {
+				out.Findings = append(out.Findings, row)
+			}
+		}
+		slices.SortFunc(out.Findings, func(a, b code.FindingRow) int { return strings.Compare(a.ID, b.ID) })
 	case code.PartReviews:
 		out.Reviews, out.Next = pageAfter(f.reviews, code.ReviewRow.Cursor, q.Cursor, limit)
 	case code.PartComments:

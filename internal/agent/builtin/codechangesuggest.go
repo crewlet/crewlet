@@ -185,20 +185,30 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 }
 
 // suggestions are the suggestions of the findings ids names, in that order,
-// read from the change's conversation a page at a time from the call's read
-// of the change — or the refusal of a finding no apply may take: one the
-// change does not hold, one that no longer stands, one that suggests nothing,
-// or one on the old side of its revision's diff.
+// read from the change's conversation from the call's read of the change: ONE
+// read narrowed to those findings (code.ReadQuery.FindingIDs), each a seek on
+// the node that answers it, never a walk of the change's findings — which are
+// paged by time-ordered id, so the newest review's, the ones an apply names,
+// would be on the last page of a history that only grows — and a page more
+// only where findings at their bounds filled one. Or the refusal of a finding
+// no apply may take: one the change does not hold, one that no longer stands,
+// one that suggests nothing, or one on the old side of its revision's diff.
 func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.SuggestionOp, *tools.Result) {
 	g := cv.g
+	// EACH ID ASKED ONCE, AND ONLY ONE A FINDING COULD HAVE: one no finding
+	// carries is one the change does not hold, refused below as such rather
+	// than by the read it would make invalid.
 	want := map[string]*code.FindingRow{}
+	var asked []string
 	for _, id := range ids {
+		if _, seen := want[id]; !seen && code.ValidFindingID(id) {
+			asked = append(asked, id)
+		}
 		want[id] = nil
 	}
-	left, cursor := len(ids), ""
-	for left > 0 {
-		page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartFindings, Cursor: cursor,
-			Limit: code.MaxFindingsPerPage}, cv.at)
+	for cursor := ""; len(asked) > 0; {
+		page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartFindings, FindingIDs: asked, Cursor: cursor},
+			cv.at)
 		if refusal != nil {
 			return nil, refusal
 		}
@@ -206,7 +216,6 @@ func (cv conversing) suggestions(ctx context.Context, ids []string) ([]code.Sugg
 			f := &page.Findings[i]
 			if held, asked := want[f.ID]; asked && held == nil {
 				want[f.ID] = f
-				left--
 			}
 		}
 		if page.Next == "" {
