@@ -19,14 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -82,10 +80,11 @@ type Sources struct {
 	Events FleetEvents
 
 	// Usage is the replicated estate's usage domain: every data node's
-	// company days, for every NAMED spend window and its series (ADR-0020).
-	// Not this node's event log, which answered for this node alone and only
-	// thirty days back. Nil leaves `token_series` unregistered and a named
-	// `tokens` window empty.
+	// company days, for every NAMED spend window and its series (ADR-0020),
+	// and every schedule's fires. Not this node's event log, which answered
+	// for this node alone and only thirty days back. Nil leaves
+	// `token_series` and `schedule_runs` unregistered, a named `tokens`
+	// window empty and the schedules' recent runs an empty list.
 	Usage usage.Estate
 
 	// Company reads the CURRENT company, for the questions answered from
@@ -233,12 +232,6 @@ type Sources struct {
 	// advertises against what the metadata group counts. Nil leaves the
 	// question unregistered.
 	FleetBroker BrokerLister
-
-	// Runs is the schedule dispatch ledger. Nil still answers the
-	// schedules question — the configured schedules are a projection of
-	// the org — with an empty history, because "no ledger" and "nothing
-	// has fired" are told apart by the answer's own shape.
-	Runs ScheduleRuns
 
 	// Memory is a seat's memory — its diary, episodes, the skills it drafted
 	// and what it learned about the people it works with — and its
@@ -555,22 +548,6 @@ type Sources struct {
 	ArtifactData *ArtifactDataSource
 }
 
-// ScheduleRuns is the dispatch history a schedules answer reads.
-//
-// Declared here rather than imported so this package depends on the shape and
-// not on the ledger. Satisfied by the SQL ledger and its memory twin alike.
-type ScheduleRuns interface {
-	Recent(ctx context.Context, limit int) ([]schedule.Run, error)
-
-	// RecentFor is the same listing narrowed to ONE schedule — see
-	// [schedule.Ledger]. The company-wide page is not a history of
-	// anything: twenty schedules firing hourly fill fifty rows in two and
-	// a half hours, so "did the standup fire this week" was unanswerable
-	// while every row of the answer sat in the table.
-	RecentFor(ctx context.Context, scope types.ScheduleScope,
-		scopeID, name string, limit int) ([]schedule.Run, error)
-}
-
 // clock reads the injected time, or the wall clock, in UTC either way. It is
 // the only read of the wall clock in this package — see [Sources.Now].
 func (s Sources) clock() time.Time {
@@ -750,11 +727,11 @@ func Register(r *Registry, s Sources) {
 	if s.DeviceSignIns != nil {
 		r.Register("llm_device_sign_in", Requires(iam.GrantAdmin), s.llmDeviceSignIn)
 	}
-	if s.Runs != nil {
-		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
-		// the company: the configured rows are a projection of the org
-		// and this is a store read, so a node with one and not the other
-		// is a real shape.
+	if s.Usage != nil {
+		// ONE SCHEDULE'S OWN HISTORY, gated on the USAGE DOMAIN rather
+		// than on the company: the configured rows are a projection of
+		// the org and this is a read of the replicated fires, so a node
+		// with one and not the other is a real shape.
 		r.Register("schedule_runs", Everybody(), s.scheduleRuns)
 	}
 	if s.Company != nil {

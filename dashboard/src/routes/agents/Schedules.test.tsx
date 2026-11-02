@@ -95,8 +95,8 @@ test("a row is worked out in the zone the engine names, and never in a default",
   expect(container.textContent).toBe("");
 });
 
-// A LEDGER OUTCOME IS A WORD, AND NEITHER SKIP ASKS FOR ANYBODY. The raw enum
-// sat in an amber pill on every row of a company whose node had been down
+// A FIRE'S OUTCOME IS A WORD, AND NO SKIP ASKS FOR ANYBODY. The raw enum sat
+// in an amber pill on every row of a company whose node had been down
 // overnight: `skipped_catchup` is the catchup cap doing its job, and amber is
 // the one state that asks a person for something.
 test("an outcome is named in words, and a skip is never the needs-you amber", () => {
@@ -105,12 +105,25 @@ test("an outcome is named in words, and a skip is never the needs-you amber", ()
       <OutcomeTag outcome="fired" />
       <OutcomeTag outcome="skipped_catchup" />
       <OutcomeTag outcome="skipped_paused" />
+      <OutcomeTag outcome="skipped_superseded" />
     </>,
   );
   expect(container.textContent).not.toContain("_");
   expect(
     screen.getByText("skipped · missed").closest(".crewlet-tag")?.getAttribute("title"),
   ).toMatch(/catchup window/);
+  expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
+});
+
+// A FIRE A LATER ONE REPLACED SAYS SO, AND WHY. Fires that waited for a seat
+// that could not work run once, as the latest, and the earlier ones are
+// skipped: drawn as the engine's word they read as a column name, and drawn
+// as `fired` they told a reader the duty ran once per waiting fire.
+test("a fire a later fire ran in place of reads as skipped, with the reason", () => {
+  const { container } = render(<OutcomeTag outcome="skipped_superseded" />);
+  const tag = screen.getByText("skipped · replaced").closest(".crewlet-tag");
+  expect(tag?.getAttribute("title")).toBe("A later fire of this schedule ran in its place");
+  expect(container.querySelector(".crewlet-tag--success")).toBeNull();
   expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
 });
 

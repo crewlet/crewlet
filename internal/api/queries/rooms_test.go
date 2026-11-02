@@ -101,7 +101,6 @@ func everySeam(t *testing.T) queries.Sources {
 		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
-		Runs:     &fakeRuns{},
 		Memory:   &memread.Reader{},
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),

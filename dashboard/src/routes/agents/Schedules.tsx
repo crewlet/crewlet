@@ -4,14 +4,14 @@
  * THE NAMES HERE ARE THE SERVER'S. This screen used to read `scope`,
  * `scope_name`, `last_run` and `last_outcome` off a schedule and `name`,
  * `scope_name` and `detail` off a run; `schedule.Row` serialises `scope_type`
- * and `scope_id` and has no last-run field at all, and a ledger row carries
+ * and `scope_id` and has no last-run field at all, and a fire's row carries
  * `schedule_name`, `fire_label`, `target_handle`, `scheduled_at` and
  * `trace_id`. Seven cells rendered `undefined` on every row, and the sort and
  * row keys they were built from collapsed every row onto one key.
  *
- * The last fire is JOINED from the ledger rather than read off the row, on the
- * identity the ledger keys on — (scope_type, scope_id, name) — because that is
- * where the fact actually lives.
+ * The last fire is JOINED from the history rather than read off the row, on
+ * the identity the dispatch ledger keys a fire on, (scope_type, scope_id,
+ * name), because that is where the fact actually lives.
  *
  * THE ID IS NOT THE NAME. `scope_id` is the scope's IDENTITY — a seat's agent
  * id, a unit's key — which a rename does not move, so every key, join and
@@ -20,12 +20,15 @@
  * else ([scopeName]): drawn from the id, a role schedule's scope read as a
  * uuid and linked to a page nobody has.
  *
- * AND THE LEDGER HAS THREE OUTCOMES. `schedule.Outcome` is `fired`,
- * `skipped_catchup` or `skipped_paused`: it is a DISPATCH ledger, not a
- * turn-outcome one, so "recent failures" counted a value the engine cannot
- * emit and read 0 for ever on every company. What it can honestly say is how
- * many ticks were skipped, which is the catchup cap doing its job, a node that
- * was down too long, or a seat a person had paused.
+ * AND A FIRE HAS FOUR OUTCOMES. The scheduler records `fired`,
+ * `skipped_catchup` or `skipped_paused`, and the history reports a fire its
+ * seat did not run, because a later fire of the schedule ran in its place, as
+ * `skipped_superseded`. None of them is a turn's outcome, so "recent
+ * failures" counted a value the engine cannot emit and read 0 for ever on
+ * every company. What it can honestly say is how many ticks were skipped:
+ * the catchup cap doing its job, a node that was down too long, a seat a
+ * person had paused, or fires that waited for a seat that could not work and
+ * ran once, as the latest.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -86,27 +89,30 @@ import { useViewer } from "~/lib/viewer.ts";
 /** Where the company document a schedule is written in is read. */
 const CONFIG_PATH = ["settings", "config"];
 
-/** The ledger's three outcomes, and nothing else — see the note above.
+/** A fire's four outcomes, and nothing else (see the note above).
  *
- *  NEITHER SKIP IS AMBER. Amber is the one state that asks for a person, and
- *  neither skip does: a paused seat's fire follows the decision somebody
- *  already made, and a missed tick outside the catchup window is the cap doing
- *  its job. A catchup skip was drawn amber, beside the raw enum, on every row
- *  of a company whose node had been down overnight — a page of warnings about
+ *  NO SKIP IS AMBER. Amber is the one state that asks for a person, and no
+ *  skip does: a paused seat's fire follows the decision somebody already
+ *  made, a missed tick outside the catchup window is the cap doing its job,
+ *  and a fire a later one replaced is the seat doing the duty once, as of now.
+ *  A catchup skip was drawn amber, beside the raw enum, on every row of a
+ *  company whose node had been down overnight: a page of warnings about
  *  nothing anybody could act on. */
 const OUTCOME_TONE: Record<string, "success" | "neutral"> = {
   fired: "success",
   skipped_catchup: "neutral",
   skipped_paused: "neutral",
-} satisfies Record<LedgerOutcome, "success" | "neutral">;
+  skipped_superseded: "neutral",
+} satisfies Record<FireOutcome, "success" | "neutral">;
 
-/** What each outcome is called on screen — the ledger's enum is a wire value,
+/** What each outcome is called on screen: the history's enum is a wire value,
  *  and `skipped_catchup` in a pill is a column name, not a word. */
 const OUTCOME_LABEL: Record<string, string> = {
   fired: "fired",
   skipped_catchup: "skipped · missed",
   skipped_paused: "skipped · paused",
-} satisfies Record<LedgerOutcome, string>;
+  skipped_superseded: "skipped · replaced",
+} satisfies Record<FireOutcome, string>;
 
 /** An outcome as a pill: the word, the tone, and why a skip was one. */
 export function OutcomeTag({ outcome }: { outcome: string }) {
@@ -117,16 +123,17 @@ export function OutcomeTag({ outcome }: { outcome: string }) {
   );
 }
 
-/** Why a fire was skipped, for the badge's title — one sentence per skip, held
- *  to the ledger's own vocabulary by the type so a new skip cannot arrive
+/** Why a fire was skipped, for the badge's title: one sentence per skip, held
+ *  to the history's own vocabulary by the type so a new skip cannot arrive
  *  unexplained. */
 const OUTCOME_WHY: Record<string, string> = {
   skipped_catchup: "Missed, outside the catchup window",
   skipped_paused: "The seat was paused",
-} satisfies Record<Exclude<LedgerOutcome, "fired">, string>;
+  skipped_superseded: "A later fire of this schedule ran in its place",
+} satisfies Record<Exclude<FireOutcome, "fired">, string>;
 
-/** Every outcome the ledger can record. */
-type LedgerOutcome = Exclude<ScheduleRunRow["outcome"], "">;
+/** Every outcome the history can report for a fire. */
+type FireOutcome = Exclude<ScheduleRunRow["outcome"], "">;
 
 /**
  * Who a schedule wakes, in a cell: one seat by name, several by face and count.
@@ -181,12 +188,12 @@ const WOKE_FLOOR = "12rem";
 /**
  * The track an outcome column takes: its own content, whole. A grid caps a
  * content-sized column at a fifth of itself because a value like a seat's name
- * has no ceiling; an outcome does — it is one of [OUTCOME_LABEL]'s three
+ * has no ceiling; an outcome does: it is one of [OUTCOME_LABEL]'s four
  * words — so the cap only ever cut the skip pills.
  */
 const OUTCOME_WIDTH = "max-content";
 
-/** The identity a ledger row and a schedule row share. */
+/** The identity a fire and a schedule row share. */
 function identity(scopeType: string, scopeID: string, name: string): string {
   return `${scopeType}:${scopeID}:${name}`;
 }
@@ -335,7 +342,7 @@ export function ScopeCell({
   who,
 }: {
   scopeType: string;
-  /** The scope as a person reads it ([scopeName]), never the ledger's id. */
+  /** The scope as a person reads it ([scopeName]), never its id. */
   name: string;
   who: Who;
 }) {
@@ -358,7 +365,7 @@ export function ScopeCell({
 function scheduleStatus(row: ScheduleRow | undefined): ReactNode {
   if (!row) {
     return (
-      <Tag appearance="outline" title="the ledger outlives the configuration">
+      <Tag appearance="outline" title="Its history outlives the configuration">
         no longer declared
       </Tag>
     );
@@ -538,7 +545,7 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
 /** What an address that names no schedule and no fire means. */
 const NO_SCHEDULE_HINT = "It may have been removed.";
 
-/** And what the ledger outliving the configuration means, wherever it shows. */
+/** And what a history outliving the configuration means, wherever it shows. */
 const UNDECLARED_HINT = "This schedule was removed. Its history is kept for now.";
 
 export function Schedules({ scope = [] }: { scope?: string[] }) {
@@ -556,7 +563,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // each declare a "standup", and a role and a unit may both.
   const [scopeType, scopeId, scheduleName] = scope;
   const detail = Boolean(scopeType && scopeId && scheduleName);
-  // ONE SCHEDULE'S OWN HISTORY, which the company-wide ledger below cannot
+  // ONE SCHEDULE'S OWN HISTORY, which the company-wide history below cannot
   // be: `schedules.recent_runs` is fifty rows across every schedule, so
   // twenty hourly ones fill it in two and a half hours and "did the standup
   // fire this week" is unanswerable. The three segments were destructured
@@ -599,7 +606,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
     ),
   );
 
-  // The last fire per schedule, from the ledger. `Recent` returns newest
+  // The last fire per schedule, from the history. `recent_runs` is newest
   // first, so the first row per identity is the latest one.
   const lastFire = new Map<string, ScheduleRunRow>();
   for (const run of runs) if (!lastFire.has(runID(run))) lastFire.set(runID(run), run);
@@ -848,8 +855,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             name="runs"
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${runID(r)}:${r.fire_label}`}
-            // A FIRE IS NOT AN OBJECT — the ledger row has no page of its own
-            // — so a row here opens the SCHEDULE it is a fire of. That is the
+            // A FIRE IS NOT AN OBJECT (it has no page of its own), so a row
+            // here opens the SCHEDULE it is a fire of. That is the
             // question this table raises: a reader scanning the company's
             // fires stops at one and asks what it was.
             rowHref={(r) => peekHref(scheduleRef(r.scope_type, r.scope_id, r.schedule_name))}
@@ -896,7 +903,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 // WHICH SEAT this fire woke. A unit schedule targeting `each`
-                // writes one ledger row per member, so without this column
+                // fires once per member, so without this column
                 // three rows read as one fire repeated. It goes LAST of the
                 // three, after the tick, because it is the one fact about a
                 // fire the schedule it opens cannot say.
@@ -913,18 +920,18 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               {
                 key: "outcome",
                 header: "Outcome",
-                // DRAWN WHOLE: the ledger's three words are a closed set whose
-                // longest is "skipped · missed", so the track is its content
+                // DRAWN WHOLE: a fire's four words are a closed set whose
+                // longest is "skipped · replaced", so the track is its content
                 // (`OUTCOME_WIDTH`) rather than a fifth of the grid, which cut
                 // both skips to "skipped · …" beside a peek at 1280 — the one
                 // word a skip row says.
                 width: OUTCOME_WIDTH,
                 sortValue: (r) => r.outcome,
-                // A BADGE, NOT `TableStatusCell`: the ledger's two words are a
-                // dispatch vocabulary rather than a lifecycle, and this is
+                // A BADGE, NOT `TableStatusCell`: these words are a fire's
+                // outcomes rather than a lifecycle, and this is
                 // the pill the Last column above draws for the same value.
                 // AN ABSENT OUTCOME IS NOT A WORD, though — a badge reading
-                // "—" claims the ledger recorded something it did not.
+                // "—" claims the history recorded something it did not.
                 cell: (r) =>
                   r.outcome ? (
                     <OutcomeTag outcome={r.outcome} />
@@ -966,7 +973,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 }
 
 /**
- * One schedule: what it is, and every fire this node's ledger still holds.
+ * One schedule: what it is, and every fire the company's history holds for it.
  *
  * # Why this is its own read
  *
@@ -978,8 +985,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
  *
  * # A schedule the config no longer declares still has a history
  *
- * The ledger outlives the configuration: a schedule somebody removed has rows
- * until the retention sweep takes them, and this page shows them. So the
+ * The history outlives the configuration: a schedule somebody removed keeps
+ * its fires for the history's 181 days, and this page shows them. So the
  * header degrades to the identity rather than refusing — "there is no such
  * schedule" would be wrong about the rows underneath it.
  */
@@ -1143,7 +1150,7 @@ function OneSchedule({
  * # Two reads, because a schedule's definition and its history are two facts
  *
  * The DEFINITION is pushed on a config apply and arrives in the company-wide
- * `schedules` answer; the HISTORY is the dispatch ledger and is not pushed at
+ * `schedules` answer; the HISTORY is the replicated fires and is not pushed at
  * all. The rail asks for both rather than filtering the company's fifty most
  * recent fires, for the reason the page does: twenty hourly schedules fill
  * that page in two and a half hours, and a schedule whose fires fell off the
@@ -1151,8 +1158,8 @@ function OneSchedule({
  *
  * # An address with no definition behind it is not an error
  *
- * The ledger outlives the configuration. A schedule somebody removed keeps
- * its fires until the retention sweep takes them, so the rail degrades to the
+ * The history outlives the configuration. A schedule somebody removed keeps
+ * its fires for the history's 181 days, so the rail degrades to the
  * identity and says which of the two absences it is — and only an address
  * with neither a definition nor a fire is "no such schedule".
  */
@@ -1227,8 +1234,8 @@ export function SchedulePeek({ scope }: { scope: string }) {
                 <Card.Header
                   icon={<ClockGlyph size="sm" />}
                   count={runs.length}
-                  // WHICH OF THE COUNT IS DRAWN. The chip is the ledger's own
-                  // total and the rows are the newest few of it — a panel that
+                  // WHICH OF THE COUNT IS DRAWN. The chip is the history's page
+                  // and the rows are the newest few of it: a panel that
                   // said 12 over three rows and nothing else would read as a
                   // list that failed to finish rendering.
                   subtitle={runs.length > PEEK_RUNS ? `the newest ${PEEK_RUNS} of them` : undefined}

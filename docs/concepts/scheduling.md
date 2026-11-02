@@ -250,9 +250,10 @@ deliberately — that one asks "has this work been done", whose safe answer
 is to re-run, while this one asks "may I start", whose safe answer is to
 wait.
 
-`scheduled_runs` — the node's own table — stays as **this node's audit
-record** of what it dispatched, which is what the dashboard reads and what
-the retention sweep purges. It is the same split the token counter made
+`scheduled_runs` (the node's own table) stays as **this node's audit
+record** of what it dispatched, which the retention sweep purges after a
+week. The node derives every fire in it into the replicated usage history
+([Observability](#observability)), which is what the dashboard reads. It is the same split the token counter made
 when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
 `outcome` is `fired`, `skipped_catchup` or `skipped_paused`, and the schedule's
@@ -265,8 +266,8 @@ restores it.
 
 > The at-most-once guarantee lives in the coordination store, not in the
 > node's file: a node whose `scheduled_runs` table cannot be read still
-> schedules correctly, and what it loses is its own dispatch history in the
-> dashboard.
+> schedules correctly, and what it loses is the history of its own fires in
+> the dashboard.
 
 ### Missed-tick catchup
 
@@ -292,7 +293,10 @@ them. That run's brief says how many earlier fires it stands for and when
 they were due, so the seat does the duty once, as of now. Each earlier fire is
 recorded as `scheduled_fire_superseded` under its own trace, and the
 schedule's history shows it as `skipped_superseded` beside the run that took
-its place.
+its place. The seat's node publishes that record in its own day of the
+replicated usage history, and the history joins it to the fire by trace, so
+the fire reads as skipped whichever node ran the scheduler and however many
+days the seat waited.
 
 A person's pause is different: a paused seat's fires are not sent at all
 (below), so nothing waits for the resume.
@@ -426,8 +430,8 @@ on **every config apply**:
    at-most-once claim lives in the coordination store, because a scheduler
    with a process-local claim looks identical to a correct one until there
    are two nodes, and then every company gets two standups. The node's own
-   store is **not** a condition; without one the node only loses its local
-   dispatch history,
+   store is **not** a condition; without one the node only loses the
+   history of its own fires,
 3. the company actually declares at least one role or unit schedule,
 4. the company configures at least one model provider under `providers.llm`.
    A company with none is valid, but its seats hold every delivery on their
@@ -456,25 +460,39 @@ holds the `scheduler` fleet duty.
 ## Observability
 
 - **Dashboard.** **Company › Schedules** (`#/company/schedules`) lists every
-  configured schedule — name, scope (a role's seat by its handle, or a unit by
-  its key, each labelled with its name),
-  cron with what it means in words, task, whom it wakes, when it next fires
-  and how it last went — and the recent dispatch ledger below it, both
-  sortable. One schedule's own page
+  configured schedule (name, scope (a role's seat by its handle, or a unit by
+  its key, each labelled with its name), cron with what it means in words,
+  task, whom it wakes, when it next fires and how it last went) and the
+  company's recent fires below it, both sortable. One schedule's own page
   (`#/company/schedules/{scope_type}/{scope_id}/{name}`) adds its whole
   definition, the fires after the next worked out in the schedule's own zone,
-  and every fire this node's ledger still holds for it (the `schedule_runs`
-  query), because the company-wide ledger is only its newest fifty. The list is backed by
+  and its own fires (the `schedule_runs` query, fifty to a page), because the
+  company-wide list is only its newest fifty. The list is backed by
   `GET /schedules`, which serves `schedules` (the resolved schedule list with
   next-run times, projected from the current organization on each request)
-  and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the
-  product reads one shared clock rather than being baked at render.
+  and `recent_runs` (the company's 50 most recent fires). The next-fire times
+  tick as you watch: every relative time in the product reads one shared
+  clock rather than being baked at render.
+- **The history is the replicated usage domain's**
+  ([ADR-0020](../../adr/0020-a-nodes-own-day-is-a-compacted-domain.md)), not
+  the ledger of whichever node answers. Each data node derives the fires its
+  scheduler recorded, and the fires its seats did not run, into its own usage
+  day, and every data node applies every node's days, so the history is the
+  whole fleet's, outlives a node that leaves and is kept 181 days. Each fire
+  carries the tick it stands for (`scheduled_at`, `fire_label`) and what
+  became of it: `fired`, `skipped_catchup`, `skipped_paused`, or
+  `skipped_superseded` for a fire its seat did not run because a later fire
+  ran in its place (see *Fires that wait in a seat's inbox*). A node publishes
+  its day every 15 seconds while it moves, so a fire reaches the history
+  within about that long of being sent; the screen asks again every 30
+  seconds.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `scope_name`,
   `schedule_name`, `target_handle`, and `scheduled_at` — surfaced in the
   dashboard / event store.
 - The coordination store's `fires` slot is the at-most-once claim; the
-  node's `scheduled_runs` table is its own dispatch history.
+  node's `scheduled_runs` table is its own record of what it dispatched, kept
+  a week, which its usage day is derived from.
 - Structured logs: `scheduler_armed`, `scheduler_disarmed`,
   `schedules_waiting_for_a_model`, `schedule_fired`, `schedule_catchup_skipped`, `schedule_no_runners`,
   `schedule_parse_failed`, `schedule_claim_failed` and

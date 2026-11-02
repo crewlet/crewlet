@@ -1734,12 +1734,14 @@ export interface ScheduleRow {
   problem?: string;
 }
 
-/** One fire, from the at-most-once dispatch ledger.
+/** One fire, from the schedules' replicated history: every data node's fires,
+ *  each with what became of it.
  *
- *  `outcome` has exactly three values — `fired`, `skipped_catchup` and
- *  `skipped_paused` (the runner seat was paused when the fire came due) —
- *  because this is a DISPATCH ledger and not a turn-outcome one. Nothing here
- *  can say a turn failed; the turn says that. */
+ *  `outcome` is what the scheduler recorded (`fired`, `skipped_catchup`, or
+ *  `skipped_paused` for a runner seat that was paused when the fire came due),
+ *  or `skipped_superseded` for a fire its seat did not run because a later
+ *  fire of the same schedule ran in its place. None of them is a turn's
+ *  outcome: nothing here can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
   /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
@@ -1748,12 +1750,13 @@ export interface ScheduleRunRow {
    *  node is running. */
   scope_name: string;
   schedule_name: string;
-  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  /** The tick this fire stands for, as the dispatch ledger's own
+   *  at-most-once key. */
   fire_label: string;
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "";
+  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
   trace_id: string;
 }
 
@@ -1765,7 +1768,7 @@ export interface SchedulesAnswer {
   recent_runs?: ScheduleRunRow[];
 }
 
-/** One schedule's own dispatch history, newest first. */
+/** One schedule's own history, newest first. */
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;

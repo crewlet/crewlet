@@ -1,21 +1,17 @@
 package schedule
 
 import (
-	"cmp"
 	"context"
-	"slices"
 	"sync"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // MemoryLedger is the in-process [Ledger] twin.
 //
-// It is what a single-node run with no database gets, and what every test
-// runs against. It loses the one thing the SQL backend exists for — a claim
-// does not survive the process — so a fleet or a restart-tolerant deployment
-// wires the SQL ledger instead.
+// It is what the scheduler's own tests run against. The engine wires the SQL
+// ledger, or none on a node with no store (see [SharedClaimer]): the twin
+// loses the one thing the SQL backend exists for, a row that survives the
+// process.
 //
 // Correct under concurrent use, which is not a courtesy: a plain set is only
 // safe behind a single-threaded scheduler, and every one of those implicit
@@ -44,47 +40,6 @@ func (m *MemoryLedger) Claim(_ context.Context, run Run) (bool, error) {
 	return true, nil
 }
 
-// Recent returns the newest rows first, at most limit of them.
-func (m *MemoryLedger) Recent(_ context.Context, limit int) ([]Run, error) {
-	return m.recent(limit, func(Run) bool { return true }), nil
-}
-
-// RecentFor returns one schedule's newest rows first, at most limit of them.
-func (m *MemoryLedger) RecentFor(_ context.Context, scope types.ScheduleScope,
-	scopeID, name string, limit int) ([]Run, error) {
-
-	return m.recent(limit, func(r Run) bool {
-		return r.Scope == scope && r.ScopeID == scopeID && r.ScheduleName == name
-	}), nil
-}
-
-// recent is the one walk both listings take, so the total order the Ledger
-// contract names cannot hold for one of them and not the other.
-func (m *MemoryLedger) recent(limit int, keep func(Run) bool) []Run {
-	if limit <= 0 {
-		return nil
-	}
-	m.mu.Lock()
-	rows := make([]Run, 0, len(m.claim))
-	for _, run := range m.claim {
-		if keep(run) {
-			rows = append(rows, run)
-		}
-	}
-	m.mu.Unlock()
-
-	// Map iteration is deliberately randomised in Go, so the sort has to be
-	// TOTAL — not merely "newest first with ties left alone". Sorting on
-	// FiredAt only would hand a caller a different page on every call for
-	// rows written in the same millisecond, and the SQL backend, ordering
-	// the same rows by the same columns, would disagree with it.
-	slices.SortFunc(rows, byNewestThenIdentity)
-	if len(rows) > limit {
-		rows = rows[:limit]
-	}
-	return rows
-}
-
 // Purge drops rows fired strictly before the cutoff, and their claim keys
 // with them.
 func (m *MemoryLedger) Purge(_ context.Context, before time.Time) (int, error) {
@@ -103,19 +58,4 @@ func (m *MemoryLedger) Purge(_ context.Context, before time.Time) (int, error) {
 		}
 	}
 	return dropped, nil
-}
-
-// byNewestThenIdentity is the ordering both backends answer Recent in. See
-// [Ledger.Recent] for why the tiebreak is part of the contract.
-func byNewestThenIdentity(a, b Run) int {
-	if c := b.FiredAt.Compare(a.FiredAt); c != 0 {
-		return c
-	}
-	return cmp.Or(
-		cmp.Compare(a.Scope, b.Scope),
-		cmp.Compare(a.ScopeID, b.ScopeID),
-		cmp.Compare(a.ScheduleName, b.ScheduleName),
-		cmp.Compare(a.FireLabel, b.FireLabel),
-		cmp.Compare(a.TargetHandle, b.TargetHandle),
-	)
 }

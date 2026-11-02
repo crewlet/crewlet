@@ -2027,8 +2027,10 @@ units:
 | `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn, its executor's run included (default `1800`, half an hour: [why](../concepts/scheduling.md#hard-wall-clock-timeout)) |
 | `catchup` | bool | no | Fire one recent missed tick on restart (default `true`) |
 
-> Scheduling requires a database (for the at-most-once `scheduled_runs`
-> ledger). Schedules are **not** inherited by child units.
+> The at-most-once claim on every fire lives in the fleet's
+> [coordination store](../concepts/coordination.md); each node's own
+> `scheduled_runs` table records what it dispatched, and the schedules'
+> history is derived from it. Schedules are **not** inherited by child units.
 
 ---
 

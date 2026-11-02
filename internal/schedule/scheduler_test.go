@@ -118,11 +118,7 @@ func (c *countingLedger) count() int {
 
 func (c *countingLedger) rows(t *testing.T) []Run {
 	t.Helper()
-	rows, err := c.inner.Recent(t.Context(), 100)
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	return rows
+	return c.inner.Rows()
 }
 
 // --- fixtures -------------------------------------------------------------
