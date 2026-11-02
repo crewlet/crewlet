@@ -1405,10 +1405,11 @@ one `git rev-list` over the repository's whole history, each object it names
 looked up in the index of every pack old enough to rewrite, and every
 build is a walk of it from every tip kept. Each is admitted in the node's
 maintenance lane at room for that walk, 240 bytes an object of the whole
-repository as a clone without a bitmap takes, and for the delta window beside
-it, six times `code.limits.max_blob_bytes` (300 MiB by default); a build adds
-550 bytes an object of the packs it sorts, as a merge does, and the scan the
-same of the packs it weighs. A node whose
+repository as a clone without a bitmap takes. The scan adds what its indexes
+hold, 29 bytes an object of the packs it weighs and 44 more an object of the
+largest of them; a build adds the delta window, six times
+`code.limits.max_blob_bytes` (300 MiB by default), and 550 bytes an object
+of the packs it sorts, as a merge does. A node whose
 budget cannot hold that refuses the expunge and asks again at every pass.
 Nothing is refused at once, but what no ref reaches keeps counting against
 `code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,

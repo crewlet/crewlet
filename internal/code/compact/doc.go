@@ -348,7 +348,9 @@
 // publication's repack's charge (cache.Cache.AdmitExpunge): a merge's figure
 // an object of what they sort, beside a clone's room of the WHOLE repository
 // and the delta window, since the walk reads the whole history whatever few
-// packs it sorts; the due scan at the room and the window alone. A refused
+// packs it sorts; the due scan, which sorts nothing and searches no delta,
+// at the room and the indexes it holds alone (cache.Cache.AdmitExpungeScan,
+// [indexBytes]). A refused
 // expunge refuses no push at once, but what no ref reaches keeps counting
 // against code.limits.repo_max_bytes until a node with the room serves it.
 // Once the begin has applied, EVERY OUTPUT IS ADOPTED from the build's scratch

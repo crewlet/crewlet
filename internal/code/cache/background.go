@@ -143,9 +143,10 @@ func compactionCharge(inputs int64, limits code.Limits) int64 {
 // a walk: `pack-objects --revs` from every tip it keeps reads every commit,
 // tree and blob those reach — the repository's whole history, whichever packs
 // it sorts — as a clone without a bitmap walks it, at the transfer's figure an
-// object (gitproc.TransferBytesPerObject). A due scan is admitted here too, at
-// no input: the walk's room and the window alone. A node whose budget cannot
-// hold the charge is refused it (ErrNoMemory); the expunge is asked again at
+// object (gitproc.TransferBytesPerObject). A due scan is not admitted here:
+// it sorts nothing and searches no delta, so it takes the walk's room and
+// the indexes it holds alone ([Cache.AdmitExpungeScan]). A node whose budget
+// cannot hold the charge is refused it (ErrNoMemory); the expunge is asked again at
 // every pass, and a git node with more memory serves it once it becomes the
 // repository's maintainer. Its refusal refuses no push at once, as a
 // compaction's does at the pack bound, but it is no publication's mere
