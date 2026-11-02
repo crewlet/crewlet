@@ -1498,7 +1498,11 @@ const (
 	// under 0.1 KiB, with the debounce moving out of its own chunk into the
 	// shared links chunk. The receipt's own styles were already in the one
 	// sheet with 0.89.0. 5291 KiB.
-	treeBudget = 5<<20 + 171<<10
+	// What waits in a seat's inbox, on the Running turns row and in the In
+	// a box row's caption ("1 person waiting", "4 waiting"), took it from
+	// 5290.7 KiB to 5291.1 KiB (+0.4 KiB): the chunk the running-turn row
+	// ships in +0.3 KiB and Live's +0.1 KiB. 5292 KiB.
+	treeBudget = 5<<20 + 172<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
