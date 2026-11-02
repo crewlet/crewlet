@@ -307,6 +307,11 @@ type writing struct {
 	// its budget of git run time (build.go's budget and charge).
 	metered bool
 	left    time.Duration
+	// landNeed is what the last landing's deadline rule held the caller's
+	// deadline to — code.MinProposeAttempt and its bundle's upload — and 0
+	// before one, or for a caller with no deadline: a merge's measure of
+	// the landing a rebuild would make again (merge.go's roomToRebuild).
+	landNeed time.Duration
 	// opens is the change the write's push opens as its build formed it —
 	// a revert_change's "Revert <repo>!<n>" — and nil for every other kind.
 	opens *code.ChangeOption
@@ -761,6 +766,7 @@ func (wr *writing) deadlineRule(ctx context.Context, sc *cache.Scratch) (code.En
 		}
 		need += min(code.UploadDeadline(ref.Size), code.WriteUploadAllowance)
 	}
+	wr.landNeed = need
 	if left := time.Until(deadline); left < need {
 		return wr.refused(code.RefusalBusy, fmt.Sprintf("this write's caller left %s for its upload and "+
 			"proposal, under the %s they take; ask again", left.Round(time.Millisecond), need)), true, nil

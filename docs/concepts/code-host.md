@@ -7106,7 +7106,8 @@ person — an override's reason, at most 1 KiB.
 3. **Built onto the tip the copy holds**, in a scratch beside the copy, under
    one unit of the node's seat git-work share and **thirty seconds of git** —
    the budget a change's [mergeability](#mergeability) is merged in, since it
-   is the same merge. A `fast_forward` builds nothing: the tip must be an
+   is the same merge — for the merge as a whole: every rebuild below draws on
+   the same thirty seconds. A `fast_forward` builds nothing: the tip must be an
    ancestor of the head, or it is refused `not_fast_forward`. A `merge` or a
    `squash` runs one `git merge-tree --write-tree` of the tip and the head —
    histories sharing no commit merge from the empty tree, as the
@@ -7133,13 +7134,22 @@ person — an override's reason, at most 1 KiB.
    again onto the tip a sync at the log's head finds — at most **four
    times**; moved under the fifth build too, it is answered `target_moving`:
    the branch moves faster than a merge is built onto it, and its queue, or a
-   quieter moment, lands it. A merge built from a copy taken before an expunge
-   of the repository began is refused `expunging` and built again the same
-   way, from a copy synced past it.
+   quieter moment, lands it. A rebuild is started only where it fits, the
+   round before it its measure: what is left of the merge's thirty seconds of
+   git must hold the git that round ran, and what is left of the router's
+   attempt the share's wait and three reads' at their budget, that git, and
+   the upload and proposal that round's landing was held to. A merge with no
+   room for one is
+   answered `target_moving` at once, with its rebuilds so far, as is a
+   rebuild that runs out what the builds before it left — rather than a build
+   that ends `unready` and sends the next git node to merge it from scratch,
+   or a landing refused `busy`. A merge built from a copy taken before an
+   expunge of the repository began is refused `expunging` and built again the
+   same way, from a copy synced past it.
 
 A router gives a merge **102 seconds** on one git node — an engine write's 82
-with its ten seconds of build replaced by the merge's thirty — and every other
-write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
+with its ten seconds of build replaced by the merge's thirty, which its
+rebuilds share — and every other write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
 `crewlet.code.host.write.duration`'s `build` stage times its builds, every
 rebuild included.
 

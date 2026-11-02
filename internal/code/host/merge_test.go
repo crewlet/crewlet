@@ -622,6 +622,91 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 	}
 }
 
+// A MERGE IS BUILT AGAIN ONLY WHERE ITS ONE BUDGET AND ITS ATTEMPT HOLD A
+// ROUND: its git is code.MergeBuildDeadline across every round together — the
+// one build the router's attempt holds — so a merge whose target moves under
+// every build is answered target_moving, nothing more asked of the committer,
+// once what is left of that budget is less than the git its last round ran:
+// its merge-tree charged four seconds of a ten-second budget, it is built
+// twice, and the six seconds left after the first hold a rebuild while the two
+// after the second do not. And where what its caller's deadline leaves cannot
+// hold another round's waits, its git and the upload and proposal its first
+// landing was held to, it is built once. Never a round started to end unready
+// during its build, which sends the walk's runner-up git node to merge it
+// from scratch, or busy at its landing. The change stays open.
+//
+// Mutations: give every round the whole budget again → four rebuilds, five
+// records asked, red; start a rebuild the budget cannot hold → its git runs
+// out the budget on a second rebuild, red; start one the attempt cannot hold
+// → five records asked, red.
+func TestAMergeIsBuiltAgainOnlyWithinItsOneBudgetAndAttempt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// budget scales the merge's budget of git and its merge-tree's
+		// charge, and deadline the caller's attempt; zero leaves each as it
+		// is.
+		budget, mergeTree time.Duration
+		deadline          bool
+		// rebuilds is how many times the merge is built again, and says
+		// what its answer names as having stopped it.
+		rebuilds int
+		says     string
+	}{
+		{name: "its budget of git", budget: 10 * time.Second, mergeTree: 4 * time.Second, rebuilds: 1,
+			says: "of the 10s of git a merge is given"},
+		{name: "its attempt", deadline: true, says: "its caller left"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &movingMain{moves: code.MergeRecomputes + 1}
+			c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: m.wrap}},
+				codetest.Settings(), map[string]string{"README.md": "one\n"})
+			m.move = func(i int) {
+				c.p.Commit(c.work, map[string]string{fmt.Sprintf("main-%d.md", i): "moved\n"}, "move main")
+				c.MustPush(c.p, c.work, "main")
+			}
+			if tc.budget > 0 {
+				host.SetBuildBudget(c.server(), tc.budget)
+				host.SlowGit(c.server(), tc.mergeTree, "merge-tree")
+			}
+			n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Chase main")
+			head := c.change(n).Head
+			w := merge(c.repo, pat(), n, head, code.MergeMethodMerge)
+			w.Override = "chasing a moving main"
+			ctx := c.Ctx
+			if tc.deadline {
+				// ROOM FOR ONE LANDING AND NOT ONE MORE ROUND: what the deadline
+				// rule holds the first landing to — its proposal and its
+				// upload's allowance, which a bundle of a few hundred bytes
+				// reaches whole (code.UploadDeadline's first byte alone is
+				// past it) — and four seconds for the round to reach it, short
+				// of the eight seconds of the share's and three reads' waits a
+				// second round needs on top of them.
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(c.Ctx, code.MinProposeAttempt+code.WriteUploadAllowance+
+					4*time.Second)
+				defer cancel()
+			}
+			res, err := c.server().Write(ctx, w)
+			if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalTargetMoving ||
+				res.Merge.Recomputes != tc.rebuilds || !strings.Contains(res.Merge.Detail, tc.says) {
+				t.Fatalf("a merge with no room to build again answered %+v %v (%+v), want target_moving after %d "+
+					"rebuilds, saying %q", res, err, res.Merge, tc.rebuilds, tc.says)
+			}
+			m.mu.Lock()
+			asked := m.asked
+			m.mu.Unlock()
+			if asked != tc.rebuilds+1 {
+				t.Errorf("the merge asked %d records, want %d: one a build", asked, tc.rebuilds+1)
+			}
+			if ch := c.change(n); ch.State != code.ChangeStateOpen {
+				t.Errorf("change %d is %s, want open", n, ch.State)
+			}
+		})
+	}
+}
+
 // expungingBuilds answers the first refusals merges it is asked refused
 // expunging, deciding nothing — as the committer refuses a merge whose
 // builder's copy held another drop epoch than the repository's, an expunge

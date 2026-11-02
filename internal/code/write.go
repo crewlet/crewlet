@@ -544,16 +544,20 @@ const (
 	WriteBuildDeadline = 10 * time.Second
 
 	// MergeBuildDeadline is a merge_change's whole build — its ancestry, its
-	// one `merge-tree --write-tree`, its commit and its pack: THIRTY
-	// SECONDS, three of a write's own (code/home's MergeabilityDeadline is
+	// one `merge-tree --write-tree`, its commit and its pack, and every
+	// rebuild's onto a target that moved (MergeRecomputes) together, never
+	// this much a round, since the estate's attempt on a git node holds one
+	// build term: THIRTY SECONDS, three of a write's own (code/home's MergeabilityDeadline is
 	// this constant), since the one merge-tree a merge runs is the one a
 	// change's mergeability is recorded by, merging the same two commits —
 	// the merge base found, both sides diffed against it, their changes
 	// merged — and BenchmarkMergeability measures it (code/home's doc: 125 ms
 	// for 1 000 files changed both ways, some 240 times inside). PROVISIONAL
 	// as that deadline is: what moves it is a production merge whose p99
-	// nears it. A merge past it is too_large, a change to merge in a coding
-	// box.
+	// nears it. A merge whose first build runs past it is too_large, a
+	// change to merge in a coding box; a rebuild that runs out what the
+	// builds before it left is target_moving, its change no larger than its
+	// first build proved it.
 	MergeBuildDeadline = 3 * WriteBuildDeadline
 
 	// MergeRecomputes is how many times a merge_change is built again onto a
@@ -562,6 +566,10 @@ const (
 	// branch moving under five consecutive builds is a branch moving faster
 	// than its merges are built — a queue's work (M5-D9), or a person's —
 	// and a fifth rebuild would only spend the attempt the write is given.
+	// A bound, not a promise: every rebuild draws on the one
+	// MergeBuildDeadline and must fit what is left of the write's attempt,
+	// or the merge is answered target_moving with fewer (internal/code/host's
+	// merge.go).
 	MergeRecomputes = 4
 
 	// MaxRebaseCommits is the most commits one rebase_change replays: A

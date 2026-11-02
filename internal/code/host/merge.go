@@ -75,6 +75,25 @@ import (
 // linearizable sync brings past the begin, and answered expunging where
 // every rebuild meets it: a begin is rare and its sync quick, so one rebuild
 // almost always lands it.
+//
+// EVERY ROUND DRAWS ON ONE BUDGET, AND FITS ONE ATTEMPT. The merge's git is
+// code.MergeBuildDeadline across its first build and every rebuild together,
+// never that much a round: the router sizes the write's attempt on a git node
+// for ONE build of it (internal/estate's Timing.GitWriteAttemptFor), so five
+// rounds of thirty seconds each would run past the attempt on exactly the
+// busy target rebuilds exist for — answered unready during a build, which
+// sends the walk's runner-up git node to start the whole merge again, or busy
+// at the landing, either after builds and stored bundles nobody proposes. So
+// a rebuild is started only where it fits — the round before it as the
+// measure of it, since it merges the same change onto a tip moved by a push
+// or two: what is left of the budget must hold the git that round ran, and
+// what is left of the attempt the waits the attempt holds for one write (the
+// share's, and three reads' at a read's budget each), that git, and the
+// upload and proposal that round's landing was held to (the deadline rule's)
+// — and a merge with no room for one is answered target_moving with its
+// rebuilds so far, as is a rebuild whose git runs out the budget the rounds
+// before it left: the change is no larger than its first build proved it,
+// its target moved under it.
 
 // mergeCarrying is p as its landing proposes it: carrying pack — the bundle
 // its landing stored, nil for a merge that stores none — as its record names
@@ -108,10 +127,17 @@ type mergeVerdict struct {
 
 // runMerge is a merge_change's steps from its sync on: judged, built, landed —
 // and built again onto a target that moved under it, or from a copy an
-// expunge's begin overtook, at most code.MergeRecomputes times.
+// expunge's begin overtook, at most code.MergeRecomputes times, every round
+// drawing on the merge's ONE budget of git and started only where it fits
+// what is left of that budget and of the write's attempt (roomToRebuild).
 func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
+	// ONE BUDGET FOR EVERY ROUND (code.MergeBuildDeadline): charged by each
+	// round's git and never given afresh, so the merge's git is the one
+	// build its attempt was sized for.
+	wr.left = s.buildBudget(wr.w.Kind)
+	var again *code.MergeAnswer
 	for recomputes := 0; ; recomputes++ {
 		syncStart := s.now()
 		j, res, done, err := wr.judgeMerge(ctx, fresh)
@@ -123,24 +149,76 @@ func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error)
 			res, err = wr.enqueue(ctx, j)
 			return withRecomputes(res, recomputes), err
 		}
-		res, again, err := wr.buildAndLandMerge(ctx, j)
-		if err != nil || again == nil {
+		before := wr.left
+		res, refused, err := wr.buildAndLandMerge(ctx, j)
+		if errors.Is(err, errBuildSpent) {
+			if recomputes == 0 {
+				return wr.spent(), nil
+			}
+			// A REBUILD RAN OUT WHAT THE ROUNDS BEFORE IT LEFT: the change
+			// built within its budget once; its target kept moving.
+			return withRecomputes(wr.notRebuilt(again, recomputes, fmt.Sprintf("its rebuilds ran out the %s of "+
+				"git a merge is given", s.buildBudget(wr.w.Kind))), recomputes), nil
+		}
+		if err != nil || refused == nil {
 			return withRecomputes(res, recomputes), err
 		}
-		if recomputes == code.MergeRecomputes && again.Refusal == code.MergeRefusalExpunging {
-			return withRecomputes(code.EngineWriteResult{Merge: again}, recomputes), nil
-		}
+		again = refused
 		if recomputes == code.MergeRecomputes {
-			return withRecomputes(code.EngineWriteResult{Merge: &code.MergeAnswer{
-				Refusal: code.MergeRefusalTargetMoving,
-				Detail: fmt.Sprintf("%s moved under this merge's build %d times running: it moves faster than a "+
-					"merge is built onto it — merge again once it is quieter", wr.w.Ref, recomputes+1)}},
-				recomputes), nil
+			return withRecomputes(wr.notRebuilt(again, recomputes+1, ""), recomputes), nil
+		}
+		if why := wr.roomToRebuild(ctx, before-wr.left); why != "" {
+			return withRecomputes(wr.notRebuilt(again, recomputes+1, why), recomputes), nil
 		}
 		// THE TIP THE DECIDE HELD is at or past the log's head as this node
 		// reads it next: built again onto what a linearizable sync finds.
 		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
+}
+
+// notRebuilt is the answer to a merge built builds times and not again, why
+// saying what stopped it ("" for code.MergeRecomputes rebuilds spent): the
+// last record's own refusal where it was expunging — the copies every build
+// met — and target_moving where its target moved under each build.
+func (wr *writing) notRebuilt(last *code.MergeAnswer, builds int, why string) code.EngineWriteResult {
+	if last != nil && last.Refusal == code.MergeRefusalExpunging {
+		return code.EngineWriteResult{Merge: last}
+	}
+	stopped := ""
+	if why != "" {
+		stopped = ", and " + why
+	}
+	return code.EngineWriteResult{Merge: &code.MergeAnswer{Refusal: code.MergeRefusalTargetMoving,
+		Detail: fmt.Sprintf("%s moved under this merge's build %d times running%s: it moves faster than a merge "+
+			"is built onto it — merge again once it is quieter", wr.w.Ref, builds, stopped)}}
+}
+
+// roomToRebuild is why the merge cannot be built again — "" where it can —
+// judged with the round just landed, whose git ran lastGit, as the measure of
+// the next: what is left of the merge's budget of git must hold lastGit, and
+// what is left of the write's attempt the waits an engine write's attempt
+// holds beside its build (internal/estate's GitWriteAttempt: the share's
+// code.GitShareWait, and three at a read's budget each — the sync, the read
+// of a moved head as the write's own push, the sync at the log's head a
+// refusal is judged at — each this host's syncWait), the build's lastGit,
+// and the upload and proposal the last landing was held to (writing.landNeed,
+// the deadline rule's). A caller with no deadline holds any.
+func (wr *writing) roomToRebuild(ctx context.Context, lastGit time.Duration) string {
+	s := wr.s
+	if wr.left < lastGit {
+		return fmt.Sprintf("its builds left %s of the %s of git a merge is given, under the %s its last ran",
+			max(wr.left, 0).Round(time.Millisecond), s.buildBudget(wr.w.Kind), lastGit.Round(time.Millisecond))
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ""
+	}
+	need := code.GitShareWait + 3*s.syncWait + lastGit + wr.landNeed
+	if left := time.Until(deadline); left < need {
+		return fmt.Sprintf("its caller left %s, under the %s another build and landing take",
+			left.Round(time.Millisecond), need.Round(time.Millisecond))
+	}
+	return ""
 }
 
 // withRecomputes is res with how many times its merge was built again.
@@ -547,14 +625,15 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 }
 
 // buildMergeShared is a merge's build under one unit of the node's seat
-// git-work share and its kind's budget of git run time
-// (code.MergeBuildDeadline): a fast-forward's ancestry, or a merge's or a
-// squash's merge, commit and pack. Past code.GitShareWait the share is
-// unready, about this node; a build that runs its whole budget is too_large.
+// git-work share and what is left of its budget of git run time
+// (code.MergeBuildDeadline, every round's together: runMerge gives it once):
+// a fast-forward's ancestry, or a merge's or a squash's merge, commit and
+// pack. Past code.GitShareWait the share is unready, about this node; a build
+// that runs out the budget is errBuildSpent, which runMerge answers.
 func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	code.EngineWriteResult, bool, error) {
 
-	s, w := wr.s, wr.w
+	s := wr.s
 	release, err := s.o.Share.Take(ctx, code.SeatWorkWrite)
 	if err != nil {
 		if code.AnswerDue(ctx) {
@@ -564,12 +643,9 @@ func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j me
 		return "", code.EngineWriteResult{}, true, err
 	}
 	defer release()
-	wr.metered, wr.left = true, s.buildBudget(w.Kind)
+	wr.metered = true
 	commit, res, done, err := wr.buildMerge(ctx, sc, j)
 	wr.metered = false
-	if errors.Is(err, errBuildSpent) {
-		return "", wr.spent(), true, nil
-	}
 	return commit, res, done, err
 }
 
