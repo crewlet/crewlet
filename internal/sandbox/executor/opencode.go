@@ -245,7 +245,8 @@ func newOpenCodeSession() string {
 func (OpenCode) Session(req sandbox.RunRequest) Session {
 	if req.Resume != "" {
 		return Session{ID: "ses_" + strings.TrimPrefix(req.Resume, "ses_"), Continues: true,
-			Fresh: "ses_" + newOpenCodeSession()}
+			Fresh:    "ses_" + newOpenCodeSession(),
+			Replaces: req.Carried != nil && req.Carried.Replace}
 	}
 	return Session{ID: "ses_" + newOpenCodeSession()}
 }
@@ -556,7 +557,14 @@ func openCodeSessionGate(session Session, paths Paths) string {
 	// the box's copy is kept unless the export is one it does not hold, which
 	// then replaces it.
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
-	line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h= own=1; fi`, digests)
+	if session.Replaces {
+		// A COPY ITS RUN WAS CUT OFF IN is replaced by the export whatever it
+		// holds: it may hold a step that never settled, which an export
+		// leaves out (only settled messages are exported, transfer.ts).
+		line(`if [ -n "$h" ] && [ -s %s ]; then h= own=1; fi`, carried)
+	} else {
+		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h= own=1; fi`, digests)
+	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
@@ -574,9 +582,14 @@ func openCodeSessionGate(session Session, paths Paths) string {
 	line(`  fi`)
 	line(`fi`)
 	line(`rm -f %s`, carried)
-	line(`if [ -n "$w" ]; then sid=%s k=no; printf '%%s%%s\n' %s "$w" >&2; fi`, q(session.Fresh),
+	// A NEW SESSION IS HANDED THE BRIEF WRITTEN FOR ONE, where the run was
+	// given it: the brief on the script's stdin, which `opencode run` reads,
+	// continues a session OpenCode does not hold ([sandbox.RunRequest.FreshBrief]).
+	line(`if [ -n "$w" ]; then sid=%s k=no; printf '%%s%%s\n' %s "$w" >&2; [ ! -s %s ] || exec < %s; fi`,
+		q(session.Fresh),
 		q("crewlet: this run was asked to continue the OpenCode session "+session.ID+
-			", and starts a new session, "+session.Fresh+", instead: "))
+			", and starts a new session, "+session.Fresh+", instead: "),
+		q(paths.FreshBrief()), q(paths.FreshBrief()))
 	return b.String()
 }
 

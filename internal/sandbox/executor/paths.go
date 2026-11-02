@@ -164,6 +164,13 @@ func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
+// FreshBrief is where a run asked to continue a session has the brief written
+// that a session of its own is handed instead ([sandbox.RunRequest.FreshBrief]):
+// its script points its harness's stdin at it where it finds the session
+// neither held by its box nor restorable, and starts a new one — so a new
+// session is never handed a brief written for a model that remembers.
+func (p Paths) FreshBrief() string { return p.WorkDir() + "/brief-fresh.md" }
+
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
 // are written for its harness to add to its own system prompt: named on Claude
 // Code's command line, listed in the configuration an OpenCode run is handed

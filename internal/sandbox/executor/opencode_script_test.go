@@ -218,6 +218,10 @@ type scriptOpts struct {
 	// the session ([executor.Paths.SessionDigests]), as a box that packed
 	// or restored that export keeps it.
 	ownsCarried bool
+	// freshBrief, where set, is the brief a session of the run's own is
+	// handed, written where [executor.Paths.FreshBrief] names it as a run's
+	// start would have written it ([sandbox.RunRequest.FreshBrief]).
+	freshBrief string
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -314,6 +318,11 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 		if o.ownsCarried {
 			keepDigest(t, paths, session.ID, packed)
+		}
+	}
+	if o.freshBrief != "" {
+		if err := os.WriteFile(paths.FreshBrief(), []byte(o.freshBrief), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
 	command := executor.OpenCode{}.Command(o.req, session, paths, "")

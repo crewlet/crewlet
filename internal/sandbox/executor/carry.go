@@ -216,18 +216,38 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
 	}
 	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
-	switch {
-	case archive.Harness != r.harness.Name():
-		check.Why = fmt.Sprintf("the session was written by %q, and this box runs %s: a session is "+
-			"continued only by the harness that wrote it", archive.Harness, r.harness.Name())
-	case archive.Format != carries.ArchiveFormat():
-		check.Why = fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
-			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
-	default:
-		check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
+	if restores, why := r.Restores(archive); !restores {
+		check.Why = why
+		return check, nil
 	}
+	check.Continues, check.Why = carries.Continues(check.Version, archive.Version)
 	return check, nil
 }
+
+// Restores reports whether this runner restores archive at all
+// ([sandbox.SessionRestorer]): written by its own harness, in the one format it
+// packs, by a release whose sessions another box continues — everything
+// [Runner.CheckCarry] decides but the box's own release, which only the box can
+// say. The one answer a launch and every reader of whether a session can be
+// continued take ([sandbox.ContinuityOf]), so neither restates the floors.
+func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
+	carries, ok := r.harness.(carrier)
+	switch {
+	case !ok:
+		return false, r.harness.Name() + " carries no session between boxes"
+	case archive.Harness != r.harness.Name():
+		return false, fmt.Sprintf("the session was written by %q, and this runner drives %s: a session "+
+			"is continued only by the harness that wrote it", archive.Harness, r.harness.Name())
+	case archive.Format != carries.ArchiveFormat():
+		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
+			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
+	}
+	// THE WRITER'S FLOOR ALONE: a box release that cannot be read is taken
+	// for a current one, so an empty one asks nothing of the box.
+	return carries.Continues("", archive.Version)
+}
+
+var _ sandbox.SessionRestorer = (*Runner)(nil)
 
 // carriedOlder is the reason a box's release cannot continue a session a newer
 // one wrote, shared by both harnesses: a release reads what it and those before it

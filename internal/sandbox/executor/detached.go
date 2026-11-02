@@ -184,6 +184,13 @@ type Session struct {
 	// does not hold creates and then answers as if it remembered
 	// ([sandbox.Result.Continued]). "" for a run that continues nothing.
 	Fresh string
+
+	// Replaces says the archive carried in replaces the box's own copy of
+	// the session even where that copy already holds it
+	// ([sandbox.CarriedSession.Replace]): the copy is one its harness was cut
+	// off in. False for a run carried no archive, or one whose box keeps a
+	// copy that holds it.
+	Replaces bool
 }
 
 // resumer is a harness that continues a session an earlier run reported.
@@ -465,7 +472,7 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried()}
 	// The stream too, where it lives apart from the result: it is only
@@ -613,6 +620,14 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if out.BriefOnStdin {
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
+		}
+		// AND THE BRIEF A SESSION OF ITS OWN IS HANDED, for a run that
+		// continues one: its script points its harness at it where it starts
+		// a new session in the one's place ([sandbox.RunRequest.FreshBrief]).
+		if session.Continues && req.FreshBrief != "" {
+			if err = box.WriteFile(ctx, paths.FreshBrief(), []byte(req.FreshBrief)); err != nil {
+				return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief a new session is handed: %w", err)
+			}
 		}
 	}
 
