@@ -1007,7 +1007,13 @@ func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) e
 		}
 		b.segs = append(b.segs, g)
 		builder = &codeindex.Builder{}
-		return b.merge()
+		if err := b.merge(); err != nil {
+			return err
+		}
+		if k := b.c.knobs; k != nil && k.indexPlaced != nil {
+			k.indexPlaced(b.c.maps.count())
+		}
+		return nil
 	}
 	for _, oid := range fresh {
 		if err := ctx.Err(); err != nil {

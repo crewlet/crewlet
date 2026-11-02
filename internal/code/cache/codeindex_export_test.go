@@ -65,6 +65,18 @@ func IndexReadingWith(fn func(blobs int)) func(*Options) {
 	}
 }
 
+// IndexPlacedWith makes each build of a code index by the cache Open builds
+// tell fn, after each segment it places and merges, how many mappings the
+// node holds (knobs.indexPlaced).
+func IndexPlacedWith(fn func(mapped int)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.indexPlaced = fn
+	}
+}
+
 // IndexSegmentBytesWith makes each build of a code index by the cache Open
 // builds write a segment once it has read n bytes of source, in place of
 // codeindex.SegmentSourceBytes (knobs.indexSegmentBytes).

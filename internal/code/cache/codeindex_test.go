@@ -170,6 +170,58 @@ func TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd(t *testing.T) {
 	}
 }
 
+// A BUILD READS WHAT IT PLACED THROUGH MAPPINGS IT GIVES BACK: an index built
+// as eight one-file segments, merged as each is written, opens every segment
+// it placed over a mapping of the placed file — never the bytes it wrote,
+// held in the heap until it committed — and holds a mapping only of the
+// segments it still reads: a merge's two inputs go as it is placed, so the
+// build holds no more mappings than segments, and none once it is over.
+//
+// Mutations: keep a merge's inputs mapped until the build ends, and the build
+// holds a mapping a segment it ever placed, red; drop nothing at the build's
+// end, and its mappings outlive it, red.
+func TestABuildReadsWhatItPlacedThroughMappingsItGivesBack(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	files := map[string]string{}
+	for i := range 8 {
+		word := string(rune('a' + i))
+		files[word+".txt"] = strings.Repeat(word+" "+strings.Repeat(word, 3)+"\n", 8)
+	}
+	w.push(t, repo, "refs/heads/main", files)
+	var mu sync.Mutex
+	var placed []int
+	c := w.open(t, cache.IndexSegmentBytesWith(1), cache.IndexPlacedWith(func(mapped int) {
+		mu.Lock()
+		defer mu.Unlock()
+		placed = append(placed, mapped)
+	}))
+	s := w.sync(t, c, repo)
+	before, _ := cache.MappedRuns(c)
+	indexOf(t, c, s, cache.IndexBuilt)
+	after, _ := cache.MappedRuns(c)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(placed) != len(files) {
+		t.Fatalf("the build placed %d segments, want one a file: %d", len(placed), len(files))
+	}
+	// Merged as each is written, eight equal segments keep at most
+	// 2·log2(8) = 6, and the build maps no more of them than that.
+	for i, n := range placed {
+		if n-before > 6 {
+			t.Errorf("after its segment %d the build held %d mappings, past the 6 segments it keeps", i+1,
+				n-before)
+		}
+	}
+	if slices.Max(placed) == before {
+		t.Error("the build mapped none of the segments it placed: it read them from somewhere else")
+	}
+	if after != before {
+		t.Errorf("the node holds %d mappings after the build and held %d before it", after, before)
+	}
+}
+
 // THE INDEX SKIPS BINARIES AND LARGE FILES (M6-D12), by the one rule git grep
 // -I keeps too: a file past codeindex.MaxFileBytes is never read — its size,
 // from ls-tree -l, is enough — and a binary one is read and recorded skipped,
