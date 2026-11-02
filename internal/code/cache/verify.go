@@ -182,7 +182,7 @@ func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("cache: verify %s: %w", repoID, ErrNotHeld)
 	}
-	held := c.pin(e, inc, SyncNone)
+	held := c.pin(e, inc)
 	label := cmp.Or(inc.repo.Name, repoID)
 	mem := verifyCharge(inc)
 	e.mu.Unlock()

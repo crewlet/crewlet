@@ -528,7 +528,7 @@ func (c *Cache) run(e *entry, r *round) {
 	)
 	if errors.As(err, &h) {
 		e.mu.Lock()
-		held = c.pin(e, h.inc, SyncNone)
+		held = c.pin(e, h.inc)
 		e.running = nil
 		c.start(e)
 		e.mu.Unlock()
@@ -679,7 +679,7 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) roundRepair {
 		case w.gone:
 			c.answer(e, w, nil, "", d)
 		case w.checks:
-			w.got, w.damage, w.found = c.pin(e, d.inc, SyncNone), d, r.found
+			w.got, w.damage, w.found = c.pin(e, d.inc), d, r.found
 			close(w.done)
 		default:
 			asking = append(asking, w)

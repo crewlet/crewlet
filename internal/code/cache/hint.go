@@ -277,7 +277,7 @@ func (c *Cache) packCheck(e *entry, inc *incarnation, h gitproc.Hint, rows *snap
 		inc.packChecks = map[string]*packCheck{}
 	}
 	inc.packChecks[h.Pack] = check
-	pinned := c.pin(e, inc, SyncNone)
+	pinned := c.pin(e, inc)
 	go func() {
 		defer c.leave()
 		defer pinned.Release()

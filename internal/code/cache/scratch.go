@@ -244,7 +244,7 @@ func (c *Cache) NewLayerScratch(ctx context.Context, s Synced, id string, base i
 
 	dir := filepath.Join(c.dir, scratchDir, id+".git")
 	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
-		c.release(e, inc, noReader)
+		c.release(e, inc)
 		if errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("%w: %s already exists: a publication id names one scratch, once", ErrInvalid, dir)
 		}
@@ -408,7 +408,7 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 
 	dir := filepath.Join(c.dir, scratchDir, name+".git")
 	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
-		c.release(e, inc, noReader)
+		c.release(e, inc)
 		if errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("%w: %s already exists: an id names one scratch, once", ErrInvalid, dir)
 		}
@@ -626,7 +626,7 @@ func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
 
 	dir := filepath.Join(c.dir, scratchDir, name+".git")
 	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
-		c.release(e, inc, noReader)
+		c.release(e, inc)
 		if errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("%w: %s already exists: an id names one scratch, once", ErrInvalid, dir)
 		}
@@ -820,7 +820,7 @@ func (s *Scratch) discard() {
 		c.leave()
 		c.kick()
 	}
-	c.release(s.e, s.inc, noReader)
+	c.release(s.e, s.inc)
 }
 
 // Spool is a file a request's body that outgrew memory is written to: a
