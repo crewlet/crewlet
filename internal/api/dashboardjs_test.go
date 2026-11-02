@@ -1518,7 +1518,17 @@ const (
 	// rather than of lib/scroller.ts, which the shell imports, and a
 	// transcript's prose takes the shared .prose rule rather than a rule of
 	// its own in the one sheet. 5339 KiB.
-	treeBudget = 5<<20 + 219<<10
+	// Settings › MCP & tools' add and edit wizard (its source, name,
+	// connection, sign-in, test and review steps, the Test and Replace value
+	// dialogs), net of the Add dialog and its form helpers it replaces, took
+	// it from 5338.8 KiB to 5381.5 KiB (+42.7 KiB): the settings chunk
+	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
+	// setup wizard, key and value rows, source editor and file drop the
+	// wizard is the first settings screen to draw), and 5.6 KiB less of
+	// shared code Rollup moved between chunks and of the Add dialog's rules
+	// out of the one sheet. The page is all in the settings chunk, so the
+	// initial load did not grow. 5382 KiB.
+	treeBudget = 5<<20 + 262<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
