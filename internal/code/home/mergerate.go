@@ -44,14 +44,18 @@ import (
 // queue drained — or for one window at most, after which it counts nothing
 // the current window asked: what an old home holds once its repository moved
 // on lapses with it, and the next reading forgets it ([mergeRate.reading]).
+//
+// KEYED BY REPOSITORY, then by target: a turn's [mergeRate.seen] walks only
+// its own repository's targets, so a pass over the R repositories with a
+// queue costs each turn its own targets. A flat map keyed by the pair made
+// every turn's seen walk every target this node holds, under the lock every
+// concurrent turn's measure takes: R turns of N targets each, a pass.
 type mergeRate struct {
-	mu      sync.Mutex
-	targets map[rateKey]*rateTarget
-}
-
-// rateKey is one target of one repository.
-type rateKey struct {
-	repo, target string
+	mu sync.Mutex
+	// targets is each repository's targets by their ref. An inner map is
+	// never left empty, so the outer one holds only the repositories with a
+	// target timed or measured.
+	targets map[string]map[string]*rateTarget
 }
 
 // rateTarget is one target's timing and its last measurement.
@@ -80,15 +84,20 @@ type timedRound struct {
 	took  time.Duration
 }
 
-// target is key's entry, made for a first use. Held under r.mu.
-func (r *mergeRate) target(key rateKey) *rateTarget {
+// target is repoID's target's entry, made for a first use. Held under r.mu.
+func (r *mergeRate) target(repoID, target string) *rateTarget {
 	if r.targets == nil {
-		r.targets = map[rateKey]*rateTarget{}
+		r.targets = map[string]map[string]*rateTarget{}
 	}
-	t, ok := r.targets[key]
+	repo, ok := r.targets[repoID]
+	if !ok {
+		repo = map[string]*rateTarget{}
+		r.targets[repoID] = repo
+	}
+	t, ok := repo[target]
 	if !ok {
 		t = &rateTarget{}
-		r.targets[key] = t
+		repo[target] = t
 	}
 	return t
 }
@@ -98,7 +107,7 @@ func (r *mergeRate) target(key rateKey) *rateTarget {
 func (r *mergeRate) built(repoID, target, train string, at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	t := r.target(rateKey{repoID, target})
+	t := r.target(repoID, target)
 	t.train, t.built = train, at
 }
 
@@ -107,7 +116,7 @@ func (r *mergeRate) built(repoID, target, train string, at time.Time) {
 func (r *mergeRate) landed(repoID, target, train string, at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	t, ok := r.targets[rateKey{repoID, target}]
+	t, ok := r.targets[repoID][target]
 	if !ok || t.train != train || t.train == "" {
 		return
 	}
@@ -125,7 +134,7 @@ func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	t := r.target(rateKey{repoID, d.TargetRef})
+	t := r.target(repoID, d.TargetRef)
 	from := now.Add(-code.MergeRateWindow)
 	t.rounds = slices.DeleteFunc(t.rounds, func(x timedRound) bool { return x.ended.Before(from) })
 	if t.train != "" && (len(d.Train) == 0 || d.Train[0].Train != t.train) {
@@ -160,13 +169,22 @@ func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
 
 // seen drops every target of repoID a turn that read all of its queue work
 // did not meet: a target with no live entry left, whose queue has drained.
+// It walks repoID's own targets alone, and drops the repository once none is
+// left.
 func (r *mergeRate) seen(repoID string, met []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for key := range r.targets {
-		if key.repo == repoID && !slices.Contains(met, key.target) {
-			delete(r.targets, key)
+	repo, ok := r.targets[repoID]
+	if !ok {
+		return
+	}
+	for target := range repo {
+		if !slices.Contains(met, target) {
+			delete(repo, target)
 		}
+	}
+	if len(repo) == 0 {
+		delete(r.targets, repoID)
 	}
 }
 
@@ -187,17 +205,22 @@ func (r *mergeRate) reading(now time.Time, out *statelog.Reading) {
 	from := now.Add(-code.MergeRateWindow)
 	var over int
 	var worst *rateTarget
-	for key, t := range r.targets {
-		if (t.at.IsZero() || t.at.Before(from)) && (t.train == "" || t.built.Before(from)) {
-			delete(r.targets, key)
-			continue
+	for repoID, repo := range r.targets {
+		for target, t := range repo {
+			if (t.at.IsZero() || t.at.Before(from)) && (t.train == "" || t.built.Before(from)) {
+				delete(repo, target)
+				continue
+			}
+			if t.at.IsZero() || t.at.Before(from) || t.asked <= t.capacity {
+				continue
+			}
+			over++
+			if worst == nil || furtherPast(t, worst) {
+				worst = t
+			}
 		}
-		if t.at.IsZero() || t.at.Before(from) || t.asked <= t.capacity {
-			continue
-		}
-		over++
-		if worst == nil || furtherPast(t, worst) {
-			worst = t
+		if len(repo) == 0 {
+			delete(r.targets, repoID)
 		}
 	}
 	out.CodeMergeRateOver = over

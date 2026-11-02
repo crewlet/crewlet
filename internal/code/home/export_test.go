@@ -76,5 +76,9 @@ func MergeChange(ctx context.Context, l *Loop, repoID string, due code.ChangeDue
 func MergeRateTargets(l *Loop) int {
 	l.merges.rate.mu.Lock()
 	defer l.merges.rate.mu.Unlock()
-	return len(l.merges.rate.targets)
+	var n int
+	for _, repo := range l.merges.rate.targets {
+		n += len(repo)
+	}
+	return n
 }
