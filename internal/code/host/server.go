@@ -374,9 +374,16 @@ type Server struct {
 	// syncWait bounds an engine write's wait on its sync and on its push's
 	// outcome (statelog.ReadBudget), and buildBudget the git run time a
 	// write of each kind is given for its build (code.EngineWriteKind's
-	// BuildDeadline) — fields so the suite can scale them (export_test.go).
-	syncWait    time.Duration
-	buildBudget func(code.EngineWriteKind) time.Duration
+	// BuildDeadline), chainMerges what a chain's merges are given together
+	// (code.MergeBuildDeadline; chain.go), chainPack what its pack is given
+	// (code.ChainPackDeadline) and chainObjects the uncompressed bytes its
+	// entries may write (code.MaxChainObjectBytes) — fields so the suite can
+	// scale them (export_test.go).
+	syncWait     time.Duration
+	buildBudget  func(code.EngineWriteKind) time.Duration
+	chainMerges  time.Duration
+	chainPack    time.Duration
+	chainObjects int64
 
 	// runRequests is every coding run's requests in flight here, by its
 	// launch, under runsMu (boxlimit.go).
@@ -421,7 +428,8 @@ func New(o Options) (*Server, error) {
 	}
 	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes,
 		checkProposal: code.Proposal.ValidateUnstored, runGit: o.Git.Run, syncWait: statelog.ReadBudget,
-		buildBudget: code.EngineWriteKind.BuildDeadline}
+		buildBudget: code.EngineWriteKind.BuildDeadline, chainMerges: code.MergeBuildDeadline,
+		chainPack: code.ChainPackDeadline, chainObjects: code.MaxChainObjectBytes}
 	if s.log == nil {
 		s.log = logging.Get("code.host")
 	}

@@ -14,6 +14,24 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
+// A TURN HOLDS A WHOLE CHAIN: the queue builds its train in its turn, one
+// Backstop, so the git a chain is given at the most (code.ChainBuildDeadline:
+// its merges and its pack) leaves a third of the turn — twenty seconds — for
+// what the turn does around it: its due read before it, and the bundle's
+// store and the candidate record after it, each well under a second in the
+// common case. A chain given more would be cut by its turn's end with its
+// work thrown away, and every turn after it would build it to the same cut.
+//
+// Mutation: give a chain's pack as long as its merges (code.ChainPackDeadline
+// thirty seconds) → sixty of a sixty-second turn, red.
+func TestATurnHoldsAWholeChain(t *testing.T) {
+	t.Parallel()
+	if room := home.Backstop - code.ChainBuildDeadline; room < home.Backstop/3 {
+		t.Errorf("a chain is given %s of git in a turn of %s, leaving %s for the turn's reads, store and record; "+
+			"want a third of the turn at least", code.ChainBuildDeadline, home.Backstop, room)
+	}
+}
+
 // busyRepo is an estate whose first read of one repository's due changes
 // waits for the case to let it go, keeping the freshness of every read of
 // them and how many ran at once.

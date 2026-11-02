@@ -229,7 +229,10 @@ func BatchOf(waiting, depth, batch int) int {
 }
 
 // build builds a train of d's live entries onto its tip as one chain and
-// records it, ejecting the entries the chain skipped.
+// records it, ejecting the entries the chain skipped. A chain is never
+// refused whole: an entry it did not reach within its time
+// (code.ChainBuildDeadline) or its objects' bound (code.MaxChainObjectBytes)
+// is absent from its answer, and stays queued for the train after this one.
 func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at statelog.Position) error {
 	about := fmt.Sprintf("target %s at %s", d.TargetRef, short(d.Tip))
 	if d.Tip == code.ZeroOID {
@@ -262,8 +265,6 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		w.log.Debug("code_queue_chain_refused", "repo", repoID, "about", about, "refusal", built.Status,
 			"detail", built.Detail)
 		return nil
-	case built.Refusal != "":
-		return fmt.Errorf("home: build the train of %s: %s: %s", about, built.Refusal, built.Detail)
 	}
 	applied := false
 	defer func() {
@@ -279,10 +280,14 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		switch {
 		case c.Skipped == "":
 			kept = append(kept, c)
-		case c.Skipped == code.WriteConflict || c.Skipped == code.WriteTooLarge:
+		case c.Skipped == code.WriteConflict || c.Skipped == code.WriteTooLarge ||
+			c.Skipped == code.WriteRejectedObject:
 			// A MERGE THAT CANNOT BE BUILT is its entry's conflict: one
-			// past its own build's budget is as unbuildable as one git
-			// marks, and named with no paths.
+			// past a merge's own budget or pack bound, or past the objects a
+			// chain may hold (code.MaxChainObjectBytes) alone, or one
+			// writing an object git's check refuses, is as unbuildable as
+			// one git marks, and named with no paths — left queued, every
+			// train after this one would skip it again.
 			x := code.Ejection{EntryID: c.EntryID, Reason: code.EjectConflict}
 			for _, conflict := range c.Conflicts {
 				if len(x.Paths) < code.MaxEjectedPaths && code.ConflictPathCarried(conflict.Path) &&

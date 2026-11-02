@@ -387,3 +387,63 @@ func RecordGit(s *Server) func() []gitproc.Cmd {
 		return slices.Clone(cmds)
 	}
 }
+
+// GitTook has s total the run time of every process it hands the pool from now
+// on whose arguments start with args, and answers a reader of that total and
+// of how many there were. Set before s's first request.
+func GitTook(s *Server, args ...string) func() (time.Duration, int) {
+	var (
+		mu    sync.Mutex
+		total time.Duration
+		runs  int
+	)
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		res, err := run(ctx, c)
+		if len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
+			mu.Lock()
+			total, runs = total+res.Took, runs+1
+			mu.Unlock()
+		}
+		return res, err
+	}
+	return func() (time.Duration, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		return total, runs
+	}
+}
+
+// SetChainMerges scales what a chain's merges are given together after its
+// first entry, which is always given a merge's whole budget (chain.go).
+func SetChainMerges(s *Server, d time.Duration) { s.chainMerges = d }
+
+// SetChainObjects scales the uncompressed bytes a chain's entries may write
+// together, and each alone (code.MaxChainObjectBytes; chain.go).
+func SetChainObjects(s *Server, n int64) { s.chainObjects = n }
+
+// SetChainPack scales what a chain's pack is given (code.ChainPackDeadline;
+// chain.go): BenchmarkBuildChain's past-bound arm lifts it to measure a pack
+// no chain may make.
+func SetChainPack(s *Server, d time.Duration) { s.chainPack = d }
+
+// RefuseObjectOnce has s answer its next `index-pack --strict` as the relay's
+// check refusing object id — the trace and the words a real refusal carries —
+// without running it, and run every later one. Set before s's first request.
+func RefuseObjectOnce(s *Server, id string) {
+	var once sync.Once
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		refuse := false
+		if len(c.Args) >= 2 && c.Args[0] == "index-pack" && c.Args[1] == "--strict" {
+			once.Do(func() { refuse = true })
+		}
+		if !refuse {
+			return run(ctx, c)
+		}
+		return gitproc.Result{Exit: 128, Stderr: "error: object " + id + ": badDate: invalid author/committer " +
+				"line - bad date\nfatal: fsck error in packed object\n",
+				Trace: gitproc.Trace{Formats: []string{"fsck error in packed object"}}},
+			fmt.Errorf("index-pack exited 128")
+	}
+}

@@ -560,8 +560,9 @@ var cacheWriters = []writerRow{
 			"files, written into its scratch; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " pack-objects",
 		"an engine write's one pack (`--stdout`), and a chain's, of its scratch's loose objects into a file " +
-			"staged in its scratch — pack-objects writes a repository only with a base name, so the row is " +
-			"argued for what the build does with its output", nil},
+			"staged in its scratch, and a chain entry's objects packed past their loose bound only to be counted " +
+			"(chain.go's entryObjects, into no file) — pack-objects writes a repository only with a base name, so " +
+			"the row is argued for what the build does with its output", nil},
 	{"internal/code/host/build.go", kindGit + " index-pack",
 		"an engine write's pack and a chain's (`--strict --stdin`) indexed into its scratch's objects/pack under " +
 			"the relay's own fsck; it enters a cache only by Adopt, once its row has applied — a chain's by its " +

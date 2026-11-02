@@ -3,6 +3,7 @@ package host
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1578,34 +1579,84 @@ func fitConflicts(res code.EngineWriteResult, conflicts []code.Conflict, omitted
 // refused at the door. A pack past code.MaxWritePackBytes is too_large; an
 // object the check refuses is rejected_object, in git's own words.
 func (b *building) pack(ctx context.Context) (code.EngineWriteResult, bool, error) {
-	return b.packWithin(ctx, code.MaxWritePackBytes, func(size int64) string {
-		return fmt.Sprintf("this change's pack is %s, past the %s one engine write may store "+
-			"(code.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
-			humanBytes(size),
-			humanBytes(code.MaxWritePackBytes))
-	})
+	res, _, done, err := b.packWithin(ctx, code.MaxWritePackBytes, writePackTooLarge)
+	return res, done, err
+}
+
+// writePackTooLarge is the sentence of an engine write's pack of size bytes
+// past code.MaxWritePackBytes — a merge_change's, and a chain's entry held to
+// the same bound (chain.go), in the same words.
+func writePackTooLarge(size int64) string {
+	return fmt.Sprintf("this change's pack is %s, past the %s one engine write may store "+
+		"(code.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
+		humanBytes(size),
+		humanBytes(code.MaxWritePackBytes))
 }
 
 // packWithin is pack under a bound of the build's own: a pack past bound
 // bytes is too_large, tooLarge its sentence of the pack's size — a chain's is
-// code.MaxChainPackBytes, every entry's merge at a merge_change's bound
-// (chain.go).
+// code.MaxChainPackBytes (chain.go). With a rejected_object it answers the
+// object git's check named first ("" where its words named none), so a chain
+// skips the one entry that wrote it.
 func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(size int64) string) (
-	code.EngineWriteResult, bool, error) {
+	code.EngineWriteResult, string, bool, error) {
 
 	wr := b.wr
 	ids, err := looseObjects(filepath.Join(b.sc.Dir, "objects"))
 	if err != nil {
-		return code.EngineWriteResult{}, true, err
+		return code.EngineWriteResult{}, "", true, err
 	}
 	if len(ids) == 0 {
-		return code.EngineWriteResult{}, false, nil
+		return code.EngineWriteResult{}, "", false, nil
 	}
 	out, err := b.create("pack")
 	if err != nil {
-		return code.EngineWriteResult{}, true, err
+		return code.EngineWriteResult{}, "", true, err
 	}
 	packPath := out.Name()
+	err = b.packObjects(ctx, ids, out, "pack of the change's objects")
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return code.EngineWriteResult{}, "", true, err
+	}
+	info, err := os.Stat(packPath)
+	if err != nil {
+		return code.EngineWriteResult{}, "", true, err
+	}
+	if info.Size() > bound {
+		return wr.changeRefused(code.WriteTooLarge, tooLarge(info.Size())), "", true, nil
+	}
+	in, err := os.Open(packPath)
+	if err != nil {
+		return code.EngineWriteResult{}, "", true, err
+	}
+	defer func() { _ = in.Close() }()
+	left, err := wr.budget()
+	if err != nil {
+		return code.EngineWriteResult{}, "", true, err
+	}
+	res, err := wr.s.runGit(ctx, gitproc.Cmd{
+		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"index-pack", "--strict", "--stdin"},
+		Config: []gitproc.KV{{Key: "pack.indexVersion", Value: "2"}, {Key: "pack.writeReverseIndex", Value: "true"}},
+		Stdin:  in, Class: gitproc.ClassRead, Deadline: left,
+	})
+	if err != nil && res.Damage == nil && refusedByFsck(res) {
+		wr.charge(res)
+		return wr.changeRefused(code.WriteRejectedObject, fsckWords(res)), fsckObject(res), true, nil
+	}
+	if err = wr.failed(ctx, "check of the change's objects", res, err); err != nil {
+		return code.EngineWriteResult{}, "", true, err
+	}
+	return code.EngineWriteResult{}, "", false, nil
+}
+
+// packObjects is ONE `pack-objects` of ids, in the build's scratch, into out,
+// within what is left of the build's budget — what was named, `what`, in a
+// failure's words.
+func (b *building) packObjects(ctx context.Context, ids []string, out io.Writer, what string) error {
+	wr := b.wr
 	var stdin bytes.Buffer
 	for _, id := range ids {
 		stdin.WriteString(id)
@@ -1613,8 +1664,7 @@ func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(si
 	}
 	left, err := wr.budget()
 	if err != nil {
-		_ = out.Close()
-		return code.EngineWriteResult{}, true, err
+		return err
 	}
 	// AN OBJECT LIST, never revs and never --thin, so no delta leans on an
 	// object outside the pack; one thread and no reuse, so two nodes building
@@ -1624,40 +1674,15 @@ func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(si
 		Args:  []string{"pack-objects", "--threads=1", "--no-reuse-object", "-q", "--stdout"},
 		Stdin: &stdin, Stdout: out, Class: gitproc.ClassRead, Deadline: left,
 	})
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err = wr.failed(ctx, "pack of the change's objects", res, err); err != nil {
-		return code.EngineWriteResult{}, true, err
-	}
-	info, err := os.Stat(packPath)
-	if err != nil {
-		return code.EngineWriteResult{}, true, err
-	}
-	if info.Size() > bound {
-		return wr.changeRefused(code.WriteTooLarge, tooLarge(info.Size())), true, nil
-	}
-	in, err := os.Open(packPath)
-	if err != nil {
-		return code.EngineWriteResult{}, true, err
-	}
-	defer func() { _ = in.Close() }()
-	if left, err = wr.budget(); err != nil {
-		return code.EngineWriteResult{}, true, err
-	}
-	res, err = wr.s.runGit(ctx, gitproc.Cmd{
-		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"index-pack", "--strict", "--stdin"},
-		Config: []gitproc.KV{{Key: "pack.indexVersion", Value: "2"}, {Key: "pack.writeReverseIndex", Value: "true"}},
-		Stdin:  in, Class: gitproc.ClassRead, Deadline: left,
-	})
-	if err != nil && res.Damage == nil && refusedByFsck(res) {
-		wr.charge(res)
-		return wr.changeRefused(code.WriteRejectedObject, fsckWords(res)), true, nil
-	}
-	if err = wr.failed(ctx, "check of the change's objects", res, err); err != nil {
-		return code.EngineWriteResult{}, true, err
-	}
-	return code.EngineWriteResult{}, false, nil
+	return wr.failed(ctx, what, res, err)
+}
+
+// counted is an io.Writer that keeps nothing and counts what it was given.
+type counted int64
+
+func (c *counted) Write(p []byte) (int, error) {
+	*c += counted(len(p))
+	return len(p), nil
 }
 
 // refusedByFsck reports an index-pack the relay's own check stopped: git's
@@ -1682,6 +1707,48 @@ func fsckWords(res gitproc.Result) string {
 		}
 	}
 	return "an object this change makes is one git's own check refuses: " + res.LastLine()
+}
+
+// fsckObject is the object git's check refused first, as fsckWords reads its
+// line — `error: object <id>: …` — and "" where no line names one.
+func fsckObject(res gitproc.Result) string {
+	for line := range strings.Lines(res.Stderr) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "error: object "); ok {
+			if id, _, _ := strings.Cut(rest, ":"); gitref.ValidOID(id) {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// looseSize is the size, uncompressed, of the loose object at path, as its
+// header states it — `<type> <size>` and a NUL, the first bytes its deflate
+// holds — so a chain weighs what an entry wrote by the bytes its pack will
+// deflate and check without reading any object whole.
+func looseSize(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	z, err := zlib.NewReader(f)
+	if err != nil {
+		return 0, fmt.Errorf("host: loose object %s: %w", path, err)
+	}
+	defer func() { _ = z.Close() }()
+	// A HEADER IS AT MOST 32 BYTES: the longest type, "commit", a space, a
+	// size of at most twenty digits and the NUL.
+	header, err := bufio.NewReaderSize(z, 32).ReadSlice(0)
+	if err != nil {
+		return 0, fmt.Errorf("host: loose object %s has no header: %w", path, err)
+	}
+	_, size, ok := strings.Cut(string(header[:len(header)-1]), " ")
+	n, perr := strconv.ParseInt(size, 10, 64)
+	if !ok || perr != nil || n < 0 {
+		return 0, fmt.Errorf("host: loose object %s has the header %q", path, header)
+	}
+	return n, nil
 }
 
 // looseObjects is every loose object under objects — the scratch's own, which
