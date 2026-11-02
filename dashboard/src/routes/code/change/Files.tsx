@@ -62,10 +62,17 @@ import type {
   CodeDiffFile,
   CodeFindingPlace,
   CodeFindingRow,
+  CodeRevisionRow,
 } from "~/protocol/index.ts";
 import { PatchPager } from "../PatchPager.tsx";
 import { ReplyComposer, Thread } from "./Conversation.tsx";
-import { CHANGE_POLL_MS, changePartParams, useChangePart } from "./reads.ts";
+import {
+  changePartParams,
+  partMovedBy,
+  revisionInputs,
+  useAskAgainWhenMoved,
+  useChangePart,
+} from "./reads.ts";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -100,7 +107,14 @@ interface Placed {
   place: CodeFindingPlace | undefined;
 }
 
-export function Files({ change }: { change: CodeChangeDetail }) {
+export function Files({
+  change,
+  revisions: rows,
+}: {
+  change: CodeChangeDetail;
+  /** The detail's page of revisions, newest first: what each diff is read from. */
+  revisions: readonly CodeRevisionRow[];
+}) {
   const [revParam, setRev] = useParam("rev", "", "filter");
   const [sinceParam, setSince] = useParam("since", "", "filter");
   const [fileParam, setFile] = useParam("file", "", "filter");
@@ -117,6 +131,11 @@ export function Files({ change }: { change: CodeChangeDetail }) {
   const sinceAsked = wholeParam(sinceParam);
   const since = sinceAsked !== null && sinceAsked < rev ? sinceAsked : null;
   const file = fileParam || threadRoot?.anchor?.path || "";
+  // THE DIFF IS ASKED AGAIN ONLY WHEN WHAT IT IS READ FROM MOVES: the
+  // revisions' heads and the bases their facts record (reads.ts).
+  const diffMoved = `${change.version}/${revisionInputs(rows, rev)}/${
+    since !== null ? revisionInputs(rows, since) : ""
+  }`;
   // THE REVISION'S FILES, EVERY PAGE THE READER ASKS FOR: a revision of a
   // large change lists past one answer (a few hundred files a page), and each
   // later page is the `files` part's own question from the cursor the page
@@ -129,7 +148,7 @@ export function Files({ change }: { change: CodeChangeDetail }) {
       }),
     [change.repo, change.number, rev, since],
   );
-  const files = useCodeQuery("code_change", filesParams, { pollMs: CHANGE_POLL_MS });
+  const files = useCodeQuery("code_change", filesParams);
   const pagedFiles = usePaged(
     files,
     filesParams,
@@ -138,7 +157,15 @@ export function Files({ change }: { change: CodeChangeDetail }) {
     fileId,
     nextOf,
   );
-  const findings = useChangePart(change, "findings", { revision: rev });
+  // Every page the reader holds is asked again: a moved input is a new listing.
+  useAskAgainWhenMoved(diffMoved, true, pagedFiles.refresh);
+  const findings = useChangePart(
+    change,
+    "findings",
+    { revision: rev },
+    true,
+    `${partMovedBy(change, "findings")}/${revisionInputs(rows, rev)}`,
+  );
   // A FINDING IS DRAFTED ON THE HEAD, read whole: the lines a review of the
   // head judges, never an interdiff's or an earlier revision's.
   const drafting = rev === change.revision && since === null && changeLive(change.state);
@@ -253,6 +280,7 @@ export function Files({ change }: { change: CodeChangeDetail }) {
               comments={comments.data?.comments ?? []}
               drafts={drafting ? drafts : null}
               thread={thread}
+              moved={diffMoved}
             />
           ) : (
             <p className="muted">Choose a file to read its changes.</p>
@@ -276,6 +304,7 @@ function FileDiff({
   comments,
   drafts,
   thread,
+  moved,
 }: {
   change: CodeChangeDetail;
   rev: number;
@@ -288,10 +317,12 @@ function FileDiff({
   comments: readonly CodeCommentRow[];
   drafts: ReviewDrafts | null;
   thread: string;
+  /** What the patch is read from, as `Files` keys it. */
+  moved: string;
 }) {
   const params = useMemo(
-    // THE CHANGE BY ITS NAME: a poll hands in a new detail of the same change,
-    // which is the same question.
+    // THE CHANGE BY ITS NAME: a new detail of the same change is the same
+    // question.
     () =>
       changePartParams({ repo: change.repo, number: change.number }, "diff", {
         revision: rev,
@@ -300,15 +331,14 @@ function FileDiff({
       }),
     [change.repo, change.number, rev, path, since],
   );
-  const patch = useCodeQuery("code_change", params, {
-    enabled: !entry?.binary,
-    pollMs: CHANGE_POLL_MS,
-  });
+  const patch = useCodeQuery("code_change", params, { enabled: !entry?.binary });
   // EVERY PAGE OF THE PATCH the reader asks for, each its part's own question
   // from the cursor the page before it ended at (`lib/patchPages.ts`).
   const { paged, hunks } = usePatchPages(patch, params, (cursor) =>
     codeRest.query("code_change", { ...params, cursor }),
   );
+  // Every page held is asked again when what the patch is read from moves.
+  useAskAgainWhenMoved(moved, !entry?.binary, paged.refresh);
   const [pick, setPick] = useState<Pick | null>(null);
   const ofFile: Placed[] = findings
     .filter((f) => f.path === path)

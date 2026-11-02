@@ -7783,7 +7783,13 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   reference is short for, and the engine's own REST path — reads the change a
   part at a time (`code_change`): its detail rides the first page of its
   revisions, and each tab asks the part it draws, every one a code question at
-  the tab's floor. **Conversation** is the readiness, the description, and the
+  the tab's floor. The detail is the one read on a clock, every minute; a part
+  is asked again only when the detail says what it reads moved — for a
+  revision's files and a file's patch, git reads on the repository's home git
+  node, the change's version and the revision's head and the base its facts
+  record (which a retarget's new facts move after the version), and the
+  change's and its conversation's versions for every other part.
+  **Conversation** is the readiness, the description, and the
   timeline in the order the records landed on the code log — each review with
   its verdict and summary, each thread by its first comment with its replies
   under it, each revision pushed — never by a clock a node read, with the

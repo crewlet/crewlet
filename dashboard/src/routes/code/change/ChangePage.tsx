@@ -140,7 +140,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         {tab === "conversation" && (
           <Conversation change={change} revisions={read.data?.revisions ?? []} />
         )}
-        {tab === "files" && <Files change={change} />}
+        {tab === "files" && <Files change={change} revisions={read.data?.revisions ?? []} />}
         {tab === "commits" && <Commits change={change} revisions={read.data?.revisions ?? []} />}
         {tab === "checks" && <Checks change={change} />}
         {tab === "provenance" && <Provenance change={change} />}

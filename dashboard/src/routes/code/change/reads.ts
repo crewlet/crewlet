@@ -13,36 +13,59 @@
  * first page's question).
  * The one set read to its end is the reader's own standing findings, which a
  * review DECIDES (`useStandingFindings`).
+ *
+ * # A part is read again when the detail says it moved, never on a clock
+ *
+ * The page's detail read (`ChangePage`) is the one read on a clock
+ * ({@link CHANGE_POLL_MS}), and it carries what every part is a function of:
+ * the change's `version`, which every record that changes its row counts — a
+ * pushed revision, a retarget, its life — and its conversation's, which every
+ * record on its conversation counts (`code.ConversationRow.Version`), and
+ * beside them its newest revisions, each with the facts its home recorded. A
+ * part is asked again, quietly, when what it reads moves, and not otherwise.
+ * The `files` and `diff` parts above all: each is a git read on the
+ * repository's home git node, holding a share of its read lane that pushes and
+ * clones need too, and its answer is a function of the revision's head and the
+ * base its facts record ({@link revisionInputs}) — facts its home records
+ * again in a record of its own (`code/revise.go`: a retarget's new facts of
+ * the same revision replace the row, after the record that moved the change's
+ * version) — so it is asked again when either moves. Polled,
+ * every open Files tab redid that diff each minute for an answer that could not
+ * change. A revision whose base its home has not recorded yet is refused
+ * `unavailable` with the engine's wait, which `useRest` honours, so a part that
+ * waits on the home's facts is read again without a clock of its own.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import {
   isAbort,
   QueryError,
   type CodeChangeDetail,
   type CodeFindingRow,
+  type CodeRevisionRow,
   type LogRefusal,
   type QueryRefusal,
 } from "~/protocol/index.ts";
 
 /**
- * How often an open change is read again: a MINUTE, the workspace's cadence on
- * the code log, which has no push to the dashboard — a seat's review reaches
- * the open page by this read or by the reader's own press, which asks again
- * at once.
+ * How often an open change's detail is read again: a MINUTE, the workspace's
+ * cadence on the code log, which has no push to the dashboard — a seat's
+ * review reaches the open page by this read or by the reader's own press,
+ * which asks again at once. Every part follows the detail (the file's doc).
  */
 export const CHANGE_POLL_MS = 60_000;
 /** The most rows a part's page reads: the engine's own bound for the conversation's parts. */
 export const PART_PAGE = 200;
 
-/** A part of a change the page reads. */
-export type ChangePart = "reviewers" | "comments" | "reviews" | "findings" | "files" | "diff";
+/** A part of a change, as the page asks for it. */
+export type ChangePartName =
+  "reviewers" | "comments" | "reviews" | "findings" | "standing" | "files" | "diff";
 
 /** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
 export function changePartParams(
   change: Pick<CodeChangeDetail, "repo" | "number">,
-  part: ChangePart,
+  part: ChangePartName,
   extra: Readonly<Record<string, string | number | undefined>> = {},
 ) {
   const listed = part !== "files" && part !== "diff";
@@ -55,17 +78,59 @@ export function changePartParams(
   };
 }
 
-/** One part of a change, as its tab reads it. */
+/**
+ * What a part's answer is a function of, as the detail read says it, where its
+ * reader names nothing finer: the change's version for `files` and `diff`,
+ * which no conversation record moves, and the change's and its conversation's
+ * versions for every other part.
+ */
+export function partMovedBy(change: CodeChangeDetail, part: ChangePartName): string {
+  if (part === "files" || part === "diff") return String(change.version);
+  return `${change.version}/${change.conversation?.version ?? 0}`;
+}
+
+/**
+ * What revision `n`'s files are read from, as the detail's revisions say it:
+ * its head and the base its facts record — `pending` before its home has
+ * recorded them, "" for a revision older than the detail's page, which the
+ * change's version alone then answers for.
+ */
+export function revisionInputs(revisions: readonly CodeRevisionRow[], n: number): string {
+  const r = revisions.find((one) => one.n === n);
+  if (!r) return "";
+  return `${r.head}:${r.facts ? (r.facts.base_oid ?? "unrelated") : "pending"}`;
+}
+
+/**
+ * Ask a read again, quietly, when what it is read from — `moved` — changes,
+ * and not on its first render, which asked it already. `again` is the read's
+ * own way to ask: a part's `refetch`, or a paged read's `refresh`, which asks
+ * every page the reader holds again, since a diff whose inputs moved is a
+ * different diff on every page.
+ */
+export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () => void) {
+  const askedAt = useRef(moved);
+  useEffect(() => {
+    if (askedAt.current === moved) return;
+    askedAt.current = moved;
+    if (enabled) again();
+  }, [moved, enabled, again]);
+}
+
+/**
+ * One part of a change, as its tab reads it: asked again when what it reads
+ * moves — `moved`, where the tab names it finer than {@link partMovedBy}.
+ */
 export function useChangePart(
   change: CodeChangeDetail,
-  part: ChangePart,
+  part: ChangePartName,
   extra: Readonly<Record<string, string | number | undefined>> = {},
   enabled = true,
+  moved: string = partMovedBy(change, part),
 ) {
-  return useCodeQuery("code_change", changePartParams(change, part, extra), {
-    enabled,
-    pollMs: CHANGE_POLL_MS,
-  });
+  const read = useCodeQuery("code_change", changePartParams(change, part, extra), { enabled });
+  useAskAgainWhenMoved(moved, enabled, read.refetch);
+  return read;
 }
 
 /**

@@ -26,10 +26,12 @@ import { withDerived } from "~/test/org.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
+import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
   sessionStorage.clear();
@@ -438,6 +440,68 @@ test("a refused standing read holds the review until it is read again", async ()
   fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
   await waitFor(() => expect(acted).toHaveLength(1));
   expect(acted[0]!.args.carries).toEqual(["f-mine"]);
+});
+
+// A DIFF IS READ ONCE FOR WHAT IT IS A FUNCTION OF: a revision's files and a
+// file's patch are git reads on the home git node whose answer moves only
+// with the revision's head and the base its facts record, so minutes on the
+// Files tab ask neither again while the detail says neither has moved — and a
+// version the detail moves asks both again, as a base its facts record anew
+// does. Mutation: poll the files or diff part on a clock again, or drop the
+// re-ask on the version or on the facts, and this fails.
+test("the Files tab asks for a diff again only when the change moves", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let base = HEAD;
+  const facts = () => ({
+    n: 2,
+    head: HEAD,
+    pusher: "dev",
+    pusher_kind: "agent",
+    position: POSITION,
+    at: "2026-10-27T10:00:00Z",
+    facts: { target_ref: "refs/heads/main", target_oid: HEAD, base_oid: base, touched: ["app.go"] },
+  });
+  stubEngine(
+    () => detail({ version }),
+    () => json({}),
+    {
+      "": () =>
+        json({
+          position: POSITION,
+          level: "session",
+          change: detail({ version }),
+          revisions: [facts()],
+        }),
+    },
+  );
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  expect(await screen.findByText("1 outdated on this file")).toBeTruthy();
+  const askedFor = (part: string) =>
+    changeAsked.filter((u) => u.searchParams.get("part") === part).length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  await waitFor(() => expect(askedFor("diff")).toBe(1));
+  expect(askedFor("files")).toBe(1);
+
+  const before = details();
+  for (let minute = 0; minute < 3; minute++) {
+    await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  }
+  await waitFor(() => expect(details()).toBeGreaterThanOrEqual(before + 3));
+  expect(askedFor("files")).toBe(1);
+  expect(askedFor("diff")).toBe(1);
+
+  version = 6;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(askedFor("files")).toBe(2));
+  await waitFor(() => expect(askedFor("diff")).toBe(2));
+
+  // A RETARGET'S NEW FACTS land in a record of the home's own, after the one
+  // that moved the version: the base they record moves the diff too.
+  base = "fedcba9876543210fedcba9876543210fedcba98";
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(askedFor("files")).toBe(3));
+  await waitFor(() => expect(askedFor("diff")).toBe(3));
 });
 
 // A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with
