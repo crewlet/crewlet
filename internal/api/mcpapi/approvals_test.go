@@ -72,7 +72,7 @@ func approvalSurface(t *testing.T, desk *fakeApprovals, docs *fakeToolDocuments,
 	t.Helper()
 	opts := mcpapi.Options{Company: func() *config.Company { return nil },
 		Registry: &fakeRegistry{}, Detail: listedDetail(), Restarter: &fakeRestarter{}, Checker: &fakeChecker{},
-		Tools: docs, Values: valueStore(t), Audit: audit,
+		Tools: docs, Values: valueStore(t), SignIns: &fakeSignIns{}, Audit: audit,
 		Guard: authz.ContextGuard(leadOf{lead: "cto", seat: "swe"})}
 	if desk != nil {
 		opts.Approvals = desk
