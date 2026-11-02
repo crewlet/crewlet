@@ -600,18 +600,19 @@ func codeSweepArgs() map[string]map[string]any {
 const sweepConflicted = "conflicted"
 
 // sweepCodeHost is the scratch repository [scratchHost] holds, its change !7
-// with suggestions besides a review and a comment, and a git node answering by
-// object id. poison fills every field the code records declare; and the
-// bodies the code tools read as somebody's words — a change's description, a
-// finding's body, a review's summary, a comment, and the file's lines, a
-// patch, a history's subjects and a blame's lines git answers — hold the words
-// whether or not a record declares them, as every body a store holds outside
-// a record does.
+// with suggestions besides a review and a comment, in its target's queue as
+// scratchHost's is — so a dequeue takes it out and reaches its answer — and a
+// git node answering by object id. poison fills every field the code records
+// declare; and the bodies the code tools read as somebody's words — a
+// change's description, a finding's body, a review's summary, a comment, and
+// the file's lines, a patch, a history's subjects and a blame's lines git
+// answers — hold the words whether or not a record declares them, as every
+// body a store holds outside a record does.
 func sweepCodeHost(t *testing.T, words string) *codeHost {
 	t.Helper()
 	host := scratchHost(time.Hour)
 	poison(t, reflect.ValueOf(&host.detail).Elem(), words)
-	change := suggestedChange()
+	change := suggestedChange().queued()
 	change.repo = host.detail.Name
 	change.detail.Body = words
 	for i := range change.findings {
