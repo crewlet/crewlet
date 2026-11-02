@@ -2368,6 +2368,56 @@ test("a thread opened from the address does not scroll the page to it", async ()
   }
 });
 
+// CHOOSING ANOTHER THREAD SHOWS THAT THREAD'S TURNS, from its loading state.
+// The choice asks again with the new `conversation=`, and until that answer
+// arrives the one in hand is the last thread's: its turns drawn under the new
+// thread's name read as the new thread's own.
+test("choosing another thread never shows the last thread's turns under it", async () => {
+  const other = "slack:C0TEAM/1709290000.000200";
+  const listed = {
+    handle: "swe",
+    held_by: "node-2",
+    conversations: [
+      { key: THREAD, turns: 1, last_at: "2026-03-01T09:00:00Z" },
+      { key: other, turns: 1, last_at: "2026-03-01T08:00:00Z" },
+    ],
+    conversations_total: 2,
+  };
+  let answer: (entries: unknown[]) => void = () => undefined;
+  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      conversations: (p: Record<string, unknown>) =>
+        p.conversation === other
+          ? new Promise((resolve) => {
+              answer = (entries) => resolve({ ...listed, entries });
+            })
+          : {
+              ...listed,
+              entries:
+                p.conversation === THREAD
+                  ? [
+                      {
+                        turn_id: "t1",
+                        at: "2026-03-01T09:00:00Z",
+                        intent: "The first thread's turn.",
+                      },
+                    ]
+                  : [],
+            },
+    },
+  });
+  expect(await screen.findByText("The first thread's turn.")).toBeTruthy();
+  const row = screen.getAllByRole("button").find((b) => b.getAttribute("title") === other)!;
+  fireEvent.click(row);
+  await waitFor(() => expect(screen.queryByText("The first thread's turn.")).toBeNull());
+  act(() =>
+    answer([{ turn_id: "t2", at: "2026-03-01T08:00:00Z", intent: "The other thread's turn." }]),
+  );
+  expect(await screen.findByText("The other thread's turn.")).toBeTruthy();
+  expect(screen.queryByText("The first thread's turn.")).toBeNull();
+});
+
 // ---------------------------------------------------------------------------
 // The Memory tab's executor sessions
 // ---------------------------------------------------------------------------
