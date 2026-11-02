@@ -233,3 +233,50 @@ func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
 		t.Fatalf("a target green past every landing owes tip work %+v (listed: %v), want none", tips, repos)
 	}
 }
+
+// A TIP ROUND IN FLIGHT IS READ WHEREVER IT IS (ADR-0091): the home dispatches
+// a target's newest landing only once no tip round on another of its commits
+// is still queued or running, so a target's tip work names that round's
+// commit — read by its own index, past the window as much as inside it. Three
+// of ada's pushes land on main past a window of one: the work reads B and D
+// with C in the gap. A tip attempt queued on D, the newest, is no round the
+// newest waits for; one running on C, which the window does not read, is.
+//
+// Mutation: read the round without leaving out the newest's own commit — D's
+// attempt named, red; or read no round at all — C's never named, red.
+func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	code.SetTipWindow(n.reader, 1)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A"))))
+	from := "A"
+	for _, to := range []string{"B", "C", "D"} {
+		got, err := c.Propose(t.Context(), proposal(repo, update(mainRef, oidOf(from), oidOf(to))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push from %s to %s answered %+v (%v), want it landed", from, to, got.Answer, err)
+		}
+		from = to
+	}
+	inFlight := func() string {
+		t.Helper()
+		_, tips := tipsDue(t, n, repo)
+		if len(tips) != 1 || !tips[0].More || tips[0].Newest().OID != oidOf("D") {
+			t.Fatalf("web owes tip work %+v, want main's read past a gap to D", tips)
+		}
+		return tips[0].InFlight
+	}
+	n.checked(repo, oidOf("D"), mainRef, "unit", 1, code.CheckStateQueued)
+	if got := inFlight(); got != "" {
+		t.Fatalf("main's round in flight is %s with only its newest's own attempt queued, want none", got)
+	}
+	n.checked(repo, oidOf("C"), mainRef, "unit", 1, code.CheckStateRunning)
+	if got := inFlight(); got != oidOf("C") {
+		t.Fatalf("main's round in flight is %q with C's tip attempt running past the window, want C", got)
+	}
+}

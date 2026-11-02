@@ -35,8 +35,11 @@ import (
 // attempt's purpose, since a check is a measurement of a commit, and a
 // fast-forward lands the very commit its change's head checks measured. The
 // home then (internal/code/home's tips) dispatches the newest landing's tip
-// where it holds no attempt (coalesced: a landing that is no longer the
-// newest is never dispatched), moves the green row onto it where every
+// where it holds no attempt — coalesced, ONE ROUND AT A TIME: a landing that
+// is no longer the newest is never dispatched, and the newest waits while a
+// tip round on another of the target's commits is still queued or running
+// ([TipDue.InFlight]), so the landings that arrive meanwhile are measured
+// together by the next round — moves the green row onto it where every
 // required check passed, and where one failed BISECTS the failed checks over
 // the landing rows — never over git's history, which a merge's second parent
 // would walk into — down to the first landing they failed on, which it
@@ -87,6 +90,12 @@ type TipDue struct {
 	// those two, which the window does not read.
 	Landings []TipLanding `json:"landings"`
 	More     bool         `json:"more,omitempty"`
+	// InFlight is a commit of the target's other than its newest landing's
+	// that a tip attempt is still queued or running on — the ROUND IN FLIGHT,
+	// which the newest waits for before it is dispatched — read by the index
+	// partial on exactly those attempts (replicated 0136), so it is found
+	// wherever that commit lies, past the window included; "" for none.
+	InFlight string `json:"in_flight,omitempty"`
 }
 
 // Newest is the target's newest landing, the tip its checks are dispatched
@@ -230,6 +239,14 @@ func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *
 		window[i].Last = window[i].Position != window[i+1].Position
 	}
 	t.Landings = window
+	if len(window) > 0 {
+		switch err := tx.QueryRowContext(ctx, tipInFlightSQL, repoID, target, t.Newest().OID).Scan(
+			&t.InFlight); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return TipDue{}, fmt.Errorf("code: read whether %s's tip round is in flight: %w", target, err)
+		}
+	}
 	return t, tipChecksIn(ctx, tx, repoID, target, t)
 }
 
@@ -324,7 +341,9 @@ func mergeRepoPages(a, b []string, limit int) ([]string, string) {
 // The tip work's reads, each registered in plan_test.go: the repositories,
 // and one repository's targets, owing tip work, by the key of its rows — one a
 // target, each repository tested by its key; a target's landings above its
-// green by the landings' key, and its newest, the key read backwards.
+// green by the landings' key, and its newest, the key read backwards; and a
+// tip attempt not ended on another of its commits, by the index partial on
+// exactly those attempts, its predicate spelled as the index declares it.
 const (
 	dueTipReposSQL = `SELECT d.repo_id FROM code_tips_due AS d
 		WHERE d.repo_id > ?1
@@ -336,4 +355,7 @@ const (
 		ORDER BY position, ordinal LIMIT ?`
 	newestLandingSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? ORDER BY position DESC, ordinal DESC LIMIT 1`
+	tipInFlightSQL = `SELECT commit_oid FROM code_checks INDEXED BY code_checks_tip_live_idx
+		WHERE repo_id = ? AND target_ref = ? AND state IN ('queued', 'running') AND purpose = 'tip'
+			AND commit_oid != ? LIMIT 1`
 )

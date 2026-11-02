@@ -6505,11 +6505,16 @@ checks its gate requires, and its landings above the green, oldest first, each
 with the latest attempt of each required check on its commit for the branch —
 and worked by its `checks` worker:
 
-1. **The newest landing is dispatched**, and only the newest: a required
-   check it holds no attempt of is queued there (purpose `tip`). Landings that
-   are no longer the newest are never dispatched, so a burst of pushes costs
-   one round of checks. A fast-forward landing is the very commit its change's
-   head checks measured, and its head's attempts count.
+1. **The newest landing is dispatched**, and only the newest, **one round at
+   a time**: a required check it holds no attempt of is queued there (purpose
+   `tip`) once no tip check on another of the branch's commits is still
+   queued or running. Landings that are no longer the newest are never
+   dispatched, and a round a later landing superseded runs to its end, whose
+   record has the home dispatch whatever is newest then — so the landings that
+   arrive while a round runs are measured together by the next, and a branch
+   landed on faster than its checks run keeps one round in flight, never one
+   a landing. A fast-forward landing is the very commit its change's head
+   checks measured, and its head's attempts count.
 2. **Every required check passed there**: a `green` record moves the branch's
    green row onto it — and every landing below it is green with it, by its
    place, in that one record (below). A branch whose

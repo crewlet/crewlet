@@ -18,8 +18,14 @@ import (
 //     newest landing as it stands;
 //   - a required check the newest landing holds no attempt of is DISPATCHED
 //     there (purpose tip), under the checks file the window's BASE holds —
-//     coalesced: only the newest landing is ever dispatched, so a burst of
-//     landings costs one round of checks, not one a landing;
+//     coalesced, ONE ROUND AT A TIME: only the newest landing is ever
+//     dispatched, and only once no tip round on another of the target's
+//     commits is still queued or running (code.TipDue.InFlight). A round
+//     superseded by a later landing still runs to its end, and the record
+//     that ends it nudges this work, which then dispatches whatever is
+//     newest — so the landings that arrive while a round runs are measured
+//     together by the next, and a target landed on faster than its checks
+//     run keeps one round in flight rather than one a landing;
 //   - an attempt there its infrastructure ended is queued again below
 //     code.AutoRequeueAttempts, and one a merge queue cancelled giving its
 //     train up below code.MaxCheckAttempts;
@@ -48,6 +54,11 @@ func (k *checks) tip(ctx context.Context, repoID string, t code.TipDue, memo *de
 		return k.green(ctx, repoID, t, newest, at)
 	}
 	states := tipStates(newest, t.Required)
+	if len(states.missing) > 0 && t.InFlight != "" {
+		k.log.Debug("code_tip_waits_on_its_round", "repo", repoID, "about", about, "in_flight",
+			short(t.InFlight))
+		return nil
+	}
 	if len(states.missing) > 0 || len(states.invalid) > 0 || len(states.requeue) > 0 {
 		defs, err := k.baseDefs(ctx, repoID, t, memo, at)
 		if err != nil {

@@ -183,3 +183,39 @@ func TestARedTipIsBisectedOverLandingRows(t *testing.T) {
 			records)
 	}
 }
+
+// A TIP WAITS FOR THE ROUND IN FLIGHT (ADR-0091): main's tip round runs on X,
+// and T has landed on top of it since, holding no attempt yet. The turn
+// dispatches nothing — T waits for X's round to end rather than start a second
+// round beside it, so a target landed on faster than its checks run keeps one
+// round in flight, not one a landing. Once no round is in flight, the very
+// same rows dispatch unit on T.
+//
+// Mutation: dispatch the newest whatever round is in flight — unit queued on T
+// beside X's round, red.
+func TestATipWaitsForTheRoundInFlight(t *testing.T) {
+	t.Parallel()
+	green, earlier, tip := oid("1"), oid("2"), oid("3")
+	e := newCheckEstate()
+	e.files[green] = checksFile("unit")
+	main := code.TipDue{TargetRef: "refs/heads/main", Required: []string{"unit"},
+		Green: &code.GreenRow{RepoID: repoA, TargetRef: "refs/heads/main", CommitOID: green,
+			Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 9}},
+		Landings: []code.TipLanding{landedAt(10, green, earlier, ran("unit", code.CheckStateRunning)),
+			landedAt(11, earlier, tip)},
+		InFlight: earlier}
+	e.tips = []code.TipDue{main}
+	if writes, records, _ := tipTurn(t, e); len(writes) != 0 || len(records) != 0 {
+		t.Fatalf("a tip landed while a round runs asked %d check writes (%v) and records %+v, want it to wait",
+			len(writes), queuedOf(writes), records)
+	}
+
+	main.Landings[0].Checks, main.InFlight = []code.TipCheck{ran("unit", code.CheckStatePassed)}, ""
+	e.tips = []code.TipDue{main}
+	writes, records, _ := tipTurn(t, e)
+	if unit, ok := queuedOf(writes)["unit"]; len(writes) != 1 || !ok || len(records) != 0 || unit.OID != tip ||
+		unit.Purpose != code.PurposeTip {
+		t.Fatalf("with no round in flight the tip work asked %d check writes (%v) and records %+v, want unit "+
+			"queued on the tip", len(writes), queuedOf(writes), records)
+	}
+}

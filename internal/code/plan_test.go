@@ -1338,7 +1338,8 @@ func registeredStatements() map[string]statement {
 		// one repository's targets, owing tip work, by the key of its rows —
 		// one a target — each repository tested by its key; a target's
 		// window above its green, a range of the landings' key, and its
-		// newest, the key read backwards.
+		// newest, the key read backwards; and its round in flight, by the
+		// index partial on its tip attempts not yet ended.
 		"due tip repositories": {dueTipReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id>?)", repoKey + " (id=?)"}},
 		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", MaxSnapshotItems},
@@ -1347,6 +1348,8 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"newest landing": {newestLandingSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=?)"}},
+		"a tip round in flight": {tipInFlightSQL, []any{"repo-1", "refs/heads/main", oid("c")},
+			[]string{"code_checks_tip_live_idx (repo_id=? AND target_ref=?)"}},
 		// THE HOME'S DISPATCHES (checksdispatch.go): a target's reading and
 		// a head's dispatch, each by its whole key — the join's read and the
 		// decide's — and a purge's, by the repository's prefix of each key.
