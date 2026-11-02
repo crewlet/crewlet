@@ -41,13 +41,35 @@ import (
 // cycle's wall clock buys too little — the share alone bounds fleet/freed
 // (under three at a quarter, per node) — so it is set where cycle-ms at
 // share=0.25 stops being dominated by the walk of the reachable history,
-// which a repository pays whatever little it frees. PROVISIONAL until these
-// arms are run (repo=1GB is LARGE: about a minute to build, and twice that a
-// loop).
+// which a repository pays whatever little it frees. NOT YET DECIDED BY IT
+// (below): code.ExpungeMinBytes stays PROVISIONAL.
 //
 // repo={100MB,1GB} × share={0.1,0.25,0.5}; share=0.1 is NOT DUE by the
 // share and is priced as the scan alone, the weekly cost of a clean
 // repository.
+//
+// # Measured
+//
+// Once each (-benchtime 1x -count 1), on two cores of the crun runner on a
+// laptop other sessions loaded (load 4.5 to 9), git 2.56.0, 2026-11-02:
+//
+//	arm                    cycle-ms  freed-MiB  redownload-MiB  fleet/freed
+//	repo=100MB/share=0.1      1 419          0               0            -
+//	repo=100MB/share=0.25     2 131      24.01               0            0
+//	repo=100MB/share=0.5      4 242      48.02               0            0
+//	repo=1000MB/share=0.1    66 078          0               0            -
+//	repo=1000MB/share=0.25   24 467      239.1               0            0
+//	repo=1000MB/share=0.5    not run
+//
+// At 100 MB the walk (the scan alone, 1.4 s) is two thirds of the cycle that
+// frees 24 MiB and a third of the one that frees 48 MiB, so by THE RULE the
+// least lies between the two. At 1 GB the scan alone took longer than the
+// whole cycle that freed 239 MiB, which only the load on the host explains,
+// so that pair says nothing of where the walk stops dominating; and the
+// re-download is zero in every arm, since this composition leaks into a pack
+// of its own, which a cycle rewrites whole as dropping. Deciding the least
+// needs the 1 GB arms on an unloaded host, several counts each, and a leak
+// mixed into packs that also hold reachable objects.
 func BenchmarkExpunge(b *testing.B) {
 	quiet(b)
 	for _, repo := range []int64{100_000_000, 1_000_000_000} {

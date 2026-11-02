@@ -484,11 +484,17 @@ const (
 
 	// ExpungeMinBytes is the least a repository's unreachable bytes must be
 	// for an expunge to be due on the maintainer's schedule, whatever their
-	// share: 64 MiB, below which the fleet's re-download of the kept packs and
-	// the rewrite's own walk of the whole history cost more than the bytes
-	// they free. PROVISIONAL: BenchmarkExpunge (internal/code/compact,
-	// repo={100MB,1GB} × share={0.1,0.25,0.5}) prices a cycle's walk, build
-	// and re-download against the bytes it frees, and decides it.
+	// share — and the live bytes under which a repository is judged clean
+	// from its row alone, never synced or walked.
+	//
+	// 64 MiB, PROVISIONAL: BenchmarkExpunge (internal/code/compact) decides
+	// it as the bytes freed where a cycle stops being dominated by its walk
+	// of the reachable history, and its one run so far (the benchmark's
+	// "Measured") puts that between 24 and 48 MiB for a 100 MB repository —
+	// the walk 1.4 s of a 2.1 s cycle freeing 24 MiB and of a 4.2 s one
+	// freeing 48 MiB — while its 1 GB pair, taken on a loaded host, cannot
+	// place it. 64 MiB is above everything that run measured as
+	// walk-dominated and is kept until the 1 GB arms run on an unloaded host.
 	ExpungeMinBytes = 64 << 20
 
 	// RefExpiry is a SEAT BRANCH'S IDLE WINDOW: how long a branch a seat set

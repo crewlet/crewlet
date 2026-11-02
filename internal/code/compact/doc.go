@@ -381,10 +381,12 @@
 // WHAT A PURGE LEAVES BEHIND: the commit retires the dropping packs into
 // code_packs_retired, so a reader already on one finishes, and the store
 // deletes their bytes after code.RetireGrace and the collector's grace — the
-// purge's crewlet.code.expunge.dropped_bytes. Nothing of this loop is
+// purge's crewlet.code.expunge.dropped_bytes. Little of this loop is
 // measured yet: [ExpungePoll] is the listing's, [ExpungeInputByteCap] the
-// compaction's half of a record's outputs, and code.ExpungeMinBytes is
-// PROVISIONAL, for BenchmarkExpunge to decide.
+// compaction's half of a record's outputs, and code.ExpungeMinBytes stays
+// PROVISIONAL — BenchmarkExpunge's one run (its "Measured") placed the
+// bytes freed where a cycle stops being mostly its walk between 24 and 48
+// MiB for a 100 MB repository, and could not place it for a gigabyte.
 //
 // # What it raises
 //

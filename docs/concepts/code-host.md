@@ -1247,8 +1247,8 @@ publication, one rewrite of a repository at a time
   repository, which takes it off every git node's list for a week — after a
   restart, an upgrade or a new git node as much as before — so a clean
   repository's history is walked at most once a week. The 64 MiB is
-  provisional, until the expunge's benchmark has priced a cycle against
-  what it frees.
+  provisional: the expunge's benchmark has priced a 100 MB repository's
+  cycle against what it frees, and not yet a gigabyte's.
 - **At once, when a person purges** the repository's unreachable objects —
   `code_purge_unreachable` from your own assistant, **Purge unreachable
   history** on the repository's Settings tab in the dashboard, or
