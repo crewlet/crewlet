@@ -177,6 +177,10 @@ type knobs struct {
 	// indexTipReading is told the directory of each copy the indexer reads a
 	// default branch's tip in, with git, before it starts the process.
 	indexTipReading func(dir string)
+	// indexPlaced is told, each time a build of a code index has placed a
+	// segment and merged what it asked, how many mappings the node then
+	// holds: a case holds a build to the segments it still reads.
+	indexPlaced func(mapped int)
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer, and firing as one: once that clock reaches the

@@ -25,12 +25,12 @@ import (
 // beside the steer desk's ([Engine.codeSearchWire]).
 
 // serveCodeSearch makes this node an answerer of topics.CodeSearch over its
-// git reads, and answers what withdraws it — and, on a node with no broker,
-// keeps the answerer as the one its own searches are handed to, its fleet
-// being itself.
-func (e *Engine) serveCodeSearch(ctx context.Context, nodeID string, reads codesearch.Reads) (queue.Unsubscribe,
-	error) {
-	srv, err := codesearch.NewServer(e.codeSearchWire, nodeID, reads)
+// git reads, bounded by its seat git-work share of units units, and answers
+// what withdraws it — and, on a node with no broker, keeps the answerer as the
+// one its own searches are handed to, its fleet being itself.
+func (e *Engine) serveCodeSearch(ctx context.Context, nodeID string, reads codesearch.Reads,
+	units int) (queue.Unsubscribe, error) {
+	srv, err := codesearch.NewServer(e.codeSearchWire, nodeID, reads, units)
 	if err != nil {
 		return nil, err
 	}

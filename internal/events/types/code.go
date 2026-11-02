@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -67,6 +68,7 @@ func init() {
 	events.Register[CodeQueueEjected]()
 	events.Register[CodeTargetBroken]()
 	events.Register[CodeMirrorPushed]()
+	events.Register[CodeExpunged]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -731,4 +733,68 @@ func (e CodeTargetBroken) SummaryFor(actor string) string {
 	}
 	return lead(actor, "found "+strings.TrimPrefix(e.Target, "refs/heads/")+" broken by "+landing+": "+
 		strings.Join(e.Checks, ", ")+" failed")
+}
+
+// CodeExpunged records that a repository's unreachable objects were dropped:
+// an expunge's COMMIT applied (internal/code/compact, ADR-0092), retiring the
+// packs its begin made dropping and keeping live, as its rescue, whatever of
+// them a push made reachable again. Published ONCE a commit, by the
+// maintainer whose compactor proposed it and heard it applied — a person's
+// purge served (Request names it) and every weekly cycle the maintainer
+// began on its own (Request empty) alike. The code log's rows keep only the
+// LATEST expunge of a repository (its detail's `expunge`), so this is the one
+// durable account of every one: what was destroyed, and when.
+//
+// A commit whose answer the maintainer did not hear applied — pending or
+// unknown at its committer, or the maintainer gone between the apply and the
+// publish — is no event: the next pass finds the expunge closed and has
+// nothing left to announce, and the repository's detail still names it.
+//
+// # Stored, not fed
+//
+// The weekly cycle is the maintainer's housekeeping, and a person's purge is
+// already in the feed as the `operator_acted` of the person who asked: the
+// account of what the commit dropped is kept for whoever asks what left the
+// repository and when, out of the activity feed.
+type CodeExpunged struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the commit applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// Request is the person's purge this expunge served — the request's
+	// operation id — and empty for one the weekly schedule began. Expunge is
+	// the expunge's own id, which its begin and its commit both carry.
+	Request string `json:"request,omitempty"`
+	Expunge string `json:"expunge"`
+
+	// DroppedObjects and DroppedBytes are what the commit took out of the
+	// repository: the dropping packs' objects and bytes, less the rescue's.
+	DroppedObjects int64 `json:"dropped_objects"`
+	DroppedBytes   int64 `json:"dropped_bytes"`
+
+	// Position is the commit's record on the repository's code log.
+	Position string `json:"position"`
+
+	// StoreUntil is the latest the object store keeps the dropped bytes on a
+	// healthy fleet: the retired packs' grace after the commit, so a clone
+	// already reading one finishes, then the code-retention duty's next
+	// pass, which removes their rows, and the collector's next, which deletes
+	// the bytes. A versioned S3 bucket keeps a deleted object's old version
+	// past it for as long as its own rules say.
+	StoreUntil time.Time `json:"store_until"`
+}
+
+// EventType is the "code_expunged" wire type.
+func (CodeExpunged) EventType() string { return "code_expunged" }
+
+// SummaryFor names the repository, what the commit dropped, and whether a
+// person's purge or the weekly schedule asked for it.
+func (e CodeExpunged) SummaryFor(actor string) string {
+	why := "on its weekly schedule"
+	if e.Request != "" {
+		why = "serving a purge"
+	}
+	return lead(actor, "expunged "+strconv.FormatInt(e.DroppedObjects, 10)+" unreachable object(s), "+
+		strconv.FormatInt(e.DroppedBytes, 10)+" bytes, from "+e.RepoName+" "+why)
 }

@@ -15,10 +15,12 @@ import (
 // answer is told as the node gave it, the repository importing. An unknown
 // outcome names the operation, and -op-id sends it again. A flag of the
 // other import is refused before anything is sent: -git or -dry-run without
-// -local, and -owner, -credential, -mirror or -op-id beside it.
+// -local, and -owner, -credential, -mirror or -op-id beside it, every such
+// flag given named in one list as a sentence says it.
 //
 // Mutation: dispatch the import to the client-side push whatever -local
-// says, or drop the owner or the mirror from the arguments → red.
+// says, or drop the owner or the mirror from the arguments, or join the
+// refused flags with " and " again → red.
 func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 	t.Parallel()
 	const source = "https://git.example.com/acme/web.git"
@@ -73,6 +75,10 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 		{[]string{"-owner", "unit:eng", "-dry-run"}, []string{"-dry-run", "add -local"}},
 		{[]string{"-local", "-owner", "unit:eng"}, []string{"-owner", "or -local"}},
 		{[]string{"-local", "-mirror"}, []string{"-mirror", "or -local"}},
+		{[]string{"-owner", "unit:eng", "-git", "/usr/bin/git", "-dry-run"},
+			[]string{"-dry-run and -git: -local's alone", "add -local"}},
+		{[]string{"-local", "-mirror", "-credential", "GITHUB_TOKEN", "-owner", "unit:eng"},
+			[]string{"-credential, -mirror and -owner: the node's import alone", "or -local"}},
 		{[]string{"-owner", "eng"}, []string{"-owner", "unit:<key>"}},
 	} {
 		args := append([]string{"code", "import", source, "web", "-api", node.server.URL}, c.flags...)

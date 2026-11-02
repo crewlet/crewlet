@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A QUEUE'S OWN RECORDS: what a target's merge queue does with the entries an
@@ -488,7 +489,7 @@ func (e Eject) validate() error {
 		named[x.EntryID] = true
 		switch {
 		case !slices.Contains(EjectReasons(), x.Reason):
-			return badField(field+".reason", "%q is not one of %v", x.Reason, EjectReasons())
+			return badField(field+".reason", "%q is not one of %s", x.Reason, words.Or(EjectReasons()))
 		case len(x.Checks) > 0 && x.Reason != EjectCheckFailed:
 			return badField(field+".checks", "only a failed check's ejection names checks")
 		case len(x.Paths) > 0 && x.Reason != EjectConflict:

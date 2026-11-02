@@ -201,3 +201,12 @@ func outputBytes(outs []output) int64 {
 	}
 	return n
 }
+
+// outputObjects is how many objects outs hold, each counted by its own pack.
+func outputObjects(outs []output) int64 {
+	var n int64
+	for _, o := range outs {
+		n += o.ref.Objects
+	}
+	return n
+}

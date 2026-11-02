@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPOSITORY'S CHECKS, READ: what became of each attempt of each check of
@@ -243,7 +244,7 @@ func (q ReadQuery) validateChecks() error {
 	case c.Name != "" && !config.ValidCodeCheckName(c.Name):
 		return refused("checks.name", fmt.Sprintf("%q is not a check name", c.Name))
 	case c.State != "" && !c.State.Valid():
-		return refused("checks.state", fmt.Sprintf("%q is not one of %v", c.State, CheckStates()))
+		return refused("checks.state", fmt.Sprintf("%q is not one of %s", c.State, words.Or(CheckStates())))
 	case c.Change < 0:
 		return refused("checks.change", fmt.Sprintf("%d is no change's number", c.Change))
 	case c.OID != "" && (!gitref.ValidOID(c.OID) || c.OID == ZeroOID):
@@ -371,8 +372,8 @@ func (q ReadQuery) validateChecksQueued() error {
 		return refused("checks_queued", `a checks_queued read names its question: the cell its attempts' `+
 			`definitions name, or "" for the ones naming none`)
 	case r.RunIn != "" && !r.RunIn.Valid():
-		return refused("checks_queued.run_in", fmt.Sprintf(`%q is not one of %v, or "" for none`, r.RunIn,
-			CheckCells()))
+		return refused("checks_queued.run_in", fmt.Sprintf(`%q is not one of %s, or "" for none`, r.RunIn,
+			words.Or(CheckCells())))
 	case q.Asker != (Principal{}):
 		return refused("asker", "a checks_queued read is the engine's own — a runner's claim walk — which no "+
 			"principal makes")

@@ -479,22 +479,32 @@ real source, this repository's own tree in rotated copies:
 
 | | Measured |
 |---|---|
-| Building the index | 78 seconds of one core a gigabyte of source, the first time; a later tip reads only its new blobs |
-| The index on disk | 0.147 bytes a byte of source — 0.29 GiB for those 120 000 files, about 0.45 of a copy that holds its tip and no history (the source deflated as a pack holds it is 0.327 bytes a byte) |
-| A build's memory | 120 MiB at its peak for each segment of 256 MiB of source it writes |
-| A search | 11 ms at the median and 417 ms at the 99th percentile, its lookups and the confirmation of its candidates' lines up to its 500 hits |
+| Building the index | 75 seconds of one core a gigabyte of source, the first time; a later tip reads only its new blobs |
+| The index on disk | 0.146 bytes a byte of source — 0.29 GiB for those 120 000 files, about 0.45 of a copy that holds its tip and no history (the source deflated as a pack holds it is 0.327 bytes a byte) |
+| A build's memory | 107 MiB at its peak for the whole build, in segments of 512 MiB of source — each segment's postings and its writing, and every merge — and the tip's listing beside it, 31 MiB for those 120 000 files; every segment it has written is read back through a mapping of its file, never held |
+| A search | 16 ms at the median and 432 ms at the 99th percentile, its lookups and the confirmation of its candidates' lines up to its 500 hits |
 
 So a git node's indexes take at most a third of its cache's budget — what a
 cache full of indexed copies with no history holds of them, 31% — and past
 that they are dropped, least recently used first, before any repository is
 evicted, since a dropped index is built again from the blobs the copy already
 holds. Segments are merged as each is written, each kept more than twice the
-next, so an index keeps a handful of them (three for that tip) and each blob is
-written a logarithmic number of times. A search costs its node a lookup of a
-few lists and a read of the candidates' lines, never a walk of the tree: the
-repositories it names are divided among the git nodes that hold their
-indexes, each searching its own share at once, so adding git nodes divides a
-company-wide search rather than repeating it.
+next, so an index keeps a handful of them (two for that tip) and each blob is
+written a logarithmic number of times. Every search a git node is answering
+reads, together, at most all but one of the units of its share of git work for
+seats' reads, which each read's search takes — one where the node has only
+one — so a seat's read of a file, a log or a diff always finds a unit no
+search can hold, however many company-wide searches are running. A search
+costs its node a lookup of a few lists and a read of the candidates' lines,
+never a walk of the tree: the repositories it names are divided among the git
+nodes that hold their indexes, each searching its own share at once, so adding
+git nodes divides a company-wide search's reading rather than repeating it.
+Its REQUEST is not divided: it is one signed question every git node hears,
+carrying the whole table of which node answers for which repository, so each
+git node receives, verifies and reads the whole table — a line for every
+repository the search names — before it finds its own part, nodes assigned
+nothing included. What a search costs the broker and the nodes' reading of
+requests grows with the git nodes times the repositories it names.
 
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A seat's push of one commit

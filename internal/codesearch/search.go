@@ -1,11 +1,14 @@
 package codesearch
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -14,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Estate is the code host's rows and its keyed git walk as a search reads
@@ -78,9 +82,9 @@ type Answer struct {
 // Coverage is what a search covered. Every repository the search names — the
 // repositories its repo: filters name, or, unfiltered, every `search:
 // indexed` repository the asker may read — is in exactly ONE of Searched,
-// Building, NotAnswering, NotPermitted, Stale and NoRef, but in a search
-// continued after a [Key], which names those from the key's on: the ones
-// before it were asked for the pages before, and are in none; GrepNotNamed is the
+// Building, NotAnswering, NotPermitted, Stale, NoRef and PastLimit, but in a
+// search continued after a [Key], which names those from the key's on: the
+// ones before it were asked for the pages before, and are in none; GrepNotNamed is the
 // repositories an unfiltered search leaves out, and NotIndexed names those
 // of Searched that were read with git grep.
 type Coverage struct {
@@ -115,26 +119,58 @@ type Coverage struct {
 	// NoRef is the repositories holding no ref or commit the search's ref:
 	// names: nothing to search in them at it.
 	NoRef RepoSet `json:"no_ref"`
+	// PastLimit is the repositories none of whose lines can be in the
+	// answer: it holds Limit lines, every one of a repository named before
+	// them. A git node passes over such a repository unread once its own
+	// first Limit lines are of repositories named before it, so a search for
+	// a common word reads the repositories that fill the limit rather than
+	// the company; whether one was read or passed over turns on how the reads
+	// interleaved, so it is named here by its name alone, either way.
+	// Truncated is set beside it.
+	PastLimit RepoSet `json:"past_limit"`
 	// SkippedFiles is the files the searched repositories passed over for
 	// their size or as binaries (code.SearchAnswer.SkippedFiles).
 	SkippedFiles int `json:"skipped_files"`
 	// Truncated says lines may follow the last hit, or be missing: a
 	// repository's search stopped at its limit, its answer's bound or its
-	// budget, or the merge cut the lines past Limit or past such a stop.
-	// Every line before the last hit is answered; the lines after it are
-	// what a search continued after it answers, but for a repository whose
-	// budget ran out before its first line, which no page reaches.
+	// budget, the merge cut the lines past Limit or past such a stop, or a
+	// repository is past the limit (PastLimit). Every line before the last
+	// hit is answered; the lines after it are what a search continued after
+	// it answers, but for a repository whose budget ran out before its first
+	// line, which no page reaches.
 	Truncated bool `json:"truncated"`
 }
 
-// MaxCoverageNames is the most repository names a [RepoSet] lists: its count
-// is whole. 100 names of at most 64 bytes is under 7 KiB, so all seven sets
-// together stay under an eighth of a seat's tool answer (64 KiB) beside the
-// hits.
-const MaxCoverageNames = 100
+// MaxCoverageText is the most bytes of WORDS a [Coverage] lists, as JSON
+// encodes them: every repository name of every set — NotAnswering's
+// included — and every node's reason, ONE BUDGET across them all. 4 KiB, a
+// sixteenth of a seat's tool answer (internal/agent/builtin's
+// ToolAnswerBytes, 64 KiB), since code_search sends the coverage beside every
+// page of its lines and the lines are the answer. Every count stays whole:
+// past the budget a set lists fewer of its names — the first, in order — and
+// a reason is cut. The reasons are listed first, in the order of their nodes
+// and in at most HALF the budget, so the names keep the other half whatever
+// the fleet; then the names, the sets of repositories left unsearched before
+// those searched another way.
+//
+// WHAT THE BUDGET DOES NOT HOLD is the coverage's shape — its fields' names
+// and counts, under 600 bytes — and one entry for each git node that did not
+// answer, its id (at most 64 bytes) and its count, under 140 bytes: every
+// such node is named, which is the point of the entry. A fleet of sixteen
+// silent git nodes so takes a coverage to under 7 KiB. Its own per-set cap of
+// 100 names was an eighth of an answer by its arithmetic and three quarters
+// of one by the names' real length, with NotAnswering's sets beside it
+// growing with the fleet.
+const MaxCoverageText = 4 << 10
 
-// RepoSet is a set of repositories: how many, and the first
-// [MaxCoverageNames] of their names in order.
+// MaxGapWhyBytes is the most of one node's reason a coverage keeps, as JSON
+// encodes it: two lines, what a node's sentence takes to say what to look
+// at — one carrying an error's own words is cut there — and eight such fill
+// the reasons' half of the budget.
+const MaxGapWhyBytes = 256
+
+// RepoSet is a set of repositories: how many, and the first of their names
+// in order, as many as the coverage's budget lists ([MaxCoverageText]).
 type RepoSet struct {
 	Count int      `json:"count"`
 	Names []string `json:"names"`
@@ -219,7 +255,7 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	if err := q.validate(); err != nil {
 		return Answer{}, err
 	}
-	repos, grepLeft, err := s.repos(ctx, q)
+	repos, grepLeft, head, err := s.repos(ctx, q)
 	if err != nil {
 		return Answer{}, err
 	}
@@ -241,14 +277,15 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	}
 	if single && len(repos) == 1 {
 		var read code.SearchVia
-		if out, read, err = s.one(ctx, q, sq, repos[0]); err != nil {
+		if out, read, err = s.one(ctx, q, sq, head, repos[0]); err != nil {
 			return Answer{}, err
 		}
 		via = string(read)
-	} else if out, err = s.scatter(ctx, q, sq, repos); err != nil {
+	} else if out, err = s.scatter(ctx, q, sq, head, repos); err != nil {
 		return Answer{}, err
 	}
 	out.Coverage.GrepNotNamed = setOf(grepLeft)
+	fitCoverage(&out.Coverage)
 	s.record(via, s.now().Sub(began), out.Coverage)
 	return out, nil
 }
@@ -298,48 +335,23 @@ func (q Query) validate() error {
 	return nil
 }
 
-// repos is the repositories q searches, by name, and the grep repositories
-// an unfiltered q leaves out.
-func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string, err error) {
+// repos is the repositories q searches, by name, the grep repositories an
+// unfiltered q leaves out, and the code log's HEAD as those reads found it
+// where they were linearizable (headOf): what every repository's second
+// look at the log's head syncs to (code.GitQuery.Head).
+func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string,
+	head statelog.Position, err error) {
 	if len(q.Search.Repos) > 0 {
-		grep := 0
-		// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
-		// names each once, and a Query built otherwise may not, where a
-		// repository listed twice would be read twice by its node, its lines
-		// taking two places in that node's first Limit, and counted twice in
-		// the coverage every repository is in exactly once.
-		seen := make(map[string]bool, len(q.Search.Repos))
-		for _, name := range q.Search.Repos {
-			if seen[name] {
-				continue
-			}
-			seen[name] = true
-			a, err := s.estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
-				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
-			if err != nil {
-				return nil, nil, &RepoRefusal{Repo: name, Err: err}
-			}
-			if a.Repo == nil {
-				return nil, nil, &RepoRefusal{Repo: name, Err: code.ErrRepoNotFound}
-			}
-			if a.Repo.Search != code.SearchIndexed {
-				grep++
-			}
-			searched = append(searched, a.Repo.RepoRef)
-		}
-		if grep > MaxGrepRepos {
-			return nil, nil, fmt.Errorf("%w: repo: names %d repositories searched with git grep, and a search "+
-				"reads at most %d of them: name fewer, or search the indexed ones without a repo: filter",
-				code.ErrInvalid, grep, MaxGrepRepos)
-		}
-		return searched, nil, nil
+		searched, head, err = s.named(ctx, q)
+		return searched, nil, head, err
 	}
 	rq := code.ReadQuery{Kind: code.ReadRepos, Asker: q.Asker, CeilingSeat: q.CeilingSeat, Fresh: q.Rows,
 		Limit: code.MaxReposPerPage}
 	for {
 		page, err := s.estate.Read(ctx, rq)
 		if err != nil {
-			return nil, nil, fmt.Errorf("codesearch: list the repositories the asker may read: %w", err)
+			return nil, nil, statelog.Position{}, fmt.Errorf("codesearch: list the repositories the asker may "+
+				"read: %w", err)
 		}
 		for _, r := range page.Repos {
 			if r.Search == code.SearchIndexed {
@@ -348,19 +360,141 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 				grepLeft = append(grepLeft, r.Name)
 			}
 		}
+		head = headOf(head, page)
 		if page.Next == "" {
-			return searched, grepLeft, nil
+			return searched, grepLeft, head, nil
 		}
 		rq.Cursor = page.Next
 	}
 }
 
+// ResolveReads is how many of a repo: filter's names are read at once.
+//
+// A name is one estate read of the repository's row (code.ReadRepo) at the
+// asker's level, and a seat's and a person's is linearizable: read one after
+// another, a filter of dozens of names — a 400-byte query holds up to 57 —
+// was as many barriers back to back before anything was searched. Read
+// beside each other, the reads in flight at once join ONE barrier (a node's
+// barrier is single-flighted per log: statelog.ReadIndex), so a filter costs
+// a barrier a wave. MaxGrepRepos+1, nine, is the fewest answers that can
+// show a filter past the grep bound — so one wave decides a filter of grep
+// repositories that must be refused, and the rest are never read — and it
+// resolves the most names a query can hold in seven waves.
+const ResolveReads = MaxGrepRepos + 1
+
+// named is the repositories q's repo: filters name, read BESIDE EACH OTHER,
+// at most ResolveReads at once, and the head their reads found (headOf). A
+// filter naming more grep repositories than MaxGrepRepos is refused AS THEIR
+// ROWS ARRIVE: the reads in flight are cancelled and the rest never started.
+// Otherwise every name is read, and a refusal is the FIRST NAME's, in the
+// order the filter wrote them — whichever read answered first — so a search
+// is refused the same however its reads interleave.
+func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog.Position, error) {
+	// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
+	// names each once, and a Query built otherwise may not, where a
+	// repository listed twice would be read twice by its node, its lines
+	// taking two places in that node's first Limit, and counted twice in the
+	// coverage every repository is in exactly once.
+	var names []string
+	seen := make(map[string]bool, len(q.Search.Repos))
+	for _, name := range q.Search.Repos {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type read struct {
+		a   code.ReadAnswer
+		err error
+	}
+	reads := make([]read, len(names))
+	var (
+		mu   sync.Mutex
+		grep int
+		over bool
+		wg   sync.WaitGroup
+	)
+	slots := make(chan struct{}, ResolveReads)
+	for i, name := range names {
+		if rctx.Err() != nil {
+			break
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-rctx.Done():
+		}
+		if rctx.Err() != nil {
+			break
+		}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			a, err := s.estate.Read(rctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
+				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
+			mu.Lock()
+			defer mu.Unlock()
+			reads[i] = read{a: a, err: err}
+			if err == nil && a.Repo != nil && a.Repo.Search != code.SearchIndexed {
+				if grep++; grep > MaxGrepRepos && !over {
+					over = true
+					cancel()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if over {
+		return nil, statelog.Position{}, fmt.Errorf("%w: repo: names more than %d repositories searched with "+
+			"git grep, and a search reads at most %d of them: name fewer, or search the indexed ones without a "+
+			"repo: filter", code.ErrInvalid, MaxGrepRepos, MaxGrepRepos)
+	}
+	var (
+		searched []code.RepoRef
+		head     statelog.Position
+	)
+	for i, r := range reads {
+		switch {
+		case r.err != nil:
+			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: r.err}
+		case r.a.Repo == nil:
+			// A read never started (ctx ended first) answers ctx's error.
+			if err := ctx.Err(); err != nil {
+				return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: err}
+			}
+			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: code.ErrRepoNotFound}
+		}
+		searched, head = append(searched, r.a.Repo.RepoRef), headOf(head, r.a)
+	}
+	return searched, head, nil
+}
+
+// headOf is the later of head and where a read of the rows answered, where
+// that read was LINEARIZABLE: a position every write committed before the
+// search asked is at or before, which each repository's second look can sync
+// to as a floor (code.GitQuery.Head) in place of a barrier of its own — so a
+// company-wide search pays for its listing's barrier once, not for one a
+// repository. A read at any other level found no head, and is not one.
+func headOf(head statelog.Position, a code.ReadAnswer) statelog.Position {
+	if a.Level != statelog.ReadLinearizable || a.Position.IsZero() {
+		return head
+	}
+	if head.IsZero() {
+		return a.Position
+	}
+	if before, err := head.Before(a.Position); err == nil && before {
+		return a.Position
+	}
+	return head
+}
+
 // one searches one repository through the keyed walk.
-func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, repo code.RepoRef) (Answer,
+func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
+	repo code.RepoRef) (Answer,
 	code.SearchVia, error) {
 	q.After.continueIn(repo.Name, &sq)
 	got, err := s.estate.GitRead(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: repo.ID, Asker: q.Asker,
-		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: &sq})
+		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: &sq})
 	if err != nil {
 		return Answer{}, "", &RepoRefusal{Repo: repo.Name, Err: err}
 	}
@@ -380,7 +514,6 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, repo c
 	if repo.Search == code.SearchIndexed && ans.Via == code.SearchViaGrep {
 		out.Coverage.NotIndexed = setOf([]string{repo.Name})
 	}
-	sortCoverage(&out.Coverage)
 	return out, ans.Via, nil
 }
 
@@ -401,7 +534,8 @@ type asked struct {
 
 // scatter asks every repository of its order's first node, then its
 // runner-up where that one did not answer it.
-func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, repos []code.RepoRef) (Answer,
+func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
+	repos []code.RepoRef) (Answer,
 	error) {
 	out := Answer{Hits: []Hit{}}
 	if len(repos) == 0 {
@@ -420,7 +554,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		all[i] = &asked{repo: r, order: orders[r.ID]}
 	}
 	var (
-		hits []Hit
+		m    = newMerge(sq.Hits())
 		ends prefixEnd
 		cut  = false
 	)
@@ -429,6 +563,12 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		byNode := map[string][]*asked{}
 		for _, a := range all {
 			if a.done || a.at >= len(a.order) {
+				continue
+			}
+			if m.passed(a.repo.Name) {
+				// PAST THE LIMIT ALREADY: the first round's lines fill the
+				// limit before any of this repository's could come, so its
+				// runner-up is not asked for lines the answer cannot hold.
 				continue
 			}
 			// THE FILL: the first node of the order is its home, which may
@@ -444,7 +584,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		if len(assign) == 0 {
 			break
 		}
-		replies, err := s.round(ctx, q, sq, assign)
+		replies, err := s.round(ctx, q, sq, head, assign)
 		if err != nil {
 			return Answer{}, err
 		}
@@ -455,7 +595,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 				for _, r := range rep.Repos {
 					results[r.RepoID] = r
 				}
-				hits = append(hits, rep.Hits...)
+				m.fold(rep.Hits)
 				cut = cut || rep.Cut
 				// A NODE THAT CUT its lines answered the first of them up to
 				// its last; a repository that stopped early, its own first
@@ -486,7 +626,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 					a.why = fmt.Sprintf("it did not answer within %s", RoundBudget)
 				}
 				switch r.Outcome {
-				case OutcomeSearched, OutcomeNotPermitted, OutcomeNoRef:
+				case OutcomeSearched, OutcomeNotPermitted, OutcomeNoRef, OutcomePastLimit:
 					a.done = ok
 				}
 				a.at++
@@ -495,26 +635,29 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 	}
 	tips := map[string]string{}
 	for _, a := range all {
+		if m.passed(a.repo.Name) {
+			// PAST THE LIMIT OF THE WHOLE SEARCH, whatever its node said or
+			// whether one answered: decided by the name against the lines
+			// every node's answers left, so the coverage is the same
+			// whichever node answered first.
+			a.done, a.result, cut = true, RepoResult{RepoID: a.repo.ID, Outcome: OutcomePastLimit}, true
+		}
 		classify(&out.Coverage, a, tips)
 	}
-	slices.SortFunc(hits, CompareHits)
-	hits = slices.CompactFunc(hits, func(x, y Hit) bool { return CompareHits(x, y) == 0 })
-	var past bool
-	hits, past = ends.keep(hits)
+	// The merge's first Limit lines, then no line past a stop: both cut a
+	// prefix of the same order, so which runs first does not change what is
+	// kept.
+	hits, folded := m.lines()
+	hits, past := ends.keep(hits)
 	cut = cut || past
-	limit := sq.Hits()
-	if len(hits) > limit {
-		hits, cut = hits[:limit], true
-	}
 	out.Hits = append(out.Hits, hits...)
-	out.Coverage.Truncated = out.Coverage.Truncated || cut
+	out.Coverage.Truncated = out.Coverage.Truncated || cut || folded
 	for _, h := range out.Hits {
 		if out.Tips == nil {
 			out.Tips = map[string]string{}
 		}
 		out.Tips[h.Repo] = tips[h.Repo]
 	}
-	sortCoverage(&out.Coverage)
 	return out, nil
 }
 
@@ -536,6 +679,8 @@ func classify(c *Coverage, a *asked, tips map[string]string) {
 			add(&c.NotPermitted, name)
 		case OutcomeNoRef:
 			add(&c.NoRef, name)
+		case OutcomePastLimit:
+			add(&c.PastLimit, name)
 		}
 		return
 	}
@@ -578,9 +723,9 @@ func gap(c *Coverage, node, why, name string) {
 	c.NotAnswering = append(c.NotAnswering, g)
 }
 
-// add puts name in set, counted whole and listed up to MaxCoverageNames; the
-// names are sorted at the end ([sortCoverage]), so which are listed is the
-// first in order whatever order they were added in.
+// add puts name in set, counted whole; the names are sorted and cut to the
+// coverage's budget once it is whole ([fitCoverage]), so which are listed is
+// the first in order whatever order they were added in.
 func add(set *RepoSet, name string) {
 	set.Count++
 	set.Names = append(set.Names, name)
@@ -592,54 +737,95 @@ func setOf(names []string) RepoSet {
 	for _, n := range names {
 		add(&s, n)
 	}
-	s.cap()
 	return s
 }
 
-// cap sorts a set's names and keeps the first MaxCoverageNames.
-func (s *RepoSet) cap() {
-	slices.Sort(s.Names)
-	if len(s.Names) > MaxCoverageNames {
-		s.Names = s.Names[:MaxCoverageNames]
-	}
-	if s.Names == nil {
-		s.Names = []string{}
-	}
-}
-
-// sortCoverage puts every set and the nodes in order.
-func sortCoverage(c *Coverage) {
-	for _, s := range []*RepoSet{&c.NotIndexed, &c.Building, &c.NotPermitted, &c.GrepNotNamed, &c.Stale, &c.NoRef} {
-		s.cap()
-	}
-	for i := range c.NotAnswering {
-		c.NotAnswering[i].Repos.cap()
-	}
-	slices.SortFunc(c.NotAnswering, func(x, y NodeGap) int {
-		switch {
-		case x.Node < y.Node:
-			return -1
-		case x.Node > y.Node:
-			return 1
-		}
-		return 0
-	})
+// fitCoverage puts every set and the nodes in order and holds the coverage's
+// words to [MaxCoverageText]: each node's reason, in the order of the nodes,
+// cut to MaxGapWhyBytes and to what is left of the reasons' half of the
+// budget; then each set's first names while the budget lasts, the sets of
+// repositories left unsearched — NotAnswering's by node, then Building,
+// Stale, NotPermitted, NoRef and PastLimit — before NotIndexed and
+// GrepNotNamed, which were searched another way or left out by the search's
+// own terms. Every count stays whole.
+func fitCoverage(c *Coverage) {
+	slices.SortFunc(c.NotAnswering, func(x, y NodeGap) int { return cmp.Compare(x.Node, y.Node) })
 	if c.NotAnswering == nil {
 		c.NotAnswering = []NodeGap{}
 	}
+	budget := MaxCoverageText
+	reasons := MaxCoverageText / 2
+	for i := range c.NotAnswering {
+		g := &c.NotAnswering[i]
+		// THE EMPTY REASON IS THE SHAPE'S, not the budget's: its two quotes
+		// are counted with the node's entry.
+		g.Why = fitText(g.Why, min(MaxGapWhyBytes, reasons)+jsonLen(""))
+		spent := jsonLen(g.Why) - jsonLen("")
+		reasons, budget = reasons-spent, budget-spent
+	}
+	sets := make([]*RepoSet, 0, len(c.NotAnswering)+8)
+	for i := range c.NotAnswering {
+		sets = append(sets, &c.NotAnswering[i].Repos)
+	}
+	sets = append(sets, &c.Building, &c.Stale, &c.NotPermitted, &c.NoRef, &c.PastLimit, &c.NotIndexed,
+		&c.GrepNotNamed)
+	for _, s := range sets {
+		slices.Sort(s.Names)
+		kept := 0
+		for _, n := range s.Names {
+			// A name costs its quoted bytes and the comma before it.
+			cost := jsonLen(n) + 1
+			if cost > budget {
+				break
+			}
+			budget -= cost
+			kept++
+		}
+		s.Names = s.Names[:kept:kept]
+		if s.Names == nil {
+			s.Names = []string{}
+		}
+	}
+}
+
+// fitText is s in at most room bytes as JSON encodes it, cut on a rune and
+// marked where cut — or empty, quoted, where room holds no word of it.
+func fitText(s string, room int) string {
+	if jsonLen(s) <= room {
+		return s
+	}
+	for most := room - jsonLen(""); most > len("…"); {
+		cut := textcut.Within(s, most)
+		over := jsonLen(cut) - room
+		if over <= 0 {
+			return cut
+		}
+		most -= over
+	}
+	return ""
+}
+
+// jsonLen is how many bytes JSON encodes s in, its quotes included.
+func jsonLen(s string) int {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// A Go string always encodes: an invalid byte is written as U+FFFD.
+		return len(s) + len(`""`)
+	}
+	return len(b)
 }
 
 // round asks one round's assignment and answers the believed replies by
 // node: a reply is believed only where it verifies, is bound to this round's
 // request and names a node the round asked. The round ends once every node
 // asked has answered, or at RoundBudget.
-func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery,
+func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
 	assign map[string][]Assigned) (map[string]Reply, error) {
 	rctx, cancel := context.WithTimeout(ctx, RoundBudget)
 	defer cancel()
 	deadline, _ := rctx.Deadline()
 	req := Request{Version: Protocol, ID: signedask.NewID(), Deadline: deadline, Asker: q.Asker,
-		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: sq, Assign: assign}
+		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: sq, Assign: assign}
 	sealed, err := s.wire.SealRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("codesearch: seal the search: %w", err)
@@ -685,7 +871,7 @@ func (s *Searcher) record(via string, took time.Duration, c Coverage) {
 	}
 	for reason, n := range map[string]int{"not_indexed": c.NotIndexed.Count, "building": c.Building.Count,
 		"not_answering": not, "not_permitted": c.NotPermitted.Count, "grep_not_named": c.GrepNotNamed.Count,
-		"stale": c.Stale.Count, "no_ref": c.NoRef.Count} {
+		"stale": c.Stale.Count, "no_ref": c.NoRef.Count, "past_limit": c.PastLimit.Count} {
 		if n > 0 {
 			s.metrics.Add(metrics.CodeSearchCoverage, uint64(n), metrics.Attrs{"reason": reason})
 		}

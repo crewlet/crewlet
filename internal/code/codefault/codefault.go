@@ -1,6 +1,6 @@
 // Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
-// compaction, publication, engine write and expunge paths, of a check's run
-// and of an import and a pull mirror's sync, and the one seam that reaches
+// compaction, publication and engine write paths, of a check's run, and of an
+// expunge, an import and a pull mirror's sync, and the one seam that reaches
 // them. Production passes a nil [Injector] and every call site is a nil
 // check; the suites pass a [*Script].
 //
@@ -206,6 +206,13 @@ const (
 	// next boot empties.
 	ChainAfterBuild Point = "chain.after_build"
 
+	// CheckAfterClaim: a git node's runner holds a queued check — its claim
+	// applied, the row naming it the attempt's runner — and has made no box
+	// (internal/code/checkrun): a runner that dies here leaves a running row
+	// nothing will end but the repository's home, which sweeps a runner gone
+	// from its git order.
+	CheckAfterClaim Point = "check.after_claim"
+
 	// ExpungeAfterBuild: an expunge's build has written its kept and its
 	// dropping packs into the expunge's scratch, and nothing of them is
 	// stored or proposed (internal/code/compact).
@@ -222,13 +229,6 @@ const (
 	// expunge's commit, and its rescue is not yet adopted into the building
 	// node's cache.
 	ExpungeAfterCommit Point = "expunge.after_commit"
-
-	// CheckAfterClaim: a git node's runner holds a queued check — its claim
-	// applied, the row naming it the attempt's runner — and has made no box
-	// (internal/code/checkrun): a runner that dies here leaves a running row
-	// nothing will end but the repository's home, which sweeps a runner gone
-	// from its git order.
-	CheckAfterClaim Point = "check.after_claim"
 
 	// ImportAfterBuild: an import's attempt has fetched the source into its
 	// scratch and cut what arrived into the packs it stores, and nothing of
@@ -288,13 +288,13 @@ var mergePath = []Point{MergeAfterBuild}
 // entries merged and its pack made, before its bundle is stored.
 var chainPath = []Point{ChainAfterBuild}
 
-// expungePath is an expunge's points in the order its maintainer reaches them:
-// its build, its begin applied, its rescue stored, its commit answered.
-var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
-
 // checkPath is a check's run's points in the order its runner reaches them:
 // its claim applied, before any box.
 var checkPath = []Point{CheckAfterClaim}
+
+// expungePath is an expunge's points in the order its maintainer reaches them:
+// its build, its begin applied, its rescue stored, its commit answered.
+var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
 
 // importPath is an import's points in the order its home reaches them: its
 // build, a chunk stored, the committer's answer to it.
@@ -346,15 +346,15 @@ func MergePath() []Point { return slices.Concat(mergePath, landingPath) }
 // reason.
 func ChainPath() []Point { return slices.Clone(chainPath) }
 
-// ExpungePath is an expunge's points in the order its maintainer reaches them,
-// every one hit by internal/code/compact. A fresh copy at every call, for
-// [PushPath]'s reason: the expunge's crash matrix walks it.
-func ExpungePath() []Point { return slices.Clone(expungePath) }
-
 // CheckPath is a check's run's points in the order its runner reaches them,
 // every one hit by internal/code/checkrun. A fresh copy at every call, for
 // [PushPath]'s reason.
 func CheckPath() []Point { return slices.Clone(checkPath) }
+
+// ExpungePath is an expunge's points in the order its maintainer reaches them,
+// every one hit by internal/code/compact. A fresh copy at every call, for
+// [PushPath]'s reason: the expunge's crash matrix walks it.
+func ExpungePath() []Point { return slices.Clone(expungePath) }
 
 // ImportPath is an import's points in the order its home reaches them, every
 // one hit by internal/code/mirror. A fresh copy at every call, for
@@ -368,19 +368,21 @@ func MirrorPath() []Point { return slices.Clone(mirrorPath) }
 
 // Points is the closed set: every point, the push path first in pipeline
 // order, then the sync's, the compaction's and the publication's, then the
-// engine write's own, the merge's and the chain's, then the expunge's, then a
-// check's run's, then an import's and a pull mirror's sync's. A fresh copy at
-// every call, so no importer can rewrite what [Point.Valid] accepts.
+// engine write's own, the merge's and the chain's, then a check's run's, then
+// the expunge's, an import's and a pull mirror's sync's — the milestone
+// spec's order (M6 §0), held whatever order the paths landed in, so the set
+// reads as the domain grew. A fresh copy at every call, so no importer can
+// rewrite what [Point.Valid] accepts.
 func Points() []Point {
 	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, chainPath,
-		expungePath, checkPath, importPath, mirrorPath)
+		checkPath, expungePath, importPath, mirrorPath)
 }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
 		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(mergePath, p) ||
-		slices.Contains(chainPath, p) || slices.Contains(expungePath, p) || slices.Contains(checkPath, p) ||
+		slices.Contains(chainPath, p) || slices.Contains(checkPath, p) || slices.Contains(expungePath, p) ||
 		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p)
 }
 

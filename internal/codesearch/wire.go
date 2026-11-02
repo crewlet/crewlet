@@ -55,7 +55,13 @@ type Request struct {
 	CeilingSeat string             `json:"ceiling_seat,omitempty"`
 	Turn        string             `json:"turn,omitempty"`
 	Fresh       statelog.Freshness `json:"fresh"`
-	Search      code.SearchQuery   `json:"search"`
+	// Head is the code log's head as the asker's linearizable listing of
+	// the repositories read it (code.GitQuery.Head), zero where it listed
+	// them at another level: each repository's one second look syncs to it
+	// rather than taking a barrier of its own, so a search naming a ref most
+	// repositories lack costs the fleet the one barrier its listing took.
+	Head   statelog.Position `json:"head,omitzero"`
+	Search code.SearchQuery  `json:"search"`
 
 	// Assign is every node asked this round and the repositories it answers
 	// for, each repository named under exactly one node.
@@ -137,7 +143,8 @@ type Reply struct {
 	// Repos is what became of each repository assigned it.
 	Repos []RepoResult `json:"repos,omitempty"`
 	// Hits are the first Limit lines of its repositories' answers by (name,
-	// path, line); Cut says it left lines out past them.
+	// path, line); Cut says it left lines out past them, or named a
+	// repository past the limit ([OutcomePastLimit]).
 	Hits []Hit `json:"hits,omitempty"`
 	Cut  bool  `json:"cut,omitempty"`
 }
@@ -166,11 +173,18 @@ const (
 	// OutcomeFailed means the node refused it for any other reason — a request
 	// this build reads otherwise than its asker's; its runner-up is asked.
 	OutcomeFailed Outcome = "failed"
+	// OutcomePastLimit means no line of it can be in the answer: the node's
+	// first Limit lines are all of repositories named before it, so every line
+	// it holds sorts after them. Read or passed over unread — which turns on
+	// how the node's reads interleaved, so the node names it by its name alone
+	// once every read has returned. Final: its runner-up is never asked.
+	OutcomePastLimit Outcome = "past_limit"
 )
 
 // Outcomes is the closed set.
 func Outcomes() []Outcome {
-	return []Outcome{OutcomeSearched, OutcomeUnready, OutcomeNotPermitted, OutcomeNoRef, OutcomeFailed}
+	return []Outcome{OutcomeSearched, OutcomeUnready, OutcomeNotPermitted, OutcomeNoRef, OutcomeFailed,
+		OutcomePastLimit}
 }
 
 // RepoResult is one repository's outcome.

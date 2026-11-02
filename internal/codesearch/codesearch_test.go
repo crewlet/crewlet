@@ -1,6 +1,7 @@
 package codesearch_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -73,23 +75,31 @@ func indexed(name string, order ...string) repo {
 	return repo{ref: code.RepoRef{ID: "id-" + name, Name: name, Search: code.SearchIndexed}, order: order}
 }
 
-// estate answers the listing and the walk from the fake company.
+// estate answers the listing and the walk from the fake company; where head
+// is set, its reads of the rows answer at it, at level (linearizable where
+// unset), and the walk records the head each read names.
 type estate struct {
 	mu    sync.Mutex
 	repos []repo
 	reads int
 	// at is every repository the walk was asked to search, as
 	// "<name>@<ref>".
-	at []string
+	at    []string
+	head  statelog.Position
+	level statelog.ReadLevel
+	heads []statelog.Position
 }
 
 func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
+	var out code.ReadAnswer
+	if !e.head.IsZero() {
+		out.Position, out.Level = e.head, cmp.Or(e.level, statelog.ReadLinearizable)
+	}
 	switch q.Kind {
 	case code.ReadRepos:
-		var out code.ReadAnswer
 		for _, r := range e.repos {
 			out.Repos = append(out.Repos, code.RepoSummary{RepoRef: r.ref})
 		}
@@ -97,7 +107,8 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	case code.ReadRepo:
 		for _, r := range e.repos {
 			if r.ref.Name == q.Repo {
-				return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: r.ref}}}, nil
+				out.Repo = &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: r.ref}}
+				return out, nil
 			}
 		}
 		return code.ReadAnswer{}, code.ErrRepoNotFound
@@ -109,6 +120,7 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
+	e.heads = append(e.heads, q.Head)
 	for _, r := range e.repos {
 		if r.ref.ID == q.RepoID {
 			e.at = append(e.at, r.ref.Name+"@"+q.Search.Ref)
@@ -138,8 +150,9 @@ type node struct {
 	asked []string
 	// at is every repository asked, as "<name>@<ref>": the commit or ref
 	// it was searched at.
-	at []string
-	mu sync.Mutex
+	at    []string
+	heads []statelog.Position
+	mu    sync.Mutex
 }
 
 func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -150,6 +163,7 @@ func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) 
 		n.mu.Lock()
 		n.asked = append(n.asked, r.ref.Name)
 		n.at = append(n.at, r.ref.Name+"@"+q.Search.Ref)
+		n.heads = append(n.heads, q.Head)
 		n.mu.Unlock()
 		if err := n.fault[r.ref.Name]; err != nil {
 			return code.GitAnswer{}, err
@@ -188,12 +202,16 @@ func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool)
 	return nil
 }
 
+// shareUnits is every fake node's seat git-work share: four units, a git
+// node of eight cores (code.ShareOf).
+const shareUnits = 4
+
 func newFleet(t *testing.T, e *estate, nodes map[string]*node) *fleet {
 	t.Helper()
 	f := &fleet{servers: map[string]*codesearch.Server{}, silent: map[string]bool{}}
 	for id, n := range nodes {
 		n.e = e
-		s, err := codesearch.NewServer(wire(t, fleetRing), id, n)
+		s, err := codesearch.NewServer(wire(t, fleetRing), id, n, shareUnits)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +412,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	r := indexed("alpha", "git-a")
 	r.lines = []code.SearchHit{line("a.go", 1)}
 	n := &node{e: &estate{repos: []repo{r}}}
-	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n)
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,5 +657,305 @@ func TestARepositoryThatStoppedEarlyEndsTheMerge(t *testing.T) {
 	if want := hitsOf(cobalt, dune); !reflect.DeepEqual(got.Hits, want) || !got.Coverage.Truncated {
 		t.Errorf("past a repository with no line read answered %v (truncated %t), want %v, truncated",
 			got.Hits, got.Coverage.Truncated, want)
+	}
+}
+
+// A NODE HOLDS THE FIRST LIMIT LINES, NEVER EVERY ANSWER: a node assigned
+// many repositories, each answering the search's whole limit of lines, reads
+// them in the order of their names and folds each answer in as it returns —
+// so once the first answers fill the limit, every repository named after
+// them is passed over unread, and the node reads at most the reads one
+// request runs at once, whatever it is assigned. The answer is the first
+// repository's lines, and every other repository is named past the limit,
+// by its name, however the reads interleaved.
+//
+// Mutations: collect every answer and cut once the last returns, and the
+// node reads every repository, red; fold without cutting at the limit, and
+// nothing is ever passed, red.
+func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
+	t.Parallel()
+	const limit = 5
+	at := codesearch.ScatterReads(shareUnits)
+	n := 3*at + 7
+	var repos []repo
+	for i := range n {
+		r := indexed(fmt.Sprintf("repo-%03d", i), "git-a")
+		for j := range limit {
+			r.lines = append(r.lines, line(fmt.Sprintf("f%d.go", j), 1))
+		}
+		repos = append(repos, r)
+	}
+	e := &estate{repos: repos}
+	a := &node{}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a}))
+	q := query("needle")
+	q.Limit = limit
+	got, err := s.Search(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.asked) > at {
+		t.Errorf("the node read %d of its %d repositories, want at most the %d it reads at once",
+			len(a.asked), n, at)
+	}
+	var want []codesearch.Hit
+	for _, h := range repos[0].lines {
+		want = append(want, codesearch.Hit{Repo: "repo-000", SearchHit: h})
+	}
+	if !reflect.DeepEqual(got.Hits, want) {
+		t.Errorf("hits %v, want repo-000's %d lines", got.Hits, limit)
+	}
+	c := got.Coverage
+	if c.Searched != 1 || c.PastLimit.Count != n-1 || !c.Truncated {
+		t.Errorf("searched %d, past the limit %d, truncated %t; want 1, %d and true", c.Searched,
+			c.PastLimit.Count, c.Truncated, n-1)
+	}
+}
+
+// sharedReads is a git node's reads as query's take the node's share: each
+// read's search holds a unit of it until the test lets it go, and how many
+// reads have begun is counted.
+type sharedReads struct {
+	share   *code.GitShare
+	release chan struct{}
+	mu      sync.Mutex
+	began   int
+}
+
+func (r *sharedReads) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	r.mu.Lock()
+	r.began++
+	r.mu.Unlock()
+	done, err := r.share.Take(ctx, q.SeatWork())
+	if err != nil {
+		return code.GitAnswer{}, err
+	}
+	defer done()
+	<-r.release
+	return code.GitAnswer{Kind: code.GitSearch, Search: &code.SearchAnswer{Hits: []code.SearchHit{},
+		Tip: strings.Repeat("c", 40), Via: code.SearchViaIndex}}, nil
+}
+
+func (r *sharedReads) begun() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.began
+}
+
+// grep is a `search: grep` repository of the fake company.
+func grep(name string, order ...string) repo {
+	r := indexed(name, order...)
+	r.ref.Search = code.SearchGrep
+	return r
+}
+
+// A FILTER PAST THE GREP BOUND IS REFUSED UNREAD: a repo: filter naming thirty
+// grep repositories is refused once more than MaxGrepRepos of their rows have
+// arrived, the reads in flight cancelled and the rest never begun — not after
+// a read of every name.
+//
+// Mutation: read every name and count the grep repositories after, and all
+// thirty are read, red.
+func TestAFilterPastTheGrepBoundIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	var repos []repo
+	var names []string
+	for i := range 30 {
+		r := grep(fmt.Sprintf("scratch-%02d", i), "git-a")
+		repos, names = append(repos, r), append(names, r.ref.Name)
+	}
+	e := &estate{repos: repos}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
+	q := query("needle")
+	q.Search.Repos = names
+	if _, err := s.Search(context.Background(), q); !errors.Is(err, code.ErrInvalid) ||
+		!strings.Contains(err.Error(), "searched with git grep") {
+		t.Fatalf("a filter naming %d grep repositories = %v, want refused past the bound", len(names), err)
+	}
+	if most := codesearch.MaxGrepRepos + 1 + codesearch.ResolveReads; e.reads > most {
+		t.Errorf("the refused filter read %d of its %d names, want at most %d", e.reads, len(names), most)
+	}
+}
+
+// wave is the fake company whose rows a repository's read answers only once
+// every one of a wave's reads has begun: a read made alone waits for company
+// that never comes, and is refused.
+type wave struct {
+	*estate
+	want int
+	mu   sync.Mutex
+	in   int
+	all  chan struct{}
+}
+
+func (w *wave) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind == code.ReadRepo {
+		w.mu.Lock()
+		if w.in++; w.in == w.want {
+			close(w.all)
+		}
+		w.mu.Unlock()
+		select {
+		case <-w.all:
+		case <-time.After(10 * time.Second):
+			return code.ReadAnswer{}, errors.New("the row's read began alone: no other name's began beside it")
+		}
+	}
+	return w.estate.Read(ctx, q)
+}
+
+// A FILTER'S NAMES ARE READ BESIDE EACH OTHER: a repo: filter naming six
+// repositories reads their six rows at once — one wave, whose linearizable
+// reads join one barrier — never one after another, a barrier each.
+//
+// Mutation: read the names one at a time, and the first waits alone and is
+// refused, red.
+func TestAFiltersNamesAreReadBesideEachOther(t *testing.T) {
+	t.Parallel()
+	var repos []repo
+	var names []string
+	for i := range 6 {
+		r := indexed(fmt.Sprintf("repo-%d", i), "git-a")
+		repos, names = append(repos, r), append(names, r.ref.Name)
+	}
+	e := &estate{repos: repos}
+	w := &wave{estate: e, want: len(names), all: make(chan struct{})}
+	s, err := codesearch.New(codesearch.Options{Estate: w, Placement: e,
+		Ask: newFleet(t, e, map[string]*node{"git-a": {}}).ask, Wire: wire(t, fleetRing)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := query("needle")
+	q.Search.Repos = names
+	got, err := s.Search(context.Background(), q)
+	if err != nil {
+		t.Fatalf("a filter of %d names = %v, want them read in one wave", len(names), err)
+	}
+	if got.Coverage.Searched != len(names) {
+		t.Errorf("searched %d repositories, want %d", got.Coverage.Searched, len(names))
+	}
+}
+
+// EVERY REPOSITORY LOOKS AT THE HEAD ITS LISTING READ: a search whose
+// listing of the asker's repositories was linearizable hands the position it
+// answered at to every repository's read — the scatter's on every node, and a
+// one-repository search's through the walk — as the head a second look syncs
+// to, so the fleet takes no barrier a repository; a listing at another level
+// found no head, and hands none.
+//
+// Mutations: build the scatter's request without the head, and the nodes'
+// reads name none, red; take a listing's position at any level for a head,
+// and the stale listing's names one, red.
+func TestEveryRepositoryLooksAtTheHeadItsListingRead(t *testing.T) {
+	t.Parallel()
+	head := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 42}
+	e := &estate{repos: []repo{indexed("alpha", "git-a"), indexed("beta", "git-b"), indexed("gamma", "git-a")},
+		head: head}
+	a, b := &node{}, &node{}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a, "git-b": b}))
+	if _, err := s.Search(context.Background(), query("needle")); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Concat(a.heads, b.heads)
+	if len(got) != 3 || slices.ContainsFunc(got, func(p statelog.Position) bool { return p != head }) {
+		t.Errorf("the scatter's reads named the heads %v, want %v for each of the three", got, head)
+	}
+	one := query("needle")
+	one.Search.Repos = []string{"beta"}
+	if _, err := s.Search(context.Background(), one); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.heads) != 1 || e.heads[0] != head {
+		t.Errorf("the one repository's walk named the heads %v, want %v", e.heads, head)
+	}
+
+	// A LISTING AT THE STALE LEVEL answered where its node's copy stood,
+	// which is no head of the log.
+	stale := &estate{repos: e.repos, head: head, level: statelog.ReadStale}
+	c := &node{}
+	if _, err := searcher(t, stale, newFleet(t, stale, map[string]*node{"git-a": c, "git-b": c})).Search(
+		context.Background(), query("needle")); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.heads) != 3 || slices.ContainsFunc(c.heads, func(p statelog.Position) bool { return !p.IsZero() }) {
+		t.Errorf("a stale listing's reads named the heads %v, want none", c.heads)
+	}
+}
+
+// A SEAT'S READ FINDS A UNIT WHILE A SEARCH RUNS: a git node answering a
+// search of many repositories, each of whose reads holds a unit of the node's
+// seat git-work share while it searches, starts no more of them at once than
+// all but one of the share's units — so a seat's ordinary read, taking its
+// unit of the same share meanwhile, is granted one at once rather than
+// queued behind the search's reads — and the search still reads every
+// repository once the units come free.
+//
+// Mutation: bound a request's reads by the queue's answer slots instead of
+// the share, and the search takes every unit and queues behind them, so the
+// seat's read waits out the share's wait and is answered unready, red.
+func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
+	t.Parallel()
+	const readSlots = 8
+	share := code.NewGitShare("git-a", readSlots, nil)
+	units := share.Units()
+	bound := codesearch.ScatterReads(units)
+	reads := &sharedReads{share: share, release: make(chan struct{})}
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", reads, units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assign []codesearch.Assigned
+	for i := range 4 * units {
+		assign = append(assign, codesearch.Assigned{RepoID: fmt.Sprintf("id-%02d", i), Name: fmt.Sprintf("r%02d", i),
+			Home: true})
+	}
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute),
+		Asker: person, Search: code.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
+		Assign: map[string][]codesearch.Assigned{"git-a": assign}}
+	sealed, err := wire(t, fleetRing).SealRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan []byte, 1)
+	go func() {
+		raw, _ := srv.Answer(context.Background(), sealed)
+		answered <- raw
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for share.Held() < bound {
+		if time.Now().After(deadline) {
+			t.Fatalf("the search holds %d of the share's %d units, and never reached %d", share.Held(), units, bound)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A READ PAST THE BOUND WOULD START AT ONCE: every one waits on nothing
+	// but its slot.
+	for settle := time.Now().Add(200 * time.Millisecond); time.Now().Before(settle); time.Sleep(time.Millisecond) {
+		if n := reads.begun(); n > bound {
+			t.Fatalf("the search began %d reads at once, past the %d of the share's %d units it may hold", n, bound,
+				units)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), code.GitShareWait)
+	defer cancel()
+	done, err := share.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		t.Fatalf("a seat's read beside the search = %v, want a unit at once", err)
+	}
+	done()
+	close(reads.release)
+	rep, why, err := wire(t, fleetRing).OpenReply(<-answered, "req-share")
+	if err != nil || why != "" {
+		t.Fatalf("the search's reply: %v %q", err, why)
+	}
+	for _, r := range rep.Repos {
+		if r.Outcome != codesearch.OutcomeSearched {
+			t.Errorf("repository %s: %s (%s), want it searched once the units came free", r.RepoID, r.Outcome,
+				r.Detail)
+		}
+	}
+	if len(rep.Repos) != len(assign) || reads.begun() != len(assign) {
+		t.Errorf("the reply names %d repositories and %d reads began, want %d each", len(rep.Repos), reads.begun(),
+			len(assign))
 	}
 }

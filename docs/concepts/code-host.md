@@ -1409,6 +1409,23 @@ dropping packs ([metrics reference](../reference/metrics.md)); its log says
 `code_expunge_failed` with why when a cycle stops — each tried again at the
 next pass.
 
+The repository's detail keeps only the **latest** expunge, so every one is
+also an event: once a commit applies, the maintainer that proposed it
+publishes one `code_expunged` — the repository by id and name, the purge it
+served (none for one the weekly schedule began), the expunge's id, the
+objects and bytes it dropped, its commit's position on the code log, and
+`store_until`, the latest a healthy fleet's object store keeps the dropped
+bytes (the day's grace, then the retention duty's quarter-hour and the
+collector's hour, above). The event log keeps it out of the activity feed
+— the person who asked for a purge is already there, as their
+`operator_acted` — for whoever asks what left a repository and when
+([What gets stored, and under which
+category](../guides/deployment.md#what-gets-stored-and-under-which-category)).
+A commit the maintainer did not hear applied (its answer pending, or the node gone
+before it published) is no event, and a stream that does not take the
+event within five seconds is logged `code_expunged_unpublished`; the commit
+stands either way, and the repository's detail names it.
+
 **What it costs.** On the schedule, the scan that judges an expunge due is
 one `git rev-list` over the repository's whole history, each object it names
 looked up in the index of every pack old enough to rewrite, and every
@@ -5138,6 +5155,20 @@ sequenceDiagram
   round. A round waits at most nine seconds — a node's two-second wait for
   its share of git work, the search's own five, and a second each way — and
   ends as soon as every node it asked has answered.
+- **Never the whole share.** Every search a git node answers reads, together,
+  at most all but one unit of the node's share of git work for seats' reads
+  ([Server-side reads](#server-side-reads)), one where the share is one unit,
+  so a seat's read of a file, a log or a diff always finds a unit a search
+  cannot hold. A repository whose read could not start before its answer fell
+  due is unanswered for that node's share, and its runner-up is asked.
+- **One look at the log's head for the whole search.** A git node that would
+  answer a repository with no such ref, or refuse it, from a copy that may be
+  behind looks once more at the log's head first, as every read does
+  ([Server-side reads](#server-side-reads)). For a search, that head is the
+  one the asker's listing of its repositories read — linearizable for a seat
+  and a person — carried in the request: each repository's copy is brought to
+  it as a floor, so a company-wide search naming a branch most repositories
+  lack costs the one barrier its listing took, not one a repository.
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
@@ -5154,6 +5185,14 @@ sequenceDiagram
   costs the lines from its place on, never the whole search again, and a push
   between two pages neither repeats nor skips a line of the file the first was
   cut in. The `code_search` tool pages this way.
+- **Bounded by the limit, not by the company.** A node folds each
+  repository's lines into the ones it keeps as its read returns, so what a
+  search holds is its limit of lines and the reads in flight, however many
+  repositories a node answers for. And a node reads its repositories in the
+  order of their names: once the lines it keeps fill the limit and are all of
+  repositories named before the next one, that one cannot reach the answer
+  and is not read — a search for a common word reads the repositories that
+  fill its limit rather than every repository in the company.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -5169,6 +5208,7 @@ under `not_answering`, naming the runner-up, whatever the first node said:
 | `not_answering` | was not answered by the node named beside it, with why: silent, busy, failing, or holding no key the request is signed under |
 | `not_permitted` | the answering node's chart did not grant the asker: the configuration moved since the asker's listing |
 | `no_ref` | holds no ref or commit the search's `ref:` names |
+| `past_limit` | none of its lines can be in the answer: the answer holds the search's limit of lines, all of repositories named before it. Read or passed over unread, it is named here by its name either way, and `truncated` is set |
 
 and beside them `grep_not_named`, the `search: grep` repositories the asker
 may read that a search with no `repo:` filter leaves out — git grep over every
@@ -5176,7 +5216,12 @@ repository is a scan of the company, which the index is for, so a grep
 repository is searched only when a `repo:` filter names it, eight at most —
 and `not_indexed`, the indexed repositories among those searched that were
 read with git grep, no index answering for their tip yet. Each lists its
-first hundred names, in order, beside its whole count; `skipped_files` and
+first names, in order, beside its whole count: the names of every set and
+the reason of every node under `not_answering` share one budget of 4 KiB —
+the reasons at most half of it, each cut at 256 bytes, then the names, the
+repositories left unsearched first — so the coverage stays a small part of an
+answer however many repositories it names, and one entry naming each git
+node that did not answer is all that grows with the fleet; `skipped_files` and
 `truncated` add up those of every repository searched, and `truncated` is set
 too where the merge cut lines past the limit or past a repository that
 stopped early. A search asked after a line names only the repositories from

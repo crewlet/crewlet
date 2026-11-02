@@ -3139,6 +3139,24 @@ type GitQuery struct {
 	// is looked for once more at the log's head before it is answered
 	// [ErrObjectNotFound]. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
+	// Head is the code log's head AS THE ASKER READ IT, after it asked —
+	// the position its own linearizable read of the repositories' rows
+	// answered at — where the asker holds one: the read's ONE SECOND LOOK
+	// at the log's head (a refusal judged again on a copy that may be
+	// behind, a ref or an object the copy lacks) brings the copy to it, at
+	// session, in place of a barrier of its own. For a search of many
+	// repositories that is one barrier for the whole search, where each
+	// repository's own second look was a barrier and a linearizable round
+	// of its rows on a data node — thousands for a company-wide search
+	// naming a ref most repositories lack. It is a position every write the
+	// asker could have seen before it asked is at or before, so the look
+	// is as linearizable for the asker as its own barrier; a seat's look is
+	// charged to its turn's bucket all the same. Zero, the read takes its
+	// own barrier. A position on another log is [ErrInvalid]. An estate
+	// request's field and no record's, so it takes no versionedFields row:
+	// AS A STATED CONDITION, no build that carries the code domain has run
+	// without it — none of the domain is on main.
+	Head statelog.Position `json:"head,omitzero"`
 	// Cursor is a page's Next, handed back whole; empty for the first page.
 	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
 	// kind issues.
@@ -3577,6 +3595,9 @@ func (q GitQuery) Validate() error {
 	// along: a position on another names nothing a copy could reach.
 	if err := q.Fresh.OnlyOn(topics.CodeLogStream); err != nil {
 		return fmt.Errorf("%w: fresh: %w", ErrInvalid, err)
+	}
+	if err := q.Head.On(topics.CodeLogStream); err != nil {
+		return fmt.Errorf("%w: head: %w", ErrInvalid, err)
 	}
 	for _, s := range []struct {
 		kind    GitReadKind

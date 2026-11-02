@@ -11,10 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"runtime/metrics"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
@@ -120,22 +125,196 @@ func heap() int64 {
 	return int64(m.HeapAlloc)
 }
 
+// built is one build of the benchmark's tip AS THE CACHE BUILDS ONE
+// (internal/code/cache's indexBuild): each segment streamed straight into a
+// file of its own and opened over a read-only mapping of it, never over the
+// bytes written; merged as codeindex.MergeNewest says after each segment, a
+// merge's inputs unmapped and removed once it is placed.
+type built struct {
+	segs   []*codeindex.Segment
+	maps   [][]byte
+	paths  []string
+	sizes  []int64
+	source int64
+}
+
+// unmap gives back every mapping the build holds.
+func (o *built) unmap(b *testing.B) {
+	for _, m := range o.maps {
+		if err := unix.Munmap(m); err != nil {
+			b.Fatal(err)
+		}
+	}
+	o.segs, o.maps = nil, nil
+}
+
+// build indexes the tip, files in id order, into segments of segmentBytes of
+// source each, written into dir.
+func build(b *testing.B, dir string, corpus []corpusFile, ids []codeindex.OID, order []int,
+	segmentBytes int64) *built {
+
+	out := &built{}
+	// A FILE IS NEVER NAMED TWICE, as the cache's numbers are not (alloc):
+	// created again under a live segment's name, the file a mapping reads
+	// would be truncated under it.
+	placed := 0
+	place := func(write func(io.Writer) error) {
+		placed++
+		path := filepath.Join(dir, "seg-"+strconv.Itoa(placed))
+		f, err := os.Create(path)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := write(f); err != nil {
+			b.Fatal(err)
+		}
+		info, err := f.Stat()
+		if err != nil {
+			b.Fatal(err)
+		}
+		data, err := unix.Mmap(int(f.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			b.Fatal(err)
+		}
+		out.segs, out.maps = append(out.segs, open(b, data)), append(out.maps, data)
+		out.paths, out.sizes = append(out.paths, path), append(out.sizes, info.Size())
+	}
+	builder := &codeindex.Builder{}
+	write := func() {
+		if builder.Len() == 0 {
+			return
+		}
+		full := builder
+		place(func(w io.Writer) error { return codeindex.WriteSegment(w, full) })
+		out.source += full.SourceBytes()
+		builder = &codeindex.Builder{}
+		for codeindex.MergeNewest(out.sizes) {
+			n := len(out.segs)
+			place(func(w io.Writer) error { return codeindex.MergeSegments(w, out.segs[n-2:n], nil) })
+			for k := n - 2; k < n; k++ {
+				if err := unix.Munmap(out.maps[k]); err != nil {
+					b.Fatal(err)
+				}
+				if err := os.Remove(out.paths[k]); err != nil {
+					b.Fatal(err)
+				}
+			}
+			out.segs = append(out.segs[:n-2], out.segs[n])
+			out.maps = append(out.maps[:n-2], out.maps[n])
+			out.paths = append(out.paths[:n-2], out.paths[n])
+			out.sizes = append(out.sizes[:n-2], out.sizes[n])
+		}
+	}
+	var buf []byte
+	for _, i := range order {
+		buf = blob(corpus, i, buf)
+		if err := builder.Add(ids[i], buf); err != nil {
+			b.Fatal(err)
+		}
+		if builder.SourceBytes() >= segmentBytes {
+			write()
+		}
+	}
+	write()
+	return out
+}
+
+// buildPeak is the most heap a whole build holds at once — its builder's
+// postings and table, each segment's writing, and each merge's — over what
+// the benchmark itself holds (its corpus and the tip's ids): the live heap
+// every collection marks, sampled each millisecond, with collections made
+// every tenth of the heap's growth (GOGC=10) for the length of the build, so
+// the peak is read within a tenth of itself.
+func buildPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order []int, segmentBytes int64) int64 {
+	dir, err := os.MkdirTemp(b.TempDir(), "peak-*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	base := heap()
+	old := debug.SetGCPercent(10)
+	defer debug.SetGCPercent(old)
+	var peak atomic.Int64
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		live := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+			}
+			metrics.Read(live)
+			if v := int64(live[0].Value.Uint64()); v > peak.Load() {
+				peak.Store(v)
+			}
+		}
+	}()
+	got := build(b, dir, corpus, ids, order, segmentBytes)
+	close(stop)
+	<-done
+	got.unmap(b)
+	return peak.Load() - base
+}
+
+// listing is the heap the cache's build holds for the tip's LISTING beside
+// the build, for the whole of it (internal/code/cache's segments and
+// listTip): every file's path, blob and size; the tip's blobs, by id, which a
+// merge keeps; each fresh blob's size, by id; and the ids read and written,
+// sorted — modelled here by the same shapes over the benchmark's tip.
+func listing(corpus []corpusFile, ids []codeindex.OID) int64 {
+	type treeFile struct {
+		path string
+		blob codeindex.OID
+		size int64
+	}
+	base := heap()
+	files := make([]treeFile, len(ids))
+	tip := make(map[codeindex.OID]bool, len(ids))
+	sizes := map[codeindex.OID]int64{}
+	for i, id := range ids {
+		f := corpus[i%len(corpus)]
+		files[i] = treeFile{path: strconv.Itoa(i/len(corpus)) + "/" + f.path, blob: id, size: int64(len(f.data))}
+		tip[id], sizes[id] = true, int64(len(f.data))
+	}
+	fresh := make([]codeindex.OID, 0, len(sizes))
+	for id := range sizes {
+		fresh = append(fresh, id)
+	}
+	read := slices.Clone(fresh)
+	held := heap() - base
+	runtime.KeepAlive(files)
+	runtime.KeepAlive(tip)
+	runtime.KeepAlive(read)
+	runtime.KeepAlive(sizes)
+	runtime.KeepAlive(fresh)
+	return held
+}
+
 // BenchmarkCodeIndex measures code search's index at the size it is sized
 // for — a tip of 120k files, built from this repository's own tree (blob) —
 // and reports what re-derives its provisional figures (M3-O6):
 //
 //   - build-s/GB: the build's seconds a gigabyte of source, segments written
 //     as production writes them (a segment each codeindex.SegmentSourceBytes,
-//     merged as codeindex.MergeNewest says after each) into memory, where the
-//     cache streams each into its staged file and maps it back: no disk in
-//     the figure. The blobs are made in memory where the cache reads them
+//     merged as codeindex.MergeNewest says after each) straight into files
+//     and read back through mappings of them, as the cache's build does
+//     (build). The blobs are made in memory where the cache reads them
 //     through one cat-file;
 //   - index-B/src-B: the index's bytes — its segments and its tip map — a
 //     byte of the source it indexes;
-//   - seg-peak-MiB: the heap one segment's build holds at its peak, the
-//     builder's postings and table with the written segment beside them — a
-//     bound above the cache's build, which streams the segment to its file,
-//     and what codeindex.SegmentSourceBytes is sized by;
+//   - build-peak-MiB: the most heap the WHOLE build holds at once — each
+//     segment's builder and its writing, each merge — what
+//     codeindex.SegmentSourceBytes is sized by (buildPeak);
+//   - build-peak-next-MiB: the same at the next power of two,
+//     2·codeindex.SegmentSourceBytes, which the sizing rules out;
+//   - listing-MiB: the heap the cache's build holds beside it for the tip's
+//     listing, for the whole build (listing);
 //   - zlib-B/src-B: the tree's own files deflated as a pack deflates an
 //     object, a byte of source — the least a copy holding the tip takes,
 //     against which CodeIndexShare weighs the index;
@@ -170,54 +349,26 @@ func BenchmarkCodeIndex(b *testing.B) {
 	}
 
 	var (
-		segs    []*codeindex.Segment
-		sizes   []int64
-		source  int64
+		got     *built
 		elapsed time.Duration
 	)
+	root := b.TempDir()
 	for b.Loop() {
-		segs, sizes, source = nil, nil, 0
+		if got != nil {
+			got.unmap(b)
+		}
+		dir, err := os.MkdirTemp(root, "build-*")
+		if err != nil {
+			b.Fatal(err)
+		}
 		start := time.Now()
-		builder := &codeindex.Builder{}
-		write := func() {
-			if builder.Len() == 0 {
-				return
-			}
-			var out bytes.Buffer
-			if err := codeindex.WriteSegment(&out, builder); err != nil {
-				b.Fatal(err)
-			}
-			source += builder.SourceBytes()
-			builder = &codeindex.Builder{}
-			segs, sizes = append(segs, open(b, out.Bytes())), append(sizes, int64(out.Len()))
-			for {
-				if !codeindex.MergeNewest(sizes) {
-					return
-				}
-				n := len(segs)
-				var merged bytes.Buffer
-				if err := codeindex.MergeSegments(&merged, segs[n-2:], nil); err != nil {
-					b.Fatal(err)
-				}
-				segs = append(segs[:n-2], open(b, merged.Bytes()))
-				sizes = append(sizes[:n-2], int64(merged.Len()))
-			}
-		}
-		for _, i := range order {
-			buf = blob(corpus, i, buf)
-			if err := builder.Add(ids[i], buf); err != nil {
-				b.Fatal(err)
-			}
-			if builder.SourceBytes() >= codeindex.SegmentSourceBytes {
-				write()
-			}
-		}
-		write()
+		got = build(b, dir, corpus, ids, order, codeindex.SegmentSourceBytes)
 		elapsed = time.Since(start)
 	}
+	defer got.unmap(b)
 
 	var indexBytes int64
-	for _, n := range sizes {
+	for _, n := range got.sizes {
 		indexBytes += n
 	}
 	entries := make([]codeindex.TipEntry, benchFiles)
@@ -232,15 +383,18 @@ func BenchmarkCodeIndex(b *testing.B) {
 	indexBytes += tipMap.n
 
 	b.ReportMetric(float64(benchFiles), "files")
-	b.ReportMetric(float64(source)/(1<<30), "src-GiB")
-	b.ReportMetric(float64(len(segs)), "segments")
-	b.ReportMetric(elapsed.Seconds()/(float64(source)/1e9), "build-s/GB")
-	b.ReportMetric(float64(indexBytes)/float64(source), "index-B/src-B")
-	b.ReportMetric(float64(segmentPeak(b, corpus, ids, order))/(1<<20), "seg-peak-MiB")
+	b.ReportMetric(float64(got.source)/(1<<30), "src-GiB")
+	b.ReportMetric(float64(len(got.segs)), "segments")
+	b.ReportMetric(elapsed.Seconds()/(float64(got.source)/1e9), "build-s/GB")
+	b.ReportMetric(float64(indexBytes)/float64(got.source), "index-B/src-B")
+	b.ReportMetric(float64(buildPeak(b, corpus, ids, order, codeindex.SegmentSourceBytes))/(1<<20), "build-peak-MiB")
+	b.ReportMetric(float64(buildPeak(b, corpus, ids, order, 2*codeindex.SegmentSourceBytes))/(1<<20),
+		"build-peak-next-MiB")
+	b.ReportMetric(float64(listing(corpus, ids))/(1<<20), "listing-MiB")
 
 	b.ReportMetric(deflated(b, corpus), "zlib-B/src-B")
 
-	p50, p99 := queryTimes(b, corpus, segs, byID)
+	p50, p99 := queryTimes(b, corpus, got.segs, byID)
 	b.ReportMetric(float64(p50.Microseconds())/1e3, "query-p50-ms")
 	b.ReportMetric(float64(p99.Microseconds())/1e3, "query-p99-ms")
 }
@@ -282,33 +436,6 @@ type countingWriter struct{ n int64 }
 func (w *countingWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
 
 var _ io.Writer = (*countingWriter)(nil)
-
-// segmentPeak is the heap one segment's build holds at its peak: the
-// first codeindex.SegmentSourceBytes of the tip, in id order, added to a
-// builder and written beside it into memory: a bound above the cache's
-// build, which streams the segment into its staged file.
-func segmentPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order []int) int64 {
-	base := heap()
-	builder := &codeindex.Builder{}
-	var buf []byte
-	for _, i := range order {
-		buf = blob(corpus, i, buf)
-		if err := builder.Add(ids[i], buf); err != nil {
-			b.Fatal(err)
-		}
-		if builder.SourceBytes() >= codeindex.SegmentSourceBytes {
-			break
-		}
-	}
-	var out bytes.Buffer
-	if err := codeindex.WriteSegment(&out, builder); err != nil {
-		b.Fatal(err)
-	}
-	peak := heap() - base
-	runtime.KeepAlive(builder)
-	runtime.KeepAlive(out.Bytes())
-	return peak
-}
 
 // queryTimes is the p50 and p99 of benchQueries searches of segs: literals
 // taken from the unrotated copy's own lines, each an identifier of 6 to 40

@@ -560,6 +560,17 @@ code_mirror_pushed         # a repository's home pushed it to its push
                            # raises code_mirror_failing). STORED, NOT FED:
                            # the audit of what the company published
                            # (code-host.md, "Mirrors and imports")
+code_expunged              # an expunge's commit applied: repository by id
+                           # and name, the person's purge it served (none
+                           # for the weekly schedule), the expunge's id, the
+                           # objects and bytes it dropped, the commit's
+                           # position on the code log, and store_until — the
+                           # latest a healthy fleet's object store keeps
+                           # the dropped bytes. Published ONCE a commit, by
+                           # the maintainer that proposed it and heard it
+                           # applied. STORED, NOT FED: the audit of what left
+                           # a repository; the repository's detail keeps
+                           # only its latest (code-host.md, "Expunge")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

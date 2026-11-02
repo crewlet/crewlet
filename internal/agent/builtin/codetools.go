@@ -1185,8 +1185,10 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 //
 // The rest are no caller's refusal: a configuration apply's own wiring
 // (ErrNoActivation, ErrSuperseded, ErrNotConfigManaged), a proposal or a
-// published layer the domain's own machinery built wrong, a stored object
-// that is not what its row says, and a record a newer build wrote.
+// published layer the domain's own machinery built wrong, a re-anchoring
+// answer placing another set than its anchors (ErrMisplaced), which the
+// asking node tells as its own fault, a stored object that is not what its
+// row says, and a record a newer build wrote.
 func codeClass(err error) (tools.Refusal, bool) {
 	var unready *code.ErrGitUnready
 	switch {

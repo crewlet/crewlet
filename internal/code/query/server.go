@@ -764,8 +764,9 @@ func (r *read) grant() error {
 // copy calls deleted, or a grant its row refuses, may be one an activation
 // restored or opened since. So a read that would refuse on a copy not read at
 // the log's head syncs there once, judges the grant again on the row it
-// brings, and only then answers — a refused read costs one barrier, and a
-// served one none.
+// brings, and only then answers — a refused read costs one barrier, a served
+// one none, and one whose asker names the head it read (code.GitQuery.Head)
+// none of its own: it syncs to that head (lookAtHead).
 //
 // A SEAT'S SECOND LOOK IS ITS TURN'S TO PAY, from its seat's bucket on this
 // node (Options.Resyncs, code.NewResyncs): past it the refusal is answered
@@ -795,7 +796,7 @@ func (r *read) objects(ctx context.Context) (found, error) {
 		if !r.linear {
 			spent := r.resync()
 			if spent == nil {
-				if err = r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
+				if err = r.lookAtHead(ctx); err != nil {
 					return found{}, err
 				}
 				continue
@@ -814,6 +815,25 @@ func (r *read) objects(ctx context.Context) (found, error) {
 		return found{}, fmt.Errorf("%w: repository %s holds no object %s", code.ErrObjectNotFound,
 			r.synced.Repo.Name, absent)
 	}
+}
+
+// lookAtHead is the read's ONE SECOND LOOK at the log's head: the copy synced
+// to the head its asker read (code.GitQuery.Head), at session, where it names
+// one, and otherwise to a barrier of its own, at linearizable — either way a
+// copy no write its asker could have seen before asking is past, so the read
+// is judged as read at the head from then on. Its asker's head costs this
+// node no barrier: one taken by the asker for a whole search, against one for
+// every repository the search reads.
+func (r *read) lookAtHead(ctx context.Context) error {
+	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
+	if !r.q.Head.IsZero() {
+		fresh = statelog.FloorAt(statelog.ReadSession, r.q.Head)
+	}
+	if err := r.sync(ctx, fresh); err != nil {
+		return err
+	}
+	r.linear = true
+	return nil
 }
 
 // resync draws the read's one second look at the log's head from this node's

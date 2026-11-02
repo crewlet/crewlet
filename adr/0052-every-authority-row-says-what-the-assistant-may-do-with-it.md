@@ -43,8 +43,10 @@ verb and no other:
   refuses a grant `/assistant/` besides.
 - **An effect a grant would falsify or hide:** asking the knowledge base's own
   model (`answer_knowledge`, a model spend outside the turn's budget meter; the
-  assistant searches the same pages itself), and an open frame's render report
-  (`artifacts.ready`, which a grant that renders nothing would falsify).
+  assistant searches the same pages itself), an open frame's render report
+  (`artifacts.ready`, which a grant that renders nothing would falsify), and a
+  CI's report of a check (`code_report_check`, a measurement the row records
+  as the person's CI's, which a grant that ran no check would falsify).
 
 **Why "add a seat" works and "add a person" does not.** A seat is a part of the
 company document: adding one changes the org chart, and nothing in the answer

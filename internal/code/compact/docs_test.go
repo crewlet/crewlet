@@ -63,14 +63,16 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	}
 }
 
-// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md and
-// docs/guides/code.md tell an operator when an expunge is due (its share and
-// its least), how often a repository is asked (its interval), how long what a
-// force-push left is kept (the prune grace), how many packs a begin takes and
-// writes, how long the object store keeps what it dropped (the retire grace)
-// and what its builds are admitted at — in the constants' own figures, held
-// here, so moving one (ExpungeMinBytes is provisional until BenchmarkExpunge
-// decides it) cannot leave a page saying what the code no longer does.
+// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md,
+// docs/guides/code.md and docs/concepts/object-store.md (what a hosting
+// company's bucket grows by) tell an operator when an expunge is due (its
+// share and its least), how often a repository is asked (its interval), how
+// long what a force-push left is kept (the prune grace), how many packs a
+// begin takes and writes, how long the object store keeps what it dropped
+// (the retire grace) and what its builds are admitted at — in the constants'
+// own figures, held here, so moving one (ExpungeMinBytes is provisional until
+// BenchmarkExpunge decides it) cannot leave a page saying what the code no
+// longer does.
 //
 // Mutation: change code.ExpungeShare, code.ExpungeMinBytes, code.PruneGrace,
 // code.ExpungeInterval, code.MaxExpungeInputs, code.MaxExpungeOutputs,
@@ -92,9 +94,9 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 				share, least),
 			fmt.Sprintf("The %s is provisional", least),
 			fmt.Sprintf("due past a %s and %s", share, least),
-			fmt.Sprintf("last expunged %s ago or never", interval),
-			fmt.Sprintf("not scanned again on that node for %s, so a clean repository's history is walked at most once %s",
-				interval, interval),
+			fmt.Sprintf("last expunged or found clean %s ago or never", interval),
+			fmt.Sprintf("takes it off every git node's list for %s", interval),
+			fmt.Sprintf("so a clean repository's history is walked at most once %s", interval),
 			fmt.Sprintf("for **%s**, git's own `gc.pruneExpire` default: every object", graceDays),
 			fmt.Sprintf("stays fetchable by its id for %s, and no push in flight", grace),
 			fmt.Sprintf("kept **%s**, git's own `gc.pruneExpire` default, because the weekly", graceDays),
@@ -108,7 +110,7 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("the schedule waits for a %s of the repository to be unreachable", share),
 			fmt.Sprintf("%d bytes an object of the whole repository", gitproc.TransferBytesPerObject),
 			fmt.Sprintf("%s times `code.limits.max_blob_bytes` (%s by default)", numberWord(t, int(windowBlobs)), window),
-			fmt.Sprintf("a build adds %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
+			fmt.Sprintf("and %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
 		},
 		filepath.Join("guides", "code.md"): {
 			fmt.Sprintf("every %s once a %s of the repository, and at least %s, is unreachable, keeping what a "+
@@ -116,6 +118,11 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("rather than %s on", grace),
 			fmt.Sprintf("within %s of its deletion", grace),
 			fmt.Sprintf("the object store for %s,", retired),
+		},
+		filepath.Join("concepts", "object-store.md"): {
+			fmt.Sprintf("within `code.PruneGrace` (%s)", grace),
+			fmt.Sprintf("once more than a %s of the repository's live bytes and at least %s is unreachable",
+				share, least),
 		},
 	} {
 		path := filepath.Join(sourcetree.Root(t), "docs", page)

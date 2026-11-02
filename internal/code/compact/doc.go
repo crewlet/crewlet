@@ -383,7 +383,12 @@
 // WHAT A PURGE LEAVES BEHIND: the commit retires the dropping packs into
 // code_packs_retired, so a reader already on one finishes, and the store
 // deletes their bytes after code.RetireGrace and the collector's grace — the
-// purge's crewlet.code.expunge.dropped_bytes. Little of this loop is
+// purge's crewlet.code.expunge.dropped_bytes. The commit this node hears
+// applied is announced once, as code_expunged on the node's event stream
+// (Options.Events): what it dropped, at which position, and until when the
+// store holds it — the event log's account of every expunge, where the
+// repository's row keeps only its latest; one whose answer this node did not
+// hear is no event, and its row names it all the same. Little of this loop is
 // measured yet: [ExpungePoll] is the listing's, [ExpungeInputByteCap] the
 // compaction's half of a record's outputs, and code.ExpungeMinBytes stays
 // PROVISIONAL — BenchmarkExpunge's one run (its "Measured") placed the

@@ -300,10 +300,13 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 	if !call.local {
 		given = map[string]bool{"-git": call.gitPath != "", "-dry-run": call.dryRun}
 	}
-	var misplaced []string
+	// THE FLAGS AS THE COMMAND LINE WRITES THEM, unquoted, as -local is in
+	// the same sentence: a flag is copied onto a command, not read as a
+	// value somebody typed.
+	var misplaced []words.Said
 	for flag, set := range given {
 		if set {
-			misplaced = append(misplaced, flag)
+			misplaced = append(misplaced, words.Said(flag))
 		}
 	}
 	if len(misplaced) == 0 {
@@ -314,11 +317,11 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 	if call.local {
 		return importCall{}, fmt.Errorf("%s: the node's import alone, which creates the repository and "+
 			"fetches the source, where -local pushes from this machine into one that exists: drop them, or "+
-			"-local", strings.Join(misplaced, " and "))
+			"-local", words.And(misplaced))
 	}
 	return importCall{}, fmt.Errorf("%s: -local's alone, which pushes from this machine with its own git "+
 		"into a repository that exists: add -local, or drop them for the node to fetch the source",
-		strings.Join(misplaced, " and "))
+		words.And(misplaced))
 }
 
 // importer is -local's run of call: the repository the import fills and the

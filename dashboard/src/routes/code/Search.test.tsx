@@ -31,6 +31,7 @@ const coverage = {
   grep_not_named: { count: 1, names: ["scratch"] },
   stale: none,
   no_ref: none,
+  past_limit: none,
   skipped_files: 0,
   truncated: false,
 };

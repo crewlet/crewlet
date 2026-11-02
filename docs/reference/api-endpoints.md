@@ -7196,7 +7196,8 @@ And the tool's own refusal, carrying its person's words as `detail` where it
 has them, never the tool's sentence, which is written for a model and names
 the tool to call next. A `conflict` or an `exists` a native domain decided (a
 room archived, an item in the trash, a label another tag carries, a write that
-lost its race), a write about something deleted, and an `unavailable` about a
+lost its race), a write about something deleted, a change its target's merge
+gate does not allow yet (`not_ready`), and an `unavailable` about a
 condition of the node or the fleet (a node behind its log, a full log, a store
 that didn't answer, a note the node running a turn couldn't verify, or a coding
 run's record whose seat this node couldn't open, because the fleet's nodes don't
@@ -7254,8 +7255,9 @@ is about** and **what would make the same request land**:
   for the same reason.
 - **A change that does not meet its target's merge gate yet** is `not_ready`
   (`409`): nothing is wrong with the request or the change, and the same
-  request lands once every precondition is met; the `detail` names each unmet
-  one and who clears it.
+  request lands once every precondition is met. A tool's sentence names each
+  unmet one and who clears it; this route answers no `detail` for it, and the
+  change's readiness (`code_get_change`, or the change's page) names them.
 - **A limit with a class of its own** is that class, because what lifts it is
   not a change of the object and a surface names the remedy:
   `quota_exceeded` (the company's plan), `inbox_full` (a person's marks),
@@ -9524,8 +9526,8 @@ bytes that are not UTF-8), `line`, `text` (at most 256 bytes of it) and `blob`,
 the file's object id — in the order of repository, path and line; `tips`, the
 commit each repository with a hit was searched at, by its name; and
 `coverage`, what the search did and did not reach: `searched`, `building`,
-`stale`, `not_answering`, `not_permitted`, `no_ref`, `grep_not_named`,
-`not_indexed`, `skipped_files` and `truncated`, as [Code
+`stale`, `not_answering`, `not_permitted`, `no_ref`, `past_limit`,
+`grep_not_named`, `not_indexed`, `skipped_files` and `truncated`, as [Code
 search](../concepts/code-host.md#code-search) tells each. An empty `hits`
 says nothing matched in the repositories counted under `searched`, and no
 more: every set beside it but `not_indexed` names repositories the search did

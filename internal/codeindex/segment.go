@@ -107,22 +107,27 @@ var ErrMalformed = errors.New("codeindex: a file this build does not write; drop
 
 // SegmentSourceBytes is the most source one segment is built from: a
 // builder takes blobs until it has read this much (Builder.SourceBytes) and
-// the segment is written then, so what an index build holds is one segment's
-// postings — a byte or two for each distinct trigram of each blob, in lists
-// grown by doubling, and a table entry and a list header for each distinct
-// trigram of the segment — and the blob being read: at most 256 MiB at its
-// peak (M6's sizing). The segment itself is streamed to its file
-// (WriteSegment's writer buffers 64 KiB), and the cache reads every segment
-// back through a mapping. BenchmarkCodeIndex measured that peak at 120 MiB
-// for 256 MiB of source (37 MiB for 64 MiB: the table of distinct trigrams
-// grows slower than the source) with the written segment held in memory
-// beside it, a bound above what the streamed write holds, so 256 MiB
-// is the largest power of two measured within the bound; 512 MiB would be
-// 240 MiB by the rate at 256, with nothing left for the blob and the merge
-// beside it. Re-derived from the PROVISIONAL 64 MiB (M3-O6) by that run: a
-// tip of 120k files, 1.96 GiB of this repository's own tree, on two E-cores
-// of a Core Ultra 7 265U.
-const SegmentSourceBytes = 256 << 20
+// the segment is written then. A build holds one segment's postings at a time
+// — a byte or two for each distinct trigram of each blob, in lists grown by
+// doubling, and a table entry and a list header for each distinct trigram of
+// the segment — and its writing; then each merge's tables; and beside them,
+// for its whole length, the tip's listing. Every segment it has written it
+// reads back through a MAPPING of its file and holds none of (the cache's
+// build, internal/code/cache), the segment itself streamed to its file
+// (WriteSegment's writer buffers 64 KiB): the bound is the WHOLE build's
+// peak, at most 256 MiB (M6's sizing).
+//
+// BenchmarkCodeIndex measured that peak (build-peak-MiB) at 106.7 MiB for
+// segments of 512 MiB and 187.4 MiB for segments of 1 GiB, a tip's listing
+// beside it at 30.7 MiB, about 260 bytes a file. 512 MiB is the largest power
+// of two within the bound with the measurement's own tenth on top and room
+// for a tip of twice the sizing's files, whose listing doubles: 106.7·1.1 +
+// 2·30.7 = 179 MiB; 1 GiB is 268 MiB so, past it. Re-derived from 256 MiB,
+// which was sized by one segment's builder beside the segment it had written
+// (120 MiB) while every segment a build placed stayed in its heap — the
+// peak this bound did not hold — by a run over a tip of 120k files, 1.96 GiB
+// of this repository's own tree, on two E-cores of a Core Ultra 7 265U.
+const SegmentSourceBytes = 512 << 20
 
 // MaxSegments is the most segments one repository's index keeps: past it the
 // smaller ones are merged (MergeSegments), keeping only the blobs the tip
@@ -132,10 +137,10 @@ const SegmentSourceBytes = 256 << 20
 // blob is rewritten a logarithmic number of times over the index's life
 // rather than at every tip. Merged so, an index of I bytes keeps at most
 // log2(I / its smallest segment) + 1 — BenchmarkCodeIndex's 120k files index
-// in 0.29 GiB (0.147 bytes a source byte), and a segment of one small blob is
+// in 0.29 GiB (0.146 bytes a source byte), and a segment of one small blob is
 // about half a kilobyte, so at most 20 — and 32, the next power of two, binds
 // only on an index four thousand times larger, while its lookups cost
-// nothing a search notices (p50 11 ms and p99 417 ms over the whole search,
+// nothing a search notices (p50 16 ms and p99 432 ms over the whole search,
 // confirmation included). Re-derived, and kept, by that run (M3-O6).
 const MaxSegments = 32
 

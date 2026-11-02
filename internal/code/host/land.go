@@ -778,6 +778,12 @@ type invalidProposal struct{ err error }
 func (e *invalidProposal) Error() string { return e.err.Error() }
 func (e *invalidProposal) Unwrap() error { return e.err }
 
+// A box's credential never outlives the grace a scheduled expunge keeps a
+// deleted seat branch's commits for, which [Server.forged] relies on: were
+// RunTokenTTL ever past code.PruneGrace this constant would overflow, and the
+// build fail.
+const _ = uint64(code.PruneGrace - RunTokenTTL)
+
 // forged is land's step 8 for a coding box's push: the sentence its every
 // command still standing is refused forged_committer with, and refused true,
 // where the push's pack (commits, its commits as the blob scan spooled them)
@@ -791,10 +797,18 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 // ALREADY HELD IS NO FORGERY. A box's push may carry the engine's own commits
 // back: a seat branch deleted since the box checked it out — by the seat's
 // own tool, by a person, by the branch's expiry — leaves its commits in the
-// repository, since nothing removes an object a ref stopped reaching and a
-// compaction keeps what no ref reaches (ADR-0083), and git sends a commit no
-// ref the box was shown reaches. Refused, the host's own write would be
-// answered as a forgery of it. So every commit committed as the engine is
+// repository FOR code.PruneGrace AFTER THE DELETION: a compaction keeps what
+// no ref reaches (ADR-0083), and the deletion's code_ref_drops row keeps them
+// out of every scheduled expunge's drop set until the grace has passed
+// (ADR-0092) — and git sends a commit no ref the box was shown reaches.
+// Refused, the host's own write would be answered as a forgery of it. The
+// grace is enough because a box cannot outlive it: its credential is valid
+// RunTokenTTL (seven days) from its launch, half the fourteen-day grace, and
+// the branch it checked out was deleted after that launch, so no box pushes
+// a seat-branch commit a scheduled expunge has already dropped. A person's
+// purge keeps no drop (its grace is none), so once it commits a box pushing
+// such a commit back is refused forged_committer, as one pushing any commit
+// the repository never held is. So every commit committed as the engine is
 // asked whether the REPOSITORY holds it — ONE `cat-file --batch-check` of them
 // all in the copy the push's scratch leans on (cache.Cache.Missing over
 // l.Synced), never in the scratch, whose own objects are the push's — and

@@ -1701,6 +1701,7 @@ describe("code", () => {
               grep_not_named: none,
               stale: none,
               no_ref: none,
+              past_limit: none,
               skipped_files: 0,
               truncated: false,
             },

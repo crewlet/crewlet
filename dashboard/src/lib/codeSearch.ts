@@ -111,7 +111,7 @@ export interface CoverageNotes {
   notes: string[];
 }
 
-/** A set of repositories, by name — the first hundred the engine lists, and how many more. */
+/** A set of repositories, by name — the first the engine lists, and how many more. */
 function named(set: RepoSet): string {
   const names = set.names ?? [];
   const more = set.count - names.length;
@@ -167,6 +167,11 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
   }
   if (coverage.no_ref.count > 0) {
     notes.push(`Nothing to search at the ref named in ${counted(coverage.no_ref)}.`);
+  }
+  if (coverage.past_limit.count > 0) {
+    notes.push(
+      `Past the limit: ${counted(coverage.past_limit)}, named after the last line shown — narrow the search with repo: or path: to reach them.`,
+    );
   }
   if (coverage.skipped_files > 0) {
     notes.push(

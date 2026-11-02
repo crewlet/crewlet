@@ -10,8 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
@@ -24,17 +25,33 @@ type Reads interface {
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
-// ServeReads is the most of one request's repositories a node reads at once.
+// ScatterReads is how many of a git node's repositories its scatter reads at
+// once, ACROSS EVERY REQUEST it is answering, where its seat git-work share
+// (code.GitShare) holds units units: ALL BUT ONE of them, and one where the
+// share holds only one.
 //
-// queue.ConcurrentAnswers (64): the git each read runs is bounded by the
-// node's seat git-work share — half its read lane, a core a slot — which no
-// plausible host makes wider than this, so the bound never idles the share;
-// what it bounds is the rest of a read, its sync of the copy and its wait for
-// a unit, so a request assigning a node thousands of repositories holds 64
-// goroutines and syncs at once rather than thousands. A read that waits past
-// code.GitShareWait for a unit is answered unready share, and its runner-up
-// is asked.
-const ServeReads = queue.ConcurrentAnswers
+// TIED TO THE SHARE, because the share is what every scatter read waits on:
+// each one's search takes a unit of it (code.GitShare.Take), FIFO behind
+// every seat's read of a file, a log or a diff. Bounded by the requests'
+// answer slots instead (queue.ConcurrentAnswers, 64 a request, 64 requests a
+// node), one unfiltered search queued 64 waiters on every git node's share at
+// once and a few at once thousands, so every seat's ordinary read waited
+// behind them past code.GitShareWait and was answered unready on every node
+// alike. Bounded here, a node's scatter holds at most units-1 units and waits
+// for no other, so a seat's read always finds a unit the scatter cannot take,
+// and waits behind nothing a search started; and one search on an idle node
+// still uses every unit but that one. A read holds its unit around its search
+// alone, never around its sync of the copy (code.GitShare), so a scatter read
+// that is syncing holds its place here and no unit: the share's unit is then
+// free for a seat, at the price of the scatter running below units-1 for as
+// long as its reads sync — the bound is on the share the scatter can hold,
+// not on keeping it full.
+//
+// A NODE WHOSE SHARE IS ONE UNIT (a read lane of three cores or fewer:
+// code.ShareOf) has none to keep apart: the scatter there waits for that unit
+// FIFO beside the seats' reads, one read at a time, so a seat's read waits
+// behind at most one search's.
+func ScatterReads(units int) int { return max(1, units-1) }
 
 // errNotAsked is a request that assigns this node nothing: answered with
 // nothing, since a scatter is served by every git node and only the nodes it
@@ -48,15 +65,22 @@ type Server struct {
 	reads Reads
 	node  string
 	now   func() time.Time
+	// units is the node's seat git-work share, and scatter its
+	// ScatterReads(units) slots, taken by every request's reads alike, FIFO.
+	units   int
+	scatter *semaphore.Weighted
 }
 
-// NewServer is node's answerer over its reads, verifying requests with wire.
-func NewServer(wire *Wire, node string, reads Reads) (*Server, error) {
-	if wire == nil || reads == nil || node == "" {
-		return nil, errors.New("codesearch: a server needs the scatter's envelopes, its node's id and its " +
-			"reads")
+// NewServer is node's answerer over its reads, verifying requests with wire,
+// its reads bounded by a seat git-work share of units units
+// (code.GitShare.Units).
+func NewServer(wire *Wire, node string, reads Reads, units int) (*Server, error) {
+	if wire == nil || reads == nil || node == "" || units < 1 {
+		return nil, errors.New("codesearch: a server needs the scatter's envelopes, its node's id, its reads " +
+			"and its node's seat git-work share")
 	}
-	return &Server{wire: wire, taken: signedask.NewGuard(), reads: reads, node: node, now: time.Now}, nil
+	return &Server{wire: wire, taken: signedask.NewGuard(), reads: reads, node: node, now: time.Now,
+		units: units, scatter: semaphore.NewWeighted(int64(ScatterReads(units)))}, nil
 }
 
 // Answer answers one sealed request: queue.AnswerFunc's shape, the function
@@ -96,31 +120,61 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	return s.wire.SealReply(s.search(rctx, req, asked))
 }
 
-// search reads every repository asked, at most ServeReads at once, and keeps
-// the first Limit hits of them all. A line past the last of a repository that
-// stopped early is the asker's to leave out ([prefixEnd]), which it does from
-// the outcomes this reply carries; the node cuts by its limit alone.
+// search reads the repositories asked IN THE ORDER OF THEIR NAMES, in the
+// node's ScatterReads slots, folding each one's lines into the request's
+// merge as its read returns — so the request holds the first Limit lines and the
+// answers of the reads in flight, never every answer — and PASSES OVER a
+// repository the merge has passed: once the first Limit lines are all of
+// repositories named before it, none of its lines can be in the reply, so a
+// search for a common word reads the first repositories that fill the limit
+// and the reads in flight beside them rather than every repository assigned.
+// Every repository named after the last line kept is past the limit
+// ([OutcomePastLimit]), read or not: decided by its name once every read has
+// returned, so the reply is the same however the reads interleaved. A line
+// past the last of a repository that stopped early is the asker's to leave
+// out ([prefixEnd]), which it does from the outcomes this reply carries; the
+// node cuts by its limit alone.
 func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Reply {
 	results := make([]RepoResult, len(asked))
-	hits := make([][]Hit, len(asked))
-	slots := make(chan struct{}, ServeReads)
+	order := make([]int, len(asked))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(x, y int) int { return cmp.Compare(asked[x].Name, asked[y].Name) })
+	m := newMerge(req.Search.Hits())
 	var wg sync.WaitGroup
-	for i, a := range asked {
-		slots <- struct{}{}
+	for _, i := range order {
+		a := asked[i]
+		if err := s.scatter.Acquire(ctx, 1); err != nil {
+			// THE ANSWER FELL DUE, or its asker went away, before a slot came
+			// free: unready for this node's share, so its runner-up is asked.
+			results[i] = RepoResult{RepoID: a.RepoID, Outcome: OutcomeUnready, Unready: code.UnreadyShare,
+				Detail: fmt.Sprintf("%s's code searches held their part of its seat git-work share — %d of its "+
+					"%d units — until the search's answer fell due; another git node answers meanwhile", s.node,
+					ScatterReads(s.units), s.units)}
+			continue
+		}
+		// Asked once a slot is free: the reads that held it may have filled
+		// the limit meanwhile.
+		if m.passed(a.Name) {
+			s.scatter.Release(1)
+			continue
+		}
 		wg.Go(func() {
-			defer func() { <-slots }()
-			results[i], hits[i] = s.one(ctx, req, a)
+			defer s.scatter.Release(1)
+			var hits []Hit
+			results[i], hits = s.one(ctx, req, a)
+			m.fold(hits)
 		})
 	}
 	wg.Wait()
-	all := slices.Concat(hits...)
-	limit := req.Search.Hits()
-	slices.SortFunc(all, CompareHits)
 	out := Reply{Version: Protocol, Request: req.ID, Node: s.node, Repos: results}
-	if len(all) > limit {
-		all, out.Cut = all[:limit], true
+	out.Hits, out.Cut = m.lines()
+	for i, a := range asked {
+		if m.passed(a.Name) {
+			results[i], out.Cut = RepoResult{RepoID: a.RepoID, Outcome: OutcomePastLimit}, true
+		}
 	}
-	out.Hits = all
 	return out
 }
 
@@ -129,7 +183,7 @@ func (s *Server) one(ctx context.Context, req Request, a Assigned) (RepoResult, 
 	sq := req.Search
 	a.After.continueIn(a.Name, &sq)
 	got, err := s.reads.Read(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: a.RepoID, Asker: req.Asker,
-		CeilingSeat: req.CeilingSeat, Turn: req.Turn, Fresh: req.Fresh, Home: a.Home, Search: &sq})
+		CeilingSeat: req.CeilingSeat, Turn: req.Turn, Fresh: req.Fresh, Head: req.Head, Home: a.Home, Search: &sq})
 	r := RepoResult{RepoID: a.RepoID}
 	var unready *code.ErrGitUnready
 	switch {

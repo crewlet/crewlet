@@ -63,6 +63,17 @@
 // commit it was read at. The rest of its order is read as it stands then: a
 // repository after the key has had no line answered yet.
 //
+// A MERGE HOLDS THE LIMIT, NEVER THE ANSWERS: each answer is folded in as it
+// arrives and cut there, so a node assigned thousands of repositories holds
+// the first limit lines and the answers of the reads in flight, not every
+// answer until the last returns. And a node reads its repositories in the
+// order of their names, so once its first limit lines are all of repositories
+// named before the next, that one cannot reach the answer and is passed over
+// unread: a search for a common word reads the repositories that fill the
+// limit, not the company. Whether a repository was read or passed over turns
+// on how the reads interleaved, so the coverage names every repository after
+// the last line kept as past the limit (PastLimit) by its name alone.
+//
 // # What was not searched is said
 //
 // Every answer carries a [Coverage]: how many repositories answered, and each
@@ -70,7 +81,8 @@
 // behind the log or the company's configuration (Stale), a node that did not
 // answer (NotAnswering, naming the node and the repositories), a grant the
 // node's chart refuses (NotPermitted), a ref the repository does not hold
-// (NoRef) — beside the grep repositories an unfiltered search leaves out
+// (NoRef), every line of it past the answer's limit (PastLimit) — beside the
+// grep repositories an unfiltered search leaves out
 // (GrepNotNamed) and the indexed ones read with git grep (NotIndexed). A
 // search that could not reach part of the company never reads as one that
 // found nothing there.
@@ -79,9 +91,13 @@
 //
 // The text is bounded as knowledge search's is (codeindex.MaxQueryBytes, 400
 // bytes, refused and never cut). `search: grep` repositories are read only
-// when a repo: filter names them, at most [MaxGrepRepos]. A round waits at
+// when a repo: filter names them, at most [MaxGrepRepos]; a filter's names
+// are read beside each other, [ResolveReads] at once, so their linearizable
+// reads join one barrier a wave, and a filter past the grep bound is refused
+// as their rows arrive, the rest unread. A round waits at
 // most [RoundBudget] and ends as soon as every node it asked has answered; a
-// node reads at most [ServeReads] of its repositories at once, each one's git
-// under the node's seat git-work share and the search's own budget
-// (code.SearchBudget).
+// node's searches together read at most [ScatterReads] of its repositories at
+// once — all but one unit of its seat git-work share, which each read's git
+// takes, so a seat's ordinary read always finds one a search cannot hold —
+// each under the search's own budget (code.SearchBudget).
 package codesearch

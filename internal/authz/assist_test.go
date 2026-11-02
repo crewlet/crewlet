@@ -300,8 +300,10 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		authz.ActionAssistantConverse, authz.ActionAssistantConversationRead,
 		authz.ActionAssistantApprove, authz.ActionAssistantDecline,
 		authz.ActionAssistantAuditRead,
-		// an effect a grant would falsify or hide
-		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady,
+		// an effect a grant would falsify or hide: a model spend outside the
+		// turn's meter, a render only an open frame reports, and a check
+		// result only the CI that ran the check reports
+		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady, authz.ActionCodeReportCheck,
 		// an agent seat's own
 		authz.ActionColleagueAsk,
 	}
