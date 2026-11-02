@@ -114,6 +114,23 @@ test("the section asks the window from its start and narrows by state as the eng
   );
 });
 
+// THE WINDOW'S STATE CHIPS ARE THE ENDINGS ALONE: the window lists the
+// attempts that ended, and the engine refuses it narrowed to `queued` or
+// `running`, so no chip asks it either.
+// Mutation: offer every state (`CHECK_STATES`) → red.
+test("the window offers a chip for each ending and none for a state that never ends in it", async () => {
+  stubCodeEngine({ "/query/code_checks": LISTED });
+  mountCode("#/code/checks", <Checks />);
+  await screen.findByRole("table", { name: "Attempts of checks" });
+  const chips = within(screen.getByRole("group", { name: "State" }));
+  for (const ended of ["passed", "failed", "errored", "cancelled", "skipped"]) {
+    expect(chips.getByRole("button", { name: new RegExp(ended) })).toBeTruthy();
+  }
+  for (const live of ["queued", "running"]) {
+    expect(chips.queryByRole("button", { name: new RegExp(live) })).toBeNull();
+  }
+});
+
 // THE BARS ARE THE ATTEMPTS THAT ENDED, by when, the failed ones their foot.
 test("the chart buckets ended attempts by when they ended, failures apart", () => {
   const since = "2026-11-01T00:00:00Z";

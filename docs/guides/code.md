@@ -853,8 +853,9 @@ with nothing queued says so. The queues are read fifty entries at a time;
 **Code › Checks** (`#/code/checks`) is every repository's attempts that
 ended in a window — a day by default, at most the thirty days an ended
 attempt is kept — newest ended first, with a chart of when they ended (the
-failed ones the foot of each bar) and chips that narrow the listing by state
-and by a check's name; the engine narrows them, and the chart and the chips
+failed ones the foot of each bar) and chips that narrow the listing by the
+state an attempt ended in and by a check's name; the engine narrows them, and
+the chart and the chips
 count the attempts loaded, as each says. A repository's page has its own
 **Checks** tab, every attempt it keeps with no window, and a change's page
 has one too: the attempts that judge it, its head's, checked for its target.

@@ -411,19 +411,26 @@ func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 // commit for, in the engine's order.
 //
 // The Checks section's facets, its histogram's bars and every checks tab key
-// on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`): a state the
-// engine grew that the list lacks is an attempt no facet can narrow to, and
-// one the list keeps that the engine dropped is a facet the engine refuses
-// as a `state` it does not know ([code.CheckState.Valid]). Both ways, in
-// order.
+// on `CHECK_STATES`, `CHECK_ENDED_STATES` and `CHECK_PURPOSES`
+// (`contract/checks.ts`): a state the engine grew that the list lacks is an
+// attempt no facet can narrow to, and one the list keeps that the engine
+// dropped is a facet the engine refuses as a `state` it does not know
+// ([code.CheckState.Valid]) — or, among the endings the window's chips
+// offer, one the window refuses as never ending in it
+// ([code.CheckState.Ended]). Both ways, in order.
 //
-// Mutation: drop a state or a purpose from either side, or reorder the
-// dashboard's, and this fails.
+// Mutation: drop a state or a purpose from either side, list `running` among
+// the endings, or reorder the dashboard's, and this fails.
 func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
 	t.Parallel()
 	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(code.CheckStates())
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
+	}
+	ended := slices.DeleteFunc(code.CheckStates(), func(s code.CheckState) bool { return !s.Ended() })
+	got, want = theDashboardsList(t, "CHECK_ENDED_STATES"), spelledOut(ended)
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHECK_ENDED_STATES is %v, want the engine's endings, in order: %v", got, want)
 	}
 	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(code.CheckPurposes())
 	if !slices.Equal(got, want) {

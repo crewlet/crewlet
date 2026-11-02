@@ -7985,8 +7985,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   attempts that ended at or after the window's start and before its end
   (`since=`, `until=`), which the engine seeks from the end down, so a custom
   interval in the past reads its own newest attempts first rather than every
-  attempt that ended after it. A state
-  or a check's name narrows on the ENGINE (`state=`, `name=`), and the chart
+  attempt that ended after it. A state an attempt ended in — the window
+  holds none queued or running, and offers no chip for either — or a check's
+  name narrows on the ENGINE (`state=`, `name=`), and the chart
   and the chips count the pages loaded and say so. The listing, the pane and
   its log are one component every checks listing shares (`routes/code/checks`):
   this section, a repository's Checks tab (its own listing, which takes no

@@ -30,7 +30,7 @@ import { useNow } from "~/lib/clock.ts";
 import { checkStateWord } from "~/lib/checks.ts";
 import { barsOver, useTimeRange, type Bucket, type Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
-import { CHECK_STATES } from "~/contract/checks.ts";
+import { CHECK_ENDED_STATES } from "~/contract/checks.ts";
 import type { CodeCheckRow } from "~/protocol/index.ts";
 import { FacetRail, type Facet } from "~/ui/FacetRail.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
@@ -149,9 +149,14 @@ export function checkBars(
   return all.map((b, i) => ({ ...b, failed: failed[i]?.count ?? 0 }));
 }
 
-/** The state chips: every state a check can be in, counted over the rows loaded. */
+/**
+ * The state chips: every state an attempt ENDS in, counted over the rows
+ * loaded. The window lists the attempts that ended, so it holds none queued
+ * or running, and the engine refuses it narrowed to either: a chip for one
+ * would be a question with no answer.
+ */
 function stateFacets(rows: readonly CodeCheckRow[], chosen: string): Facet[] {
-  return CHECK_STATES.map((s) => ({
+  return CHECK_ENDED_STATES.map((s) => ({
     value: s,
     label: checkStateWord(s),
     // NARROWED BY STATE, the rows loaded are that state's alone: another

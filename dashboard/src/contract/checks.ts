@@ -31,6 +31,15 @@ export const CHECK_STATES = [
 ] as const;
 
 /**
+ * The five endings of [CHECK_STATES] (`code.CheckState.Ended`), in its order:
+ * every state the Checks section's window holds an attempt in, and so every
+ * state it narrows to — the window lists the attempts that ENDED, and the
+ * engine refuses it narrowed to `queued` or `running` (a repository's listing
+ * is where those are narrowed to). Held with [CHECK_STATES].
+ */
+export const CHECK_ENDED_STATES = ["passed", "failed", "errored", "cancelled", "skipped"] as const;
+
+/**
  * What an attempt of a check was checking (`code.CheckPurposes`): a change's
  * head revision, a merge queue's candidate, a protected branch's tip, or a
  * landing between a green tip and a red one. Held with [CHECK_STATES].
