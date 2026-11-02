@@ -942,7 +942,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				Kind: "queue", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 				EntryID: "019a0c2e-0000-7000-8000-0000000000f1", BaseOID: "6666666666666666666666666666666666666666",
 				CommitOID: "8888888888888888888888888888888888888888", EnqueuedBy: "founder", MergedBy: "node-b",
-				Green: true, Broken: true, At: created}},
+				Broken: true, At: created}},
 			Green: []code.GreenRow{{RepoID: ref.ID, TargetRef: "refs/heads/main",
 				CommitOID: "8888888888888888888888888888888888888888", Position: at, At: created}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
