@@ -616,13 +616,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	stampCtx, stampCancel := detached(ctx)
-	took, stampErr := c.pending.StampCapture(stampCtx, run.TurnID, stamp)
-	stampCancel()
+	took, stampErr := c.reserveCapture(ctx, run.TurnID, stamp)
 	if stampErr != nil || !took {
 		// ANOTHER READ OF THE SAME RUN TOOK THIS PLACE FIRST — a stop's and a
 		// collection's, at once — and keeps the session itself; or the row
-		// could not be written, which leaves nowhere to say what came of it.
+		// could not be written however often it was asked, which leaves
+		// nowhere to say what came of it.
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 			"capture_seq", stamp.CaptureSeq, "error", fmt.Sprint(stampErr),
 			"detail", "the capture's place could not be reserved on the run's row")
@@ -999,6 +998,35 @@ func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp S
 			"detail", stamp.Reason)
 	}
 	return stamp.kept()
+}
+
+// reserveCapture reserves a capture's place on its run's row — its stamp,
+// begun ([PendingStore.StampCapture]) — asked again while the coordination
+// store does not answer, spaced by a doubling wait, within one record's budget
+// and under a context of its own, as [Coordinator.stampSettled] asks an
+// outcome: false, with no error, where another read of the same job took the
+// place first.
+//
+// ASKED AGAIN SO A READ LEAVES A STAMP OF WHAT IT TOOK wherever the store lets
+// it: a turn's newest capture is known only by its stamp, and its end tells the
+// log the turn's newest capture where it was not kept ([unkeptOf]). A place the
+// store would not take at all is a capture never made, which the take abandons.
+func (c *Coordinator) reserveCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
+	stampCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		took, err := c.pending.StampCapture(stampCtx, turnID, stamp)
+		if err == nil {
+			return took, nil
+		}
+		wait := time.NewTimer(backoff.Doubling(attempt, c.sessionRetry, sessionRetryCeiling))
+		select {
+		case <-stampCtx.Done():
+			wait.Stop()
+			return false, err
+		case <-wait.C:
+		}
+	}
 }
 
 // stampSettled stamps a capture's outcome on its run's row, asked again while

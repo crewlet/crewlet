@@ -555,25 +555,32 @@ func (f *flakyStamps) StampCapture(ctx context.Context, turnID string, c Session
 	return f.PendingStore.StampCapture(ctx, turnID, c)
 }
 
-// A CAPTURE'S OUTCOME IS STAMPED EVEN THROUGH A STORE'S BAD MOMENT. A stamp left
-// begun reads as a keep still under way for as long as a capture can take —
-// the turn's end waits that long on it, and a relaunch reads a capture that
-// landed as one it cannot continue — so the outcome is asked again until the
-// store takes it, within a record's budget.
+// A CAPTURE IS STAMPED EVEN THROUGH A STORE'S BAD MOMENT, its place and its
+// outcome. A stamp left begun reads as a keep still under way for as long as a
+// capture can take — the turn's end waits that long on it, and a relaunch reads
+// a capture that landed as one it cannot continue — and a place never reserved
+// is a capture nobody can know was made; so each is asked again until the store
+// takes it, within a record's budget.
 //
-// Mutation: stamp the outcome once, and the row keeps the capture begun.
-func TestACapturesOutcomeIsStampedThroughAStoresBadMoment(t *testing.T) {
+// Mutation: stamp the place or the outcome once, and the row keeps no capture,
+// or keeps it begun.
+func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 	t.Parallel()
 	rig, _, kept := keptTurn(t)
 	begun := kept
 	begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
-	if _, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil {
-		t.Fatalf("StampCapture: %v", err)
-	}
 	// A COORDINATOR OF ITS OWN over the flaky store, so nothing the rig's
 	// coordinator runs in the background reads the store this case swaps.
+	reserving := &flakyStamps{PendingStore: rig.pending, fails: 2}
+	c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
+	if took, err := c.reserveCapture(t.Context(), "t1", begun); err != nil || !took {
+		t.Fatalf("the place was reserved %v (%v) through the store's bad moment, want reserved", took, err)
+	}
+	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) {
+		t.Fatalf("the row holds %+v, want the capture's place reserved", run.Capture)
+	}
 	flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
-	c := &Coordinator{pending: flaky, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
+	c.pending = flaky
 	c.finishCapture(t.Context(), rig.get("t1"), begun, CaptureRefused, "the upload failed")
 	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
 		run.Capture.State != CaptureRefused {
