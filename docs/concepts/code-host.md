@@ -817,8 +817,10 @@ others for one of the node's two slots, or is still running — a first push of
 a large repository — is not level either, and is counted all the same. Every
 push that moved something is recorded in the event log as
 `code_mirror_pushed` — the repository, the other host, the seat it pushed as,
-the refs it set and deleted and the protected branches it held back — the one
-durable account of what the company published, and when.
+the refs it set and deleted and the protected branches it held back, each the
+first 16 in ref order beside the count of all of them, so that a first push of
+a repository of tens of thousands of refs is still one event the stream takes —
+the one durable account of what the company published, and when.
 
 ---
 

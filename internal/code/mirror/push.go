@@ -201,8 +201,8 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	}
 	m.leveled(key, sum, read)
 	outcome = "pushed"
-	m.announcePushed(ctx, types.CodeMirrorPushed{RepoID: repoID, RepoName: s.Repo.Name, URL: to.URL, As: to.As,
-		Updated: out.updated, Deleted: out.deleted, Waiting: out.waiting})
+	m.announcePushed(ctx, types.CodeMirrorPushed{RepoID: repoID, RepoName: s.Repo.Name, URL: to.URL,
+		As: to.As}.WithRefs(out.updated, out.deleted, out.waiting))
 	return nil
 }
 

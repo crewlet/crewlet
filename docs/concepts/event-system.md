@@ -555,7 +555,12 @@ code_mirror_pushed         # a repository's home pushed it to its push
                            # identity there it pushed as, the refs it set
                            # and onto what, those it deleted, and the
                            # protected branches it held back with no green
-                           # commit to publish. Published once a push that
+                           # commit to publish — each list its first 16
+                           # refs in ref order beside the count of all of
+                           # them (updated_count, deleted_count,
+                           # waiting_count), so a first push of a large
+                           # repository stays one event the queue takes.
+                           # Published once a push that
                            # moved something, by the home git node that
                            # pushed; a failed push is no event (its home
                            # raises code_mirror_failing). STORED, NOT FED:
