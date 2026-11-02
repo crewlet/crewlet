@@ -74,9 +74,9 @@ func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Eve
 	var out []*events.Event
 	if queue.HasLane(topic) {
 		lane := queue.LaneOf(topic)
-		held, err := q.backlogOf(ctx, stream, lane, consumerName(lane, group))
-		if err != nil {
-			return nil, err
+		held, laneErr := q.backlogOf(ctx, stream, lane, consumerName(lane, group))
+		if laneErr != nil {
+			return nil, laneErr
 		}
 		out = append(out, held...)
 	}

@@ -1562,10 +1562,10 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	// finishes; the other order would leave a lane no listing names.
 	if queue.HasLane(topic) {
 		lane := queue.LaneOf(topic)
-		err := q.js.DeleteConsumer(ctx, stream, consumerName(lane, group))
-		if err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		laneErr := q.js.DeleteConsumer(ctx, stream, consumerName(lane, group))
+		if laneErr != nil && !errors.Is(laneErr, jetstream.ErrConsumerNotFound) {
 			return false, fmt.Errorf("delete the priority lane of %s/%s: %w", topic, group,
-				q.brokerFailed(ctx, err))
+				q.brokerFailed(ctx, laneErr))
 		}
 	}
 	err = q.js.DeleteConsumer(ctx, stream, consumerName(topic, group))
