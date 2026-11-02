@@ -581,8 +581,12 @@ green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a
 **Load more** — the engine's own listing of them, `GET
 /code/repos?protected=true`, which reads an index of the protected
 repositories alone — each rule with what it lets a push do and, once its fold
-is opened, what its gate asks, and says where the repository's rules are set —
-the company document, or the code tools. A repository's own page
+is opened, what its gate asks and **who set it and when**: the seat, the
+person or the credential whose request last changed the rule, or the company
+document for a declared one, and when that change landed. A change to
+something else (the description, another rule) leaves a rule naming whoever
+last set it. The card also says where the repository's rules are set: the
+company document, or the code tools. A repository's own page
 shows the same under its **Settings** tab. A seat may tighten a gate and never
 loosen it ([Who may change a
 protection](../concepts/code-host.md#who-may-change-a-protection)); every

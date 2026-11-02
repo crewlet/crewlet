@@ -8653,6 +8653,20 @@ export interface CodeRuleGate {
   gate: CodeMergeGate;
 }
 
+/**
+ * Who set one of a repository's rules and when, named by the rule's pattern
+ * (`code.RuleSource`): the decider of the record that last changed the rule —
+ * a seat's handle (`agent`), a person's seat or a credential's login
+ * (`operator`), nobody where the configuration set it (`config`) — and that
+ * record's instant.
+ */
+export interface CodeRuleSource {
+  pattern: string;
+  set_by?: string;
+  set_by_kind: "operator" | "config" | "system" | "agent" | (string & {});
+  set_at: string;
+}
+
 /** Who owns which of a repository's paths, for review (`code.PathOwner`): globs over its tree. */
 export interface CodePathOwner {
   owner: CodeOwner;
@@ -8663,7 +8677,7 @@ export interface CodePathOwner {
  * One repository in detail (`code.RepoDetail`): its summary, how many
  * branches, tags and deleted refs it holds, when it was declared, and — to
  * this question, which asks for them — who owns its paths and its rules'
- * merge gates.
+ * merge gates, with who set each rule and when (asked for with the gates).
  */
 export interface CodeRepoDetail extends CodeRepoSummary {
   branches: number;
@@ -8672,6 +8686,7 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   created_at: string;
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
+  rule_sources?: CodeRuleSource[];
   /** Where its expunges stand (`code.ExpungeState`); absent for one never purged with none asked. */
   expunge?: CodeExpungeState;
   /** Where it stands with other hosts (`code.RemoteState`); absent for none. */
