@@ -117,6 +117,18 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
+		// SIGNED IN TO WITH OAUTH: started under the company's grant, read
+		// afresh at each pass, and held back while nobody holds one (or its
+		// vendor refused to renew it), which a person ends by signing in
+		// (mcpoauth.go). Retired below if it was running.
+		if server.OAuth != nil {
+			bearer, needed := e.bearerFor(ctx, server.Name)
+			if needed != nil {
+				outcomes = append(outcomes, mcpOutcome{server: server.Name, err: needed})
+				continue
+			}
+			spec.Bearer = bearer
+		}
 		specs = append(specs, spec)
 	}
 	outcomes = e.withheldForCredentials(ctx, outcomes)
@@ -165,6 +177,12 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			log.InfoContext(ctx, "mcp_server_retired", "server", name, "detail", turnedOffDetail)
 			continue
 		}
+		if needed := signInHeld(outcomes, name); needed != nil {
+			// A GRANT GIVEN UP OR REFUSED STOPS THE SERVER, by the rule that
+			// would not start it: nobody is signed in to it any more.
+			log.InfoContext(ctx, "mcp_server_retired", "server", name, "detail", needed.Error())
+			continue
+		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name,
 			"detail", "the revision no longer declares this shared server")
 	}
@@ -181,6 +199,17 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
 	e.mcpMu.Unlock()
+}
+
+// signInHeld is the sign-in a pass held server back for, nil where it did not.
+func signInHeld(outcomes []mcpOutcome, server string) *signInNeeded {
+	for _, o := range outcomes {
+		var needed *signInNeeded
+		if o.server == server && errors.As(o.err, &needed) {
+			return needed
+		}
+	}
+	return nil
 }
 
 // serversTurnedOff names the servers cfg declares and turns off

@@ -1941,6 +1941,16 @@ func sandboxMCP(
 					"reaches a server whole; the seat reaches its allowed tools over the bridge")
 			continue
 		}
+		if server.OAuth != nil {
+			// A BOX CANNOT RENEW A SIGN-IN: it is handed a server's values
+			// once, at its launch, and admission refuses the listing; one a
+			// stored revision still carries reaches the server through the
+			// bridge instead.
+			log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is signed in to with "+
+					"OAuth, and the box reaches its tools through the bridge")
+			continue
+		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)

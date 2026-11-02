@@ -47,6 +47,8 @@ type entryInputs struct {
 	statuses map[string]coord.NodeStatus
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
+	// grants are the MCP servers' OAuth grants, by server.
+	grants map[string]coord.MCPGrant
 }
 
 // entriesReading fills the per-entry half of an alarm reading: each model
@@ -80,7 +82,7 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		e.modelsReading(ctx, c, statuses, now, out)
 	}
 	if len(c.Config.MCPServers) > 0 {
-		out.MCPServers = mcpConditions(c, statuses)
+		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
 		out.MCPServersAt = now
 	}
 }
