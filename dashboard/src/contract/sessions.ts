@@ -71,14 +71,21 @@ export interface ExecutorSessionRow {
   not_continuable?: string;
 }
 
+/** Where on the executor log an answer's rows were read. */
+interface LogPosition {
+  stream: string;
+  generation: number;
+  seq: number;
+}
+
 /** A page of a seat's executor sessions, the latest begun first. */
 export interface ExecutorSessionsAnswer {
   handle: string;
   sessions: ExecutorSessionRow[];
-  /** The cursor of the page after this one, "" on the last. */
-  next: string;
+  /** The cursor of the page after this one; absent on the last. */
+  next_cursor?: string;
   read_level: string;
-  position: { stream: string; generation: number; seq: number };
+  position: LogPosition;
   /** False where the answering copy holds a record of the log it could not
    *  read, which may hold rows missing from this page. */
   complete: boolean;
@@ -88,9 +95,10 @@ export interface ExecutorSessionsAnswer {
 export type TranscriptState =
   "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
 
-/** Who an entry of a transcript is from (`executor.EntryKinds`). */
+/** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
+ *  one a person sent the run while it worked. */
 export type TranscriptEntryKind =
-  "brief" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
+  "brief" | "note" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
 
 /**
  * Why a page of a transcript ends before the transcript does
@@ -132,13 +140,24 @@ export interface ExecutorSessionAnswer {
   handle: string;
   session: ExecutorSessionRow;
   state: TranscriptState;
-  /** Why no transcript is shown, wherever `state` is not `read`. */
+  /** Why no transcript is shown, wherever `state` is not `read`: the engine's
+   *  own sentence, never anything the archive held. */
   why?: string;
   entries: TranscriptEntry[];
   /** The ordinal of the first of `entries` among the transcript's. */
   from: number;
   cut?: TranscriptCut;
-  /** The cursor the entries after these are read from, "" where none follow. */
-  next: string;
+  /**
+   * The cursor the entries after these are read from; absent where none
+   * follow. It names the capture it was read from and how the engine counts
+   * entries, so the engine refuses it (`bad_params`) once the session is
+   * captured again or a build counting otherwise answers: read the transcript
+   * again from its start.
+   */
+  next_cursor?: string;
   bounds: TranscriptBounds;
+  /** How the session's row was read, as the list says it of its page. */
+  read_level: string;
+  position: LogPosition;
+  complete: boolean;
 }

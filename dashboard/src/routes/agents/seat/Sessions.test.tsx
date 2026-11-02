@@ -4,8 +4,10 @@
  * Mounted as UNITS rather than through the seat screen, for the reason
  * `Memory.test.tsx` gives: the screen needs an org, a roster, a projection and
  * its queries before the section draws at all, and a rule exercised only
- * through the whole machine is a rule nobody re-runs. The shapes below are the
- * ones the engine sends — `contract/sessions.ts`, which
+ * through the whole machine is a rule nobody re-runs. What the section does
+ * with its questions — the list, a choice, its paging, a session that cannot be
+ * read — is mounted on the seat's page, in `routes/agents/Seat.test.tsx`. The
+ * shapes below are the ones the engine sends — `contract/sessions.ts`, which
  * `internal/api/queries`' `TestTheSessionsScreenReadsWhatTheAnswersSend` holds
  * to both answers in both directions.
  */
@@ -15,8 +17,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import {
-  cutWords,
+  blockLabel,
+  continuationWords,
   KIND_LABELS,
+  readCutWords,
   SessionAccount,
   SessionSummary,
   STATE_TITLES,
@@ -24,7 +28,7 @@ import {
 } from "./Sessions.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ExecutorSessionRow, TranscriptEntry } from "~/contract/sessions.ts";
-import { drawnClasses, isDrawnAs } from "~/testing.tsx";
+import { drawnClasses, isDrawnAs, overflowing } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -226,11 +230,84 @@ test("every kind of entry and every unread state has words of its own", () => {
 });
 
 // A PAGE CUT AT THE READ'S OWN BOUND IS THE END OF WHAT CAN BE SHOWN, said as
-// such and with the bound, where a page's own bound is only where the next
-// one starts.
+// such and with the bound — the one cut that has words, since a page cut at
+// its own bound has its Load more instead.
 test("a page cut at the read's own bound says the rest cannot be shown", () => {
-  expect(cutWords("read", 256 * 1024 * 1024)).toMatch(/cannot be shown.*256 MiB/);
-  for (const cut of ["entries", "bytes"] as const) {
-    expect(cutWords(cut, 256 * 1024 * 1024)).not.toMatch(/cannot/);
-  }
+  expect(readCutWords(256 * 1024 * 1024)).toMatch(/cannot be shown.*256 MiB/);
+});
+
+// WHICH LAUNCH CONTINUES A SESSION IS THE ROW'S: a turn on a conversation is
+// taken up by its conversation's next turn, and a running turn on none by its
+// own next launch — told of "its conversation", a reader looks for one the
+// turn does not have.
+test("a session's continuation names the launch that takes it up", () => {
+  expect(continuationWords(session())).toBe(
+    "A later launch of its conversation can continue this session.",
+  );
+  expect(continuationWords(session({ conversation_key: "", ending: null, ended_at: null }))).toBe(
+    "Its turn's next launch can continue this session.",
+  );
+  expect(continuationWords(session({ continuable: false, not_continuable: "it is gone" }))).toBe(
+    "No later launch continues it: it is gone",
+  );
+});
+
+// A NOTE A PERSON SENT THE RUN IS LABELLED A NOTE, never a brief: the model
+// changing course after it reads as following the note, not as a new task.
+test("a note a person sent the run reads as a note", () => {
+  render(
+    <Router>
+      <TranscriptEntryView
+        entry={entry({
+          kind: "note",
+          text: "## A note from ada, sent while this turn was running\n\nTarget main.",
+        })}
+      />
+    </Router>,
+  );
+  expect(screen.getByText(KIND_LABELS.note)).toBeTruthy();
+  expect(screen.queryByText(KIND_LABELS.brief)).toBeNull();
+});
+
+// A TOOL'S BLOCK THAT SCROLLS IS A NAMED REGION, AND ONLY THAT. Long enough to
+// scroll under its ceiling it takes a tab stop — a scroll container no keyboard
+// can reach is content no keyboard can read — named by its tool and which half
+// of the call it is; and it leaves select-all to the browser, as the bridge's
+// tool log does: a page holds two hundred such blocks, none of them the record
+// the screen is about. A short one takes no stop at all.
+test("a tool's block that scrolls is a named region and leaves select-all to the browser", () => {
+  const long = entry({ kind: "tool_result", tool: "Bash", text: "ok\n".repeat(400) });
+  const container = overflowing(
+    <Router>
+      <TranscriptEntryView entry={long} />
+    </Router>,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]');
+  expect(region).not.toBeNull();
+  expect(region!.getAttribute("aria-label")).toBe("Bash output");
+  const event = new KeyboardEvent("keydown", {
+    code: "KeyA",
+    key: "a",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  region!.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  cleanup();
+
+  const { container: short } = render(
+    <Router>
+      <TranscriptEntryView entry={entry({ kind: "tool_call", tool: "Bash", text: "{}" })} />
+    </Router>,
+  );
+  expect(short.querySelector('[role="region"]')).toBeNull();
+});
+
+// A BLOCK IS NAMED BY ITS TOOL AND ITS HALF OF THE CALL, a failure as one.
+test("a tool's block is named by its tool and which half of the call it is", () => {
+  expect(blockLabel(entry({ kind: "tool_call", tool: "Read" }))).toBe("Read input");
+  expect(blockLabel(entry({ kind: "tool_result", tool: "Read" }))).toBe("Read output");
+  expect(blockLabel(entry({ kind: "tool_result", tool: "Read", failed: true }))).toBe("Read error");
+  expect(blockLabel(entry({ kind: "tool_result" }))).toBe("Tool output");
 });

@@ -6,9 +6,9 @@
  * the only whole record of what the run read and wrote. The list is every
  * turn's: how it ended, what it was asked, the harness that wrote it, and
  * whether a later launch could take it up (or why not). Choosing one opens its
- * transcript, as the harness recorded it: the brief, the model's words, every
- * tool call and what answered it, the compaction summaries, and each
- * subagent's own transcript after the run's.
+ * transcript, as the harness recorded it: the brief, the notes a person sent
+ * the run, the model's words, every tool call and what answered it, the
+ * compaction summaries, and each subagent's own transcript after the run's.
  *
  * # The seat's trail, read through any node
  *
@@ -20,25 +20,30 @@
  *
  * # A page at a time, both of them
  *
- * The list pages by the engine's cursor (`next`), and so does a transcript,
- * whose cursor names the object it was read from: a live turn's session moves
- * to a newer object with every capture, and a page continued in another
- * archive would skip or repeat entries. Each page states why it ends where it
- * does — the page's own bound, with more to read, or the most one read takes,
- * with nothing more to show — and an entry cut to its bound says how large the
- * whole was.
+ * The list pages by the engine's cursor (`next_cursor`), and so does a
+ * transcript, whose cursor names the capture it was read from: a live turn's
+ * session moves to a newer archive with every capture, and a page continued in
+ * another archive would skip or repeat entries. So when the list shows a newer
+ * capture than the transcript on screen, or the engine refuses a page because
+ * the session moved since, the reader is told and offered the transcript again
+ * from its first page. Each page states why it ends where it does — the page's
+ * own bound, with more to read, or the most one read takes, with nothing more
+ * to show — and an entry cut to its bound says how large the whole was.
  *
- * # Choosing a session shows it
+ * # Choosing a session shows it — that session, and never the last one
  *
  * As Conversations does: the chosen session is a filter on the address
  * (`session=`), the list is bounded beside the transcript and keeps the chosen
  * row in its own view, and on a phone, where the transcript is below the
- * whole list, choosing one scrolls to it and focuses its heading.
+ * whole list, choosing one scrolls to it and focuses its heading. The
+ * transcript is drawn fresh for every choice, from its loading state: a read
+ * of an archive takes a moment, and the previous session's account and entries
+ * drawn under the new one's heading meanwhile would read as the new one's.
  */
 
 import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import { CircleAlertGlyph, FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel, fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
@@ -53,7 +58,6 @@ import type {
   ExecutorSessionRow,
   ExecutorSessionsAnswer,
   SessionOutcome,
-  TranscriptCut,
   TranscriptEntry,
   TranscriptEntryKind,
   TranscriptState,
@@ -66,6 +70,7 @@ import type {
  */
 export const KIND_LABELS: Record<TranscriptEntryKind, string> = {
   brief: "Brief",
+  note: "Note",
   model: "Model",
   tool_call: "Tool call",
   tool_result: "Result",
@@ -104,14 +109,14 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
  * AN ENTRY IS ITS PLACE IN ONE CAPTURE: a live turn's session moves to a newer
  * archive with every capture, and the hundredth entry of one is not the
  * hundredth of the next — so a page read from a later capture never meets the
- * pages held from an earlier one, and the list is read again rather than
- * spliced from two archives.
+ * pages held from an earlier one, and the transcript is read again from its
+ * start rather than spliced from two archives.
  */
 type PlacedEntry = TranscriptEntry & { ordinal: number; capture: string };
 
 const pickSessions = (a: ExecutorSessionsAnswer) => a.sessions;
 const sessionId = (row: ExecutorSessionRow) => row.turn_id;
-const nextOf = (a: { next: string }) => a.next;
+const nextOf = (a: { next_cursor?: string }) => a.next_cursor ?? "";
 const pickEntries = (a: ExecutorSessionAnswer): PlacedEntry[] =>
   a.entries.map((entry, i) => ({
     ...entry,
@@ -129,7 +134,8 @@ const SESSION_DETAIL_ID = "prof-session-transcript";
  * A MINUTE: a row appears when a turn's run is collected and changes when the
  * turn ends — minutes apart on a busy seat — and nothing pushes either. The
  * transcript is not polled at all: a session's archive changes only with a new
- * capture, which the list shows.
+ * capture, which the list shows, and a newer capture reads the transcript
+ * again from its start.
  */
 const SESSIONS_POLL_MS = 60_000;
 
@@ -139,6 +145,10 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
   // in the address the page was opened on is not a reader's gesture.
   const chose = useRef(false);
   const list = useRef<HTMLDivElement>(null);
+  // HOW MANY TIMES THE READER ASKED for the open transcript again from its
+  // start: for a newer capture the list shows, or after the engine refused a
+  // page of it as one of an older capture.
+  const [rereads, setRereads] = useState(0);
   useLayoutEffect(() => {
     if (!turn) return;
     const box = list.current;
@@ -165,6 +175,7 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
   );
   const rows = sessions.items;
   const first = sessions.answers[0];
+  const chosen = turn ? rows.find((r) => r.turn_id === turn) : undefined;
   return (
     <section className="col gap-2" aria-labelledby="prof-sessions">
       <h3 id="prof-sessions" className="prof-section-title">
@@ -235,14 +246,24 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
               icon={<FileTextGlyph size="sm" />}
               // WHICH SESSION, named where its transcript is: on a phone the
               // list that says it is a screen above.
-              subtitle={turn ? sessionSubtitle(rows.find((r) => r.turn_id === turn)) : undefined}
+              subtitle={turn ? sessionSubtitle(chosen) : undefined}
             >
               <Card.Title as="h4" id={SESSION_DETAIL_ID} tabIndex={-1}>
                 Transcript
               </Card.Title>
             </Card.Header>
             {turn ? (
-              <Transcript handle={handle} turn={turn} />
+              <Transcript
+                // ONE TRANSCRIPT PER CHOICE AND PER RE-READ: keyed so each
+                // starts from its loading state with no page held — never the
+                // last session's answer under this one's heading, and never a
+                // newer capture's pages continued from an older one's.
+                key={`${turn}#${rereads}`}
+                handle={handle}
+                turn={turn}
+                listed={chosen?.captured_at ?? null}
+                onReread={() => setRereads((n) => n + 1)}
+              />
             ) : (
               <EmptyState
                 size="compact"
@@ -303,11 +324,30 @@ export function SessionSummary({ row, now }: { row: ExecutorSessionRow; now: num
 
 /**
  * A session's transcript, a page at a time, under the account of how its turn
- * ended.
+ * ended — one session's and one capture's, for as long as it is mounted.
+ *
+ * A NEWER CAPTURE IS OFFERED, NEVER SWAPPED IN: when the list, asked again
+ * each minute, shows the session captured since the transcript on screen was
+ * read, the reader is told and offered it from its start — a page continued
+ * from the older capture would be refused — rather than having the pages they
+ * are reading replaced under them.
  */
-function Transcript({ handle, turn }: { handle: string; turn: string }) {
+function Transcript({
+  handle,
+  turn,
+  listed,
+  onReread,
+}: {
+  handle: string;
+  turn: string;
+  /** When the list says the session was last captured, null where it has not
+   *  listed the session (yet). */
+  listed: string | null;
+  /** Read the transcript again from its first page. */
+  onReread: () => void;
+}) {
   const { socket } = useClient();
-  const asked = { handle, turn };
+  const asked = { handle, turn_id: turn };
   const pages = usePaged(
     useQuery("executor_session", asked, { enabled: handle !== "" && turn !== "" }),
     asked,
@@ -322,6 +362,8 @@ function Transcript({ handle, turn }: { handle: string; turn: string }) {
   );
   const first = pages.answers[0];
   const last = pages.answers[pages.answers.length - 1];
+  const read = first?.session.captured_at;
+  const newer = Boolean(listed && read && Date.parse(listed) > Date.parse(read));
   return (
     <div className="col gap-2">
       {pages.loading && !first && (
@@ -331,6 +373,16 @@ function Transcript({ handle, turn }: { handle: string; turn: string }) {
         {first && (
           <>
             <SessionAccount row={first.session} />
+            {newer && (
+              <div className="row gap-2 wrap">
+                <span className="t-caption">
+                  This session was captured again since this transcript was read.
+                </span>
+                <Button size="small" variant="secondary" onClick={onReread}>
+                  Read the newer capture
+                </Button>
+              </div>
+            )}
             {first.state !== "read" ? (
               <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
                 <strong>{STATE_TITLES[first.state]}.</strong> {first.why}
@@ -350,11 +402,26 @@ function Transcript({ handle, turn }: { handle: string; turn: string }) {
               />
             )}
             {last?.cut === "read" && (
-              <p className="t-caption">{cutWords("read", last.bounds.read_bytes)}</p>
+              <p className="t-caption">{readCutWords(last.bounds.read_bytes)}</p>
             )}
             {(pages.more || pages.paging || pages.pageError) && (
               <footer className="panel-foot">
-                {pages.pageError ? (
+                {pages.pageError === "bad_params" ? (
+                  // THE ENGINE REFUSES A PAGE OF A CAPTURE IT NO LONGER HOLDS
+                  // — the session was captured again since its first page was
+                  // read — and the only way on is the transcript from its
+                  // start, which the reader is offered rather than a refusal
+                  // with no way past it.
+                  <>
+                    <span>
+                      This session was captured again since its first page was read, so its later
+                      pages no longer follow on.
+                    </span>
+                    <Button size="small" variant="secondary" onClick={onReread}>
+                      Read it again from the start
+                    </Button>
+                  </>
+                ) : pages.pageError ? (
                   <QueryState error={pages.pageError} refusal={null} loading={false} />
                 ) : (
                   <Button
@@ -376,23 +443,16 @@ function Transcript({ handle, turn }: { handle: string; turn: string }) {
 }
 
 /**
- * Why a page of a transcript ends where it does, in a reader's words: a page's
- * own bound is the next page's to carry on from, and the read's own bound is
- * the end of what can be shown — the archive is past what one read takes
- * (`read_bytes` of it), or a part of it too large to hold left the rest
- * unreadable.
+ * Why a page of a transcript ends where no later page can go further, in a
+ * reader's words: the archive is past what one read takes (`read_bytes` of it),
+ * or a part of it too large to read left the rest unreadable. A page that ends
+ * at its own bound says nothing of the kind — its Load more is the way on.
  */
-export function cutWords(cut: TranscriptCut, readBytes: number): string {
-  switch (cut) {
-    case "entries":
-    case "bytes":
-      return "More of the transcript follows.";
-    case "read":
-      return (
-        `The rest of this session cannot be shown: a read takes at most ` +
-        `${fmtBytes(readBytes)} of its archive, or a part of it was too large to read.`
-      );
-  }
+export function readCutWords(readBytes: number): string {
+  return (
+    `The rest of this session cannot be shown: a read takes at most ` +
+    `${fmtBytes(readBytes)} of its archive, or a part of it was too large to read.`
+  );
 }
 
 /**
@@ -442,13 +502,24 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         </p>
       )}
       {ending?.failure && <p className="t-caption">{ending.failure}</p>}
-      <p className="t-caption">
-        {row.continuable
-          ? "A later launch of its conversation can continue this session."
-          : `No later launch continues it: ${row.not_continuable ?? ""}`}
-      </p>
+      <p className="t-caption">{continuationWords(row)}</p>
     </div>
   );
+}
+
+/**
+ * Whether a later launch can take the session up, in a reader's words.
+ *
+ * WHICH LAUNCH IS THE ROW'S: a turn on a conversation is continued by the next
+ * turn of that conversation, and one on none only by its own next launch — the
+ * engine answers such a turn continuable while it runs, and a sentence naming
+ * "its conversation" would name one the turn does not have.
+ */
+export function continuationWords(row: ExecutorSessionRow): string {
+  if (!row.continuable) return `No later launch continues it: ${row.not_continuable ?? ""}`;
+  return row.conversation_key
+    ? "A later launch of its conversation can continue this session."
+    : "Its turn's next launch can continue this session.";
 }
 
 /**
@@ -456,10 +527,15 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
  * holds it, the tool, a failure marked, when — and its text, an opening marked
  * as one where the entry was cut to its bound.
  *
- * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within a ceiling and
- * reachable by keyboard, because their whitespace is the content; a brief, the
- * model's words and a summary are prose. A PART OF THE RECORD NOT READ is drawn
- * as the warning it is, in its place, so a gap never reads as continuity.
+ * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
+ * every block in the shell's scroller takes, because their whitespace is the
+ * content; a brief, a note, the model's words and a summary are prose. A block
+ * takes a tab stop only when it scrolls (`focusWhenScrollable`), named by its
+ * tool — never `selectable`, which would put a stop before each of two hundred
+ * short blocks a page holds and take select-all from the page while one has
+ * focus, for a block that is not the record the screen is about. A PART OF THE
+ * RECORD NOT READ is drawn as the warning it is, in its place, so a gap never
+ * reads as continuity.
  */
 export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
   if (entry.kind === "unread") {
@@ -493,15 +569,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
         {entry.at && <span className="t-caption">{fmtDateTime(entry.at)}</span>}
       </div>
       {block ? (
-        <CodeBlock
-          plain
-          selectable
-          focusWhenScrollable
-          copyable={false}
-          maxHeight="calc(var(--record-ceiling) / 2)"
-          label={entry.kind === "tool_call" ? "Input" : "Output"}
-          code={entry.text}
-        />
+        <CodeBlock plain focusWhenScrollable label={blockLabel(entry)} code={entry.text} />
       ) : (
         <p className="t-body session-prose">{entry.text}</p>
       )}
@@ -510,4 +578,15 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
       )}
     </div>
   );
+}
+
+/**
+ * What a tool's block is called where it takes focus: the tool, and which
+ * half of its call — a region named only "Input" or "Output", one of two
+ * hundred, tells a reader moving by landmark nothing.
+ */
+export function blockLabel(entry: TranscriptEntry): string {
+  const tool = entry.tool || "Tool";
+  if (entry.kind === "tool_call") return `${tool} input`;
+  return `${tool} ${entry.failed ? "error" : "output"}`;
 }
