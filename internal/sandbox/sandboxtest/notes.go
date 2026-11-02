@@ -989,8 +989,8 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 				} `json:"notes"`
 			} `json:"steer"`
 		}
-		if err := json.Unmarshal(record.Value, &row); err != nil {
-			t.Fatalf("%s: %v", step, err)
+		if derr := json.Unmarshal(record.Value, &row); derr != nil {
+			t.Fatalf("%s: %v", step, derr)
 		}
 		logged, found, err := runs.SandboxRunLog(ctx, turn)
 		if err != nil || !found {

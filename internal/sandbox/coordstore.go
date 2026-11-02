@@ -185,10 +185,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if made {
 			// AND THE JOB'S LOG, a new run's: whatever a key of that
 			// name held is no call of this run's.
-			last, opened, err := s.openLog(ctx, run.TurnID, run.LaunchID,
+			last, opened, openErr := s.openLog(ctx, run.TurnID, run.LaunchID,
 				logOpening{round: created.Round})
-			if err != nil {
-				return PendingRun{}, err
+			if openErr != nil {
+				return PendingRun{}, openErr
 			}
 			if !opened {
 				return PendingRun{}, endedUnderLaunch(run.TurnID)
