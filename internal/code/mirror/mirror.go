@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -259,8 +260,12 @@ type Mirrors struct {
 	// ends ([Mirrors.startQueued]); arrivals numbers them.
 	queued   map[mirrorKey]queuedAttempt
 	arrivals uint64
-	stopped  bool
-	wg       sync.WaitGroup
+	// seen is every mirror the listing in progress has named so far — nil
+	// between listings — which its last page keeps and drops the rest of
+	// ([Mirrors.prune]).
+	seen    map[mirrorKey]bool
+	stopped bool
+	wg      sync.WaitGroup
 }
 
 // New builds a node's mirrors; nothing runs until a turn of its loop asks
@@ -306,12 +311,14 @@ const (
 // first, by id — whose last push here is a code.MirrorInterval old, or that
 // was never pushed here; then every pull mirror whose last sync is a
 // code.MirrorInterval old — listed least recently synced first, so the
-// listing stops at the first synced within it — less the ones this node
-// attempted within that interval with nothing to land, or failed within
-// [RetryAfter]. Read at floor where it is set, stale where it is zero. What it
-// lists it remembers, for the turn that works it — every push mirror among
-// them, due or not, so a nudge of its repository (a green row moved) finds
-// it.
+// listing stops at the first synced within it, a sync that found its source
+// level moving that instant too (code.MirrorSync.Current) — less the ones
+// this node attempted within that interval with nothing to land, or failed
+// within [RetryAfter]. Read at floor where it is set, stale where it is zero.
+// What it lists it remembers, for the turn that works it — every push mirror
+// among them, due or not, so a nudge of its repository (a green row moved)
+// finds it — and the listing's last page forgets every mirror the listing did
+// not name ([Mirrors.prune]).
 func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
 	if !floor.IsZero() {
@@ -327,9 +334,12 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 		now := m.now()
 		var out []string
 		m.mu.Lock()
+		if cursor == "" {
+			m.seen = map[mirrorKey]bool{}
+		}
 		for _, c := range ans.Imports {
 			key := mirrorKey{repo: c.ID}
-			m.known[key] = listed{kind: kindImport, name: c.Name, source: c.Source, seq: c.Seq, at: c.Version}
+			m.remember(key, listed{kind: kindImport, name: c.Name, source: c.Source, seq: c.Seq, at: c.Version})
 			if m.waiting(key, now, 0) {
 				continue
 			}
@@ -357,7 +367,7 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 				// this listing answered at, so the snapshot it pushes from
 				// holds every record the listing saw.
 				key := mirrorKey{repo: c.ID, out: true}
-				m.known[key] = listed{kind: kindPush, name: c.Name, at: ans.Position}
+				m.remember(key, listed{kind: kindPush, name: c.Name, at: ans.Position})
 				if !m.waiting(key, now, code.MirrorInterval) {
 					out = append(out, c.ID)
 				}
@@ -369,10 +379,11 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 			if !c.SyncedAt.IsZero() && now.Sub(c.SyncedAt) < code.MirrorInterval {
 				// The first synced within its interval: every one after
 				// it was synced later still.
+				m.prune()
 				return out, "", nil
 			}
 			key := mirrorKey{repo: c.ID}
-			m.known[key] = listed{kind: kindSync, name: c.Name, source: code.ImportSource(*c.From), at: c.Version}
+			m.remember(key, listed{kind: kindSync, name: c.Name, source: code.ImportSource(*c.From), at: c.Version})
 			if m.waiting(key, now, code.MirrorInterval) {
 				continue
 			}
@@ -381,9 +392,44 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 		if ans.Next != "" {
 			return out, mirrorsArm + ans.Next, nil
 		}
+		m.prune()
 		return out, "", nil
 	}
 	return nil, "", fmt.Errorf("mirror: %q is no cursor of this worker's listing", cursor)
+}
+
+// remember keeps what the listing in progress says of key, for the turn that
+// works it, and marks key seen by that listing. Called with mu held.
+func (m *Mirrors) remember(key mirrorKey, l listed) {
+	m.known[key] = l
+	if m.seen != nil {
+		m.seen[key] = true
+	}
+}
+
+// prune ends a listing that ran from its first page to its last: everything
+// this node remembers of a mirror the listing did not name and that is not
+// running — what a listing said of it, its attempts' memory, its health and
+// its queued attempt — is dropped. So the worker holds what its last whole
+// listing named — the company's imports and mirrors, as every git node lists
+// them before its placement says which are its own — never every repository
+// any listing ever named: one deleted, one whose mirror went, an import that
+// ended. A pull mirror past the listing's stop, synced within its interval, is
+// dropped with them — brought level within it, so its health says nothing —
+// and listed again once its interval has passed. A listing that failed part
+// way prunes nothing: the next one begins at its first page. Called with mu
+// held.
+func (m *Mirrors) prune() {
+	seen := m.seen
+	m.seen = nil
+	if seen == nil {
+		return
+	}
+	gone := func(key mirrorKey) bool { return !seen[key] && !m.running[key] }
+	maps.DeleteFunc(m.known, func(key mirrorKey, _ listed) bool { return gone(key) })
+	maps.DeleteFunc(m.memory, func(key mirrorKey, _ memory) bool { return gone(key) })
+	maps.DeleteFunc(m.health, func(key mirrorKey, _ health) bool { return gone(key) })
+	maps.DeleteFunc(m.queued, func(key mirrorKey, _ queuedAttempt) bool { return gone(key) })
 }
 
 // waiting reports whether key's last attempt on this node ended too recently
@@ -473,10 +519,10 @@ func (m *Mirrors) claim(key mirrorKey, l listed, now time.Time) {
 // startQueued starts queued attempts while fewer than [MaxAttempts] run: each
 // time, the one THIS NODE ATTEMPTED LONGEST AGO — one it never attempted
 // first — and, between two alike, the one queued first. Never in the order
-// they were listed: a mirror whose source is idle lands no record, so its row
-// keeps its place at the front of `mirrors_due` for as long as it stays idle,
-// and an order by listing would start it ahead of every mirror behind it each
-// interval. One whose listing was spent meanwhile, that is running,
+// they were listed: a mirror whose attempt failed keeps its row's instant,
+// and so its place at the front of `mirrors_due`, until one lands, and an
+// order by listing would start it ahead of every mirror behind it each time
+// its RetryAfter passed. One whose listing was spent or pruned meanwhile, that is running,
 // or that is within its pace again is dropped: the next pass lists it again
 // if it is still owed. Called with mu held, as an attempt ends.
 func (m *Mirrors) startQueued(now time.Time) {

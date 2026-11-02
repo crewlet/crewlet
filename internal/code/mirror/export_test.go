@@ -103,6 +103,15 @@ func StartOrder(queued []string, ended map[string]time.Time) []string {
 	}
 }
 
+// Remembered is how many entries the worker holds of the repositories its
+// listings named: what they said, its attempts' memory, its health and its
+// queued attempts, together.
+func (m *Mirrors) Remembered() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.known) + len(m.memory) + len(m.health) + len(m.queued)
+}
+
 // FailingWhileQueued is what [Mirrors.AlarmReading] counts a second after the
 // last of turns, where a pull mirror is listed and worked at each of them
 // while MaxAttempts other attempts hold every slot, so that it is queued at

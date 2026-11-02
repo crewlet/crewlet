@@ -151,7 +151,8 @@
 // landed whole moving it to its end — so the listing stops at the first
 // mirror synced within the interval on every node, this one after a restart
 // included; this node's memory of its last attempts holds a mirror whose
-// last attempt failed back for RetryAfter.
+// last attempt failed back for RetryAfter. What a whole listing does not
+// name, the worker forgets ([Mirrors.Due]).
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
 // internal/code/home, internal/code/checkrun and this package never import

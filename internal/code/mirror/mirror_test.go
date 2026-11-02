@@ -939,6 +939,36 @@ func TestAQueuedAttemptStartsLongestUnattemptedFirst(t *testing.T) {
 	}
 }
 
+// A MIRROR THE LISTING NO LONGER NAMES IS FORGOTTEN: once an import has
+// ended, the next whole listing — which no longer names it — leaves the
+// worker remembering nothing of it, so a node holds the imports and mirrors
+// its last listing named rather than every repository any listing ever
+// named.
+//
+// Mutation: keep what a listing does not name, and the ended import's memory
+// stays.
+func TestAMirrorTheListingNoLongerNamesIsForgotten(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+	m := h.mirrors()
+	h.pass(m)
+	if rows := h.rows("imported"); rows.Repo.Status != code.RepoStatusActive {
+		t.Fatalf("after its import the repository is %s, want active", rows.Repo.Status)
+	}
+	if got := m.Remembered(); got == 0 {
+		t.Fatal("the worker remembers nothing of the import it has just run; the case proves nothing")
+	}
+
+	h.pass(m)
+	if got := m.Remembered(); got != 0 {
+		t.Errorf("after a listing that no longer names the ended import the worker remembers %d entries of "+
+			"it; want none", got)
+	}
+}
+
 // A MIRROR QUEUED PAST ITS PROMISE IS FAILING: a pull mirror that every pass
 // lists and queues behind attempts holding every slot, and that so is never
 // brought level, raises code_mirror_failing once its promise has passed —
