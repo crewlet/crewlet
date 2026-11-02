@@ -95,6 +95,11 @@ type MCPStatusAnswer struct {
 	// empty "Work items" would say its agents hold a group they do not.
 	// ALWAYS A LIST.
 	Builtin []BuiltinGroup `json:"builtin"`
+	// Alarms are the MCP alarms standing on this node's latest evaluation,
+	// in the table's order, each server with the gesture that fixes it
+	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
+	// log, which evaluates no alarm.
+	Alarms []MCPAlarm `json:"alarms"`
 }
 
 // BuiltinGroup is one shelf of the built-in catalogue.
@@ -271,8 +276,11 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	}
 	status := s.mcpStatusOf(leases)
 	if MCPReading(ctx) != ReadingAdmin {
+		// NO ALARM ON A MEMBER'S READING: each one quotes a failure or a
+		// wait sentence, which that reading leaves out.
 		return MemberMCPStatus(status), nil
 	}
+	status.Alarms = s.mcpAlarms()
 	return status, nil
 }
 
@@ -308,6 +316,7 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		Servers: []MCPServerRow{},
 		Nodes:   make([]MCPStatusNode, 0, len(reports)),
 		Builtin: s.builtinGroups(),
+		Alarms:  []MCPAlarm{},
 	}
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})

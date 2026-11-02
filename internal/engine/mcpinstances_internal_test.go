@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
@@ -84,8 +85,45 @@ func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 	}
 
 	healthy := (&Engine{mcpShared: []mcpOutcome{{server: "search", tools: 2}}}).mcpStatus(t.Context())
-	if len(healthy) != 1 || !healthy[0].DownSince.IsZero() || healthy[0].ErrorClass != "" || healthy[0].Restarts != 0 {
-		t.Errorf("a serving server's row = %+v, want no outage, class or restart", healthy)
+	if len(healthy) != 1 || !healthy[0].DownSince.IsZero() || healthy[0].ErrorClass != "" || healthy[0].Restarts != 0 ||
+		!healthy[0].WaitingSince.IsZero() {
+		t.Errorf("a serving server's row = %+v, want no outage, wait, class or restart", healthy)
+	}
+}
+
+// THE HEARTBEAT'S ROW SAYS SINCE WHEN ITS LONGEST WAIT BEGAN, carried across
+// the passes that hold the instance back again: what `mcp_server_waiting_long`
+// measures, so a clock reset by every pass would never let it fire. A failed
+// instance is no wait, however long it has been down.
+//
+// Mutation: name the row's wait by the first seat id, or stamp each pass
+// afresh in [stampSince], and this fails.
+func TestTheHeartbeatRowDatesTheLongestWaitAcrossPasses(t *testing.T) {
+	t.Parallel()
+	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
+	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	cto := uuid.MustParse("00000000-0000-7000-8000-000000000003")
+	first := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	waits := func(seat string) *credentialMissing {
+		return &credentialMissing{seat: seat, server: "tracker",
+			minting: map[string]integration.Kind{"TRACKER_TOKEN": integration.KindGitHub}}
+	}
+	held := []mcpOutcome{{server: "tracker", seat: pm, err: waits("pm")}}
+	stampSince(nil, held, first)
+	again := []mcpOutcome{{server: "tracker", seat: pm, err: waits("pm")}}
+	stampSince(held, again, first.Add(5*time.Minute))
+	e := &Engine{mcpSeats: map[string][]mcpOutcome{
+		"swe": {{server: "tracker", seat: swe, err: waits("swe"), since: first.Add(10 * time.Minute)}},
+		"pm":  again,
+		"cto": {{server: "tracker", seat: cto, err: errors.New("exit status 1"), since: first.Add(-time.Hour)}},
+	}}
+	rows := e.mcpStatus(t.Context())
+	if len(rows) != 1 || rows[0].Waiting != 2 || rows[0].Failed != 1 {
+		t.Fatalf("rows = %+v, want one row with two waiting and one failed", rows)
+	}
+	if got := rows[0].WaitingSince; !got.Equal(first) || rows[0].WaitSeat != pm {
+		t.Errorf("waiting since %s for %s, want %s for pm, whose wait began first and was kept "+
+			"across the pass that held it back again", got, rows[0].WaitSeat, first)
 	}
 }
 

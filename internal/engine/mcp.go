@@ -334,17 +334,21 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 //
 // AND HOW LONG THE SERVER HAS BEEN DOWN HERE AND HOW OFTEN IT CAME BACK: the
 // earliest instant a failed instance stopped serving, the class of the failure
-// the row names, and the restarts of its instances summed, all bounded.
+// the row names, and the restarts of its instances summed, all bounded; and
+// the earliest instant a waiting instance was held back. The two instants are
+// what the MCP alarms measure an outage and a wait against.
 //
-// THE FAILURE THE ROW NAMES IS THE ONE ITS OUTAGE DATES: the instance down
-// longest, so the error, its seat, its class and DownSince are one instance's
-// facts. Named by the first failure by seat id instead, a row said one agent's
-// error beside another's outage. Ties, and failures nothing dated, go to the
-// lower seat id.
+// THE INSTANCE THE ROW NAMES IS THE ONE ITS INSTANT DATES: the failure is the
+// instance down longest, and the wait the instance waiting longest, so the
+// error, its seat, its class and DownSince are one instance's facts, and so
+// are the wait, its seat and WaitingSince. Named by the first failure by seat
+// id instead, a row said one agent's error beside another's outage, and the
+// alarm that quotes both described an instance that does not exist. Ties, and
+// instances nothing dated, go to the lower seat id.
 //
-// Sorted by server, a server's reported wait its first by the seat's agent id,
-// and every choice above made on the readings' own order (server, then seat),
-// so a beat that re-sends the same facts sends the same bytes.
+// Sorted by server, with every choice above made on the readings' own order
+// (server, then seat), so a beat that re-sends the same facts sends the same
+// bytes.
 func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
@@ -382,8 +386,12 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 		switch r.state {
 		case coord.MCPInstanceWaiting:
 			row.Waiting++
-			if row.Wait == "" {
-				row.Wait, row.WaitSeat = r.wait.Error(), r.seat
+			// THE LONGEST WAIT, dated as the outage is ([stampSince]): a
+			// pass that holds the instance back again keeps the instant it
+			// was first held, so `mcp_server_waiting_long` measures the whole
+			// wait rather than the latest pass's share of it.
+			if row.Wait == "" || datedBefore(r.since, row.WaitingSince) {
+				row.Wait, row.WaitSeat, row.WaitingSince = r.wait.Error(), r.seat, r.since
 			}
 		case coord.MCPInstanceFailed:
 			row.Failed++
