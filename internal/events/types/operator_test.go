@@ -99,6 +99,21 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 		actor:   "jane-founder",
 		summary: "jane-founder checked the MCP server address https://mcp.example.com/mcp",
 	}, {
+		name: "an MCP server's header stored for one seat, by name alone",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerStoreValue, Server: "tracker", Seat: "cto", Key: "TOKEN",
+			Variable: "MCP_TRACKER_TOKEN_CTO", Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder stored TOKEN of MCP server tracker as MCP_TRACKER_TOKEN_CTO for seat cto",
+	}, {
+		name: "an MCP server's header whose test failed",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerStoreValue, Server: "linear", Key: "Authorization",
+			Variable: "MCP_LINEAR_AUTHORIZATION", Outcome: AuditRefused, Refusal: "value_test_failed"}),
+		actor: "jane-founder",
+		summary: "jane-founder stored Authorization of MCP server linear as MCP_LINEAR_AUTHORIZATION: " +
+			"refused (value_test_failed)",
+	}, {
 		name: "a device sign-in cancelled, said apart from its start",
 		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
 			Action: ModelDeviceSignInCancel, ProviderKey: "codex", Outcome: AuditApplied}),

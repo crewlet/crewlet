@@ -398,6 +398,7 @@ export const LINEAR_DETAIL: McpServerAnswer = {
     coverage: { nodes: [{ id: "node-a", answered: true, error: "" }], complete: true },
   },
   last_check: null,
+  values: [],
 };
 
 /** Linear whole, as a member reads it. */

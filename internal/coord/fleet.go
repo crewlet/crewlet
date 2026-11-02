@@ -1343,6 +1343,10 @@ type SecretRecord struct {
 	// NEVER ANSWERED: no route, listing, log or audit carries it.
 	OpID string
 
+	// WriteOnly marks a value only the engine's resolver opens; every reveal
+	// refuses it. Kept by later writes and a rekey (internal/fleetsecrets).
+	WriteOnly bool
+
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] is
 	// conditioned on. Store-wide rather than

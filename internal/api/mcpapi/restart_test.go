@@ -82,7 +82,7 @@ func restartSurface(t *testing.T, restarter mcpapi.Restarter, audit *recordedAud
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Audit: audit})
+		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Values: valueStore(t), Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +248,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/check": authz.ActionToolsCheck,
 		"POST /mcp-checks":               authz.ActionToolsCheck,
 		"POST /mcp-probe":                authz.ActionToolsCheck,
+		// A STORED VALUE IS A CREDENTIAL, never the assistant's: its
+		// pointer's config.write is asked in the handler (values.go).
+		"PUT /mcp-servers/{name}/values/{key}": authz.ActionSecretWrite,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {

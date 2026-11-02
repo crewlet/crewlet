@@ -389,6 +389,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/mcp-servers/{name}/check` | Test one MCP server where it runs, calling no tool: on every node, or with `seat` one agent's instance on the node holding the seat; recorded as the server's latest test. **Takes `tools.check`**, an administrator's at any recency (see [below](#post-mcp-serversnamecheck)) |
 | `POST` | `/mcp-checks` | Test a draft MCP server entry before it is saved, as a write would leave it. **Takes `tools.check`**, and `config.write` and `secrets.write` on top, decided before the body is read (see [below](#post-mcp-checks)) |
 | `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
+| `PUT` | `/mcp-servers/{name}/values/{key}` | Store one header or variable of an MCP server, tested first by default, sealed write-only and read through a `${VAR}` the key is pointed at. **Takes `secrets.write`**, and `config.write` on top, both at a recent step-up and decided before the body is read; never the assistant (see [below](#put-mcp-serversnamevalueskey)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -2586,7 +2587,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
 | `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry` or `done` |
 | `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`, `models` for a model's credential the Models page wrote, and `mcp` for an MCP server's header or variable [stored from its page](#put-mcp-serversnamevalueskey); see [the secret store](../concepts/secret-store.md#the-design)), and `write_only` (whether no reveal answers the value: one stored from Settings › MCP & tools is); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, Ask Crewlet's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no Ask Crewlet estate; and `executor_values`, the seats' executor sessions counted the same way (each session a turn's row names counted by the key its object is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves either (each leaves with its row), or `null` on a node that runs no executor log. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -2656,6 +2657,15 @@ record it.
 the route answers what a listing answers for one name, so a browser, a crawl or
 a link preview cannot pull a credential out by accident.
 
+**A value stored write-only is never revealed.** The headers and variables
+[Settings › MCP & tools stores](#put-mcp-serversnamevalueskey) are sealed on a
+row marked write-only: the engine resolves it for the `${VAR}` references that
+name it, and both reveals refuse it `403 write_only`, naming it under `names`,
+before anything is opened (the batched read refuses its whole request). The
+listing and one row's metadata carry `write_only`. The mark is the row's: a
+later `PUT /secrets/{name}` of the same name keeps it, a rekey re-seals the row
+with it, and only `DELETE /secrets/{name}` clears it.
+
 **Every value is sealed under the node's keyring.** The store has no plaintext
 mode, and there is no node without a keyring to ask about: `crewlet validate`
 refuses a Tier A file with no `secrets.keys`, and the engine refuses to start
@@ -2663,7 +2673,8 @@ without one.
 
 **Every refusal here is the engine's envelope** — `error`, the sentence
 `message` a screen shows, and the route's own detail beside them:
-`reserved_name`, `invalid_name`, `invalid_query` (on a write or a reveal of
+`reserved_name`, `write_only` (a reveal naming a value stored write-only,
+with its `names`), `invalid_name`, `invalid_query` (on a write or a reveal of
 several names carrying any query parameter, with a `detail` naming each and a
 `hint`), `invalid_body` (a reveal or a write of several names that names none,
 too many, or a field it does not read, and a write of several whose names or
@@ -9771,6 +9782,18 @@ it under, so a node that drained, died or restarted stops counting at once.
   made for (`""` for a shared server), `ok`, and `nodes`, each as a test
   answers it but without its tools. `null` where the server was never tested.
   An administrator's reading only.
+- `values` is every header (a remote server) or variable (a local one) the
+  server is sent, by name and never by value: `key` as the document spells
+  it, `as` (`header` or `env`), `variable`, the one variable it reads (`""` for
+  a value written in the document, one reading several, or a key an
+  integration binds per agent), `set` (whether the secret store holds every
+  variable it reads; a literal is set, and a key bound per agent is never set
+  at the server's level), `stored_at` and `stored_by` from the variable's row
+  (`null` where the store holds none), `optional` (`optional_keys` names it),
+  and `bound_by`, the integration that hands each agent its own value under
+  the key, `null` for one the document sets. What
+  [`PUT /mcp-servers/{name}/values/{key}`](#put-mcp-serversnamevalueskey)
+  stores. An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
   configuration does not declare: `auth` (`integration` for a per-agent server
@@ -10169,6 +10192,92 @@ An address the configuration's own rule refuses (plain http to a public host, a
 user name or password in it) stops at the `address` stage, dialling nothing.
 Every call is one `mcp_server_acted` with the action `probe`, naming the
 address with its credentials withheld.
+
+### `PUT /mcp-servers/{name}/values/{key}`
+
+Stores one header of a remote server, or one variable of a local one, from the
+server's page: what the server is sent under `key`, whole (`"Bearer <API
+key>"`, as the curated catalogue's format says), as `{"value": "..."}`. The
+value is sealed **write-only** in the fleet's secret store and the key reads it
+through a `${VAR}`, so no credential is written into the company document and
+no route ever answers the value again.
+
+| Query | Meaning |
+|---|---|
+| `seat=<handle>` | One seat's value of a per-agent server (`shared: false`), written into that seat's `mcp_env` block for the server, which the engine lays over the server's own keys. Only a seat already granted the server takes one: storing a value never grants it. Refused `400 invalid_query` for a shared server |
+| `test=true\|false` | Test the value before storing it (the default). A per-agent server's own value can only be tested as one of its seats, so without `seat` it is stored with `test=false` or refused `400 invalid_query` |
+
+**Who may.** `secrets.write` on the route and `config.write` in it, both an
+administrator's at a recent step-up, decided before the body is read: the
+value is a credential and its pointer a write of the document. The assistant
+never takes `secrets.write`, so it never stores one. A managed document
+(`api.auth.company_writers`) refuses it `403 config_managed`, before the body
+too.
+
+**Which variable.** The key's own variable where it already reads exactly one
+that nothing else in the document reads, so rotating it changes nobody else's
+credential; otherwise `MCP_<SERVER>_<KEY>`, and `_<SEAT>` for a seat's value,
+upper-snaked. A derived name another field already reads is refused `409
+conflict` naming the fields (`readers`), since a value sealed there would
+reach them too. A key an integration hands each agent its own value under
+(`seat_credentials`, or a server the engine recognises) is refused `409
+conflict`: nobody stores it.
+
+**In this order**, each step only when the one before it passed:
+
+1. The pointer the write would make is held to every rule a write of the
+   document is (`422 validation_error` with `problems`).
+2. The test (unless `test=false`): the saved entry, turned on whatever its
+   `enabled` says, with the key reading the value, where the server runs (on
+   every node for a shared server, on the seat's holder for a seat's value),
+   as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck) tests it
+   and calling no tool. The value travels to the other nodes sealed under the
+   fleet's keyring. It is never recorded as the server's latest test. A test
+   that fails stores nothing and answers `422 value_test_failed` with the
+   `stage` and the `class` it stopped at, the `node`, the whole `check` and a
+   problem at `values.<key>`; one no node answered is `503`.
+3. The seal: write-only, its `source` `mcp`. Past the test, the write finishes
+   whatever the caller does.
+4. The pointer as one revision, applied to the document as it stands then (a
+   write that landed while the value was tested is kept), or, where the key
+   already read the variable, a re-activation of the revision that reads it
+   ([ADR-0070](#a-secret-write-re-activates-the-revision-that-reads-it)): the
+   running server is started with the new value either way. A pointer refused
+   here (the document changed the key meanwhile, for one) answers with
+   `stored: true` and the `variable`: the value is stored and nothing reads it
+   yet, and the same request sent again finishes it.
+
+```json
+{
+  "server": "linear", "key": "Authorization", "seat": "",
+  "variable": "MCP_LINEAR_AUTHORIZATION",
+  "tested": true,
+  "check": {"server": "linear", "seat": "", "draft": false, "ok": true, "...": "as POST /mcp-servers/{name}/check answers"},
+  "pointed": true,
+  "reload": {"revision_id": "rev-0192", "epoch": 14},
+  "values": [
+    {"key": "Authorization", "as": "header", "variable": "MCP_LINEAR_AUTHORIZATION", "set": true,
+     "stored_at": "2026-11-02T09:00:00Z", "stored_by": "jane-founder", "optional": false, "bound_by": null}
+  ]
+}
+```
+
+- `pointed` is whether the document was written to read the variable, and
+  `reload` the revision that resolves the new value: the write's, or the
+  re-activation's, with `error` and `detail` where a re-activation did not
+  land (the value is sealed either way).
+- `values` are the server's values, or with `seat` that seat's, as
+  [`GET /mcp-servers/{name}`](#get-mcp-serversname) answers them.
+
+The body is read strictly (`400 invalid_body` for a field it does not read, no
+`value`, an empty one, or one holding a line break or a NUL, since a header's
+or a variable's value is one line), and any other query parameter is `400
+invalid_query`. `404 not_found` for a server the configuration does not
+declare, `404 no_such_seat` for a seat that is not an agent's, `409 conflict`
+for a seat the server is not granted to. **No answer, log line or audit record
+carries the value**, a refusal included: every call is one `mcp_server_acted`
+with the action `store_value`, naming the `key` and the `variable`, and a
+test's sentences withhold the values the server was started with.
 
 ### `GET /fleet`
 

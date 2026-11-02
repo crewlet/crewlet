@@ -598,6 +598,30 @@ export interface McpServerAnswer {
   calls: McpServerCalls;
   /** The server's latest test, whoever asked through whichever node; null where never tested. */
   last_check: McpCheckView | null;
+  /** Every header or variable the server is sent, by name and never by value. */
+  values: McpValueState[];
+}
+
+/** Where a server is sent a value: a remote server's header, a local one's variable. */
+type McpValueAs = "header" | "env";
+
+/**
+ * One header or variable a server is sent, by name: the variable it reads and
+ * whether the store holds it. Never the value (values stored from the page are
+ * write-only).
+ */
+interface McpValueState {
+  key: string;
+  as: McpValueAs;
+  /** The one variable it reads, "" for a literal, several, or a per-agent binding. */
+  variable: string;
+  set: boolean;
+  stored_at: string | null;
+  stored_by: string | null;
+  /** The server starts without it when it resolves to nothing. */
+  optional: boolean;
+  /** The integration that hands each agent its own value under the key, or null. */
+  bound_by: string | null;
 }
 
 /** A stage a test of a server walks, in order (`mcp.TestStages`). */

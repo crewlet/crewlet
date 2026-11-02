@@ -523,6 +523,10 @@ const (
 	// key, a blind-index key — which no caller of `/secrets` may address,
 	// whatever it holds. The detail names the gesture that does.
 	CodeReservedName Code = "reserved_name"
+
+	// CodeWriteOnly is a reveal of a value stored write-only, which no route
+	// answers. 403, its `names` listed.
+	CodeWriteOnly Code = "write_only"
 )
 
 // THE IDENTITY CODES, and why there are so few of them.
@@ -1188,6 +1192,9 @@ const (
 	// answer the test of (a timeout, a server error): nothing was stored.
 	// 502.
 	CodeCredentialUntested Code = "credential_untested"
+	// CodeValueTestFailed is an MCP server's value whose test failed, so
+	// nothing was stored. 422, with the `stage` and `class` it stopped at.
+	CodeValueTestFailed Code = "value_test_failed"
 	// CodeAlreadyExists is a create-only credential write (`If-None-Match:
 	// *`) naming a secret that is already stored, its `names` listed. 412.
 	CodeAlreadyExists Code = "already_exists"
@@ -1532,6 +1539,8 @@ var codes = map[Code]string{
 		"is back.",
 	CodeReservedName: "That name is reserved for the engine. The detail " +
 		"names the command that can change it.",
+	CodeWriteOnly: "That value is write-only: the engine uses it, and it is " +
+		"never shown again. Store a new value to replace it.",
 
 	CodeArtifactTrashed: "This artifact is in the trash. Its owner can " +
 		"restore it, then try again.",
@@ -1628,6 +1637,8 @@ var codes = map[Code]string{
 		"stored. The model still uses its current credential.",
 	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
 		"Try again.",
+	CodeValueTestFailed: "The server did not work with this value, so nothing was stored. " +
+		"The detail names where the test stopped and why.",
 	CodeAlreadyExists: "A secret with that name is already stored, so nothing was " +
 		"written. Choose another name, or rotate that one.",
 	CodeNotSittingOut: "This model isn't sitting out on any node. Nothing to retry; " +

@@ -25,12 +25,14 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -150,6 +152,16 @@ func (f *fakeRuntime) MCPChecker() mcpapi.Checker {
 
 // MCPChecks reads no server's latest test.
 func (f *fakeRuntime) MCPChecks() queries.MCPCheckReader { return noChecks{} }
+
+// MCPValues is a secret store over a memory fleet of its own: what a stored
+// value does is held by mcpapi's own suite.
+func (f *fakeRuntime) MCPValues() mcpapi.ValueStore {
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		panic(err)
+	}
+	return fleetsecrets.New(coordmemory.NewFleet(), cipher)
+}
 
 // passingChecker finds every server serving on one node, and every address
 // asking for no sign-in.
