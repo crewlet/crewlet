@@ -31,11 +31,8 @@ import type {
   McpValueRefusal,
   McpValueState,
 } from "~/contract/mcp.ts";
-import { storeValue } from "../api.ts";
+import { CLIENT_SECRET, storeValue } from "../api.ts";
 import { TestResult } from "./TestDialog.tsx";
-
-/** The key a server's OAuth client's secret is stored under. */
-export const CLIENT_SECRET = "oauth.client_secret";
 
 /** What a store came to, beyond a plain success. */
 type Outcome =

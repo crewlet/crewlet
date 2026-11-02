@@ -43,9 +43,8 @@ import { href } from "~/app/router.tsx";
 import { fmtDate } from "~/lib/format.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
-import type { ServerDetail } from "../api.ts";
+import { CLIENT_SECRET, type ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
-import { CLIENT_SECRET } from "../flows/ValueDialog.tsx";
 import type { OnFlow } from "../parts.tsx";
 import { AUTH, OAUTH_CLIENT, OAUTH_STATUS } from "../words.ts";
 

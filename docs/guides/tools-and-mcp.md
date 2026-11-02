@@ -672,11 +672,20 @@ sent write-only. Its steps:
    variables, and the tool prefix.
 4. **Sign-in.** The vendor's integration where the catalogue names one (each
    agent gets its own instance, signed in as itself, and which agents get it
-   is set on that integration's Agents tab), a header, or none. What the
-   address check or the catalogue found is chosen already and said.
+   is set on that integration's Agents tab); [OAuth](#signing-in-with-oauth),
+   with how the engine registers (Crewlet's published identity, registering
+   automatically, or your own client with its id and secret), the scopes and
+   the callback address to allowlist; a header;
+   [client credentials](#signing-in-as-a-service-identity), a service
+   identity's client id and secret; or none. What the address check or the
+   catalogue found is chosen already and said, and a registration the
+   vendor's metadata rules out is not offered.
 5. **Test.** The entry as it would be written, with the values you typed,
    tested before anything is stored ([Before you save](#testing-a-server)). A
-   per-agent server is tested as the agent you choose.
+   per-agent server is tested as the agent you choose. A service identity is
+   tested by signing in with the secret you typed; a person's OAuth sign-in is
+   not, since a draft is never sent the company's grant, so its test stops
+   where the server asks for one.
 6. **Review.** The engine's dry run of the entry: a problem is placed on the
    field it names, the step that holds it marked, and nothing is saved.
 
@@ -688,7 +697,11 @@ write-only, and the key pointed at the variable the engine chooses. So no value
 is ever written into the entry, and a value the server refuses stores nothing:
 the entry stays saved and the wizard open on what is left, and saving again
 sends only that. A per-agent server's own value is stored untested, since the
-engine tests it as each agent. A server added here has no `access`, so it
+engine tests it as each agent, and so is the secret of your own client for a
+person's OAuth sign-in, which is first sent when the grant renews. A client's
+secret is never written into the entry: a service identity's entry is written
+reading the variable the secret is then stored under. A new server a person
+signs in to with OAuth opens its **Sign in** next. A server added here has no `access`, so it
 reaches every agent seat (an integration's server, the agents on at its lane):
 see [Choosing which agents get a server](#choosing-which-agents-get-a-server).
 
@@ -701,10 +714,9 @@ A configuration another system manages refuses both. A name the configuration
 already carries is refused on add; a name only a node still runs, from a
 revision it has not applied past yet, is free. The name, the prefix, the keys
 and the address are held to [the naming rules](#naming-a-server-and-its-tools).
-The wizard does not set up an OAuth sign-in: a server that asks for one is
-said to, and is added with a header it accepts, or with its `oauth` block in
-the configuration ([Signing in with OAuth](#signing-in-with-oauth)). Editing a
-server that signs in with OAuth keeps its sign-in as it is.
+Editing a server that signs in with OAuth draws its sign-in as its `oauth`
+block says it and writes back what you do not change; a stored client secret
+stays stored unless you type a new one.
 
 ### Choosing which agents get a server
 
@@ -1744,8 +1756,9 @@ the server is already granted to. A key an integration fills for each agent
 
 The secret of the OAuth client a server signs in with is stored the same way,
 under the key `oauth.client_secret` (its own variable, else
-`MCP_<SERVER>_OAUTH_CLIENT_SECRET`), and listed on the Connection tab beside
-the headers with `as: oauth`: it is sent to the server's authorization server,
+`MCP_<SERVER>_OAUTH_CLIENT_SECRET`), and listed on the Connection tab's
+**Sign-in** card rather than among the headers (`as: oauth` in the detail's
+`values`), with **Set** or **Replace**: it is sent to the server's authorization server,
 never to the server. A [service identity's](#signing-in-as-a-service-identity)
 is tested by signing in with it. The company's own client of a person's
 [sign-in](#signing-in-with-oauth) is first sent when the grant next renews,
@@ -1791,9 +1804,14 @@ server's values once, at its launch, and an access token runs out within the
 hour, so a box reaches the server through the bridge instead.
 
 **Signing in.** Until somebody signs in, the server is not started and its
-state is `needs_sign_in`. **Sign in** on its page
+state is `needs_sign_in`. **Sign in** on its Connection tab's **Sign-in** card,
+or on the `mcp_oauth_needs_sign_in` alarm (on Settings › MCP & tools and in the
+Inbox)
 ([`POST /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#post-mcp-serversnameoauth))
-takes an administrator who stepped up recently, never Ask Crewlet. The engine
+takes an administrator who stepped up recently, never Ask Crewlet. It opens
+the vendor's consent page in a new tab and waits there until the engine says
+the sign-in is approved or why it failed; a tab your browser holds back is
+offered as a link. The engine
 reads the server's sign-in metadata, refuses an authorization server that does
 not offer PKCE with S256, and sends your browser to the vendor's consent page.
 When you approve, the vendor sends the browser back to
@@ -1807,7 +1825,8 @@ two addresses the Servers answer names: `callback_url` and
 issued, are sealed in the company's secret store under a name of the engine's
 own that no `${VAR}` reaches and no person can list, reveal or delete through
 Settings, Secrets. Who signed in and when, the authorization server, the scopes
-and when the grant runs out are on the server's page. The access token is
+and when the grant runs out are on the **Sign-in** card of the server's
+Connection tab, never a token. The access token is
 issued as the server is used and kept in each node's memory alone, never
 stored, logged or answered; each node renews its own as it runs out, one node
 at a time across the fleet, so a vendor that retires a refresh token at every
@@ -1825,7 +1844,7 @@ states when it runs out raises `mcp_oauth_expiring` seven days before. Either
 way, signing in again replaces the grant, and the agents keep the server from
 then on.
 
-**Signing out.** **Sign out** on the server's page
+**Signing out.** **Revoke** on the server's **Sign-in** card
 ([`DELETE /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#delete-mcp-serversnameoauth))
 revokes the grant at the vendor where it offers revocation, forgets it here,
 and stops the server on every node. The page says whether the vendor revoked

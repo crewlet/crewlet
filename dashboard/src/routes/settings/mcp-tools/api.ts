@@ -39,6 +39,12 @@ import { answerOf, getEntity, outcomeOf, putEntity } from "~/protocol/configWrit
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
 
+/**
+ * The key an OAuth client's secret is stored under on
+ * `PUT /mcp-servers/{name}/values/{key}` (`config.MCPValueClientSecret`).
+ */
+export const CLIENT_SECRET = "oauth.client_secret";
+
 /** One server whole, in the reading the caller is answered. */
 export type ServerDetail = McpServerAnswer | McpMemberServerAnswer;
 

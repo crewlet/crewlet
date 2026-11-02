@@ -63,11 +63,12 @@ import {
   fromServer,
   stepOf,
   stepsFor,
+  testsValue,
   valuesOf,
   type Draft,
   type Step,
 } from "./draft.ts";
-import { SourceStep, unavailableReason } from "./SourceStep.tsx";
+import { SourceStep } from "./SourceStep.tsx";
 import {
   ConnectionStep,
   isComplete,
@@ -148,7 +149,8 @@ export function ServerWizard({
   /** The step the address names, or null for the first. */
   start: Step | null;
   onClose: () => void;
-  onSaved: (name: string) => void;
+  /** After a save: the server's name, and whether a person signs it in next (a new OAuth sign-in). */
+  onSaved: (name: string, signInNext: boolean) => void;
 }) {
   const toast = useToast();
   const lifetime = useLifetimeSignal();
@@ -194,6 +196,8 @@ export function ServerWizard({
   const entity = useMemo(() => entityOf(draft, saved?.entity ?? null), [draft, saved]);
   const values = useMemo(() => valuesOf(draft), [draft]);
   const unchanged = saved !== null && canonical(entity) === canonical(saved.entity);
+  // THE SAVED SERVER, as it runs, for an edit that changes nothing of it.
+  const testsSaved = unchanged && Object.keys(values).length === 0;
   const testSeat = draft.shared ? "" : seat;
   const signature = JSON.stringify({ entity, values, seat: testSeat });
 
@@ -215,10 +219,9 @@ export function ServerWizard({
   async function runTest() {
     const sig = signature;
     setTest({ kind: "running", for: sig });
-    const answer: McpAnswer<McpCheckAnswer> =
-      unchanged && Object.keys(values).length === 0
-        ? await testServer(draft.name, testSeat)
-        : await testDraft(entity, values, testSeat);
+    const answer: McpAnswer<McpCheckAnswer> = testsSaved
+      ? await testServer(draft.name, testSeat)
+      : await testDraft(entity, values, testSeat);
     if (answer.kind === "ok") {
       setTest({ kind: "done", for: sig, answer: answer.value });
       return;
@@ -331,7 +334,7 @@ export function ServerWizard({
       const stored: Record<string, string> = { ...storedFor };
       for (const [key, value] of Object.entries(values)) {
         if (stored[key] === value) continue;
-        const answer = await storeValue(name, key, value, { test: draft.shared });
+        const answer = await storeValue(name, key, value, { test: testsValue(draft, key) });
         if (screen.aborted) return;
         if (answer.kind === "ok") {
           stored[key] = value;
@@ -349,14 +352,18 @@ export function ServerWizard({
         return;
       }
       setPartial(null);
+      // A NEW SERVER A PERSON SIGNS IN TO starts once somebody does, which is next.
+      const signInNext = !saved && draft.signIn === "oauth";
       toast.show({
         variant: "success",
         title: saved ? `${name} saved` : `${name} added`,
         message: saved
           ? "It applies with no restart; a running turn finishes first."
-          : "It starts with no restart, and the agents it reaches see its tools on their next turn.",
+          : signInNext
+            ? "Sign in to it next: no agent reaches its tools until somebody does."
+            : "It starts with no restart, and the agents it reaches see its tools on their next turn.",
       });
-      onSaved(name);
+      onSaved(name, signInNext);
     } finally {
       if (!screen.aborted) setSaving(false);
     }
@@ -377,7 +384,7 @@ export function ServerWizard({
     step !== "source"
       ? null
       : draft.catalogue
-        ? unavailableReason(draft.catalogue)
+        ? null
         : draft.source === "catalogue" || draft.source === "community"
           ? "Choose a server, or start from an address."
           : draft.source === "url" && !draft.url.trim()
@@ -538,6 +545,9 @@ export function ServerWizard({
               problems={problems}
               missing={shownMissing}
               editing={editing}
+              callbackUrl={
+                data.answer && "callback_url" in data.answer ? data.answer.callback_url : ""
+              }
             />
           ) : null}
           {step === "test" ? (
@@ -548,6 +558,7 @@ export function ServerWizard({
               agents={data.agents}
               seat={seat}
               onSeat={setSeat}
+              ofDraft={!testsSaved}
             />
           ) : null}
           {reviewing ? (
