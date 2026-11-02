@@ -1359,11 +1359,16 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 // still refusing or starved ([Engine.budgetHold]) — nil for every other error,
 // and for a refusal whose window has turned over since, which an ordinary
 // retry now runs.
+//
+// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): a relaunch
+// that continues its turn's session needs more than the static floor, and a
+// window with room for the static one alone would release the resume into the
+// same refusal.
 func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle string, err error) *sandbox.HeldError {
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		return nil
 	}
-	refusal, held := e.budgetHold(ctx, company, handle)
+	refusal, held := e.budgetHold(ctx, company, handle, floorOf(company, err))
 	if !held {
 		return nil
 	}
@@ -2248,6 +2253,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// minting and sealed upload beside them. See executorsession.go.
 		Sessions: e.executorLog,
 		Keep:     executorKeep{engine: e},
+		// AND A RELAUNCH CONTINUES THE TURN'S KEPT SESSION in whatever box it
+		// gets, its row read through the same router's reads and its object
+		// fetched through the same store. See executorrestore.go.
+		Restore: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -2717,7 +2726,12 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 	}
 	c := e.Company()
 	if route == sandbox.ResumeAnswer {
-		if refusal, held := e.budgetHold(ctx, c, handle); held {
+		// THE STATIC FLOOR: the gate is asked before the claim and names no
+		// run, so it cannot know the session the answer's relaunch continues.
+		// A relaunch whose own floor is above it is refused at its launch and
+		// held on its window there ([Engine.heldByBudget]), so the answer
+		// waits either way rather than circling.
+		if refusal, held := e.budgetHold(ctx, c, handle, staticFloor(c)); held {
 			return refusal, true
 		}
 	}

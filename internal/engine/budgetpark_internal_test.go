@@ -506,7 +506,7 @@ func TestALaunchRefusedBelowTheFloorParksTheSeat(t *testing.T) {
 	r.mu.Lock()
 	r.turnFn = func() (turn.Result, error) {
 		r.spend(t, 60)
-		return turn.Result{}, executorHeadroom(t.Context(), staticRemaining{left: 40}, 50)
+		return turn.Result{}, executorHeadroom(t.Context(), staticRemaining{left: 40}, launchFloor{static: 50})
 	}
 	r.mu.Unlock()
 	r.deliver(t)

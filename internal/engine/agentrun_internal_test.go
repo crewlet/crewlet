@@ -757,20 +757,20 @@ func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
 func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	if err := executorHeadroom(ctx, nil, 25000); err != nil {
+	if err := executorHeadroom(ctx, nil, launchFloor{static: 25000}); err != nil {
 		t.Errorf("an uncapped seat was refused: %v", err)
 	}
-	if err := executorHeadroom(ctx, staticRemaining{left: 1}, 0); err != nil {
+	if err := executorHeadroom(ctx, staticRemaining{left: 1}, launchFloor{}); err != nil {
 		t.Errorf("a company with the floor off refused a launch: %v", err)
 	}
-	if err := executorHeadroom(ctx, staticRemaining{left: 25000}, 25000); err != nil {
+	if err := executorHeadroom(ctx, staticRemaining{left: 25000}, launchFloor{static: 25000}); err != nil {
 		t.Errorf("a seat exactly at the floor was refused: %v", err)
 	}
-	if err := executorHeadroom(ctx, staticRemaining{left: 24999}, 25000); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+	if err := executorHeadroom(ctx, staticRemaining{left: 24999}, launchFloor{static: 25000}); !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("a seat one token below the floor = %v, want a budget refusal", err)
 	}
 	down := errors.New("store down")
-	err := executorHeadroom(ctx, staticRemaining{err: down}, 25000)
+	err := executorHeadroom(ctx, staticRemaining{err: down}, launchFloor{static: 25000})
 	if err == nil || errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("an unreadable budget = %v, want refused, and not as an exhausted one", err)
 	}

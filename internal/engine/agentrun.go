@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -212,8 +211,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			"seat, so a bridged call would have nobody to act as; this is an assembly " +
 			"fault in the runner, not a setting")
 	}
-	if err := executorHeadroom(ctx, e.remainingFor(company, handle),
-		company.Config.TurnEngine.ExecutorFloor()); err != nil {
+	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): a launch that
+	// continues its turn's session sends the session's context before its
+	// brief, so its floor is the two together, never the static one alone.
+	floor := staticFloor(company)
+	if session := req.Session; session != nil && session.Basis.Continues() {
+		floor = floor.continuing(session.Basis.ContextTokens, harness.EstimateTokens(req.Brief))
+	}
+	if err := executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
 	member, agent, err := l.member(ctx, manager, req.OnFallback)
@@ -372,7 +377,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// [runner.Asked] — or a ROUND CARRIED ON after its job was lost with
 		// its host, in a session of its own ([runner.Lost]). Either keeps the
 		// round's calls on the row.
-		Continue:    sandboxContinuation(req.Continue),
+		Continue: sandboxContinuation(req.Continue),
+		// AND THE TURN'S KEPT SESSION, continued in whatever box the launch
+		// gets, where the turn's runner was told it would be
+		// ([agentLauncher.ProbeSession]), with the briefs that continue it.
+		Session:     sandboxSession(req.Session),
 		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes:  brief,
 		HandedNotes: handed,
@@ -608,8 +617,8 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 // [sandbox.ErrResumeHeld]): the job stays collected, its seat held, until the
 // window turns over. An unreadable counter is not one: it is the store's
 // moment, and a retry's backoff is what rides it out.
-func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int) error {
-	if floor <= 0 || remaining == nil {
+func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) error {
+	if floor.tokens() <= 0 || remaining == nil {
 		// No floor, or no counter anywhere in the epoch — a company with
 		// no token budget rather than a read that could not be made.
 		return nil
@@ -619,10 +628,10 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int
 		return fmt.Errorf("this seat's remaining token budget could not be read, and an "+
 			"executor run costs a box before it produces anything: %w", err)
 	}
-	if left < floor {
-		return fmt.Errorf("this seat has %d tokens left and an executor run needs at least "+
-			"%d (turn_engine.executor_min_budget_tokens): %w",
-			left, floor, toolloop.ErrBudgetExhausted)
+	if left < floor.tokens() {
+		// THE FLOOR RIDES THE REFUSAL, so the hold that waits on it waits
+		// for room for this launch ([floorRefusal]).
+		return &floorRefusal{floor: floor, left: left}
 	}
 	return nil
 }

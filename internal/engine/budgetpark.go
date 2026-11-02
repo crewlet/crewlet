@@ -143,7 +143,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// none, so there is no refusal of a charge to record.
 		m.turnAway(ctx, r)
 	} else {
-		reason = starvedReason(r, m.basis.floor)
+		reason = starvedReason(r, launchFloor{static: m.basis.floor})
 	}
 	log.InfoContext(ctx, "seat_budget_parked", "seat", handle, "scope", r.Scope,
 		"period", string(r.Window.Period), "window", r.Window.Label,
@@ -182,10 +182,13 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 // seat's mail ([Engine.budgetPark]), and the idle sweep asking whether an ask
 // waiting in that mail is still owed its answer ([colleagueOwed]). Three-valued
 // as both its halves are.
+//
+// THE STATIC FLOOR, because what both readers hold mail for is a turn's first
+// launch, which continues no session of the turn's own ([launchFloor]).
 func (m *meter) parks(ctx context.Context) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
-		r, starved, err = m.starved(ctx)
+		r, starved, err = m.starved(ctx, m.basis.floor)
 	}
 	return r, refusing, starved, err
 }
@@ -205,7 +208,12 @@ func (m *meter) parks(ctx context.Context) (r refusal, refusing, starved bool, e
 // collected job's resume that its review or relaunch was refused for is held
 // on it ([sandbox.ErrResumeHeld]). A completion's gate asks it nothing: the
 // job is collected and charged first.
-func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+//
+// AGAINST floor, the room the launch it holds back needs ([launchFloor]): a
+// relaunch that continues its turn's session needs the session's context
+// beside its brief, and held to the static floor it was found not starved,
+// released, and refused at its launch again.
+func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, floor launchFloor) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return sandbox.Refusal{}, false
@@ -217,11 +225,11 @@ func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (san
 	if refusing {
 		return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End}, true
 	}
-	r, starved, err := m.starved(ctx)
+	r, starved, err := m.starved(ctx, floor.tokens())
 	if err != nil || !starved {
 		return sandbox.Refusal{}, false
 	}
-	return sandbox.Refusal{Condition: waitBudget, Reason: starvedReason(r, m.basis.floor),
+	return sandbox.Refusal{Condition: waitBudget, Reason: starvedReason(r, floor),
 		Until: r.Window.End}, true
 }
 
@@ -234,12 +242,19 @@ func refusingReason(r refusal) string {
 }
 
 // starvedReason is the reason a seat waits on a window r whose room is below
-// floor, the tokens an executor launch needs; see [refusingReason].
-func starvedReason(r refusal, floor int) string {
-	return fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an executor "+
-		"launch needs (turn_engine.executor_min_budget_tokens); resets %s",
-		r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), floor,
-		rfc3339(r.Window.End))
+// floor, the tokens an executor launch needs ([launchFloor]); see
+// [refusingReason]. A floor made of a continued session's context says so, in
+// the figures it is made of.
+func starvedReason(r refusal, floor launchFloor) string {
+	need := fmt.Sprintf("the %d an executor launch needs (turn_engine.executor_min_budget_tokens)",
+		floor.tokens())
+	if floor.context > 0 {
+		need = fmt.Sprintf("the %d an executor launch that continues its session needs (its last "+
+			"request carried %d tokens and its brief about %d; turn_engine.executor_min_budget_tokens "+
+			"is %d)", floor.tokens(), floor.context, floor.brief, floor.static)
+	}
+	return fmt.Sprintf("budget: %s window %s leaves %d tokens, below %s; resets %s",
+		r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), need, rfc3339(r.Window.End))
 }
 
 // releaseBudgetPark lifts the budget hold from one seat's inbox, whatever
