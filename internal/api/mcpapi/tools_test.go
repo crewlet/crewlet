@@ -141,12 +141,12 @@ func TestAWriteOfToolLevelsSaysWhichLevelsDecideNothing(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("PUT tools = %d %s", code, raw)
 	}
-	if got, want := keysOf(body), []string{"baseline", "default", "derived", "dry_run", "epoch", "levels",
+	if got, want := keysOf(body), []string{"default", "derived", "dry_run", "epoch", "levels",
 		"listing", "revision_id", "server", "unlisted", "warnings"}; !slices.Equal(got, want) {
 		t.Errorf("the answer's keys are %v, want exactly %v", got, want)
 	}
 	if body["server"] != "tracker" || body["dry_run"] != false || body["default"] != "blocked" ||
-		body["baseline"] != "blocked" || body["listing"] != mcpapi.ListingRead {
+		body["listing"] != mcpapi.ListingRead {
 		t.Errorf("the answer = %v", body)
 	}
 	if unlisted, _ := body["unlisted"].([]any); len(unlisted) != 1 || unlisted[0] != "tr_delete_project" {
@@ -231,7 +231,7 @@ func TestAWriteOfToolLevelsIsAConfigurationWrite(t *testing.T) {
 	code, raw := putWith(t, toolsSurface(t, docs, unread, &recordedAudit{}), proved(time.Minute),
 		"/mcp-servers/tracker/tools", `{"levels": {"nowhere": "blocked"}, "_summary": "x"}`, nil)
 	if body := decoded(t, raw); code != http.StatusOK || body["listing"] != mcpapi.ListingUnavailable ||
-		len(body["unlisted"].([]any)) != 0 || body["baseline"] != "allow" {
+		len(body["unlisted"].([]any)) != 0 || body["default"] != nil {
 		t.Fatalf("a write whose listing was unread = %d %v", code, body)
 	}
 }

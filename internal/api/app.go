@@ -902,7 +902,10 @@ func New(opts Options) (*App, error) {
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
-		SignIns: opts.Runtime.MCPSignIns(), Audit: opts.Audit})
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), Audit: opts.Audit,
+		// OVER THE CHART, which an approval asks: whether the caller leads
+		// the seat whose run made the held call.
+		Guard: authz.ContextGuard(sources.Chart)})
 	if err != nil {
 		return nil, err
 	}
@@ -1033,8 +1036,9 @@ func New(opts Options) (*App, error) {
 		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
 		// own verb (internal/api/llmapi).
 		{"models", opts.Models, logging.Get("api.llm")},
-		// WHAT AN MCP SERVER IS ADDED FROM, on the configuration's own
-		// read verb. Reads alone, so no refused write to log.
+		// SETTINGS › MCP & TOOLS' OWN ROUTES: its reads, and gestures
+		// that record every call of theirs, refused ones included, as an
+		// `mcp_server_acted`, so no refused write logs a line here.
 		{"mcp", mcpSurface, nil},
 	} {
 		var mounted authz.Mux = mux

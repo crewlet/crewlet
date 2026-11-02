@@ -893,7 +893,8 @@ person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
-`question_context`, `decision`, `reply` and `bridge_calls`. A status reader receives the rest with **`body_withheld:
+`question_context`, `decision`, `held_call`, `held_arguments`, `reply` and `bridge_calls` (`held_call` also
+to the person the question is put to, `held_arguments` never). A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
 call stale and asks for a body it will not be sent. A work item a call or a
 turn names (`work_item`, an `llm_history` entry's `work_item` and `task_id`
@@ -9602,6 +9603,13 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
         "fix": {"kind": "restart", "server": "github", "seat": "backend-dev"}}
      ]}
   ],
+  "approvals": [
+    {"id": "0190f3a8-6b1c-7d2e-9f00-1a2b3c4d5e6f", "at": "2026-11-01T09:02:11Z",
+     "server": "github", "tool": "gh_merge_pull_request", "raw": "merge_pull_request",
+     "digest": "sha256:9c1f…", "seat": "backend-dev", "turn_id": "…", "launch_id": "…",
+     "item": "ENG-42", "args": {"owner": "acme", "repo": "web", "pullNumber": 71},
+     "status": "waiting", "answer": "", "answered_by": "", "answered_at": null}
+  ],
   "builtin": [
     {"key": "work", "label": "Work items",
      "description": "Worklet, the company's tracker: read, file, discuss and move work.",
@@ -9646,6 +9654,7 @@ longest began; `null` for a refused name, which carries no instant), `seat`
 | `integration` | `mcp_server_waiting_long` | The integration that mints `fix.seat`'s credential for `fix.server`, which the server's [detail](#get-mcp-serversname) names in `resolved.binding` |
 | `edit` | `mcp_tools_refused` | The server's configuration: a shorter `tool_prefix`, or one, as each name's `message` in `refused_tools` says |
 | `sign_in` | `mcp_oauth_needs_sign_in` and `mcp_oauth_expiring` | Signing the company in to `fix.server` again: [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth) |
+| `approve` | `mcp_approval_waiting` | The calls `fix.seat`'s run holds for approval on `fix.server`, each answered with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid) by its id in `approvals` |
 
 The list is always present, and empty on a node that runs no state log, which
 evaluates no alarm: ask a data node.
@@ -9685,6 +9694,19 @@ addresses a vendor that allowlists them is given: where it sends a person back
 after a sign-in, and the engine's client metadata document (the client id a
 `cimd` sign-in is made as). Each is `""` on an engine with no public address.
 A member's reading carries neither, and no `oauth`; it carries the state.
+
+`approvals`, in an administrator's reading only, are the calls agents' runs
+hold for a person's approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs)),
+the longest waiting first: each while its run is parked on it (`status:
+"waiting"`), and once an answer is recorded until the run carries on to its
+next job (`"answered"`, with the `answer` (`once`, `always` or `deny`),
+`answered_by` and `answered_at`, as the answer's seal opens on this node).
+`id` is what the call is answered by; `tool` is the tool as the run called it
+and `raw` the server's own name for it, which Always allow sets the level of;
+`digest` names the definition the run was offered; `item` is the key of the
+work item the run was on, or `null`. `args` are what the call would send,
+opened from their seal under this node's fleet keyring, `null` where they do
+not open here. A member's reading carries no `approvals`. Always present.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -9804,15 +9826,18 @@ it under, so a node that drained, died or restarted stops counting at once.
   `null` where none is kept: a tool that publishes no output schema, schemas
   past 64 KiB, or a tool past its listing's 1 MiB of schemas (kept in name
   order). `level` is the level the tool runs at, `allow` or `blocked`, decided
-  by the server's entry by `raw` (`tools.levels`, else `tools.default`), and
-  `custom` whether `tools.levels` names it. A blocked tool is listed here and
-  offered to no agent ([Tools and MCP › Blocking a server's tools](../guides/tools-and-mcp.md#blocking-a-servers-tools));
+  by the server's entry by `raw` (`tools.levels`, else `tools.default`, else
+  the level its hints start it at), and `custom` whether `tools.levels` names
+  it: `allow`, `approve` (offered, and each call held for a person's answer)
+  or `blocked`. A blocked tool is listed here and offered to no agent ([Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level));
   for a server the configuration does not declare, `level` says what the nodes
   did.
 - `tool_count` is how many tools the server lists, never fewer than `tools`
   holds: a node's listing names at most 256 of them.
 - `baseline` is the level of every tool `tools.levels` does not name: the
-  entry's `tools.default`, `allow` where it sets none. `unlisted_levels` are the
+  entry's `tools.default`, or `null` where it sets none, which leaves each such
+  tool at the level its hints start it at (`allow` for one whose `risk` is
+  `read_only`, `approve` for every other). `unlisted_levels` are the
   tools `tools.levels` names that no live node's listing names, sorted: a level
   that decides nothing, most often a name written with the `tool_prefix` or
   spelled otherwise than the server spells it. Empty where the listings cannot
@@ -10381,10 +10406,10 @@ test's sentences withhold the values the server was started with.
 Sets the level each tool of a server runs at, from the server's Tools tab, as
 one revision of the company document (`mcp_servers[].tools`): `allow` offers a
 tool to every agent the server reaches, `blocked` never offers it to an agent
-([Tools and MCP › Blocking a server's tools](../guides/tools-and-mcp.md#blocking-a-servers-tools)).
+([Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level)).
 
 ```json
-{"default": "blocked", "levels": {"search_issues": "allow", "get_issue": "allow", "delete_repository": null},
+{"default": "blocked", "levels": {"search_issues": "allow", "get_issue": "allow", "merge_pull_request": "approve", "delete_repository": null},
  "_summary": "github: block every tool but the two reads"}
 ```
 
@@ -10393,7 +10418,9 @@ tool to every agent the server reaches, `blocked` never offers it to an agent
   `tool_prefix`. A tool the body leaves out keeps its level; `null` removes a
   tool's own level, so it runs at the default.
 - `default` sets the level of every tool `levels` does not name; `null`
-  removes it, which is `allow`. Left out, it stays.
+  removes it, which leaves each such tool at the level its hints start it at
+  (`allow` for a tool the server marks read-only, `approve` for every other).
+  Left out, it stays.
 - A body that names neither is `400 invalid_body`, and so is any other field,
   or a level that is not a string.
 
@@ -10408,25 +10435,26 @@ The assistant proposes one for a person to approve. A managed document
 (`api.auth.company_writers`) refuses it `403 config_managed`.
 
 **The whole document is validated**, as any write of it is: a level other than
-`allow` or `blocked`, or a key that names no tool (empty, or holding a space),
+`allow`, `approve` or `blocked`, or a key that names no tool (empty, or holding a space),
 is `422 validation_error` with the problem at
 `mcp_servers.<i>.tools.levels.<tool>`. A level that leaves a server some
-role's `sandbox.mcp.servers` lists with a tool held back is refused at that
-box entry (`roles.<i>.sandbox.mcp.servers.<j>`): a box reaches a server whole.
+role's `sandbox.mcp.servers` lists with a tool that is not certain to run at
+`allow` (any level but `allow`, or no `default: allow`) is refused at that box
+entry (`roles.<i>.sandbox.mcp.servers.<j>`): a box reaches a server whole.
 `404 no_such_entity` for a server the configuration does not declare.
 
 ```json
 {
   "server": "github", "dry_run": false,
-  "default": "blocked", "baseline": "blocked",
+  "default": "blocked",
   "levels": {"get_issue": "allow", "search_issues": "allow"},
   "unlisted": ["get_issue"], "listing": "read",
   "revision_id": "rev-0193", "epoch": 15, "warnings": [], "derived": {}
 }
 ```
 
-- `default` is `tools.default` as written (`""` unset) and `baseline` the
-  level it decides, `allow` where unset; `levels` every tool's own level now.
+- `default` is `tools.default` as written, `null` where unset; `levels` every
+  tool's own level now.
 - `unlisted` are the tools `levels` names that no live node's listing of the
   server names, as `unlisted_levels` on the detail: **kept**, since a server
   may list the tool later, and **said**, since a level that decides nothing is
@@ -10437,9 +10465,71 @@ box entry (`roles.<i>.sandbox.mcp.servers.<j>`): a box reaches a server whole.
   `base_revision_id`, `warnings` and `derived`, with `dry_run: true`.
 
 The engine applies the revision as any other: each node restarts its
-instances of the server, and files only the tools left at `allow`. Every call
+instances of the server, and files every tool not left `blocked`, a tool at
+`approve` with each call held for a person. Every call
 is one `mcp_server_acted` with the action `set_tools`, a check marked
 `dry_run`; the revision names the levels.
+
+
+### `POST /mcp-approvals/{id}`
+
+Answers a call an agent's run made to an MCP tool at Needs approval
+([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs),
+[ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-run-in-the-shape-a-runs-ask-does.md)),
+which waits parked on the run's record. `{id}` is the held call's, as
+`approvals` in [`GET /mcp-servers`](#get-mcp-servers) and `held_call.id` on
+the run's [executors board](#get-executors) row name it.
+
+```json
+{"answer": "once"}
+```
+
+`answer` is `once` (make the call), `always` (make it, and set the tool to
+`allow` on its server's entry from now on) or `deny` (do not make it; the run
+is told the call was refused as `forbidden`). `always` takes an optional
+`_summary` for the revision it writes; without one the revision is summarised
+as the tool allowed in answer to the held call.
+
+Decided as `tools.approve`: an administrator, or a lead of the seat whose run
+made the call, a person and never an agent seat or Ask Crewlet. The route
+admits on the caller's own record and decides again on the run's seat once the
+call is read. `always` is also a configuration write, decided as
+`config.write` at its recent step-up (`403 step_up_required` otherwise), and
+written as [`PUT /mcp-servers/{name}/tools`](#put-mcp-serversnametools)
+writes a level, before the answer is sent, so a refused write answers nothing.
+
+`202 Accepted` with:
+
+```json
+{
+  "id": "0190f3a8-6b1c-7d2e-9f00-1a2b3c4d5e6f",
+  "server": "github", "tool": "gh_merge_pull_request", "seat": "backend-dev",
+  "turn_id": "…", "launch_id": "…", "answer": "once",
+  "outcome": "pending", "answer_id": "0190f3a9-…",
+  "revision": null
+}
+```
+
+`outcome` is `pending`: the answer is on the control topic of the node
+holding the seat, which records it, makes or refuses the call at most once,
+and carries the run on with the result. `unknown` is an answer whose delivery
+may or may not have landed; answering again is safe, since the seat records
+one answer. `revision` is the configuration's own answer to the level
+`always` wrote (`revision_id`, `epoch`, `warnings`, `derived`), `null` for
+`once` and `deny`.
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `invalid_body` | An `answer` other than `once`, `always` or `deny`, or a field the route does not read |
+| `403` | `unauthorized` | The authority table refused: the caller neither administers nor leads the seat, or is an agent seat or Ask Crewlet (`reason` and `grants` say which) |
+| `403` | `step_up_required` | `always` without a recent step-up |
+| `404` | `not_found` | No active run holds a call under `{id}`: its run ended, or the id names none |
+| `409` | `stale_version` | The call is not waiting any more: it was answered, or its run moved on to another question. Nothing was answered |
+| `503` | `unavailable` | The node holds no run record, or could not read the runs |
+
+Every call, refused ones included, is audited as one
+`mcp_server_acted` with `action: "approve"`, the server, the
+seat, the `tool`, the `approval` id and the `answer`, never the arguments.
 
 ### `POST /mcp-servers/{name}/oauth`
 
@@ -10920,6 +11010,16 @@ has (never with `inform`), or `null` for an open question answered in words.
 All three are the run's body, sent to the people its question is put to as the
 question always was, and answered with [`answer_executor`](#answering-a-parked-executor)
 (`choice` names one of `decision.options`).
+
+A run whose question is a call held for approval ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
+also carries `held_call`, `{id, server, tool, raw, digest, held_at}`, sent with
+the question to the people it is put to, and `held_arguments`, what the call
+would send, opened from its seal under this node's fleet keyring (`null` where
+it does not open here), sent only to whom the run's body goes (an
+administrator and the seat's lead, who are who may approve it). Both are
+absent on any other run. Its `decision` offers `once`, `always` and `deny`,
+and it is answered only with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid):
+`answer_executor` refuses it.
 
 `declined_answers` names the answers the run's question let go of, by the id
 of the delivery each arrived in, which `answer_executor` answers as `answer_id`. An

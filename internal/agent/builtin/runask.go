@@ -343,6 +343,14 @@ func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				return nodeFailure(ctx, g.submit.Name(), err, g.submit.Name()+" could not "+
 					"read whether this run is waiting on a person", "Nothing was submitted: "+
 					"call it again."), nil
+			case found && run.AskedBy(launch) && run.HeldCall != nil:
+				// A CALL HELD FOR APPROVAL parks the job as its own question
+				// does (ADR-0077), and is said as the call it is.
+				return refused(tools.RefusalNotRunning, "Your call to "+run.HeldCall.Tool+
+					" waits for a person's approval, so this run is parked on their answer and "+
+					"takes no submission. END YOUR TURN NOW: their answer, and what the call "+
+					"returned, arrive as your next prompt, and you submit your work once you "+
+					"have finished it."), nil
 			case found && run.AskedBy(launch):
 				return refused(tools.RefusalNotRunning, "You asked a person a question in "+
 					"this run, so it is parked on their answer and takes no submission. "+

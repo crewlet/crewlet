@@ -104,10 +104,11 @@ mcp_servers:
 // A BOX IS NEVER HANDED A SERVER SIGNED IN TO WITH OAUTH: it is given a
 // server's credentials once, at its launch, and only the engine holds what
 // renews an access token, so the entry is refused and the box reaches the
-// server through the bridge.
+// server through the bridge. The server runs every tool at allow, as any
+// server a box lists must, so the sign-in is the one thing refused.
 func TestABoxIsNeverHandedAServerSignedInToWithOAuth(t *testing.T) {
 	t.Parallel()
-	doc := oauthDoc("    oauth:\n      client: cimd\n") + `
+	doc := oauthDoc("    tools: {default: allow}\n    oauth:\n      client: cimd\n") + `
 roles:
   - name: Engineer
     handle: eng

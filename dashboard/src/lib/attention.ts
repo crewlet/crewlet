@@ -590,6 +590,15 @@ const MCP_ALARM_WORDS: Record<
     title: (e) => `${e.key}'s sign-in runs out soon`,
     detail: () => "Sign in again before it runs out, or the agents lose its tools.",
   },
+  mcp_approval_waiting: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) =>
+      e.seat
+        ? `${e.seat} is waiting for approval to use ${e.key}`
+        : `A call to ${e.key} is waiting for approval`,
+    detail: () => "Its run is parked until somebody allows or denies the call.",
+  },
 };
 
 /**

@@ -247,6 +247,17 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"%s, not waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
+	if run.HeldCall != nil {
+		// A HELD CALL IS APPROVED BY ITS OWN ROUTE (ADR-0077), which asks
+		// whether the caller may approve a call for this seat, and which
+		// writes the level an Always allow sets. This tool asks only
+		// whether the caller may answer the run, which a run's requester
+		// may, so an answer here would approve a call on a narrower grant.
+		return refused(tools.RefusalForbidden, fmt.Sprintf("The executor of turn %s is waiting "+
+			"for a person to approve a call to %s, which is answered with POST /mcp-approvals/%s "+
+			"by an administrator or a lead of the seat's unit, not by this tool. Nothing was "+
+			"answered.", clip(turnID), run.HeldCall.Tool, run.HeldCall.ID)), nil
+	}
 	// THE QUESTION THE PERSON READ, never the one the run asks now if
 	// those differ: a run that moved on to another question since would
 	// otherwise take an answer, or a choice by id, given to one it no

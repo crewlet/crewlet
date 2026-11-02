@@ -20,7 +20,7 @@ import (
 )
 
 // `PUT /mcp-servers/{name}/tools` sets the levels of a server's tools:
-// `{"default": "allow"|"blocked"|null, "levels": {"<tool>": "allow"|"blocked"|null}}`,
+// `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`,
 // each key the server's own name for a tool. A key the body leaves out stays
 // as it is; null removes the default or a tool's own level. Written through
 // the configuration's own pipeline ([configapi.Service.SetMCPTools]): decided
@@ -71,7 +71,7 @@ func (o *optionalLevel) UnmarshalJSON(raw []byte) error {
 }
 
 // toolsShape is the body, as a refusal names it.
-const toolsShape = `{"default": "allow"|"blocked"|null, "levels": {"<tool>": "allow"|"blocked"|null}}`
+const toolsShape = `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`
 
 // maxToolsBody bounds the body: a level for each of a listing's most tools
 // ([coord.MaxMCPListedTools], 256), each name at a tool name's longest, with
@@ -85,11 +85,11 @@ type ToolsAnswer struct {
 	Server string `json:"server"`
 	// DryRun is whether nothing was written.
 	DryRun bool `json:"dry_run"`
-	// Default is `tools.default` as written, "" where it is unset, and
-	// Baseline the level of every tool Levels does not name, the default
-	// applied.
-	Default  config.MCPToolLevel `json:"default"`
-	Baseline config.MCPToolLevel `json:"baseline"`
+	// Default is `tools.default` as written, null where it is unset, which
+	// leaves every tool Levels does not name at the level its hints start
+	// it at (allow for a tool the server marks read-only, approve for every
+	// other).
+	Default *config.MCPToolLevel `json:"default"`
 	// Levels is every tool's own level, by the server's own name for it.
 	// Always an object.
 	Levels map[string]config.MCPToolLevel `json:"levels"`
@@ -158,9 +158,12 @@ func (s *Service) serveTools(w http.ResponseWriter, r *http.Request, rec *types.
 		s.tools.RefuseMCPTools(w, r, name, err)
 		return
 	}
-	answer := ToolsAnswer{Server: name, DryRun: !written.Applied, Default: written.Tools.Default,
-		Baseline: written.Tools.DefaultLevel(), Levels: map[string]config.MCPToolLevel{}, Unlisted: []string{},
-		Listing: ListingRead}
+	answer := ToolsAnswer{Server: name, DryRun: !written.Applied, Levels: map[string]config.MCPToolLevel{},
+		Unlisted: []string{}, Listing: ListingRead}
+	if written.Tools.Default != "" {
+		level := written.Tools.Default
+		answer.Default = &level
+	}
 	maps.Copy(answer.Levels, written.Tools.Levels)
 	// AFTER THE WRITE, and never in its way: the listing says what the
 	// levels decide, and one that cannot be read leaves a written level

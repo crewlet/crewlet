@@ -302,6 +302,15 @@ const (
 	// make the engine dial the address, `config.write` on top
 	// (internal/api/mcpapi).
 	ActionToolsCheck Action = "tools.check"
+	// ActionToolsApprove answers a call an agent's run made to a tool at
+	// Needs approval, which waits parked on the answer
+	// (`POST /mcp-approvals/{id}`, ADR-0077): allow it once, allow it
+	// always, or deny it. An administrator's, or a lead of the seat whose
+	// run made the call; a person's alone, never an agent's and never the
+	// assistant's, since the level exists so that a person decides that
+	// call. Always allow also writes the tool's level, so it is
+	// `config.write` on top, at that verb's step-up (internal/api/mcpapi).
+	ActionToolsApprove Action = "tools.approve"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -1244,6 +1253,16 @@ var rules = map[Action]rule{
 	// proposes it and the person approves it, since it starts a process or
 	// dials an address on every node it names.
 	ActionToolsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// A HELD TOOL CALL'S ANSWER is the seat's lead's or an administrator's,
+	// as answering the run's own question is, and a person's alone: the
+	// level holds the call for a person, so an agent seat answering it
+	// would be an agent approving an agent. No step-up for once or deny,
+	// which write neither the company nor a credential and are often given
+	// from a phone while the run waits; Always allow asks `config.write`'s
+	// in the handler. Its nature is a write a person approves, and the
+	// human-only list keeps the assistant from it.
+	ActionToolsApprove: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
@@ -1635,7 +1654,9 @@ const (
 	tellSeat      = "Only an agent does this, as part of its own work."
 	tellKnowledge = "Asking the knowledge base's own model would spend outside this " +
 		"conversation's budget, so Ask Crewlet searches the pages itself instead."
-	tellReady = "Only an open artifact reports that it has finished drawing."
+	tellReady    = "Only an open artifact reports that it has finished drawing."
+	tellApproval = "A call an agent waits on is approved by a person, so this stays with " +
+		"you: answer it from the Inbox or Settings › MCP & tools."
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
@@ -1645,7 +1666,7 @@ const (
 // approved, because a grant is the person's own session narrowed and never
 // widened (ADR-0050, ADR-0051).
 //
-// FOUR KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
+// FIVE KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
 // that names which:
 //
 //   - a sign-in or session ceremony: how somebody proves who they are, or
@@ -1659,6 +1680,9 @@ const (
 //   - the assistant's own decisions, so it can never approve itself;
 //   - a gesture whose effect a grant would falsify or hide: a model spend
 //     outside the turn's own meter, and a render only an open page reports;
+//   - a person's approval of an agent's call: a tool at Needs approval holds
+//     each call so that a person decides it, and an assistant answering it
+//     would be a model approving a model;
 //
 // plus the one seat-only verb, asking a colleague (`a2a_ask`): no person takes
 // it either, so parity alone keeps it from the person's assistant.
@@ -1690,6 +1714,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
+		"and the assistant deciding it would be a model approving a model's call", tellApproval},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and

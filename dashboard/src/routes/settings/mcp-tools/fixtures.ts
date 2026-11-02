@@ -248,6 +248,7 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
       ],
     },
   ],
+  approvals: [],
 };
 
 /** A member's row of a server: the administrator's, its launch line and sentences left out. */

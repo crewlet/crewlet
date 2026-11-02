@@ -43,6 +43,9 @@ import (
 //   - the executor's harness in its box ([harnessEnv]).
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
+	if os.Getenv(heldToolServerEnv) != "" {
+		os.Exit(runHeldToolServer())
+	}
 	if endpoint := os.Getenv(scriptedHarnessEnv); endpoint != "" {
 		os.Exit(runScriptedHarness(endpoint))
 	}

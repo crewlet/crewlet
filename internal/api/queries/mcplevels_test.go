@@ -65,8 +65,9 @@ func TestADetailSaysTheLevelEachToolRunsAt(t *testing.T) {
 			t.Errorf("%s = %+v, want level %s, custom %v", want.name, got.Tools, want.level, want.custom)
 		}
 	}
-	if got.Baseline != config.MCPToolBlocked || !slices.Equal(got.UnlistedLevels, []string{"gh_create_issue"}) {
-		t.Errorf("baseline %s, unlisted %v; want blocked and the prefixed name", got.Baseline, got.UnlistedLevels)
+	if got.Baseline == nil || *got.Baseline != config.MCPToolBlocked ||
+		!slices.Equal(got.UnlistedLevels, []string{"gh_create_issue"}) {
+		t.Errorf("baseline %v, unlisted %v; want blocked and the prefixed name", got.Baseline, got.UnlistedLevels)
 	}
 	if member := queries.MemberMCPServer(got); member.Tools[0].Level != config.MCPToolBlocked {
 		t.Errorf("a member reads %+v, want the level that tells them why no agent is offered it", member.Tools[0])

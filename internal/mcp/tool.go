@@ -148,6 +148,7 @@ type Definition struct {
 	output      map[string]any // the output schema, nil where it gives none
 	annotations Annotations
 	digest      string // the server's definition, hashed ([digestOf])
+	level       Level  // what its entry, or else its hints, set it at ([Levels.Of])
 }
 
 var _ Callable = (*Tool)(nil)
@@ -208,15 +209,16 @@ func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition,
 }
 
 // sameAs reports whether two tools would put the same thing in front of a
-// model (name, description, schema and hints) and describe the same
-// definition: its digest, which also covers the title and the output schema a
-// listing shows. A tool kept across a restart whose title moved would leave
-// the fleet's listing naming the old one.
+// model (name, description, schema and hints), describe the same definition
+// (its digest, which also covers the title and the output schema a listing
+// shows) and run at the same level. A tool kept across a restart whose title
+// moved would leave the fleet's listing naming the old one, and one kept at
+// its old level would run at a level nobody set.
 func (t *Tool) sameAs(other *Tool) bool {
 	return t.name == other.name && t.raw == other.raw &&
 		t.description == other.description &&
 		t.annotations == other.annotations &&
-		t.digest == other.digest &&
+		t.digest == other.digest && t.level == other.level &&
 		reflect.DeepEqual(t.parameters, other.parameters)
 }
 
@@ -243,6 +245,9 @@ func definitionOf(def toolDef, spec Spec) Definition {
 		output:      maps.Clone(def.OutputSchema),
 		annotations: ann,
 		digest:      digestOf(def),
+		// THE HINTS THE OPERATOR'S OVERRIDES LEAVE, so the level a tool
+		// starts at is read from the same hints its risk is shown by.
+		level: spec.Levels.Of(def.Name, ann),
 	}
 }
 
@@ -299,6 +304,12 @@ func (d *Definition) OutputSchema() map[string]any { return d.output }
 // with one digest are one definition, wherever and by whichever instance they
 // were listed.
 func (d *Definition) Digest() string { return d.digest }
+
+// Level is the level the tool runs at: its own in the entry's levels, else the
+// entry's default, else the level its hints start it at ([Levels.Of]). A
+// filed [Tool] is at [LevelAllow] or [LevelApprove]; only a blocked
+// Definition reads [LevelBlocked].
+func (d *Definition) Level() Level { return d.level }
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.

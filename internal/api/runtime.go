@@ -283,4 +283,10 @@ type NodeRuntime interface {
 	// (`GET /webhooks/mcp-oauth`) and publishes the engine's client
 	// metadata document; nil answers both as an engine that finishes none.
 	MCPLanding() webhooks.MCPSignIns
+
+	// MCPApprovals finds a call held for a person's approval on the
+	// fleet's runs and puts its answer on the control topic of the seat
+	// holding the run (`POST /mcp-approvals/{id}`), nil on a node that
+	// holds no fleet store.
+	MCPApprovals() mcpapi.Approvals
 }
