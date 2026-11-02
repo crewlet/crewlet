@@ -336,9 +336,15 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // earliest instant a failed instance stopped serving, the class of the failure
 // the row names, and the restarts of its instances summed, all bounded.
 //
-// Sorted by server, and a server's reported error is its first failure by the
-// seat's agent id — its reported wait likewise — so a beat that re-sends the
-// same facts sends the same bytes.
+// THE FAILURE THE ROW NAMES IS THE ONE ITS OUTAGE DATES: the instance down
+// longest, so the error, its seat, its class and DownSince are one instance's
+// facts. Named by the first failure by seat id instead, a row said one agent's
+// error beside another's outage. Ties, and failures nothing dated, go to the
+// lower seat id.
+//
+// Sorted by server, a server's reported wait its first by the seat's agent id,
+// and every choice above made on the readings' own order (server, then seat),
+// so a beat that re-sends the same facts sends the same bytes.
 func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
@@ -381,13 +387,11 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 			}
 		case coord.MCPInstanceFailed:
 			row.Failed++
-			if row.Error == "" {
+			if row.Error == "" || datedBefore(r.since, row.DownSince) {
 				// REDACTED, as a page's instance is: the row is on a lease
 				// every node reads, and a failure can carry what a
 				// server's process printed.
 				row.Error, row.ErrorSeat, row.ErrorClass = redact.Secrets(r.failure.Error()), r.seat, string(r.class)
-			}
-			if !r.since.IsZero() && (row.DownSince.IsZero() || r.since.Before(row.DownSince)) {
 				row.DownSince = r.since
 			}
 		default:
@@ -400,6 +404,12 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	}
 	settle()
 	return out
+}
+
+// datedBefore reports whether since dates an instance before the one at named,
+// where a dated instance comes before one nothing dated (zero).
+func datedBefore(since, named time.Time) bool {
+	return !since.IsZero() && (named.IsZero() || since.Before(named))
 }
 
 // filedOutcome is a start's outcome beside the surface its instance's tools

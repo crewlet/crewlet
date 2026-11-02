@@ -50,9 +50,12 @@ func TestAnOutageIsDatedFromWhenItBeganAcrossRetries(t *testing.T) {
 }
 
 // THE HEARTBEAT'S ROW SAYS SINCE WHEN THE SERVER HAS BEEN DOWN ON THE NODE,
-// AND WHY IN A CLASS: the earliest outage of its failed instances, and the
-// class of the failure the row names (its first by seat id). A waiting
-// instance is no outage, and a serving one has none.
+// AND WHY IN A CLASS: the earliest outage of its failed instances, and that
+// same instance's failure, seat and class, even where a lower seat id failed
+// later. A waiting instance is no outage, and a serving one has none.
+//
+// Mutation: name the row's failure by the first seat id rather than by the
+// outage it dates, and the row says swe's failure beside pm's outage.
 func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 	t.Parallel()
 	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
@@ -63,8 +66,8 @@ func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 	dns := fmt.Errorf("mcp: server %q failed to connect: %w", "tracker",
 		&net.DNSError{Err: "no such host", Name: "tracker.example.invalid", IsNotFound: true})
 	e := &Engine{mcpSeats: map[string][]mcpOutcome{
-		"swe": {{server: "tracker", seat: swe, err: dns, since: late}},
-		"pm":  {{server: "tracker", seat: pm, err: errors.New("exit status 1"), since: early}},
+		"swe": {{server: "tracker", seat: swe, err: errors.New("exit status 1"), since: late}},
+		"pm":  {{server: "tracker", seat: pm, err: dns, since: early}},
 		"cto": {{server: "tracker", seat: cto, tools: 4}},
 	}}
 	rows := e.mcpStatus(t.Context())
@@ -72,8 +75,9 @@ func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 	row := rows[0]
-	if row.Failed != 2 || row.Started != 1 || row.ErrorSeat != swe || row.ErrorClass != string(mcp.FailDNS) {
-		t.Errorf("row = %+v, want two failures named by swe's, classed %q", row, mcp.FailDNS)
+	if row.Failed != 2 || row.Started != 1 || row.ErrorSeat != pm || row.ErrorClass != string(mcp.FailDNS) ||
+		!strings.Contains(row.Error, "no such host") {
+		t.Errorf("row = %+v, want two failures named by pm's, the one down longest, classed %q", row, mcp.FailDNS)
 	}
 	if !row.DownSince.Equal(early) {
 		t.Errorf("down since %s, want %s, the earliest of its failed instances", row.DownSince, early)

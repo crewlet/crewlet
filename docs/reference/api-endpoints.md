@@ -9246,7 +9246,9 @@ failure somebody has to act on:
 | `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
-and `error_seat` the seat it was launched for (none for a shared server); the
+and `error_seat` the seat it was launched for (none for a shared server): the
+instance down longest on that node, so `error`, `error_seat`, `error_class` and
+`down_since` are one instance's facts (ties go to the lower seat id); the
 whole text is the node's `mcp_server_failed` log line for a start that failed,
 its `mcp_server_credential_missing` line for a server or a seat's instance held
 back, unlaunched, because a value it is started with resolves to nothing and

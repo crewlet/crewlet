@@ -389,8 +389,11 @@ type MCPServerStatus struct {
 
 	// Error is ONE failed instance's reason, and ErrorSeat the seat it
 	// belonged to, by its AGENT ID (uuid.Nil for a shared server). One
-	// rather than all, for the size argument above; the first by agent id,
-	// so two beats with the same failures publish the same row.
+	// rather than all, for the size argument above: the one DownSince dates,
+	// the instance down longest (ties, and failures nothing dated, to the
+	// lower agent id), so the reason, its seat, its class and the outage's
+	// start are one instance's facts, and two beats with the same failures
+	// publish the same row.
 	//
 	// THE ID RATHER THAN THE HANDLE, because this row is published on a
 	// lease every peer reads, and a peer reads it against its OWN org: the
