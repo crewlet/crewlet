@@ -369,6 +369,22 @@ test("a comparison reads what head changed since the merge base, and its preview
   expect(compare?.searchParams.get("head")).toBe("retry");
 });
 
+// A COMPARISON'S TWO PICKERS LIST ONE READ of the repository's branches and
+// of its tags, each up to a thousand refs: never one read a picker. Mutation:
+// let each picker read its own listings, and this fails.
+test("a comparison's two pickers share one read of the branches and the tags", async () => {
+  const { asked } = stubEngine();
+  mount(<ComparePage repo="web" />, "#/code/repos/web/compare?head=retry");
+
+  expect(await screen.findByText("Conflicts")).toBeTruthy();
+  // BOTH PICKERS ARE DRAWN, whatever role their searchable trigger takes.
+  expect(document.querySelector('[aria-label="Base"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="Compared"]')).not.toBeNull();
+  await waitFor(() => expect(reads(asked, "code_refs").length).toBeGreaterThanOrEqual(2));
+  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
+  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+});
+
 // OPEN CHANGE IS ONE code_open_change of the branch compared into the base
 // branch, its title head's subject and its work item the one head's push was
 // charged to — and the reader is taken to the change it opened. Mutation:

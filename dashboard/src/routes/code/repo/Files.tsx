@@ -55,7 +55,7 @@ import type {
   CodeTreeEntry,
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
-import { RefPicker, revisionWord } from "./refs.tsx";
+import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
 type PathPart = CodeTreeEntry | CodeBlobAnswer;
@@ -74,7 +74,7 @@ function commitOf(rev: string, answer: CodeGitAnswer | null, param = "ref"): str
   return answer?.resolved?.[param]?.oid ?? "";
 }
 
-export function Files({ repo }: { repo: CodeRepoDetail }) {
+export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
   const [ref, setRef] = useParam("ref", "", "filter");
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
@@ -84,7 +84,7 @@ export function Files({ repo }: { repo: CodeRepoDetail }) {
       <p className="muted">Nobody has pushed a branch yet: {repo.default_branch} holds no file.</p>
     );
   }
-  const place = { repo, rev: ref, path, onRev: setRef };
+  const place = { repo, revisions, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
   ) : (
@@ -100,13 +100,15 @@ export function Files({ repo }: { repo: CodeRepoDetail }) {
 
 interface Place {
   repo: CodeRepoDetail;
+  /** The repository's branches and tags, read once by its page ([useRevisions]). */
+  revisions: Revisions;
   rev: string;
   path: string;
   onRev: (rev: string) => void;
 }
 
 /** The repository's root at the revision: its listing. */
-function RootListing({ repo, rev, path, onRev }: Place) {
+function RootListing({ repo, revisions, rev, path, onRev }: Place) {
   const params = useMemo(
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
@@ -124,6 +126,7 @@ function RootListing({ repo, rev, path, onRev }: Place) {
     <Stack gap={3}>
       <FilesBar
         repo={repo}
+        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -137,6 +140,7 @@ function RootListing({ repo, rev, path, onRev }: Place) {
 /** A path under the root: a directory's listing, or a file's lines or its blame. */
 function PathView({
   repo,
+  revisions,
   rev,
   path,
   onRev,
@@ -169,6 +173,7 @@ function PathView({
     <Stack gap={3}>
       <FilesBar
         repo={repo}
+        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -201,6 +206,7 @@ function PathView({
  */
 function FilesBar({
   repo,
+  revisions,
   rev,
   path,
   onRev,
@@ -215,7 +221,7 @@ function FilesBar({
   const at = (p: string) => repoHref(repo.name, { tab: "files", ref: rev, path: p });
   return (
     <div className="toolbar">
-      <RefPicker repo={repo} value={rev} onChoose={onRev} />
+      <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
       <nav aria-label="Path" className="row gap-1 wrap mono">
         <a className="prose-link" href={at("")}>
           {repo.name}

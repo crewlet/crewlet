@@ -35,7 +35,7 @@ import type {
   CodeRepoDetail,
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { RefPicker, revisionWord } from "./refs.tsx";
+import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 
 /** The repository's branches, the default first in name order as the engine lists them, each opening its files. */
 export function Branches({ repo }: { repo: CodeRepoDetail }) {
@@ -172,9 +172,10 @@ export function subjectOf(c: { subject?: string; subject_bytes?: number }): stri
 
 /**
  * The history at the revision, of the path the address names or of every
- * path, newest first.
+ * path, newest first. Its picker lists the branches and tags its page read
+ * once ([useRevisions]).
  */
-export function Commits({ repo }: { repo: CodeRepoDetail }) {
+export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
   const now = useNow();
   const [rev, setRev] = useParam("ref", "", "filter");
   const [path, setPath] = useParam("path", "", "filter");
@@ -208,7 +209,7 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
   return (
     <>
       <div className="toolbar">
-        <RefPicker repo={repo} value={rev} onChoose={setRev} />
+        <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
         {path && (
           <span className="row gap-1">
             <span className="t-caption">

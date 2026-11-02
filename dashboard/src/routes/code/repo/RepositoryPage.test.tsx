@@ -15,7 +15,7 @@
  * says how far an import went and where the mirrors stand.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -339,6 +339,30 @@ test("a directory is read at the address's revision and its entries open at it",
   );
   const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "src");
   expect(read?.searchParams.get("ref")).toBe("feature");
+});
+
+// THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
+// move from the root to a path draws another picker, and so does the
+// Commits tab, and none of them asks either listing again — each is up to a
+// thousand refs. Mutation: let each picker read its own listings, and this
+// fails.
+test("the revision picker's branches and tags are read once while the reader moves", async () => {
+  const asked = stubEngine();
+  mount("#/code/repos/web?tab=files");
+
+  await screen.findByRole("link", { name: "src/" });
+  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
+  act(() => {
+    location.hash = "#/code/repos/web?tab=files&path=src";
+  });
+  expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
+  act(() => {
+    location.hash = "#/code/repos/web?tab=commits";
+  });
+  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
+
+  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
+  expect(listings.sort()).toEqual([null, "refs/tags/"]);
 });
 
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line

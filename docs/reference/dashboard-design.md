@@ -7864,6 +7864,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  The revision picker lists the first page of the branches and of the tags
+  (`code_refs`), read ONCE by the page while its Files or Commits tab is open
+  and handed to every picker it draws — a comparison's two pickers share one
+  read too — so a move between the root and a path, or between the two tabs,
+  asks neither listing again.
   Opening a directory or a file is a new place in the history; picking lines,
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's

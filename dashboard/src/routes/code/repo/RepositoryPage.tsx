@@ -68,6 +68,7 @@ import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
 import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
+import { useRevisions } from "./refs.tsx";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -93,6 +94,12 @@ export function RepositoryPage({ repo }: { repo: string }) {
   const named = isRepoName(repo);
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named, pollMs: REPO_POLL_MS });
   const [tab, setTab] = useTab<RepoTab>("tab", REPO_TABS);
+  // THE BRANCHES AND TAGS ITS PICKERS LIST, read here — once, under the
+  // repository's current name — while a tab that draws a picker is open, so a
+  // move between the root and a path, or between Files and Commits, asks
+  // neither listing again (`refs.tsx`'s useRevisions).
+  const current = read.data?.repo?.name ?? "";
+  const revisions = useRevisions(current, current !== "" && (tab === "files" || tab === "commits"));
   const panelId = useId();
   if (!named) {
     return (
@@ -169,9 +176,9 @@ export function RepositoryPage({ repo }: { repo: string }) {
         tabIndex={0}
       >
         {tab === "overview" && <Overview repo={detail} />}
-        {tab === "files" && <Files repo={detail} />}
+        {tab === "files" && <Files repo={detail} revisions={revisions} />}
         {tab === "branches" && <Branches repo={detail} />}
-        {tab === "commits" && <Commits repo={detail} />}
+        {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
         {tab === "settings" && <Settings repo={detail} />}
