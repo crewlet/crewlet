@@ -206,7 +206,7 @@ func (s *sarifStream) Read(p []byte) (int, error) {
 		runtime.ReadMemStats(&m)
 		s.heap = max(s.heap, m.HeapAlloc)
 	}
-	if err == io.EOF && !s.done {
+	if errors.Is(err, io.EOF) && !s.done {
 		err = nil
 	}
 	return n, err

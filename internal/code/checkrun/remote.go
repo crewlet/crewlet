@@ -290,7 +290,10 @@ func (s *RemoteSlots) Take(ctx context.Context, view *SlotView, maxRunning, minu
 			}
 			return nil, HoldBoxHours, nil
 		}
-		go slot.keep()
+		// KEPT PAST THIS WALK, which ends long before the box does: the
+		// keeping carries ctx's values and none of its cancellation, and
+		// stops at the slot's Release.
+		go slot.keep(context.WithoutCancel(ctx))
 		return slot, "", nil
 	}
 	// EVERY SLOT THE LISTING CALLED FREE WAS TAKEN BY ANOTHER RUNNER since.
@@ -405,8 +408,9 @@ func (s *RemoteSlots) daySpent(now time.Time, limit int) bool {
 // keep holds the slot — renewed, or taken again once lost — and charges its
 // box's minutes until its release, and charges the minutes begun since its
 // last renewal as it stops: the box is closed by then, so they are the last
-// of its time.
-func (sl *RemoteSlot) keep() {
+// of its time. Each renewal is bounded on its own, under base: the walk's
+// values, which no walk's ending cancels (Take).
+func (sl *RemoteSlot) keep(base context.Context) {
 	defer close(sl.done)
 	s := sl.s
 	charged := 1
@@ -420,13 +424,13 @@ func (sl *RemoteSlot) keep() {
 			// closed within a renewal of a minute's start was held in that
 			// minute, so it is charged — bounded as a renewal's round trip,
 			// under no caller's cancellation.
-			ctx, cancel := context.WithTimeout(context.Background(), s.renew)
+			ctx, cancel := context.WithTimeout(base, s.renew)
 			sl.chargeDue(ctx, charged, true)
 			cancel()
 			return
 		case <-tick.C:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), s.renew)
+		ctx, cancel := context.WithTimeout(base, s.renew)
 		unanswered = sl.hold(ctx, unanswered)
 		charged = sl.chargeDue(ctx, charged, false)
 		cancel()
@@ -525,18 +529,19 @@ func (sl *RemoteSlot) chargeDue(ctx context.Context, charged int, closing bool) 
 }
 
 // Release gives the slot back once its box is closed: its keeping stopped and
-// its lease released, under a context no caller's cancellation reaches, and
-// then a full cap this node remembered forgotten — after the release, so no
-// listing between the two is remembered full again. Safe to call more than
-// once, and on nil.
-func (sl *RemoteSlot) Release() {
+// its lease released under ctx's values but none of its cancellation (give),
+// since a release its caller's ending cut would hold the slot for a box that
+// is gone until the lease lapsed — and then a full cap this node remembered
+// forgotten — after the release, so no listing between the two is
+// remembered full again. Safe to call more than once, and on nil.
+func (sl *RemoteSlot) Release(ctx context.Context) {
 	if sl == nil {
 		return
 	}
 	sl.once.Do(func() {
 		close(sl.stop)
 		<-sl.done
-		sl.give(context.Background())
+		sl.give(ctx)
 		sl.s.freed()
 	})
 }
