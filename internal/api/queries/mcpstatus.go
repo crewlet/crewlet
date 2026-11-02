@@ -23,10 +23,10 @@ import (
 // MCPServerState is one server's condition across the fleet, decided here
 // from every node's report so a screen never re-derives it.
 //
-// SEVEN VALUES, because each calls for something different from the person
+// EIGHT VALUES, because each calls for something different from the person
 // reading it: nothing to do, a node to look at, a server to fix, a grant to
-// write, a provisioning pass to let finish, a fleet that has not said, and a
-// server somebody turned off on purpose.
+// write, a provisioning pass to let finish, a fleet that has not said, a
+// server somebody turned off on purpose, and a sign-in to make.
 type MCPServerState string
 
 const (
@@ -38,6 +38,12 @@ const (
 	// an earlier revision that runs it shows in its own cell until it
 	// applies this one.
 	MCPDisabled MCPServerState = "disabled"
+	// MCPNeedsSignIn is a server signed in to with OAuth that nobody holds a
+	// grant for, or whose grant its vendor refused to renew or let run out:
+	// nothing is started for it until somebody signs in, which is the one
+	// thing to do. DECIDED AFTER [MCPDisabled] and before anything a node
+	// reports, whose counts are its instances held back for it.
+	MCPNeedsSignIn MCPServerState = "needs_sign_in"
 	// MCPRunning — every instance any node launched is serving: it
 	// started, listed its tools and was up at its node's last beat.
 	MCPRunning MCPServerState = "running"
@@ -72,7 +78,7 @@ const (
 
 // MCPServerStates is every state, for the gate holding the dashboard's copy.
 var MCPServerStates = []MCPServerState{
-	MCPDisabled, MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
+	MCPDisabled, MCPNeedsSignIn, MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
 }
 
 // Valid reports whether s is a state this build sends.
@@ -102,6 +108,13 @@ type MCPStatusAnswer struct {
 	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
 	// log, which evaluates no alarm.
 	Alarms []MCPAlarm `json:"alarms"`
+	// CallbackURL is where a vendor sends a person back after a sign-in,
+	// and ClientMetadataURL the engine's client metadata document (the
+	// client id a cimd sign-in is made as): the two addresses a vendor
+	// that allowlists them is given. "" where the engine has no public
+	// address.
+	CallbackURL       string `json:"callback_url"`
+	ClientMetadataURL string `json:"client_metadata_url"`
 	// Approvals are the calls agents' runs hold for a person's approval
 	// (ADR-0077), the longest waiting first: each while its run waits on
 	// it, and once answered until the run carries on to its next job.
@@ -219,6 +232,9 @@ type MCPServerRow struct {
 	Command   string   `json:"command"`
 	Args      []string `json:"args"`
 	URL       string   `json:"url"`
+	// OAuth is the server's OAuth sign-in, null for a server the
+	// configuration does not sign in to with OAuth ([MCPOAuthView]).
+	OAuth *MCPOAuthView `json:"oauth"`
 
 	State MCPServerState `json:"state"`
 	// Started, Failed and Waiting are summed over the nodes that report;
@@ -334,7 +350,13 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
-	status := s.mcpStatusOf(leases)
+	grants, err := s.mcpGrants(ctx)
+	if err != nil {
+		// UNKNOWN, as an unreadable lease table is: "needs a sign-in"
+		// drawn over a store blip would send somebody to sign in again.
+		return nil, err
+	}
+	status := s.mcpStatusOf(leases, grants)
 	if MCPReading(ctx) != ReadingAdmin {
 		// NO ALARM ON A MEMBER'S READING: each one quotes a failure or a
 		// wait sentence, which that reading leaves out.
@@ -395,10 +417,10 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 	return out, nil
 }
 
-// mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
-// one reading of every server's row, which a server's detail answers its own
-// row from.
-func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
+// mcpStatusOf is `mcp_servers_status` read off the presence leases given and
+// the servers' OAuth grants: the one reading of every server's row, which a
+// server's detail answers its own row from.
+func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPGrant) MCPStatusAnswer {
 
 	type report struct {
 		node     string
@@ -430,6 +452,10 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		Alarms:    []MCPAlarm{},
 		Approvals: []MCPApproval{},
 	}
+	if s.MCPGrants != nil {
+		out.CallbackURL, out.ClientMetadataURL = s.MCPGrants.MCPSignInAddresses()
+	}
+	now := s.clock()
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})
 	}
@@ -443,8 +469,11 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		company, roster := s.Company()
 		if company != nil {
 			for i := range company.MCPServers {
-				rows[company.MCPServers[i].Name] = configuredRow(&company.MCPServers[i])
-				prefixes[company.MCPServers[i].Name] = company.MCPServers[i].ToolPrefix
+				server := &company.MCPServers[i]
+				row := configuredRow(server)
+				row.OAuth = oauthView(server, grants[server.Name], now)
+				rows[server.Name] = row
+				prefixes[server.Name] = server.ToolPrefix
 			}
 			organization = roster
 		}
@@ -513,7 +542,14 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		row.RefusedTools, row.ShadowedTools = refusedTools(refused, prefixes[name]), shadowedTools(shadowed)
 		row.RefusedCount = max(row.RefusedCount, len(row.RefusedTools))
 		row.ShadowedCount = max(row.ShadowedCount, len(row.ShadowedTools))
-		row.State = mcpState(row.Enabled, anyReported, row.Started, row.Failed, row.Waiting)
+		// A SERVER HELD BACK FOR A SIGN-IN on the nodes needs one too, whatever
+		// its grant record says: one made for an address the server is no
+		// longer configured at is never handed to it.
+		needsSignIn := row.OAuth != nil && (row.OAuth.Status != MCPOAuthConnected ||
+			(row.Started == 0 && slices.ContainsFunc(row.Nodes, func(c MCPServerNode) bool {
+				return c.Failed > 0 && c.ErrorClass == mcp.FailNeedsSignIn
+			})))
+		row.State = mcpState(row.Enabled, needsSignIn, anyReported, row.Started, row.Failed, row.Waiting)
 		out.Servers = append(out.Servers, *row)
 	}
 	return out
@@ -579,14 +615,20 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 // the configuration's decision, and the only counts left are a node's that has
 // not applied it yet.
 //
+// A SERVER NOBODY IS SIGNED IN TO NEEDS A SIGN-IN whatever its counts say
+// ([MCPNeedsSignIn]): its instances are held back for it, and a sign-in is the
+// one gesture that changes them.
+//
 // A WAITING INSTANCE DECIDES THE STATE ONLY WHERE NOTHING ELSE DOES: a server
 // serving some seats while another's credential is minted is running, since
 // nothing is wrong with it, and one with a failure is partial or failing
 // whatever waits beside it, since the failure is what somebody has to act on.
-func mcpState(enabled, anyReported bool, started, failed, waiting int) MCPServerState {
+func mcpState(enabled, needsSignIn, anyReported bool, started, failed, waiting int) MCPServerState {
 	switch {
 	case !enabled:
 		return MCPDisabled
+	case needsSignIn:
+		return MCPNeedsSignIn
 	case !anyReported:
 		return MCPUnreported
 	case started > 0 && failed > 0:

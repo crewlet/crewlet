@@ -195,7 +195,9 @@ export function RemoveDialog({
               : server.tools > 0
                 ? `${listed(losing)} ${losing.length === 1 ? "loses" : "lose"} its ${plural(server.tools, "tool")} on ${losing.length === 1 ? "its" : "their"} next turn. A running turn finishes first.`
                 : `${listed(losing)} ${losing.length === 1 ? "is" : "are"} no longer granted it from ${losing.length === 1 ? "its" : "their"} next turn.`}{" "}
-            Its history goes with it. Disabling keeps everything instead.
+            Its history goes with it
+            {deps?.oauth ? ", and its sign-in is revoked at the vendor" : ""}. Disabling keeps
+            everything instead.
           </Text>
           {deps && elsewhere > 0 ? (
             <Callout variant="warning" title={`Still named in ${plural(elsewhere, "place")}`}>

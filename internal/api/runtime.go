@@ -39,6 +39,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -270,6 +271,18 @@ type NodeRuntime interface {
 	// MCPValues is the secret store a server's value is sealed in, under
 	// the engine's keyring.
 	MCPValues() mcpapi.ValueStore
+
+	// MCPSignIns starts, reads and ends a server's OAuth sign-in
+	// (`POST` and `DELETE /mcp-servers/{name}/oauth`,
+	// `GET /mcp-sign-ins/{id}`), whose grant only the engine holds;
+	// MCPGrants reads each server's grant and the two addresses a vendor is
+	// given, which the servers' answers carry.
+	MCPSignIns() mcpapi.SignIns
+	MCPGrants() queries.MCPGrantReader
+	// MCPLanding finishes a sign-in where the vendor sends the person back
+	// (`GET /webhooks/mcp-oauth`) and publishes the engine's client
+	// metadata document; nil answers both as an engine that finishes none.
+	MCPLanding() webhooks.MCPSignIns
 
 	// MCPApprovals finds a call held for a person's approval on the
 	// fleet's runs and puts its answer on the control topic of the seat

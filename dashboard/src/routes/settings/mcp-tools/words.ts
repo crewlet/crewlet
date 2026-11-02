@@ -37,6 +37,7 @@ export const STATE: Record<McpServerState, { label: string; tone: Tone }> = {
   failing: { label: "Failed", tone: "danger" },
   waiting: { label: "Waiting", tone: "info" },
   disabled: { label: "Disabled", tone: "neutral" },
+  needs_sign_in: { label: "Needs sign-in", tone: "warning" },
   not_started: { label: "Not started", tone: "neutral" },
   unreported: { label: "Not reported", tone: "neutral" },
 };
@@ -60,6 +61,7 @@ export const AUTH: Record<McpAuth, string> = {
   none: "None",
   headers: "Values the configuration sets",
   integration: "The integration's own credential, per agent",
+  oauth: "OAuth, signed in for the company",
 };
 
 /** How a call ended. */
@@ -288,6 +290,14 @@ export const ALARM: Record<
     title: ({ server, count }) =>
       count === 1 ? `1 ${server} tool is not offered` : `${count} ${server} tools are not offered`,
   },
+  mcp_oauth_needs_sign_in: {
+    tone: "warning",
+    title: ({ server }) => `${server} needs somebody to sign in`,
+  },
+  mcp_oauth_expiring: {
+    tone: "info",
+    title: ({ server }) => `${server}'s sign-in runs out soon`,
+  },
   mcp_approval_waiting: {
     tone: "warning",
     title: ({ server, who }) =>
@@ -300,6 +310,7 @@ export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",
   edit: "See which tools",
+  sign_in: "See its sign-in",
   approve: "Open the Inbox",
 };
 

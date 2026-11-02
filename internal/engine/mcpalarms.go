@@ -2,9 +2,11 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -30,11 +32,19 @@ import (
 // active configuration runs, in name order. A server turned off raises nothing,
 // so it has no condition; one only a node on another revision reports is that
 // node's apply, which the control plane names, and has none either.
-func mcpConditions(c *Company, statuses map[string]coord.NodeStatus) []statelog.MCPServerCondition {
+//
+// grants are the servers' OAuth grants by server ([Engine.grantsReading]): a
+// server signed in to with OAuth gets its sign-in's condition from its own,
+// or none held.
+func mcpConditions(c *Company, statuses map[string]coord.NodeStatus,
+	grants map[string]coord.MCPGrant) []statelog.MCPServerCondition {
+
 	servers := make([]string, 0, len(c.Config.MCPServers))
+	signedIn := map[string]bool{}
 	for i := range c.Config.MCPServers {
 		if c.Config.MCPServers[i].IsEnabled() {
 			servers = append(servers, c.Config.MCPServers[i].Name)
+			signedIn[c.Config.MCPServers[i].Name] = c.Config.MCPServers[i].OAuth != nil
 		}
 	}
 	slices.Sort(servers)
@@ -72,9 +82,54 @@ func mcpConditions(c *Company, statuses map[string]coord.NodeStatus) []statelog.
 		}
 		cond.Refused = slices.Sorted(maps.Keys(refused))
 		cond.RefusedCount = max(cond.RefusedCount, len(cond.Refused))
+		if signedIn[server] {
+			cond.SignIn = signInCondition(grants, server)
+		}
 		out = append(out, cond)
 	}
 	return out
+}
+
+// signInCondition is a server's sign-in as its grant record holds it, or
+// none held.
+func signInCondition(grants map[string]coord.MCPGrant, server string) *statelog.MCPSignInCondition {
+	g, held := grants[server]
+	if !held {
+		return &statelog.MCPSignInCondition{}
+	}
+	out := &statelog.MCPSignInCondition{Held: true, Failure: g.Failure}
+	if g.FailedAt != nil {
+		out.FailedAt = *g.FailedAt
+	}
+	if g.Expiry != nil {
+		out.Expiry = *g.Expiry
+	}
+	return out
+}
+
+// grantsReading is every MCP server's OAuth grant, by server, for an alarm
+// reading: read afresh where c signs in to any server, and the last good
+// reading carried across a store that cannot answer, as the heartbeats are.
+// Nil where no server is signed in to with OAuth.
+func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord.MCPGrant {
+	if !slices.ContainsFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.OAuth != nil }) ||
+		e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	in := &e.entryInputs
+	grants, err := e.backends.Fleet.ListMCPGrants(ctx)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if err != nil {
+		log.WarnContext(ctx, "mcp_alarms_grants_unread", "error", err,
+			"detail", "the MCP sign-in alarms are judged on the last grants this node read")
+		return in.grants
+	}
+	in.grants = make(map[string]coord.MCPGrant, len(grants))
+	for _, g := range grants {
+		in.grants[g.Server] = g
+	}
+	return in.grants
 }
 
 // heldConditions lays the calls the fleet's runs hold for a person's approval

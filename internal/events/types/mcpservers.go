@@ -30,6 +30,11 @@ const (
 	// MCPServerSetTools sets the levels of a server's tools, or with
 	// [MCPServerActed.DryRun] checks a change to them.
 	MCPServerSetTools MCPServerAction = "set_tools"
+	// MCPServerSignIn starts an OAuth sign-in to a server, and
+	// MCPServerSignOut gives its grant up (revoked at the vendor where it
+	// offers that).
+	MCPServerSignIn  MCPServerAction = "sign_in"
+	MCPServerSignOut MCPServerAction = "sign_out"
 	// MCPServerApprove answers a call an agent's run made to one of the
 	// server's tools at Needs approval ([MCPServerActed.Answer]).
 	MCPServerApprove MCPServerAction = "approve"
@@ -37,7 +42,7 @@ const (
 
 // MCPServerActions is every action, for a reader's copy.
 var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue,
-	MCPServerSetTools, MCPServerApprove}
+	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -123,6 +128,10 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		if e.DryRun {
 			text = "checked a change to the tool levels of MCP server " + e.Server
 		}
+	case MCPServerSignIn:
+		text = "started a sign-in to MCP server " + e.Server
+	case MCPServerSignOut:
+		text = "signed out of MCP server " + e.Server
 	case MCPServerApprove:
 		switch e.Answer {
 		case "once":

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -165,6 +167,42 @@ func (f *fakeRuntime) MCPValues() mcpapi.ValueStore {
 		panic(err)
 	}
 	return fleetsecrets.New(coordmemory.NewFleet(), cipher)
+}
+
+// MCPSignIns signs nothing in: what a sign-in does is held by mcpapi's own
+// suite and the engine's.
+func (f *fakeRuntime) MCPSignIns() mcpapi.SignIns { return noSignIns{} }
+
+// MCPGrants reads no server's grant, and no address for a sign-in.
+func (f *fakeRuntime) MCPGrants() queries.MCPGrantReader { return noSignIns{} }
+
+// MCPLanding finishes no sign-in: the callback answers as an engine that
+// finishes none.
+func (f *fakeRuntime) MCPLanding() webhooks.MCPSignIns { return nil }
+
+// noSignIns is an engine nobody has signed in to any server through.
+type noSignIns struct{}
+
+func (noSignIns) StartSignIn(context.Context, string, iam.Actor) (mcpapi.SignInAnswer, error) {
+	return mcpapi.SignInAnswer{}, mcpapi.ErrNoOAuth
+}
+
+func (noSignIns) SignIn(context.Context, uuid.UUID) (mcpapi.SignInAnswer, error) {
+	return mcpapi.SignInAnswer{}, mcpapi.ErrNoSignIn
+}
+
+func (noSignIns) SignOut(context.Context, string, iam.Actor) (mcpapi.SignOutAnswer, error) {
+	return mcpapi.SignOutAnswer{}, mcpapi.ErrNotSignedIn
+}
+
+func (noSignIns) MCPGrants(context.Context) ([]coord.MCPGrant, error) { return nil, nil }
+
+func (noSignIns) MCPSignInAddresses() (string, string) { return "", "" }
+
+func (noSignIns) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
+
+func (noSignIns) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
 }
 
 // passingChecker finds every server serving on one node, and every address

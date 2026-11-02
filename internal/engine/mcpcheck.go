@@ -511,8 +511,14 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 	case openErr != nil:
 		report = mcp.Unstarted(mcp.Spec{Name: ask.Server},
 			"this node could not open the value under test: "+openErr.Error())
+	case ask.Seat == uuid.Nil && ask.Draft == nil && server.OAuth != nil:
+		// A SAVED SERVER SIGNED IN TO WITH OAUTH is tested under its grant,
+		// as it runs, a value under test included. A draft never is,
+		// whatever its name: the grant's token goes to the address it was
+		// issued for, and a draft's address is somebody's typing.
+		report = e.testServer(ctx, server, nil, nil, nil, tried, e.testBearer(ctx, server.Name))
 	case ask.Seat == uuid.Nil:
-		report = e.testServer(ctx, server, nil, nil, nil, tried)
+		report = e.testServer(ctx, server, nil, nil, nil, tried, nil)
 	default:
 		role := c.Org.AgentSeatByID(ask.Seat)
 		if role == nil {
@@ -520,7 +526,7 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 		}
 		env, token := e.seatResolver(ctx, c, role, github.ToolTokenLife)
 		report = e.testServer(ctx, server, role, env, &seatMint{kinds: e.mintedFor(c, role.Handle()), token: token},
-			tried)
+			tried, nil)
 	}
 	report = boundedReport(report, e.epochTools())
 	return &report
@@ -574,8 +580,11 @@ func testedEntry(c *Company, ask mcpCheckAsk) *config.MCPServer {
 // values a start of it would be given: the same resolution
 // ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
 // and the same launch ([mcp.Test]); with tried, the key reads the value.
+// bearer is the grant's token source of a saved server signed in to with
+// OAuth, nil for any other, and is sent only where the test dials the origin
+// the saved server is dialled at.
 func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
-	env *config.Resolver, mint *seatMint, tried *MCPValueTry) mcp.TestReport {
+	env *config.Resolver, mint *seatMint, tried *MCPValueTry, bearer mcp.BearerSource) mcp.TestReport {
 
 	instance, handle := server.Name, ""
 	var block map[string]string
@@ -598,6 +607,12 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	spec, err := serverSpec(server, instance, values)
 	if err != nil {
 		return mcp.Unstarted(unstarted, err.Error())
+	}
+	// THE GRANT'S TOKEN GOES WHERE THE SERVER RUNS AND NOWHERE ELSE: a value
+	// under test that moves the server's address takes it to an origin the
+	// grant was not issued for, which is tested without it.
+	if bearer != nil && mcp.SameOrigin(values.url, e.resolver().Value(server.URL)) {
+		spec.Bearer = bearer
 	}
 	ctx, cancel := context.WithTimeout(ctx, mcpCheckBudget(server))
 	defer cancel()

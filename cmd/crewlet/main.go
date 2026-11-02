@@ -1976,6 +1976,9 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 	}
 	return configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
+		// AND EACH MCP SERVER'S OAUTH GRANT, which a removal of the server
+		// revokes: the engine's own.
+		Grants: e,
 		// THE POINTER, without which the write routes have nothing to
 		// activate against. It was missing, so every /config write on
 		// this binary reached a nil plane: the live-edit path that is the

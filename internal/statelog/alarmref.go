@@ -194,6 +194,13 @@ var alarmMeaning = map[Kind]string{
 	KindMCPToolsRefused: "An MCP server lists a tool that cannot be offered under its name: " +
 		"with the server's `tool_prefix` it is longer than the harnesses take, it holds a " +
 		"character a model's tool name cannot, or a built-in has the name.",
+	KindMCPOAuthNeedsSignIn: "An MCP server signed in to with OAuth is not started: nobody has " +
+		"signed in to it, or its vendor refused to renew the sign-in (the detail quotes the " +
+		"vendor). It stands in place of `mcp_server_failing` and `mcp_server_partial` for the " +
+		"server. No agent is offered the server's tools until somebody signs in.",
+	KindMCPOAuthExpiring: "An MCP server's OAuth sign-in runs out within seven days, where its " +
+		"vendor said when. The engine renews the access the sign-in grants, but only a person " +
+		"signing in again renews the sign-in itself.",
 	KindMCPApprovalWaiting: "An agent's run called one of an MCP server's tools at Needs " +
 		"approval, and the call has waited for a person's answer for longer than a third " +
 		"of the default pause TTL. The run is parked and its seat free; its work waits on " +

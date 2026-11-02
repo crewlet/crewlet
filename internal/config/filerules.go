@@ -537,13 +537,27 @@ func (c *Company) validateMCPServerReferences() error {
 	// allowed set also holds `datadog` and `confluence` describes the engine
 	// rather than their file.
 	declared := make(map[string]struct{}, len(c.MCPServers))
+	signedIn := map[string]bool{}
 	for i := range c.MCPServers {
 		if name := strings.TrimSpace(c.MCPServers[i].Name); name != "" {
 			declared[name] = struct{}{}
+			signedIn[name] = c.MCPServers[i].OAuth != nil
 		}
 	}
 	var p problems
 	for _, ref := range c.mcpServerReferences() {
+		// A BOX CANNOT RENEW A SIGN-IN. It is handed a server's values
+		// once, at its launch, and an OAuth server's access token runs out
+		// within the hour while only the engine holds what renews it; the
+		// box reaches the server's tools through the bridge instead.
+		if ref.Field == MCPReferenceSandbox && signedIn[ref.Server] {
+			p.add(ref.Segments, ErrConflict,
+				"%q is signed in to with OAuth, and an executor box is handed a server's "+
+					"credentials once, at its launch, which an access token outlives by "+
+					"an hour at most: remove the entry, and the box reaches the server's "+
+					"tools through the bridge", ref.Server)
+			continue
+		}
 		if _, ok := declared[ref.Server]; ok || ref.EngineRead {
 			continue
 		}

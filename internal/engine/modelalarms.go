@@ -48,6 +48,8 @@ type entryInputs struct {
 	statuses map[string]coord.NodeStatus
 	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
+	// grants are the MCP servers' OAuth grants, by server.
+	grants map[string]coord.MCPGrant
 	// runs is the fleet's active runs, read for the calls they hold for a
 	// person's approval ([heldConditions]).
 	runs []sandbox.PendingRun
@@ -84,7 +86,7 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 		e.modelsReading(ctx, c, statuses, now, out)
 	}
 	if len(c.Config.MCPServers) > 0 {
-		out.MCPServers = mcpConditions(c, statuses)
+		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
 		heldConditions(out.MCPServers, e.heldRuns(ctx))
 		out.MCPServersAt = now
 	}

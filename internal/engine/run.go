@@ -356,6 +356,10 @@ type Engine struct {
 	// ([mcpRestarts]).
 	restarts mcpRestarts
 
+	// oauth is this node's part in its MCP servers' OAuth sign-ins: the
+	// state signer and each server's access token source ([oauthState]).
+	oauth oauthState
+
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings

@@ -224,6 +224,11 @@ type Sources struct {
 	// detail answers. Nil answers none.
 	MCPChecks MCPCheckReader
 
+	// MCPGrants reads each MCP server's OAuth grant and the addresses a
+	// vendor is given for a sign-in. Nil answers every server signed in to
+	// with OAuth as one nobody has signed in to, and no addresses.
+	MCPGrants MCPGrantReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 

@@ -93,7 +93,7 @@ func toolsSurface(t *testing.T, docs *fakeToolDocuments, detail func(context.Con
 	t.Helper()
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
 		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{},
-		Tools: docs, Values: valueStore(t), Audit: audit})
+		Tools: docs, Values: valueStore(t), SignIns: &fakeSignIns{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}

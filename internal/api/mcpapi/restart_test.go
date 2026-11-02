@@ -82,7 +82,8 @@ func restartSurface(t *testing.T, restarter mcpapi.Restarter, audit *recordedAud
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Values: valueStore(t), Audit: audit})
+		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Values: valueStore(t),
+		SignIns: &fakeSignIns{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +255,10 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as any write of
 		// it: checked on dry_run and summarised (tools.go).
 		"PUT /mcp-servers/{name}/tools": authz.ActionConfigWrite,
+		// A SIGN-IN MAKES THE CREDENTIAL, as a stored value does.
+		"POST /mcp-servers/{name}/oauth":   authz.ActionSecretWrite,
+		"DELETE /mcp-servers/{name}/oauth": authz.ActionSecretWrite,
+		"GET /mcp-sign-ins/{id}":           authz.ActionConfigRead,
 		// A HELD CALL'S ANSWER, decided again on the run's seat once the
 		// handler has read it (approvals.go).
 		"POST /mcp-approvals/{id}": authz.ActionToolsApprove,
@@ -268,6 +273,7 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/check": authz.EffectRewrites,
 		"POST /mcp-checks":               authz.EffectReads,
 		"POST /mcp-probe":                authz.EffectReads,
+		"POST /mcp-servers/{name}/oauth": authz.EffectCreates,
 		"POST /mcp-approvals/{id}":       authz.EffectRewrites,
 	} {
 		if got := mux.policies[pattern]; got.Effect != effect {
@@ -285,7 +291,8 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		t.Error("a surface with no restarter was built")
 	}
 	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
-		Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}}); err == nil {
+		Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{},
+		Values: valueStore(t), SignIns: &fakeSignIns{}}); err == nil {
 		t.Error("a surface with no audit was built")
 	}
 }

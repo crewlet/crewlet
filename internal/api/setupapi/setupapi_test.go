@@ -258,7 +258,7 @@ func newConfigSurface(t *testing.T, writers ...string) configFixture {
 	gate := &gatedPlane{Plane: fleet}
 	f := configFixture{db: db, cipher: testCipher(t), plane: gate, gate: gate}
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: f.plane, Cipher: f.cipher, Secrets: fleetsecrets.New(fleet, f.cipher),
+		Store: db, Plane: f.plane, Cipher: f.cipher, Secrets: fleetsecrets.New(fleet, f.cipher), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -3021,4 +3021,13 @@ func TestASubmissionThatDoesNotDecodeIsToldInWords(t *testing.T) {
 		body["detail"] != `In the body, "store" isn't a field this takes.` {
 		t.Errorf("the check answered %d %v, want 400 saying it in words", res.Code, body)
 	}
+}
+
+// noGrants is an engine nobody has signed in to any MCP server through.
+type noGrants struct{}
+
+func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
+
+func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
 }

@@ -72,6 +72,10 @@ const (
 	// the server's `tool_prefix` or the server's own naming, never by
 	// anything a restart changes.
 	MCPFixEdit MCPFixKind = "edit"
+	// MCPFixSignIn signs the company in to the server again
+	// (`POST /mcp-servers/{name}/oauth`): a grant nobody holds, one its
+	// vendor refused to renew, or one about to run out.
+	MCPFixSignIn MCPFixKind = "sign_in"
 	// MCPFixApprove answers the calls the named agent's run holds for a
 	// person's approval on the server, each by its id in the answer's
 	// `approvals` (`POST /mcp-approvals/{id}`).
@@ -79,7 +83,7 @@ const (
 )
 
 // MCPFixKinds is every gesture, for the gate holding the dashboard's copy.
-var MCPFixKinds = []MCPFixKind{MCPFixRestart, MCPFixIntegration, MCPFixEdit, MCPFixApprove}
+var MCPFixKinds = []MCPFixKind{MCPFixRestart, MCPFixIntegration, MCPFixEdit, MCPFixSignIn, MCPFixApprove}
 
 // Valid reports whether k is a gesture this build sends.
 func (k MCPFixKind) Valid() bool { return slices.Contains(MCPFixKinds, k) }
@@ -104,6 +108,8 @@ var mcpFixes = map[statelog.Kind]mcpFix{
 	statelog.KindMCPServerPartial:     {kind: MCPFixRestart, oneSeat: true},
 	statelog.KindMCPServerWaitingLong: {kind: MCPFixIntegration, oneSeat: true},
 	statelog.KindMCPToolsRefused:      {kind: MCPFixEdit},
+	statelog.KindMCPOAuthNeedsSignIn:  {kind: MCPFixSignIn},
+	statelog.KindMCPOAuthExpiring:     {kind: MCPFixSignIn},
 	statelog.KindMCPApprovalWaiting:   {kind: MCPFixApprove, oneSeat: true},
 }
 

@@ -877,6 +877,9 @@ func New(opts Options) (*App, error) {
 	// And each server's latest test, which every node reads from the
 	// coordination store.
 	sources.MCPChecks = opts.Runtime.MCPChecks()
+	// And each server's OAuth grant, which every node reads from the
+	// coordination store, with the addresses a vendor is given.
+	sources.MCPGrants = opts.Runtime.MCPGrants()
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
 	// company this node applied, the community registry it names and, for
 	// one server's detail, the sources as they stand here, every field the
@@ -899,7 +902,7 @@ func New(opts Options) (*App, error) {
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
-		Approvals: opts.Runtime.MCPApprovals(), Audit: opts.Audit,
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.
 		Guard: authz.ContextGuard(sources.Chart)})
@@ -996,7 +999,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.MCPLanding(), now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -1421,7 +1424,9 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Time) error {
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MCPSignIns,
+	now func() time.Time) error {
+
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -1433,6 +1438,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Tim
 		Now:        now,
 
 		SlackInstalls: in.SlackInstalls,
+		MCPSignIns:    signIns,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)
