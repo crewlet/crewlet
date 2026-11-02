@@ -239,8 +239,8 @@ func TestAValueIsSealedOnlyAfterItsTestPasses(t *testing.T) {
 		t.Fatalf("a value that works = %d %v", code, body)
 	}
 	asked := checker.requests()
-	if last := asked[len(asked)-1]; last.Value == nil || last.Value.Key != "Authorization" ||
-		last.Value.Variable != "MCP_SENTRY_AUTHORIZATION" || last.Value.Value != theValue || last.Seat != "" {
+	if last := asked[len(asked)-1]; len(last.Values) != 1 || last.Values[0].Key != "Authorization" ||
+		last.Values[0].Variable != "MCP_SENTRY_AUTHORIZATION" || last.Values[0].Value != theValue || last.Seat != "" {
 		t.Fatalf("tested %+v, want the trimmed value read through the variable it is sealed under", last)
 	}
 	row, found, err := store.Describe(t.Context(), "MCP_SENTRY_AUTHORIZATION")
@@ -400,7 +400,7 @@ func TestAPerAgentValueIsTestedAsItsSeat(t *testing.T) {
 		body["seat"] != "dev" {
 		t.Fatalf("dev's value = %d %v", code, body)
 	}
-	if last := checker.requests()[0]; last.Seat != "dev" || last.Value == nil {
+	if last := checker.requests()[0]; last.Seat != "dev" || len(last.Values) != 1 {
 		t.Fatalf("tested %+v, want dev's instance", last)
 	}
 	if got := docs.company.Roles[0].MCPEnv["tracker"]; got["TOKEN"] != "${MCP_TRACKER_TOKEN_DEV}" || got["REGION"] != "eu" {

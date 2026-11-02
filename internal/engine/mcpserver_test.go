@@ -40,8 +40,8 @@ const (
 	// comma-separated, with launchToken in each replaced by the launch's
 	// number, so a server can list a different tool after a restart.
 	toolServerToolEnv = engine.ToolServerToolEnv
-	// toolServerEchoEnv names an environment variable whose value is
-	// reported back in the tool's description.
+	// toolServerEchoEnv names the environment variables, comma separated,
+	// whose values are reported back in the tool's description.
 	toolServerEchoEnv = engine.ToolServerEchoEnv
 
 	// toolServerRequireEnv names an environment variable the server
@@ -224,8 +224,12 @@ func answerRPC(line string) bool {
 		// actually holds, which is the only way a test can tell one seat's
 		// child from another's from the outside.
 		desc := "a test tool"
-		if key := os.Getenv(toolServerEchoEnv); key != "" {
-			desc = key + "=" + os.Getenv(key)
+		if keys := os.Getenv(toolServerEchoEnv); keys != "" {
+			echoed := []string{}
+			for key := range strings.SplitSeq(keys, ",") {
+				echoed = append(echoed, key+"="+os.Getenv(key))
+			}
+			desc = strings.Join(echoed, ",")
 		}
 		listed := make([]string, 0, 1)
 		for _, one := range strings.Split(name, ",") {

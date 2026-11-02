@@ -30,12 +30,12 @@ func (m mcpRestarter) RestartServer(ctx context.Context, name, seat string, by i
 type mcpChecker struct{ e *engine.Engine }
 
 func (m mcpChecker) CheckServer(ctx context.Context, req mcpapi.CheckRequest) (mcpapi.Check, error) {
-	var tried *engine.MCPValueTry
-	if req.Value != nil {
-		tried = &engine.MCPValueTry{Key: req.Value.Key, Variable: req.Value.Variable, Value: req.Value.Value}
+	tried := make([]engine.MCPValueTry, 0, len(req.Values))
+	for _, v := range req.Values {
+		tried = append(tried, engine.MCPValueTry{Key: v.Key, Variable: v.Variable, Value: v.Value})
 	}
 	r, err := m.e.CheckMCPServer(ctx, engine.MCPCheckRequest{Server: req.Server, Draft: req.Draft,
-		Seat: req.Seat, Value: tried, By: req.By})
+		Seat: req.Seat, Values: tried, By: req.By})
 	if err != nil {
 		return mcpapi.Check{}, restartErr(err)
 	}

@@ -63,9 +63,10 @@ import (
 //
 // # A value is tested before it is stored
 //
-// The saved entry is tested with the key reading the value ([MCPValueTry]),
-// which crosses the signed, unencrypted channel sealed under the fleet's
-// keyring ([mcpValueAAD]). Never recorded.
+// The saved entry, or a draft, is tested with each key under test reading its
+// value ([MCPValueTry]); every value crosses the signed, unencrypted channel
+// sealed under the fleet's keyring, bound to the request and its variable
+// ([mcpValueAAD]). Never recorded.
 //
 // # The latest test is kept, bounded
 //
@@ -97,8 +98,9 @@ type MCPCheckRequest struct {
 	Draft *config.MCPServer
 	// Seat is the handle of the seat a per-agent server is tested for.
 	Seat string
-	// Value is a value tested before it is stored, nil for none.
-	Value *MCPValueTry
+	// Values are the values tested before they are stored, each its own
+	// key's; none for a test of what is stored.
+	Values []MCPValueTry
 	// By is who asked.
 	By iam.Actor
 }
@@ -144,8 +146,9 @@ const mcpCheckChannel = "mcp.check"
 // mcpCheckWire is the request and reply version this build speaks; a node
 // answers only a request in its own version, and an asker reads only a
 // reply in it.
-// Version 2 carries [mcpCheckAsk.Value], which a version 1 node would drop.
-const mcpCheckWire = 2
+// Version 3 carries [mcpCheckAsk.Values], every value under test, which a
+// version 2 node would drop, testing without them.
+const mcpCheckWire = 3
 
 // mcpCheckAsk asks nodes to test a server.
 type mcpCheckAsk struct {
@@ -162,8 +165,8 @@ type mcpCheckAsk struct {
 	Seat   uuid.UUID `json:"seat"`
 	// Draft is the entry as a write would leave it, nil for the saved one.
 	Draft *config.MCPServer `json:"draft,omitempty"`
-	// Value is a value under test, sealed for the fleet.
-	Value *mcpValueAsk `json:"value,omitempty"`
+	// Values are the values under test, each sealed for the fleet.
+	Values []mcpValueAsk `json:"values,omitempty"`
 }
 
 func (a mcpCheckAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
@@ -260,15 +263,15 @@ func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCh
 		draft.Enabled = config.Toggle{}
 		ask.Draft = &draft
 	}
-	if req.Value != nil {
-		if e.cipher == nil {
-			return MCPCheckResult{}, errNoValueKeyring
-		}
-		sealed, sealErr := e.cipher.Encrypt(req.Value.Value, mcpValueAAD(ask.ID, req.Value.Variable))
+	if len(req.Values) > 0 && e.cipher == nil {
+		return MCPCheckResult{}, errNoValueKeyring
+	}
+	for _, tried := range req.Values {
+		sealed, sealErr := e.cipher.Encrypt(tried.Value, mcpValueAAD(ask.ID, tried.Variable))
 		if sealErr != nil {
 			return MCPCheckResult{}, fmt.Errorf("engine: seal the value under test: %w", sealErr)
 		}
-		ask.Value = &mcpValueAsk{Key: req.Value.Key, Variable: req.Value.Variable, Sealed: sealed}
+		ask.Values = append(ask.Values, mcpValueAsk{Key: tried.Key, Variable: tried.Variable, Sealed: sealed})
 	}
 	seat := strings.TrimSpace(req.Seat)
 	switch {
@@ -319,7 +322,7 @@ func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCh
 	}
 	out.OK = out.OK && answered > 0
 	// The latest test is of the entry the company runs.
-	if req.Draft == nil && req.Value == nil {
+	if req.Draft == nil && len(req.Values) == 0 {
 		e.recordMCPCheck(ctx, out, ask.Seat, req.By)
 	}
 	return out, nil
@@ -336,7 +339,7 @@ func checkedEntry(c *Company, req MCPCheckRequest) (*config.MCPServer, error) {
 		return nil, fmt.Errorf("%w: %q", ErrNoMCPServer, req.Server)
 	}
 	server := &c.Config.MCPServers[i]
-	if !server.IsEnabled() && req.Value == nil {
+	if !server.IsEnabled() && len(req.Values) == 0 {
 		return nil, fmt.Errorf("%w: %q", ErrMCPServerOff, req.Server)
 	}
 	return server, nil
@@ -526,19 +529,23 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 	return &report
 }
 
-// openTried opens the value ask carries under test, nil for none.
-func (e *Engine) openTried(ask mcpCheckAsk) (*MCPValueTry, error) {
-	if ask.Value == nil {
+// openTried opens every value ask carries under test, none for none.
+func (e *Engine) openTried(ask mcpCheckAsk) ([]MCPValueTry, error) {
+	if len(ask.Values) == 0 {
 		return nil, nil
 	}
 	if e.cipher == nil {
 		return nil, errNoValueKeyring
 	}
-	value, err := e.cipher.Decrypt(ask.Value.Sealed, mcpValueAAD(ask.ID, ask.Value.Variable))
-	if err != nil {
-		return nil, fmt.Errorf("the fleet's keyring does not open it here: %w", err)
+	out := make([]MCPValueTry, 0, len(ask.Values))
+	for _, v := range ask.Values {
+		value, err := e.cipher.Decrypt(v.Sealed, mcpValueAAD(ask.ID, v.Variable))
+		if err != nil {
+			return nil, fmt.Errorf("the fleet's keyring does not open it here: %w", err)
+		}
+		out = append(out, MCPValueTry{Key: v.Key, Variable: v.Variable, Value: value})
 	}
-	return &MCPValueTry{Key: ask.Value.Key, Variable: ask.Value.Variable, Value: value}, nil
+	return out, nil
 }
 
 // mcpTestKey names what a test tests on a node: the kind of entry, its name
@@ -548,7 +555,7 @@ func mcpTestKey(ask mcpCheckAsk) string {
 	switch {
 	case ask.Draft != nil:
 		kind = "draft"
-	case ask.Value != nil:
+	case len(ask.Values) > 0:
 		kind = "value"
 	}
 	return kind + "/" + ask.Server + "/" + ask.Seat.String()
@@ -573,9 +580,10 @@ func testedEntry(c *Company, ask mcpCheckAsk) *config.MCPServer {
 // testServer tests server on this node, as a seat when seat is set, with the
 // values a start of it would be given: the same resolution
 // ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
-// and the same launch ([mcp.Test]); with tried, the key reads the value.
+// and the same launch ([mcp.Test]); with tried, each of its keys reads its
+// value.
 func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
-	env *config.Resolver, mint *seatMint, tried *MCPValueTry) mcp.TestReport {
+	env *config.Resolver, mint *seatMint, tried []MCPValueTry) mcp.TestReport {
 
 	instance, handle := server.Name, ""
 	var block map[string]string
@@ -585,9 +593,13 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	if env == nil {
 		env = e.resolver()
 	}
-	if tried != nil {
+	if len(tried) > 0 {
 		server, block = withTried(server, block, seat != nil, tried)
-		env = env.Trying(tried.Variable, tried.Value)
+		values := make(map[string]string, len(tried))
+		for _, t := range tried {
+			values[t.Variable] = t.Value
+		}
+		env = env.Trying(values)
 	}
 	unstarted := mcp.Spec{Name: instance, Transport: mcp.TransportKind(server.Transport),
 		Command: server.Command, URL: server.URL}
@@ -604,19 +616,26 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	return mcp.Test(ctx, spec, nil)
 }
 
-// withTried points tried's key at its variable in copies: the seat's block
-// for a seat's test, the server's own map otherwise.
+// withTried points each tried key at its variable in copies: the seat's block
+// for a seat's test, the server's own map otherwise. A key spelled another way
+// in the map (`authorization` for `Authorization`) gives way to it.
 func withTried(server *config.MCPServer, block map[string]string, forSeat bool,
-	tried *MCPValueTry) (*config.MCPServer, map[string]string) {
+	tried []MCPValueTry) (*config.MCPServer, map[string]string) {
 
 	point := func(values map[string]string) map[string]string {
-		out := make(map[string]string, len(values)+1)
+		under := make(map[string]bool, len(tried))
+		for _, t := range tried {
+			under[server.ValueKey(t.Key)] = true
+		}
+		out := make(map[string]string, len(values)+len(tried))
 		for key, value := range values {
-			if server.ValueKey(key) != server.ValueKey(tried.Key) {
+			if !under[server.ValueKey(key)] {
 				out[key] = value
 			}
 		}
-		out[tried.Key] = "${" + tried.Variable + "}"
+		for _, t := range tried {
+			out[t.Key] = "${" + t.Variable + "}"
+		}
 		return out
 	}
 	if forSeat {

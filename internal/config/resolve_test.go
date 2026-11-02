@@ -489,23 +489,29 @@ func TestWholeReferencePatternIsTheResolvers(t *testing.T) {
 	}
 }
 
-// A value under test hides the stored one without a shadow warning, and other
+// Values under test hide the stored ones without a shadow warning, and other
 // names still warn. Mutation: drop the trying check, and this is red.
 func TestAValueUnderTestHidesWhatItReplacesQuietly(t *testing.T) {
 	var buf strings.Builder
 	t.Setenv("NPM_TOKEN", "exported")
-	base := WithStore(MapSource{"MCP_LINEAR_AUTHORIZATION": "Bearer stored-not-real", "NPM_TOKEN": "stored"})
+	base := WithStore(MapSource{"MCP_LINEAR_AUTHORIZATION": "Bearer stored-not-real",
+		"MCP_LINEAR_X_TEAM": "stored-team", "NPM_TOKEN": "stored"})
 	base.log = testLogger(&buf)
-	trying := base.Trying("MCP_LINEAR_AUTHORIZATION", "Bearer tried-not-real")
+	tried := map[string]string{"MCP_LINEAR_AUTHORIZATION": "Bearer tried-not-real", "MCP_LINEAR_X_TEAM": "tried-team"}
+	trying := base.Trying(tried)
+	tried["MCP_LINEAR_X_TEAM"] = "changed after the call"
 
 	if got := trying.Value("${MCP_LINEAR_AUTHORIZATION}"); got != "Bearer tried-not-real" {
 		t.Fatalf("the tried name resolved to %q, want the value under test", got)
 	}
+	if got := trying.Value("${MCP_LINEAR_X_TEAM}"); got != "tried-team" {
+		t.Fatalf("the second tried name resolved to %q, want its value as the call was made", got)
+	}
 	if got := base.Value("${MCP_LINEAR_AUTHORIZATION}"); got != "Bearer stored-not-real" {
 		t.Fatalf("the chain under the test changed: %q", got)
 	}
-	if strings.Contains(buf.String(), "MCP_LINEAR_AUTHORIZATION") {
-		t.Errorf("the value under test was warned as a shadow:\n%s", buf.String())
+	if strings.Contains(buf.String(), "MCP_LINEAR_") {
+		t.Errorf("a value under test was warned as a shadow:\n%s", buf.String())
 	}
 	trying.Value("${NPM_TOKEN}")
 	if strings.Count(buf.String(), "secret_shadowed_env") != 1 {

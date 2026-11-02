@@ -185,7 +185,7 @@ func (s *Service) testValue(w http.ResponseWriter, r *http.Request, company *con
 		return CheckAnswer{}, false
 	}
 	done, err := s.checker.CheckServer(r.Context(), CheckRequest{Server: slot.Server, Seat: slot.Seat,
-		Value: &ValueTry{Key: slot.Key, Variable: slot.Variable, Value: value}, By: by})
+		Values: []ValueTry{{Key: slot.Key, Variable: slot.Variable, Value: value}}, By: by})
 	if err != nil {
 		s.refuseServerGesture(w, r, slot.Server, slot.Seat, err, "mcp_value_test_failed",
 			"this node could not ask the fleet to test the value; nothing was stored; ask again")
@@ -317,24 +317,43 @@ func readValue(w http.ResponseWriter, r *http.Request) (string, bool) {
 			httpjson.Detail{"detail": `the body is {"value": "..."}, what the server is sent under the key`})
 		return "", false
 	}
-	value := strings.TrimSpace(*req.Value)
-	switch {
-	case value == "":
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the value is empty: send what the server is sent under the key"})
-		return "", false
-	case strings.ContainsAny(value, "\r\n\x00"):
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the value holds a line break or a NUL inside it: a header's or a " +
-				"variable's value is one line"})
-		return "", false
-	}
-	if err := secrets.CheckValue(value); err != nil {
-		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
-			httpjson.Detail{"detail": err.Error()})
+	value, refusal := checkValue(*req.Value)
+	if refusal != nil {
+		refusal.answer(w, "the value")
 		return "", false
 	}
 	return value, true
+}
+
+// valueRefusal is why a value is not one a server can be sent, said of the
+// value without quoting it.
+type valueRefusal struct {
+	status int
+	code   httpjson.Code
+	// why follows the value's name in the sentence.
+	why string
+}
+
+func (v *valueRefusal) answer(w http.ResponseWriter, what string) {
+	httpjson.FailWithFields(w, v.status, v.code, httpjson.Detail{"detail": what + " " + v.why})
+}
+
+// checkValue is raw as a server is sent it, trimmed: one line, not empty, and
+// within the store's bound. Shared by a stored value and a draft's.
+func checkValue(raw string) (string, *valueRefusal) {
+	value := strings.TrimSpace(raw)
+	switch {
+	case value == "":
+		return "", &valueRefusal{http.StatusBadRequest, httpjson.CodeInvalidBody,
+			"is empty: send what the server is sent under the key"}
+	case strings.ContainsAny(value, "\r\n\x00"):
+		return "", &valueRefusal{http.StatusBadRequest, httpjson.CodeInvalidBody,
+			"holds a line break or a NUL inside it: a header's or a variable's value is one line"}
+	}
+	if err := secrets.CheckValue(value); err != nil {
+		return "", &valueRefusal{http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge, "is too long: " + err.Error()}
+	}
+	return value, nil
 }
 
 // refuseSlot answers a slot the document refused.
