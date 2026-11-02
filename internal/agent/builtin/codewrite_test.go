@@ -278,7 +278,7 @@ func commitArgs(text string) map[string]any {
 
 // callWrite calls a seat's write tool in turn under ctx, recording the call in
 // the turn's log as the tool loop does.
-func callWrite(t *testing.T, ctx context.Context, reg *tools.Registry, turn *turnctx.Turn, name string,
+func callWrite(ctx context.Context, t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
 	args map[string]any) tools.Result {
 
 	t.Helper()
@@ -479,7 +479,7 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 	reg := codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
 	turn.WorkItem = &types.WorkItem{Backend: "native", ID: "t-7", Key: "ENG-7"}
-	got := callWrite(t, toolloop.WithCallModel(everyGrant(), "claude-house"), reg, turn,
+	got := callWrite(toolloop.WithCallModel(everyGrant(), "claude-house"), t, reg, turn,
 		builtin.CodeCommitFilesTool, commitArgs("hello"))
 	if got.Failed {
 		t.Fatalf("the commit answered %q", got.Output)
@@ -591,7 +591,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 				{builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"}},
 				{builtin.CodeRevertChangeTool, map[string]any{"change": "site!7"}},
 			} {
-				if got := callWrite(t, everyGrant(), reg, turn, call.tool, call.args); got.Failed {
+				if got := callWrite(everyGrant(), t, reg, turn, call.tool, call.args); got.Failed {
 					t.Fatalf("%s answered %q", call.tool, got.Output)
 				}
 			}
@@ -645,7 +645,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	reg := codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
 	turn.Requester = "agent-gone"
-	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("hello"))
+	got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("hello"))
 	if tools.RefusalOf(got) != tools.RefusalUnavailable || !errors.Is(got.Cause, builtin.ErrUndecidable) ||
 		!strings.Contains(got.Output, "could not establish who this turn's work is for") {
 		t.Errorf("a write whose requester this node cannot compose answered %s %q (%v), want unavailable",
@@ -678,7 +678,7 @@ func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 	// at 3.
 	host, writer := newCodeHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
-	if got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{
+	if got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{
 		"repo": "site", "branch": "seats/agent-cto/fix", "expected_head": mainOID, "commit": "feature",
 	}); got.Failed {
 		t.Fatalf("the revert answered %q", got.Output)
@@ -697,11 +697,11 @@ func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
 	host.moved["refs/heads/seats/agent-cto/fix"] = codeAt(9)
 	reg = codeRegistry(t, writeDeps(host, writer))
 	turn := writerTurn(t)
-	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeResolveTool,
+	if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeResolveTool,
 		map[string]any{"repo": "site", "ref": "seats/agent-cto/fix"}); got.Failed {
 		t.Fatalf("the resolve answered %q", got.Output)
 	}
-	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, map[string]any{"repo": "site",
+	if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, map[string]any{"repo": "site",
 		"branch": "seats/agent-cto/fix", "expected_head": featureOID, "message": "Fix the readme",
 		"files": []any{map[string]any{"op": "put", "path": "README.md", "content": "hello"}},
 	}); got.Failed {
@@ -727,15 +727,15 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
 	turn := writerTurn(t)
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("two"))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("two"))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
 	long := commitArgs("one")
 	// A BRANCH AT ITS LONGEST: refs/heads/ and 244 bytes is the 255 a ref may
 	// be.
 	long["branch"] = "seats/agent-cto/" + strings.Repeat("b", 228)
-	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, long); got.Failed {
+	if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, long); got.Failed {
 		t.Fatalf("a write to a 244-byte branch answered %q", got.Output)
 	}
 	writes, _ := writer.asked()
@@ -804,7 +804,7 @@ func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 	} {
 		args := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(args, c.args)
-		if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args); got.Failed {
+		if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, args); got.Failed {
 			t.Fatalf("a protection naming %v answered %q", c.args, got.Output)
 		}
 		_, lifecycles := writer.asked()
@@ -822,7 +822,7 @@ func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(call, args)
 		_, before := writer.asked()
-		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, call)
+		got := callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, call)
 		if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			len(after) != len(before) {
 			t.Errorf("%s answered %q as %s, with %d requests sent", name, got.Output, tools.RefusalOf(got),
@@ -861,7 +861,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 	// call makes one call and answers it with the requests it sent.
 	call := func(tool string, args map[string]any) (tools.Result, []code.LifecycleRequest) {
 		_, before := writer.asked()
-		got := callWrite(t, everyGrant(), reg, turn, tool, args)
+		got := callWrite(everyGrant(), t, reg, turn, tool, args)
 		_, after := writer.asked()
 		return got, after[len(before):]
 	}
@@ -923,7 +923,7 @@ func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
 	turn := writerTurn(t)
 	call := func(args map[string]any) (tools.Result, []code.LifecycleRequest) {
 		_, before := writer.asked()
-		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeUpdateRepoTool, args)
+		got := callWrite(everyGrant(), t, reg, turn, builtin.CodeUpdateRepoTool, args)
 		_, after := writer.asked()
 		return got, after[len(before):]
 	}
@@ -1019,7 +1019,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		return lifecycles[len(lifecycles)-1].Protect
 	}
 
-	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{
+	got := callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, map[string]any{
 		"repo": "site", "pattern": "refs/heads/main", "direct_push": "none", "merge_by": "persons",
 		"checks": map[string]any{"add": []any{"unit"}, "remove": []any{"e2e"}}, "landing": map[string]any{"depth": 2},
 		"owners_approve": false,
@@ -1052,11 +1052,11 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	}
 
 	// NAMING NO GATE FIELD sends no change; remove_gate sends the removal.
-	if callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
+	if callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
 		"pattern": "refs/heads/main", "direct_push": "none"}).Failed || sent().Gate != nil {
 		t.Errorf("a protection naming no gate field sent the gate change %+v, want none", sent().Gate)
 	}
-	if callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
+	if callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
 		"pattern": "refs/heads/main", "remove_gate": true}).Failed ||
 		!reflect.DeepEqual(sent().Gate, &code.GateChange{Remove: true}) {
 		t.Errorf("a protection removing its gate sent the gate change %+v, want its removal", sent().Gate)
@@ -1073,7 +1073,7 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(call, args)
 		_, before := writer.asked()
-		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, call)
+		got := callWrite(everyGrant(), t, reg, turn, builtin.CodeProtectBranchTool, call)
 		if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			len(after) != len(before) {
 			t.Errorf("%s answered %q as %s, with %d requests sent", name, got.Output, tools.RefusalOf(got),
@@ -1122,7 +1122,7 @@ func TestTheWriteToolsFollowARename(t *testing.T) {
 	reg := codeRegistry(t, writeDeps(host, writer))
 	args := commitArgs("hello")
 	args["repo"] = "site-old"
-	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCommitFilesTool, args)
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommitFilesTool, args)
 	var answer map[string]any
 	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil || got.Failed {
 		t.Fatalf("the write answered %q", got.Output)
@@ -1169,7 +1169,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 				Result: code.ResultNG, Reason: refusal, Detail: "the " + string(refusal) + " sentence"}}, nil
 		}}
 		reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
-		got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCommitFilesTool, commitArgs("x"))
+		got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommitFilesTool, commitArgs("x"))
 		class := tools.RefusalOf(got)
 		switch {
 		case !got.Failed:
@@ -1193,7 +1193,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
 			return code.EngineWriteResult{Refusal: refusal, Detail: "the change's sentence"}, nil
 		}}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 			t.Errorf("a change refused %s answered %q as %s, want invalid", refusal, got.Output, tools.RefusalOf(got))
@@ -1209,7 +1209,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{life: func(code.LifecycleRequest) (code.LifecycleResult, error) {
 			return code.LifecycleResult{Refusal: refusal, Detail: "the request's sentence"}, nil
 		}}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 			builtin.CodeDeleteRepoTool, map[string]any{"repo": "site"})
 		if !got.Failed || tools.RefusalOf(got) != lifeWant[refusal] {
 			t.Errorf("a request refused %s answered %q as %s, want %s", refusal, got.Output, tools.RefusalOf(got),
@@ -1240,7 +1240,7 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
 			return code.EngineWriteResult{}, c.err
 		}}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 			builtin.CodeCommitFilesTool, commitArgs("x"))
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable || tools.UnknownOf(got) != c.unknown {
 			t.Errorf("%s: answered %q (unknown %v), want an unavailable answer with unknown %v", c.name,
@@ -1251,7 +1251,7 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Command: code.Command{Ref: w.Ref,
 			Result: code.ResultNG, Reason: code.RefusalUnknown}}, nil
 	}}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 		builtin.CodeCommitFilesTool, commitArgs("x"))
 	if !got.Failed || !errors.Is(got.Cause, tools.ErrOutcomeUnknown) {
 		t.Errorf("a push whose outcome is unknown answered %q, %v", got.Output, got.Cause)
@@ -1387,7 +1387,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 				}
 			}
 			reg := codeRegistry(t, writeDeps(host, writer))
-			got := callWrite(t, everyGrant(), reg, turn, name, args)
+			got := callWrite(everyGrant(), t, reg, turn, name, args)
 			if got.Failed {
 				t.Fatalf("%s answered %q", name, got.Output)
 			}
@@ -1413,7 +1413,7 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 	// ItNamesBeforeItsRequest), never by the repository's id — and an
 	// operator holds nothing.
 	turn := writerTurn(t)
-	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})), turn,
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})), turn,
 		builtin.CodeCommitFilesTool, commitArgs("x"))
 	if held := turn.Holds.IDs(); slices.Contains(held, siteID) {
 		t.Errorf("a write to a project repository held the repository: %v", held)
@@ -1457,7 +1457,7 @@ func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
 			t.Parallel()
 			host, writer := scratchHost(c.idle), &codeWrites{life: c.answer}
 			turn := writerTurn(t)
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn,
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn,
 				builtin.CodeCommitFilesTool, map[string]any{"repo": "agent-cto.lab", "branch": "fix",
 					"expected_head": mainOID, "message": "m",
 					"files": []any{map[string]any{"op": "delete", "path": "a"}}})
@@ -1521,7 +1521,7 @@ func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
 			turn := writerTurn(t)
 			turn.RunID, turn.WorkKey, turn.WorkSince = statelog.NewOpID(c.began, ""), "wk-parked", c.began
 			turn.RebasedTo = c.rebasedTo
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(scratchHost(30*24*time.Hour), writer)),
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(scratchHost(30*24*time.Hour), writer)),
 				turn, builtin.CodeCommitFilesTool, map[string]any{"repo": "agent-cto.lab", "branch": "fix",
 					"expected_head": mainOID, "message": "m",
 					"files": []any{map[string]any{"op": "delete", "path": "a"}}})

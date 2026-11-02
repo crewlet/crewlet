@@ -66,7 +66,7 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(suggestedChange())
 	writer := &codeWrites{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeApplySuggestionsTool, applyArgs(suggestedA, suggestedB))
 	writes, _ := writer.asked()
 	_, converses := writer.changesAsked()
@@ -108,7 +108,7 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 		"one on the old side":          {suggestsOld, tools.RefusalInvalid},
 	} {
 		writer := &codeWrites{}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(suggestedChange()), writer)),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(suggestedChange()), writer)),
 			writerTurn(t), builtin.CodeApplySuggestionsTool, applyArgs(suggestedA, c.finding))
 		writes, _ := writer.asked()
 		_, converses := writer.changesAsked()
@@ -122,7 +122,7 @@ func TestAnAppliedSuggestionResolvesItsFindingAsAStep(t *testing.T) {
 		return code.EngineWriteResult{Refusal: code.WriteSuggestionOutdated,
 			Detail: "finding " + suggestedA + "'s lines 3 to 3 of a.txt changed since they were read"}, nil
 	}}
-	got = callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(suggestedChange()), outdated)),
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(suggestedChange()), outdated)),
 		writerTurn(t), builtin.CodeApplySuggestionsTool, applyArgs(suggestedA))
 	if _, answers := outdated.changesAsked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalStaleVersion ||
 		!strings.Contains(got.Output, suggestedA) || len(answers) != 0 {

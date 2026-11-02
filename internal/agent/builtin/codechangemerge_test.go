@@ -47,7 +47,7 @@ func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 	}}
 	args := mergeArgs()
 	args["method"] = "squash"
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 		writerTurn(t), builtin.CodeMergeChangeTool, args)
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalNotReady {
 		t.Fatalf("a gate the change does not meet answered %q as %s, want not_ready", got.Output,
@@ -87,7 +87,7 @@ func TestAQueuedMergeAnswersItsPosition(t *testing.T) {
 	deps.Tasks, deps.Closer = closer, closer.as
 	args := mergeArgs()
 	args["close_task"] = true
-	got := callWrite(t, everyGrant(), codeRegistry(t, deps), writerTurn(t), builtin.CodeMergeChangeTool, args)
+	got := callWrite(everyGrant(), t, codeRegistry(t, deps), writerTurn(t), builtin.CodeMergeChangeTool, args)
 	if got.Failed {
 		t.Fatalf("the queued merge answered %q", got.Output)
 	}
@@ -129,7 +129,7 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 			deps.Tasks, deps.Closer = closer, closer.as
 			args := mergeArgs()
 			args["close_task"] = true
-			got := callWrite(t, everyGrant(), codeRegistry(t, deps), writerTurn(t), builtin.CodeMergeChangeTool,
+			got := callWrite(everyGrant(), t, codeRegistry(t, deps), writerTurn(t), builtin.CodeMergeChangeTool,
 				args)
 			if got.Failed {
 				t.Fatalf("the merge answered %q", got.Output)
@@ -230,7 +230,7 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 		return code.ReadAnswer{Queue: []code.QueueRow{{EntryID: siteEntryID, ChangeID: siteChangeID}}}, nil
 	}
 	writer := &codeWrites{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})
 	if got.Failed {
 		t.Fatalf("the dequeue answered %q", got.Output)
