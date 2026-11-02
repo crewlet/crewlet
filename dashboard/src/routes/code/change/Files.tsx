@@ -37,7 +37,7 @@ import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } fro
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import {
   CATEGORY_CHOICES,
@@ -54,7 +54,9 @@ import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/rev
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
+  CodeChangeAnswer,
   CodeChangeDetail,
   CodeCommentRow,
   CodeDiffFile,
@@ -85,6 +87,13 @@ function numberOn(line: DiffLine, side: "old" | "new"): number | null {
   return line.kind === "add" ? null : line.before;
 }
 
+// A PAGE OF A REVISION'S FILES, as `usePaged` reads it: its files, each by its
+// path (base64 where git cannot spell it as text), and the cursor to the next.
+// MODULE CONSTANTS, so the list is the same list until a page arrives.
+const filesOf = (a: CodeChangeAnswer): readonly CodeDiffFile[] => a.diff?.files ?? [];
+const fileId = (f: CodeDiffFile): string => f.path_b64 ?? f.path;
+const nextOf = (a: CodeChangeAnswer): string => a.next ?? "";
+
 /** One finding as its revision places it: raised here, moved, outdated or gone. */
 interface Placed {
   finding: CodeFindingRow;
@@ -108,16 +117,33 @@ export function Files({ change }: { change: CodeChangeDetail }) {
   const sinceAsked = wholeParam(sinceParam);
   const since = sinceAsked !== null && sinceAsked < rev ? sinceAsked : null;
   const file = fileParam || threadRoot?.anchor?.path || "";
-  const files = useChangePart(change, "files", {
-    revision: rev,
-    ...(since !== null ? { since_revision: since } : {}),
-  });
+  // THE REVISION'S FILES, EVERY PAGE THE READER ASKS FOR: a revision of a
+  // large change lists past one answer (a few hundred files a page), and each
+  // later page is the `files` part's own question from the cursor the page
+  // before ended at, joined to it (`lib/usePaged.ts`).
+  const filesParams = useMemo(
+    () =>
+      changePartParams({ repo: change.repo, number: change.number }, "files", {
+        revision: rev,
+        ...(since !== null ? { since_revision: since } : {}),
+      }),
+    [change.repo, change.number, rev, since],
+  );
+  const files = useCodeQuery("code_change", filesParams, { pollMs: CHANGE_POLL_MS });
+  const pagedFiles = usePaged(
+    files,
+    filesParams,
+    (cursor) => codeRest.query("code_change", { ...filesParams, cursor }),
+    filesOf,
+    fileId,
+    nextOf,
+  );
   const findings = useChangePart(change, "findings", { revision: rev });
   // A FINDING IS DRAFTED ON THE HEAD, read whole: the lines a review of the
   // head judges, never an interdiff's or an earlier revision's.
   const drafting = rev === change.revision && since === null && changeLive(change.state);
   const drafts = useReviewDrafts(change.id, rev);
-  const listed = files.data?.diff?.files ?? [];
+  const listed = pagedFiles.items;
   const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
   return (
     <Stack gap={3}>
@@ -172,7 +198,7 @@ export function Files({ change }: { change: CodeChangeDetail }) {
         detail={files.detail}
         loading={files.loading && !files.data}
         empty={
-          files.data && listed.length === 0
+          files.data && listed.length === 0 && !pagedFiles.more
             ? {
                 title: "No file changed",
                 hint: "This revision changes nothing against what it is compared with.",
@@ -181,24 +207,39 @@ export function Files({ change }: { change: CodeChangeDetail }) {
         }
       >
         <div className="code-files">
-          <ul className="code-files__list" aria-label="Files changed">
-            {listed.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className="code-files__file"
-                  aria-current={f.path === file || undefined}
-                  onClick={() => setFile(f.path)}
+          <Stack gap={2}>
+            <ul className="code-files__list" aria-label="Files changed">
+              {listed.map((f) => (
+                <li key={fileId(f)}>
+                  <button
+                    type="button"
+                    className="code-files__file"
+                    aria-current={f.path === file || undefined}
+                    onClick={() => setFile(f.path)}
+                  >
+                    <span className="mono">{f.path}</span>{" "}
+                    <span className="muted">
+                      {f.status} +{f.added} −{f.deleted}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {pagedFiles.more && (
+              <span>
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={pagedFiles.next}
+                  disabled={pagedFiles.paging}
+                  loading={pagedFiles.paging}
                 >
-                  <span className="mono">{f.path}</span>{" "}
-                  <span className="muted">
-                    {f.status} +{f.added} −{f.deleted}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {files.data?.next && <p className="muted">More files changed than one page lists.</p>}
+                  Load more files
+                </Button>
+              </span>
+            )}
+            {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
+          </Stack>
           {file ? (
             <FileDiff
               change={change}

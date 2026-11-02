@@ -7789,7 +7789,8 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   under it, each revision pushed — never by a clock a node read, with the
   reader's own comment below. **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
-  engine's interdiff) and one file's patch (`file=`) as git wrote it, read
+  engine's interdiff), a page at a time — **Load more files** asks the page
+  after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read
   into the one `DiffView` and drawn `layout=unified` or `split` — a patch
   past one answer a page at a time, **Load more lines** asking the page
   after from the cursor the last one ended at, and the hunks drawn from every

@@ -134,12 +134,16 @@ const changeAsked: URL[] = [];
 /**
  * The engine: its reads by part, and each act recorded and answered as
  * `answer` says — a file's patch as `patch`'s pages, page n answered from the
- * cursor `p:<n>`, as the engine cuts one at a line.
+ * cursor `p:<n>`, as the engine cuts one at a line, and a revision's files as
+ * `files`' pages, page n answered from the cursor `f:<n>`.
  */
 function stubEngine(
   change: Record<string, unknown>,
   answer: () => Promise<Response> | Response,
   patch: readonly string[] = [PATCH],
+  files: readonly (readonly Record<string, unknown>[])[] = [
+    [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
+  ],
 ) {
   const acted: Acted[] = [];
   vi.stubGlobal(
@@ -201,17 +205,19 @@ function stubEngine(
       if (url.pathname !== "/query/code_change") return json({}, 404);
       changeAsked.push(url);
       const page = { position: POSITION, level: "session" };
-      const patchPage = Number((url.searchParams.get("cursor") ?? "p:0").slice(2));
+      // THE PAGE A CURSOR NAMES, a patch's (`p:<n>`) or a listing's (`f:<n>`).
+      const pageAt = Number((url.searchParams.get("cursor") ?? "p:0").slice(2));
       switch (url.searchParams.get("part")) {
         case "files":
           return json({
             ...page,
+            ...(pageAt + 1 < files.length ? { next: `f:${pageAt + 1}` } : {}),
             revision: 2,
             diff: {
               base: HEAD,
               head: HEAD,
-              files: [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
-              total: 1,
+              files: files[pageAt],
+              total: files.flat().length,
               added: 1,
               deleted: 1,
             },
@@ -219,7 +225,7 @@ function stubEngine(
         case "diff":
           return json({
             ...page,
-            ...(patchPage + 1 < patch.length ? { next: `p:${patchPage + 1}` } : {}),
+            ...(pageAt + 1 < patch.length ? { next: `p:${pageAt + 1}` } : {}),
             revision: 2,
             diff: {
               base: HEAD,
@@ -228,7 +234,7 @@ function stubEngine(
               total: 1,
               added: 1,
               deleted: 1,
-              patch: patch[patchPage],
+              patch: patch[pageAt],
             },
           });
         case "findings":
@@ -389,6 +395,36 @@ test("a change's patch past one page draws the rest of its hunks when the reader
   const second = changeAsked.find((u) => u.searchParams.get("cursor") === "p:1");
   expect(second?.searchParams.get("part")).toBe("diff");
   expect(second?.searchParams.get("file")).toBe("app.go");
+  expect(second?.searchParams.get("revision")).toBe("2");
+});
+
+// A REVISION'S FILES ARE LISTED A PAGE AT A TIME, ALL OF THEM: Load more
+// files asks the `files` part from the cursor the page before ended at, at
+// the same revision, and the files it lists open like any other. Mutation:
+// draw the first page alone, or ask the next without its cursor, and this
+// fails.
+test("a change's files past one page are listed when the reader asks", async () => {
+  changeAsked.length = 0;
+  stubEngine(
+    detail(),
+    () => json({ outcome: "applied" }),
+    [PATCH],
+    [
+      [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
+      [{ path: "z.go", status: "A", added: 2, deleted: 0 }],
+    ],
+  );
+  mount("#/code/repos/web/changes/42?tab=files");
+
+  const list = await screen.findByRole("list", { name: "Files changed" });
+  expect(await within(list).findByRole("button", { name: /app\.go/ })).toBeTruthy();
+  expect(within(list).queryByRole("button", { name: /z\.go/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load more files" }));
+
+  expect(await within(list).findByRole("button", { name: /z\.go/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load more files" })).toBeNull();
+  const second = changeAsked.find((u) => u.searchParams.get("cursor") === "f:1");
+  expect(second?.searchParams.get("part")).toBe("files");
   expect(second?.searchParams.get("revision")).toBe("2");
 });
 

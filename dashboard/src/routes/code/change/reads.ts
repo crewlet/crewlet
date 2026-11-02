@@ -6,6 +6,11 @@
  * ReadQuery.Limit`: two hundred comments, reviews or findings): a change's
  * conversation past that is rare, and where a page carries a cursor the tab
  * that draws it SAYS that more exist rather than drawing a page as the whole.
+ * A revision's FILES and a file's PATCH are not rare past one page — a large
+ * change lists hundreds of files, and a generated file's patch runs to many
+ * pages — so the Files tab follows both past their first page as the reader
+ * asks (`Files.tsx`, through [changePartParams], so a later page asks its
+ * first page's question).
  */
 
 import { useMemo } from "react";
