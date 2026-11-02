@@ -688,6 +688,45 @@ test("a seat working on an answer is drawn under the message it is answering", a
   ).not.toBeNull();
 });
 
+test("a seat a person's message waits behind is drawn queued, still, where the reply will land", async () => {
+  // THE KIT'S QUEUED INDICATOR: the words say what the message waits behind,
+  // and the mark rests, so a person can tell a reply on its way from one that
+  // has not started. Under the message it answers, and in the footer for a
+  // message with no thread.
+  const { store } = mount();
+  await screen.findByText("line 2");
+  store.applyChatPresence(
+    present(
+      {
+        seat: "bo",
+        kind: "agent",
+        activity: "editing",
+        focus: { thread: "m-2" },
+        status: "is queued behind its current task",
+        queued: true,
+      },
+      {
+        seat: "eve",
+        kind: "agent",
+        activity: "editing",
+        status: "is queued behind 2 tasks",
+        queued: true,
+      },
+    ),
+  );
+  await waitFor(() =>
+    expect(document.querySelector('[data-message-id="m-2"]')?.textContent).toContain(
+      "bo is queued behind its current task",
+    ),
+  );
+  expect(
+    document.querySelector('[data-message-id="m-2"] .crewlet-thinking--queued'),
+  ).not.toBeNull();
+  const footer = document.querySelector(".crewlet-activity-line");
+  expect(footer?.textContent).toContain("eve is queued behind 2 tasks");
+  expect(footer?.querySelector(".crewlet-thinking--queued")).not.toBeNull();
+});
+
 test("a person's message names the person, never the kind it was stored under", async () => {
   // EVERY MESSAGE A PERSON WRITES is stored under the seat they hold with the
   // kind `human` (`iam.ActorFor`), so a tag for that kind would put "human"

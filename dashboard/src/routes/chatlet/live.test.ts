@@ -16,7 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { Store, type ChatChange, type RoomMember } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
-import { chatRoomPresence, framesSince, useChatFrames } from "./live.ts";
+import { chatRoomPresence, framesSince, useChatFrames, workingLine } from "./live.ts";
 
 function change(channel: string, op: string): ChatChange {
   return {
@@ -152,6 +152,45 @@ describe("a chat room's members, as its screen draws them", () => {
       { handle: "bo", thread: undefined, status: undefined },
     ]);
     expect(view.viewing).toEqual([]);
+  });
+
+  test("a seat whose line is about a waiting message is drawn queued", () => {
+    // QUEUED, NOT WORKING: the line says what the person's message waits
+    // behind, and the room draws it still. A seat at work carries no flag.
+    const view = chatRoomPresence({
+      members: [
+        member({
+          session: "b1",
+          seat: "bo",
+          kind: "agent",
+          activity: "editing",
+          focus: { thread: "m-2" },
+          status: "is queued behind its current task",
+          queued: true,
+        }),
+        member({
+          session: "e1",
+          seat: "eve",
+          kind: "agent",
+          activity: "editing",
+          status: "is reading the thread",
+        }),
+      ],
+    });
+    expect(view.working).toEqual([
+      { handle: "bo", thread: "m-2", status: "is queued behind its current task", queued: true },
+      { handle: "eve", thread: undefined, status: "is reading the thread" },
+    ]);
+  });
+
+  test("a queued seat with no words says it is queued, never that it is working", () => {
+    expect(workingLine("Bo", { handle: "bo", queued: true }, "is writing a reply")).toBe(
+      "Bo is queued",
+    );
+    expect(workingLine("Bo", { handle: "bo" }, "is writing a reply")).toBe("Bo is writing a reply");
+    expect(
+      workingLine("Bo", { handle: "bo", queued: true, status: "is queued behind 2 tasks" }, "x"),
+    ).toBe("Bo is queued behind 2 tasks");
   });
 
   test("a room nobody is in draws nothing", () => {
