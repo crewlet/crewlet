@@ -215,7 +215,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 
 // suiteWrite is one write through the domain's own production writer, which is
 // where the framework's stamp is kept or lost: a turn's end, which needs no
-// object uploaded first.
+// object uploaded first — one that says its turn's newest capture was not kept,
+// so the field the end's apply decides on is written, stamped and applied by
+// the framework the conformance suite certifies.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := executordomain.NewWriter(executordomain.WriterDeps{Publisher: pub, DB: db})
 	if err != nil {
@@ -226,7 +228,8 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "suite"),
 	}, executordomain.NewEnd{
 		Handle: "suite-seat", Turn: uuid.NewString(), ConversationKey: suiteConversation,
-		Ask: "Suite", Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+		Ask: "Suite", Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted,
+			Unkept: &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "suite: not kept"}},
 	})
 	return err
 }

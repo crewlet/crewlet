@@ -59,7 +59,11 @@
 //     launch's read of the conversation handed out ([Head.Absorbs], which the
 //     turn's captures carry), and DEDUPES on a non-empty work key, merging
 //     what the older attempt delivered. The end is authoritative for the
-//     turn's work key where its captures carried none.
+//     turn's work key where its captures carried none. And where the turn's
+//     newest capture was NOT KEPT ([Ending.Unkept]: refused, or never
+//     answered) and the row names an older one, the row's object goes: that
+//     session does not hold what the turn did after it, and the next turn
+//     starts fresh, told why, rather than continuing it as the turn's last.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a

@@ -57,8 +57,10 @@ func engineCall(opID string) executordomain.Call {
 // fullEnding is an ending with every field set.
 func fullEnding() executordomain.Ending {
 	return executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
-		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "shipped",
-		BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough", Failure: "a guard"}
+		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", DeliveryUnknown: true,
+		CompletedWork: "shipped", BlockedOn: "a review", StoppedBy: "jane", StopReason: "enough",
+		Failure: "a guard",
+		Unkept:  &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "refused for space"}}
 }
 
 // sessionOf is one turn's row with every field set, so a field the wire
