@@ -1542,13 +1542,37 @@ const (
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
 	// initial load did not grow. 5385 KiB.
+	// A team's MCP limits in the Remove dialog (each seat's and unit's
+	// mcp_limits block a removal clears, listed and counted with the other
+	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
+	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
+	// load does not fetch. 5386 KiB.
+	// Settings › MCP & tools' grants, levels, approvals and changed tools
+	// (the Access tab and its grant picker with each agent's team limits, the
+	// Tools tab's levels, default and held-back marks, the Agent access view,
+	// the wizard's Who gets it and Tool approvals steps, the calls held for
+	// approval on a server's page, the review of a server's changed tools)
+	// and a held call answered from the Inbox's decision row took it from
+	// 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and
+	// its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code
+	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
+	// row's +1.4 KiB (the held call's answers and row). The initial load did
+	// not grow. 5423 KiB.
+	// Signing MCP servers in with OAuth and client credentials (the Sign in
+	// and Revoke dialogs, the Connection tab's sign-in card, a client's
+	// secret named as one, the sign-in alarm opening the dialog, and the
+	// wizard's OAuth and client-credentials choices) took it from 5422.9 KiB
+	// to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet
+	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
+	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
+	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
 	// A session's row saying whether, and where, a relaunch would continue it
 	// (the sentence under its account for a session continued in any box,
 	// only in the box its run parked in, not at all, or not decidable now)
-	// took it from 5384.9 KiB to 5385.6 KiB (+0.7 KiB), all of it the agents
-	// chunk the view loads in (+245 bytes gzipped). The initial load did not
-	// grow. 5386 KiB.
-	treeBudget = 5<<20 + 266<<10
+	// took it from 5436.1 KiB to 5436.8 KiB (+0.7 KiB, 700 bytes), all of it
+	// the agents chunk the view loads in (+252 bytes gzipped), under 5437
+	// KiB. The initial load did not grow. 5437 KiB.
+	treeBudget = 5<<20 + 317<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

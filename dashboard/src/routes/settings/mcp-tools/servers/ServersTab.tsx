@@ -33,7 +33,7 @@ import {
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
-import { plural } from "~/lib/format.ts";
+import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "../data.ts";
 import {
   LastError,
@@ -114,7 +114,15 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
   const notRunning = enabled.length - running;
   const tools = servers.reduce((n, s) => n + s.tools, 0);
   const refused = servers.reduce((n, s) => n + s.refused_count, 0);
-  const attention = data.alarms.reduce((n, a) => n + a.entries.length, 0);
+  // WHAT WAITS ON AN ADMINISTRATOR: the calls held for an answer, and the
+  // servers whose changed tools wait for a review (the engine's alarm on each).
+  const waiting =
+    data.answer?.reading === "admin"
+      ? data.answer.approvals.filter((a) => a.status === "waiting").length
+      : 0;
+  const changed = data.alarms
+    .filter((a) => a.kind === "mcp_tools_changed")
+    .reduce((n, a) => n + a.entries.length, 0);
   return (
     <>
       {/* One line: the page already shows a reader with no actions what
@@ -154,17 +162,28 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
             sub={refused > 0 ? `${refused} not offered` : "every one offered"}
             subTone={refused > 0 ? "warning" : undefined}
           />
-          {/* What the engine's alarms ask of an administrator: a member is
-              answered none, so the figure is not theirs to read. */}
+          {/* Calls and changes wait on an administrator: a member answers
+              neither, so the figure is not theirs to read. */}
           {admin ? (
             <StatCard
               icon={
-                attention > 0 ? <TriangleAlertGlyph size="xs" /> : <ShieldCheckGlyph size="xs" />
+                waiting + changed > 0 ? (
+                  <TriangleAlertGlyph size="xs" />
+                ) : (
+                  <ShieldCheckGlyph size="xs" />
+                )
               }
-              label="Needs attention"
-              value={attention}
-              sub={attention === 0 ? "no alarm standing" : `${plural(attention, "alarm")} standing`}
-              subTone={attention > 0 ? "warning" : undefined}
+              label="Waiting on you"
+              value={waiting + changed}
+              sub={
+                waiting + changed === 0
+                  ? "no call or change to review"
+                  : listed([
+                      ...(waiting ? [`${plural(waiting, "call")} to approve`] : []),
+                      ...(changed ? [`changed tools on ${plural(changed, "server")}`] : []),
+                    ])
+              }
+              subTone={waiting + changed > 0 ? "warning" : undefined}
             />
           ) : null}
         </StatGroup>

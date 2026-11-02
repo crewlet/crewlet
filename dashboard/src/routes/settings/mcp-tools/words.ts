@@ -12,19 +12,25 @@
 
 import type {
   McpAlarmKind,
+  McpApproval,
   McpAuth,
   McpAuthMethod,
   McpCallOutcome,
   McpFailureClass,
   McpFixKind,
   McpInstanceState,
+  McpOAuthClient,
+  McpOAuthStatus,
+  McpReach,
+  McpReachReason,
   McpRisk,
   McpServerState,
   McpStepState,
   McpTestStage,
+  McpToolLevel,
 } from "~/contract/mcp.ts";
 import type { StepState } from "@crewlethq/ui";
-import type { BuiltinGate } from "~/contract/tools.ts";
+import type { BuiltinGate, ToolAnnotations } from "~/contract/tools.ts";
 import { managedSentence, unsettledSentence } from "~/protocol/configAnswer.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
@@ -91,13 +97,87 @@ export const STAGE_STATE: Record<McpStepState, StepState> = {
   not_reached: "pending",
 };
 
+/**
+ * A way a server is signed in to, as the wizard offers it: the catalogue's
+ * methods, and a service identity, which the engine reads as `oauth` with
+ * `grant: client_credentials`.
+ */
+export type SignInChoice = McpAuthMethod | "client_credentials";
+
 /** A sign-in method in a few words, for a card, a fact or a sentence. */
-export const SIGN_IN: Record<McpAuthMethod, { label: string; noun: string }> = {
+export const SIGN_IN: Record<SignInChoice, { label: string; noun: string }> = {
   integration: { label: "Integration", noun: "an integration" },
   oauth: { label: "OAuth", noun: "OAuth" },
   headers: { label: "Header", noun: "a header" },
+  client_credentials: { label: "Client credentials", noun: "client credentials" },
   none: { label: "None", noun: "no sign-in" },
 };
+
+/** Where a server's OAuth sign-in is, in a word, the tone its tag wears. */
+export const OAUTH_STATUS: Record<McpOAuthStatus, { label: string; tone: Tone }> = {
+  connected: { label: "Connected", tone: "success" },
+  needs_sign_in: { label: "Needs sign-in", tone: "warning" },
+  expired: { label: "Expired", tone: "warning" },
+  refresh_failed: { label: "Renewal refused", tone: "danger" },
+};
+
+/**
+ * How the engine registers for a person's sign-in: as a choice (`label`, its
+ * `detail`), and inside a sentence (`noun`).
+ */
+export const OAUTH_CLIENT: Record<McpOAuthClient, { label: string; detail: string; noun: string }> =
+  {
+    cimd: {
+      label: "Published identity",
+      detail: "No registration at the vendor",
+      noun: "Crewlet's published identity",
+    },
+    dcr: {
+      label: "Register automatically",
+      detail: "A client is created on the first sign-in",
+      noun: "a client registered automatically",
+    },
+    own: {
+      label: "Your own client",
+      detail: "An app you registered there",
+      noun: "the company's own client",
+    },
+  };
+
+/** The client a sign-in registers as, in a sentence; "" for one this build does not name. */
+export function clientNoun(client: string): string {
+  return client in OAUTH_CLIENT ? OAUTH_CLIENT[client as McpOAuthClient].noun : "";
+}
+
+/**
+ * What giving a sign-in up did at the vendor, as its toast. The engine has
+ * forgotten the grant whatever the vendor said, so each is a sign-out.
+ */
+export function signOutWords(
+  title: string,
+  out: { revocation: "revoked" | "not_offered" | "failed"; said: string },
+): { variant: "success" | "warning"; title: string; message: string } {
+  switch (out.revocation) {
+    case "revoked":
+      return {
+        variant: "success",
+        title: `${title}'s sign-in revoked`,
+        message: "Its tools stop answering until somebody signs in again.",
+      };
+    case "not_offered":
+      return {
+        variant: "success",
+        title: `Signed out of ${title}`,
+        message: `${title} offers no way to revoke a grant, so it lapses there on its own. The engine has forgotten it.`,
+      };
+    case "failed":
+      return {
+        variant: "warning",
+        title: `Signed out of ${title}, not revoked there`,
+        message: `${out.said ? `${title} said: ${out.said} ` : ""}The engine has forgotten the grant; revoke it at ${title} as well.`,
+      };
+  }
+}
 
 /** How a call ended. */
 export const OUTCOME: Record<McpCallOutcome, { label: string; tone: Tone }> = {
@@ -349,9 +429,9 @@ export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",
   edit: "Change its prefix",
-  sign_in: "See its sign-in",
-  approve: "Open the Inbox",
-  review: "Review the changes",
+  sign_in: "Sign in",
+  approve: "Answer it",
+  review: "Review",
 };
 
 /**
@@ -392,4 +472,122 @@ export function writeRefusalWords(
     case "problems":
       return outcome.problems.map((p) => p.message).join(" ");
   }
+}
+
+/**
+ * A tool's level in words: the select's label, and the tone a level wears
+ * where it is a fact rather than a setting.
+ */
+export const LEVEL: Record<McpToolLevel, { label: string; tone: Tone }> = {
+  allow: { label: "Always allow", tone: "success" },
+  approve: { label: "Needs approval", tone: "warning" },
+  blocked: { label: "Blocked", tone: "danger" },
+};
+
+/** The levels in the order every picker lists them. */
+export const LEVELS: readonly McpToolLevel[] = ["allow", "approve", "blocked"];
+
+/**
+ * A server with no default of its own: each tool it does not name starts at
+ * the level the engine reads off its hints.
+ */
+export const BASELINE = {
+  hints: {
+    label: "By each tool's hints",
+    detail: "Read-only tools run, and every other tool asks first.",
+  },
+} as const;
+
+/** Why a server reaches an agent, in a few words. */
+export const REASON: Record<McpReachReason, string> = {
+  every_agent: "Every agent",
+  unit: "Through its team",
+  seat: "Granted to it",
+  integration: "On at its integration",
+};
+
+/**
+ * One agent's reason in words, naming the team a unit grant came through:
+ * the nearest unit the grant names, which may be above the agent's own.
+ */
+export function reasonWords(reach: McpReach, units: ReadonlyMap<string, string>): string {
+  if (reach.reason === "unit" && reach.via) return `Through ${units.get(reach.via) ?? reach.via}`;
+  return REASON[reach.reason];
+}
+
+/**
+ * What a team lead's limits hold a server to for one agent, in a line: off
+ * for it, or how many of its tools are held back, naming the team whose
+ * limit does it (the agent's own block where the engine names no team).
+ * "" where nothing narrows it.
+ */
+export function limitWords(
+  limited: McpReach["limited"],
+  units: ReadonlyMap<string, string>,
+): string {
+  if (!limited) return "";
+  const who = (key: string | null) => (key ? `${units.get(key) ?? key}'s lead` : "its lead");
+  if (limited.off) return `Turned off for it by ${who(limited.off_by)}`;
+  if (limited.tools.length === 0) return "";
+  const by = [...new Set(limited.tools.map((t) => t.by))];
+  return `${limited.tools.length === 1 ? "1 tool" : `${limited.tools.length} tools`} held back by ${by.map(who).join(" and ")}`;
+}
+
+/** A held call's answer in a word, and the tone its tag wears. */
+export function approvalWords(a: Pick<McpApproval, "status" | "answer">): {
+  label: string;
+  tone: Tone;
+} {
+  if (a.status === "waiting") return { label: "Waiting", tone: "warning" };
+  switch (a.answer) {
+    case "once":
+      return { label: "Allowed once", tone: "success" };
+    case "always":
+      return { label: "Always allowed", tone: "success" };
+    case "deny":
+      return { label: "Denied", tone: "danger" };
+    default:
+      return { label: "Answered", tone: "neutral" };
+  }
+}
+
+/**
+ * A route's refusal in the sentences a person acts on: each problem the
+ * engine placed (a level naming a tool a box lists, say), else its sentence.
+ */
+export function refusedWords(answer: { sentence: string; body: Record<string, unknown> }): string {
+  const problems = Array.isArray(answer.body.problems) ? answer.body.problems : [];
+  const said = problems
+    .map((p) =>
+      typeof p === "object" &&
+      p !== null &&
+      typeof (p as { message?: unknown }).message === "string"
+        ? (p as { message: string }).message
+        : "",
+    )
+    .filter(Boolean);
+  return said.length > 0 ? said.join(" ") : answer.sentence;
+}
+
+/** What a change to a tool moved, in a word each (`changes[].kinds`). */
+export const CHANGE_KIND: Readonly<Record<string, string>> = {
+  added: "New tool",
+  removed: "Removed",
+  title: "Title",
+  description: "Description",
+  schema: "Arguments",
+  annotations: "Hints",
+};
+
+/** A tool's hints, by the names a person reads them by. */
+export const HINT: Record<keyof ToolAnnotations, string> = {
+  read_only: "Read only",
+  destructive: "Destructive",
+  idempotent: "Idempotent",
+  open_world: "Open world",
+};
+
+/** One hint's value in a word. */
+export function hintWord(v: ToolAnnotations[keyof ToolAnnotations]): string {
+  return v === "yes" ? "Yes" : v === "no" ? "No" : "Not declared";
 }

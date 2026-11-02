@@ -92,6 +92,17 @@ import (
 // change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
 // admin.
 //
+// A LEAD NARROWS AN MCP SERVER AND NEVER WIDENS ONE. A seat's or a unit's
+// `mcp_limits` is its own field, written by whoever leads the place it sits,
+// and a limit only holds a server back ([org.MCPLimits]). Lifting or loosening
+// one is a grant, which is an administrator's: so every agent seat both
+// documents hold is compared as it is held, its own block and every enclosing
+// unit's together ([org.Role.Limits]), and each limit the write lifts or
+// loosens for it is listed apart ([OrgDiff.Widened]) for admin. Compared as
+// held rather than block by block, because a seat is freed of a limit as
+// surely by moving it out of the unit that holds it, or by removing that unit
+// around it, as by editing the block.
+//
 // A REMOVAL TAKES ITS KEYS WITH IT, judged by where the object was and nothing
 // else, and that is the one residual: a lead may remove a sub-team or a seat
 // that declares a project or a space, and what it declared stays in the
@@ -149,6 +160,11 @@ type OrgDiff struct {
 	// value differs, sorted.
 	Settings []string
 
+	// Widened is every MCP limit the write lifts or loosens for an agent
+	// seat both documents hold, by seat, then server, then tool
+	// ([OrgWidening]).
+	Widened []OrgWidening
+
 	// Before and After are the two organizations every place was read in,
 	// so a decision about a place reads the very tree it was found in.
 	Before, After *org.Organization
@@ -197,6 +213,27 @@ type OrgTouch struct {
 	Value string
 }
 
+// OrgWidening is one MCP limit a write lifts or loosens for one agent seat: a
+// server it turned off is on for the seat again, or one of its tools is held
+// to less than it was.
+type OrgWidening struct {
+	// Seat is the agent seat's handle.
+	Seat string
+	// Server is the server's name, and Tool the server's own name for the
+	// tool, "" where the server itself is turned back on.
+	Server, Tool string
+}
+
+// Field is where the limit is, as a refusal names it:
+// `mcp_limits.<server>.enabled` or `mcp_limits.<server>.tools.<tool>`, read as
+// the seat is held, whichever block held it.
+func (w OrgWidening) Field() string {
+	if w.Tool == "" {
+		return "mcp_limits." + w.Server + ".enabled"
+	}
+	return "mcp_limits." + w.Server + ".tools." + w.Tool
+}
+
 // DiffOrg reports what turning before into after changes. A nil before is a
 // document with nothing in it.
 func DiffOrg(before, after *Company) OrgDiff {
@@ -209,7 +246,8 @@ func DiffOrg(before, after *Company) OrgDiff {
 	b, a := survey(before), survey(after)
 	b.rankAgainst(a)
 	a.rankAgainst(b)
-	diff := OrgDiff{Settings: settingsChanged(before, after), Before: b.org, After: a.org}
+	diff := OrgDiff{Settings: settingsChanged(before, after), Before: b.org, After: a.org,
+		Widened: widened(b.org, a.org, after)}
 
 	for _, kind := range []OrgKind{OrgSeat, OrgUnit} {
 		ids := map[string]bool{}

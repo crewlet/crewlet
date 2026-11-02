@@ -746,6 +746,17 @@ type Role struct {
 
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
+	// MCPLimits is this seat's own limits on MCP servers, as written: a
+	// server turned off, a tool held to approve or blocked ([MCPLimits]).
+	MCPLimits MCPLimits `yaml:"mcp_limits,omitempty" json:"mcp_limits,omitempty"`
+
+	// Limits is what this agent seat's own `mcp_limits` and every enclosing
+	// unit's hold it to, per server, the strictest of them
+	// ([Organization.Normalize]); nil for a human seat and for a seat nothing
+	// limits. Derived, and not part of the wire form: read it through
+	// [Role.LimitOn].
+	Limits map[string]ServerLimit `yaml:"-" json:"-"`
+
 	// Sandbox is what this seat's executor box reads beyond the
 	// engine-wide catalogue; nil means it reads only that.
 	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
@@ -929,6 +940,7 @@ func (r *Role) humanForbidden() []string {
 		{"project", r.Project != ""},
 		{"space", r.Space != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},
+		{"mcp_limits", len(r.MCPLimits) > 0},
 		{"behavioral_guidelines", len(r.BehavioralGuidelines) > 0},
 	}
 	var out []string
