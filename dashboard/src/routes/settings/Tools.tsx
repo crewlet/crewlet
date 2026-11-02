@@ -54,6 +54,7 @@ import {
   serversUpLine,
   takenNames,
 } from "~/lib/mcpServers.ts";
+import { MCP_STATUS_POLL_MS } from "~/lib/mcpStatusPoll.ts";
 import { AddMcpServerDialog } from "./AddMcpServerDialog.tsx";
 import { failureLine, McpServers, ServerHeader } from "./McpServers.tsx";
 import { useOrg, useTools } from "~/lib/store-hooks.ts";
@@ -518,16 +519,6 @@ export function emptyOriginReason(
   }
 }
 
-/**
- * How often the servers' status is asked again, in ms.
- *
- * FIFTEEN SECONDS, the Nodes screen's cadence and for its reason: the answer
- * is the lease table, and a poll slower than the presence TTL would show a
- * server running on a node whose lease had already expired. It also bounds
- * how long a server just added reads "not started" after a node applied it.
- */
-const SERVERS_POLL_MS = 15_000;
-
 export function Tools({ server, tool }: { server?: string; tool?: string }) {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
@@ -542,7 +533,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   // THE ADD FORM IS AN ADDRESS (`?add=server`), so Company › Integrations'
   // "Add an MCP server" tile can open it and a reload keeps it open.
   const [adding, setAdding] = useParam("add", "");
-  const status = useQuery("mcp_servers_status", undefined, { pollMs: SERVERS_POLL_MS });
+  const status = useQuery("mcp_servers_status", undefined, { pollMs: MCP_STATUS_POLL_MS });
   const access = useConfigWriteAccess();
   const addressedStatus = useMemo(
     () => (server ? (status.data?.servers.find((s) => s.name === server) ?? null) : null),

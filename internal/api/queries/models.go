@@ -81,10 +81,10 @@ type LocalModel struct {
 }
 
 // ModelSource is the engine's half of the model questions: what this node
-// resolved for each entry, and its latest alarm evaluation.
+// resolved for each entry. Its alarms are the node's latest evaluation
+// ([Sources.Alarms]).
 type ModelSource interface {
 	LocalModels() []LocalModel
-	LatestAlarms() []statelog.Alarm
 }
 
 // SecretRows lists the fleet's secret rows, metadata only: when each was
@@ -109,13 +109,14 @@ type ModelCatalogue interface {
 // the span a person looking at a model's page asks "is it used" over.
 const ModelUsageDays = 7
 
-// llmAlarmKinds are the five model alarms (statelog), the ones `llm_entries`
-// carries.
-var llmAlarmKinds = []statelog.Kind{statelog.KindLLMCredentialExpiring,
-	statelog.KindLLMCredentialExpiresSoon, statelog.KindLLMSignInRefused,
-	statelog.KindLLMLimit, statelog.KindLLMLimitWaiting}
+// llmAlarmKinds are the model alarms (statelog's per-entry kinds about one
+// model entry), the ones `llm_entries` carries: read off the table, so a kind
+// it adds is carried, and held to the page's union.
+var llmAlarmKinds = statelog.PerModelKinds()
 
-// ModelReading is which reading of `llm_entries` an answer is.
+// ReadingAdmin and ReadingMember are which reading of a two-reading answer an
+// answer is, named on the answer as `reading`: `llm_entries` ([Sources.llmEntries])
+// and Settings › MCP & tools' ([MCPReading]).
 const (
 	ReadingAdmin  = "admin"
 	ReadingMember = "member"
@@ -402,7 +403,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 		return out, nil
 	}
 	alarms := []ModelsAlarm{}
-	for _, a := range s.Models.LatestAlarms() {
+	for _, a := range s.latestAlarms() {
 		if slices.Contains(llmAlarmKinds, a.Kind) {
 			alarms = append(alarms, a)
 		}
@@ -582,7 +583,7 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 			if e.Waiting == nil {
 				e.Waiting = &ModelWaiting{Seats: []string{}, Since: parked.Since}
 			}
-			handle := instanceSeat(organization, parked.Seat)
+			handle := organization.AgentHandleByID(parked.Seat)
 			if !slices.Contains(e.Waiting.Seats, handle) {
 				e.Waiting.Seats = append(e.Waiting.Seats, handle)
 			}

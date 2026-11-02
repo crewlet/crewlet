@@ -41,9 +41,9 @@ import (
 //
 // # The order each figure grows in
 //
-// Every counter — a spend cell's six figures, a seat's turns, failures,
-// reviewed turns, send-backs, a read entry's count — grows by addition, so it
-// joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
+// Every counter (a spend cell's six figures, a seat's turns, failures,
+// reviewed turns, send-backs, a read entry's count, a tool's calls in each
+// outcome and their time) grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
 // turn back takes it out of them), and what does is its turns with an
 // unaccepted review, so it is that count that joins by max and the first-pass
 // figure is read back from it ([joinTurns]). A turn duration can move UP a bin
@@ -89,7 +89,7 @@ import (
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
-		       duration_hist, last_ended_at, reads_elided
+		       duration_hist, last_ended_at, reads_elided, tools_elided
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -101,6 +101,10 @@ const (
 		SELECT backend, page_id, via, reads, last_at, last_turn_id,
 		       last_work_key, last_query
 		  FROM usage_reads
+		 WHERE day = ? AND node = ? AND agent_id = ?`
+	appliedSeatToolsSQL = `
+		SELECT server, tool, calls, failed, unavailable, refused, total_ms, last_at
+		  FROM usage_tool_calls
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedPersonSQL = `
 		SELECT role, phase, worker, model, provider_key, input, output,
@@ -136,7 +140,8 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			)
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
-				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided); {
+				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
+				&rec.ToolsElided); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -155,7 +160,10 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				s.Day, s.Node, s.Seat); err != nil {
 				return err
 			}
-			rec.Reads, err = appliedReads(ctx, tx, s)
+			if rec.Reads, err = appliedReads(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Tools, err = appliedTools(ctx, tx, s)
 			return err
 		case KindPerson:
 			var err error
@@ -234,6 +242,32 @@ func appliedReads(ctx context.Context, tx *sql.Tx, s Subject) ([]Read, error) {
 	return out, rows.Err()
 }
 
+// appliedTools reads a seat-day's tool calls, in key order.
+func appliedTools(ctx context.Context, tx *sql.Tx, s Subject) ([]ToolCalls, error) {
+	rows, err := tx.QueryContext(ctx, appliedSeatToolsSQL, s.Day, s.Node, s.Seat)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ToolCalls
+	for rows.Next() {
+		var (
+			t    ToolCalls
+			last int64
+		)
+		if err := rows.Scan(&t.Server, &t.Tool, &t.Calls, &t.Failed, &t.Unavailable,
+			&t.Refused, &t.TotalMS, &last); err != nil {
+			return nil, err
+		}
+		if last != 0 {
+			t.LastAt = store.DecodeTime(last)
+		}
+		out = append(out, t)
+	}
+	slices.SortFunc(out, compareToolKey)
+	return out, rows.Err()
+}
+
 // appliedFires reads a schedule-day's fires, in fire order.
 func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	rows, err := tx.QueryContext(ctx, appliedScheduleSQL, s.Day, s.Node, s.ScopeType,
@@ -281,6 +315,8 @@ func Join(derived, applied Record) Record {
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 		out.Reads, out.ReadsElided = joinReads(derived.Reads, derived.ReadsElided,
 			applied.Reads, applied.ReadsElided)
+		out.Tools, out.ToolsElided = joinTools(derived.Tools, derived.ToolsElided,
+			applied.Tools, applied.ToolsElided)
 	case KindPerson:
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
@@ -395,6 +431,50 @@ func joinReads(d []Read, dElided int, a []Read, aElided int) ([]Read, int) {
 	}
 	held := max(len(d)+dElided, len(a)+aElided, len(all))
 	kept, _ := capReads(all)
+	return kept, held - len(kept)
+}
+
+// toolKey is a tool-calls entry's identity within its record.
+type toolKey struct{ server, tool string }
+
+func keyOfTool(t ToolCalls) toolKey { return toolKey{t.Server, t.Tool} }
+
+// compareToolKey is a record's tool order: the server, then the tool, as the
+// store derives them and the estate's key holds them.
+func compareToolKey(a, b ToolCalls) int {
+	return cmp.Or(cmp.Compare(a.Server, b.Server), cmp.Compare(a.Tool, b.Tool))
+}
+
+// joinTools joins two seat-days' tool calls and what each cap dropped, on
+// [joinReads]' terms: every figure of an entry both hold at the larger of the
+// two (each a count that only grows), the newest instant the later one, an
+// entry only the fleet holds kept, and the union capped again by the rule the
+// derivation is ([capTools]).
+func joinTools(d []ToolCalls, dElided int, a []ToolCalls, aElided int) ([]ToolCalls, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[toolKey]int, len(all))
+	for i, t := range all {
+		at[keyOfTool(t)] = i
+	}
+	for _, t := range a {
+		i, ok := at[keyOfTool(t)]
+		if !ok {
+			all = append(all, t)
+			continue
+		}
+		c := &all[i]
+		c.Calls, c.Failed = max(c.Calls, t.Calls), max(c.Failed, t.Failed)
+		c.Unavailable, c.Refused = max(c.Unavailable, t.Unavailable), max(c.Refused, t.Refused)
+		c.TotalMS = max(c.TotalMS, t.TotalMS)
+		if t.LastAt.After(c.LastAt) {
+			c.LastAt = t.LastAt
+		}
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capTools(all)
 	return kept, held - len(kept)
 }
 

@@ -225,18 +225,19 @@ const (
 	// domain's history covers, and the stream forgets a day when the rows
 	// do. So its size is a census rather than a rate. A three-node fleet of
 	// forty seats and twenty schedules is 60 × 3 × 181 ≈ 32 600 messages,
-	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
-	// holds that window four times over, which is room for a fleet to grow
-	// before anybody has to touch the field. Beside the other logs it is
+	// and at a busy seat-day's ≈ 9.5 KiB (6.5 KiB of spend, turns and reads,
+	// and about 150 bytes for each of twenty MCP tools it called) that is
+	// about 320 MB: a gibibyte holds that window three times over, which is
+	// room for a fleet to grow before anybody has to touch the field. Beside the other logs it is
 	// one gibibyte of what every unset ceiling reserves at its smallest
 	// (see [StoreMaxBytesFloor]).
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
 	// it, so a floor is free space a node must have before it boots, and a
-	// ten-seat node's 181-day census — ten seats × 181 days × 6.5 KiB — is
-	// about 12 MB. A gibibyte floor would make a small company reserve
-	// eighty times what it can ever write.
+	// ten-seat node's 181-day census (ten seats × 181 days × 9.5 KiB) is
+	// about 18 MB. A gibibyte floor would make a small company reserve
+	// sixty times what it can ever write.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: sixty-four times
 	// the default is a fleet two orders of magnitude past the reference

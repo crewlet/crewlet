@@ -278,11 +278,13 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// Each model's condition and uses, in two readings: a member's names no
 		// credential, no account and no vendor sentence, an admin's all of it.
 		"llm_entries": "everybody",
+		// Each MCP server's condition and tools, in two readings: a member's
+		// names no launch line, header, variable, account or call.
+		"mcp_servers_status": "everybody",
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"mcp_servers_status": "admin", "backups": "admin",
-		"fleet_broker": "admin",
+		"backups": "admin", "fleet_broker": "admin",
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",

@@ -87,7 +87,10 @@ type Run struct {
 	FiredAt time.Time
 
 	// Outcome is [OutcomeFired], [OutcomeSkippedCatchup] or
-	// [OutcomeSkippedPaused]. The zero value
+	// [OutcomeSkippedPaused]. A fired run its seat later did not run, because
+	// a later fire of the schedule ran in its place, stays fired here: the
+	// seat's node records that on the event log, and the schedule's history
+	// reads it as types.ScheduleOutcomeSuperseded. The zero value
 	// is empty rather than "fired": a caller that forgot to say what it
 	// recorded should read back as unset, not as a dispatch.
 	Outcome Outcome

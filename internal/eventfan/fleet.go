@@ -992,6 +992,34 @@ func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) 
 	return merged, coverage, nil
 }
 
+// ToolCalls answers one MCP server's newest calls across the fleet, at most
+// q.Limit ([store.MaxToolCalls] when it names none or more), newest first.
+//
+// EVERY DATA NODE'S, because a call is on the phase record of the phase that
+// made it, in the event log of the node that ran it or kept its events in
+// custody: a seat that moved, or ran on a node without `data`, called the
+// server from another node's log. Each node answers its own newest, read out
+// of its own records ([store.EventLog.ToolCalls]), and the asker merges them
+// ([MergeToolCalls]).
+func (f *Fleet) ToolCalls(ctx context.Context, q store.ToolCallQuery) ([]store.ToolCall, Coverage, error) {
+	started := time.Now()
+	q.At = f.askedAt(q.At)
+	if q.Limit <= 0 || q.Limit > store.MaxToolCalls {
+		q.Limit = store.MaxToolCalls
+	}
+	g, err := gather(ctx, f, QuestionToolCalls, toolCallsParamsOf(q), nil,
+		func(ctx context.Context) (toolCallsPart, error) {
+			calls, err := f.Local.ToolCalls(ctx, q)
+			return toolCallsPart{Calls: calls}, err
+		})
+	if err != nil {
+		return nil, Coverage{}, err
+	}
+	calls := MergeToolCalls(g.parts(), q.Limit)
+	f.report(QuestionToolCalls, g.coverage, started)
+	return calls, g.coverage, nil
+}
+
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no
 // position to resume from, and paging one by start time would mix two orders
 // on one screen.

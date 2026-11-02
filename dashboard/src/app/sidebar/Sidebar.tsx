@@ -104,11 +104,10 @@ import {
   WORKSPACES,
   landingPath,
   pathShown,
-  sectionOpen,
   serviceShown,
+  settingsSectionOpen,
   workspaceMissing,
   workspaceOf,
-  workspaceRow,
   type WorkspaceRow,
 } from "~/app/nav.ts";
 import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
@@ -159,8 +158,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // section that lists them opens for — by the rule every lock is drawn by —
   // so the panel never asks a question the engine would refuse.
   const readsReport = useMemo(() => {
-    const backups = workspaceRow("settings")?.sections.find((s) => s.key === "backups");
-    return held !== null && backups !== undefined && sectionOpen(backups, held);
+    return held !== null && settingsSectionOpen("backups", held);
   }, [held]);
 
   // MOD+\ IS THE SIDEBAR'S KEY IN EITHER SHAPE OF THE FRAME. Where the

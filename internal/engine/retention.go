@@ -148,9 +148,10 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
-	// models fills the model alarms' half of a reading: each entry's
-	// condition across the fleet. Nil reads as nothing to report.
-	models func(ctx context.Context, now time.Time, out *statelog.Reading)
+	// entries fills the per-entry alarms' half of a reading: each model
+	// entry's and each MCP server's condition across the fleet. Nil reads
+	// as nothing to report.
+	entries func(ctx context.Context, now time.Time, out *statelog.Reading)
 
 	// feeds fills the change feeds' half of a reading: every feed this
 	// node started that is down ([native.feedsReading]). Nil reads as
@@ -264,7 +265,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
-		models:      e.modelsReading,
+		entries:     e.entriesReading,
 		feeds:       e.feedsReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,

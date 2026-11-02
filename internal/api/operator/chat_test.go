@@ -144,7 +144,7 @@ func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, id strin
 }
 
 func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
-	_ []chatlet.Member) (chatlet.Written, error) {
+	_ []chatlet.Member, _ *[]chatlet.Member) (chatlet.Written, error) {
 	return d.wrote(actor)
 }
 

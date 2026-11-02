@@ -84,6 +84,7 @@ func TestAQuestionWithNoInstantIsRefused(t *testing.T) {
 		QuestionTraceRows:            traceRowsParams{TraceIDs: []string{"t"}, Limit: 10},
 		QuestionPhaseTokens:          phaseTokenParams{},
 		QuestionNotificationOutcomes: outcomeParams{},
+		QuestionToolCalls:            toolCallsParams{Server: "github", Limit: 10},
 	}
 	for _, q := range Questions {
 		if _, ok := floored[q]; !ok && q != QuestionKept {
@@ -169,5 +170,42 @@ func TestTheFeedFilterAndTheSpendCursorCrossTheWire(t *testing.T) {
 	}
 	if got := spendBack.query().Before; got == nil || *got != *cursor {
 		t.Errorf("the spend page's cursor %+v came back off the wire as %+v", cursor, got)
+	}
+}
+
+// A SERVER'S CALLS AND THE TURNS THAT MADE THEM ARE ASKED FOR WHOLE: a peer
+// that read a page of turns without `server` or `tool` would answer every turn
+// in the window, merged in as though each had called the tool, and one that
+// read a server's calls without its window or its server would answer another
+// question entirely.
+//
+// Mutation: drop Server or Tool from turnsParamsOf or query, or any field from
+// toolCallsParamsOf or query, and its case fails.
+func TestAToolsCallsAndItsTurnsCrossTheWire(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	raw, err := json.Marshal(turnsParamsOf(store.TurnQuery{Server: "github",
+		Tool: "github_get_issue", At: at}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turnsBack turnsParams
+	if err := json.Unmarshal(raw, &turnsBack); err != nil {
+		t.Fatal(err)
+	}
+	if q := turnsBack.query(nil); q.Server != "github" || q.Tool != "github_get_issue" {
+		t.Errorf("a page of a tool's turns came back off the wire asking for %q/%q", q.Server, q.Tool)
+	}
+	want := store.ToolCallQuery{Server: "github", Since: at.Add(-time.Hour), Limit: 7, At: at}
+	raw, err = json.Marshal(toolCallsParamsOf(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var callsBack toolCallsParams
+	if err := json.Unmarshal(raw, &callsBack); err != nil {
+		t.Fatal(err)
+	}
+	if got := callsBack.query(); got != want {
+		t.Errorf("a server's calls were asked for as %+v and came back off the wire as %+v", want, got)
 	}
 }

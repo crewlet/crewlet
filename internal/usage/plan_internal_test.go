@@ -50,6 +50,7 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 			[]string{seat, "usage_turns_agent_idx (agent_id=? AND day=?)"}},
 		{"what the fleet holds: a seat's spend", appliedSeatTokensSQL, []string{seat}},
 		{"what the fleet holds: a seat's reads", appliedSeatReadsSQL, []string{seat}},
+		{"what the fleet holds: a seat's tool calls", appliedSeatToolsSQL, []string{seat}},
 		{"what the fleet holds: a person's spend", appliedPersonSQL, []string{person}},
 		{"what the fleet holds: a schedule's fires", appliedScheduleSQL, []string{schedule}},
 		{"the apply's guard: a seat's head", applySeatHeadSQL,
@@ -58,6 +59,7 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 		{"the apply's guard: a person's newest", applyPersonNewestSQL, []string{person}},
 		{"the apply's clear: a seat's spend", applyClearSeatTokensSQL, []string{seat}},
 		{"the apply's clear: a seat's reads", applyClearSeatReadsSQL, []string{seat}},
+		{"the apply's clear: a seat's tool calls", applyClearSeatToolsSQL, []string{seat}},
 		{"the apply's clear: a schedule's fires", applyClearScheduleSQL, []string{schedule}},
 		{"the apply's clear: a person's spend", applyClearPersonSQL, []string{person}},
 	} {
@@ -95,4 +97,33 @@ func containsAny(s string, subs []string) bool {
 		}
 	}
 	return false
+}
+
+// A SERVER'S CALLS ARE READ BY ITS OWN INDEX: the read is a range of days of
+// one server, every node and every seat, and walking the whole range of every
+// server to find one is what `usage_tool_calls_server_idx` exists to stop.
+//
+// Mutation: drop the index from the migration, and the plan names the primary
+// key's day range instead.
+func TestAServersToolCallsSeekItsIndex(t *testing.T) {
+	t.Parallel()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	steps := storetest.Plan(t, db.Replicated(), serverToolCallsSQL,
+		[]any{"github", "2026-09-17", "2026-09-23"})
+	if line, ok := storetest.Decorrelated(steps); ok {
+		t.Errorf("the planner unnested a correlated aggregate: %s", line)
+	}
+	sought := false
+	for _, step := range steps {
+		if strings.Contains(step, "usage_tool_calls_server_idx (server=?") {
+			sought = true
+		}
+		if strings.HasPrefix(step, "SCAN t") || strings.HasPrefix(step, "SCAN usage_tool_calls") {
+			t.Errorf("the plan walks the table: %s", step)
+		}
+	}
+	if !sought {
+		t.Errorf("the plan %q does not seek the server's index", steps)
+	}
 }

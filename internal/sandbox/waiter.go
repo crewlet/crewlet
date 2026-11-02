@@ -307,6 +307,10 @@ type Waiter struct {
 	// box a stuck poll held a slot from is not the next to take one.
 	settled map[string]uint64
 	seq     uint64
+	// announced is the job each turn's completion was last announced for,
+	// how often and when: the re-announcement schedule
+	// ([Waiter.announcing]).
+	announced map[string]announced
 	// walk stops the walk still handing out slots; the next pass replaces
 	// it with one over a fresher listing.
 	walk context.CancelFunc
@@ -366,6 +370,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		failures:  map[string]connectStreak{},
 		busy:      map[string]context.CancelFunc{},
 		settled:   map[string]uint64{},
+		announced: map[string]announced{},
 		following: map[string]bool{},
 		absent:    map[string]time.Time{},
 		stopped:   make(chan struct{}),
@@ -749,16 +754,21 @@ func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run
 		// UNREACHED FOR THE GIVE-UP WINDOW, the completion goes out anyway,
 		// so the coordinator frees the seat and settles the run (its
 		// collection fails to reach the box too) instead of it hanging.
-		if err := w.publishCompletion(ctx, run); err != nil {
+		first, due := w.announcing(run)
+		if !due {
+			return false
+		}
+		if err := w.publishCompletion(ctx, run, first); err != nil {
+			w.unannounce(run.TurnID)
 			log.WarnContext(ctx, "sandbox_completion_publish_failed",
 				"turn_id", run.TurnID, "error", err.Error())
 			return false
 		}
-		if state == pollCollected {
-			// QUIETLY: a job read back and handed back is announced
-			// again at every poll for as long as the node that holds it
-			// waits on a condition, which can be an hour, and the
-			// collection that first read it said so already.
+		if !first {
+			// QUIETLY: a job its node has not resumed yet (held for a
+			// condition, refused by its gate, handed back for a retry)
+			// is announced again on the schedule, and its first
+			// announcement said so already.
 			log.DebugContext(ctx, "sandbox_waiter_reannounced", "turn_id", run.TurnID,
 				"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
 			return true
@@ -918,6 +928,11 @@ func (w *Waiter) forget(runs []PendingRun) {
 			delete(w.settled, id)
 		}
 	}
+	for id := range w.announced {
+		if !active[id] {
+			delete(w.announced, id)
+		}
+	}
 }
 
 type pollState int
@@ -1023,6 +1038,19 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_poll_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
+		if run.PastDeadline(w.now()) {
+			// PAST THE TURN'S CAP A POLL THAT CANNOT SAY IS NOT A
+			// REASON TO KEEP THE JOB OUT: the box answered, so its
+			// collection can read it, and that ends the job as the
+			// deadline below does. Read as still running, a job whose
+			// poll kept failing was kept alive with no bound at all.
+			log.InfoContext(ctx, "sandbox_run_past_deadline",
+				"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID,
+				"deadline", run.Deadline.Format(time.RFC3339),
+				"detail", "the turn's wall-clock cap has passed and its job could not be "+
+					"polled; the run is ended and its turn resumed with what it did")
+			return pollDone
+		}
 		return pollRunning
 	}
 	switch state {
@@ -1223,7 +1251,7 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 // COMMAND, and it goes to the seat's own topic because only the node holding
 // that seat has the parked turn to resume — a single
 // fleet-wide group would hand it to a non-owner (N-1)/N of the time.
-func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
+func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool) error {
 	completion := types.ExecutorFinished{
 		Agent:       run.AgentID,
 		AgentHandle: run.AgentHandle,
@@ -1243,8 +1271,13 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	})
 	announcement.Source = run.Role
 
-	if err := w.queue.Publish(ctx, topics.Event(completion.EventType()), announcement); err != nil {
-		return err
+	// THE EVENTS COPY ONCE PER JOB: it is the record that the job finished,
+	// which the dashboard and the event store keep, and a job announced
+	// again is the same fact. Every announcement is routed to the seat.
+	if public {
+		if err := w.queue.Publish(ctx, topics.Event(completion.EventType()), announcement); err != nil {
+			return err
+		}
 	}
 	control := controlSubject(run.AgentID)
 	if control == "" {

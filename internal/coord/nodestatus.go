@@ -389,8 +389,11 @@ type MCPServerStatus struct {
 
 	// Error is ONE failed instance's reason, and ErrorSeat the seat it
 	// belonged to, by its AGENT ID (uuid.Nil for a shared server). One
-	// rather than all, for the size argument above; the first by agent id,
-	// so two beats with the same failures publish the same row.
+	// rather than all, for the size argument above: the one DownSince dates,
+	// the instance down longest (ties, and failures nothing dated, to the
+	// lower agent id), so the reason, its seat, its class and the outage's
+	// start are one instance's facts, and two beats with the same failures
+	// publish the same row.
 	//
 	// THE ID RATHER THAN THE HANDLE, because this row is published on a
 	// lease every peer reads, and a peer reads it against its OWN org: the
@@ -400,11 +403,34 @@ type MCPServerStatus struct {
 	Error     string
 	ErrorSeat uuid.UUID
 
-	// Wait is ONE waiting instance's sentence — the variables it waits for
-	// and the integration that mints them — and WaitSeat its seat, chosen
-	// and bounded as Error and ErrorSeat are.
+	// ErrorClass is why that instance failed, in internal/mcp's FailureClass
+	// words (kept a string here, as a lease carries it, for a reader to
+	// judge), "" where no class fits.
+	ErrorClass string
+
+	// DownSince is when the longest-failed instance on this node stopped
+	// serving, or first failed to start; zero when none has failed. What an
+	// alarm measures a server's outage against, and the same instant on
+	// every beat of one outage, so a beat re-sending the same facts sends the
+	// same bytes.
+	DownSince time.Time
+
+	// Restarts is how many times this node brought the server's instances
+	// back since each was started from its spec, summed over them: a count
+	// that climbs while the server stays up is a server that flaps.
+	Restarts int
+
+	// Wait is ONE waiting instance's sentence (the variables it waits for
+	// and the integration that mints them), and WaitSeat its seat: the one
+	// WaitingSince dates, chosen and bounded as Error and ErrorSeat are.
 	Wait     string
 	WaitSeat uuid.UUID
+
+	// WaitingSince is when the longest-waiting instance on this node was
+	// first held back for its credential; zero when none waits. What an alarm
+	// measures a wait against, kept across the passes that hold it back
+	// again, as DownSince is across retries.
+	WaitingSince time.Time
 
 	// Unlisted are the entry's tool_annotations keys that NO instance this
 	// node started lists a tool for, sorted. Such a key overrides nothing
@@ -526,6 +552,17 @@ func (s NodeStatus) Meta() map[string]any {
 			if m.ErrorSeat != uuid.Nil {
 				row["error_seat"] = m.ErrorSeat.String()
 			}
+			// OMITTED WHEN UNSET, which is every healthy row: absent reads
+			// as no class, no outage and no restart.
+			if m.ErrorClass != "" {
+				row["error_class"] = textcut.Within(m.ErrorClass, MaxMCPToolNameBytes)
+			}
+			if !m.DownSince.IsZero() {
+				row["down_since"] = m.DownSince.UTC().Format(time.RFC3339)
+			}
+			if m.Restarts > 0 {
+				row["restarts"] = m.Restarts
+			}
 			// OMITTED WHEN NOTHING WAITS, which is every row but a
 			// seat's during provisioning: absent reads as zero.
 			if m.Waiting > 0 {
@@ -536,6 +573,9 @@ func (s NodeStatus) Meta() map[string]any {
 			}
 			if m.WaitSeat != uuid.Nil {
 				row["wait_seat"] = m.WaitSeat.String()
+			}
+			if !m.WaitingSince.IsZero() {
+				row["waiting_since"] = m.WaitingSince.UTC().Format(time.RFC3339)
 			}
 			if len(m.Unlisted) > 0 {
 				row["unlisted"] = m.Unlisted
@@ -715,16 +755,20 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			continue
 		}
 		m := MCPServerStatus{
-			Server:    server,
-			Started:   intFromMeta(row["started"]),
-			Failed:    intFromMeta(row["failed"]),
-			Tools:     intFromMeta(row["tools"]),
-			Error:     stringFromMeta(row["error"]),
-			ErrorSeat: seatFromMeta(row["error_seat"]),
-			Waiting:   intFromMeta(row["waiting"]),
-			Wait:      stringFromMeta(row["wait"]),
-			WaitSeat:  seatFromMeta(row["wait_seat"]),
-			Unlisted:  stringsFromMeta(row["unlisted"]),
+			Server:       server,
+			Started:      intFromMeta(row["started"]),
+			Failed:       intFromMeta(row["failed"]),
+			Tools:        intFromMeta(row["tools"]),
+			Error:        stringFromMeta(row["error"]),
+			ErrorSeat:    seatFromMeta(row["error_seat"]),
+			ErrorClass:   stringFromMeta(row["error_class"]),
+			DownSince:    instant(row["down_since"]),
+			Restarts:     max(intFromMeta(row["restarts"]), 0),
+			Waiting:      intFromMeta(row["waiting"]),
+			Wait:         stringFromMeta(row["wait"]),
+			WaitSeat:     seatFromMeta(row["wait_seat"]),
+			Unlisted:     stringsFromMeta(row["unlisted"]),
+			WaitingSince: instant(row["waiting_since"]),
 		}
 		m.Shared, _ = row["shared"].(bool)
 		for _, n := range listFromMeta(row["refused"]) {

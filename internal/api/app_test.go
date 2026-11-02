@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
@@ -27,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -87,6 +89,12 @@ type fakeRuntime struct {
 	// listings is the fleet's MCP listings the node holds, nil for a node
 	// that keeps no copy.
 	listings queries.MCPListingReader
+	// instances reads a server's instances, nil for none read; restarter
+	// takes a restart, nil until a case sets one.
+	instances queries.MCPInstanceReader
+	restarter mcpapi.Restarter
+	// alarms is the node's latest alarm evaluation, nil for none run.
+	alarms []statelog.Alarm
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -111,6 +119,28 @@ func (f *fakeRuntime) Tools() []queries.ToolRow { return f.tools }
 func (f *fakeRuntime) Builtins() []queries.ToolRow { return f.builtins }
 
 func (f *fakeRuntime) Listings() queries.MCPListingReader { return f.listings }
+
+func (f *fakeRuntime) MCPInstances() queries.MCPInstanceReader { return f.instances }
+
+// MCPRestarter is the restarter a case set, else one that records every
+// restart it is asked for: what a restart does is held by mcpapi's own suite
+// and the engine's.
+func (f *fakeRuntime) MCPRestarter() mcpapi.Restarter {
+	if f.restarter == nil {
+		return acceptingRestarter{}
+	}
+	return f.restarter
+}
+
+// LatestAlarms is the evaluation a case set, nil (none has run) otherwise.
+func (f *fakeRuntime) LatestAlarms() []statelog.Alarm { return f.alarms }
+
+// acceptingRestarter takes every restart it is asked for.
+type acceptingRestarter struct{}
+
+func (acceptingRestarter) RestartServer(_ context.Context, name, seat string, _ iam.Actor) (mcpapi.Restart, error) {
+	return mcpapi.Restart{Server: name, Seat: seat, At: time.Now(), Node: "node-1"}, nil
+}
 
 // Seats answers from the same state Snapshot does, as ShuttingDown does.
 func (f *fakeRuntime) Seats() []string { return f.state.Seats }

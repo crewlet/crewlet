@@ -86,6 +86,7 @@ func personRecord(t *testing.T, id string, at time.Time, seat string, total int)
 // usageTally is what a derived day says, reduced to what these cases count.
 type usageTally struct {
 	spend, turns, failed, reviewed, firstPass, sentBack, reads, person int64
+	toolCalls                                                          int64
 	duration                                                           time.Duration
 }
 
@@ -110,6 +111,9 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 		}
 		for _, r := range s.Reads {
 			out.reads += r.Count
+		}
+		for _, c := range s.Tools {
+			out.toolCalls += c.Calls
 		}
 	}
 	for _, p := range day.People {
@@ -152,7 +156,8 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			readRecord(t, "own-read", at(2), "seat-1", "p-own"),
 			personRecord(t, "own-person", at(2), "maya", 7),
 			endedTurn(t, "own-end", at(3), "seat-1", "t-own",
-				types.TurnTally{DurationMS: 60_000, Reviews: 1}),
+				types.TurnTally{DurationMS: 60_000, Reviews: 1, Tools: []types.ToolTally{
+					{Server: "github", Tool: "github_get_issue", Calls: 2}}}),
 		} {
 			if err := log.Append(t.Context(), rec); err != nil {
 				t.Fatalf("append %s: %v", rec.ID, err)
@@ -169,13 +174,14 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			readRecord(t, "b-read", at(5), "seat-2", "p-b"),
 			personRecord(t, "b-person", at(5), "maya", 70),
 			endedTurn(t, "b-end", at(6), "seat-2", "t-b",
-				types.TurnTally{DurationMS: 120_000, Failed: true, Reviews: 2, SentBack: 1, Unaccepted: 1}),
+				types.TurnTally{DurationMS: 120_000, Failed: true, Reviews: 2, SentBack: 1, Unaccepted: 1,
+					Tools: []types.ToolTally{{Server: "github", Tool: "github_search", Calls: 5}}}),
 		}}
 	}
 	ownOnly := usageTally{spend: 100 + 10, turns: 1, reviewed: 1, firstPass: 1, reads: 1,
-		person: 7, duration: time.Minute}
+		person: 7, toolCalls: 2, duration: time.Minute}
 	withBatch := usageTally{spend: 110 + 1000 + 1, turns: 2, failed: 1, reviewed: 2,
-		firstPass: 1, sentBack: 1, reads: 2, person: 77, duration: 3 * time.Minute}
+		firstPass: 1, sentBack: 1, reads: 2, person: 77, toolCalls: 7, duration: 3 * time.Minute}
 
 	for _, kept := range []bool{true, false} {
 		t.Run(fmt.Sprintf("settled kept=%v", kept), func(t *testing.T) {
@@ -381,6 +387,66 @@ func TestAnEndingRecordedTwiceIsReadOffTheCopyWithATally(t *testing.T) {
 			got, want)
 	}
 }
+
+// A SEAT'S CALLS PER TOOL ARE READ OFF THE RECORD THAT ENDS EACH TURN, ONCE
+// PER TURN: the turn counted its own calls as it ran ([types.ToolTally]), so
+// the node holding its end states every one of them, phase records elsewhere
+// or not; an ending recorded twice is the same turn and counts once, each
+// figure at the larger copy's; two turns of the seat are added up; and a
+// segment that parked, whose record states no tally, counts nothing.
+//
+// Mutation: sum the copies of one ending rather than take the larger, and
+// t-1's calls count twice; read a parked segment's record, and its calls are
+// counted before the turn ends; compare the newest instant as text, and the
+// shorter fraction wins.
+func TestAToolCallIsCountedOncePerTurnOffTheRecordThatEndsIt(t *testing.T) {
+	t.Parallel()
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	w := usageDayOf(day, day.Add(24*time.Hour))
+	db := open(t)
+	early := day.Add(2 * time.Hour)
+	later := early.Add(500 * time.Millisecond)
+	tally := func(calls int64, last time.Time) types.TurnTally {
+		return types.TurnTally{DurationMS: 1_000, Tools: []types.ToolTally{
+			{Server: "github", Tool: "github_get_issue", Calls: int(calls), Failed: 1,
+				TotalMS: calls * 100, LastAt: last},
+		}}
+	}
+	parked := usageRecord(t, "parked", "turn_completed", day.Add(time.Hour), "seat-1",
+		types.TurnCompleted{Agent: "seat-1", AgentHandle: "dev", RoleName: "Dev", TurnID: "t-3",
+			Suspended: true, Turn: ptrTo(tally(9, early))})
+	for _, rec := range []store.EventRecord{
+		endedTurn(t, "t-1-end", day.Add(3*time.Hour), "seat-1", "t-1", tally(3, early)),
+		// THE SAME ENDING, PUBLISHED AGAIN by a re-run: one more call and a
+		// later instant whose fraction is shorter as text.
+		endedTurn(t, "t-1-again", day.Add(3*time.Hour+time.Second), "seat-1", "t-1",
+			tally(4, later)),
+		endedTurn(t, "t-2-end", day.Add(4*time.Hour), "seat-1", "t-2", tally(2, early)),
+		parked,
+	} {
+		if err := db.Events().Append(t.Context(), rec); err != nil {
+			t.Fatalf("append %s: %v", rec.ID, err)
+		}
+	}
+	got, err := db.UsageForDay(t.Context(), w)
+	if err != nil {
+		t.Fatalf("derive the day: %v", err)
+	}
+	if len(got.Seats) != 1 {
+		t.Fatalf("the day holds %d seats, want one", len(got.Seats))
+	}
+	want := []store.UsageTool{{Server: "github", Tool: "github_get_issue", Calls: 6, Failed: 2,
+		TotalMS: 600, LastAt: later}}
+	if tools := got.Seats[0].Tools; len(tools) != 1 || tools[0].Server != want[0].Server ||
+		tools[0].Tool != want[0].Tool || tools[0].Calls != want[0].Calls ||
+		tools[0].Failed != want[0].Failed || tools[0].TotalMS != want[0].TotalMS ||
+		!tools[0].LastAt.Equal(want[0].LastAt) {
+		t.Errorf("the seat's calls are %+v, want t-1's larger copy (4) and t-2's (2) "+
+			"added up, the parked segment's none, and the newest instant: %+v", tools, want)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
 
 // A USAGE DAY NAMES THE REVIEW DECISIONS, or is refused.
 //

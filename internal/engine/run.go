@@ -351,6 +351,10 @@ type Engine struct {
 	// ([modelRetries]).
 	retries modelRetries
 
+	// restarts is this node's watched copy of the fleet's MCP restarts
+	// ([mcpRestarts]).
+	restarts mcpRestarts
+
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings
@@ -367,9 +371,10 @@ type Engine struct {
 	// home ([Engine.CheckModel]); empty is the process's temporary directory.
 	checkHomes string
 
-	// modelInputs is the last good read of the model alarms' fleet-wide
-	// inputs ([Engine.modelsReading]).
-	modelInputs modelInputs
+	// entryInputs is the last good read of the per-entry alarms'
+	// fleet-wide inputs, the model entries' and the MCP servers'
+	// ([Engine.entriesReading]).
+	entryInputs entryInputs
 
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
@@ -915,6 +920,9 @@ type Engine struct {
 	// history.go.
 	history          *eventfan.Fleet
 	stopHistoryServe queue.Unsubscribe
+	// stopMCPInstanceServe withdraws this node as an answerer of reads of
+	// its MCP instances ([Engine.startMCPInstances]).
+	stopMCPInstanceServe queue.Unsubscribe
 
 	// steers is this node's running turns' note boxes, and stopSteerServe
 	// withdraws the node as their answerer. See steer.go.
@@ -2113,6 +2121,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
+	// AND HOW EACH OF THEM IS, answered to a server's page on any node; and
+	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
+	e.startMCPInstances(ctx)
+	e.startMCPRestarts(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2764,8 +2776,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
-	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down.
+	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
+	// and its instances no longer answered.
 	e.stopMCPListings(ctx)
+	e.stopMCPInstances(ctx)
+	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()

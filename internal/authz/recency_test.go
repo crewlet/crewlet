@@ -241,6 +241,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"credential: they spend a few tokens on a call the company already makes",
 		authz.ActionModelsRetry: "a retry changes no config and no credential: " +
 			"it clears a sit-out the vendor's next answer re-imposes if it still holds",
+		authz.ActionToolsRetry: "a restart changes no config and no credential: " +
+			"it starts an MCP server again from the spec it already runs",
 		authz.ActionChatAutoJoin: "asked from inside `update_channel`, a tool, " +
 			"which no step-up surface reaches; and it destroys nothing: it puts " +
 			"the seats the company takes on later in a public room, and turning " +

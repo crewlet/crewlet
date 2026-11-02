@@ -1,7 +1,9 @@
 package types
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -77,6 +79,27 @@ type TaskAssigned struct {
 	// It travelled as a write-only Payload key before this field existed, so
 	// nothing could read it and the documented cap bounded nothing.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// ScheduledAt is the instant this fire came due, in UTC: the tick it
+	// stands for rather than the moment it was published. It is what orders
+	// two fires of one schedule that waited in an inbox together, and what
+	// the run that stands for both names the other by ([TaskAssigned.Missed]).
+	ScheduledAt time.Time `json:"scheduled_at,omitzero"`
+	// Missed are the earlier fires of this schedule this one run stands for:
+	// fires that waited in the seat's inbox while it could not work (a
+	// provider limit, a budget, a pause of its executor) and reached it
+	// together with this one. The scheduler never sets it. The dispatcher
+	// does, when it runs only the latest fire of a waiting schedule, so the
+	// seat is told it is catching up once rather than handed the same duty
+	// once per missed tick.
+	Missed []MissedFire `json:"missed,omitempty"`
+}
+
+// MissedFire is one earlier fire a scheduled run stands for.
+type MissedFire struct {
+	// TaskID is the fire's run id, as [TaskAssigned.TaskID] carried it.
+	TaskID string `json:"task_id"`
+	// ScheduledAt is when that fire came due, in UTC.
+	ScheduledAt time.Time `json:"scheduled_at,omitzero"`
 }
 
 // EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
@@ -106,7 +129,41 @@ func (e TaskAssigned) Brief() string {
 		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
 	}
 	b.WriteString(e.Description)
+	if line := e.missedLine(); line != "" {
+		b.WriteString("\n\n" + line)
+	}
 	return strings.TrimSpace(b.String())
+}
+
+// missedLine tells a seat that this run stands for fires it missed, and how
+// to treat them: as one piece of work done once, as of now.
+//
+// SAID IN THE BRIEF, because without it a seat that knows its schedule's
+// cadence reads a run that comes due hours late as an anomaly to report, and
+// one that counts its own checks numbers this one as if the missed ticks had
+// run.
+func (e TaskAssigned) missedLine() string {
+	if len(e.Missed) == 0 {
+		return ""
+	}
+	due := make([]string, 0, len(e.Missed))
+	for _, m := range e.Missed {
+		if m.ScheduledAt.IsZero() {
+			continue
+		}
+		due = append(due, m.ScheduledAt.UTC().Format(time.RFC3339))
+	}
+	fires := "1 earlier fire"
+	if n := len(e.Missed); n > 1 {
+		fires = strconv.Itoa(n) + " earlier fires"
+	}
+	line := "This run also stands for " + fires + " of this schedule that " +
+		"waited while you could not work"
+	if len(due) > 0 {
+		line += " (due " + strings.Join(due, ", ") + ")"
+	}
+	return line + ". Do the work once, as of now, and do not repeat it for " +
+		"each missed fire."
 }
 
 // SummaryFor names the SCHEDULE a fire came from, never the fire's id.
