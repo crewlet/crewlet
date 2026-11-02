@@ -834,7 +834,9 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
     returned.
   - **Always allow** also sets the tool to `allow` on the server's entry, by
     the server's own name for it, as a configuration write at a recent
-    step-up, before the call is made.
+    step-up, before the call is made. A team's limit holding the tool at
+    `approve` still holds for that team ([Narrowing a server for a
+    team](#narrowing-a-server-for-a-team)).
   - **Deny** makes no call; the run carries on told the call was refused.
 
   A chat reply in the conversation the run was started from never answers a
@@ -855,6 +857,75 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
   `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),
   and every answer is audited as an `mcp_server_acted` with the tool and the
   answer, never the arguments.
+
+### Narrowing a server for a team
+
+An administrator grants a server and sets its tools' levels on its entry. A
+team's lead narrows that for their own teams with `mcp_limits`, on a unit or a
+seat, keyed by the server's name:
+
+```yaml
+units:
+  - name: Platform
+    id: platform
+    lead: platform-lead
+    mcp_limits:
+      search: {off: true}              # not started for, or offered to, anybody beneath Platform
+      tracker:
+        tools:
+          close_items: approve         # the server's own name, before tool_prefix
+          delete_project: blocked
+    roles:
+      - name: SRE
+        handle: sre
+        mcp_limits:
+          tracker: {tools: {merge_projects: blocked}}
+```
+
+- **`off: true` turns the server off** for the seat, or for every agent seat
+  beneath the unit at any depth: nothing of it starts for them and none of its
+  tools is offered to them. The grant stands, so the seat's `mcp_env` values
+  and its box listing are kept for the day the limit is lifted, as they are for
+  a server turned off on its entry.
+- **`tools` holds a tool at `approve` or `blocked`**, by the server's own name
+  for it. `allow` is refused: only the server's entry lets a tool run.
+- **The strictest wins.** A seat is held to its own block, to the block of
+  every unit it sits in outward to the top, and to the server's entry: a server
+  any of them turns off is off, and a tool runs at the strictest level any of
+  them sets. A limit cannot bring back a tool the entry blocks, nor let a tool
+  the entry holds at `approve` run unasked, and a team's lead cannot loosen
+  what a lead above them set.
+- **A lead may only narrow.** A unit's lead writes the limits of the seats and
+  units they lead as they write any other field of their team
+  ([A lead edits their own team](../concepts/identity-and-access.md#a-lead-edits-their-own-team)).
+  A write that lifts or loosens a limit any agent seat is held to is an
+  administrator's, however it does it: removing an `off`, moving a tool from
+  `blocked` to `approve`, removing a tool's limit, moving a seat out from under
+  a unit's limits, or removing the unit around it. The refusal is `403
+  unauthorized`, naming each seat it would widen (`why: widens`) and the limit
+  as the seat is held to it (`mcp_limits.<server>.off`,
+  `mcp_limits.<server>.tools.<tool>`). Lifting a limit the entry already holds
+  as far widens nothing, and neither does lifting one from a server the seat is
+  not granted.
+- **A limit names a server the company declares.** A block for no server is
+  refused, and a removal of a server clears every limit naming it
+  ([Removing a server](#removing-a-server)). A limit on a server not yet
+  granted to the team is kept, and holds from the day the grant does. A block
+  that holds nothing back (`{}`) is refused, and so is a limit on a person's
+  seat, which runs no tools.
+- **An executor box reaches a server whole**, so a box listing is refused for
+  a server a seat's limits hold a tool of back: take the server out of the
+  box, and the seat reaches its tools over the bridge, each at its level. A
+  server a limit turns off is kept in the box listing and not given to the box.
+- **Each seat's limits are on the server's detail.** `reaches` on
+  [`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
+  carries `limited` for every seat a limit holds: whether it is off for the
+  seat and every tool held back, each naming the unit whose limit holds it
+  (null for the seat's own).
+
+These limits are admission rules beside the lead's own: a stored revision that
+breaks one runs, its limits holding as written (a level this build cannot read
+blocks the tool), and warns.
 
 ### Turning a server off
 
@@ -883,12 +954,14 @@ every block that names it with it, and what they held: see
 
 ### Removing a server
 
-A server is named from two places beside its own entry: every seat's and unit's
-`mcp_env` block keyed on its name, and every seat's `sandbox.mcp.servers` entry
+A server is named from three places beside its own entry: every seat's and
+unit's `mcp_env` block keyed on its name, every seat's and unit's
+`mcp_limits` block keyed on it, and every seat's `sandbox.mcp.servers` entry
 listing it. A field naming a server the company does not declare is refused,
-whichever of the two it is: an `mcp_env` block for no server is read by
-nothing, and a box entry for no server gives the seat's executor nothing. So a
-server leaves the document with everything that names it, in one revision.
+whichever it is: an `mcp_env` block for no server is read by nothing, a limit
+on no server would hold back whichever server later takes the name, and a box
+entry for no server gives the seat's executor nothing. So a server leaves the
+document with everything that names it, in one revision.
 
 `DELETE /config/mcp-servers/{name}` is that write. Sent with no body (or as a
 `?dry_run=true` check) it is refused with the list of every field that names

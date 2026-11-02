@@ -333,6 +333,30 @@ func (r *Registry) RegisterMCP(reg mcp.Registration) error {
 	return r.RegisterWith(reg.Tool, reg.Origin, ann, func(e *Entry) { e.NeedsApproval = approval })
 }
 
+// RequireApproval makes every call to the MCP tool filed as name wait for a
+// person's answer ([Entry.NeedsApproval]), reporting whether such a tool is
+// filed. It only ever adds the wait: a tool already at approve stays there, and
+// a builtin, which no level governs, is left as it is and reported absent.
+//
+// What a seat's surface is cut with where a limit on the way down to the seat
+// holds a tool at approve that its entry lets run (internal/engine): the entry
+// is the surface's own copy, so the epoch's registry and every other seat's
+// keep the tool's own level.
+func (r *Registry) RequireApproval(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.byName[name]
+	if !ok {
+		return false
+	}
+	if _, fromMCP := e.FromMCP(); !fromMCP {
+		return false
+	}
+	e.NeedsApproval = true
+	r.byName[name] = e
+	return true
+}
+
 // Unregister removes a tool, reporting whether it was there.
 func (r *Registry) Unregister(name string) bool {
 	r.mu.Lock()

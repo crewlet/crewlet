@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
-	"unicode"
 
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -101,6 +100,24 @@ func (p MCPToolPolicy) Level(raw string, starting MCPToolLevel) (level MCPToolLe
 	return starting, false
 }
 
+// holds reports whether the entry holds the tool the server calls raw at least
+// as far as a limit at level would, by its own level or its default. A tool the
+// entry leaves to its hints is not held: which level its hints give it is read
+// off the server's listing, which no document holds.
+func (p MCPToolPolicy) holds(raw string, level org.ToolLimit) bool {
+	own, ok := p.Levels[raw]
+	if !ok {
+		own = p.Default
+	}
+	switch own {
+	case MCPToolBlocked:
+		return true
+	case MCPToolApprove:
+		return level == org.ToolApprove
+	}
+	return false
+}
+
 // AllowsEveryTool reports whether every tool the server lists, whatever it
 // lists, runs at [MCPToolAllow]: the default says allow, and no level holds a
 // tool back. What an executor box is held to, since a box reaches a server
@@ -154,18 +171,7 @@ func (p MCPToolPolicy) validate(probs *problems, path Path) {
 		if level := p.Levels[tool]; !level.Valid() {
 			probs.add(here, ErrUnknownValue, "%q (want %s)", level, words.Or(MCPToolLevels))
 		}
-		// A NAME NO SERVER LISTS is refused where it can be told from the
-		// name alone: nothing, or a name holding a space or a control
-		// character, which no tool name carries. A well-formed name the
-		// server does not list is a fact about the server, not the
-		// document, and is reported beside the listing instead.
-		if strings.TrimSpace(tool) == "" {
-			probs.add(here, ErrMissing, "an empty key names no tool: key a level by the "+
-				"server's own name for the tool")
-		} else if strings.IndexFunc(tool, unicode.IsSpace) >= 0 || strings.IndexFunc(tool, unicode.IsControl) >= 0 {
-			probs.add(here, ErrUnknownValue, "%q holds a space or a control character, which "+
-				"no tool name does: key a level by the server's own name for the tool", tool)
-		}
+		toolKey(probs, here, tool)
 	}
 }
 

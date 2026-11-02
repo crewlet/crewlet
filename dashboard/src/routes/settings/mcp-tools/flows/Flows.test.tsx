@@ -46,6 +46,14 @@ vi.mock("../api.ts", async (actual) => ({
                 },
               ],
               sandbox: [],
+              mcp_limits: [
+                {
+                  kind: "unit",
+                  key: "eng",
+                  name: "Engineering",
+                  segments: ["units", 0, "mcp_limits", "linear"],
+                },
+              ],
               secrets: ["LINEAR_TOKEN"],
               oauth: true,
             },
@@ -110,8 +118,9 @@ test("a removal waits on its dry run, asks to clear what names the server, and s
     expect.objectContaining({ etag: '"entry-r1"', dryRun: true }),
     expect.anything(),
   );
-  expect(screen.getByText("Still named in 1 place")).toBeDefined();
+  expect(screen.getByText("Still named in 2 places")).toBeDefined();
   expect(screen.getByText(/Product Manager: its own/)).toBeDefined();
+  expect(screen.getByText(/Team Engineering: its/)).toBeDefined();
   expect(screen.getByText(/its sign-in is revoked at the vendor/)).toBeDefined();
   const remove = screen.getByRole("button", { name: "Remove server" });
   expect(remove.hasAttribute("disabled") || remove.getAttribute("aria-disabled") === "true").toBe(

@@ -23,8 +23,8 @@ import (
 )
 
 // serverRemovalDoc is a company whose server `linear` is named every way a
-// removal has to clear: pm's own block and box entry, dev's block, and the eng
-// unit's block. Its values are read thus: LINEAR_ORG by the server alone,
+// removal has to clear: pm's own block and box entry, dev's block and limits,
+// and the eng unit's block and limits. Its values are read thus: LINEAR_ORG by the server alone,
 // PM_LINEAR and DEV_LINEAR by one seat's block each, and SHARED_TOKEN by the
 // unit's block AND by `search`, which stays.
 const serverRemovalDoc = `
@@ -56,11 +56,15 @@ units:
     id: eng
     mcp_env:
       linear: {X-Team: "${SHARED_TOKEN}"}
+    mcp_limits:
+      linear: {tools: {delete_issue: blocked}}
     roles:
       - name: Dev
         handle: dev
         mcp_env:
           linear: {Authorization: "Bearer ${DEV_LINEAR}"}
+        mcp_limits:
+          linear: {tools: {create_issue: approve}}
 `
 
 // storedValues are the values the store holds for serverRemovalDoc: every one
@@ -133,6 +137,9 @@ const wantDependants = `{"mcp_env":[` +
 	`{"kind":"seat","key":"dev","name":"Dev","segments":["units",0,"roles",0,"mcp_env","linear"]},` +
 	`{"kind":"unit","key":"eng","name":"Eng","segments":["units",0,"mcp_env","linear"]}],` +
 	`"sandbox":[{"seat":"pm","name":"PM","segments":["roles",0,"sandbox","mcp","servers",0]}],` +
+	`"mcp_limits":[` +
+	`{"kind":"seat","key":"dev","name":"Dev","segments":["units",0,"roles",0,"mcp_limits","linear"]},` +
+	`{"kind":"unit","key":"eng","name":"Eng","segments":["units",0,"mcp_limits","linear"]}],` +
 	`"secrets":["LINEAR_ORG","PM_LINEAR"],"oauth":false}`
 
 // A REMOVAL CLEARS EVERY DEPENDANT IN ONE REVISION OR IS REFUSED NAMING ALL OF
@@ -170,7 +177,8 @@ func TestAServerRemovalClearsEveryDependantInOneRevisionOrNamesThemAll(t *testin
 		segments = append(segments, jsonOf(t, problem["segments"]))
 	}
 	if want := []string{`["roles",0,"mcp_env","linear"]`, `["roles",0,"sandbox","mcp","servers",0]`,
-		`["units",0,"roles",0,"mcp_env","linear"]`, `["units",0,"mcp_env","linear"]`}; !slices.Equal(segments, want) {
+		`["units",0,"roles",0,"mcp_env","linear"]`, `["units",0,"roles",0,"mcp_limits","linear"]`,
+		`["units",0,"mcp_env","linear"]`, `["units",0,"mcp_limits","linear"]`}; !slices.Equal(segments, want) {
 		t.Errorf("problems at %v, want one at every field that names the server %v", segments, want)
 	}
 

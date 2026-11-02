@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // THE SERVER PAGE READS WHAT THE DETAIL SENDS, in both readings.
@@ -24,8 +25,9 @@ import (
 // the engine's own lists. The server's row, the removal's dependants and the
 // calls' coverage are each held by the gate that owns their declaration.
 //
-// Mutation: drop `risk_declared` from McpToolView, or `wait` from
-// McpInstanceView, or add a member usage row's `seats`, and this is red.
+// Mutation: drop `risk_declared` from McpToolView, `wait` from
+// McpInstanceView or `off_by` from McpReachLimit, or add a member usage row's
+// `seats`, and this is red.
 func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	t.Parallel()
 	var detail queries.MCPServerAnswer
@@ -79,7 +81,10 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	holdShape(t, "McpCheckFailure", one(checked[0]["failure"]), false)
 	holdShape(t, "McpServerInfo", one(checked[0]["server_info"]), false)
 	holdShape(t, "McpValueState", rowsOf(t, admin["values"]), false)
-	holdShape(t, "McpReach", rowsOf(t, admin["reaches"]), false)
+	reaches := rowsOf(t, admin["reaches"])
+	holdShape(t, "McpReach", reaches, false)
+	holdShape(t, "McpReachLimit", one(reaches[0]["limited"]), false)
+	holdShape(t, "McpToolLimit", rowsOf(t, at(reaches[0], "limited", "tools")), false)
 
 	member := asMap(t, queries.MemberMCPServer(detail))
 	holdShape(t, "McpMemberServerAnswer", []map[string]any{member}, false)
@@ -106,6 +111,7 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 		"McpValueAs":              stringsOf(config.MCPValueAses),
 		"McpReachReason":          stringsOf(config.MCPReachReasons()),
 		"McpToolLevel":            stringsOf(config.MCPToolLevels),
+		"McpToolLimitLevel":       stringsOf(org.ToolLimits),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)
 		if err != nil {

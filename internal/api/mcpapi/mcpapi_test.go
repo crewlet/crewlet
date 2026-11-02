@@ -282,7 +282,8 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 					InputSchema: map[string]any{"type": "object"}}},
 				ServerInfo: &coord.MCPServerInfo{Name: "github-mcp"},
 				Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
-					MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{}},
+					MCPEnv: []configapi.MCPBlockDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
+					MCPLimits: []configapi.MCPBlockDependant{}},
 					Secrets: []string{}},
 				Instances: []queries.MCPInstanceView{{Seat: "backend-dev", Node: "node-a",
 					State: coord.MCPInstanceRunning, Since: &seen, Restarts: 1, Tools: 1,
@@ -367,7 +368,8 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
 		t.Errorf("the tool answered %v", tool)
 	}
-	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "oauth", "sandbox", "secrets")
+	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "mcp_limits", "oauth", "sandbox",
+		"secrets")
 	// THE SERVER'S ACTIVITY, key for key: counts per tool, and each recent
 	// call's who, when, which and how it ended, never its arguments or its
 	// result.

@@ -141,7 +141,8 @@ type MCPServerAnswer struct {
 
 // MCPReachView is one agent seat a server reaches, and why: through `access`
 // (every agent, a unit named, the seat named) or, for a server reading each
-// agent's own vendor credential, the integration lane the seat is on at.
+// agent's own vendor credential, the integration lane the seat is on at. And
+// what the limits on the way down to the seat hold the server to for it.
 type MCPReachView struct {
 	// Seat is the seat's handle.
 	Seat   string                `json:"seat"`
@@ -149,10 +150,42 @@ type MCPReachView struct {
 	// Via is the key of the unit that grants it, for `unit`, and the lane the
 	// seat is on at, for `integration`; null otherwise.
 	Via *string `json:"via"`
+	// Limited is what the seat's own `mcp_limits` and every enclosing
+	// unit's hold the server to for it ([org.Role.LimitOn]), null where none
+	// does.
+	Limited *MCPLimitView `json:"limited"`
+}
+
+// MCPLimitView is what the limits hold one server to for one agent seat: the
+// strictest of the seat's own block and every enclosing unit's, each part
+// naming the block nearest the seat that holds it there.
+type MCPLimitView struct {
+	// Off is whether a limit turns the server off for the seat: its grant
+	// stands, and nothing of it starts for the seat or is offered to it.
+	Off bool `json:"off"`
+	// OffBy is the key of the unit whose limit turns it off, null where the
+	// seat's own does or where none does.
+	OffBy *string `json:"off_by"`
+	// Tools is each tool a limit holds back, by the server's own name for it,
+	// sorted. Always a list.
+	Tools []MCPToolLimitView `json:"tools"`
+}
+
+// MCPToolLimitView is one tool a limit holds back for a seat: at approve, each
+// call waits for a person's answer, and at blocked it is never offered. The
+// tool runs at the stricter of this and its own level.
+type MCPToolLimitView struct {
+	// Tool is the server's own name for it, before tool_prefix.
+	Tool  string        `json:"tool"`
+	Level org.ToolLimit `json:"level"`
+	// By is the key of the unit whose limit holds it, null for the seat's
+	// own.
+	By *string `json:"by"`
 }
 
 // reachesOf is every agent seat of roster that server's grant reaches, in the
-// chart's order ([org.Organization.AllRoles]).
+// chart's order ([org.Organization.AllRoles]), with what its limits hold the
+// server to.
 func reachesOf(server *config.MCPServer, roster *org.Organization) []MCPReachView {
 	out := []MCPReachView{}
 	if roster == nil {
@@ -167,7 +200,29 @@ func reachesOf(server *config.MCPServer, roster *org.Organization) []MCPReachVie
 		if reach.Via != "" {
 			view.Via = &reach.Via
 		}
+		if limit := seat.LimitOn(server.Name); !limit.IsZero() {
+			view.Limited = limitView(limit)
+		}
 		out = append(out, view)
+	}
+	return out
+}
+
+// limitView is the answer's reading of what the limits hold one server to.
+func limitView(limit org.ServerLimit) *MCPLimitView {
+	unit := func(key string) *string {
+		if key == "" {
+			return nil
+		}
+		return &key
+	}
+	out := &MCPLimitView{Off: limit.Off, Tools: []MCPToolLimitView{}}
+	if limit.Off {
+		out.OffBy = unit(limit.OffBy)
+	}
+	for _, tool := range slices.Sorted(maps.Keys(limit.Tools)) {
+		held := limit.Tools[tool]
+		out.Tools = append(out.Tools, MCPToolLimitView{Tool: tool, Level: held.Level, By: unit(held.By)})
 	}
 	return out
 }
@@ -387,7 +442,8 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
 		Reaches: []MCPReachView{}, UnlistedLevels: []string{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
-			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
+			MCPEnv: []configapi.MCPBlockDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
+			MCPLimits: []configapi.MCPBlockDependant{},
 		}, Secrets: []string{}},
 	}
 	if at >= 0 {

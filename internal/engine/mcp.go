@@ -588,7 +588,8 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 
 // grantedSurface is the epoch's surface as seat holds it: a clone of it without
 // the tools of each shared server the seat is not granted
-// ([config.MCPServer.Grants]).
+// ([config.MCPServer.Grants]), each tool held to what the limits on the way
+// down to the seat hold it to ([limitSurface]).
 //
 // ONE INSTANCE, FILED ONCE, HELD BY SOME: a shared server runs one instance for
 // the company and files its tools into the epoch's registry, and a seat's
@@ -598,6 +599,15 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 // this node holds no children for. A seat the epoch does not have (nil) holds no
 // shared server.
 func grantedSurface(c *Company, seat *org.Role) *tools.Registry {
+	reg := sharedSurface(c, seat)
+	limitSurface(reg, seat)
+	return reg
+}
+
+// sharedSurface is the epoch's surface without the tools of each shared server
+// seat is not granted: [grantedSurface] before the seat's limits are applied,
+// for [seatSurface] to file the seat's own children into first.
+func sharedSurface(c *Company, seat *org.Role) *tools.Registry {
 	reg := c.Tools.Clone()
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
@@ -606,6 +616,46 @@ func grantedSurface(c *Company, seat *org.Role) *tools.Registry {
 		}
 	}
 	return reg
+}
+
+// limitSurface holds each MCP tool on reg to the seat's limits
+// ([org.Role.LimitOn]): a tool a limit blocks is taken off the surface, and one
+// it holds at approve waits for a person's answer before each call.
+//
+// THE STRICTER OF THE TWO, ALWAYS. The surface already holds each tool to its
+// entry's level, applied where the server's tools are filed: a tool its entry
+// blocks was never filed, so no limit can bring it back, and one at approve
+// stays there whatever a limit says. A limit only takes a tool away or adds the
+// wait, so a seat is never offered more than its entry gives it.
+//
+// HERE, ON THE SEAT'S OWN COPY, and not where the tools are filed: one shared
+// instance is filed once for every seat it reaches, and each seat's limits are
+// its own. Every surface a seat's turn, its executor's bridge and its held
+// calls are built from is cut here ([grantedSurface], [seatSurface]), a seat's
+// own children's tools included, so none of them reaches a tool past its
+// limits. A server a limit turns off is not on the surface at all
+// ([config.MCPServer.Grants]): none of its children starts for the seat.
+func limitSurface(reg *tools.Registry, seat *org.Role) {
+	if seat == nil || len(seat.Limits) == 0 {
+		return
+	}
+	for _, entry := range reg.List() {
+		server, fromMCP := entry.FromMCP()
+		if !fromMCP {
+			continue
+		}
+		tool, ok := entry.Tool.(*mcp.Tool)
+		if !ok {
+			continue
+		}
+		switch level, limited := seat.LimitOn(server).Tool(tool.RawName()); {
+		case !limited:
+		case level == org.ToolApprove:
+			reg.RequireApproval(entry.Name())
+		default:
+			reg.Unregister(entry.Name())
+		}
+	}
 }
 
 // startAll brings a set of servers up CONCURRENTLY and files what they

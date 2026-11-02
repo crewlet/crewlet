@@ -716,7 +716,9 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bo
 
 // seatSurface is the registry one seat's turns are built against: the epoch's
 // surface as the seat holds it ([grantedSurface]: the shared servers it is
-// granted, and no other), with the seat's own live catalogue filed into it.
+// granted, and no other), with the seat's own live catalogue filed into it,
+// and every tool on it held to the seat's limits ([limitSurface]) once both
+// are in.
 //
 // CLONED, not shared: the seat's own tools must not reach a peer seat, and
 // the epoch's registry is read by every other seat on this node. Filed from
@@ -724,13 +726,15 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bo
 // claim and every apply build the same surface from the same children —
 // whichever pass happened to start them.
 func seatSurface(ctx context.Context, c *Company, s *seatChildren) *tools.Registry {
-	reg := grantedSurface(c, c.Org.AgentSeatByHandle(s.handle))
+	seat := c.Org.AgentSeatByHandle(s.handle)
+	reg := sharedSurface(c, seat)
 	for _, registration := range s.bridge.Registrations() {
 		if err := reg.RegisterMCP(registration); err != nil {
 			log.WarnContext(ctx, "mcp_tool_refused", "seat", s.handle,
 				"tool", registration.Tool.Name(), "error", err)
 		}
 	}
+	limitSurface(reg, seat)
 	return reg
 }
 

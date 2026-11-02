@@ -399,3 +399,79 @@ units:
 		}
 	}
 }
+
+// THE DETAIL SAYS WHAT A TEAM'S LIMITS HOLD A SERVER TO FOR EACH SEAT IT
+// REACHES, as the engine holds the seat ([org.Role.LimitOn]): the strictest of
+// the seat's own block and every enclosing unit's, each part naming the block
+// nearest the seat (a unit's key, or null for the seat's own), and null for a
+// seat no limit holds. A server a limit turns off for a seat still reaches it,
+// and the seat's box is not given it; nor is a box given a server a seat's
+// limits hold a tool of back.
+//
+// Mutation: answer the seat's own block alone, or drop the limits from
+// resolvedOf's boxes, and this is red.
+func TestTheDetailSaysWhatEachSeatsLimitsHoldAServerTo(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    main: {model: sonnet, run_in: direct}
+mcp_servers:
+  - {name: docs, command: docs-mcp, tools: {default: allow}}
+roles:
+  - {name: CEO, handle: ceo, llm: main, sandbox: {mcp: {servers: [docs]}}}
+units:
+  - name: Eng
+    id: eng
+    mcp_limits:
+      docs: {tools: {erase_doc: approve, read_doc: approve}}
+    roles:
+      - name: Dev
+        handle: dev
+        llm: main
+        mcp_limits:
+          docs: {tools: {erase_doc: blocked}}
+  - name: Ops
+    id: ops-team
+    mcp_limits:
+      docs: {off: true}
+    roles:
+      - {name: Ops, handle: ops, llm: main, sandbox: {mcp: {servers: [docs]}}}
+`
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, _ := configSurface(t, doc)
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
+	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+		Config: surface, MCPListings: fakeListings{}})
+	got, err := s.MCPServer(t.Context(), "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := map[string]string{}
+	for _, reach := range got.Reaches {
+		raw, err := json.Marshal(reach.Limited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		limited[reach.Seat] = string(raw)
+	}
+	for seat, want := range map[string]string{
+		"ceo": `null`,
+		"dev": `{"off":false,"off_by":null,"tools":[` +
+			`{"tool":"erase_doc","level":"blocked","by":null},{"tool":"read_doc","level":"approve","by":"eng"}]}`,
+		"ops": `{"off":true,"off_by":"ops-team","tools":[]}`,
+	} {
+		if limited[seat] != want {
+			t.Errorf("%s's limits read %s, want %s", seat, limited[seat], want)
+		}
+	}
+	if !slices.Equal(got.Resolved.BoxSeats, []queries.MCPBoxSeat{{Seat: "ceo", Cell: "direct"}}) {
+		t.Errorf("docs' boxes = %+v, want ceo's alone: ops' limits turn it off", got.Resolved.BoxSeats)
+	}
+}
