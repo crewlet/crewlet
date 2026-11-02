@@ -76,6 +76,10 @@ var questionExposures = []Exposure{
 	// chat write's preview reads are read by get_chat_room and
 	// get_chat_thread above.)
 	{Question: "work_person", As: AsPreviewRead, Name: "set_my_priorities"},
+	// WHOM A POST OR A REPLY WOULD REACH, read by their previews alone: the
+	// post's own decision run dry, so the card says what the send will do.
+	{Question: "chat_reach", As: AsPreviewRead, Name: "post_chat_message"},
+	{Question: "chat_reach", As: AsPreviewRead, Name: "reply_in_chat_thread"},
 }
 
 // toolExposures are the operator catalogue tools a curated write executes as.

@@ -281,6 +281,11 @@ type ChatWriter interface {
 		in chatlet.NewMessage) (chatlet.Written, error)
 	Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
 		in chatlet.NewMessage) (chatlet.Written, error)
+	// Reach is a post's DRY RUN: whom it would reach if it were sent now,
+	// decided by the post's own decision against the serving node's
+	// snapshot and roster, and published nowhere ([chatlet.Store.Reach]).
+	Reach(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+		in chatlet.NewMessage) (chatlet.Draft, error)
 	Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
 		in chatlet.EditMessage) (chatlet.Written, error)
 	Delete(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
@@ -2124,6 +2129,26 @@ var opChatReply = define("chat.reply", opOnceWrite, chatDomain, false,
 		}
 		return b.ChatWriter.Reply(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
 	}).repeatableWhen(func(a chatReplyArgs) bool { return chatKeyed(a.Actor) })
+
+// chatReachArgs is a post's dry run as it crosses: the post's own arguments,
+// with the thread it would answer (empty for a room post).
+type chatReachArgs struct {
+	Actor     chatlet.Actor
+	ChannelID string
+	ReplyTo   string
+	Message   chatlet.NewMessage
+}
+
+// A POST'S DRY RUN IS A READ: it decides on the serving node's snapshot, with
+// the roster that node's write path routes by, and publishes nothing, so
+// asking it again is asking again ([chatlet.Store.Reach]).
+var opChatReach = define("chat.reach", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatReachArgs) (chatlet.Draft, error) {
+		if b.ChatWriter == nil {
+			return chatlet.Draft{}, errNoHalf
+		}
+		return b.ChatWriter.Reach(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
+	})
 
 type chatEditArgs struct {
 	Actor     chatlet.Actor

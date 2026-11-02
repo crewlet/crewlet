@@ -3871,6 +3871,10 @@ export interface ChatMessage {
   mentions?: string[];
   /** `@channel` — the room as a whole. */
   collective?: boolean;
+  /** Whom a PERSON'S message reached and why, in routing order, written by
+   *  the engine from the post's own routing. Absent on everything else; an
+   *  empty `recipients` is a message that reached no agent. */
+  reach?: ChatReach;
   created_at: string;
   edited_at?: string;
   edited_by?: string;
@@ -3933,6 +3937,56 @@ export interface ChatThreadSummary {
   replier_count: number;
 }
 
+/** Why a message woke a seat. OPEN, for a reason a newer engine adds. */
+export type ChatReachReason =
+  | "dm"
+  | "mention"
+  | "reply_to_own_root"
+  | "collective_request"
+  | "answerer"
+  | "reply"
+  | "collective"
+  | "follow"
+  | "follow_all"
+  | (string & {});
+
+/** Whom a person's message reached. */
+export interface ChatReach {
+  /** The agents it woke, in routing order. Absent or empty: no agent. */
+  recipients?: { handle: string; reason: ChatReachReason }[];
+  /** A routing cap left seats out. */
+  truncated?: boolean;
+}
+
+/** A seat's answer to a message it was reached by. */
+export interface ChatAnswer {
+  handle: string;
+  /** The message that answered, and its broker instant. */
+  message_id: string;
+  at: string;
+}
+
+/** Where a person's message stands with the agents it reached. `unknown` is
+ *  a message whose reach was never recorded (stored before messages recorded
+ *  it), which shows no receipt: it is not `no_agent`. OPEN. */
+export type ChatDelivery =
+  "unknown" | "no_agent" | "waiting" | "partly_answered" | "answered" | (string & {});
+
+/** Why a draft would reach no agent: the room has none to answer it, or the
+ *  words name only people. OPEN. */
+export type ChatQuiet = "no_agent" | "addressed_to_people" | (string & {});
+
+/** The `chat_reach{channel_id, body, reply_to?}` answer: whom a draft would
+ *  reach if it were sent now, decided by the post's own routing. */
+export interface ChatDraft {
+  channel_id: string;
+  thread_root?: string;
+  reach?: ChatReach;
+  mentions?: string[];
+  collective?: boolean;
+  quiet?: ChatQuiet;
+}
+
 /** One emoji on one message, with whether this viewer is among the reactors. */
 export interface ChatReaction {
   emoji: string;
@@ -3955,6 +4009,12 @@ export interface ChatMessageView {
   /** The replies under a room post, on a transcript page and on a thread's
    *  root. Absent on a reply, a room event and a post nobody answered. */
   thread?: ChatThreadSummary;
+  /** Which of the agents a person's message reached have answered it, in the
+   *  order they answered. */
+  answered?: ChatAnswer[];
+  /** Where a person's message stands with them; absent on anything that is
+   *  not a person's message. */
+  delivery?: ChatDelivery;
 }
 
 /** The newest message in a room, as the rail previews it. */
@@ -7762,6 +7822,7 @@ export interface QueryMap {
   chat_channels: ChatChannelsAnswer;
   chat_channel: ChatChannelDetail;
   chat_messages: ChatMessagesAnswer;
+  chat_reach: ChatDraft;
   /* A THREAD IS ITS OWN QUESTION, not a filter on the room: it is opened
      beside the transcript and paged in the opposite direction, because a
      conversation is read forwards. */
