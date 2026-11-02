@@ -3805,9 +3805,11 @@ head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
 thread shows it: beside the list (a wide screen column) the list scrolls
 inside a box bounded by the scroller's view, handing the wheel back to the page
 at either end, and the thread's turns stick under the page's top; stacked
-on a phone, the turns are scrolled to and their heading takes focus. Each
-turn's trigger reads as plain words, its markdown stripped. A seat no
-node holds says why it shows nothing. Beside them are the seat's
+on a phone, the turns are scrolled to and their heading takes focus. A chosen
+thread's turns are drawn only from an answer read since it was chosen — until
+then they are loading — so the last thread's turns never stand under the new
+one's name. Each turn's trigger reads as plain words, its markdown stripped. A
+seat no node holds says why it shows nothing. Beside them are the seat's
 **Sessions** (`session=` opens one): every turn whose executor captured its
 harness's session, kept so a later turn of its conversation can continue it —
 read through any node, since the rows are the replicated estate's and the

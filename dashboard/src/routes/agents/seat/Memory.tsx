@@ -31,7 +31,7 @@ import {
   UsersGlyph,
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { keepInView, reveal } from "~/lib/scroller.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -42,7 +42,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Sessions } from "./Sessions.tsx";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
-import type { ConversationEntry } from "~/protocol/index.ts";
+import type { ConversationEntry, ConversationsAnswer } from "~/protocol/index.ts";
 
 export function Memory({ seat, now }: { seat: Seat; now: number }) {
   const handle = seat.handle;
@@ -183,6 +183,18 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   );
   const data = threads.data;
   const rows = data?.conversations ?? [];
+  // THE ANSWER IN HAND WHEN A THREAD IS CHOSEN IS THE LAST THREAD'S: the
+  // choice asks again with the new `conversation=`, and until that answer
+  // arrives the one in hand still carries the turns of the thread before —
+  // which, drawn under the new thread's name, read as its turns. So a thread's
+  // turns are drawn only from an answer read since it was chosen: which answer
+  // was in hand at the choice is kept from the render that saw it.
+  const [chosenOver, setChosenOver] = useState<{
+    thread: string;
+    answer: ConversationsAnswer | null;
+  }>({ thread, answer: null });
+  if (chosenOver.thread !== thread) setChosenOver({ thread, answer: data });
+  const turns = data !== null && data !== chosenOver.answer ? data : null;
   return (
     <section className="col gap-2" aria-labelledby="prof-conversations">
       <h3 id="prof-conversations" className="prof-section-title">
@@ -251,7 +263,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
               // A COUNT IS A FACT ABOUT THE THREAD THE READER OPENED: with
               // none open the answer carries no entries, and a 0 there would
               // be a quantity stated about a thread nobody had named.
-              count={thread ? data?.entries?.length : undefined}
+              count={thread ? turns?.entries?.length : undefined}
               // WHICH THREAD, named where the turns are: on a phone the list
               // that says it is a screen above.
               subtitle={thread ? conversationLabel(thread) : undefined}
@@ -267,9 +279,11 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                 title="Nothing selected"
                 description="Choose a thread."
               />
-            ) : data?.entries?.length ? (
+            ) : !turns ? (
+              <Skeleton variant="text" rows={3} label="Loading this thread's turns" />
+            ) : turns.entries?.length ? (
               <div className="list">
-                {data.entries.map((entry, i) => (
+                {turns.entries.map((entry, i) => (
                   <ThreadTurn key={entry.turn_id || i} entry={entry} />
                 ))}
               </div>
