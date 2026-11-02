@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE HEALTH TOOLS: fleet_health, every live node as its own heartbeat states
@@ -324,7 +325,9 @@ func (t *fleetHealth) query(args map[string]any) (fleetHealthQuery, *tools.Resul
 		cursor: strings.TrimSpace(argString(args, "cursor")),
 		limit:  argInt(args, "limit", defaultFleetHealthPage)}
 	if raw, present := args["firing"]; present && raw != nil {
-		firing, ok := raw.(bool)
+		// BY THE CHECK'S OWN READER ([argval.Bool]): true or false and
+		// nothing else, the rule the check at the surface holds it to.
+		firing, ok := argval.Bool(raw)
 		if !ok {
 			// A FILTER READ AS FALSE would list every node to a caller that
 			// asked for the ones firing.
