@@ -327,14 +327,14 @@ func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (reply turn.Re
 	for _, call := range run.BridgeCalls {
 		calls = append(calls, ledger.Call{Name: call.Name, Failed: call.Failed})
 	}
-	delivered = turn.Answered(calls, seatSurface(e.seatRegistry(c, run.AgentHandle)), reply)
+	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
 	elided := run.PriorCallsElided || run.BridgeCallsElided > 0
 	return reply, delivered, delivered || !elided
 }
 
-// seatSurface is the delivery surface a seat's calls are judged against, as its
-// registry holds it: which of its tools reach somebody, and where.
-func seatSurface(reg *tools.Registry) turn.Surface {
+// deliverySurface is the delivery surface a seat's calls are judged against, as
+// its registry holds it: which of its tools reach somebody, and where.
+func deliverySurface(reg *tools.Registry) turn.Surface {
 	if reg == nil {
 		return turn.Surface{}
 	}
