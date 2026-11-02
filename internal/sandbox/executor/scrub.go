@@ -368,15 +368,15 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		if file {
 			header.Size = plan.size
 		}
-		if err := tw.WriteHeader(&header); err != nil {
-			return err
+		if headerErr := tw.WriteHeader(&header); headerErr != nil {
+			return headerErr
 		}
 		if !file {
 			return nil
 		}
 		w := &counted{w: tw}
-		if err := rewriteMember(h.Name, plan.text, w, body, s, b); err != nil {
-			return err
+		if memberErr := rewriteMember(h.Name, plan.text, w, body, s, b); memberErr != nil {
+			return memberErr
 		}
 		if w.n != plan.size {
 			return fmt.Errorf("executor: the session's archive changed its member %s while it was read", h.Name)
