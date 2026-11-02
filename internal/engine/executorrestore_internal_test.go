@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -13,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -276,5 +280,126 @@ func TestASessionNoWindowCanCarryStartsFresh(t *testing.T) {
 				t.Errorf("a session no window carries started with brief %q, want the fresh one", last.Brief)
 			}
 		})
+	}
+}
+
+// boxSays is what the run's box says to its bridge as its harness first reaches
+// it: an MCP handshake on the endpoint its script wired its harness with, as
+// the harness's own client opens one.
+func (k keptLaunch) boxSays(t *testing.T, endpoint string) {
+	t.Helper()
+	at, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("the endpoint %q is no URL: %v", endpoint, err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", k.e.bridge.Handler())
+	req := httptest.NewRequest(http.MethodPost, at.Path, strings.NewReader(`{"jsonrpc":"2.0","id":1,`+
+		`"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},`+
+		`"clientInfo":{"name":"harness","version":"1"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	mux.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+// A RELAUNCH'S BOX SAYS WHICH SESSION IT STARTED, AND THE RUN IS HELD TO IT. A
+// relaunch that continues the turn's kept session hands its run the seat's tools
+// twice — under the bridge token of that session, and under the job's other
+// token, for a session its script starts of its own where the restore fails in
+// the box. The token its harness first dials is the box's word: the runner is
+// told which session the run is in before any call, and the job's record keeps
+// it — the fall back where the box started its own — for every later rebuild of
+// the run's guard, a relaunch carrying the run on included.
+//
+// Mutation: wire the run once, tell the runner nothing on the box's word, or
+// record the session the launch chose whatever the box said, and a case goes
+// red.
+func TestARelaunchsBoxSaysWhichSessionItStartedAndTheRunIsHeldToIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		fellBack bool
+		want     sandbox.SessionStart
+	}{
+		"its box took the session up":          {want: sandbox.SessionStartContinued},
+		"its box started a session of its own": {fellBack: true, want: sandbox.SessionStartFresh},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			k := newKeptLaunch(t, 40000, 0, 0)
+			req := launchRequest(k.l, nil)
+			req.Brief = "the fresh brief"
+			req.Session = &runner.SessionContinuation{Basis: k.l.ProbeSession(k.ctx),
+				Brief: "carry on in the box you left", Replaced: "carry on in a box that replaced yours"}
+			var mu sync.Mutex
+			var said []bool
+			req.Started = func(continued bool) {
+				mu.Lock()
+				defer mu.Unlock()
+				said = append(said, continued)
+			}
+			if _, err := k.l.LaunchExecutor(k.ctx, req); err != nil {
+				t.Fatalf("relaunch: %v", err)
+			}
+			started := k.jobs.Started()
+			last := started[len(started)-1]
+			if last.Resume != "s-1" || last.FreshWiring == nil {
+				t.Fatalf("the relaunch continues %q wired for a session of its own %+v, want the kept "+
+					"session wired both ways", last.Resume, last.FreshWiring)
+			}
+			chosen := last.MCPServers[config.ToolServerName].URL
+			other := last.FreshWiring.MCPServers[config.ToolServerName].URL
+			if chosen == "" || other == "" || chosen == other {
+				t.Fatalf("the run's bridge is wired at %q and %q, want two tokens of the job", chosen, other)
+			}
+			dialled := chosen
+			if tc.fellBack {
+				dialled = other
+			}
+			k.boxSays(t, dialled)
+			mu.Lock()
+			told := append([]bool(nil), said...)
+			mu.Unlock()
+			if len(told) != 1 || told[0] == tc.fellBack {
+				t.Fatalf("the runner was told %v, want once that the box continued: %v", told, !tc.fellBack)
+			}
+			pending := k.e.sandbox.Load().pending
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				row, _, err := pending.Get(k.ctx, "t1")
+				if err != nil {
+					t.Fatalf("Get: %v", err)
+				}
+				if row.Launch.SessionStart == tc.want {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("the job's record says %q, want %q", row.Launch.SessionStart, tc.want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
+// A RESUME READS WHICH SESSION THE JOB'S BOX SAID IT STARTED, off the job's
+// record: the runner's every rebuild of the run's guard — a collection, a
+// relaunch carrying the run on, a send-back continuing its session — holds the
+// skills the job's launch armed only where the box took up the session the
+// launch chose, and a record that says the box started its own, or says
+// nothing, holds none of them.
+//
+// Mutation: hand the runner the session the launch chose whatever the record
+// says, and the fall back's row goes red.
+func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
+	t.Parallel()
+	for start, want := range map[sandbox.SessionStart]bool{
+		sandbox.SessionStartContinued: true,
+		sandbox.SessionStartFresh:     false,
+		"":                            false,
+	} {
+		in := resumeInput{Run: sandbox.PendingRun{Launch: sandbox.LaunchRecord{SessionStart: start}}}
+		if got := runnerResume(in, nil, nil).Continued; got != want {
+			t.Errorf("a job whose box said %q resumes continued %v, want %v", start, got, want)
+		}
 	}
 }

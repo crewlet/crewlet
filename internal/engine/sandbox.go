@@ -1457,6 +1457,12 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) *runner.Resume {
 	return &runner.Resume{
 		State: in.State, Answer: in.Answer,
+		// WHICH SESSION THE JOB'S BOX SAID IT STARTED, off the job's own
+		// record: every guard the resume rebuilds from State — the
+		// collection's, a relaunch carrying the round on, a send-back that
+		// continues the job's session — holds the skills its launch armed only
+		// where the box took that session up ([runner.Resume.Continued]).
+		Continued: in.Run.Launch.SessionStart == sandbox.SessionStartContinued,
 		// WHICH BOX DID THE WORK. Off the run's own row, because this
 		// process may not be the one that launched it, and it is the only
 		// thing that can say a phase ran in a sandbox rather than in this

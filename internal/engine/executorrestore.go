@@ -175,6 +175,6 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 // sessionDecision is how the launch decided its run takes up a session, in the
 // runner's terms ([runner.SessionDecision]).
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
-	return runner.SessionDecision{Continues: d.Brief == sandbox.BriefContinued ||
-		d.Brief == sandbox.BriefContinuedNewBox, Kept: d.Kept, NewBox: d.Brief == sandbox.BriefContinuedNewBox}
+	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept,
+		NewBox: d.Brief == sandbox.BriefContinuedNewBox}
 }

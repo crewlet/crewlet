@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -251,6 +252,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
 	ledger.nudge = e.nudgeRun
+	// WHETHER THE LAUNCH CONTINUES A SESSION, decided once it has its box and
+	// before the run starts, and read on the run's first request to its
+	// bridge, on another goroutine, to read the box's word on the session it
+	// started against ([boxStarted]).
+	var continuing atomic.Bool
 	session := &mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  handle,
@@ -278,6 +284,11 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// each under: a load the harness reports is the run's load of the
 		// key (internal/api/mcpbridge, skills.go).
 		Skills: req.Skills.Listed(),
+		// AND THE SESSION ITS BOX STARTED, as the box says it by the token
+		// its harness dials, before the run's first call: the run's guard is
+		// held to it, and the job's record keeps it (internal/api/mcpbridge,
+		// started.go).
+		Started: boxStarted(ledger, l.turn.RunID, continuing.Load, req.Started),
 	}
 
 	settings := seatSandbox(company, handle)
@@ -408,8 +419,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// knows its box and before the run starts there, so the run's guard
 		// and its prompt's record are the session's it runs in.
 		Decided: func(d sandbox.LaunchDecision) {
+			decided := sessionDecision(d)
+			continuing.Store(decided.Continues)
 			if req.Decided != nil {
-				req.Decided(sessionDecision(d))
+				req.Decided(decided)
 			}
 		},
 		// THE SAME FENCE, asked again once the run's row exists — see
@@ -539,20 +552,37 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
 	inbox.Bind(ctx, job.LaunchID)
+	opening := bridgeOpening(endpoint, s, inbox != nil)
+	// AND THE SAME UNDER THE JOB'S OTHER TOKEN, for a session its box starts of
+	// its own in place of the one its launch continues: the token its harness
+	// dials is the box's word on which session it started
+	// (internal/api/mcpbridge, started.go). Handed to the run only where the
+	// launch continues one ([sandbox.Opening.Fresh]); minted here because the
+	// job is named before its launch knows its box, and a token is worth
+	// nothing outside the box that is handed it.
+	if fresh := e.bridge.FreshEndpoint(s); fresh != "" {
+		other := bridgeOpening(fresh, s, inbox != nil)
+		opening.Fresh = &other
+	}
+	return opening, nil
+}
+
+// bridgeOpening is what a job's box is given at endpoint, one of its bridge
+// tokens: the bridge's servers ([bridgeServers]), where its harness asks for
+// its turn's notes where steered, and where it reports loading one of its
+// skills where it is handed any — under THE SAME NAMES THE BRIDGE SERVES, so
+// the box and the bridge cannot disagree about where they are.
+func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool) sandbox.Opening {
 	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface)}
-	if inbox != nil {
-		// THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
-		// disagree about where the notes are.
+	if steered {
 		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
 	}
 	if len(s.Skills) > 0 {
-		// AND WHERE ITS HARNESS REPORTS LOADING ONE OF ITS SKILLS, by the
-		// same names.
 		opening.SkillLoads = sandbox.SkillWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SkillTool, URL: mcpbridge.SkillURL(endpoint)}
 	}
-	return opening, nil
+	return opening
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
