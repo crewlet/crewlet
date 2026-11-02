@@ -31,15 +31,13 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 // The bucket's two kinds of key: a run's RECORD is its turn id, one segment
 // ([encodeKey]), and the LOG beside it is the turn id and [runLogSegment], two
 // ([runLogKey]). A subject token path, so the broker tells them apart: a
-// listing of records filters on [runRecordKeys] and never moves a log, and the
-// sweep of logs left behind filters on [runLogKeys] and never moves a record.
+// listing of records filters on [runRecordKeys] and never moves a log. The
+// sweep of logs left behind reads them off the marker sweep's own pass of the
+// bucket ([FleetStore.sweepRunLogs]), which walks every key anyway.
 const (
 	runLogSegment = "log"
 	runRecordKeys = "*"
 )
-
-// runLogKeys matches every log in the bucket, whatever its run.
-var runLogKeys = "*" + coord.KeySeparator + coord.DocumentKey(runLogSegment)
 
 // runLogKey is the key of the log beside turnID's run.
 func runLogKey(turnID string) string { return coord.DocumentKey(turnID, runLogSegment) }
@@ -362,15 +360,15 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 			return true, nil
 		}
 		if found {
-			revision, err := f.runs.Update(ctx, key, put, read.Version)
+			revision, werr := f.runs.Update(ctx, key, put, read.Version)
 			switch {
-			case err == nil:
+			case werr == nil:
 				result, changed = coord.Record{Key: turnID, Value: bytes.Clone(put), Version: revision}, true
 				return true, nil
-			case lostUpdateRace(err):
+			case lostUpdateRace(werr):
 				return false, nil
 			default:
-				return false, unavailable("write the sandbox run's log", err)
+				return false, unavailable("write the sandbox run's log", werr)
 			}
 		}
 		revision, err := f.create(ctx, f.runs, key, put)
@@ -387,9 +385,9 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 			// THE RUN ENDED UNDER THE CREATE: undone, through the
 			// revision written. A loss here is a later write, which is
 			// the record's own successor's and not this one's to remove.
-			if err := f.runs.Purge(ctx, key, jetstream.LastRevision(revision)); err != nil &&
-				!lostUpdateRace(err) {
-				return false, unavailable("remove the log written beside a run that ended", err)
+			if perr := f.runs.Purge(ctx, key, jetstream.LastRevision(revision)); perr != nil &&
+				!lostUpdateRace(perr) {
+				return false, unavailable("remove the log written beside a run that ended", perr)
 			}
 			return true, nil
 		case err != nil:
@@ -410,7 +408,7 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 }
 
 // removeRunLog removes the log beside a run whose record this node has just
-// removed, whatever the log holds.
+// removed.
 //
 // ASKED FIRST, of the leader: a run that never opened a job has no log, and a
 // purge of a key holding nothing leaves a marker behind for every such run,
@@ -419,6 +417,17 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 // read finds the record already gone and removes itself
 // ([FleetStore.MutateSandboxRunLog]).
 //
+// NEVER A LOG BESIDE A RECORD: the run's turn may have been launched again
+// between the record's removal and this call, its new record created and the
+// log opened to its job — a log this removal must not take, since no append
+// ever creates one and every call of the new job would be dropped. So the log
+// is read, then the record, and a record there leaves the log to that run:
+// its launch opens the log to its own job, starting afresh whatever an earlier
+// run left. Only a log with no record beside it is purged, and THROUGH THE
+// REVISION READ, so a log written after that read — by a launch whose record
+// came after the record's read — is untouched; that loss reads both again,
+// within the bound every write on the bucket shares ([casRetry]).
+//
 // A FAILURE IS LOGGED, NOT RETURNED: the record's removal has landed, and an
 // error would tell its caller the decision did not — a caller that retried
 // would find no record and decide nothing. The log is left to the sweep
@@ -426,51 +435,70 @@ func (f *FleetStore) MutateSandboxRunLog(ctx context.Context, turnID string,
 func (f *FleetStore) removeRunLog(ctx context.Context, turnID string) {
 	key := runLogKey(turnID)
 	ctx = context.WithoutCancel(ctx)
-	_, err := f.get(ctx, f.runs, key)
-	if errors.Is(err, jetstream.ErrKeyNotFound) {
-		return
+	settled, err := casRetry(ctx, &f.runTrips, "remove the sandbox run's log "+turnID, func() (bool, error) {
+		entry, err := f.get(ctx, f.runs, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			return true, nil
+		case err != nil:
+			return false, err
+		}
+		_, err = f.get(ctx, f.runs, encodeKey(turnID))
+		switch {
+		case err == nil:
+			// A NEW RUN OF THE TURN, whose log this is to manage.
+			return true, nil
+		case !errors.Is(err, jetstream.ErrKeyNotFound):
+			return false, err
+		}
+		err = f.runs.Purge(ctx, key, jetstream.LastRevision(entry.Revision()))
+		switch {
+		case err == nil:
+			return true, nil
+		case lostUpdateRace(err):
+			return false, nil
+		default:
+			return false, err
+		}
+	})
+	if err == nil && !settled {
+		err = contended("removeRunLog", turnID)
 	}
-	if err == nil {
-		err = f.runs.Purge(ctx, key)
-	}
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if err != nil {
 		log.WarnContext(ctx, "coord_kv_sandbox_run_log_left", "turn_id", turnID, "error", err.Error(),
 			"detail", "the run's record is removed and its log is not; the marker sweep removes it")
 	}
 }
 
 // sweepRunLogs removes every log written before cutoff whose run has no
-// record, reporting how many messages went — see [coord.Markers].
+// record, off the runs bucket's marker pass, reporting how many messages went
+// — see [coord.Markers].
 //
-// THE LOGS FIRST, OFF A WALK FILTERED TO THEM, THEN EACH ONE'S RECORD from the
-// leader, so a record written under the turn again after its log was found
-// keeps it; and each log is purged THROUGH THE REVISION THE WALK SAW
+// A CANDIDATE IS READ OFF THE PASS: a log whose record key the same pass holds
+// no value for — absent, or a marker. Each is then confirmed against its
+// record from the LEADER, so a record written under the turn again after the
+// pass keeps its log; and each log is purged THROUGH THE REVISION THE PASS SAW
 // ([leaderPurge]), so a log written again since is untouched.
-func (f *FleetStore) sweepRunLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+func (f *FleetStore) sweepRunLogs(ctx context.Context, pass sweepPass, cutoff time.Time) (int64, error) {
 	what := "the sandbox runs' logs"
-	purge, err := newLeaderPurge(f.js, f.runs)
-	if err != nil {
-		return 0, fmt.Errorf("coord/kv: sweep %s: %w", what, err)
-	}
-	pass, err := watchWalk(ctx, f.runs, runLogKeys, what)
-	if err != nil {
-		return 0, err
-	}
-	keys := make([]string, 0, len(pass))
-	for key, kve := range pass {
-		if kve.Operation() == jetstream.KeyValuePut && kve.Created().Before(cutoff) {
-			keys = append(keys, key)
+	keys := make([]string, 0)
+	for key, kve := range pass.keys {
+		segments, ok := coord.DocumentSegments(key)
+		if !ok || len(segments) != 2 || segments[1] != runLogSegment ||
+			kve.Operation() != jetstream.KeyValuePut || !kve.Created().Before(cutoff) {
+			continue
 		}
+		if record, ok := pass.keys[encodeKey(segments[0])]; ok && record.Operation() == jetstream.KeyValuePut {
+			continue
+		}
+		keys = append(keys, key)
 	}
 	// KEY ORDER, as the marker sweep's, so a failure part-way names the same
 	// key on every retry.
 	slices.Sort(keys)
 	var swept int64
 	for _, key := range keys {
-		segments, ok := coord.DocumentSegments(key)
-		if !ok || len(segments) != 2 {
-			continue
-		}
+		segments, _ := coord.DocumentSegments(key)
 		_, err := f.get(ctx, f.runs, encodeKey(segments[0]))
 		switch {
 		case err == nil:
@@ -478,7 +506,7 @@ func (f *FleetStore) sweepRunLogs(ctx context.Context, cutoff time.Time) (int64,
 		case !errors.Is(err, jetstream.ErrKeyNotFound):
 			return swept, unavailable("sweep "+what, fmt.Errorf("read the run of %q: %w", key, err))
 		}
-		n, err := purge.through(ctx, key, pass[key].Revision())
+		n, err := pass.purge.through(ctx, key, pass.keys[key].Revision())
 		if err != nil {
 			return swept, unavailable("sweep "+what, fmt.Errorf("remove the log %q: %w", key, err))
 		}
