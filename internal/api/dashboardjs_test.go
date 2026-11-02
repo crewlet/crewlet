@@ -1549,7 +1549,11 @@ const (
 	// useLatestHandlers, which the dialog is the first settings screen to
 	// read, became a chunk of its own (+1.5 KiB) as Rollup moved 1.2 KiB of
 	// shared settings code into the Access chunk. 5394 KiB.
-	treeBudget = 5<<20 + 274<<10
+	// The wizard's OAuth and client credentials (the Sign-in step's client
+	// choice, scopes and callback address, a service identity's fields, the
+	// oauth block it writes and the secret it stores) took it from 5393.3 KiB
+	// to 5398.1 KiB (+4.8 KiB), all of it the settings chunk. 5399 KiB.
+	treeBudget = 5<<20 + 279<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
