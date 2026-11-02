@@ -219,3 +219,35 @@ func TestATipWaitsForTheRoundInFlight(t *testing.T) {
 			"queued on the tip", len(writes), queuedOf(writes), records)
 	}
 }
+
+// EVERY TARGET'S TIP IS WORKED WITHIN ONE TURN: main's and release's windows
+// each fill a page of the repository's check work, the listing naming the
+// target each page ended at. The one turn reads on past main's page to
+// release's and queues unit on both tips — a target past the first page is
+// never left to a later pass, which would read the same first page again.
+//
+// Mutation: stop the turn at the page the heads' cursor ends — release never
+// read, red.
+func TestEveryTargetsTipIsWorkedWithinOneTurn(t *testing.T) {
+	t.Parallel()
+	green := oid("1")
+	e := newCheckEstate()
+	e.files[green] = checksFile("unit")
+	e.tipsPerPage = 1
+	for i, target := range []string{"refs/heads/main", "refs/heads/release"} {
+		e.tips = append(e.tips, code.TipDue{TargetRef: target, Required: []string{"unit"},
+			Green: &code.GreenRow{RepoID: repoA, TargetRef: target, CommitOID: green,
+				Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 9}},
+			Landings: []code.TipLanding{landedAt(uint64(10+i), green, oid(string(rune('2'+i))))}})
+	}
+	writes, _, _ := tipTurn(t, e)
+	var tips []string
+	for _, w := range writes {
+		if q := w.Queued; q != nil && q.Name == "unit" && q.Purpose == code.PurposeTip {
+			tips = append(tips, q.Target)
+		}
+	}
+	if !slices.Equal(tips, []string{"refs/heads/main", "refs/heads/release"}) {
+		t.Fatalf("one turn queued unit on the tips of %v, want main's and release's", tips)
+	}
+}

@@ -288,6 +288,12 @@ func (q ReadQuery) validateChecksDue() error {
 	case q.ChecksDue.RepoID != "" && !canonicalUUID(q.ChecksDue.RepoID):
 		return refused("checks_due.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
 			"lowercase spelling", q.ChecksDue.RepoID))
+	case q.ChecksDue.TipsAfter != "" && (q.ChecksDue.RepoID == "" || q.Cursor != ""):
+		return refused("checks_due.tips_after", "one repository's tip work is paged on pages of its own, "+
+			"before its heads': tips_after names the target the page before ended at, beside a repository "+
+			"and with no cursor")
+	case q.ChecksDue.TipsAfter != "" && !ValidRef(q.ChecksDue.TipsAfter):
+		return refused("checks_due.tips_after", fmt.Sprintf("%q is not a branch's name", q.ChecksDue.TipsAfter))
 	}
 	for _, f := range []struct {
 		field string
@@ -877,7 +883,8 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // tip and the position that moved it there — the tip whose checks file the
 // home reads — and what it owes ([CheckWork], read in the same snapshot), and
 // on its FIRST PAGE its targets due a reading ([ReadAnswer.DueTargets]),
-// walking its targets' rows by their key, and its tip work
+// walking its targets' rows by their key, and from it on, on pages of their
+// own before its heads' ([ReadAnswer.TipsNext]), its tip work
 // ([ReadAnswer.DueTips]), walking its targets' rows of tip work
 // (code_tips_due, one a target). The listing of repositories is the union of
 // the two listings, one keyset page of each after the cursor merged into one.
@@ -935,12 +942,16 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	if q.Cursor == "" {
 		// THE TARGETS DUE A READING, on the first page alone: at most one a
 		// branch the repository's changes target, so bounded by its refs.
-		if err = r.dueCheckTargets(ctx, tx, repoID, refresh, &pg, out); err != nil {
-			return err
+		if q.ChecksDue.TipsAfter == "" {
+			if err = r.dueCheckTargets(ctx, tx, repoID, refresh, &pg, out); err != nil {
+				return err
+			}
 		}
-		// ITS PROTECTED TARGETS' TIP WORK (tipwork.go), on the first page
-		// alone too: one a target holding a landing its tip checks owe.
-		if err = r.dueTips(ctx, tx, repoID, required, &pg, out); err != nil {
+		// ITS PROTECTED TARGETS' TIP WORK (tipwork.go), one a target owing
+		// it, on pages of their own until the last of them: the heads begin
+		// on the page they end on.
+		var cut bool
+		if cut, err = r.dueTips(ctx, tx, repoID, q.ChecksDue.TipsAfter, required, &pg, out); err != nil || cut {
 			return err
 		}
 	}

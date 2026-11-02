@@ -19,8 +19,9 @@ import (
 // — a merge a person's override landed, a person's own push under
 // `direct_push: persons` — lies ABOVE ITS TARGET'S GREEN until a check of a
 // tip proves it, and its home owes the target that work: a `checks_due` read
-// of one repository answers it on its first page ([ReadAnswer.DueTips]), one
-// [TipDue] a target holding a landing neither green nor broken.
+// of one repository answers it on its first pages ([ReadAnswer.DueTips], paged
+// by [ReadAnswer.TipsNext] before its heads), one [TipDue] a target holding
+// a landing neither green nor broken.
 //
 // A LANDING IS GREEN BY ITS POSITION — at or below its target's green row —
 // never by a flag of its own: a green record moves the one row, so it writes
@@ -143,42 +144,53 @@ type TipCheck struct {
 	Reason  CheckReason `json:"reason,omitempty"`
 }
 
-// dueTips files the tip work of repository repoID's targets into out, within
-// pg — each target owing it, its window read whole or not at all — with
-// required, its gate's checks by target.
-func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID string, required *requiredChecks, pg *page,
-	out *ReadAnswer) error {
+// dueTips files the tip work of repository repoID's targets after after — ""
+// for the first — into out, within pg: each target owing it, by name, its
+// window read whole, with required, its gate's checks by target. It answers
+// whether the page ended among them, when [ReadAnswer.TipsNext] names the
+// last target it answered — the one that filled the page among them, which a
+// page APPENDS BEFORE IT ASKS whether it is full, as every page here does —
+// and the next page of the same turn goes on after it, before any head. A
+// target past a page is never left to a later pass, which would list the same
+// targets first again and never reach it while they stay owed.
+func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, required *requiredChecks,
+	pg *page, out *ReadAnswer) (bool, error) {
 
-	targets, err := dueTipTargetsIn(ctx, tx, repoID, r.pageRows)
+	targets, err := dueTipTargetsIn(ctx, tx, repoID, after, r.pageRows)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, target := range targets {
 		t, err := tipDueOf(ctx, tx, repoID, target, required, r.tipWindow)
 		switch {
 		case err != nil:
-			return err
+			return false, err
 		case len(t.Landings) == 0:
 			continue
 		}
 		encoded, err := json.Marshal(t)
 		if err != nil {
-			return fmt.Errorf("code: encode %s's tip work: %w", target, err)
-		}
-		if pg.add(len(encoded) + 1) {
-			// A TARGET'S WINDOW IS READ WHOLE OR NOT AT ALL: one past the
-			// page waits for the next pass, which lists it first.
-			return nil
+			return false, fmt.Errorf("code: encode %s's tip work: %w", target, err)
 		}
 		out.DueTips = append(out.DueTips, t)
+		if pg.add(len(encoded) + 1) {
+			out.TipsNext = target
+			return true, nil
+		}
 	}
-	return nil
+	if len(targets) == r.pageRows {
+		// THE LISTING CUT AT ITS BOUND, every target it named answered.
+		out.TipsNext = targets[len(targets)-1]
+		return true, nil
+	}
+	return false, nil
 }
 
-// dueTipTargetsIn is repoID's targets owing tip work — each holding a landing
-// above its green that no bisect found broken — by name, at most limit.
-func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID string, limit int) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, limit)
+// dueTipTargetsIn is repoID's targets owing tip work after after — each
+// holding a landing above its green that no bisect found broken — by name, at
+// most limit.
+func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID, after string, limit int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("code: list repository %s's targets owing tip work: %w", repoID, err)
 	}
@@ -349,8 +361,9 @@ const (
 		WHERE d.repo_id > ?1
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = d.repo_id AND r.status = 'active')
 		GROUP BY d.repo_id ORDER BY d.repo_id LIMIT ?2`
-	dueTipTargetsSQL = `SELECT target_ref FROM code_tips_due WHERE repo_id = ?1 ORDER BY target_ref LIMIT ?2`
-	tipLandingsSQL   = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
+	dueTipTargetsSQL = `SELECT target_ref FROM code_tips_due WHERE repo_id = ?1 AND target_ref > ?2
+		ORDER BY target_ref LIMIT ?3`
+	tipLandingsSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position >= ? AND (position > ? OR ordinal > ?)
 		ORDER BY position, ordinal LIMIT ?`
 	newestLandingSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings

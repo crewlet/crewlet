@@ -1342,8 +1342,8 @@ func registeredStatements() map[string]statement {
 		// index partial on its tip attempts not yet ended.
 		"due tip repositories": {dueTipReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id>?)", repoKey + " (id=?)"}},
-		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", MaxSnapshotItems},
-			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
+		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", "refs/heads/main", MaxSnapshotItems},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=? AND target_ref>?)"}},
 		"tip landings": {tipLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, MaxTipLandings + 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"newest landing": {newestLandingSQL, []any{"repo-1", "refs/heads/main"},

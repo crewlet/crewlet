@@ -30,10 +30,15 @@ type checkEstate struct {
 	due     []code.ChangeDue
 	targets []code.CheckTargetDue
 	tips    []code.TipDue
-	files   map[string]string
-	read    []string
-	writes  []code.ChecksRequest
-	records []code.QueueProposal
+	// tipsPerPage, where set, pages tips as the listing pages a repository's
+	// tip work whose windows fill its pages: that many a page, each page
+	// naming the target it ended at (code.ReadAnswer.TipsNext) and the next
+	// going on after it (code.ChecksDueQuery.TipsAfter), before any head.
+	tipsPerPage int
+	files       map[string]string
+	read        []string
+	writes      []code.ChecksRequest
+	records     []code.QueueProposal
 }
 
 func newCheckEstate() *checkEstate {
@@ -54,8 +59,19 @@ func (e *checkEstate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer
 	case q.ChecksDue.RepoID == "":
 		return code.ReadAnswer{DueRepos: []string{repoA}}, nil
 	}
+	at := statelog.Position{Stream: topics.CodeLogStream, Seq: 50}
+	tips := slices.Clone(e.tips)
+	if e.tipsPerPage > 0 {
+		if after := q.ChecksDue.TipsAfter; after != "" {
+			tips = tips[slices.IndexFunc(tips, func(t code.TipDue) bool { return t.TargetRef == after })+1:]
+		}
+		if len(tips) > e.tipsPerPage {
+			tips = tips[:e.tipsPerPage]
+			return code.ReadAnswer{DueTips: tips, TipsNext: tips[len(tips)-1].TargetRef, Position: at}, nil
+		}
+	}
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due), DueTargets: slices.Clone(e.targets),
-		DueTips: slices.Clone(e.tips), Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 50}}, nil
+		DueTips: tips, Position: at}, nil
 }
 
 func (e *checkEstate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {

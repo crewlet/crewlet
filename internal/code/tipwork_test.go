@@ -280,3 +280,58 @@ func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
 		t.Fatalf("main's round in flight is %q with C's tip attempt running past the window, want C", got)
 	}
 }
+
+// A TARGET PAST THE PAGE IS ANSWERED ON THE NEXT PAGE (ADR-0091): main and
+// release each owe their tip work, and a page holds one target's. The first
+// page answers main — the target that fills it is answered, never dropped —
+// and names it as where it ended; the next, asked after it, answers release;
+// the one after that answers no tip and names nowhere more, so the home's
+// turn ends with both answered, each once.
+//
+// Mutation: ask whether the page is full before answering the target that
+// fills it — main never answered, red; or go on from the start whatever the
+// page before ended at — main answered again and release never, red.
+func TestATargetPastThePageIsAnsweredOnTheNextPage(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	release := s.Protections[0]
+	release.Pattern = "refs/heads/release"
+	s.Protections = append(s.Protections, release)
+	repo := n.ensure("web", s, t1).RepoID
+	for _, target := range []string{mainRef, "refs/heads/release"} {
+		n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(target, code.ZeroOID, oidOf("A"))))
+		got, err := c.Propose(t.Context(), proposal(repo, update(target, oidOf("A"), oidOf("B"))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push onto %s answered %+v (%v), want it landed", target, got.Answer, err)
+		}
+	}
+	code.SetPageLimits(n.reader, 1, code.MaxPageBytes)
+	var answered []string
+	after := ""
+	for page := 1; ; page++ {
+		if page > 4 {
+			t.Fatalf("web's tip work was still paging after three pages, answered %v", answered)
+		}
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue,
+			ChecksDue: &code.ChecksDueQuery{RepoID: repo, RefreshBefore: harnessAt, TipsAfter: after},
+			Fresh:     statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			t.Fatalf("page %d of web's check work: %v", page, err)
+		}
+		for _, tip := range a.DueTips {
+			answered = append(answered, tip.TargetRef)
+		}
+		if a.TipsNext == "" {
+			break
+		}
+		after = a.TipsNext
+	}
+	if !slices.Equal(answered, []string{mainRef, "refs/heads/release"}) {
+		t.Fatalf("web's pages answered the tip work of %v, want main's and then release's, each once", answered)
+	}
+}

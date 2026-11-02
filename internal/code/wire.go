@@ -1631,7 +1631,8 @@ type ReadAnswer struct {
 	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
 	// repository's first page, DueTargets: its target branches due a reading
 	// of their checks file again, and DueTips: its protected targets owing
-	// tip work ([TipDue], tipwork.go).
+	// tip work ([TipDue], tipwork.go), paged on pages of their own before its
+	// heads' ([ReadAnswer.TipsNext]).
 	DueRepos []string `json:"due_repos,omitempty"`
 	// Indexed is an `indexed` listing's page of repositories, by name.
 	Indexed    []IndexedRepo    `json:"indexed,omitempty"`
@@ -1704,8 +1705,13 @@ type ReadAnswer struct {
 	// Commit is a `commit` read's changes of its commit, beside Repo.
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
-	Inbox    *InboxPage         `json:"inbox,omitempty"`
-	Next     string             `json:"next,omitempty"`
+	Inbox *InboxPage `json:"inbox,omitempty"`
+	Next  string     `json:"next,omitempty"`
+	// TipsNext is a `checks_due` page of one repository's tip work cut at its
+	// bound: the target it ended at, which the next page goes on after
+	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
+	// targets' windows fill a page has every one answered within one turn.
+	TipsNext string             `json:"tips_next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
 }
@@ -2414,6 +2420,10 @@ type ChecksDueQuery struct {
 	// pushed to on every landing is read at the home's pace, never at its
 	// own.
 	RefreshBefore time.Time `json:"refresh_before"`
+	// TipsAfter is, for one repository's due check work with no cursor, the
+	// protected target its tip work goes on after: the [ReadAnswer.TipsNext]
+	// of the page before, which ended at it.
+	TipsAfter string `json:"tips_after,omitempty"`
 }
 
 // ChecksRunningQuery is a `checks_running` read's question: the repository
