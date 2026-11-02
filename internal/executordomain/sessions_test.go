@@ -337,3 +337,60 @@ func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 		t.Errorf("an archive a byte past its bound was sealed: %v, want ErrSessionTooLarge", err)
 	}
 }
+
+// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: a restore fetches
+// the turn's object sealed onto its node's disk, checked against the row by the
+// object store, and opens the spool against the row's own associated data — so
+// the spool reads back as the archive under its own seat and turn, and is
+// ErrUnreadable named by another turn's row, another seat's, or a row naming
+// another object, whatever bytes the spool holds. A row naming an object the
+// store no longer holds fetches nothing and is ErrUnreadable at once.
+//
+// Mutation: open the spool under an associated data that leaves the turn or the
+// seat out, or skip the object store's check in Fetch, and a row goes red.
+func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionStore(t, "k1")
+	turn := statelog.NewOpID(time.Now(), "")
+	plain := archive(t, 2*secrets.StreamChunkBytes+5)
+	put, err := store.Put(t.Context(), "ana", turn, io.NopCloser(bytes.NewReader(plain)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	own := executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object}
+	var spool bytes.Buffer
+	if err := store.Fetch(t.Context(), own, &spool); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
+		t.Fatal("the spool holds the archive in the clear")
+	}
+	open := func(row executordomain.Session) ([]byte, error) {
+		r, err := store.OpenSpooled(row, bytes.NewReader(spool.Bytes()))
+		if err != nil {
+			return nil, err
+		}
+		return io.ReadAll(r)
+	}
+	if got, err := open(own); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the spool opened for its own row read (%d bytes, %v), want the archive", len(got), err)
+	}
+	for name, other := range map[string]executordomain.Session{
+		"another turn": {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
+		"another seat": {Handle: "ben", Turn: turn, Object: put.Object},
+		"another object": {Handle: "ana", Turn: turn, Object: objstore.Object{
+			Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
+			Size: put.Object.Size}},
+	} {
+		if _, err := open(other); !errors.Is(err, executordomain.ErrUnreadable) {
+			t.Errorf("the spool opened for %s: %v, want ErrUnreadable", name, err)
+		}
+	}
+	gone := executordomain.Session{Handle: "ana", Turn: turn, Object: objstore.Object{
+		Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
+		Size: put.Object.Size}}
+	var nothing bytes.Buffer
+	if err := store.Fetch(t.Context(), gone, &nothing); !errors.Is(err, executordomain.ErrUnreadable) {
+		t.Errorf("a row naming an object the store does not hold fetched: %v, want ErrUnreadable", err)
+	}
+}
