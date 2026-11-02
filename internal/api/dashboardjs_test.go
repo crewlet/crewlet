@@ -1179,8 +1179,12 @@ const (
 	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
 	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
 	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
-	// link.
-	initialBudget = 381 << 10
+	// link. The MCP sign-in (the Inbox's words for its two alarm kinds, which
+	// the entry carries as it carries every MCP kind's, and the settings code
+	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
+	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
+	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
+	initialBudget = 382 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1518,7 +1522,12 @@ const (
 	// rather than of lib/scroller.ts, which the shell imports, and a
 	// transcript's prose takes the shared .prose rule rather than a rule of
 	// its own in the one sheet. 5339 KiB.
-	treeBudget = 5<<20 + 219<<10
+	// The MCP sign-in (the state, auth method, alarm kinds and fix the page
+	// and the Inbox name, the Remove dialog's sentence, and the contract's
+	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
+	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
+	// +0.3 KiB. 5341 KiB.
+	treeBudget = 5<<20 + 221<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

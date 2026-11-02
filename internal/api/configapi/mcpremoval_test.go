@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -129,7 +131,7 @@ const wantDependants = `{"mcp_env":[` +
 	`{"kind":"seat","key":"dev","name":"Dev","segments":["units",0,"roles",0,"mcp_env","linear"]},` +
 	`{"kind":"unit","key":"eng","name":"Eng","segments":["units",0,"mcp_env","linear"]}],` +
 	`"sandbox":[{"seat":"pm","name":"PM","segments":["roles",0,"sandbox","mcp","servers",0]}],` +
-	`"secrets":["LINEAR_ORG","PM_LINEAR"]}`
+	`"secrets":["LINEAR_ORG","PM_LINEAR"],"oauth":false}`
 
 // A REMOVAL CLEARS EVERY DEPENDANT IN ONE REVISION OR IS REFUSED NAMING ALL OF
 // THEM.
@@ -192,6 +194,9 @@ func TestAServerRemovalClearsEveryDependantInOneRevisionOrNamesThemAll(t *testin
 	}
 	if got := jsonOf(t, body["secrets"]); got != `[]` {
 		t.Errorf("secrets = %s, want none deleted when none was named", got)
+	}
+	if got := jsonOf(t, body["oauth"]); got != `null` {
+		t.Errorf("oauth = %s, want null for a server nobody signed in to", got)
 	}
 	after, _, err := s.active(t.Context())
 	if err != nil || after.ParentID != before.ID {
@@ -512,5 +517,70 @@ func TestTheRemovalAnswersEnumsAreClosed(t *testing.T) {
 	}
 	if configapi.MCPHolderKind("team").Valid() || configapi.MCPSecretOutcome("gone").Valid() {
 		t.Error("a value off the wire nobody declared is valid")
+	}
+}
+
+// fakeGrants is the engine's hold on each MCP server's OAuth grant: the
+// servers somebody signed in to, and the revocations a removal asked for.
+type fakeGrants struct {
+	mu      sync.Mutex
+	held    map[string]bool
+	revoked []string
+	err     error
+}
+
+func (f *fakeGrants) HeldMCPGrant(_ context.Context, server string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held[server], nil
+}
+
+func (f *fakeGrants) RevokeMCPServerGrant(_ context.Context, entry *config.MCPServer) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", "", false, f.err
+	}
+	held := f.held[entry.Name]
+	if held {
+		f.revoked = append(f.revoked, entry.Name)
+		delete(f.held, entry.Name)
+	}
+	return "revoked", "", held, nil
+}
+
+func (f *fakeGrants) revocations() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.revoked)
+}
+
+// A REMOVAL GIVES UP THE SERVER'S SIGN-IN: the dry run names the grant among
+// what the removal takes, and the write revokes it at the vendor and forgets
+// it, before any value is deleted, answering what the vendor was asked.
+//
+// Mutation: skip the revocation, or read the grant from the next document
+// (where the server is gone), and this is red.
+func TestARemovalGivesUpTheServersSignIn(t *testing.T) {
+	t.Parallel()
+	s := serverSurface(t)
+	s.oauth.held = map[string]bool{"linear": true}
+	code, body := removeServer(t, s, "linear", "?dry_run=true", `{"clear": true}`, nil)
+	if code != http.StatusOK || !strings.Contains(jsonOf(t, body["dependants"]), `"oauth":true`) {
+		t.Fatalf("the dry run = %d %v, want the grant among the dependants", code, body)
+	}
+	if got := s.oauth.revocations(); len(got) != 0 {
+		t.Fatalf("a dry run revoked %v", got)
+	}
+	code, body = removeServer(t, s, "linear", "", `{"clear": true, "delete_secrets": ["LINEAR_ORG"]}`,
+		map[string]string{"X-Summary": "remove linear"})
+	if code != http.StatusCreated {
+		t.Fatalf("the removal = %d %v", code, body)
+	}
+	if got := jsonOf(t, body["oauth"]); got != `{"revocation":"revoked","said":""}` {
+		t.Errorf("oauth = %s, want the vendor's revocation", got)
+	}
+	if got := s.oauth.revocations(); !slices.Equal(got, []string{"linear"}) {
+		t.Errorf("revoked %v, want linear's grant", got)
 	}
 }

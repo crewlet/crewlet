@@ -164,6 +164,8 @@ func classOfCause(err error) FailureClass {
 	switch {
 	case errors.Is(err, httpx.ErrNotPublic):
 		return FailBlockedAddress
+	case errors.Is(err, ErrSignInNeeded):
+		return FailNeedsSignIn
 	case errors.Is(err, exec.ErrNotFound), isMissingCommand(err):
 		return FailCommandNotFound
 	case errors.As(err, &unknownCA), errors.As(err, &hostname), errors.As(err, &invalid),

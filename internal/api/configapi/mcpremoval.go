@@ -124,6 +124,19 @@ type MCPDependants struct {
 	// nothing reads once the removal is written, sorted: what
 	// `delete_secrets` may name. Never null.
 	Secrets []string `json:"secrets"`
+	// OAuth is whether somebody holds an OAuth grant for the server, which
+	// the removal revokes at its vendor where it offers that, and forgets.
+	OAuth bool `json:"oauth"`
+}
+
+// MCPGrantRevocation is what a removal did with the server's OAuth grant: what
+// its vendor was asked (`revoked`, `not_offered` where it publishes no
+// revocation endpoint, `failed` where it could not be asked or refused) and,
+// where it refused, its words. The grant is forgotten here whatever the
+// vendor answered.
+type MCPGrantRevocation struct {
+	Revocation string `json:"revocation"`
+	Said       string `json:"said"`
 }
 
 // MCPSecretOutcome is what became of one value a removal was asked to delete.
@@ -429,7 +442,12 @@ func (s *Service) mcpDependants(ctx context.Context, prior, next *config.Company
 	if err != nil {
 		return MCPDependants{}, err
 	}
-	return MCPDependants{MCPCleared: clearedOf(prior.MCPServerDependants(name)), Secrets: held}, nil
+	signedIn, err := s.grants.HeldMCPGrant(ctx, name)
+	if err != nil {
+		return MCPDependants{}, fmt.Errorf("configapi: read the server's OAuth grant: %w", err)
+	}
+	return MCPDependants{MCPCleared: clearedOf(prior.MCPServerDependants(name)), Secrets: held,
+		OAuth: signedIn}, nil
 }
 
 // applied deletes the values the request named, now that the removal is
@@ -439,8 +457,36 @@ func (m *mcpRemoval) applied(w http.ResponseWriter, r *http.Request, p *prepared
 	answer := appliedAnswer(a)
 	answer["removed"] = m.name
 	answer["cleared"] = clearedOf(p.prior.MCPServerDependants(m.name))
+	// THE GRANT BEFORE THE VALUES: the company's own OAuth client
+	// authenticates its revocation with the secret the server's entry
+	// names, which `delete_secrets` may be about to delete.
+	answer["oauth"] = m.revokeGrant(r.Context(), p.prior, attributionOf(r))
 	answer["secrets"] = m.deleteSecrets(r.Context(), attributionOf(r))
 	writeJSON(w, http.StatusCreated, answer)
+}
+
+// revokeGrant gives up the removed server's OAuth grant, now that the removal
+// is written: revoked at its vendor where it offers that, and forgotten. Nil
+// where nobody held one. A grant the engine could not give up is `failed`,
+// logged with why; the removal stands, and the sign-out route ends it.
+func (m *mcpRemoval) revokeGrant(ctx context.Context, prior *config.Company, by iam.Actor) *MCPGrantRevocation {
+	at := slices.IndexFunc(prior.MCPServers, func(s config.MCPServer) bool { return s.Name == m.name })
+	if at < 0 {
+		return nil
+	}
+	revocation, said, held, err := m.s.grants.RevokeMCPServerGrant(ctx, &prior.MCPServers[at])
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "mcp_grant_remove_failed", "server", m.name, "error", err,
+			"by", by.Name, "operator", by.OperatorID,
+			"detail", "the server is removed; its grant could not be given up here")
+		return &MCPGrantRevocation{Revocation: "failed", Said: "the engine could not give the grant up"}
+	case !held:
+		return nil
+	}
+	log.InfoContext(ctx, "mcp_grant_removed", "server", m.name, "revocation", revocation,
+		"by", by.Name, "operator", by.OperatorID)
+	return &MCPGrantRevocation{Revocation: revocation, Said: said}
 }
 
 // deleteSecrets deletes each value the request named that the fleet's revision

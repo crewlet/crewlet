@@ -1595,6 +1595,62 @@
         "null"
       ]
     },
+    "MCPOAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "description": "How the engine registers at the authorization server: cimd (its published client metadata document), dcr (registers when a sign-in starts) or own (a client registered at the vendor beforehand).",
+          "enum": [
+            "cimd",
+            "dcr",
+            "own",
+            "",
+            null
+          ]
+        },
+        "client_id": {
+          "description": "The client id of the company's own client (client: own).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The secret of the company's own client, where it has one (client: own); ${VAR} supported.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "scopes": {
+          "description": "Scopes the sign-in asks for; absent asks for the ones the server lists.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "client"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPRegistry": {
       "additionalProperties": false,
       "properties": {
@@ -1712,6 +1768,10 @@
             "boolean",
             "null"
           ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/MCPOAuth",
+          "description": "Sign the company in to this remote server with OAuth (http, shared): how the engine registers, and the scopes it asks for."
         },
         "optional_keys": {
           "description": "Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back.",

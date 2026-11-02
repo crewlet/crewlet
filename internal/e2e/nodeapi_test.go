@@ -204,6 +204,7 @@ func wireAPI(
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
 		Secrets:        fleetsecrets.New(backends.Fleet, cipher),
+		Grants:         e,
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
 		Node:           nodeID,

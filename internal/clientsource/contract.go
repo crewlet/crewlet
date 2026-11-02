@@ -146,6 +146,9 @@ var contract = []Entry{
 	{"McpServerStatus", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpServerNode", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpServerState", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpOAuthView", ReadInterface, "internal/api/queries.TestAServerSignedInToWithOAuthIsReadAsItsGrantSays"},
+	{"McpOAuthFailure", ReadInterface, "internal/api/queries.TestAServerSignedInToWithOAuthIsReadAsItsGrantSays"},
+	{"McpOAuthStatus", ReadUnion, "internal/api/queries.TestAServerSignedInToWithOAuthIsReadAsItsGrantSays"},
 	{"BuiltinGroup", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpToolRefusal", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpFailureClass", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
@@ -209,6 +212,7 @@ var contract = []Entry{
 	{"McpRemovalWritten", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpSecretDeletion", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpSecretOutcome", ReadUnion, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
+	{"McpGrantRevocation", ReadInterface, "internal/api/configapi.TestTheRemoveDialogReadsWhatTheRemovalSends"},
 	{"McpRestartAnswer", ReadInterface, "internal/api/mcpapi.TestTheRestartReadsWhatTheRouteSends"},
 
 	// tools.ts

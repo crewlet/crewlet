@@ -105,6 +105,11 @@ type Fleet struct {
 	// checks are each MCP server's latest test, by the server's name.
 	checks entryRecords[coord.MCPCheck, coord.MCPCheck]
 
+	// grants and mcpSignIns are each MCP server's OAuth grant and its
+	// sign-in in progress, by the server's name.
+	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
+	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
@@ -164,6 +169,8 @@ func NewFleet() *Fleet {
 		listings:     newListingRecords(),
 		restarts:     newRestartRecords(),
 		checks:       newCheckRecords(),
+		grants:       newGrantRecords(),
+		mcpSignIns:   newMCPSignInRecords(),
 	}
 }
 
