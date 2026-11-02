@@ -5,10 +5,12 @@
  * mode and filters and at no session floor, and only once a phrase is there;
  * the coverage is drawn above every answer, the lines grouped by repository
  * and file, each line linking to its file at the commit its repository was
- * searched at with the line picked; and a reconnect asks no second search.
+ * searched at with the line picked; a reconnect asks no second search; a
+ * press is one history entry; and the box follows the address when it moves
+ * under the open screen.
  */
 
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
@@ -106,6 +108,43 @@ test("a socket that comes back after an answer asks no second search", async () 
   // correct, was asked again — and the search beside it was not.
   await waitFor(() => expect(count("/query/code_repos")).toBe(listings + 1));
   expect(count("/query/code_search")).toBe(1);
+});
+
+// THE BOX FOLLOWS THE ADDRESS: ⌘K's "See every match" pushes a phrase onto
+// the screen already open, and a box seeded once would show the old phrase
+// over the new lines — and send it on the next press.
+test("an address moved under the open screen puts its phrase in the box", async () => {
+  stub({ hits: [], coverage });
+  mountCode("#/code/search?q=needle&path=src%2F", <Search />);
+  const box = await screen.findByRole("searchbox", { name: "Search the company’s code" });
+  expect((box as HTMLInputElement).value).toBe("needle");
+
+  act(() => {
+    history.pushState(null, "", "#/code/search?q=other");
+    window.dispatchEvent(new Event("crewlet:route"));
+  });
+  expect(await screen.findByText("No line matches “other”")).toBeTruthy();
+  expect((box as HTMLInputElement).value).toBe("other");
+  expect((screen.getByRole("textbox", { name: "Path" }) as HTMLInputElement).value).toBe("");
+});
+
+// A PRESS OF SEARCH IS A STEP BACK TAKES, and a press that asks what the
+// address already says is none.
+test("a search pressed is one history entry, and the same one pressed again is none", async () => {
+  stub({ hits: [], coverage });
+  mountCode("#/code/search?q=needle", <Search />);
+  const box = await screen.findByRole("searchbox", { name: "Search the company’s code" });
+  const press = () => fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+  const before = history.length;
+  fireEvent.change(box, { target: { value: "haystack" } });
+  press();
+  expect(await screen.findByText("No line matches “haystack”")).toBeTruthy();
+  expect(history.length).toBe(before + 1);
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("q")).toBe("haystack");
+
+  press();
+  expect(history.length).toBe(before + 1);
 });
 
 test("asks nothing until a phrase is there", async () => {

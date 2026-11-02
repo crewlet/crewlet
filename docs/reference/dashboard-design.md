@@ -7966,12 +7966,15 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
   filters said as controls, every one in the address, so a search is a link.
   It is asked when the reader presses Search, never as they type: a search
-  across the company is a request to every git node. A reconnect asks again
-  only a search that never reached the engine, as ⌘K's Code tab does: a
-  rolling restart reconnects every socket, and each open search asked again
-  would be one more request to every git node for an answer that already
-  names its commits. And it takes no floor:
-  it answers at the commit each repository was searched at (`tips`). The
+  across the company is a request to every git node. A press is a step Back
+  takes, its phrase, path and ref pushed onto the history (the mode and the
+  repository narrow the search on screen and replace), and the boxes follow
+  the address whenever it moves, so they never show one search over the
+  lines of another. A reconnect asks again only a search that never reached
+  the engine, as ⌘K's Code tab does: a rolling restart reconnects every
+  socket, and each open search asked again would be one more request to
+  every git node for an answer that already names its commits. And it takes
+  no floor: it answers at the commit each repository was searched at (`tips`). The
   lines are grouped by repository and then by file in the engine's order —
   repository, path, line — never re-sorted; each line's number opens its file
   on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
