@@ -353,17 +353,19 @@ func TestNoDeclarationIsAnErrorNotAnEmptyList(t *testing.T) {
 	}
 }
 
-// THE SUITES ARE NOT DECLARATIONS.
+// THE SUITES ARE NOT DECLARATIONS, and neither are the benchmarks.
 //
 // A case that quotes a constant to assert its shape would otherwise count as
 // a second copy of it and fail every gate, and a call a test makes would
-// count as a screen reading a query.
-func TestTheSuitesAreNotDeclarations(t *testing.T) {
+// count as a screen reading a query. A benchmark's cases are the same `test`
+// under `vitest bench`, and ship no more than a suite's.
+func TestTheSuitesAndBenchmarksAreNotDeclarations(t *testing.T) {
 	t.Parallel()
 	root := tree(t, map[string]string{
-		"routes/activity/Activity.tsx":      "const CATEGORIES = [\"task\", \"system\"] as const;\n",
-		"routes/activity/Activity.test.tsx": "const CATEGORIES = [\"task\"] as const;\nuseQuery(\"events\");\n",
-		"lib/range.ts":                      "export const SPANS = [1, 2];\n",
+		"routes/activity/Activity.tsx":       "const CATEGORIES = [\"task\", \"system\"] as const;\n",
+		"routes/activity/Activity.test.tsx":  "const CATEGORIES = [\"task\"] as const;\nuseQuery(\"events\");\n",
+		"routes/activity/Activity.bench.tsx": "const CATEGORIES = [\"bench\"] as const;\nuseQuery(\"events\");\n",
+		"lib/range.ts":                       "export const SPANS = [1, 2];\n",
 	})
 	body, err := clientsource.Literal(root, "CATEGORIES")
 	if err != nil {
@@ -377,7 +379,7 @@ func TestTheSuitesAreNotDeclarations(t *testing.T) {
 		t.Fatalf("Calls: %v", err)
 	}
 	if len(calls) != 0 {
-		t.Errorf("calls = %v, want none: the only one is in a suite", calls)
+		t.Errorf("calls = %v, want none: the only ones are in a suite and a benchmark", calls)
 	}
 }
 

@@ -1890,10 +1890,14 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// — a commit, an inbox, an inbox page's cards — on a read of any other kind,
+// — a commit, an inbox, an inbox page's cards, the narrowing of a listing of
+// repositories to the ones a rule protects — on a read of any other kind,
 // the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
+	case q.Protected && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: protected: only a listing of repositories is narrowed to the ones a rule "+
+			"protects", ErrInvalid)
 	case q.Commit != "" && q.Kind != ReadCommit:
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
@@ -2542,7 +2546,14 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return err
 	}
 	limit := min(limitOr(q.Limit, defaultRepoLimit), r.pageRows)
-	rows, err := tx.QueryContext(ctx, reposSQL, list, q.Cursor, limit)
+	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]): the
+	// same rows in the same order, walked by an index that holds no
+	// repository a rule does not protect.
+	listing := reposSQL
+	if q.Protected {
+		listing = protectedReposSQL
+	}
+	rows, err := tx.QueryContext(ctx, listing, list, q.Cursor, limit)
 	if err != nil {
 		return fmt.Errorf("code: list repositories: %w", err)
 	}
@@ -4497,13 +4508,24 @@ const (
 	pushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position <= ? AND (position < ? OR push_id < ?)
 		ORDER BY position DESC, push_id DESC LIMIT ?`
-	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
+	reposColumns = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
 		r.search, r.mirror_from != '', r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs,
 		r.live_packs,
-		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
-		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
-			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
+		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target`
+	reposHead = ` LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
+			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''`
+	reposSQL = reposColumns + `
+		FROM code_repos r` + reposHead + `
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
+		ORDER BY r.name LIMIT ?`
+	// protectedReposSQL is a listing of the repositories a rule protects
+	// ([ReadQuery.Protected]): reposSQL's rows, walked by
+	// [protectedReposKey] — NAMED, since code_repos_name_idx serves the
+	// same order and the planner may take either — with its predicate
+	// repeated verbatim, so the planner may use the partial index at all.
+	protectedReposSQL = reposColumns + `
+		FROM code_repos r INDEXED BY ` + protectedReposKey + reposHead + `
+		WHERE r.` + protectedRepos + ` AND r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
 		ORDER BY r.name LIMIT ?`
 	// pushRulesOfSQL is a listing page's rules as a push is judged by them,
 	// in one statement ([protectionsOf]) — pushRulesSQL for every repository

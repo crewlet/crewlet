@@ -1240,6 +1240,26 @@ type ReadQuery struct {
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
 	Status []RepoStatus `json:"status,omitempty"`
+	// Protected narrows a repos listing to the repositories a rule protects
+	// — at least one row of code_protections, which code_repos.protected
+	// says on the row — walked by the index of those alone
+	// (code_repos_protected_idx, [protectedReposKey]): a page of them costs
+	// what the protected repositories cost, however many the company holds
+	// that no rule protects. Settings › Code's Branch protection card lists
+	// them so; filtered after the read, a protected repository past the
+	// first page of every repository was never shown. Refused on every other
+	// kind, before any kind's own rules.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without this field — none
+	// of the domain is on main, so no image and no release serves a code
+	// read. A build that predated it would decode and ignore it, and answer
+	// every repository to a read that asked for the protected ones alone; so
+	// were a build without it ever to run first, the protected listing would
+	// move to a kind of its own, which such a build refuses as a kind it does
+	// not know, rather than ride a field it ignores.
+	Protected bool `json:"protected,omitempty"`
 	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
 	// seat's own namespace.
@@ -4466,8 +4486,9 @@ type LandedInAnswer struct {
 	// Detail says why LandedBy is nil: the landing predates what the index
 	// holds, falls in a range it has not read yet, or lies past what the
 	// search checked — its bound of checks (internal/code/query's
-	// MaxLandedProbes) or the read's budget of git — named with the oldest
-	// push the search knows kept the commit.
+	// MaxLandedProbes), the read's budget of git, its answer falling due or
+	// a read lane busy past gitproc.SlotWait — named with the oldest push the
+	// search knows kept the commit.
 	Detail string `json:"detail,omitempty"`
 }
 

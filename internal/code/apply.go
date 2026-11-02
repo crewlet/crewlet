@@ -451,12 +451,13 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
 			(id, name, status, managed_by, kind, owner_kind, owner, visibility, search, default_branch,
 			 description, config_epoch, created_at, created_by, created_by_kind, last_activity_at, version,
-			 mirror_from, mirror_to, import_source, owners_digest, human_paths_digest)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 mirror_from, mirror_to, import_source, owners_digest, human_paths_digest, protected)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		p.RepoID, p.Name, string(p.status()), string(s.ManagedBy), string(s.Kind), string(s.Owner.Kind),
 		s.Owner.Ref, string(s.Visibility), string(s.Search), s.DefaultBranch, s.Description, s.ConfigEpoch,
-		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports, ownersDigest, humanPathsDigest)
+		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports, ownersDigest, humanPathsDigest,
+		rowProtected(s))
 	if err != nil {
 		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -497,6 +498,20 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 // budget for nothing ([reconcileRecordRows]).
 func rowDigests(s RepoSettings) (owners, humanPaths string) {
 	return OwnersDigest(s.PathOwners), HumanPathsDigest(ruleGatesOf(s.Protections))
+}
+
+// rowProtected is whether a rule protects the repository whose settings s
+// are — code_repos.protected, 1 or 0 — which the listing of the protected
+// repositories walks the index of ([ReadQuery.Protected],
+// [protectedReposKey]). It rides the statement that writes the row, as the
+// digests do and for their reason ([rowDigests]): the rules and the column
+// are written by one record in one transaction, so no reader holds one
+// without the other.
+func rowProtected(s RepoSettings) int {
+	if len(s.Protections) > 0 {
+		return 1
+	}
+	return 0
 }
 
 // insertPathOwners writes a repository's path owners, one row an owner with its
@@ -793,8 +808,8 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, settingsSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, string(s.status()), s.ConfigEpoch,
-		at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, rowProtected(s),
+		string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
@@ -895,8 +910,8 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, string(s.status()), p.ConfigEpoch,
-		at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, rowProtected(s),
+		string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -952,11 +967,12 @@ const (
 	// is active or archived: an importing repository stays importing until
 	// its import is done, and a deleted or purging one stays as it is. It
 	// writes the digests of the rules and the path owners the record replaces
-	// beside it ([rowDigests]).
+	// beside it ([rowDigests]), and whether a rule protects it
+	// ([rowProtected]).
 	settingsSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
 			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
-			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
+			protected = ?, status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
 	// mirrorImportSQL starts the import a settings record's pull mirror owes
@@ -977,11 +993,12 @@ const (
 	// restoreRepoSQL brings a deleted repository back: IMPORTING where its
 	// create imported and the import is not done — it resumes from what of
 	// it landed — and otherwise in the status its settings say; with the
-	// digests of the rules and the path owners it carries back ([rowDigests]).
+	// digests of the rules and the path owners it carries back ([rowDigests])
+	// and whether a rule protects it ([rowProtected]).
 	restoreRepoSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
 			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
-			status = CASE WHEN import_source != '' AND imported_at = 0 THEN 'importing' ELSE ? END,
+			protected = ?, status = CASE WHEN import_source != '' AND imported_at = 0 THEN 'importing' ELSE ? END,
 			deleted_at = NULL, config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ? AND status = 'deleted'`
 	// countKindSQL counts one repository of a kind in, and uncountKindSQL

@@ -13,7 +13,7 @@
 
 import { expect, test } from "vitest";
 
-import { childrenOf, modules, parse, walk, type Node } from "./source.ts";
+import { childrenOf, modules, parse, suites, walk, type Node } from "./source.ts";
 
 test("a module is parsed once however many gates read it", () => {
   const { text, lang } = modules()[0]!;
@@ -22,6 +22,16 @@ test("a module is parsed once however many gates read it", () => {
   // text read as another language is parsed as that language.
   expect(parse(`${text}\n`, lang)).not.toBe(parse(text, lang));
   expect(parse("const a = 1;", "ts")).not.toBe(parse("const a = 1;", "tsx"));
+});
+
+// A BENCHMARK IS RUN, NOT SHIPPED: read as a module, `lib/lineDiff.bench.ts`
+// would be held to every rule over the code a reader's browser runs, and
+// left out of the gates over the suites, whose budgets bind its cases too.
+test("a benchmark is read with the suites, never as a module that ships", () => {
+  const paths = (list: readonly { path: string }[]) => list.map(({ path }) => path);
+  expect(paths(suites())).toContain("lib/lineDiff.bench.ts");
+  expect(paths(modules())).not.toContain("lib/lineDiff.bench.ts");
+  expect(paths(modules())).toContain("lib/lineDiff.ts");
 });
 
 /** A node whose fields are listed in the opposite order to their text. */

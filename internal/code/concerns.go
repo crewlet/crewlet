@@ -75,7 +75,8 @@ import (
 //   - merged: the authors, on the push that set the target to the change's
 //     head and on its home's landing, on the merge record that merged it and
 //     on the queue's landing of it — each but who merged it: on the home's
-//     landing, whoever pushed the target's tip it found the head in.
+//     landing, whoever made the push its home found bringing the head into
+//     the target, never whoever moved the target last.
 //   - re_review: the reviewers whose standing verdict asks for changes on an
 //     earlier revision, on a revision's first facts.
 //   - thread: the participants of the thread a comment is said in.
@@ -124,9 +125,12 @@ import (
 // acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
 // enqueuer of an entry a queue landed, the pusher of the head a check
 // measured and of the revision whose facts the home records, the pusher of
-// the target's tip the home found a change's head in ([tipPusher]) — whose
-// push merged it, though only the home could see so — and nobody for the
-// home's other records — and a code reason is news to whoever made the
+// the push the home found bringing a change's head into its target
+// ([landingPusher]) — the move after which the target held the head through
+// to the tip it found, which merged the change though only the home's git
+// could see so, and never the push that moved the target last, which may be
+// somebody's push on top — and nobody for the home's other records — and a
+// code reason is news to whoever made the
 // change only where [Reason.WakesActor] says so: a reviewer is not told of
 // their own review, a pusher of their own merge, whether their push set the
 // target to the head or moved it past, and a pusher IS told that the head
@@ -265,10 +269,10 @@ type ChangeRouting struct {
 	Title    string `json:"title" untrusted:"name"`
 	// Actor is who made the change the record records — its asker, a push
 	// entry's pusher, and for the home's records of a revision's facts and of
-	// a landing, whoever pushed the revision and whoever pushed the target's
-	// tip the home found the change's head in — and "" for the home's other
-	// records, which no principal's act made. Nobody hears of a change they
-	// made.
+	// a landing, whoever pushed the revision and whoever made the push the
+	// home found bringing the change's head into its target — and "" for the
+	// home's other records, which no principal's act made. Nobody hears of a
+	// change they made.
 	Actor string `json:"actor,omitempty"`
 	// Owner is the change's owner, and OwnerKind what it is.
 	Owner     string    `json:"owner,omitempty"`
@@ -760,10 +764,10 @@ type concerning struct {
 	// title, owner and work item.
 	change changeRow
 	// actor is who made the change — for a revision's facts, its pusher, and
-	// for a landing, the pusher of the tip the home found — "" for the home's
-	// other records, and actorKind what it is: a person's actor is named
-	// among the routing's persons, so a wake says a person wrote what it
-	// announces.
+	// for a landing, the pusher of the push the home found merging it — ""
+	// for the home's other records, and actorKind what it is: a person's
+	// actor is named among the routing's persons, so a wake says a person
+	// wrote what it announces.
 	actor     string
 	actorKind PartyKind
 	// roster is the deciding chart: what a mention is held to and what says
@@ -1027,47 +1031,67 @@ func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (
 	return pusher, PartyKind(kind), nil
 }
 
-// tipPusher is who pushed ref of repoID to tip in the record at moved — the
-// position the ref's row says last moved it — as a routing's actor names
-// them: the principal of that record's push whose command set ref to tip and
-// was applied, and "" where no such push names a party (a token bound to
-// nobody, the engine's own expiry, a push row past the history's horizon).
+// landingPusher is who merged change changeID of repoID that its home found
+// landed (l), as a routing's actor names them: the principal of the push l
+// names, where that push's row holds an applied command setting l's target to
+// a commit and lies where a merge of the change's head revision can — at or
+// after the record of that revision, before which no move brought its head in
+// as this change's, and at or before moved, the record the target's row says
+// last moved it, past which nothing has. "" where l names no push (its home's
+// walk found none), where the push is none of that, where its row is gone
+// (past the history's horizon, or purged), and where its principal names no
+// party (a token bound to nobody, the engine's own expiry).
 //
-// WHY THE PUSH AT THE REF'S OWN POSITION: only a push record moves a ref — a
-// merge record's and an engine-built commit's are pushes too — and a ref's row
-// keeps the position of the record that last set it, so the push rows at that
-// position hold the move to tip; and up to [MaxPushesPerRecord] pushes of
-// unrelated clients share one record, so the move is told from them by its
-// command, never by its row's place. A ref moved away and back within one
-// record has two such pushes; the later in push-id order is named, and either
-// moved the target to the tip the reader found.
-func tipPusher(ctx context.Context, tx *sql.Tx, repoID string, moved int64, ref, tip string) (string,
+// WHY THE PUSH THE HOME NAMES, AND NEVER THE ONE AT THE TARGET'S POSITION:
+// the record that last moved the target holds whoever moved it LAST, and the
+// target may move again after the merge — somebody's push on top, in the same
+// group-commit record (up to [MaxPushesPerRecord] pushes share one) or in a
+// later one landed before the home's pass read it, a race whose odds grow
+// with how many seats push to the target. That pusher merged nothing: the
+// head was already in the target before their push. The push that merged is
+// the move after which the target held the head through to the tip, and
+// telling it takes git (one commit holding another), which the home runs and
+// a committer's decide never does; so the home walks the target's moves and
+// names it, and the decide holds the name to the rows — a seek of the
+// revisions' key and one of the pushes' — as it holds the tip the home names
+// to the target's row.
+func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l ChangeLanded, moved int64) (string,
 	PartyKind, error) {
 
-	rows, err := tx.QueryContext(ctx, tipPushersSQL, repoID, moved)
-	if err != nil {
-		return "", "", fmt.Errorf("code: read who pushed %s of repository %s to %s: %w", ref, repoID, short(tip),
-			err)
+	pushed := l.PushPosition.Packed()
+	if l.PushID == "" || pushed > moved {
+		return "", "", nil
 	}
-	defer func() { _ = rows.Close() }()
-	var who string
-	var kind PartyKind
-	for rows.Next() {
-		var actorKind, seat, encoded string
-		if err := rows.Scan(&actorKind, &seat, &encoded); err != nil {
-			return "", "", err
-		}
-		var cmds []Command
-		if err := json.Unmarshal([]byte(encoded), &cmds); err != nil {
-			return "", "", fmt.Errorf("code: decode a push's commands of repository %s: %w", repoID, err)
-		}
-		if slices.ContainsFunc(cmds, func(c Command) bool {
-			return c.Ref == ref && c.New == tip && c.Result == ResultOK
-		}) {
-			who, kind = Principal{Kind: PrincipalKind(actorKind), Seat: seat}.party()
-		}
+	var revised int64
+	switch err := tx.QueryRowContext(ctx, revisionPositionSQL, changeID, l.Revision).Scan(&revised); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("code: read where revision %d of %s was pushed: %w", l.Revision, changeID, err)
 	}
-	return who, kind, rows.Err()
+	if pushed < revised {
+		return "", "", nil
+	}
+	var actorKind, seat, encoded string
+	switch err := tx.QueryRowContext(ctx, landingPushSQL, l.PushID, repoID, pushed).Scan(&actorKind, &seat,
+		&encoded); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("code: read push %s of repository %s, which merged %s: %w", l.PushID, repoID,
+			changeID, err)
+	}
+	var cmds []Command
+	if err := json.Unmarshal([]byte(encoded), &cmds); err != nil {
+		return "", "", fmt.Errorf("code: decode push %s's commands of repository %s: %w", l.PushID, repoID, err)
+	}
+	if !slices.ContainsFunc(cmds, func(c Command) bool {
+		return c.Ref == l.TargetRef && c.Result == ResultOK && c.New != ZeroOID
+	}) {
+		return "", "", nil
+	}
+	who, kind := Principal{Kind: PrincipalKind(actorKind), Seat: seat}.party()
+	return who, kind, nil
 }
 
 // The routing's reads, each registered in plan_test.go: a change's authors and
@@ -1082,12 +1106,15 @@ const (
 	// check of its head and of the revision's facts ([revisionPusher]) — one
 	// seek of the revisions' key.
 	headPusherSQL = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
-	// tipPushersSQL is the pushes of one record of a repository, each with
-	// its commands, in push-id order — who pushed the tip a landing found
-	// ([tipPusher]) — one seek of code_pushes_repo_idx at the position the
-	// target's row names, at most a record's [MaxPushesPerRecord].
-	tipPushersSQL = `SELECT actor_kind, actor_seat, commands FROM code_pushes WHERE repo_id = ? AND position = ?
-		ORDER BY push_id`
+	// revisionPositionSQL is where a change's revision was pushed — the
+	// oldest record a push that merged it can be in ([landingPusher]) — one
+	// seek of the revisions' key; landingPushSQL is the push a landing names
+	// as its merger, with its commands, one seek of the pushes' key — held to
+	// the repository and the position named, so a push of another record or
+	// another repository is no push of this landing's.
+	revisionPositionSQL = `SELECT position FROM code_revisions WHERE change_id = ? AND n = ?`
+	landingPushSQL      = `SELECT actor_kind, actor_seat, commands FROM code_pushes
+		WHERE push_id = ? AND repo_id = ? AND position = ?`
 	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
 		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`
 )

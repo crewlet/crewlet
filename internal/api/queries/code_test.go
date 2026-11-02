@@ -411,6 +411,44 @@ func TestAQuestionAsksForPathOwnersAndGatesOnlyWhereItsCallerNamesThem(t *testin
 	}
 }
 
+// A LISTING ASKS FOR THE PROTECTED REPOSITORIES ALONE ONLY WHERE ITS CALLER
+// NAMES THEM — `protected=true` — and otherwise for every repository, so
+// Settings › Code pages through the repositories a rule protects without the
+// Code workspace's listing losing any; a spelling that is neither `true` nor
+// `false` is refused before the reader is asked (code.ReadQuery.Protected).
+//
+// Mutations: read `protected` as nothing — the listing naming it asks for
+// every repository, red; read it whatever the caller named — the bare listing
+// asks for the protected alone, red; read an unknown spelling as false — it
+// reaches the reader, red.
+func TestAListingAsksForTheProtectedRepositoriesOnlyWhereItsCallerNamesThem(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want bool
+	}{
+		{"nothing", nil, false},
+		{"protected", map[string]any{"protected": "true"}, true},
+		{"not protected, spelled out", map[string]any{"protected": "false"}, false},
+	} {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_repos", tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := stub.last(); got.Protected != tc.want {
+			t.Errorf("code_repos naming %s asked for the protected repositories alone %t, want %t", tc.name,
+				got.Protected, tc.want)
+		}
+	}
+	stub := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_repos",
+		map[string]any{"protected": "yes"}); !errors.Is(err, queries.ErrBadParams) || len(stub.asked) != 0 {
+		t.Errorf("protected=yes: answered %v having asked the reader %d times, want bad_params before it", err,
+			len(stub.asked))
+	}
+}
+
 // A CODE QUESTION REFUSES IN THIS SURFACE'S VOCABULARY, which every transport
 // renders: a repository nobody declared is an absence that says which
 // (`not_declared`, the sentence naming the setting that declares one); one the

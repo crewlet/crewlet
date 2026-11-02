@@ -527,9 +527,12 @@ engine's answer:
 A refusal is said beside the controls in words of its own: a head that moved
 ("somebody pushed to it since you loaded it"), a target that moved under every
 rebuild of the merge, a change that does not merge cleanly onto the target's
-tip, a full queue; and in the engine's own words where those say more — a gate
-the change does not meet yet (`not_ready`), which sends you to the change's
-readiness for every unmet condition and who clears it, or why you may not.
+tip, a full queue; and in the engine's words, written for a person, where only
+the engine knows what to say — a gate the change does not meet yet
+(`not_ready`), named by what it still waits for and who can move it forward;
+a merge that would delete a branch a protection rule keeps, or one you may
+not delete; a repository at the most it may hold; and a merge asked for
+somebody who may not make it.
 
 ## Protecting a branch
 
@@ -568,9 +571,12 @@ before it lands ([The merge queue](../concepts/code-host.md#the-merge-queue)),
 and `main`'s tip is checked again once it lands, `code_green` advancing on
 green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a-green-branch)).
 
-**Settings › Code** lists every protected repository, each rule with what it
-lets a push do and what its gate asks, and says where the repository's rules
-are set — the company document, or the code tools. A repository's own page
+**Settings › Code** lists every protected repository, a page at a time with
+**Load more** — the engine's own listing of them, `GET
+/code/repos?protected=true`, which reads an index of the protected
+repositories alone — each rule with what it lets a push do and, once its fold
+is opened, what its gate asks, and says where the repository's rules are set —
+the company document, or the code tools. A repository's own page
 shows the same under its **Settings** tab. A seat may tighten a gate and never
 loosen it ([Who may change a
 protection](../concepts/code-host.md#who-may-change-a-protection)); every
