@@ -597,6 +597,42 @@ func TestDescribeTriggerWithNoTrigger(t *testing.T) {
 	}
 }
 
+// A TRIGGER THAT NAMES ANYTHING IS NOT ZERO, whichever field names it.
+//
+// Trigger.IsZero lists its fields by hand, since its Origins slice makes the
+// struct incomparable, and a field added later and left off that list would
+// make a trigger that names something read as no trigger at all. This sets
+// each field alone, so the list is held to the struct rather than to memory.
+func TestTriggerIsZeroSeesEveryField(t *testing.T) {
+	t.Parallel()
+	if !(Trigger{}).IsZero() {
+		t.Fatal("the zero Trigger must be zero")
+	}
+	typ := reflect.TypeFor[Trigger]()
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		var trigger Trigger
+		value := reflect.ValueOf(&trigger).Elem().Field(i)
+		switch {
+		case field.Type == reflect.TypeFor[time.Time]():
+			value.Set(reflect.ValueOf(time.Unix(1, 0).UTC()))
+		case field.Type == reflect.TypeFor[TriggerOrigin]():
+			value.Set(reflect.ValueOf(TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1"}))
+		case field.Type.Kind() == reflect.String:
+			value.SetString("set")
+		case field.Type.Kind() == reflect.Slice:
+			value.Set(reflect.MakeSlice(field.Type, 1, 1))
+		default:
+			t.Fatalf("Trigger.%s is a %s this test cannot set: teach it, and "+
+				"Trigger.IsZero, the new field", field.Name, field.Type)
+		}
+		if trigger.IsZero() {
+			t.Errorf("a trigger naming only its %s reads as zero: Trigger.IsZero "+
+				"does not look at the field", field.Name)
+		}
+	}
+}
+
 func TestDescribeTriggerCompactDescriptor(t *testing.T) {
 	t.Parallel()
 	// AN EVENT WITH NO ROLE OF ITS OWN, so the actor falls back to the

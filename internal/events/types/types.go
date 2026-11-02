@@ -263,6 +263,10 @@ func DescribeTrigger(e *events.Event) Trigger {
 }
 
 // IsZero reports whether this descriptor names no trigger at all.
+//
+// FIELD BY FIELD because Origins, a slice, makes the struct incomparable, so
+// `t == Trigger{}` no longer compiles. A field added to Trigger must be added
+// here too; TestTriggerIsZeroSeesEveryField fails until it is.
 func (t Trigger) IsZero() bool {
 	return t.ID == "" && t.Type == "" && t.Summary == "" && t.Actor == "" &&
 		t.Timestamp.IsZero() && t.Integration == "" && t.Sender == "" &&
