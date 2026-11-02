@@ -142,7 +142,6 @@ func testACarriedOnRoundKeepsItsCallsPastAnOpeningThatFailed(t *testing.T, runs 
 func testALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused(t *testing.T, runs *stagedRuns,
 	s sandbox.PendingStore,
 ) {
-	ctx := t.Context()
 	stop := func(turn string) func(context.Context) {
 		return func(ctx context.Context) {
 			decided, ok, err := s.DecideEnding(ctx, turn, sandbox.Decision{
@@ -165,6 +164,7 @@ func testALaunchWhoseOwnRowEndsUnderItsOpeningIsRefused(t *testing.T, runs *stag
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			turn := "t-ended-under-" + tc.name
+			ctx := t.Context()
 			if tc.first {
 				mustLaunched(t, s, run(turn))
 			}
