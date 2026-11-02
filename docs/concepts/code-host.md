@@ -142,7 +142,10 @@ code:
   and only by a search that names it. The index is kept by the first two git
   nodes of the repository's order over the live git nodes — each fills a copy
   of its own for it, and builds it again within a minute of a push, reading
-  only the files the push brought — and an index costs each git node keeping one
+  only the files the push brought. A node that becomes one of the two because
+  another left the order builds nothing until that one has been gone ten
+  minutes, and a node the order moves past keeps its index ten minutes, so a
+  git node's restart moves no index. An index costs each git node keeping one
   its disk and a build at every new tip, and a `grep` repository costs nothing
   until somebody asks it. A git node's indexes hold at most a third of its
   cache's budget: past it, the index of the repository searched there least

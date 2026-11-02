@@ -1660,8 +1660,9 @@ func Catalogue() []Instrument {
 				"`none`: the repository keeps no index here — its search is " +
 				"grep, its default branch names no commit, or this node is not " +
 				"among the first two git nodes of its order, which keep it " +
-				"(an index this node kept then dropped), so on a fleet of more " +
-				"than two git nodes most looks are `none`. " +
+				"(an index this node kept is dropped once it has been out of " +
+				"them ten minutes), so on a fleet of more than two git nodes " +
+				"most looks are `none`. " +
 				"`over_share`: the copy keeps no index and the node's indexes " +
 				"hold their share of the budget, so none is built — nor a copy " +
 				"filled for one — until the share has room or the repository " +
@@ -1670,6 +1671,10 @@ func Catalogue() []Instrument {
 				"`no_room`: the budget evicted the copy this node kept the " +
 				"index in, and it is filled again only once the budget has room " +
 				"for what it held. " +
+				"`placing`: this node became one of the repository's two " +
+				"index holders within the last ten minutes — another git node " +
+				"left its order — and fills and builds nothing until its place " +
+				"has stood that long, so a git node's restart moves no index. " +
 				"`failed`: the copy could not be synced or read, and the next " +
 				"look tries again (`code_cache_index_failed` says why). A " +
 				"steady `over_share` or `no_room` is a node keeping more " +

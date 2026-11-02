@@ -203,7 +203,8 @@ func TestTheIndexSkipsBinariesAndLargeFiles(t *testing.T) {
 // repository's index is kept by the first code.IndexHolders of its git order,
 // and a holder that holds no copy fills one for it — deliberately, beside the
 // read path's rule that only the home fills — while a node past the holders
-// fills nothing, and a holder the order no longer names drops what it kept.
+// fills nothing, and a holder the order no longer names drops what it kept
+// once the order has stood cache.IndexPlacementGrace.
 //
 // Mutation: hold to the first node of the order alone (codeindex.go's
 // indexHeld) — the second holder keeps no index; or skip the drop — the node
@@ -215,8 +216,10 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	head, _ := w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
 	var mu sync.Mutex
 	order := []string{"git-1", "git-2", "git-3"}
+	clk := newClock()
 	placed := func(node string) func(*cache.Options) {
 		return func(o *cache.Options) {
+			clk.on(o)
 			o.Placement = &cache.Placement{Node: node, Order: func(id string) ([]string, error) {
 				if id != repo {
 					return nil, errors.New("no such repository")
@@ -250,11 +253,74 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	order = []string{"git-1", "git-3", "git-2"}
 	mu.Unlock()
 	cache.IndexPass(t.Context(), second)
-	if _, _, ok := cache.CodeIndexFiles(second, repo); ok {
-		t.Error("a node the order moved past the holders still keeps its index")
+	if !keeps(second, repo) {
+		t.Error("a node the order moved past the holders dropped its index at once, within the grace")
+	}
+	clk.Add(cache.IndexPlacementGrace)
+	cache.IndexPass(t.Context(), second)
+	if keeps(second, repo) {
+		t.Error("a node the order moved past the holders for the grace still keeps its index")
 	}
 	if got := cache.CodeIndexBytes(second); got != 0 {
 		t.Errorf("the node counts %d bytes of code indexes after it dropped its one", got)
+	}
+}
+
+// A HOLDER BACK WITHIN THE GRACE MOVES NO INDEX. The order is over the live
+// git nodes, and a restarting node leaves it for the length of its restart,
+// which made the next node of each of its repositories' orders a holder that
+// filled a copy and built a whole index — dropped again the moment the node
+// was back. A node that becomes a holder fills and builds nothing until its
+// place has stood cache.IndexPlacementGrace, and a place that changes back
+// meanwhile starts the grace again; one that stands builds.
+//
+// Mutation: act on a holder's place at once (codeindex.go's settled answering
+// true for every holder) — the third node fills while the second restarts; or
+// keep the grace's start when the place changes back (settled keeping since)
+// — the second absence builds at once.
+func TestAHolderBackWithinTheGraceMovesNoIndex(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	head, _ := w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	var mu sync.Mutex
+	order := []string{"git-1", "git-2", "git-3"}
+	clk := newClock()
+	third := w.open(t, clk.on, func(o *cache.Options) {
+		o.Placement = &cache.Placement{Node: "git-3", Order: func(string) ([]string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(order), nil
+		}}
+	})
+	look := func(live ...string) {
+		t.Helper()
+		mu.Lock()
+		order = live
+		mu.Unlock()
+		cache.IndexPass(t.Context(), third)
+	}
+	look("git-1", "git-2", "git-3")
+	look("git-1", "git-3") // git-2 restarting
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if third.Holds(repo) || keeps(third, repo) {
+		t.Fatalf("the third node fills a copy (%t) or keeps an index (%t) while the second restarts within the "+
+			"grace", third.Holds(repo), keeps(third, repo))
+	}
+	look("git-1", "git-2", "git-3") // back
+	look("git-1", "git-3")          // and gone again
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if third.Holds(repo) || keeps(third, repo) {
+		t.Fatalf("the third node fills a copy (%t) or keeps an index (%t) a half grace into the second's second "+
+			"absence", third.Holds(repo), keeps(third, repo))
+	}
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if tip, _, ok := cache.CodeIndexFiles(third, repo); !ok || tip != head {
+		t.Errorf("the third node keeps the index at %s (%t) once the second has been gone the grace, want it "+
+			"built at %s", tip, ok, head)
 	}
 }
 

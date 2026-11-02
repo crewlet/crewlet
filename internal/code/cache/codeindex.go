@@ -61,6 +61,26 @@ const codeIndexDir = engineRoot + "/codeindex"
 // time a compaction would.
 const IndexPoll = time.Minute
 
+// IndexPlacementGrace is how long this node's place among a repository's
+// index holders must stand, once a look has seen it change, before the
+// indexer acts on it: a node that BECOMES a holder fills and builds nothing
+// until then, and one the order moved PAST keeps its index until then.
+//
+// The order is over the LIVE git nodes, and a node gives up its presence at
+// the first step of its drain, so every restart of a git node made the next
+// node of each of its repositories' orders a holder — which filled a copy and
+// built an index from every blob of the tip — and, once the node was back,
+// dropped them again: a rolling upgrade of the git nodes cost some two full
+// fills and builds for every indexed repository, all thrown away. Ten
+// IndexPolls cover a restart: the drain waits for the node's turns and git
+// requests (a multi-tool turn takes two to five minutes; the drain's own
+// stop up to about a minute more, agent-runtime.md's grace rule) and the
+// boot that follows it, while a holder truly gone costs its repositories one
+// index for ten minutes more — searched the first holder's way, or with git
+// grep — rather than none. A JUDGMENT, from those figures rather than a
+// measured restart.
+const IndexPlacementGrace = 10 * IndexPoll
+
 // CodeIndexShare is the share of the cache's budget the node's code indexes
 // may hold — a third, trimmed before any repository is evicted, the
 // repository searched least recently first: one dropped is built again from
@@ -1273,7 +1293,42 @@ const (
 	// in, and the indexer fills it again only once the budget has room for
 	// what it held (Cache.roomToFill): its searches go to the next node.
 	IndexNoRoom IndexOutcome = "no_room"
+	// IndexPlacing means this node became one of the repository's index
+	// holders within IndexPlacementGrace and its copy keeps no index: it
+	// fills and builds nothing until its place has stood that long.
+	IndexPlacing IndexOutcome = "placing"
 )
+
+// indexPlace is the place among a repository's index holders the indexer
+// last saw this node in: whether a holder, since when, and whether since is
+// a CHANGE a look saw rather than the first look since the boot.
+type indexPlace struct {
+	holder, moved bool
+	since         time.Time
+}
+
+// settled notes holder as this node's place among repoID's index holders now,
+// and reports whether the indexer acts on it (IndexPlacementGrace): a holder
+// at once where it has been one since the boot's first look, and otherwise —
+// a holder it became, or a place past the holders, whose index stays until
+// then — once the place has stood the grace.
+func (c *Cache) settled(repoID string, holder bool) bool {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	now := c.now()
+	p, seen := c.indexSeen[repoID]
+	if !seen || p.holder != holder {
+		p = indexPlace{holder: holder, moved: seen, since: now}
+		if c.indexSeen == nil {
+			c.indexSeen = map[string]indexPlace{}
+		}
+		c.indexSeen[repoID] = p
+	}
+	if holder && !p.moved {
+		return true
+	}
+	return now.Sub(p.since) >= IndexPlacementGrace
+}
 
 // indexTaken is what the budget took of a repository this node keeps a code
 // index of, by the bytes each held: copyBytes, the copy its eviction took,
@@ -1400,14 +1455,15 @@ func (c *Cache) keepsCodeIndex(repoID string) (held, keeps bool) {
 // repository a stale page misses is listed at the next look) and, for each one
 // this node is among the first code.IndexHolders of — its git order read
 // again at every look, so a node that joins or leaves moves the index with the
-// order — syncs its copy, FILLING ONE THIS NODE DOES NOT HOLD (M6-D12: the
+// order, once the move has stood IndexPlacementGrace (settled), so a node's
+// restart moves none — syncs its copy, FILLING ONE THIS NODE DOES NOT HOLD (M6-D12: the
 // index's holder holds a copy deliberately, where a read fills one only on
 // the home), and brings the index to the default branch's tip — as NO USE
 // of the copy (indexSync), and never straight back into what the budget
 // just took (indexTaken: a copy it evicted, an index it trimmed). Between looks,
 // a round that moves a repository's refs NUDGES it (nudgeIndex), and only
-// that repository is looked at. A repository this node is no longer a holder
-// of has its index dropped where its copy keeps one: an index nobody's
+// that repository is looked at. A repository this node has been no holder of
+// for the grace has its index dropped where its copy keeps one: an index nobody's
 // search reads is budget a held one needs, and a placement back finds the
 // tip from nothing, which is what a new holder pays anyway.
 func (c *Cache) indexer(ctx context.Context) {
@@ -1499,6 +1555,7 @@ func (c *Cache) indexPass(ctx context.Context) {
 	// gone, and the indexer keeps nothing of it.
 	c.indexMu.Lock()
 	maps.DeleteFunc(c.indexBack, func(id string, _ indexTaken) bool { return !listed[id] })
+	maps.DeleteFunc(c.indexSeen, func(id string, _ indexPlace) bool { return !listed[id] })
 	c.indexMu.Unlock()
 }
 
@@ -1540,15 +1597,22 @@ func (c *Cache) indexHeld(ctx context.Context, repoID string) (IndexOutcome, err
 	if err != nil {
 		return "", err
 	}
-	if !slices.Contains(order[:min(len(order), code.IndexHolders)], c.placement.Node) {
-		c.dropIndexOf(ctx, repoID)
-		c.gaveBack(repoID, true, true)
+	holder := slices.Contains(order[:min(len(order), code.IndexHolders)], c.placement.Node)
+	settled := c.settled(repoID, holder)
+	if !holder {
+		if settled {
+			c.dropIndexOf(ctx, repoID)
+			c.gaveBack(repoID, true, true)
+		}
 		return IndexNone, nil
 	}
-	// Before any sync: a copy filled only for an index the share has no room
-	// for, or into a budget that evicted it, would be evicted or trimmed
-	// again.
+	// Before any sync: a copy filled only for a place a restart lent this
+	// node, for an index the share has no room for, or into a budget that
+	// evicted it, would be dropped, trimmed or evicted again.
 	held, keeps := c.keepsCodeIndex(repoID)
+	if !keeps && !settled {
+		return IndexPlacing, nil
+	}
 	if !keeps && !c.mayBuildIndex(repoID) {
 		return IndexOverShare, nil
 	}
