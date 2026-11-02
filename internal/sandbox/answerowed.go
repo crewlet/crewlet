@@ -56,9 +56,13 @@ import (
 // nothing about the inbox's own serial dispatch keeps the seat's later mail
 // behind it. The coordinator holds the seat's inbox ([SeatHold], the hold
 // seathold.go keeps for a busy seat too) for as long as any of the seat's
-// answers is owed, and lifts it once the resume has RETURNED
-// — so R2 is worked after R1's resume, with the run's own replies already in
-// the thread it reads, rather than racing it. A hold rather than a park,
+// answers is owed, and lifts it once the resume has RETURNED and, where the
+// resume ended the run, its ending is finished: the turn's end recorded on the
+// executor log, once every capture of the turn has settled, and the run's
+// record deleted — by this node's retry, off the resume's frame, the answer's
+// series kept until it is ([Coordinator.settleOwed]) — so R2 is worked after
+// R1's resume and after its end, with the run's own replies already in the
+// thread it reads, rather than racing either. A hold rather than a park,
 // because the held mail waits on the broker with its place and its delivery
 // count intact, where a park would republish it in a loop for the whole
 // backoff.

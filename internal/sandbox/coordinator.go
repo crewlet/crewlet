@@ -2860,8 +2860,13 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // ending is decided and the box torn down, and the record goes with the
 // ending's last step: here, or — where it owes the turn's end, as every
 // record of a coordinator that records on an executor log does — by this
-// node's retry of the ending, at once and after this returns
-// ([Coordinator.finishEnding]).
+// node's retry of the ending ([Coordinator.finishEnding]), armed at once on a
+// goroutine of its own, which records the end once every capture of the turn
+// has settled, deletes the record and recounts the seat. That retry runs
+// beside the rest of this frame, its own recount included, and can finish
+// before this returns; the two recounts are ordered by the seat's moves, so
+// whichever is written second reads the store again first
+// ([Coordinator.syncSeat]).
 //
 // IT REPORTS WHAT IT LEFT THE DELIVERY, not merely whether it failed, because
 // "the resume did not happen" is three different facts and only one of them is
@@ -2928,12 +2933,15 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	}
 	// THE SEAT STAYS HELD THROUGH THE RESUMED TURN. The claim holds the row
 	// in [StatusResumed], which is a [Holding] status, and it is counted so
-	// until the turn has returned: every branch below recounts the seat from
-	// the store once it has. The count used to be given back HERE, before the
-	// resumer ran, which lifted the seat's inbox hold for the length of the
-	// resumed turn, and the seat's next mail ran as a second turn beside it.
-	// Two of the seat's turns in flight at once is what the hold exists to
-	// prevent (seathold.go).
+	// for as long as the row stands so: every branch below recounts the seat
+	// from the store once the turn has returned, and a row that outlives the
+	// turn by the end it owes the executor log is counted until its ending's
+	// retry deletes it — the seat's mail held behind the end as well. The
+	// count used to be given back HERE, before the resumer ran, which lifted
+	// the seat's inbox hold for the length of the resumed turn, and the
+	// seat's next mail ran as a second turn beside it. Two of the seat's
+	// turns in flight at once is what the hold exists to prevent
+	// (seathold.go).
 	//
 	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin (see
 	// [ResumeRequest.Begin]). Atomic because nothing here promises the
@@ -3223,12 +3231,16 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// store has no record of this run now, so the recount keeps only the
 	// seat's other live runs and the seat's inbox hold lifts here, once the
 	// resumed turn is over. Where the record OWES THE TURN'S END, the ending
-	// is decided here and finished by this node's retry, at once and off this
-	// frame ([errAskAway]): the log's write, and a capture still being kept,
-	// are not this frame's to wait on. The record outlives the resume by that
-	// write and is still counted here, and the hold lifts once the retry has
-	// deleted it, recounted the seat and settled the ending it kept
-	// ([Coordinator.retryOwed]).
+	// is decided here and finished by this node's retry, armed at once on a
+	// goroutine of its own ([errAskAway]): a capture still being kept, and
+	// the log's write after it, are not this frame's to wait on. The record
+	// outlives the resume by them, its ending keeping the seat's inbox held
+	// ([Coordinator.oweEndingAfter]), and the hold lifts once the retry has
+	// deleted the record, recounted the seat and settled the ending it kept
+	// ([Coordinator.retryOwed]). That retry can be under way, or done, as
+	// this recount reads: a delete moves the seat ([Coordinator.moved]) and
+	// so does every recount written, so a listing read before the delete is
+	// read again rather than counting the run as holding after it.
 	c.syncSeat(ctx, run.AgentHandle)
 	// The ordinary ending: the turn came back and the run is finished, so
 	// whatever drove the resume did its whole job.
