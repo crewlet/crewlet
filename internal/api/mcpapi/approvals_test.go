@@ -62,7 +62,9 @@ func (leadOf) LeadsProject(context.Context, string, string) (bool, error)   { re
 func (leadOf) LeadsUnit(context.Context, string, string) (bool, error)      { return false, nil }
 func (leadOf) LeadsContainer(context.Context, string, string) (bool, error) { return false, nil }
 func (leadOf) MemberOf(context.Context, string, string) (bool, error)       { return false, nil }
-func (c leadOf) LeadsAnyone(_ context.Context, actor string) (bool, error) { return actor == c.lead, nil }
+func (c leadOf) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == c.lead, nil
+}
 
 // approvalSurface is the surface over desk and docs, decided over the chart in
 // which "cto" leads "swe".

@@ -89,9 +89,9 @@ func TestAnApprovalAnswersNoQuestionThatIsNotAHeldCall(t *testing.T) {
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
-	given, ev := givenAgainst(t, rig, "t1")
+	given, _ := givenAgainst(t, rig, "t1")
 	given.Answer, given.Approval = "go", "0190f3a8-0000-7000-8000-000000000001"
-	ev = events.New(given, events.TraceContext{})
+	ev := events.New(given, events.TraceContext{})
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerNotMine {
 		t.Fatalf("an approval to a run's own question = %q, %v, want not mine", d, err)
 	}

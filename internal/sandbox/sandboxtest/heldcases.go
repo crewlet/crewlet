@@ -125,21 +125,23 @@ func testAHeldCallIsMarkedOnceAndTheMarkOutlivesAClaimGivenBack(t *testing.T, s 
 	if err != nil || !first || !held.Calling() || held.Made() {
 		t.Fatalf("the first mark = %+v, %v, %v, want this mark the first", held, first, err)
 	}
-	if again, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{}); err != nil || first ||
-		!again.CallingAt.Equal(held.CallingAt) {
+	again, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+	if err != nil || first || !again.CallingAt.Equal(held.CallingAt) {
 		t.Fatalf("a second mark = %+v, %v, %v, want it found marked", again, first, err)
 	}
-	if ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered}); err != nil || !ok {
+	ok, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{Launch: launch, To: sandbox.StatusAnswered})
+	if err != nil || !ok {
 		t.Fatalf("ReleaseClaim = %v, %v", ok, err)
 	}
 	claim()
-	if again, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{}); err != nil || first {
+	again, first, err = s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})
+	if err != nil || first {
 		t.Fatalf("a mark after the claim came back = %+v, %v, %v, want it found marked", again, first, err)
 	}
-	if ok, err := s.RecordHeldResult(ctx, "t1", launch, "sealed-result", sandbox.Fence{}); err != nil || !ok {
+	if ok, err = s.RecordHeldResult(ctx, "t1", launch, "sealed-result", sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
 	}
-	if ok, err := s.RecordHeldResult(ctx, "t1", launch, "another", sandbox.Fence{}); err != nil || !ok {
+	if ok, err = s.RecordHeldResult(ctx, "t1", launch, "another", sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
 	}
 	made, first, err := s.MarkHeldCall(ctx, "t1", launch, sandbox.Fence{})

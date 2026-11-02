@@ -423,9 +423,9 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 	slices.SortFunc(reports, func(a, b report) int { return cmp.Compare(a.node, b.node) })
 
 	out := MCPStatusAnswer{
-		Reading: ReadingAdmin,
-		Servers: []MCPServerRow{},
-		Nodes:   make([]MCPStatusNode, 0, len(reports)),
+		Reading:   ReadingAdmin,
+		Servers:   []MCPServerRow{},
+		Nodes:     make([]MCPStatusNode, 0, len(reports)),
 		Builtin:   s.builtinGroups(),
 		Alarms:    []MCPAlarm{},
 		Approvals: []MCPApproval{},

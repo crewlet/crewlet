@@ -582,7 +582,9 @@ const MCP_ALARM_WORDS: Record<
     severity: "caution",
     icon: "clock",
     title: (e) =>
-      e.seat ? `${e.seat} is waiting for approval to use ${e.key}` : `A call to ${e.key} is waiting for approval`,
+      e.seat
+        ? `${e.seat} is waiting for approval to use ${e.key}`
+        : `A call to ${e.key} is waiting for approval`,
     detail: () => "Its run is parked until somebody allows or denies the call.",
   },
 };

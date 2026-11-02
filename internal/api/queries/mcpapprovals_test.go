@@ -29,7 +29,7 @@ func heldRuns(t *testing.T) (fixedRuns, *sandbox.CallSeal) {
 	}
 	return fixedRuns{
 		{TurnID: "t-held", LaunchID: "launch-1", AgentHandle: "backend-dev", Status: sandbox.StatusAwaiting,
-			Question: "May backend-dev call gh_merge_pull_request on the github MCP server?",
+			Question:        "May backend-dev call gh_merge_pull_request on the github MCP server?",
 			AudienceHandles: []string{"cto"}, HeldCall: &held,
 			WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "id-4", Key: "ENG-4"}},
 		{TurnID: "t-plain", LaunchID: "launch-2", AgentHandle: "backend-dev", Status: sandbox.StatusRunning},
