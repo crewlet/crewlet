@@ -186,9 +186,15 @@ func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 // once idle, so indexing them would build and keep an index on the git nodes
 // for every experiment a seat makes; a search naming one still reads it.
 //
-// This build records the mode, serves it on every repository's row and lets
-// a person or a maintaining seat change it; no node of it keeps an index or
-// answers a search.
+// THE GIT NODES READ IT. Each one's indexer (internal/code/cache) keeps a code
+// index of every indexed repository whose git order it is among the first
+// [IndexHolders] of, built at each new tip of the default branch, and keeps
+// none of a grep one. A search naming one repository is a git read of it
+// ([GitSearch], answered by internal/code/query): from that index where the
+// answering node holds it at the searched tip, else with git grep. A search
+// of more is internal/codesearch's scatter, which reads every indexed
+// repository the asker may read and a grep one only when a repo: filter
+// names it.
 type SearchMode string
 
 const (
