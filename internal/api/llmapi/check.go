@@ -48,7 +48,7 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request, _ *types.ModelAc
 		// it is checked as the company would run it once written.
 		next, err := s.config.CheckEntity(r.Context(), configapi.EntityLLMProviders, key,
 			req.Entity, active == nil, actor(r))
-		if !refuseDraft(w, err) {
+		if !configapi.RefuseDraft(w, err) {
 			return
 		}
 		entry := next.Providers.LLM[key]

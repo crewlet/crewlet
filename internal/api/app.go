@@ -874,18 +874,29 @@ func New(opts Options) (*App, error) {
 	// And the node's latest alarm evaluation, which the Models and the MCP
 	// servers answers carry their kinds from.
 	sources.Alarms = opts.Runtime.LatestAlarms
+	// And each server's latest test, which every node reads from the
+	// coordination store.
+	sources.MCPChecks = opts.Runtime.MCPChecks()
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
 	// company this node applied, the community registry it names and, for
 	// one server's detail, the sources as they stand here, every field the
 	// detail reads set above: built here rather than handed in, because the
 	// app already holds the one company reader every answer takes it from.
+	// A DRAFT IS HELD TO THE CONFIGURATION'S OWN DRY RUN, where this app
+	// serves one: a nil service leaves the draft test answered unavailable,
+	// never a nil pointer behind an interface.
+	var drafts mcpapi.DraftChecker
+	if sources.Config != nil {
+		drafts = sources.Config
+	}
 	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
 		if sources.Company == nil {
 			return nil
 		}
 		company, _ := sources.Company()
 		return company
-	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Audit: opts.Audit})
+	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
+		Drafts: drafts, Audit: opts.Audit})
 	if err != nil {
 		return nil, err
 	}

@@ -221,6 +221,10 @@ type Sources struct {
 	// each instance's health. Nil answers the detail with no instances read.
 	MCPInstances MCPInstanceReader
 
+	// MCPChecks reads each MCP server's latest test, which a server's
+	// detail answers. Nil answers none.
+	MCPChecks MCPCheckReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 

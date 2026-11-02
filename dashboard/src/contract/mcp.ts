@@ -596,6 +596,57 @@ export interface McpServerAnswer {
   resolved: McpResolved | null;
   usage: McpServerUsage;
   calls: McpServerCalls;
+  /** The server's latest test, whoever asked through whichever node; null where never tested. */
+  last_check: McpCheckView | null;
+}
+
+/** A stage a test of a server walks, in order (`mcp.TestStages`). */
+type McpTestStage = "address" | "resolve" | "connect" | "tls" | "launch" | "discover" | "list";
+
+/** How one stage of a test went. */
+type McpStepState = "passed" | "failed" | "skipped" | "not_reached";
+
+/** A server's latest test, as its detail answers it: never its tools. */
+interface McpCheckView {
+  at: string;
+  by: string;
+  /** The handle of the seat a per-agent server was tested for, "" for a shared server. */
+  seat: string;
+  /** Some node answered, and every node that answered found the server serving. */
+  ok: boolean;
+  nodes: McpCheckNodeView[];
+}
+
+/** What one node's test found. */
+interface McpCheckNodeView {
+  /** "" for a seat's test no node holding the seat answered. */
+  node: string;
+  answered: boolean;
+  /** Why a node that did not answer did not. */
+  reason: string;
+  ok: boolean;
+  steps: McpCheckStepView[];
+  /** Why the test stopped, or `empty_tools` for a server listing nothing it can offer. */
+  failure: McpCheckFailure | null;
+  server_info: McpServerInfo | null;
+  tools: number;
+  refused: number;
+  took_ms: number;
+}
+
+/** One stage of a node's test. */
+interface McpCheckStepView {
+  stage: McpTestStage;
+  state: McpStepState;
+  took_ms: number;
+  /** What the stage found, or the failure's sentence for the stage that failed. */
+  detail: string;
+}
+
+/** Why a node's test stopped: its class ("" where none fits) and its sentence. */
+interface McpCheckFailure {
+  class: McpFailureClass | "";
+  said: string;
 }
 
 /** `GET /mcp-servers/{name}` as a member reads it. */
