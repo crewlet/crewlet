@@ -144,6 +144,19 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "Re-run checks — each a WriteButton held with the gate's sentence",
     suite: "routes/code/change/ChangePage.test.tsx",
   },
+  "routes/code/ImportRepo.tsx": {
+    why:
+      "the repositories' Import a repository — one code_import_repo, a new repository " +
+      "filled from another host or made its pull mirror — and the dialog it opens",
+    suite: "routes/code/Repositories.test.tsx",
+  },
+  "routes/code/repo/RepoWrites.tsx": {
+    why:
+      "a repository's settings writes — its search mode, its pull and push mirrors " +
+      "(code_update_repo) and Purge unreachable history (code_purge_unreachable) — " +
+      "each a WriteButton held with the gate's sentence",
+    suite: "routes/code/repo/RepositoryPage.test.tsx",
+  },
   "routes/code/commit/ComparePage.tsx": {
     why:
       "a comparison's Open change — one code_open_change of the branch compared into " +

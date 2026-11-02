@@ -15,6 +15,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -88,8 +89,11 @@ function stubFetch(answer: (url: URL) => Response | null) {
   return asked;
 }
 
-/** The screen in the frame's readings, at `hash`; the socket's questions recorded. */
-function mount(ui: ReactElement, hash = "#/code/repos") {
+/**
+ * The screen in the frame's readings, at `hash`, for `viewer`; the socket's
+ * questions recorded.
+ */
+function mount(ui: ReactElement, hash = "#/code/repos", viewer: unknown = ADMIN_VIEWER) {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(ORG);
@@ -97,7 +101,7 @@ function mount(ui: ReactElement, hash = "#/code/repos") {
   const onSocket: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     onSocket.push(what);
-    return what === "viewer" ? Promise.resolve(ADMIN_VIEWER) : new Promise(() => {});
+    return what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
   };
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -311,4 +315,27 @@ test("a filter left and come back to lists from its first page, nothing held", a
   await afterMicrotasks();
   expect(listed()).toEqual(["a0", "a1"]);
   expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
+});
+
+// IMPORT A REPOSITORY IS DRAWN FOR EVERY READER, held with the reason it
+// cannot act, and opens nothing for one who cannot. Mutation: hide it from a
+// reader who cannot act, or open its dialog for one, and this fails.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...ADMIN_VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])("Import a repository is drawn for %s, held with the reason", async (_who, viewer, reason) => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_repos" ? json({ position: POSITION, level: "stale" }) : null,
+  );
+  const { store } = mount(<Repositories />, "#/code/repos", viewer);
+  act(() => store.setConnected(true));
+
+  const button = await screen.findByRole("button", { name: "Import a repository" });
+  await waitFor(() => expect(button.getAttribute("title")).toBe(reason));
+  fireEvent.click(button);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

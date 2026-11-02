@@ -127,7 +127,7 @@ describe("what a search covered", () => {
     const notes = coverageNotes({ ...quiet(), truncated: true, past_limit: set(["zeta"], 4) });
     expect(notes.variant).toBe("warning");
     expect(notes.notes).toContain(
-      "Past the limit: 4 repositories (zeta and 3 more), named after the last line shown — narrow the search with repo: or path: to reach them.",
+      "Past the limit: 4 repositories (zeta and 3 more), named after the last line shown. Narrow the search with repo: or path: to reach them.",
     );
   });
 

@@ -21,6 +21,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -533,6 +534,41 @@ test("a reader holding no human seat is held from a mirror and a purge, with the
     PERSON_ONLY,
   );
 });
+
+// A REPOSITORY'S SETTINGS WRITES ARE DRAWN FOR EVERY READER, held with the
+// reason each cannot act — the search mode, both mirrors and the purge — for a
+// reader signed in as nobody and for a person the engine does not make them
+// for, and none sends anything. Mutation: hide one from a reader who cannot
+// act, or let a press through, and this fails.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...WRITER, acts: [] }, WRITE_REASONS.not_served],
+])(
+  "a repository's settings writes are drawn for %s, held with the reason",
+  async (_who, viewer, reason) => {
+    const acted: Acted[] = [];
+    stubEngine(detail({ managed_by: "tools", search: "grep" }), acted);
+    mount("#/code/repos/web?tab=settings", "web", viewer);
+
+    const index = await screen.findByRole("button", { name: "Index it" });
+    await waitFor(() => expect(index.getAttribute("title")).toBe(reason));
+    for (const name of [
+      "Make it a pull mirror",
+      "Add a push mirror",
+      "Purge unreachable history",
+    ]) {
+      expect(screen.getByRole("button", { name }).getAttribute("title"), name).toBe(reason);
+    }
+    fireEvent.click(index);
+    fireEvent.click(screen.getByRole("button", { name: "Purge unreachable history" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(acted).toHaveLength(0);
+  },
+);
 
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
 // stand, on the Overview's rail. Mutation: drop the import's progress or the

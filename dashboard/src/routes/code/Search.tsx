@@ -268,7 +268,9 @@ function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: Fil
     <div className="code-search-file">
       <div className="code-search-file__path mono">
         {first ? (
-          <a href={href(repoPath(repo), fileOnly(first))}>{file.path}</a>
+          <a className="code-search-file__link" href={href(repoPath(repo), fileOnly(first))}>
+            {file.path}
+          </a>
         ) : (
           <span title="Its path is not UTF-8, so no address names it">{file.path}</span>
         )}

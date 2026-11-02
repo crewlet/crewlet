@@ -170,7 +170,7 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
   }
   if (coverage.past_limit.count > 0) {
     notes.push(
-      `Past the limit: ${counted(coverage.past_limit)}, named after the last line shown — narrow the search with repo: or path: to reach them.`,
+      `Past the limit: ${counted(coverage.past_limit)}, named after the last line shown. Narrow the search with repo: or path: to reach them.`,
     );
   }
   if (coverage.skipped_files > 0) {

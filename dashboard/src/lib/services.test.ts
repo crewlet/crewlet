@@ -80,6 +80,7 @@ test("a company hosting no code in the engine is offered no Code", () => {
     "code-pushes",
     "code-queue",
     "code-repos",
+    "code-search",
     "me-reviews",
     "settings-code",
   ]);
