@@ -12,7 +12,13 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { IMMUTABLE_KEPT, codeRest, codeSearch, useCodeQuery } from "./useCodeQuery.ts";
+import {
+  CHANGES_FILL_PAGES,
+  IMMUTABLE_KEPT,
+  codeRest,
+  codeSearch,
+  useCodeQuery,
+} from "./useCodeQuery.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
@@ -292,5 +298,68 @@ describe("a refusal reads as every question's", () => {
     expect(refused).toBeInstanceOf(QueryError);
     expect((refused as QueryError).message).toBe("bad_params");
     expect((refused as QueryError).detail).toBe(sentence);
+  });
+});
+
+describe("a filled listing of changes keeps rows, not pages", () => {
+  const changesPage = (ids: string[], next?: string) => ({
+    ...(ids.length > 0 ? { changes: ids.map((id) => ({ id })) } : {}),
+    ...(next ? { next } : {}),
+    position: POSITION,
+    level: "session",
+  });
+
+  // A PAGE IS THE ROWS THE ENGINE READ: one that kept none can still carry
+  // `next`, and the change the screen wants is behind it. Mutation: answer
+  // the first page alone, or ask the next without its cursor, and this fails.
+  test("follows next past a page that kept nothing, with the same parameters", async () => {
+    const sent = stub((url) =>
+      url.searchParams.get("cursor") === "c1"
+        ? json(changesPage(["kept"]))
+        : json(changesPage([], "c1")),
+    );
+    const { result } = renderHook(() =>
+      useCodeQuery("code_changes", { needs: "person", limit: 3 }, { fill: 3 }),
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(result.current.data?.changes?.map((c) => c.id)).toEqual(["kept"]);
+    expect(result.current.data?.next).toBeUndefined();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.url.searchParams.get("cursor")).toBe("c1");
+    expect(sent[1]!.url.searchParams.get("needs")).toBe("person");
+    expect(sent[1]!.url.searchParams.get("limit")).toBe("3");
+  });
+
+  // ENOUGH KEPT ENDS THE READING, and nothing kept is cut: the answer's `next`
+  // resumes after the last change it holds. Mutation: read on past `rows`, or
+  // cut the kept changes to `rows`, and this fails.
+  test("stops once it has kept its rows, holding every change those pages kept", async () => {
+    const sent = stub((url) =>
+      url.searchParams.get("cursor") === "c1"
+        ? json(changesPage(["b", "c"], "c2"))
+        : json(changesPage(["a"], "c1")),
+    );
+    const { result } = renderHook(() =>
+      useCodeQuery("code_changes", { needs: "review", limit: 2 }, { fill: 2 }),
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(sent).toHaveLength(2);
+    expect(result.current.data?.changes?.map((c) => c.id)).toEqual(["a", "b", "c"]);
+    expect(result.current.data?.next).toBe("c2");
+  });
+
+  // THE READING IS BOUNDED, and the bound is said rather than read as an end:
+  // the answer keeps the last page's `next`. Mutation: drop the bound, or
+  // answer the bound's last page without its `next`, and this fails.
+  test("reads at most its bound of pages, and answers that the listing goes on", async () => {
+    let n = 0;
+    const sent = stub(() => json(changesPage([], `c${String(++n)}`)));
+    const { result } = renderHook(() =>
+      useCodeQuery("code_changes", { needs: "person", limit: 3 }, { fill: 3 }),
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(sent).toHaveLength(CHANGES_FILL_PAGES);
+    expect(result.current.data?.changes).toBeUndefined();
+    expect(result.current.data?.next).toBe(`c${String(CHANGES_FILL_PAGES)}`);
   });
 });

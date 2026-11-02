@@ -3046,8 +3046,8 @@ company did.** That is Home until its reader arranges it (see
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Code waiting on a person**, where the company hosts code: the changes an
-  agent cannot move. Two halves, the first three of each of the engine's own
-  listings: *Asking your review* (`code_changes?needs=review`, which names no
+  agent cannot move. Two halves, the first three changes each of two of the
+  engine's own listings keeps: *Asking your review* (`code_changes?needs=review`, which names no
   reviewer and so asks the reader's own seat; a reader bound to no seat is
   told a review is asked of a seat, and asked nothing) and *Waiting on a
   person* (`needs=person`: a change whose first unmet precondition only a
@@ -3056,7 +3056,15 @@ company did.** That is Home until its reader arranges it (see
   the change in the peek. Three rows, as Needs your decision draws, and
   **Open Code** is Code › Changes narrowed to what waits on a person. A
   listing is a page the engine read, never a total, so the card counts
-  nothing.
+  nothing; and a page is the rows it read, not the rows it kept (a change of
+  a repository the reader may not read, one that has ended, one whose
+  readiness no longer waits on a person is dropped after the read), so an
+  empty page can still carry `next`. Each half follows `next` until it holds
+  its three or the listing ends, for at most four pages a poll
+  (`CHANGES_FILL_PAGES`), and says it found none only of a listing that
+  ended: a half that stops at that bound first draws what it found, or, with
+  nothing found, says none was among the newest read and links to the rest
+  in Code.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the

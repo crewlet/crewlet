@@ -225,6 +225,53 @@ test("Home's card asks a reader bound to no seat no review of its own, and says 
   expect(needs).not.toContain("review");
 });
 
+// HOME'S CARD LISTS THE CHANGES A LISTING KEEPS, NOT THE ROWS ONE PAGE READ:
+// the engine drops a read row it may not show this reader, so a first page
+// can keep none and carry `next` while the change waiting on them is on the
+// second. Mutation: read the first page alone, and the card says "No change
+// is asking your review." over a change that is.
+test("Home's card follows next past a page that kept nothing to the change behind it", async () => {
+  const asked = stubFetch((url) => {
+    if (url.pathname !== "/query/code_changes") return undefined;
+    if (url.searchParams.get("cursor") === "more") {
+      return { changes: [change("web", 42)], position: POSITION, level: "session" };
+    }
+    return { next: "more", position: POSITION, level: "session" };
+  });
+  mount(<CodeWaiting />);
+
+  const mine = await screen.findByRole("region", { name: "Asking your review" });
+  expect(await within(mine).findByText("web!42")).toBeTruthy();
+  expect(within(mine).queryByText("No change is asking your review.")).toBeNull();
+  const followed = codeAsks(asked, "code_changes").filter(
+    (u) => u.searchParams.get("cursor") === "more",
+  );
+  expect(followed.map((u) => u.searchParams.get("needs")).sort()).toEqual(["person", "review"]);
+});
+
+// "NONE" IS SAID ONLY OF A LISTING THAT ENDED: a half whose reading stops at
+// its bound with `next` still set found none among what it read, and says so
+// with the way to the rest, never that nothing waits. Mutation: say a half's
+// "none" whatever its `next`, and this fails.
+test("Home's card says none only of a listing that ended, and points past its bound", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? url.searchParams.get("needs") === "review"
+        ? { next: "more", position: POSITION, level: "session" }
+        : { position: POSITION, level: "session" }
+      : undefined,
+  );
+  mount(<CodeWaiting />);
+
+  const mine = await screen.findByRole("region", { name: "Asking your review" });
+  expect(await within(mine).findByText(/None among the newest changes read/)).toBeTruthy();
+  expect(within(mine).queryByText("No change is asking your review.")).toBeNull();
+  const rest = within(mine).getByRole("link", { name: "See the rest in Code" });
+  expect(rest.getAttribute("href")).toContain("needs=review");
+  const person = screen.getByRole("region", { name: "Waiting on a person" });
+  expect(await within(person).findByText("No change waits on a person.")).toBeTruthy();
+});
+
 const seat = (handle: string) => ({ handle, name: handle }) as unknown as Seat;
 
 const ACTIVITY = {
