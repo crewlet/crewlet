@@ -141,7 +141,8 @@ export interface ExecutorSessionAnswer {
    * follow. It names the capture it was read from and how the engine counts
    * entries, so the engine refuses it (`bad_params`) once the session is
    * captured again or a build counting otherwise answers: read the transcript
-   * again from its start.
+   * again from its start. A later page of a session whose object was released
+   * since is answered as the first page would be, `none`.
    */
   next_cursor?: string;
   bounds: TranscriptBounds;

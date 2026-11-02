@@ -165,17 +165,6 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   // opens at its top rather than jumping to it.
   const chose = useRef(false);
   const list = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (!thread) return;
-    // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone
-    // — `scrollIntoView` would move the page too.
-    const box = list.current;
-    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    if (box && row) keepInView(box, row);
-    if (!chose.current) return;
-    chose.current = false;
-    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
-  }, [thread]);
   const threads = useQuery(
     "conversations",
     { handle: seat.handle, ...(thread ? { conversation: thread } : {}) },
@@ -183,6 +172,29 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   );
   const data = threads.data;
   const rows = data?.conversations ?? [];
+  // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone —
+  // `scrollIntoView` would move the page too — ONCE IT IS DRAWN: a thread the
+  // address named on opening has no row until the threads are answered, which
+  // is after the first render, so this waits for the row rather than for the
+  // choice, and keeps each choice in view once.
+  const keptFor = useRef("");
+  const drawn = rows.some((row) => row.key === thread);
+  useLayoutEffect(() => {
+    if (!thread) {
+      keptFor.current = "";
+      return;
+    }
+    if (!drawn || keptFor.current === thread) return;
+    keptFor.current = thread;
+    const box = list.current;
+    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (box && row) keepInView(box, row);
+  }, [thread, drawn]);
+  useLayoutEffect(() => {
+    if (!thread || !chose.current) return;
+    chose.current = false;
+    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
+  }, [thread]);
   // THE ANSWER IN HAND WHEN A THREAD IS CHOSEN IS THE LAST THREAD'S: the
   // choice asks again with the new `conversation=`, and until that answer
   // arrives the one in hand still carries the turns of the thread before —

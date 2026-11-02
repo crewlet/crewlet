@@ -235,9 +235,13 @@ test("every kind of entry and every unread state has words of its own", () => {
 
 // A PAGE CUT AT THE READ'S OWN BOUND IS THE END OF WHAT CAN BE SHOWN, said as
 // such and with the bound — the one cut that has words, since a page cut at
-// its own bound has its Load more instead.
+// its own bound has its Load more instead — and of the whole session where
+// the read reached none of it.
 test("a page cut at the read's own bound says the rest cannot be shown", () => {
-  expect(readCutWords(256 * 1024 * 1024)).toMatch(/cannot be shown.*256 MiB/);
+  expect(readCutWords(256 * 1024 * 1024, 3)).toMatch(
+    /^The rest of this session cannot be shown.*256 MiB/,
+  );
+  expect(readCutWords(256 * 1024 * 1024, 0)).toMatch(/^None of this session can be shown.*256 MiB/);
 });
 
 // A NOTE A PERSON SENT THE RUN IS LABELLED A NOTE, never a brief: the model

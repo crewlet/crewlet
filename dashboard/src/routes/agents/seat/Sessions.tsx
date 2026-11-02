@@ -18,27 +18,42 @@
  * replicated estate's and the transcript is read from the fleet's object
  * store, so any node answers both; nothing here is "held by" a node.
  *
- * # A page at a time, both of them
+ * # A page at a time, both of them, and a transcript of one capture
  *
  * The list pages by the engine's cursor (`next_cursor`), and so does a
  * transcript, whose cursor names the capture it was read from: a live turn's
  * session moves to a newer archive with every capture, and a page continued in
- * another archive would skip or repeat entries. So when the list shows a newer
- * capture than the transcript on screen, or the engine refuses a page because
- * the session moved since, the reader is told and offered the transcript again
- * from its first page. Each page states why it ends where it does — the page's
- * own bound, with more to read, or the most one read takes, with nothing more
- * to show — and an entry cut to its bound says how large the whole was.
+ * another archive would skip or repeat entries. So A TRANSCRIPT IS OF ONE
+ * CAPTURE for as long as it is on screen: when the list shows a newer one, or
+ * its first page is answered again for one (a write from this tab asks every
+ * question again), or the engine refuses a page because its pages no longer
+ * follow on, the reader is told and offered the transcript again from its
+ * first page — never handed the newer capture under the pages they are
+ * reading. Each page states why it ends where it does — the page's own bound,
+ * with more to read, the most one read takes, with nothing more to show, or
+ * that the rest could not be read, and why — and an entry cut to its bound
+ * says how large the whole was.
+ *
+ * The account of how the session's turn ended is the LIST'S ROW, which the
+ * list's poll keeps current: a turn's end is recorded with no new capture, so
+ * the transcript's own first page, read once, would go on saying it had not
+ * ended beside a list saying how it did.
  *
  * # Choosing a session shows it — that session, and never the last one
  *
  * As Conversations does: the chosen session is a filter on the address
  * (`session=`), the list is bounded beside the transcript and keeps the chosen
- * row in its own view, and on a phone, where the transcript is below the
- * whole list, choosing one scrolls to it and focuses its heading. The
- * transcript is drawn fresh for every choice, from its loading state: a read
- * of an archive takes a moment, and the previous session's account and entries
- * drawn under the new one's heading meanwhile would read as the new one's.
+ * row in its own view — the moment the rows are drawn, for a session the
+ * address named before the list was read — and on a phone, where the
+ * transcript is below the whole list, choosing one scrolls to it and focuses
+ * its heading. The transcript is drawn fresh for every choice and every
+ * re-read, from its loading state: a read of an archive takes a moment, and
+ * the previous session's account and entries drawn under the new one's heading
+ * meanwhile would read as the new one's. A re-read moves focus to the
+ * transcript's heading, the button pressed for it being gone with the pages it
+ * stood under. And the transcript is NOT INSIDE THE LIST'S ANSWER: a poll of
+ * the list that failed draws the failure in the list's own card, and leaves
+ * the transcript, and the pages a reader loaded, where they are.
  */
 
 import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
@@ -51,7 +66,7 @@ import { plainText } from "~/lib/markdownText.ts";
 import { keepInView, reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import { useQuery, withFloor } from "~/lib/useQuery.ts";
+import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type {
   ExecutorSessionAnswer,
@@ -133,9 +148,9 @@ const SESSION_DETAIL_ID = "prof-session-transcript";
  *
  * A MINUTE: a row appears when a turn's run is collected and changes when the
  * turn ends — minutes apart on a busy seat — and nothing pushes either. The
- * transcript is not polled at all: a session's archive changes only with a new
- * capture, which the list shows, and a newer capture reads the transcript
- * again from its start.
+ * transcript is not polled at all, nor asked again on a reconnect: a session's
+ * archive changes only with a new capture, which the list shows and the reader
+ * is offered, and how its turn ended is the list's row's.
  */
 const SESSIONS_POLL_MS = 60_000;
 
@@ -146,18 +161,10 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
   const chose = useRef(false);
   const list = useRef<HTMLDivElement>(null);
   // HOW MANY TIMES THE READER ASKED for the open transcript again from its
-  // start: for a newer capture the list shows, or after the engine refused a
-  // page of it as one of an older capture.
+  // start: for a newer capture, or after the engine refused a page of it.
   const [rereads, setRereads] = useState(0);
-  useLayoutEffect(() => {
-    if (!turn) return;
-    const box = list.current;
-    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    if (box && row) keepInView(box, row);
-    if (!chose.current) return;
-    chose.current = false;
-    reveal(document.getElementById(SESSION_DETAIL_ID), { focus: true });
-  }, [turn]);
+  // SET BY A RE-READ, read once the transcript it drew afresh has rendered.
+  const reread = useRef(false);
   const { socket } = useClient();
   const handle = seat.handle;
   const asked = { handle };
@@ -176,28 +183,66 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
   const rows = sessions.items;
   const first = sessions.answers[0];
   const chosen = turn ? rows.find((r) => r.turn_id === turn) : undefined;
+  // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone,
+  // ONCE IT IS DRAWN: a session the address named on opening has no row until
+  // the list is answered, which is after the first render — so this waits for
+  // the row rather than for the choice, and keeps each choice in view once.
+  const keptFor = useRef("");
+  const drawn = chosen !== undefined;
+  useLayoutEffect(() => {
+    if (!turn) {
+      keptFor.current = "";
+      return;
+    }
+    if (!drawn || keptFor.current === turn) return;
+    keptFor.current = turn;
+    const box = list.current;
+    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (box && row) keepInView(box, row);
+  }, [turn, drawn]);
+  useLayoutEffect(() => {
+    if (!turn || !chose.current) return;
+    chose.current = false;
+    reveal(document.getElementById(SESSION_DETAIL_ID), { focus: true });
+  }, [turn]);
+  // A RE-READ PUTS FOCUS ON THE TRANSCRIPT'S HEADING, in view or not: the
+  // button it was pressed on is gone with the transcript it stood in, and
+  // focus left on nothing is a keyboard's place lost.
+  useLayoutEffect(() => {
+    if (!reread.current) return;
+    reread.current = false;
+    const heading = document.getElementById(SESSION_DETAIL_ID);
+    reveal(heading);
+    heading?.focus({ preventScroll: true });
+  }, [rereads]);
   return (
     <section className="col gap-2" aria-labelledby="prof-sessions">
       <h3 id="prof-sessions" className="prof-section-title">
         Sessions
       </h3>
-      <QueryState
-        error={sessions.error}
-        refusal={sessions.refusal}
-        loading={sessions.loading && !first}
-      >
-        <div className="split thread-split">
-          <Card padding="none">
-            <Card.Header
-              icon={<SquareTerminalGlyph size="sm" />}
-              subtitle={
-                first && !first.complete
-                  ? "The node that answered may be missing sessions it could not read."
-                  : "What its harness wrote on each turn"
-              }
-            >
-              <Card.Title as="h4">Turns</Card.Title>
-            </Card.Header>
+      <div className="split thread-split">
+        <Card padding="none">
+          <Card.Header
+            icon={<SquareTerminalGlyph size="sm" />}
+            subtitle={
+              first && !first.complete
+                ? "The node that answered may be missing sessions it could not read."
+                : "What its harness wrote on each turn"
+            }
+          >
+            <Card.Title as="h4">Turns</Card.Title>
+          </Card.Header>
+          {sessions.loading && !first && (
+            <Skeleton variant="text" rows={3} label="Loading this seat's sessions" />
+          )}
+          {/* THE LIST'S OWN ANSWER, SAID IN ITS OWN CARD: a poll that failed
+              replaces the rows with why, and never the transcript beside
+              them, whose pages a reader may have spent minutes loading. */}
+          <QueryState
+            error={sessions.error}
+            refusal={sessions.refusal}
+            loading={sessions.loading && !first}
+          >
             {rows.length ? (
               <div className="list thread-list" ref={list}>
                 {rows.map((row) => (
@@ -239,42 +284,45 @@ export function Sessions({ seat, now }: { seat: Seat; now: number }) {
                 )}
               </footer>
             )}
-          </Card>
+          </QueryState>
+        </Card>
 
-          <Card padding="none" className="thread-detail-card">
-            <Card.Header
-              icon={<FileTextGlyph size="sm" />}
-              // WHICH SESSION, named where its transcript is: on a phone the
-              // list that says it is a screen above.
-              subtitle={turn ? sessionSubtitle(chosen) : undefined}
-            >
-              <Card.Title as="h4" id={SESSION_DETAIL_ID} tabIndex={-1}>
-                Transcript
-              </Card.Title>
-            </Card.Header>
-            {turn ? (
-              <Transcript
-                // ONE TRANSCRIPT PER CHOICE AND PER RE-READ: keyed so each
-                // starts from its loading state with no page held — never the
-                // last session's answer under this one's heading, and never a
-                // newer capture's pages continued from an older one's.
-                key={`${turn}#${rereads}`}
-                handle={handle}
-                turn={turn}
-                listed={chosen?.captured_at ?? null}
-                onReread={() => setRereads((n) => n + 1)}
-              />
-            ) : (
-              <EmptyState
-                size="compact"
-                icon={<FileTextGlyph size={32} />}
-                title="Nothing selected"
-                description="Choose a session."
-              />
-            )}
-          </Card>
-        </div>
-      </QueryState>
+        <Card padding="none" className="thread-detail-card">
+          <Card.Header
+            icon={<FileTextGlyph size="sm" />}
+            // WHICH SESSION, named where its transcript is: on a phone the
+            // list that says it is a screen above.
+            subtitle={turn ? sessionSubtitle(chosen) : undefined}
+          >
+            <Card.Title as="h4" id={SESSION_DETAIL_ID} tabIndex={-1}>
+              Transcript
+            </Card.Title>
+          </Card.Header>
+          {turn ? (
+            <Transcript
+              // ONE TRANSCRIPT PER CHOICE AND PER RE-READ: keyed so each
+              // starts from its loading state with no page held — never the
+              // last session's answer under this one's heading, and never a
+              // newer capture's pages continued from an older one's.
+              key={`${turn}#${rereads}`}
+              handle={handle}
+              turn={turn}
+              row={chosen}
+              onReread={() => {
+                reread.current = true;
+                setRereads((n) => n + 1);
+              }}
+            />
+          ) : (
+            <EmptyState
+              size="compact"
+              icon={<FileTextGlyph size={32} />}
+              title="Nothing selected"
+              description="Choose a session."
+            />
+          )}
+        </Card>
+      </div>
     </section>
   );
 }
@@ -328,28 +376,39 @@ export function SessionSummary({ row, now }: { row: ExecutorSessionRow; now: num
  *
  * A NEWER CAPTURE IS OFFERED, NEVER SWAPPED IN: when the list, asked again
  * each minute, shows the session captured since the transcript on screen was
- * read, the reader is told and offered it from its start — a page continued
- * from the older capture would be refused — rather than having the pages they
- * are reading replaced under them.
+ * read — or the first page, asked again because this tab wrote somewhere, is
+ * answered for a newer capture — the reader is told and offered it from its
+ * start, rather than having the pages they are reading replaced under them,
+ * or bridged page by page to a capture they can never meet.
+ *
+ * HOW THE TURN ENDED IS THE LIST'S ROW where the list holds it: a turn's end
+ * is recorded with no new capture, so it reaches the list's poll and never
+ * this transcript's first page, read once.
  */
 function Transcript({
   handle,
   turn,
-  listed,
+  row,
   onReread,
 }: {
   handle: string;
   turn: string;
-  /** When the list says the session was last captured, null where it has not
-   *  listed the session (yet). */
-  listed: string | null;
+  /** The session's row as the list last read it, undefined where the list
+   *  does not hold it (yet). */
+  row: ExecutorSessionRow | undefined;
   /** Read the transcript again from its first page. */
   onReread: () => void;
 }) {
   const { socket } = useClient();
   const asked = { handle, turn_id: turn };
+  const capture = useOneCapture(
+    useQuery("executor_session", asked, {
+      enabled: handle !== "" && turn !== "",
+      refetchOnReconnect: false,
+    }),
+  );
   const pages = usePaged(
-    useQuery("executor_session", asked, { enabled: handle !== "" && turn !== "" }),
+    capture.first,
     asked,
     (cursor) =>
       socket.query(
@@ -362,8 +421,9 @@ function Transcript({
   );
   const first = pages.answers[0];
   const last = pages.answers[pages.answers.length - 1];
-  const read = first?.session.captured_at;
-  const newer = Boolean(listed && read && Date.parse(listed) > Date.parse(read));
+  const read = first?.session.captured_at ?? null;
+  const newer =
+    first !== undefined && (capturedLater(row?.captured_at ?? null, read) || capture.newer);
   return (
     <div className="col gap-2">
       {pages.loading && !first && (
@@ -372,7 +432,7 @@ function Transcript({
       <QueryState error={pages.error} refusal={pages.refusal} loading={pages.loading && !first}>
         {first && (
           <>
-            <SessionAccount row={first.session} />
+            <SessionAccount row={row ?? first.session} />
             {newer && (
               <div className="row gap-2 wrap">
                 <span className="t-caption">
@@ -393,7 +453,10 @@ function Transcript({
                   <TranscriptEntryView key={entryId(entry)} entry={entry} />
                 ))}
               </div>
-            ) : (
+            ) : last?.cut === "read" ? null : (
+              // NO ENTRIES ONLY WHERE THE READ WENT TO THE END: a read the
+              // budget stopped before its first entry says so below, and
+              // "nothing recorded" beside it would be false.
               <EmptyState
                 size="compact"
                 icon={<FileTextGlyph size={32} />}
@@ -401,21 +464,33 @@ function Transcript({
                 description="The harness recorded nothing a transcript shows."
               />
             )}
+            {last && last !== first && last.state !== "read" && (
+              // A LATER PAGE THAT COULD NOT BE READ — the archive damaged past
+              // the entries above, its object gone or released since — ends
+              // the transcript here and says why, rather than as if the run
+              // had ended where the entries do.
+              <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
+                <strong>The rest of this transcript could not be read.</strong>{" "}
+                {STATE_TITLES[last.state]}: {last.why}
+              </Callout>
+            )}
             {last?.cut === "read" && (
-              <p className="t-caption">{readCutWords(last.bounds.read_bytes)}</p>
+              <p className="t-caption">
+                {readCutWords(last.bounds.read_bytes, pages.items.length)}
+              </p>
             )}
             {(pages.more || pages.paging || pages.pageError) && (
               <footer className="panel-foot">
                 {pages.pageError === "bad_params" ? (
-                  // THE ENGINE REFUSES A PAGE OF A CAPTURE IT NO LONGER HOLDS
-                  // — the session was captured again since its first page was
-                  // read — and the only way on is the transcript from its
-                  // start, which the reader is offered rather than a refusal
-                  // with no way past it.
+                  // THE ENGINE REFUSES A PAGE THAT NO LONGER FOLLOWS ON — the
+                  // session captured again since its first page was read, or
+                  // a node counting entries otherwise answered — and the only
+                  // way on is the transcript from its start, which the reader
+                  // is offered rather than a refusal with no way past it.
                   <>
                     <span>
-                      This session was captured again since its first page was read, so its later
-                      pages no longer follow on.
+                      Its later pages no longer follow on from those read: it was captured again
+                      since, or a node running another release answered.
                     </span>
                     <Button size="small" variant="secondary" onClick={onReread}>
                       Read it again from the start
@@ -443,16 +518,55 @@ function Transcript({
 }
 
 /**
+ * The first page of ONE capture of a session: the first answer's, and any
+ * later answer of the same capture — the same archive read again, its row
+ * perhaps moved on — but never one of another, which is said instead
+ * (`newer`).
+ *
+ * The first page is asked again on a write from this tab, which asks every
+ * question again, and a later answer drawn as the first page would hand the
+ * reader another capture's entries with no page held, or set the pages held
+ * bridging to a capture whose cursors and entries they can never meet.
+ */
+function useOneCapture(asked: QueryResult<ExecutorSessionAnswer>): {
+  first: QueryResult<ExecutorSessionAnswer>;
+  newer: boolean;
+} {
+  const [held, setHeld] = useState<ExecutorSessionAnswer | null>(null);
+  const data = asked.data;
+  const same =
+    data !== null && (held === null || data.session.captured_at === held.session.captured_at);
+  if (same && data !== held) setHeld(data);
+  const shown = same ? data : held;
+  return {
+    first: shown === data ? asked : { ...asked, data: shown },
+    newer:
+      data !== null &&
+      held !== null &&
+      capturedLater(data.session.captured_at, held.session.captured_at),
+  };
+}
+
+/** Whether a capture at `at` came after one at `than` — any capture after none. */
+function capturedLater(at: string | null, than: string | null): boolean {
+  if (at === null) return false;
+  return than === null || Date.parse(at) > Date.parse(than);
+}
+
+/**
  * Why a page of a transcript ends where no later page can go further, in a
  * reader's words: the archive is past what one read takes (`read_bytes` of it),
- * or a part of it too large to read left the rest unreadable. A page that ends
- * at its own bound says nothing of the kind — its Load more is the way on.
+ * or a part of it too large to read left the rest unreadable — said of the
+ * whole session where nothing of it was read. A page that ends at its own
+ * bound says nothing of the kind — its Load more is the way on.
  */
-export function readCutWords(readBytes: number): string {
-  return (
-    `The rest of this session cannot be shown: a read takes at most ` +
-    `${fmtBytes(readBytes)} of its archive, or a part of it was too large to read.`
-  );
+export function readCutWords(readBytes: number, shown: number): string {
+  const why =
+    `a read takes at most ${fmtBytes(readBytes)} of its archive, ` +
+    `or a part of it was too large to read.`;
+  return shown === 0
+    ? `None of this session can be shown: ${why}`
+    : `The rest of this session cannot be shown: ${why}`;
 }
 
 /**

@@ -3804,7 +3804,9 @@ its turns and when it last moved under it, and a Worklet task's uuid cut to its
 head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
 thread shows it: beside the list (a wide screen column) the list scrolls
 inside a box bounded by the scroller's view, handing the wheel back to the page
-at either end, and the thread's turns stick under the page's top; stacked
+at either end, its chosen row kept in that view — a thread the address names
+as soon as the list is drawn — and the thread's turns stick under the page's
+top; stacked
 on a phone, the turns are scrolled to and their heading takes focus. A chosen
 thread's turns are drawn only from an answer read since it was chosen — until
 then they are loading — so the last thread's turns never stand under the new
@@ -3819,11 +3821,14 @@ what its turn was asked, as plain words in two lines, over how the turn ended
 (its outcome in the reviewer's tone, or `not ended`), the harness and its
 release, and when; the list pages by the engine's cursor (**Load older
 sessions**), is asked again each minute, and says when the node that answered
-may be missing rows it could not read. Choosing one shows it as a thread is
-shown, the list bounded beside it and the chosen row kept in its view: the
-engine's account of how the turn ended — the decision, whether its reply
+may be missing rows it could not read; a poll that fails says so in the list's
+own card, never in place of the transcript beside it. Choosing one shows it as
+a thread is shown, the list bounded beside it and the chosen row kept in its
+view: the engine's account of how the turn ended, as the list's row last read
+says it — a turn's end is recorded with no new capture, so it reaches the
+list's poll and never the transcript — with the decision, whether its reply
 reached anybody and where, what landed, what blocked it, who stopped it and
-why, the failure — each only where the ending carries it, what is kept of the
+why, the failure, each only where the ending carries it, what is kept of the
 session and its size, and a link to the turn. Under it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
 harness recorded it: each entry labelled by who it is from (brief, note, model,
@@ -3835,13 +3840,20 @@ the page — and the prose as prose; an entry cut to its bound says how large th
 whole was, and a part of the record that could not be read is a warning in its
 place. Every text is the engine's redacted one. Choosing another session draws
 it from its loading state, never the last one's account and entries under its
-name. When the list shows the session captured again since its transcript was
-read, the transcript says so and offers **Read the newer capture**, and a page
-the engine refuses because the session moved since offers **Read it again from
-the start** — the pages of two captures are never spliced. A session whose
-object is gone, does not open, is no archive or is of a format this build does
-not read is a warning naming which, with the engine's sentence, and a page cut
-where no later page can go further says the rest cannot be shown.
+name. A transcript is of ONE capture for as long as it is on screen: it is not
+asked again on a reconnect, and when the list shows the session captured again
+since it was read — or its first page, asked again after a write from the tab,
+is answered for a newer capture — the transcript says so and offers **Read the
+newer capture**, never drawing it under the pages on screen; a page the engine
+refuses because it no longer follows on (the session captured again, or a node
+of another release answering) offers **Read it again from the start**. The
+pages of two captures are never spliced, and either re-read puts focus on the
+transcript's heading. A session whose object is gone, does not open, is no
+archive or is of a format this build does not read is a warning naming which,
+with the engine's sentence — and so is a later page that could not be read,
+after the entries already read, saying the rest of the transcript could not be
+— and a page cut where no later page can go further says the rest cannot be
+shown, or that none of it can where the read reached no entry.
 **Settings** is the seat's half of the
 company document, read by its handle — the seat and its home unit, whose
 `mcp_env` a seat inherits per variable — through the same one read the Setup
