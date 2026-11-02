@@ -34,7 +34,7 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { McpServersStatusAnswer } from "../contract/mcp.ts";
+import type { McpMemberServersStatusAnswer, McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
@@ -7796,7 +7796,8 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  mcp_servers_status: McpServersStatusAnswer;
+  /** The administrator's reading, or a member's: narrow on `reading`. */
+  mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
   backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;

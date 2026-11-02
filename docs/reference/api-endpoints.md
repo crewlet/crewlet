@@ -5541,7 +5541,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -9190,7 +9190,7 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ### `GET /mcp-servers`
 
-Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
+Backs the **Servers** tab of **Settings › MCP & tools**: every MCP server,
 what the configuration declares for it and what each live node did with it,
 and the engine's built-in tools beside them.
 **It is everybody's, in two readings**, as [`GET /llm/entries`](#get-llmentries)
@@ -9350,6 +9350,7 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
        {"name": "list_work_items", "description": "…", "source": "builtin",
         "annotations": {"read_only": "yes", "destructive": "unknown",
                         "idempotent": "yes", "open_world": "unknown"},
+        "risk": "read_only", "risk_declared": true, "external": true,
         "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
         "group": "work", "gate": "worklet"}
      ]}
@@ -9676,9 +9677,13 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
 - `last_failure` as `{class, at, node, seat}`;
 - `resolved` as `{auth, runs_on, timeouts, binding}`, `binding` as
   `{vendor, by}`, without the `keys` a seat's credential goes in, the
-  `box_seats` or the placement `warnings`.
+  `box_seats` or the placement `warnings`;
+- `usage` as `{since, until, days, tools, elided}`, each tool's row
+  `{tool, calls, failed, unavailable, refused, total_ms, last_at}`, without
+  the `seats` that called it: how often a tool is used tells a member whether
+  it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions` and `dependants`.
+It leaves out `instructions`, `dependants` and `calls`.
 
 ```json
 {
@@ -9709,7 +9714,10 @@ It leaves out `instructions` and `dependants`.
   "resolved": {"auth": "integration", "runs_on": "engine_host",
                "timeouts": {"startup_seconds": 120, "request_seconds": 300,
                             "startup_default": true, "request_default": true},
-               "binding": {"vendor": "github", "by": "recognised"}}
+               "binding": {"vendor": "github", "by": "recognised"}},
+  "usage": {"since": "2026-10-26", "until": "2026-11-01", "days": 7, "elided": 0,
+            "tools": [{"tool": "get_issue", "calls": 18, "failed": 1, "unavailable": 0,
+                       "refused": 0, "total_ms": 7380, "last_at": "2026-11-01T09:02:11Z"}]}
 }
 ```
 
@@ -11149,6 +11157,9 @@ One row per registered tool, in the same shape as each tool on
     "idempotent": "unknown",
     "open_world": "yes"
   },
+  "risk": "additive",
+  "risk_declared": true,
+  "external": true,
   "delivers": "slack",
   "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] },
   "group": "",
@@ -11164,6 +11175,13 @@ One row per registered tool, in the same shape as each tool on
   operator audits them on. The engine's own delivery fence has always read
   them this way (see [`Registry.KnownReads`](../guides/tools-and-mcp.md)): an
   unannotated tool is **not** a known read.
+- `risk`, `risk_declared` and `external` are the engine's one reading of
+  those hints, the same an MCP server's detail answers for each of its tools:
+  `read_only` for a tool asserted read-only, `additive` for one that may write
+  and is asserted not destructive, and `destructive` for every other tool. A
+  tool that asserts nothing is `destructive` with `risk_declared: false`, and
+  `external` is true unless the tool asserts it reaches nothing outside the
+  company. A screen shows this reading rather than reading the hints again.
 - `delivers` names **where** calling this tool puts something in front of
   somebody outside the turn, and is empty for a tool that reaches nobody. It
   is the registry's own predicate, not "was this served by MCP": a proven
