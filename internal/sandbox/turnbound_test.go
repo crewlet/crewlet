@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,12 +32,41 @@ func (r *coordRig) gone(turnID string) bool {
 
 // endedWith reports whether the run was announced ended under reason.
 func (r *coordRig) endedWith(turnID, reason string) bool {
+	_, ok := r.ending(turnID, reason)
+	return ok
+}
+
+// ending is the run's announced ending under reason.
+func (r *coordRig) ending(turnID, reason string) (types.ExecutorFailed, bool) {
 	for _, f := range r.failures() {
 		if f.TurnID == turnID && f.Reason == reason {
-			return true
+			return f, true
 		}
 	}
-	return false
+	return types.ExecutorFailed{}, false
+}
+
+// keptWithTheTurn fails unless the run's ending names what its job delivered
+// and the job's own record (its account of the work) was published for the
+// turn: a run the deadline ends is not thrown away with the wait.
+func keptWithTheTurn(t *testing.T, rig *coordRig, turnID, account string, delivered ...string) {
+	t.Helper()
+	ending, ok := rig.ending(turnID, types.ExecutorFailureDeadline)
+	if !ok {
+		t.Fatalf("the run was not ended at its deadline: failures %+v", rig.failures())
+	}
+	for _, ref := range delivered {
+		if !strings.Contains(ending.Detail, ref) {
+			t.Errorf("the ending does not name the delivery %q: %q", ref, ending.Detail)
+		}
+	}
+	var found bool
+	for _, c := range rig.collected() {
+		found = found || (c.TurnID == turnID && c.Response == account)
+	}
+	if !found {
+		t.Errorf("no collected record carries the job's account %q: %+v", account, rig.collected())
+	}
 }
 
 // A RESUME THAT FAILS PAST ITS TURN'S DEADLINE ENDS THE RUN. A scheduled fire's
@@ -53,7 +83,8 @@ func TestAResumeThatFailsPastItsDeadlineEndsTheRun(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launchUntil("t1", rig.now.Add(10*time.Minute))
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{Success: true, Text: "checked the monitors"})
+	rig.runner.Finish(Result{Success: true, Text: "checked the monitors",
+		DeliveredRefs: []string{"GP-126#comment-9"}})
 	rig.now = rig.now.Add(16 * time.Minute)
 	rig.resumer.failWith(errors.New("llm chain exhausted: can't reach the API server (ENOTFOUND)"))
 
@@ -61,9 +92,10 @@ func TestAResumeThatFailsPastItsDeadlineEndsTheRun(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("a resume that failed past the deadline asked for a retry: %v", err)
 	}
-	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureDeadline) {
-		t.Fatalf("the run was not ended at its deadline: failures %+v", rig.failures())
+	if !rig.gone("t1") {
+		t.Fatal("the run was handed back rather than ended")
 	}
+	keptWithTheTurn(t, rig, "t1", "checked the monitors", "GP-126#comment-9")
 	if held, _ := rig.coordinator.SeatRuns("swe"); held {
 		t.Fatal("the seat is still held by a run its deadline ended")
 	}
@@ -124,15 +156,17 @@ func TestACompletionTheGateRefusesPastItsDeadlineIsEnded(t *testing.T) {
 	}
 	rig.launchUntil("t1", rig.now.Add(-time.Minute))
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{Success: true, Text: "checked the monitors", InputTokens: 900})
+	rig.runner.Finish(Result{Success: true, Text: "checked the monitors", InputTokens: 900,
+		DeliveredRefs: []string{"branch:health/2026-10-30", "pr:77"}})
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("a refused completion past its deadline was handed back: %v", err)
 	}
-	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureDeadline) {
-		t.Fatalf("the run was not ended at its deadline: failures %+v", rig.failures())
+	if !rig.gone("t1") {
+		t.Fatal("the run was handed back rather than ended")
 	}
+	keptWithTheTurn(t, rig, "t1", "checked the monitors", "branch:health/2026-10-30", "pr:77")
 	if len(rig.collected()) != 1 {
 		t.Fatalf("the run ended at its deadline published %d collected records, want its one",
 			len(rig.collected()))

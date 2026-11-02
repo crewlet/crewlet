@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -107,31 +108,57 @@ func (c *Coordinator) completeAtDeadline(ctx context.Context, ev types.ExecutorF
 		return nil
 	}
 	c.forgetRefused(ev.TurnID)
+	var result Result
 	if run.Lost == nil {
 		var collected bool
-		if run, _, collected, err = c.collectClaimed(ctx, run); !collected {
+		if run, result, collected, err = c.collectClaimed(ctx, run); !collected {
 			return err
 		}
 	}
-	c.endAtDeadline(ctx, run, why)
+	c.endAtDeadline(ctx, run, why, result.DeliveredRefs, result.DeliveredRefsElided)
 	return nil
 }
 
 // endAtDeadline settles a claimed run whose turn's deadline passed while its
 // resume could not run, and raises the alarm: an Error line, and the run's
 // ending announced on the board under [types.ExecutorFailureDeadline].
-func (c *Coordinator) endAtDeadline(ctx context.Context, run PendingRun, why string) {
+//
+// WHAT THE JOB DID IS KEPT WITH THE TURN, never thrown away with the wait. Its
+// collection already published the launch's own record (`executor_collected`:
+// the harness's account, its transcript and its spend), which the turn's page
+// in Live shows; the ending names what the job delivered (delivered, and how
+// many more it reported beyond them), so the board says where a person or the
+// seat's next turn picks the work up. The box goes as every finished job's box
+// goes at the end of its turn.
+func (c *Coordinator) endAtDeadline(ctx context.Context, run PendingRun, why string,
+	delivered []string, elided int,
+) {
 	log.ErrorContext(ctx, "sandbox_run_ended_at_deadline",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
 		"deadline", run.Deadline.UTC().Format(time.RFC3339),
 		"past_s", c.now().Sub(run.Deadline).Seconds(), "cause", why,
+		"delivered", delivered, "delivered_elided", elided,
 		"detail", "the turn's wall-clock cap passed while the turn that reviews its executor's "+
 			"job could not run; the run is ended and its seat freed rather than held until "+
 			"the cause clears")
-	c.settleFailed(ctx, run, types.ExecutorFailureDeadline, fmt.Sprintf(
-		"the turn passed its wall-clock cap at %s while the review of its executor's finished "+
-			"work could not run, so the turn was ended rather than left waiting; the work it "+
-			"pushed, if any, is on its branch", run.Deadline.UTC().Format(time.RFC3339)))
+	c.settleFailed(ctx, run, types.ExecutorFailureDeadline, deadlineDetail(run.Deadline, delivered, elided))
+}
+
+// deadlineDetail is the sentence a run ended at its turn's deadline reaches the
+// board with: when the cap passed, that the job's work is kept, and what it
+// delivered.
+func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
+	detail := fmt.Sprintf("the turn passed its wall-clock cap at %s while the review of its "+
+		"executor's finished work could not run, so the turn was ended rather than left waiting; "+
+		"the executor's own account of the work is on the turn", deadline.UTC().Format(time.RFC3339))
+	if len(delivered) == 0 {
+		return detail + ", and what it pushed, if anything, is on its branch"
+	}
+	detail += ", and it delivered " + strings.Join(delivered, ", ")
+	if elided > 0 {
+		detail += fmt.Sprintf(" and %d more", elided)
+	}
+	return detail
 }
 
 // resumeGivenUp settles a claimed run whose turn's resume has now failed

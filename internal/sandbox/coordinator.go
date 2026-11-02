@@ -1272,7 +1272,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	// cannot see and would admit into again ([Coordinator.keepRefused]).
 	// Refused as the gate refuses, so the announcement is acknowledged and
 	// the waiter's next one asks again; quietly, since the hold itself was
-	// said when it was taken and the waiter repeats it every poll.
+	// said when it was taken and the waiter repeats it on its schedule.
 	if refusal, held := c.stillRefused(ev); held {
 		if c.pastDeadline(ctx, ev) {
 			return c.completeAtDeadline(ctx, ev, fence, refusal.Reason)
@@ -1498,7 +1498,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+
 				"handed back uncounted and the completion is retried")
-		if err := c.unclaim(ctx, run, true, collectUnrevertedDetail); err != nil {
+		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -1516,7 +1516,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 				"the claim is handed back uncounted and that node announces the completion again")
 		// A hand-back that did not land ended and announced the run itself
 		// ([Coordinator.unclaim]), so either way nothing is retried here.
-		_ = c.unclaim(ctx, run, true, collectUnrevertedDetail)
+		_ = c.unclaim(ctx, run, collectUnrevertedDetail)
 		return nil
 	}
 	now := c.now()
@@ -2008,7 +2008,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, parkUnannouncedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, as at the record below: the
 			// claim did not go back, so the run has been ended and a
 			// redelivered completion would find no record to claim.
@@ -2042,7 +2042,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			"detail", "the question could not be recorded, so the run is not parked; its "+
 				"claim is given back for the completion to be retried, or the run is "+
 				"ended where it cannot be")
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, parkUnrecordedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate: the claim was not handed back,
 			// so the run has been SETTLED and there is nothing left for
 			// a redelivered completion to claim. Sending it back would
@@ -2869,7 +2869,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// three fires queued behind it. An answer's resume is bounded by its
 		// own series ([MaxAnswerAttempts]) and is left to it.
 		if !claimedAnswer(run) && run.PastDeadline(c.now()) {
-			c.endAtDeadline(ctx, run, err.Error())
+			c.endAtDeadline(ctx, run, err.Error(), outcome.DeliveredRefs, outcome.DeliveredRefsElided)
 			return AnswerConsumed, nil
 		}
 		// A RESUME ITS SEAT'S CONDITIONS REFUSED IS HELD, not retried — see
@@ -3248,8 +3248,13 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // release's own error where the run was ended in its place. The caller's own
 // error is not this answer — a retry keeps it, so the delivery comes back, and
 // an ending drops it, because there is nothing left to come back to.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
-	return c.unclaimAt(ctx, run, counted, detail, failure{}, nil)
+//
+// THE SEAT'S COUNT IS LEFT AS IT IS: every caller hands back a claim whose run
+// the seat still counts (a collection that failed, a park that did not land),
+// since running and resumed both hold it. A resume's failure gives the claim's
+// count back first and hands back through [Coordinator.unclaimAt].
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string) error {
+	return c.unclaimAt(ctx, run, true, detail, failure{}, nil)
 }
 
 // unclaimHeld hands back a claim whose resume the seat's conditions refused,
@@ -3274,7 +3279,8 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
 // collection it was taken for, or the resume after it, failed: failed is what
 // the release counts onto the job's record, and its zero value is any other
-// hand-back. counted is [Coordinator.unclaim]'s, and hold, where set, holds the
+// hand-back. counted is whether the seat still counts the run, so the release
+// counts it again only where it does not; and hold, where set, holds the
 // run's resume back ([Release.Hold]).
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
 	failed failure, hold *Refusal,
