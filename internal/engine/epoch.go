@@ -388,6 +388,19 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// apply spends, and an apply refused between here and the publish has
 	// indexed a company nobody can reach, which costs a rebuild and
 	// nothing else.
+	//
+	// AND EVERY SEAT IT INDEXES HAS A MAILBOX FIRST. From the refresh on, a
+	// delivery naming a seat the revision adds resolves to it and its wake
+	// is published to that seat's inbox, which the stream discards while
+	// no consumer covers it. The node's wake queue cannot make that
+	// mailbox ([Engine.wakes]): it confirms the seats of the company the
+	// node SERVES, and this one is not published yet. So the revision's
+	// own seats are ensured here, by the same pass. An apply refused after
+	// this leaves mailboxes for seats no published company has, which the
+	// retirement sweep removes because each was registered first.
+	if e.node != nil {
+		e.node.EnsureMailboxesFor(ctx, next.Seats())
+	}
 	e.refreshParties(ctx, next)
 	if e.inboundStarted() {
 		// The TRACKER is rebuilt on the same edge and for the same

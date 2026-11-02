@@ -295,14 +295,17 @@ stopping it.
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
 
-The stream carries the other half: one durable consumer per seat inbox,
-attached only by the node holding that seat's lease. That consumer **is** the
+The stream carries the other half: one durable consumer per seat inbox, plus
+one for the inbox's priority lane, both attached only by the node holding that
+seat's lease. That consumer **is** the
 mailbox — it holds an unowned seat's mail until somebody claims it, and it is
 created with no inactivity threshold precisely so nothing reaps it while a seat
 is between owners. It also has to exist *before* anything publishes: the agent
 and notification streams keep a message only while some durable consumer that
 has not acked it exists, so a subject no consumer covers drops what is
-published to it. See [a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
+published to it, which is why every wake goes through the node's wake queue
+and is refused rather than published while its mailbox is not confirmed. See
+[a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
 and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
 
 **Both halves live on one broker**, deliberately. The coordination KV is

@@ -485,7 +485,7 @@ func TestAHandleNamingNoSeatDoesNotBurnTheClaim(t *testing.T) {
 	h := build(t, roleOrg())
 	entry := Entries(h.currentOrg())[0]
 	loc := time.UTC
-	if h.s.fire(t.Context(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) {
+	if h.s.fire(t.Context(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) != fireNotSent {
 		t.Fatal("fire to an unknown handle reported success")
 	}
 	if got := h.ledger.count(); got != 0 {
