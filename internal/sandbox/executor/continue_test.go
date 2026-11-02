@@ -211,6 +211,93 @@ func TestAnOpenCodeRunWithNoValuesStartsOnItsConfigurationAsItIs(t *testing.T) {
 	}
 }
 
+// AN OPENCODE RUN WHOSE OTHER VALUES ARE MISSING DOES NOT START. Every run whose
+// configuration names a value is written both sets, file for file, so a run
+// whose box falls back to a session of its own and finds only the continued
+// session's values is one whose start did not finish writing the other: it
+// ends before its server starts, saying so — never started on the continued
+// session's values, nor with them deleted and none in their place, a server
+// reaching none of the seat's tools.
+//
+// Mutation: swap the sets without asking whether the other is there, and the
+// server starts on no values at all.
+func TestAnOpenCodeRunWhoseOtherValuesAreMissingDoesNotStart(t *testing.T) {
+	t.Parallel()
+	run := runScript(t, scriptOpts{session: &continuingOpenCode, freshBrief: "the task, from the top",
+		values: "continued-token", req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly,
+			FreshWiring: &sandbox.Wiring{MCPServers: bridgeOnly}}})
+	if run.code == 0 || !strings.Contains(run.stderr, "could not be wired to the tools of its seat") {
+		t.Fatalf("a fall back with one set of values exited %d, want it refused, saying so:\n%s",
+			run.code, run.stderr)
+	}
+	if served := readIn(t, run.dir, "served-value"); served != "" {
+		t.Errorf("the run's server started on %q", served)
+	}
+}
+
+// AN OPENCODE RUN THAT CONTINUES A SESSION IS CONFIGURED FOR EITHER SESSION ITS
+// BOX STARTS. Its configuration names every value by a reference into its values
+// directory, and the same values under the job's other bridge token are written
+// beside them under the same names, so the one configuration reads either set,
+// which the run's script moves into place for the session it starts. Two
+// wirings that would not be one configuration — another server, or the notes
+// route on one alone — are refused rather than started on the wrong values.
+//
+// Mutation: write the other set over the first, write it nowhere, or let two
+// wirings that are not one configuration through, and a case goes red.
+func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
+	t.Parallel()
+	_, box := openCodeBox(t, t.TempDir())
+	p := executor.PathsFor(box)
+	req := sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeAt("continued-token"),
+		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}}
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	if config := boxFile(t, box, path); !strings.Contains(config, "{file:"+p.OpenCodeValues()+"/v1}") ||
+		strings.Contains(config, "continued-token") || strings.Contains(config, "fresh-token") {
+		t.Fatalf("the configuration does not name its one value by reference alone:\n%s", config)
+	}
+	if got := boxFile(t, box, p.OpenCodeValues()+"/v1"); !strings.HasSuffix(got, "/continued-token") {
+		t.Errorf("the continued session's value is %q, want its own token", got)
+	}
+	if got := boxFile(t, box, p.OpenCodeValuesFresh()+"/v1"); !strings.HasSuffix(got, "/fresh-token") {
+		t.Errorf("a session of its own's value, by the same name, is %q, want its own token", got)
+	}
+	for name, other := range map[string]*sandbox.Wiring{
+		"another server": {MCPServers: map[string]sandbox.MCPServer{"elsewhere": {Name: "elsewhere",
+			Transport: sandbox.TransportHTTP, URL: "https://engine.example.com/mcp/fresh-token"}}},
+		"the notes route on one alone": {MCPServers: bridgeAt("fresh-token"),
+			Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
+				URL: "https://engine.example.com/mcp/fresh-token/steer"}},
+	} {
+		mismatched := req
+		mismatched.FreshWiring = other
+		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, p); err == nil ||
+			!strings.Contains(err.Error(), "not the same configuration") {
+			t.Errorf("%s: WriteConfig = %v, want the two wirings refused", name, err)
+		}
+	}
+}
+
+// A SECOND WIRING IS A CONTINUING RUN'S ALONE. A run that starts a session of
+// its own has one session, and a second token written into its box would be one
+// its model could read and dial as a session it is not in: the runner refuses
+// to start it.
+//
+// Mutation: start a run that continues nothing with a second wiring, and its box
+// holds another token of the job.
+func TestASecondWiringIsAContinuingRunsAlone(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	_, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin", MCPServers: bridgeAt("first-job"),
+		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("other-token")}})
+	if err == nil || !strings.Contains(err.Error(), "second wiring") {
+		t.Fatalf("Start = %v, want a run that continues no session refused its second wiring", err)
+	}
+}
+
 // A SESSION ITS HARNESS WAS CUT OFF IN IS RESTORED OVER THE BOX'S OWN COPY. The
 // capture of a job that did not exit cleanly was packed by the engine, and the
 // box's copy may hold what its harness never finished — or what it went on to
