@@ -76,9 +76,11 @@ roles:
 // servers: the shared server's instance and the seat's own child of the
 // per-agent one each list a tool the entry blocks and one it allows; a phase's
 // surface advertises the allowed two alone; a scripted harness over the real
-// tool session is told each blocked call was not offered and has the allowed
-// ones answered by the servers; and a harness's MCP client dialling the
-// bridge lists the allowed two and is refused the blocked two. The fleet's
+// tool session has the allowed calls answered by the servers and the blocked
+// ones answered by nobody, since its session lists no such tool; and a
+// harness's MCP client dialling the bridge, at the job's endpoint and at each
+// server's own (mcpbridge.ServerURL), lists the allowed tool of each server
+// and no blocked one, and has only the allowed ones answered. The fleet's
 // listing names the blocked tools, flagged, for an administrator to let
 // through again.
 //
@@ -151,9 +153,12 @@ func TestABlockedToolIsNotOfferedListedOrCallableThroughTheRelayOrTheBridge(t *t
 				t.Errorf("the allowed %s through the relay answered %+v, want the server's ok", name, r)
 			}
 		}
+		// A BLOCKED TOOL IS NO TOOL OF THE SESSION: the harness's client is
+		// told the session knows no such tool, and no server ever answers.
 		for _, name := range blocked {
-			if r := answered[name]; !r.Failed || !strings.Contains(r.Output, "not one of the tools offered") {
-				t.Errorf("the blocked %s through the relay answered %+v, want it refused as not offered", name, r)
+			if r := answered[name]; r.Output == "ok" || r.Err == nil ||
+				!strings.Contains(r.Err.Error(), "unknown tool") {
+				t.Errorf("the blocked %s through the relay answered %+v, want it unknown to the session", name, r)
 			}
 		}
 	})
@@ -168,44 +173,56 @@ func TestABlockedToolIsNotOfferedListedOrCallableThroughTheRelayOrTheBridge(t *t
 			t.Fatalf("mcpbridge.New: %v", err)
 		}
 		mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+		mux.Handle(mcpbridge.ServerPattern, bridge.Handler())
 		url := bridge.Open(ctx, &mcpbridge.Session{RunID: "run-bridge", Launch: "job-1", Handle: "ceo",
 			Role: "CEO", Surface: surfaceOf("run-bridge")})
 		if url == "" {
 			t.Fatal("the bridge minted no endpoint")
 		}
-		client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "harness", Version: "1"}, nil)
+		if servers := mcpbridge.Servers(surfaceOf("run-servers")); !slices.Equal(servers, []string{"docs", "tracker"}) {
+			t.Fatalf("the bridge serves the servers %v, want docs and tracker under their own names", servers)
+		}
 		dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		session, err := client.Connect(dialCtx, &sdkmcp.StreamableClientTransport{
-			Endpoint: url, HTTPClient: httpxtest.Pool(t)}, nil)
-		if err != nil {
-			t.Fatalf("dial the bridge: %v", err)
-		}
-		t.Cleanup(func() { _ = session.Close() })
-		listed, err := session.ListTools(dialCtx, nil)
-		if err != nil {
-			t.Fatalf("tools/list: %v", err)
-		}
-		names := map[string]bool{}
-		for _, tool := range listed.Tools {
-			names[tool.Name] = true
-		}
-		for _, name := range allowed {
-			if !names[name] {
-				t.Errorf("the bridge does not list the allowed %s: %v", name, slices.Sorted(maps.Keys(names)))
+		dial := func(endpoint string) *sdkmcp.ClientSession {
+			client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "harness", Version: "1"}, nil)
+			session, err := client.Connect(dialCtx, &sdkmcp.StreamableClientTransport{
+				Endpoint: endpoint, HTTPClient: httpxtest.Pool(t)}, nil)
+			if err != nil {
+				t.Fatalf("dial %s: %v", endpoint, err)
 			}
+			t.Cleanup(func() { _ = session.Close() })
+			return session
 		}
-		for _, name := range blocked {
-			if names[name] {
-				t.Errorf("the bridge lists %s, which its server blocks", name)
+		// The job's endpoint serves the engine's own tools, each server
+		// its own beneath it: each is listed and called where the harness
+		// is handed it.
+		for endpoint, want := range map[string][]string{
+			url:                                 nil,
+			mcpbridge.ServerURL(url, "tracker"): {"list_items"},
+			mcpbridge.ServerURL(url, "docs"):    {"read_doc"},
+		} {
+			session := dial(endpoint)
+			listed, err := session.ListTools(dialCtx, nil)
+			if err != nil {
+				t.Fatalf("tools/list at %s: %v", endpoint, err)
 			}
-		}
-		for _, name := range asked {
-			res, err := session.CallTool(dialCtx, &sdkmcp.CallToolParams{Name: name, Arguments: map[string]any{}})
-			refused := err != nil || res.IsError
-			if want := slices.Contains(blocked, name); refused != want {
-				t.Errorf("tools/call %s through the bridge: refused %v (err %v, result %+v), want %v",
-					name, refused, err, res, want)
+			var names []string
+			for _, tool := range listed.Tools {
+				if slices.Contains(asked, tool.Name) {
+					names = append(names, tool.Name)
+				}
+			}
+			if !slices.Equal(names, want) {
+				t.Errorf("%s lists %v of the asked tools, want %v: a blocked tool is listed nowhere", endpoint, names, want)
+			}
+			for _, name := range asked {
+				res, err := session.CallTool(dialCtx, &sdkmcp.CallToolParams{Name: name, Arguments: map[string]any{}})
+				answered := err == nil && !res.IsError
+				if wanted := slices.Contains(want, name); answered != wanted {
+					t.Errorf("tools/call %s at %s: answered %v (err %v, result %+v), want %v",
+						name, endpoint, answered, err, res, wanted)
+				}
 			}
 		}
 	})
