@@ -139,8 +139,9 @@ export function useChatPresence(channelID: string): ChatRoomPresence {
  * re-asserted it. A SEAT is `working` while its member is editing, which is
  * what the working indicator is (the engine raises it as the seat's member and
  * withdraws it as the turn lets go), under the thread its answer will land in
- * and with the line the room shows beside it. Each person and each seat's
- * thread once, however many sessions present them.
+ * and with the line the room shows beside it, QUEUED when that line is about a
+ * person's message waiting behind what the seat is already doing. Each person
+ * and each seat's thread once, however many sessions present them.
  */
 export function chatRoomPresence(roster: RoomRoster | undefined): ChatRoomPresence {
   const members = roster?.members ?? [];
@@ -154,13 +155,29 @@ export function chatRoomPresence(roster: RoomRoster | undefined): ChatRoomPresen
       const thread = member.focus?.thread || undefined;
       const key = `${member.seat} ${thread ?? ""}`;
       if (!working.has(key))
-        working.set(key, { handle: member.seat, thread, status: member.status });
+        working.set(key, {
+          handle: member.seat,
+          thread,
+          status: member.status,
+          ...(member.queued ? { queued: true } : {}),
+        });
       continue;
     }
     viewing.add(member.seat);
     if (member.activity === "editing") typing.add(member.seat);
   }
   return { viewing: [...viewing], typing: [...typing], working: [...working.values()] };
+}
+
+/**
+ * The line a seat at work in a room is drawn with: its name and the engine's
+ * phrase for what it is doing ("Product Manager is reading the thread",
+ * "Product Manager is queued behind its current task"). With no phrase, a
+ * queued seat says it is queued and a working one says `fallback`, so a still
+ * indicator never claims work under way.
+ */
+export function workingLine(name: string, seat: ChatWorking, fallback: string): string {
+  return `${name} ${seat.status || (seat.queued ? "is queued" : fallback)}`;
 }
 
 /**

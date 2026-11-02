@@ -57,7 +57,13 @@ import { queryErrorCode, type ChatMessageView, type ChatMessagesAnswer } from "~
 import { Composer } from "./Composer.tsx";
 import { packPosition } from "./cursor.ts";
 import { canJoin, membershipNote } from "./directory.ts";
-import { useChatFocus, useChatFrames, useChatPresence, useSettledIDs } from "./live.ts";
+import {
+  useChatFocus,
+  useChatFrames,
+  useChatPresence,
+  useSettledIDs,
+  workingLine,
+} from "./live.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -379,12 +385,17 @@ function Conversation({ channelID }: { channelID: string }) {
           }
           working={
             answering
-              ? `${people.nameOf(answering.handle)} ${answering.status || "is working on a reply"}`
+              ? workingLine(people.nameOf(answering.handle), answering, "is working on a reply")
               : undefined
           }
           workingLabel={
-            answering ? `${people.nameOf(answering.handle)} is writing a reply` : undefined
+            answering
+              ? answering.queued
+                ? workingLine(people.nameOf(answering.handle), answering, "is queued")
+                : `${people.nameOf(answering.handle)} is writing a reply`
+              : undefined
           }
+          queued={answering?.queued}
         />
         {/* WHAT OFFLINE MEANS FOR READING. What it means for saying something
             is the composer's own sentence, beside the Send it holds. */}

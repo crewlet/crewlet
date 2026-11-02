@@ -557,9 +557,9 @@ func (h *Hub) Touch(id Room, a Agent) {
 		r.local[m.member.Session] = m
 	}
 	if m.member.Activity != activity || m.member.Focus != focus || m.member.Turn != turn ||
-		m.member.Status != status || m.member.At.IsZero() {
+		m.member.Status != status || m.member.Queued != a.Queued || m.member.At.IsZero() {
 		m.member.Activity, m.member.Focus, m.member.Turn, m.member.At = activity, focus, turn, now
-		m.member.Status = status
+		m.member.Status, m.member.Queued = status, a.Queued
 		r.changed(m.member.Session)
 		h.scheduleLocked(r)
 		h.scheduleSendLocked(r)

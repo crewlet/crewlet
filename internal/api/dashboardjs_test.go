@@ -1508,7 +1508,12 @@ const (
 	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
 	// page is all in the settings chunk, so the initial load only lost that
 	// 0.4 KiB. 5329 KiB.
-	treeBudget = 5<<20 + 209<<10
+	// What waits in a seat's inbox, on Live's running-turn and In a box rows
+	// and on each seat's card on the Agents page ("1 person waiting", "4
+	// waiting"), took it from 5328.4 KiB to 5329.0 KiB (+0.6 KiB): the
+	// shared components chunk the seat card ships in +0.4 KiB, Live's +0.1
+	// KiB and the running-turn row's under 0.1 KiB. 5330 KiB.
+	treeBudget = 5<<20 + 210<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
