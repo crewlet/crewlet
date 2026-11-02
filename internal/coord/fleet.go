@@ -1661,6 +1661,7 @@ type Fleet interface {
 	PositionRegister
 	HoldRegister
 	FloorRegister
+	FeedMarkRegister
 	BackupRegister
 	MaintenanceRegister
 	Markers
