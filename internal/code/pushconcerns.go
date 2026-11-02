@@ -143,6 +143,7 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft 
 	whole := MaxRecordBytes - recordOverheadBytes
 	if !r.measured {
 		for _, j := range r.open {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			bound, err := entryBound(r.batch[j])
 			if err != nil {
 				return false, false, fmt.Errorf("code: measure push %s's entry: %w", r.batch[j].PushID, err)

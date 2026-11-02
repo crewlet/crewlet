@@ -1194,7 +1194,9 @@ func lineBreaks(b []byte) uint8 { return uint8(min(bytes.Count(b, []byte("\n")),
 // lowerAlnum reports whether s is all lowercase ASCII letters and digits.
 func lowerAlnum(s string) bool {
 	for i := range len(s) {
-		if b := s[i]; !('a' <= b && b <= 'z' || '0' <= b && b <= '9') {
+		switch b := s[i]; {
+		case 'a' <= b && b <= 'z', '0' <= b && b <= '9':
+		default:
 			return false
 		}
 	}

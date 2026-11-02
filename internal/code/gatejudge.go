@@ -396,6 +396,7 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	for i, s := range subjects {
 		out[i] = GateFacts{Rows: rows[i], Rules: rules[s.repo.ID]}
 		at[s.row.id] = i
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		gate, err := GateRulesOf(out[i].Rules, s.row.target, "")
 		if err != nil {
 			return nil, err
@@ -427,13 +428,13 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 			}
 		}
 	}
-	if err := headFactsIn(ctx, tx, heads, at, subjects, out); err != nil {
+	if err = headFactsIn(ctx, tx, heads, at, subjects, out); err != nil {
 		return nil, err
 	}
-	if err := ownerDigestsIn(ctx, tx, owned, subjects, out); err != nil {
+	if err = ownerDigestsIn(ctx, tx, owned, subjects, out); err != nil {
 		return nil, err
 	}
-	if err := gateChecksIn(ctx, tx, checks, byHead, required, out); err != nil {
+	if err = gateChecksIn(ctx, tx, checks, byHead, required, out); err != nil {
 		return nil, err
 	}
 	// EACH CHANGE'S LIVE QUEUE ENTRY, of every change at once, and the place
@@ -485,7 +486,7 @@ func rulesOfRepos(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) 
 			id, direct, gate string
 			p                Protection
 		)
-		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
+		if err = rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return nil, fmt.Errorf("code: read the rules a merge gate judges: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)

@@ -222,13 +222,14 @@ func (c *Committer) announceLater(a announcement) {
 }
 
 // announcer publishes every announcement handed to it, in the order they
-// landed, each under one [checkEventBudget] of the committer's own lifetime,
-// until Stop closes its queue and it has drained it — every publish refused
-// at once, logged, should Stop's own wait end first and the lifetime with it.
-func (c *Committer) announcer() {
+// landed, each under one [checkEventBudget] of life — the committer's own
+// lifetime — until Stop closes its queue and it has drained it: every
+// publish refused at once, logged, should Stop's own wait end first and the
+// lifetime with it.
+func (c *Committer) announcer(life context.Context) {
 	defer close(c.announcerDone)
 	for a := range c.announcements {
-		ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
+		ctx, cancel := context.WithTimeout(life, checkEventBudget)
 		a.publish(ctx, a.when)
 		cancel()
 	}

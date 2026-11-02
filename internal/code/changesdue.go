@@ -374,7 +374,7 @@ func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out
 		return nil
 	}
 	rows, err := tx.QueryContext(ctx, endedAsksSQL, repoID, MaxAskSettlesPerRead)
-	if err := due(rows, err, ReviewerEnded); err != nil {
+	if err = due(rows, err, ReviewerEnded); err != nil {
 		return err
 	}
 	left := MaxAskSettlesPerRead - len(out.AskSettles)

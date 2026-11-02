@@ -113,7 +113,9 @@ func digestShaped(s string) bool {
 		return false
 	}
 	for i := len(s) - seatBranchDigestHex; i < len(s); i++ {
-		if c := s[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+		switch c := s[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'f':
+		default:
 			return false
 		}
 	}

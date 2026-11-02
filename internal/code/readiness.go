@@ -748,8 +748,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 	if err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "counters", readinessCountersSQL, []any{list}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "counters", readinessCountersSQL, []any{list}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var standing int64
 			i, err := scan(&standing)
 			if err == nil {
@@ -759,8 +759,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "authors", readinessAuthorsSQL, []any{list}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "authors", readinessAuthorsSQL, []any{list}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var handle, kind string
 			i, err := scan(&handle, &kind)
 			if err == nil {
@@ -770,8 +770,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "approvals", readinessApprovalsSQL, []any{list}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "approvals", readinessApprovalsSQL, []any{list}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var (
 				handle, kind string
 				revision     int64
@@ -785,8 +785,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "asks", readinessAsksSQL, []any{list}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "asks", readinessAsksSQL, []any{list}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var handle, kind string
 			i, err := scan(&handle, &kind)
 			if err == nil {
@@ -796,8 +796,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "mergeabilities", readinessMergesSQL, []any{list}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "mergeabilities", readinessMergesSQL, []any{list}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var (
 				m       RecordedMerge
 				state   string
@@ -829,8 +829,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 	if err != nil {
 		return nil, fmt.Errorf("code: encode %d revisions' keys: %w", len(pairs), err)
 	}
-	if err := readinessEach(ctx, tx, "facts", readinessFactsSQL, []any{string(encoded)}, at,
-		func(scan func(...any) (int, error)) error {
+	if err = readinessEach(ctx, tx, "facts", readinessFactsSQL, []any{string(encoded)}, at,
+		func(scan func(...any) (int, error)) (err error) {
 			var f RevisionPatch
 			i, err := scan(&f.N, &f.TargetRef, &f.BaseTree, &f.HeadTree, &f.PatchID, &f.PatchIDOmitted)
 			if err == nil {
@@ -863,8 +863,8 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 		if list, err = jsonList(crowded); err != nil {
 			return nil, err
 		}
-		if err := readinessEach(ctx, tx, "blockers' cuts", blockerCutsSQL, []any{list}, at,
-			func(scan func(...any) (int, error)) error {
+		if err = readinessEach(ctx, tx, "blockers' cuts", blockerCutsSQL, []any{list}, at,
+			func(scan func(...any) (int, error)) (err error) {
 				var cut sql.NullInt64
 				i, err := scan(&cut)
 				if err == nil && cut.Valid {
@@ -891,7 +891,7 @@ func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubjec
 	}
 	raised := map[string]int64{}
 	if err := readinessEach(ctx, tx, "standing blockers", standingBlockersSQL, []any{string(encoded)}, at,
-		func(scan func(...any) (int, error)) error {
+		func(scan func(...any) (int, error)) (err error) {
 			var (
 				b           StandingBlocker
 				kind, state string

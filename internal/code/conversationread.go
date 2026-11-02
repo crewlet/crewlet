@@ -276,13 +276,13 @@ func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, curs
 	var ids []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err = rows.Scan(&id); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
 		}
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
 	}
@@ -351,7 +351,7 @@ func needingFixIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asked st
 	if err != nil {
 		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
 	}
-	if err := eachID(rows, func(id string) { out[id] = true }); err != nil {
+	if err = eachID(rows, func(id string) { out[id] = true }); err != nil {
 		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
 	}
 	if asked == "" || len(out) == 0 {

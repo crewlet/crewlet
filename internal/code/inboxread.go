@@ -264,6 +264,7 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		out.Next = at.String()
 		rest := append(slices.Clone(args), MaxRecordRows)
 		rest[1], rest[2] = at.Packed()+1, at.Packed()-1
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		more, err := scanInbox(ctx, tx, in.Handle, rest)
 		if err != nil {
 			return err
@@ -461,7 +462,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 	}
 	for rows.Next() {
 		var id, body string
-		if err := rows.Scan(&id, &body); err != nil {
+		if err = rows.Scan(&id, &body); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 		}
@@ -470,7 +471,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 			c.BodyCut = len(c.Body) < len(body)
 		}
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 	}

@@ -470,19 +470,22 @@ func (row PushRow) brief() PushRow {
 		}
 	}
 	keepRefused := min(refusals, BriefCommands)
-	refused := make([]Command, 0, BriefCommands)
+	// brief is the commands the brief shows: the refused kept, then the rest
+	// after them, in the room made for the whole of it.
+	brief := make([]Command, 0, BriefCommands)
 	rest := make([]Command, 0, BriefCommands-keepRefused)
 	for _, c := range row.Commands {
 		switch {
-		case c.Result == ResultNG && len(refused) < keepRefused:
-			refused = append(refused, c)
+		case c.Result == ResultNG && len(brief) < keepRefused:
+			brief = append(brief, c)
 		case c.Result != ResultNG && len(rest) < BriefCommands-keepRefused:
 			rest = append(rest, c)
 		default:
 			row.Omitted.add(c)
 		}
 	}
-	row.Commands = append(refused, rest...)
+	brief = append(brief, rest...)
+	row.Commands = brief
 	return row
 }
 
@@ -3409,7 +3412,7 @@ func GitPath(field, p, b64 string, root bool) (string, error) {
 		}
 		raw, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil {
-			return "", fmt.Errorf("%w: %s_b64: not standard base64: %v", ErrInvalid, field, err)
+			return "", fmt.Errorf("%w: %s_b64: not standard base64: %w", ErrInvalid, field, err)
 		}
 		if len(raw) == 0 {
 			return "", fmt.Errorf("%w: %s_b64: an empty path is given by leaving the path out", ErrInvalid, field)

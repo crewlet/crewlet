@@ -147,7 +147,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 	counted := 0
 	for weighed < PurgePartBytes && rows.Next() {
 		var c purgedChange
-		if err := rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
+		if err = rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
@@ -171,7 +171,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 		}
 		break
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 	}
@@ -179,6 +179,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 
 	var done changesPurged
 	if len(whole) > 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		list, err := jsonList(whole)
 		if err != nil {
 			return changesPurged{}, err
@@ -187,6 +188,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 			purgeChangeParticipantsSQL, purgeChangeFindingsSQL, purgeChangeCommentsSQL, purgeChangeFindingTextsSQL,
 			purgeChangeReviewsSQL, purgeChangeFactsSQL, purgeChangeBodiesSQL, purgeChangeMergeabilitySQL,
 			purgeChangeConversationsSQL, purgeChangeRowsSQL} {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			res, err := tx.ExecContext(ctx, stmt, list)
 			if err != nil {
 				return changesPurged{}, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
@@ -217,6 +219,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 			if left == 0 {
 				break
 			}
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			res, err := tx.ExecContext(ctx, stmt, cut.id, left)
 			if err != nil {
 				return changesPurged{}, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
@@ -230,6 +233,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 		// rows and taken off its count by exactly that, so the count stays
 		// the same on every node and never below the rows any node holds.
 		if take := min(left, cut.notices); take > 0 {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			removed, err := a.removeCutNotices(ctx, tx, cut.id, take)
 			if err != nil {
 				return changesPurged{}, err
@@ -302,14 +306,14 @@ func purgeCutWide(ctx context.Context, tx *sql.Tx, widthsSQL, deleteSQL, changeI
 	var freed int64
 	for cut.weighed+freed < PurgePartBytes && rows.Next() {
 		var width int64
-		if err := rows.Scan(&width); err != nil {
+		if err = rows.Scan(&width); err != nil {
 			_ = rows.Close()
 			return cut, fmt.Errorf("weigh its rows: %w", err)
 		}
 		take++
 		freed += width
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return cut, fmt.Errorf("weigh its rows: %w", err)
 	}

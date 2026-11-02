@@ -150,6 +150,7 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 	routings := make([]ChangeRouting, 0, len(e.Entries))
 	for _, x := range e.Entries {
 		entry := entries[x.EntryID]
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
 		if err != nil {
 			return queueDecision{}, err
@@ -251,7 +252,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 			"queue: %s", len(d.refused), len(l.Entries), l.TargetRef, d.refused[0].Detail))
 	}
 
-	if detail, ok, err := prefixOfTrain(ctx, tx, l); err != nil || !ok {
+	if detail, ok, err := prefixOfTrain(ctx, tx, l); err != nil || !ok { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return queueDecision{}, err
 		}
@@ -272,6 +273,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	subjects := make([]readinessSubject, 0, len(l.Entries))
 	rows := make([]changeRow, len(l.Entries))
 	for i, e := range l.Entries {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := changeRowIn(ctx, tx, e.ChangeID)
 		if err != nil {
 			return queueDecision{}, err
@@ -376,6 +378,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	routings := make([]ChangeRouting, 0, len(stamped.Entries))
 	for i, e := range stamped.Entries {
 		merger, mergerKind := entries[e.EntryID].enqueuer().party()
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		routed, err := routingFor(ctx, tx, concerning{repoName: repo.name, change: rows[i], actor: merger,
 			actorKind: mergerKind, authors: true, merged: true})
 		if err != nil {
@@ -401,7 +404,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 // OID (no_landing); every check the target's gate requires passed on OID by
 // its latest attempt checked for the target (not_green); and the landings it
 // marks green within its record (record_full).
-func decideGreen(ctx context.Context, tx *sql.Tx, g Green, repo pushRepo, d queueDecision) (queueDecision,
+func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (queueDecision,
 	error) {
 
 	green, held, err := greenIn(ctx, tx, g.RepoID, g.TargetRef)
@@ -827,7 +830,7 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 		return true, nil
 	case p.Land != nil:
 		first := LandPushID(p.Land.LandID, p.Land.Entries[0].EntryID)
-		landed, err := keySet(ctx, tx, pushesAppliedSQL, []string{first})
+		landed, err := pushesApplied(ctx, tx, []string{first})
 		return landed[first], err
 	case p.Green != nil:
 		green, held, err := greenIn(ctx, tx, repoID, p.Green.TargetRef)
@@ -913,7 +916,7 @@ func (c *Committer) announceEjections(ctx context.Context, when time.Time, repoI
 		}
 		e := Eject{RepoID: repoID, Entries: ejections}
 		var repoName string
-		switch err := tx.QueryRowContext(ctx, repoNameSQL, e.RepoID).Scan(&repoName); {
+		switch err = tx.QueryRowContext(ctx, repoNameSQL, e.RepoID).Scan(&repoName); {
 		case errors.Is(err, sql.ErrNoRows):
 			repoName = e.RepoID
 		case err != nil:

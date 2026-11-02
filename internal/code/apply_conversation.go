@@ -227,6 +227,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		return 0, conversationCounts{}, fmt.Errorf("code: write review %s at %s: %w", r.ReviewID, at.position, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "a review already holds its id")
 		return n, conversationCounts{}, err
 	}
@@ -255,6 +256,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 				counts.openBlockers--
 			}
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		list, err := jsonList(ids)
 		if err != nil {
 			return 0, conversationCounts{}, err
@@ -270,7 +272,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	// multi-row statements as the engine's bind limit allows — one each for
 	// the widest review — never a statement a row: this runs in the code
 	// domain's one applier on every data node, which the pushes queue behind.
-	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addFindingsSQL, findingValuesSQL,
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingsSQL, findingValuesSQL,
 		`ON CONFLICT (id) DO NOTHING`, len(r.Findings), func(i int) []any {
 			f := r.Findings[i]
 			return []any{f.ID, r.ChangeID, r.ReviewID, by, string(kind), r.Revision, f.CommitOID, f.Path,
@@ -280,7 +282,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 		return 0, conversationCounts{}, fmt.Errorf("code: write review %s's findings at %s: %w", r.ReviewID,
 			at.position, err)
 	}
-	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addFindingTextsSQL, `(?, ?, ?, ?, ?, ?)`,
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, addFindingTextsSQL, `(?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (change_id, finding_id) DO NOTHING`, len(r.Findings), func(i int) []any {
 			f := r.Findings[i]
 			return []any{r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body, f.Suggestion}
@@ -300,7 +302,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 	if judges {
 		participant, args = judgeParticipantSQL, append(args, string(r.Verdict), r.Revision, r.ReviewID)
 	}
-	if _, err := tx.ExecContext(ctx, participant, args...); err != nil {
+	if _, err = tx.ExecContext(ctx, participant, args...); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, r.ChangeID,
 			at.position, err)
 	}
@@ -467,10 +469,11 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 			err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := conversationNotApplied(ctx, at, c.RepoID, c.ChangeID, "a comment already holds its id")
 		return n, conversationCounts{}, err
 	}
-	if _, err := tx.ExecContext(ctx, addParticipantSQL, c.ChangeID, by, string(kind), at.packed); err != nil {
+	if _, err = tx.ExecContext(ctx, addParticipantSQL, c.ChangeID, by, string(kind), at.packed); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, c.ChangeID,
 			at.position, err)
 	}

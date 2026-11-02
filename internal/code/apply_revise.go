@@ -39,7 +39,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 		return 0, conversationCounts{}, fmt.Errorf("code: encode revision %d of %s's facts at %s: %w", r.N,
 			r.ChangeID, at.position, err)
 	}
-	if _, err := tx.ExecContext(ctx, writeFactsSQL, r.ChangeID, r.N, r.TargetRef, r.TargetOID,
+	if _, err = tx.ExecContext(ctx, writeFactsSQL, r.ChangeID, r.N, r.TargetRef, r.TargetOID,
 		r.TargetPosition.Packed(), r.BaseOID, r.BaseTree, r.HeadTree, r.PatchID, r.PatchIDOmitted, len(r.Touched),
 		r.TouchesAll, r.Node, r.OwnersDigest, wide.bytes(), at.packed, wide.owners, wide.skipped, wide.classes,
 		wide.touched); err != nil {
@@ -59,7 +59,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 	}
 	// THE OWNERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, as an
 	// ask for review writes its own.
-	if _, err := store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL, `(?, ?, ?, ?, ?, '', '', '', ?)`,
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL, `(?, ?, ?, ?, ?, '', '', '', ?)`,
 		`ON CONFLICT (change_id, reviewer) DO NOTHING`, len(r.Asked), func(i int) []any {
 			rv := r.Asked[i]
 			return []any{r.ChangeID, rv.Handle, string(rv.Kind), string(ReviewerPathOwner), string(ReviewerRequested),
@@ -68,7 +68,7 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 		return 0, conversationCounts{}, fmt.Errorf("code: ask change %s's path owners at %s: %w", r.ChangeID,
 			at.position, err)
 	}
-	if err := addParticipants(ctx, tx, at, r.ChangeID, r.Asked); err != nil {
+	if err = addParticipants(ctx, tx, at, r.ChangeID, r.Asked); err != nil {
 		return 0, conversationCounts{}, err
 	}
 	rows += 2 * len(r.Asked)

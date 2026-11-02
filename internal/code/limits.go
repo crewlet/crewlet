@@ -600,16 +600,17 @@ const (
 	// nothing of each other).
 	MaxFindingsPerReview = 64
 
-	// MaxFindingTitleBytes, MaxFindingBodyBytes and MaxSuggestionBytes bound a
-	// finding's text: a title one line a listing shows whole, a body a
-	// paragraph or two of why, and a suggestion the lines it would put in
-	// place of the ones it is anchored to — every one weighed into its
-	// conversation's text_bytes and kept on a row of its own
-	// (code_finding_texts), off the narrow row a finding's resolution and a
-	// later review's supersession rewrite.
+	// MaxFindingTitleBytes bounds a finding's title: one line a listing shows
+	// whole. It and the two bounds after it hold a finding's text, every one
+	// weighed into its conversation's text_bytes and kept on a row of its
+	// own (code_finding_texts), off the narrow row a finding's resolution and
+	// a later review's supersession rewrite.
 	MaxFindingTitleBytes = 200
-	MaxFindingBodyBytes  = 4 << 10
-	MaxSuggestionBytes   = 16 << 10
+	// MaxFindingBodyBytes bounds a finding's body: a paragraph or two of why.
+	MaxFindingBodyBytes = 4 << 10
+	// MaxSuggestionBytes bounds a finding's suggestion: the lines it would
+	// put in place of the ones it is anchored to.
+	MaxSuggestionBytes = 16 << 10
 
 	// MaxStandingFindings is the most findings one reviewer keeps STANDING —
 	// open, resolved, won't fix or disputed — on one change: sixteen

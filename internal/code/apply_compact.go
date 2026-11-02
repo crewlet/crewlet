@@ -91,7 +91,7 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	moved := m.rows + 1
 	if c.Layer == nil {
-		if _, err := tx.ExecContext(ctx, compactCountersSQL, m.goneLive.packs, m.addedLive.packs,
+		if _, err = tx.ExecContext(ctx, compactCountersSQL, m.goneLive.packs, m.addedLive.packs,
 			m.goneLive.bytes, m.addedLive.bytes, m.goneLive.objects, m.addedLive.objects, at.packed,
 			c.RepoID); err != nil {
 			return 0, fmt.Errorf("code: count the compaction at %s: %w", at.position, err)
@@ -264,6 +264,7 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 		for i, l := range p.leaving {
 			ids[i] = l.id
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		list, err := jsonList(distinct(ids))
 		if err != nil {
 			return rewritten{}, err
@@ -357,7 +358,7 @@ func (a *Applier) applyLayer(ctx context.Context, tx *sql.Tx, at applyContext, c
 	if err != nil {
 		return 0, fmt.Errorf("code: encode the packs of the layer at %s: %w", at.position, err)
 	}
-	if _, err := tx.ExecContext(ctx, insertLayerSQL, c.RepoID, baseSeq+1, l.LayerID, l.BaseID, l.GraphID,
+	if _, err = tx.ExecContext(ctx, insertLayerSQL, c.RepoID, baseSeq+1, l.LayerID, l.BaseID, l.GraphID,
 		string(packs), l.MidxBytes, l.BitmapBytes, l.GraphBytes, l.Objects, l.Commits, l.Git, l.TookMs,
 		at.packed); err != nil {
 		return 0, fmt.Errorf("code: write the layer the publication at %s adds: %w", at.position, err)

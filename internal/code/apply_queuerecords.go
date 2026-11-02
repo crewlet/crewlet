@@ -70,7 +70,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 			return queueNotApplied(ctx, at, c.RepoID, id, "a train tests live entries of its target, and it "+why)
 		}
 	}
-	if tip, err := targetTip(ctx, tx, c.RepoID, c.TargetRef); err != nil {
+	if tip, err := targetTip(ctx, tx, c.RepoID, c.TargetRef); err != nil { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		return 0, err
 	} else if tip != c.BaseOID {
 		return queueNotApplied(ctx, at, c.RepoID, "", c.TargetRef+" is at "+short(tip)+", and the train was "+
@@ -85,7 +85,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 	for i, cand := range c.Candidates {
 		bases[i], base = base, cand.TipOID
 		for _, e := range cand.Entries {
-			if _, err := tx.ExecContext(ctx, testEntrySQL, c.Train, cand.CandidateID, e.Commit, c.RepoID,
+			if _, err = tx.ExecContext(ctx, testEntrySQL, c.Train, cand.CandidateID, e.Commit, c.RepoID,
 				e.EntryID); err != nil {
 				return 0, fmt.Errorf("code: test entry %s at %s: %w", e.EntryID, at.position, err)
 			}
@@ -94,6 +94,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	encoded := make([]string, len(c.Candidates))
 	for i, cand := range c.Candidates {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		entries, err := json.Marshal(cand.Entries)
 		if err != nil {
 			return 0, err
@@ -104,7 +105,7 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 	if c.Pack != nil {
 		packID = c.Pack.PackID
 	}
-	if _, err := store.InsertRows(ctx, tx, at.maxVariables,
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_candidates (repo_id, candidate_id, target_ref, train, ordinal, base_oid, tip_oid,
 			pack_id, state, position, entries) VALUES `, `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, candidate_id) DO NOTHING`, len(c.Candidates), func(i int) []any {
@@ -154,6 +155,7 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 	}
 	rows := 0
 	for _, x := range e.Entries {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := ejectedDetail(x)
 		if err != nil {
 			return 0, err
@@ -165,13 +167,14 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 		rows++
 	}
 	if testing {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		abandoned, err := abandonTrainOn(ctx, tx, e.RepoID, target)
 		if err != nil {
 			return 0, fmt.Errorf("code: abandon %s's train at %s: %w", target, at.position, err)
 		}
 		rows += abandoned
 	}
-	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, e.RepoID); err != nil {
+	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, e.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", e.RepoID, at.position, err)
 	}
 	swept, err := sweepQueueHistory(ctx, tx, e.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)), queueHorizonRows)
@@ -216,6 +219,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			return queueNotApplied(ctx, at, l.RepoID, e.EntryID, "a landing lands live entries of its target, "+
 				"and it "+why)
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := changeRowIn(ctx, tx, e.ChangeID)
 		if err != nil {
 			return 0, err
@@ -230,7 +234,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		}
 		changes[i] = row
 	}
-	if tip, err := targetTip(ctx, tx, l.RepoID, l.TargetRef); err != nil {
+	if tip, err := targetTip(ctx, tx, l.RepoID, l.TargetRef); err != nil { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		return 0, err
 	} else if tip != l.BaseOID {
 		return queueNotApplied(ctx, at, l.RepoID, "", l.TargetRef+" is at "+short(tip)+", and the landing was "+
@@ -238,7 +242,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	}
 	pushes := l.pushes(entries, changes)
 	// ITS PUSHES LAND WHOLE WITH IT OR NOT AT ALL, as a merge's does.
-	landed, err := keySet(ctx, tx, pushesAppliedSQL, []string{pushes[0].PushID})
+	landed, err := pushesApplied(ctx, tx, []string{pushes[0].PushID})
 	if err != nil {
 		return 0, fmt.Errorf("code: read whether the landing at %s landed its pushes: %w", at.position, err)
 	}
@@ -262,7 +266,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		next.version, next.position = row.version+1, at.packed
 		merged[i] = &next
 	}
-	if err := writeChanges(ctx, tx, at.maxVariables, changeMerged, merged); err != nil {
+	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, merged); err != nil {
 		return 0, fmt.Errorf("code: merge the changes the landing at %s lands: %w", at.position, err)
 	}
 	rows := len(merged)
@@ -280,7 +284,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 
 	// 2 EVERY ENTRY LANDED, and a train's landed candidates removed.
 	for _, e := range l.Entries {
-		if _, err := tx.ExecContext(ctx, landEntrySQL, at.at(), at.packed, e.Commit, l.RepoID,
+		if _, err = tx.ExecContext(ctx, landEntrySQL, at.at(), at.packed, e.Commit, l.RepoID,
 			e.EntryID); err != nil {
 			return 0, fmt.Errorf("code: land entry %s at %s: %w", e.EntryID, at.position, err)
 		}
@@ -301,11 +305,11 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			entry: e.EntryID, base: from, commit: e.Commit, enqueuedBy: by, by: by, green: true}
 		from = e.Commit
 	}
-	if err := writeLandings(ctx, tx, at, l.RepoID, landings); err != nil {
+	if err = writeLandings(ctx, tx, at, l.RepoID, landings); err != nil {
 		return 0, err
 	}
 	rows += len(landings)
-	if err := advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID); err != nil {
+	if err = advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID); err != nil {
 		return 0, err
 	}
 	rows++
@@ -349,7 +353,7 @@ func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g
 		return queueNotApplied(ctx, at, g.RepoID, "", g.TargetRef+" holds no landing of "+short(g.OID)+" at "+
 			g.Through.String())
 	}
-	if err := moveGreen(ctx, tx, at, g.RepoID, g.TargetRef, g.OID, g.Through.Packed()); err != nil {
+	if err = moveGreen(ctx, tx, at, g.RepoID, g.TargetRef, g.OID, g.Through.Packed()); err != nil {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, greenLandingsSQL, g.RepoID, g.TargetRef, from, g.Through.Packed())

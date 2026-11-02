@@ -145,7 +145,7 @@ type ChangeWriter struct {
 var changeFlights = flightBounds{
 	key: MaxChangeWritesWaiting, node: ChangeWriterNodeWrites, bytes: ChangeWriterNodeBytes,
 	keyBound: "MaxChangeWritesWaiting", nodeBound: "ChangeWriterNodeWrites", bytesBound: "ChangeWriterNodeBytes",
-	noun: "change", writes: "writes", closed: stopping,
+	noun: "change", writes: "writes", closed: errChangeWriterStopping,
 }
 
 // NewChangeWriter builds a change writer, refusing what it cannot work without.
@@ -216,8 +216,9 @@ func (w *ChangeWriter) Converse(ctx context.Context, cw ConversationWrite) (Conv
 	return res, err
 }
 
-// stopping is the refusal of a write a stopping writer decides nothing of.
-var stopping = fmt.Errorf("%w: the change writer is stopping", ErrNotServing)
+// errChangeWriterStopping is the refusal of a write a stopping writer decides
+// nothing of.
+var errChangeWriterStopping = fmt.Errorf("%w: the change writer is stopping", ErrNotServing)
 
 // converse is [ChangeWriter.Converse] once the write is known to be one,
 // weighing weight, and whether its outcome is counted already — a publish
@@ -252,7 +253,7 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 	}
 	if !w.flights.begin() {
 		hold.release()
-		return ConversationResult{}, stopping, false
+		return ConversationResult{}, errChangeWriterStopping, false
 	}
 	type answer struct {
 		res ConversationResult
@@ -418,14 +419,14 @@ func (w *ChangeWriter) answer(ctx context.Context, cw ConversationWrite, last co
 // made is res naming what cw makes that is named apart from its change — a
 // comment's id, a review's and its findings' — every one derived from the
 // write's operation id, so it is the same on every node and every retry.
-func (cw ConversationWrite) made(res ConversationResult) ConversationResult {
+func (w ConversationWrite) made(res ConversationResult) ConversationResult {
 	switch {
-	case cw.Comment != nil:
-		res.ID = CommentID(cw.OpID)
-	case cw.Review != nil:
-		res.ID = ReviewID(cw.OpID)
-		for i := range cw.Review.Findings {
-			res.FindingIDs = append(res.FindingIDs, FindingID(cw.OpID, i))
+	case w.Comment != nil:
+		res.ID = CommentID(w.OpID)
+	case w.Review != nil:
+		res.ID = ReviewID(w.OpID)
+		for i := range w.Review.Findings {
+			res.FindingIDs = append(res.FindingIDs, FindingID(w.OpID, i))
 		}
 	}
 	return res

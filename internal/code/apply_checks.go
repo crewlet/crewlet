@@ -418,7 +418,7 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 // deleted. Every node removes the same rows: the order is the index's own, its
 // key the row's whole key.
 func checksHorizon(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, cutoff int64) (int, error) {
-	take, _, _, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows, CheckHorizonBytes)
+	take, _, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows, CheckHorizonBytes)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's checks past their history at %s: %w", repoID, at.position, err)
 	}
@@ -427,32 +427,33 @@ func checksHorizon(ctx context.Context, tx *sql.Tx, at applyContext, repoID stri
 
 // checksEndedBefore reads repoID's check rows whose finished_at is in [lo,
 // hi), oldest first, and answers how many of them one removal takes — at most
-// maxRows, and only while their row_bytes are under maxBytes, the first
-// whatever it weighs — what those weigh, and whether rows in the range remain
-// past them. The horizon and a checks sweep's decide ask it of the ended rows
-// before a cutoff (lo 1: an ending's instant; 0 is no ending), a purge part of
-// every row a repository holds.
+// maxRows, and only while the row_bytes of those taken are under maxBytes, the
+// first whatever it weighs — and whether rows in the range remain past them.
+// The horizon and a checks sweep's decide ask it of the ended rows before a
+// cutoff (lo 1: an ending's instant; 0 is no ending), a purge part of every
+// row a repository holds.
 func checksEndedBefore(ctx context.Context, tx *sql.Tx, repoID string, lo, hi int64, maxRows int,
-	maxBytes int64) (take int, weighed int64, more bool, err error) {
+	maxBytes int64) (take int, more bool, err error) {
 
 	rows, err := tx.QueryContext(ctx, checksOldestSQL, repoID, lo, hi, maxRows+1)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, false, err
 	}
 	defer func() { _ = rows.Close() }()
+	var weighed int64
 	for rows.Next() {
 		if take == maxRows || (take > 0 && weighed >= maxBytes) {
-			return take, weighed, true, nil
+			return take, true, nil
 		}
 		var commit, target, name string
 		var attempt, width int64
 		if err := rows.Scan(&commit, &target, &name, &attempt, &width); err != nil {
-			return 0, 0, false, err
+			return 0, false, err
 		}
 		take++
 		weighed += width
 	}
-	return take, weighed, false, rows.Err()
+	return take, false, rows.Err()
 }
 
 // deleteOldestChecks deletes the first n of repoID's check rows whose
@@ -484,7 +485,7 @@ func purgeChecks(ctx context.Context, tx *sql.Tx, repoID string, budget int, wei
 	if budget < 2 || weighed >= PurgePartBytes {
 		return 0, nil
 	}
-	take, _, _, err := checksEndedBefore(ctx, tx, repoID, math.MinInt64, math.MaxInt64, budget/2,
+	take, _, err := checksEndedBefore(ctx, tx, repoID, math.MinInt64, math.MaxInt64, budget/2,
 		PurgePartBytes-weighed)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's checks to purge: %w", repoID, err)

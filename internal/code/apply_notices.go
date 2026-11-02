@@ -144,9 +144,9 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 			return []any{record, k.Handle, string(k.kind), repoID, k.Change.ChangeID, k.Change.ChangeRef,
 				string(k.Reason), k.Addressed, k.FallbackOnly, k.FallbackRank, excerpt, at.at(), at.packed,
 				at.position.Stream, int64(at.position.Generation)}
-		}, func(rows *sql.Rows) error {
+		}, func(rows *sql.Rows) (err error) {
 			var key noticeKey
-			if err := rows.Scan(&key.handle, &key.change); err != nil {
+			if err = rows.Scan(&key.handle, &key.change); err != nil {
 				return err
 			}
 			c := byKey[key]

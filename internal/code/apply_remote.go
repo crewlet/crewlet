@@ -61,7 +61,7 @@ func (a *Applier) applyImportChunk(ctx context.Context, tx *sql.Tx, at applyCont
 		return remoteNotApplied(ctx, at, c.RepoID, fmt.Sprintf("its import has landed %d chunks, and this "+
 			"is chunk %d", s.importSeq, c.Seq))
 	}
-	if _, err := tx.ExecContext(ctx, importSeqSQL, c.Seq, c.RepoID); err != nil {
+	if _, err = tx.ExecContext(ctx, importSeqSQL, c.Seq, c.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's import to chunk %d at %s: %w", c.RepoID, c.Seq, at.position, err)
 	}
 	entry := PushEntry{PushID: c.ChunkID, Principal: Principal{Kind: PrincipalSystem}, Via: ViaImport,
@@ -107,7 +107,7 @@ func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyConte
 	if !s.found || s.status != RepoStatusActive || !s.mirrored {
 		return remoteNotApplied(ctx, at, m.RepoID, "the repository is not an active pull mirror")
 	}
-	if _, err := tx.ExecContext(ctx, mirrorSyncedSQL, at.at(), m.RepoID); err != nil {
+	if _, err = tx.ExecContext(ctx, mirrorSyncedSQL, at.at(), m.RepoID); err != nil {
 		return 0, fmt.Errorf("code: record %s's sync at %s: %w", m.RepoID, at.position, err)
 	}
 	entry := PushEntry{PushID: m.SyncID, Principal: Principal{Kind: PrincipalSystem}, Via: ViaMirror,
