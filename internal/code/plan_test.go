@@ -909,6 +909,8 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=?)"}},
 		"who pushed a failed head": {headPusherSQL, []any{"change-1", 2},
 			[]string{revisionKey + " (change_id=? AND n=?)"}},
+		"who pushed a landed tip": {tipPushersSQL, []any{"repo-1", 1000},
+			[]string{"code_pushes_repo_idx (repo_id=? AND position=?)"}},
 		"a landing": {landingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"a landing broken": {landingBrokenSQL, []any{"repo-1", "refs/heads/main", 1000, 1},

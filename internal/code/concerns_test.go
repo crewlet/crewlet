@@ -337,6 +337,99 @@ func TestAPushThatMovesNoChangeConcernsNobody(t *testing.T) {
 	}
 }
 
+// A LANDING IS MADE BY WHOEVER PUSHED THE TIP ITS HOME FOUND: a change whose
+// target is moved PAST its head — an author's merge commit pushed onto it, the
+// common agent flow — is merged by no push's own apply, since the target is
+// not at the head; its home finds the head in the tip and records the landing.
+// That push merged it, so the landing names its pusher as the actor: a seat
+// that merged its own change hears nothing of it while the change's other
+// author is told `merged`, and a person who merged it is named among the
+// routing's persons. The push is told from the others of its record — up to
+// 64 unrelated clients share one — by its applied command setting the target
+// to that tip: a push of the same record that set another branch to the same
+// commit, or whose own command on the target was refused, did not.
+//
+// Mutation: name nobody as the landing's actor, and dev is told of its own
+// merge and founder is named nowhere; take the first push of the record, or
+// one whose command set another ref or was refused, and the bystander is
+// named as the merger.
+func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	pushedBy := func(who code.Principal, id string, cmds ...code.Command) code.PushEntry {
+		e := entry(id, cmds...)
+		e.Principal = who
+		return e
+	}
+	refused := code.Command{Ref: mainRef, Old: oidOf("A"), New: oidOf("M"), Result: code.ResultNG,
+		Reason: code.RefusalNotPermitted}
+	for _, tc := range []struct {
+		name, repo string
+		// record is the push record that moves main to M, past the change's
+		// head B2, given two push ids in increasing order.
+		record func(first, second string) []code.PushEntry
+		actor  string
+		person bool
+		heard  []string
+	}{
+		{
+			// The seat dev, which owns the change, pushes the merge commit;
+			// the person on harness, an author since it pushed revision 2,
+			// set release to M earlier in the same record.
+			name: "a seat's own merge", repo: "web", actor: "dev", heard: []string{"harness:merged"},
+			record: func(first, second string) []code.PushEntry {
+				return []code.PushEntry{
+					entry(first, set(releaseRef, oidOf("R"), oidOf("M"))),
+					pushedBy(dev, second, set(mainRef, oidOf("A"), oidOf("M"))),
+				}
+			},
+		},
+		{
+			// ada, the person on founder and no author, pushes the merge
+			// commit; the seat cto, later in the record, set release to M
+			// and was refused main.
+			name: "a person's merge", repo: "api", actor: "founder", person: true,
+			heard: []string{"dev:merged", "harness:merged"},
+			record: func(first, second string) []code.PushEntry {
+				return []code.PushEntry{
+					pushedBy(ada, first, set(mainRef, oidOf("A"), oidOf("M"))),
+					pushedBy(cto, second, set(releaseRef, oidOf("R"), oidOf("M")), refused),
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, change := discussed(t, n, tc.repo)
+			n.revise(repo, "B", "B2")
+			first, second := uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String()
+			if pushed := n.push(repo, tc.record(first, second)...); len(routingAt(t, n, pushed.Position)) != 0 {
+				t.Fatalf("the push of a merge commit past the head routes %+v, want nothing: no push's own "+
+					"apply sees the change merged", routingAt(t, n, pushed.Position))
+			}
+
+			res, err := c.ProposeChange(ctx, landing(repo, change, 2, oidOf("B2"), mainRef, oidOf("M")))
+			if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged {
+				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
+			}
+			routings := routingAt(t, n, res.Position)
+			if len(routings) != 1 || routings[0].ChangeID != change || !routings[0].Merged {
+				t.Fatalf("the landing carries %+v, want one routing of the change, merged", routings)
+			}
+			r := routings[0]
+			if r.Actor != tc.actor || r.Person(tc.actor) != tc.person {
+				t.Errorf("the landing names %q as its actor (a person: %v), want %q (a person: %v), who pushed "+
+					"the tip it found", r.Actor, r.Person(tc.actor), tc.actor, tc.person)
+			}
+			if got := heard(code.Concerns(routings)); !slices.Equal(got, tc.heard) {
+				t.Errorf("the landing tells %v, want %v: the change's authors but whoever merged it", got,
+					tc.heard)
+			}
+		})
+	}
+}
+
 // READY TO MERGE IS ANNOUNCED ONLY BY A MERGEABILITY RECORD: a draft change
 // whose facts and clean merge are recorded becomes ready the moment its draft
 // is undone and an eligible reviewer approves it — two records on two

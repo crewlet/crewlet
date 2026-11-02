@@ -1595,7 +1595,8 @@ moves — and each push of a record sees what the ones before it did.
   than onto it is no move of the head the push's own apply can see — whether
   one commit holds another is git's to say — so the repository's home finds
   it when it reads the revision's facts and lands the change: `merged`, by
-  `push`, at the target's tip it found holding the head ([The home's change
+  `push`, at the target's tip it found holding the head, and made by whoever
+  pushed that tip, who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
   `source_deleted` — after the same push's merges, so a push that sets the
@@ -4665,7 +4666,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a change it found landed — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -4680,7 +4681,10 @@ records name nobody — but a revision's facts, which its home records and
 which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
-colleague's revision reads for both grants. A
+colleague's revision reads for both grants — and a change it found landed:
+the push that moved the target to the tip holding the change's head merged
+it, so the landing names whoever made that push, and the change's other
+authors told it merged read for that pusher's grant too. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -6515,7 +6519,7 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
 | `ready_to_merge` | The change's authors who may merge it into its target; where none may, the effective lead of the repository's owner | The mergeability whose stored answer goes from not ready to ready |
-| `merged` | The change's authors | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
+| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that moved the target to the tip the home found its head in; the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
 | `review_submitted` | The change's authors | A review that approves or comments |
 | `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
 | `thread` | Everybody who said something in the thread | A comment |
@@ -6536,7 +6540,10 @@ chart holds, in the snapshot, and not the asker's list beside them.
   something of whoever hears them; the rest are news to absorb.
 - **Nobody hears of a change they made — but a failed check.** A reviewer is
   not told of their own review, nor a pusher of the merge their push made —
-  whoever wrote it — nor an enqueuer of the landing their entry made, since
+  whoever wrote it, and whether the push set the target to the change's head
+  or moved it past, to a merge commit of their own, which the home finds and
+  records as the change landed, naming that push's pusher — nor an enqueuer
+  of the landing their entry made, since
   the queue lands an entry on its enqueuer's account. A check of a head that
   fails is the one exception: it is news to whoever pushed that head above
   all, since nothing else they did tells them, so they hear it as the
@@ -6638,7 +6645,8 @@ stops after its record committed loses no wake.
   asked for is that colleague's errand, and a code read in the turn is
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
-  and a revision's facts are whoever pushed the revision.
+  a revision's facts are whoever pushed the revision, and a change it found
+  landed whoever pushed the target's tip it found the change's head in.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a
