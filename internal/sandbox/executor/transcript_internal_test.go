@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -181,5 +182,61 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 		if strings.Contains(got, "ghp_") || strings.Contains(got, keyLine[:16]) {
 			t.Errorf("%s: the entry hands out a credential's material: …%q", name, got[max(0, len(got)-80):])
 		}
+	}
+}
+
+// sharesBytes reports whether s's bytes lie inside whole's: whether keeping s
+// keeps whole alive.
+func sharesBytes(s, whole string) bool {
+	if s == "" || whole == "" {
+		return false
+	}
+	start := uintptr(unsafe.Pointer(unsafe.StringData(whole)))
+	at := uintptr(unsafe.Pointer(unsafe.StringData(s)))
+	return at >= start && at < start+uintptr(len(whole))
+}
+
+// AN ENTRY HOLDS ONLY ITS OWN BYTES, and a read remembers no call by more than
+// a name's. A short note read out of a value of four MiB, its thread and its
+// tool — each a piece of a string the read decoded — come out of the shaping
+// that hands them out as bytes of their own: kept on the page, a piece held
+// the whole value until the answer was sent. And a call whose id or tool's
+// name runs past the bound a name has is not remembered for its result, which
+// names no tool, where a harness's call is.
+//
+// Mutation: hand an entry out as the redaction and the cut left it, and its
+// text, thread and tool are the decoded value's own bytes; remember every
+// call whatever it names, and the long id or name is held for its result.
+func TestAnEntryHoldsOnlyItsOwnBytes(t *testing.T) {
+	t.Parallel()
+	opening := "## A note from ada, sent while this turn was running\nTarget main."
+	decoded := opening + "\n" + strings.Repeat("x", 4<<20)
+	b := &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
+		calls: map[string]string{}}
+	e := b.shape(TranscriptEntry{Kind: EntryNote, Thread: decoded[3:9], Tool: decoded[10:14]},
+		decoded[:len(opening)])
+	if e.Text != opening || e.Thread != decoded[3:9] || e.Tool != decoded[10:14] {
+		t.Fatalf("the entry reads %q, thread %q, tool %q", e.Text, e.Thread, e.Tool)
+	}
+	for name, field := range map[string]string{"text": e.Text, "thread": e.Thread, "tool": e.Tool} {
+		if sharesBytes(field, decoded) {
+			t.Errorf("the entry's %s is the decoded value's own bytes, which it holds alive", name)
+		}
+	}
+
+	long := strings.Repeat("a", transcriptNameMaxBytes+1)
+	for name, c := range map[string]struct{ id, tool string }{
+		"an id past a name's bound":         {long, "Bash"},
+		"a tool's name past a name's bound": {"toolu_1", long},
+	} {
+		b.called(c.id, c.tool)
+		if got := b.answered(c.id); got != "" || len(b.calls) != 0 {
+			t.Errorf("%s: the call was remembered (%d held), and its result names %.20q", name,
+				len(b.calls), got)
+		}
+	}
+	b.called("toolu_2", "Bash")
+	if got := b.answered("toolu_2"); got != "Bash" {
+		t.Errorf("a harness's call is answered as %q, want its tool", got)
 	}
 }

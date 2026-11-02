@@ -641,11 +641,19 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 
 // shape is an entry as it is handed out: its text redacted and then cut to the
 // entry's bound, and its names redacted and bounded.
+//
+// EACH OF ITS OWN BYTES, copied: what the redaction and the cut hand back is,
+// wherever they changed nothing, the very string the entry was read from, and
+// that is a piece of a decoded record of up to a line's 32 MiB — a short note
+// is a substring of the value that carried it. Kept on the page, a few bytes of
+// it held all of it until the answer was sent, so a page of a few KiB could
+// hold the whole read budget.
 func (b *transcriptBuilder) shape(e TranscriptEntry, raw string) TranscriptEntry {
 	e.Bytes = len(raw)
 	e.Text, e.Cut = redactedWithin(raw, b.bounds.EntryBytes)
 	e.Thread, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
 	e.Tool, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
+	e.Text, e.Thread, e.Tool = strings.Clone(e.Text), strings.Clone(e.Thread), strings.Clone(e.Tool)
 	return e
 }
 
@@ -741,11 +749,18 @@ func (b *transcriptBuilder) unread(what string) error {
 	return b.add(TranscriptEntry{Kind: EntryUnread, Thread: b.thread}, what)
 }
 
-// called remembers which tool the call id is of, for its result.
+// called remembers which tool the call id is of, for its result — but never
+// an id or a tool's name past [transcriptNameMaxBytes], which no harness
+// writes: remembered whole, each held a string of any length a record names,
+// at a thousand calls the read keeps, for as long as their results were to
+// come. Such a call's result names no tool, as one past [maxPendingCalls]
+// does.
 func (b *transcriptBuilder) called(id, tool string) {
-	if id != "" && len(b.calls) < maxPendingCalls {
-		b.calls[id] = tool
+	if id == "" || len(id) > transcriptNameMaxBytes || len(tool) > transcriptNameMaxBytes ||
+		len(b.calls) >= maxPendingCalls {
+		return
 	}
+	b.calls[id] = tool
 }
 
 // answered is the tool the call id was of, which the record no longer needs
