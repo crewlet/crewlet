@@ -173,7 +173,9 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 				out.Revisions = append(out.Revisions, r)
 			}
 		}
-		if last := len(out.Revisions); last == limit && out.Revisions[last-1].N > 1 {
+		// A DETAIL ALONE pages no revision (code.ReadQuery.DetailOnly), so a
+		// page of none offers no next.
+		if last := len(out.Revisions); last > 0 && last == limit && out.Revisions[last-1].N > 1 {
 			out.Next = out.Revisions[last-1].Cursor()
 		}
 	}
@@ -365,13 +367,14 @@ func TestAChangeReadIsMadeForWhoeverWokeTheTurn(t *testing.T) {
 // ---- the listing ------------------------------------------------------------ //
 
 // A LISTING IS READ AS ITS ARGUMENTS SAY: its filters are the reader's own —
-// a repository by the name the turn resolved, a state, an owner, a work item,
-// a reviewer, a need — at the seat's level, a page of `limit`; one that names
-// nothing to list is refused before anything is read, as are a state and a
-// need this build does not know and a limit past its bound.
+// a repository by its name, a state, an owner, a work item, a reviewer, a
+// need — at the seat's level, a page of `limit`, and on a turn's first call
+// naming the repository the listing is its resolution too, one read; one that
+// names nothing to list is refused before anything is read, as are a state
+// and a need this build does not know and a limit past its bound.
 //
-// Mutation: a listing naming nothing sent to the reader; the repository read
-// by the name as given rather than the turn's resolution → red.
+// Mutation: a listing naming nothing sent to the reader; the repository
+// resolved by a read of its own before the listing → red.
 func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
@@ -393,8 +396,8 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 		listing.Limit != 5 || listing.Fresh.Level != statelog.ReadLinearizable {
 		t.Errorf("the listing was read as %+v", *listing)
 	}
-	if readsOf(reads, code.ReadRepo) != 1 {
-		t.Errorf("the repository was resolved %d times, want once", readsOf(reads, code.ReadRepo))
+	if len(reads) != 1 || !listing.Resolve {
+		t.Errorf("the turn's first listing read %+v, want one read, the listing, resolving the repository", reads)
 	}
 	changes, _ := answer["changes"].([]any)
 	row, _ := changes[0].(map[string]any)
@@ -945,6 +948,23 @@ func detailRead(q code.ReadQuery) bool {
 	return q.Kind == code.ReadChange && q.Part == "" && q.Cursor == "" && !q.Brief
 }
 
+// linearizable counts the questions asked of the code log at the seat's
+// level — each one a barrier the log appends and waits a quorum for.
+func linearizable(reads []code.ReadQuery, resolves []code.RefQuery) int {
+	n := 0
+	for _, q := range reads {
+		if q.Fresh.Level == statelog.ReadLinearizable {
+			n++
+		}
+	}
+	for _, q := range resolves {
+		if q.Fresh.Level == statelog.ReadLinearizable {
+			n++
+		}
+	}
+	return n
+}
+
 // A CHANGE IS READ IN DETAIL ONLY WHERE ITS DETAIL IS READ: a revision's files,
 // a file's patch and the findings read the change IN BRIEF (code.ReadQuery.
 // Brief) — its row and its head revision — and never its detail, which judges
@@ -1002,6 +1022,88 @@ func TestAChangeIsReadInDetailOnlyWhereItsDetailIsRead(t *testing.T) {
 		case !tc.detail && (detailed != 0 || brief != 1):
 			t.Errorf("%s %v read the change in detail %d times and in brief %d, want it in brief once, its "+
 				"detail never", tc.tool, tc.args, detailed, brief)
+		}
+	}
+}
+
+// A CHANGE TOOL'S CALL IS ONE LINEARIZABLE READ where nothing resolved its
+// repository before it: the call's first read of the change — or of its
+// checks, or a listing of the repository's changes — is the repository's
+// resolution too (code.ReadQuery.Resolve), so a call costs the code log ONE
+// barrier, not a `repo` read's and then its own, one after the other. On the
+// operator surface, which has no turn and resolves on every call, every call;
+// in a turn, its first call naming the repository, and every later call reads
+// by the turn's resolution with one read of its own. A write of an existing
+// change is the same one read.
+//
+// Mutations: resolve the repository by a read of its own before the change's
+// (the repo read restored) → two linearizable reads a call, red; drop the
+// resolution's answer and read again → two, red.
+func TestAChangeToolCallIsOneLinearizableRead(t *testing.T) {
+	t.Parallel()
+	calls := []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.CodeListChangesTool, map[string]any{"repo": "site"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "merge_readiness"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "files"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "diff", "file": "a.txt"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "findings"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "reviews"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "comments"}},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "checks"}},
+	}
+	// THE OPERATOR SURFACE: every call, twice over.
+	for _, call := range calls {
+		host := newChangeHost(siteChange())
+		op := operatorCode(t, host, nil)
+		for range 2 {
+			if got, err := op[call.tool].Call(asBoundPerson(), call.args); err != nil || got.Failed {
+				t.Fatalf("%s %v on the operator surface: %v %s", call.tool, call.args, err, got.Output)
+			}
+		}
+		reads, resolves, _ := host.asked()
+		if n := linearizable(reads, resolves); n != 2 || readsOf(reads, code.ReadRepo) != 0 {
+			t.Errorf("two operator calls of %s %v asked %d linearizable questions (%d repo reads), want one "+
+				"a call and no repo read: %+v", call.tool, call.args, n, readsOf(reads, code.ReadRepo), reads)
+		}
+	}
+	// A TURN: its first call resolves, and each later call is one read too.
+	host := newChangeHost(siteChange())
+	reg := codeRegistry(t, codeDeps(host))
+	turn := codeTurn(t)
+	for i, call := range calls {
+		callCode(t, reg, turn, call.tool, call.args)
+		reads, resolves, _ := host.asked()
+		if n := linearizable(reads, resolves); n != i+1 || readsOf(reads, code.ReadRepo) != 0 {
+			t.Errorf("a turn's %d calls, the last %s %v, asked %d linearizable questions (%d repo reads), "+
+				"want one a call", i+1, call.tool, call.args, n, readsOf(reads, code.ReadRepo))
+		}
+	}
+	if reads, _, _ := host.asked(); !reads[0].Resolve || slices.ContainsFunc(reads[1:],
+		func(q code.ReadQuery) bool { return q.Resolve }) {
+		t.Errorf("the turn resolved the repository on reads %+v, want on its first read alone", reads)
+	}
+	// A WRITE OF AN EXISTING CHANGE: its one read of the change resolves too.
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{builtin.CodeUpdateChangeTool, map[string]any{"change": "site!7", "expected_version": 1,
+			"title": "Retry twice"}},
+		{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."}},
+	} {
+		host, writer := newChangeHost(siteChange()), &codeWrites{}
+		reg := codeRegistry(t, writeDeps(host, writer))
+		if got := callWrite(everyGrant(), t, reg, writerTurn(t), call.tool, call.args); got.Failed {
+			t.Fatalf("%s answered %q", call.tool, got.Output)
+		}
+		reads, resolves, _ := host.asked()
+		if n := linearizable(reads, resolves); n != 1 || readsOf(reads, code.ReadRepo) != 0 {
+			t.Errorf("%s asked %d linearizable questions (%d repo reads), want its one read of the change",
+				call.tool, n, readsOf(reads, code.ReadRepo))
 		}
 	}
 }

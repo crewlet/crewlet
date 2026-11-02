@@ -476,7 +476,8 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 			code.ChangeRef(repo.Name, 42), CodeListChangesTool))
 		return nil, statelog.Position{}, &r
 	}
-	written, refusal := d.changeOf(ctx, turn, tool, c, repo, int64(number))
+	written, refusal := d.changeOf(ctx, &changeRead{deps: d, turn: turn, tool: tool, c: c, name: repo.Name,
+		repo: repo, number: int64(number)})
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}

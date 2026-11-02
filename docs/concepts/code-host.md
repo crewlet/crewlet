@@ -4873,7 +4873,11 @@ A turn reads each repository it names once, and resolves the refs a call
 names in one read — a comparison's two branches cost one barrier — so a seat
 that resolves a branch once and reads by the commit it answers pays one
 barrier for the repository and one for the branch, however many files it
-reads. A file's lines — a blame's among them — and a patch reach the model
+reads. A change tool's call — `code_list_changes` naming a repository,
+`code_get_change` and a write of an existing change — reads the repository
+in the same read as the change, so a turn's first call naming it, and every
+call a person's assistant makes, pays one barrier rather than two. A file's
+lines — a blame's among them — and a patch reach the model
 [fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`, and
 so does every commit's subject a history or a blame names: a read by commit id
 knows the bytes and not whose they are.

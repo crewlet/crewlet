@@ -43,7 +43,12 @@ import (
 // findings beside the revisions they are placed in, two revisions to compare
 // — makes its first read at that level and every later one at SESSION,
 // floored at the first's position: one barrier a call, and every later read
-// at or past what the first saw.
+// at or past what the first saw. That first read is the call's RESOLUTION
+// of the repository too, where the turn has not resolved it yet — on a
+// turn's first call naming it, and on every call the operator surface makes,
+// which has no turn ([changeRead.ask]): a `repo` read before it would be a
+// second linearizable read, and a second barrier the code log appends and
+// waits a quorum for, one after the other.
 //
 // A read that needs the change's state, its revision, its head and its
 // branches — a revision's files, a patch, the findings, a write of its
@@ -362,18 +367,34 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
 			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(code.Needs()))), nil
 	}
-	var repo code.RepoRef
+	var (
+		repo     code.RepoRef
+		resolved *code.ReadAnswer
+	)
 	if named {
 		name, refusal := repoArg(t.Name(), args)
 		if refusal != nil {
 			return *refusal, nil
 		}
-		if repo, refusal = t.deps.repo(ctx, turn, t.Name(), c, name); refusal != nil {
+		// THE LISTING IS THE RESOLUTION where the turn has none: one
+		// linearizable read, one barrier, rather than a `repo` read first
+		// ([CodeDeps.repoRead]).
+		first := q
+		first.Resolve = true
+		if repo, resolved, refusal = t.deps.repoRead(ctx, turn, t.Name(), c, name, &first); refusal != nil {
 			return *refusal, nil
 		}
 		q.Repo = repo.Name
 	}
-	answer, err := t.deps.read(ctx, c, q)
+	var (
+		answer code.ReadAnswer
+		err    error
+	)
+	if resolved != nil {
+		answer = *resolved
+	} else {
+		answer, err = t.deps.read(ctx, c, q)
+	}
 	if err != nil {
 		if named {
 			return t.deps.failed(ctx, turn, t.Name(), c.asker, repo, err), nil
@@ -607,11 +628,7 @@ func (t *codeGetChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	g := changeRead{deps: t.deps, turn: turn, tool: t.Name(), c: c, repo: repo, number: number}
+	g := &changeRead{deps: t.deps, turn: turn, tool: t.Name(), c: c, name: name, number: number}
 	switch call.part {
 	case partReadiness:
 		return g.readiness(ctx)
@@ -629,36 +646,76 @@ func (t *codeGetChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return g.summary(ctx, call.cursor)
 }
 
-// changeRead is one call of code_get_change: who reads, the repository the
-// turn resolved, and the change by its number on it.
+// changeRead is one call about a change: who reads, the repository by the
+// name the call gives and the one it resolved to, and the change by its
+// number on it.
 type changeRead struct {
-	deps   CodeDeps
-	turn   *turnctx.Turn
-	tool   string
-	c      codeCaller
+	deps CodeDeps
+	turn *turnctx.Turn
+	tool string
+	c    codeCaller
+	// name is the repository as the call names it, and repo the repository
+	// the name resolved to: the turn's resolution, or — zero until then —
+	// the call's own first read's ([changeRead.ask]).
+	name   string
 	repo   code.RepoRef
 	number int64
 }
 
-// ref is the change as a person and a seat name it, web!42.
-func (g changeRead) ref() string { return code.ChangeRef(g.repo.Name, g.number) }
-
-// read is q — a `change` read of this call's change — asked as its caller:
-// at the seat's level, or, where after is set, at session floored at it —
-// a later read of the call, at or past what its first saw. A change naming
-// another repository than the one the turn resolved the name to is refused
-// as a name taken again between the two ([CodeDeps.sameRepo]).
-func (g changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.Position) (code.ReadAnswer,
-	*tools.Result) {
-
-	q.Kind, q.Repo, q.Change, q.Fresh = code.ReadChange, g.repo.Name, g.number, seatRead
-	if !after.IsZero() {
-		q.Fresh = statelog.FloorAt(statelog.ReadSession, after)
+// ref is the change as a person and a seat name it, web!42: by the name the
+// repository resolved to, or by the call's own before it resolved.
+func (g *changeRead) ref() string {
+	if g.repo.Name == "" {
+		return code.ChangeRef(g.name, g.number)
 	}
+	return code.ChangeRef(g.repo.Name, g.number)
+}
+
+// ask is q, a read of the repository the call names, asked as its caller. A
+// call that has not resolved the repository yet makes q that RESOLUTION
+// ([CodeDeps.repoRead]): q asks the code host for the repository its name
+// resolves to beside its own answer ([code.ReadQuery.Resolve]), at the seat's
+// level, and the call keeps it — so the call's first read is ONE
+// linearizable read, where a `repo` read and then q were two barriers on the
+// code log, one after the other. A turn that resolved the name before answers
+// the resolution from its lookups, and q is asked by the name it resolved to.
+func (g *changeRead) ask(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, *tools.Result) {
+	if g.repo.ID == "" {
+		first := q
+		first.Resolve = true
+		repo, answer, refusal := g.deps.repoRead(ctx, g.turn, g.tool, g.c, g.name, &first)
+		if refusal != nil {
+			return code.ReadAnswer{}, refusal
+		}
+		g.repo = repo
+		if answer != nil {
+			return *answer, nil
+		}
+	}
+	q.Repo = g.repo.Name
 	answer, err := g.deps.read(ctx, g.c, q)
 	if err != nil {
 		r := g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err)
 		return code.ReadAnswer{}, &r
+	}
+	return answer, nil
+}
+
+// read is q — a `change` read of this call's change — asked as its caller
+// ([changeRead.ask]): at the seat's level, or, where after is set, at session
+// floored at it — a later read of the call, at or past what its first saw. A
+// change naming another repository than the one the turn resolved the name
+// to is refused as a name taken again between the two ([CodeDeps.sameRepo]).
+func (g *changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.Position) (code.ReadAnswer,
+	*tools.Result) {
+
+	q.Kind, q.Change, q.Fresh = code.ReadChange, g.number, seatRead
+	if !after.IsZero() {
+		q.Fresh = statelog.FloorAt(statelog.ReadSession, after)
+	}
+	answer, refusal := g.ask(ctx, q)
+	if refusal != nil {
+		return code.ReadAnswer{}, refusal
 	}
 	answered := ""
 	switch {
@@ -679,7 +736,7 @@ func (g changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.P
 // its revision, its head or its branches asks, none of which reads its
 // description, its authors, its conversation, its mergeability or its
 // readiness.
-func (g changeRead) head(ctx context.Context, after statelog.Position) (*code.ChangeSummary, code.RevisionRow,
+func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.ChangeSummary, code.RevisionRow,
 	statelog.Position, *tools.Result) {
 
 	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1, Brief: true}, after)
@@ -700,7 +757,7 @@ func (g changeRead) head(ctx context.Context, after statelog.Position) (*code.Ch
 // read at: what a read that presents the change's readiness, or acts on it,
 // asks, at the price of its description, its authors, its conversation, its
 // mergeability and its readiness judged ([changeRead.head] reads none).
-func (g changeRead) detail(ctx context.Context, after statelog.Position) (*code.ChangeDetail, code.RevisionRow,
+func (g *changeRead) detail(ctx context.Context, after statelog.Position) (*code.ChangeDetail, code.RevisionRow,
 	statelog.Position, *tools.Result) {
 
 	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1}, after)
@@ -719,7 +776,7 @@ func (g changeRead) detail(ctx context.Context, after statelog.Position) (*code.
 // revision is revision n of a change whose latest is latest, read at session
 // floored at after: the page of its revisions that resumes after n+1, one
 // revision long — refused where the change has fewer than n.
-func (g changeRead) revision(ctx context.Context, n, latest int64, after statelog.Position) (code.RevisionRow,
+func (g *changeRead) revision(ctx context.Context, n, latest int64, after statelog.Position) (code.RevisionRow,
 	*tools.Result) {
 
 	if n > latest {
@@ -744,7 +801,7 @@ func (g changeRead) revision(ctx context.Context, n, latest int64, after statelo
 // revisions beside each other ([code.ChangeRevisions]): each of a change whose
 // latest is latest, read at session floored at after, its refusal carried as
 // an error ([refusedRead]).
-func (g changeRead) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
+func (g *changeRead) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
 	code.RevisionRow, error) {
 
 	return func(n int64) (code.RevisionRow, error) {
@@ -767,7 +824,7 @@ func plural(n int64, one, many string) string {
 // floor is what a read by object id of revs is asked with ([changeRead]'s
 // doc): the code domain's one rule ([code.ObjectFloor]) over this node's own
 // floor on the repository.
-func (g changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
+func (g *changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
 	return code.ObjectFloor(g.deps.Code.FloorOf(g.repo.ID), revs...)
 }
 
@@ -868,7 +925,7 @@ func revisionOf(r code.RevisionRow) codeRevision {
 // summary answers the change in detail on a first page and its revisions a
 // page at a time; a later page, after the cursor of the one before, carries
 // its revisions alone.
-func (g changeRead) summary(ctx context.Context, cursor string) (tools.Result, error) {
+func (g *changeRead) summary(ctx context.Context, cursor string) (tools.Result, error) {
 	answer, refusal := g.read(ctx, code.ReadQuery{Cursor: cursor, Limit: changeRevisionsPage}, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
@@ -954,7 +1011,7 @@ type codeMergeability struct {
 }
 
 // readiness answers whether the change may merge.
-func (g changeRead) readiness(ctx context.Context) (tools.Result, error) {
+func (g *changeRead) readiness(ctx context.Context) (tools.Result, error) {
 	d, _, at, refusal := g.detail(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
@@ -1006,7 +1063,7 @@ type codeChangeDiff struct {
 // of the two, kept to the files either touches (code-host.md, "What changed
 // between two revisions") — the two revisions read at once once the head is
 // ([code.ChangeRevisions]), as the API's change question reads them.
-func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
+func (g *changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
 	d, head, first, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
@@ -1071,7 +1128,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 // did never has them — or, where based, none of a base to diff its head from:
 // a history that shares no commit with its target, whose change is every file
 // of its head.
-func (g changeRead) recorded(d *code.ChangeSummary, r code.RevisionRow, based bool) *tools.Result {
+func (g *changeRead) recorded(d *code.ChangeSummary, r code.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
 	case code.FilesPending:
 		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
@@ -1145,7 +1202,7 @@ type codeFinding struct {
 // at session floored at it, so the head is every revision a finding of the
 // page was raised on; then ONE re-anchoring of every finding raised on
 // another revision than the one asked about.
-func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result, error) {
+func (g *changeRead) findings(ctx context.Context, call changeCall) (tools.Result, error) {
 	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartFindings, Cursor: call.cursor,
 		Limit: changeFindingsPage}, statelog.Position{})
 	if refusal != nil {
@@ -1221,7 +1278,7 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 // size — floored at the head revision — the latest any finding was raised on
 // — and at rev's own head and base. A finding on the old side of a revision
 // whose base is not yet recorded is in neither, unplaced.
-func (g changeRead) place(ctx context.Context, head, rev code.RevisionRow,
+func (g *changeRead) place(ctx context.Context, head, rev code.RevisionRow,
 	findings []code.FindingRow) (map[string]code.FindingPlace, *tools.Result) {
 
 	fresh := g.floor(head, rev)
@@ -1288,7 +1345,7 @@ type codeReview struct {
 
 // reviews answers a page of the change's reviews, each summary its reviewer's
 // words.
-func (g changeRead) reviews(ctx context.Context, cursor string) (tools.Result, error) {
+func (g *changeRead) reviews(ctx context.Context, cursor string) (tools.Result, error) {
 	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartReviews, Cursor: cursor, Limit: changeReviewsPage},
 		statelog.Position{})
 	if refusal != nil {
@@ -1344,7 +1401,7 @@ type codeComment struct {
 }
 
 // comments answers a page of the change's comments, each its writer's words.
-func (g changeRead) comments(ctx context.Context, cursor string) (tools.Result, error) {
+func (g *changeRead) comments(ctx context.Context, cursor string) (tools.Result, error) {
 	page, refusal := g.read(ctx, code.ReadQuery{Part: code.PartComments, Cursor: cursor,
 		Limit: changeCommentsPage}, statelog.Position{})
 	if refusal != nil {
@@ -1375,7 +1432,7 @@ func (g changeRead) comments(ctx context.Context, cursor string) (tools.Result, 
 // answerPage is a page of n rows of one kind — reviews, comments — cut
 // whole-row at one tool answer, or refused where its first row alone is past
 // one: what one row holds is its writer's, and no argument narrows it.
-func (g changeRead) answerPage(ctx context.Context, n int, build func(k int) (*foreignRead, any),
+func (g *changeRead) answerPage(ctx context.Context, n int, build func(k int) (*foreignRead, any),
 	kind string) (tools.Result, error) {
 
 	k, rendered, err := fitLabelled(n, build)

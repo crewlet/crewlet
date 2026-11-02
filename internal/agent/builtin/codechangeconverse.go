@@ -87,11 +87,13 @@ type conversing struct {
 // conversation binds a call's operation by the rule every write takes,
 // resolves the repository it names and reads its change, for a write of the
 // change's conversation to name — or answers the refusal the call is answered
-// with. The read of the change is IN BRIEF ([changeRead.head]): no write of a
-// conversation reads the change's description, its authors, its
-// conversation's counts or its mergeability. judged reads it in detail, for
-// its readiness ([changeRead.detail]) — the one write that acts on it, a
-// dequeue, whose entry its queue precondition names.
+// with. The read is the call's ONE linearizable read, its resolution of the
+// repository too where the turn has none ([changeRead.ask]), and reads the
+// change IN BRIEF ([changeRead.head]): no write of a conversation reads the
+// change's description, its authors, its conversation's counts or its
+// mergeability. judged reads it in detail, for its readiness
+// ([changeRead.detail]) — the one write that acts on it, a dequeue, whose
+// entry its queue precondition names.
 func (d CodeDeps) conversation(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	args map[string]any, name string, number int64, judged bool) (conversing, *tools.Result) {
 
@@ -101,23 +103,19 @@ func (d CodeDeps) conversation(ctx context.Context, turn *turnctx.Turn, tool str
 		return conversing{}, &r
 	}
 	c.actor = actor
-	repo, refusal := d.repo(ctx, turn, tool, c, name)
-	if refusal != nil {
-		return conversing{}, refusal
-	}
-	g := changeRead{deps: d, turn: turn, tool: tool, c: c, repo: repo, number: number}
+	g := &changeRead{deps: d, turn: turn, tool: tool, c: c, name: name, number: number}
 	if judged {
 		detail, head, at, refusal := g.detail(ctx, statelog.Position{})
 		if refusal != nil {
 			return conversing{}, refusal
 		}
-		return conversing{g: g, args: args, change: &detail.ChangeSummary, head: head, at: at}, nil
+		return conversing{g: *g, args: args, change: &detail.ChangeSummary, head: head, at: at}, nil
 	}
 	brief, head, at, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
 		return conversing{}, refusal
 	}
-	return conversing{g: g, args: args, change: brief, head: head, at: at}, nil
+	return conversing{g: *g, args: args, change: brief, head: head, at: at}, nil
 }
 
 // op is the call's operation: the one every write it makes is named by.
