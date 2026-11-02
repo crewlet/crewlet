@@ -1143,7 +1143,11 @@ var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 // the answer is the pull's ([puller.undelivered]): the newest delivery's count
 // and what was delivered that no fetch has taken. A hint either way, as a
 // consumer info was, and one no leader election or backed-up queue can drop or
-// delay. A pull that has delivered nothing has counted nothing, and says so:
+// delay. Both read the consumer's own count, which can trail an append by a
+// moment: the server acknowledges an append before it tells the stream's
+// consumers of it, from a queue of its own, so a delivery made in between can
+// count fewer records behind it than the log holds. A pull that has delivered
+// nothing has counted nothing, and says so:
 // the applier commits the run in hand on an unknown count, where a zero would
 // call it level with the log on nobody's word.
 func (c *DomainConsumer) Pending(context.Context) (uint64, error) {
