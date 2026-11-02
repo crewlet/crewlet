@@ -2079,6 +2079,10 @@ func (e *Engine) boxServers(
 	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
 	servers, withheld := sandboxMCP(env, c, seat, settings,
 		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
+	// A SERVER A TOOL OF WHICH CHANGED is not the box's either (ADR-0078):
+	// the run's facts at launch, not the configuration's, so outside
+	// sandboxMCP, which decides from the revision alone.
+	servers = e.withoutChangedServers(ctx, seat.Handle(), servers)
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)

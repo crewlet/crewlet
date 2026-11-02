@@ -930,6 +930,64 @@ These limits are admission rules beside the lead's own: a stored revision that
 breaks one runs, its limits holding as written (a level this build cannot read
 blocks the tool), and warns.
 
+### When a server changes a tool
+
+A tool's level is decided on the tool as its server defined it then, and holds
+for that definition alone
+([ADR-0078](../../adr/0078-a-tools-level-holds-only-for-the-definition-it-was-decided-on.md)).
+A server controls its own definitions and may change one at any moment, so a
+tool it changes, or adds, asks a person before each call until somebody looks
+at the change.
+
+- **A server's first listing is accepted as it is.** You chose the server with
+  it in front of you (the add flow tests it and shows each tool's starting
+  level), so the node that lists the server first records each tool's
+  definition as accepted.
+- **A changed or added tool asks first.** A tool the server lists under any
+  other definition (its title, description, schema or annotations changed),
+  or one it adds after its first listing, is held at Needs approval while its
+  level would let it run unasked: an executor's call parks its run on a
+  person's answer and every other phase is refused it, exactly as for a tool
+  at `approve` ([Asking a person before a tool runs](#asking-a-person-before-a-tool-runs)).
+  A tool that asks anyway, or is blocked, is not held further; its change
+  only waits to be reviewed. An executor's box is given no server a tool of
+  which waits, since a box reaches a server whole; the seat reaches its tools
+  over the bridge, where each call is decided.
+- **A tool the server stops listing keeps its row**, marked removed, until
+  somebody accepts that it went. A tool listed again after that is one the
+  server added.
+- **A change that claims less risk is flagged as loosened**: a destructive
+  tool that now says it is not, a tool that now says it is read-only, or one
+  that no longer says it reaches past the company. Read off the hints the
+  server declared, never your overrides, since the question is what the
+  server now claims, and it is the direction a server would move a tool it
+  wanted run unasked.
+- **The server's page lists every change**: `changes` on
+  [`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
+  names each tool with what moved (`added`, `removed`, or the parts:
+  `title`, `description`, `schema`, `annotations`), the definition accepted
+  beside the one listed now, whether it is loosened, whether it holds the
+  tool, and when the fleet first saw it. A held tool's row answers its level
+  as `approve` with `held: true`.
+- **Accept it or keep it blocked** with
+  [`POST /mcp-servers/{name}/changes`](../reference/api-endpoints.md#post-mcp-serversnamechanges),
+  naming each change by the digest of the definition you reviewed, at a
+  recent step-up. A definition the server swapped in since your review is
+  refused and nothing is decided, so a server cannot have a change accepted
+  that nobody read. Keeping a tool blocked sets its level to `blocked` and
+  records the definition you decided on. Always allow on a held call accepts
+  the definition the call was made under.
+- **The engine lists a running server again** when the `ttlMs` its listing
+  states runs out, held between one minute (a server cannot make the engine
+  list it constantly) and fifteen minutes (nor opt out of being watched),
+  fifteen minutes when it states none, and when it says its tool list
+  changed, no sooner than a minute after its last listing.
+- **A change that holds a tool raises `mcp_tools_changed`** on its server at
+  once ([A server's alarms](#a-servers-alarms)), naming the tool and whether it
+  now claims less risk. A removal, or a change to a tool that asks anyway,
+  raises nothing. Every review is audited as an `mcp_server_acted`, action
+  `review_changes`, naming the tools accepted and kept blocked.
+
 ### Each agent's tools, and the budget
 
 An agent is handed every tool the servers it is granted offer, and a model
@@ -1588,8 +1646,8 @@ recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 ### A server's alarms
 
 A server that stays down, an agent whose instance waits too long for its
-credential, a tool no agent can be handed, and a call waiting too long for a
-person's approval each raise an
+credential, a tool no agent can be handed, a call waiting too long for a
+person's approval, and a tool held because the server changed it each raise an
 [alarm](../reference/alarms.md), one per kind listing every server it stands
 on. Every data node judges them from every live node's heartbeat, so they read
 the same whichever node you ask, and a server turned off raises none.
@@ -1601,6 +1659,7 @@ the same whichever node you ask, and a server turned off raises none.
 | `mcp_server_waiting_long` | An agent's instance has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat (5m 15s), for a credential that integration mints |
 | `mcp_tools_refused` | A tool the server lists cannot be offered under its name ([A tool's name](#a-tools-name)): raised as soon as a node lists it, since no wait changes a name |
 | `mcp_approval_waiting` | An agent's run has waited ten minutes for a person to approve a call to one of the server's tools ([Asking a person before a tool runs](#asking-a-person-before-a-tool-runs)), a third of the default pause TTL, so an answer still carries the run on in the box it left; read off the runs' own records, its entry naming the seat whose run waits |
+| `mcp_tools_changed` | A tool the server changed since its level was decided, or added after its first listing, asks before each call though its level would run it unasked ([When a server changes a tool](#when-a-server-changes-a-tool)): raised at once, read off the fleet's listings and what was accepted of them, naming whether a change claims less risk than before |
 
 The outage is measured from the instance that went down first, kept across
 every retry of it, so a server whose last serving instance goes down moves from
@@ -1615,8 +1674,9 @@ named as `entry`), and the health count. [`GET /mcp-servers`](../reference/api-e
 carries the standing ones in `alarms`, each server with the one gesture that
 fixes it: a restart (of the whole server where nothing serves, of the one
 agent's instance where the rest serve), the integration minting the agent's
-credential, the server's `tool_prefix`, or the answer to the calls waiting
-(`approve`, each call in `approvals`). An administrator's Inbox lists each
+credential, the server's `tool_prefix`, the answer to the calls waiting
+(`approve`, each call in `approvals`), or the review of its changed tools
+(`review`, each change in the server's `changes`). An administrator's Inbox lists each
 one under **Needs you**, linked to the server's page.
 
 ### Testing a server

@@ -103,16 +103,20 @@ type publishedListing struct {
 	version     uint64
 }
 
-// startMCPListings opens the watch of the fleet's listings and starts this
-// node's publisher, both kept until stopMCPListings.
+// startMCPListings opens the watches of the fleet's listings and of what was
+// accepted of them (mcpreviews.go), and starts this node's publisher, all kept
+// until stopMCPListings.
 func (e *Engine) startMCPListings(ctx context.Context) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	e.listings.cancel, e.listings.done = cancel, make(chan struct{})
+	// WATCHED FROM HERE, not from whenever the watch's goroutine first runs,
+	// so no call is decided in between as if nothing had changed.
+	e.watchReviews()
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		// EVERY WATCH'S FIRST ANSWER REPLACES THE COPY: a listing removed
@@ -134,6 +138,10 @@ func (e *Engine) startMCPListings(ctx context.Context) {
 			return u.Current
 		}
 		watchRecords(loopCtx, "mcp_listing", watch, marker, e.applyMCPListing)
+	}()
+	go func() {
+		defer wg.Done()
+		e.watchMCPAccepted(loopCtx)
 	}()
 	go func() {
 		defer wg.Done()
@@ -341,8 +349,9 @@ func (e *Engine) MCPToolSchemas(ctx context.Context, digests []string) (map[stri
 }
 
 // publishMCPListings is one beat of this node's publisher: read the fleet's
-// presence, derive this node's listings, write each that moved, and remove
-// each for a server this node no longer runs.
+// presence, derive this node's listings, write each that moved, remove each
+// for a server this node no longer runs, and accept the first listing of each
+// server nobody has accepted a listing of ([Engine.baselineMCPTools]).
 func (e *Engine) publishMCPListings(ctx context.Context) {
 	beatCtx, cancel := context.WithTimeout(ctx, coord.ReconcileInterval)
 	defer cancel()
@@ -371,7 +380,10 @@ func (e *Engine) publishMCPListings(ctx context.Context) {
 		return
 	}
 	node := e.nodeID()
-	e.writeMCPListings(beatCtx, node, epoch, e.nodeMCPListings(node, epoch, time.Now()))
+	now := time.Now()
+	desired := e.nodeMCPListings(node, epoch, now)
+	e.writeMCPListings(beatCtx, node, epoch, desired)
+	e.baselineMCPTools(beatCtx, desired, now)
 }
 
 // writeMCPListings brings the fleet's record of this node's listings to
@@ -601,14 +613,13 @@ func (n nodeListing) bounded(budget int) nodeListing {
 // listedTool is one tool as a listing names it, blocked or filed, and its
 // schemas as they are stored: kept only within [coord.MaxMCPToolSchemaBytes].
 func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListedTool, coord.MCPToolSchema) {
-	hints := t.Annotations()
+	parts := t.Parts()
 	row := coord.MCPListedTool{
 		Name: t.Name(), Raw: t.RawName(), Title: t.Title(), Description: t.Description(),
-		Hints: coord.MCPToolHints{
-			ReadOnly: hints.ReadOnly.String(), Destructive: hints.Destructive.String(),
-			Idempotent: hints.Idempotent.String(), OpenWorld: hints.OpenWorld.String(),
-		},
+		Hints: hintWords(t.Annotations()), Declared: hintWords(t.Declared()),
 		Digest: t.Digest(), Instances: 1, Blocked: blocked,
+		Parts: coord.MCPToolParts{Title: parts.Title, Description: parts.Description,
+			Schema: parts.Schema, Hints: parts.Hints},
 	}
 	input, inErr := json.Marshal(t.Parameters())
 	var output []byte
@@ -621,6 +632,14 @@ func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListed
 	}
 	row.SchemaKept = true
 	return row, coord.MCPToolSchema{Digest: row.Digest, Input: input, Output: output, At: now.UTC()}
+}
+
+// hintWords is a tool's four hints as a listing writes them.
+func hintWords(h mcp.Annotations) coord.MCPToolHints {
+	return coord.MCPToolHints{
+		ReadOnly: h.ReadOnly.String(), Destructive: h.Destructive.String(),
+		Idempotent: h.Idempotent.String(), OpenWorld: h.OpenWorld.String(),
+	}
 }
 
 // listingFingerprint is a listing's content, for telling whether it moved: the
@@ -674,8 +693,9 @@ func (e *Engine) nodeID() string {
 }
 
 // mcpListingJobs is the maintenance sweep of the fleet's MCP listings: every
-// listing no live node's current incarnation wrote, and every schema no
-// listing has named for [mcpListingSweepPasses] sweeps.
+// listing no live node's current incarnation wrote, every schema no listing
+// and no accepted definition has named for [mcpListingSweepPasses] sweeps, and
+// every accepted definition of a server nothing declares or lists.
 func (e *Engine) mcpListingJobs() []maintenance.Job {
 	if e.backends == nil || e.backends.Fleet == nil || e.backends.Coord == nil {
 		return nil
@@ -727,11 +747,24 @@ func (e *Engine) sweepMCPListings(ctx context.Context) (int64, error) {
 		}
 	}
 
+	// WHAT WAS ACCEPTED KEEPS ITS SCHEMAS: a change is shown beside the
+	// definition its level was decided on, which no listing names once the
+	// server changed it (ADR-0078).
+	accepted, err := fleet.ListMCPAccepted(ctx)
+	if err != nil {
+		return removed, err
+	}
+	gone, err := e.sweepMCPAccepted(ctx, accepted, live)
+	removed += gone
+	if err != nil {
+		return removed, err
+	}
 	schemas, err := fleet.ListMCPToolSchemas(ctx)
 	if err != nil {
 		return removed, err
 	}
 	named := digestSet(live)
+	maps.Copy(named, acceptedDigests(accepted))
 	l := &e.listings
 	l.mu.Lock()
 	before := l.unnamed

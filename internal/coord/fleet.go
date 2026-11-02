@@ -58,7 +58,8 @@ import (
 // may still have, the [SeatPauses] a person set, the [ModelRetries] and
 // [MCPRestarts] a person asked for, each server's latest test ([MCPChecks]),
 // each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
-// ([MCPSignIns]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
+// ([MCPSignIns]), the definition each MCP tool's level was decided on
+// ([MCPAccepted]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -1686,6 +1687,7 @@ type Fleet interface {
 	MCPChecks
 	MCPGrants
 	MCPSignIns
+	MCPAccepted
 	PositionRegister
 	HoldRegister
 	FloorRegister

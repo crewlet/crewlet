@@ -98,6 +98,25 @@ const (
 	// startToken in helperToolsEnv is replaced by the start's number, so a
 	// server can list different tools after a restart.
 	startToken = "{start}"
+
+	// helperToolsFileEnv names a file each tools/list reads its tools from
+	// (helperToolsEnv's payload), so a test can change what a RUNNING
+	// server lists by writing it.
+	helperToolsFileEnv = "CREWLET_MCP_TEST_TOOLS_FILE"
+
+	// helperTTLEnv is the `ttlMs` every tools/list result states, verbatim;
+	// unset states none.
+	helperTTLEnv = "CREWLET_MCP_TEST_TTL_MS"
+
+	// helperNotifyEnv makes the helper say its tool list changed
+	// (`notifications/tools/list_changed`) after answering each
+	// tools/call.
+	helperNotifyEnv = "CREWLET_MCP_TEST_NOTIFY"
+
+	// helperListsEnv names a file the helper appends one line to for each
+	// tools/list it answers, so a test can count the listings it was asked
+	// for.
+	helperListsEnv = "CREWLET_MCP_TEST_LISTS"
 )
 
 func TestMain(m *testing.M) {
@@ -355,9 +374,15 @@ func handleRPC(out *os.File, line string, page *int) bool {
 		if result == "" {
 			return false // answer nothing, for ever
 		}
+		if lists := os.Getenv(helperListsEnv); lists != "" {
+			appendLine(lists)
+		}
 		writeResult(out, req.ID, result)
 	case "tools/call":
 		callResult(out, req.ID, req.Params)
+		if os.Getenv(helperNotifyEnv) != "" {
+			fmt.Fprintln(out, `{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)
+		}
 		return true
 	default:
 		writeError(out, req.ID, -32601, "method not found: "+req.Method)
@@ -371,8 +396,24 @@ func listedTools() string {
 		strconv.Itoa(startsIn(os.Getenv(helperStartsEnv))))
 }
 
+// appendLine appends one line to the file at path.
+func appendLine(path string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "append:", err)
+		return
+	}
+	_, _ = f.WriteString("x\n")
+	_ = f.Close()
+}
+
 func listToolsResult(params json.RawMessage, page *int) string {
 	tools := listedTools()
+	if path := os.Getenv(helperToolsFileEnv); path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			tools = string(raw)
+		}
+	}
 	if tools == "" {
 		tools = toolsJSON([3]string{"search", "Search for items", ""})
 	}
@@ -403,6 +444,9 @@ func listToolsResult(params json.RawMessage, page *int) string {
 		return fmt.Sprintf(`{"tools":%s,"nextCursor":"page-%d"}`,
 			toolsJSON([3]string{fmt.Sprintf("t%d", *page), "generated", ""}), *page)
 	default:
+		if ttl := os.Getenv(helperTTLEnv); ttl != "" {
+			return fmt.Sprintf(`{"tools":%s,"ttlMs":%s}`, tools, ttl)
+		}
 		return fmt.Sprintf(`{"tools":%s}`, tools)
 	}
 }

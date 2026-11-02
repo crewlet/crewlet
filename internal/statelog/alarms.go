@@ -419,6 +419,7 @@ const (
 	KindMCPOAuthNeedsSignIn  Kind = "mcp_oauth_needs_sign_in"
 	KindMCPOAuthExpiring     Kind = "mcp_oauth_expiring"
 	KindMCPApprovalWaiting   Kind = "mcp_approval_waiting"
+	KindMCPToolsChanged      Kind = "mcp_tools_changed"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -837,6 +838,25 @@ type MCPServerCondition struct {
 	Approvals     int
 	ApprovalSince time.Time
 	Approval      MCPApprovalNote
+
+	// Changes is how many of the server's tools are held at Needs approval
+	// because their definition changed since their level was decided, or
+	// the server added them after its first listing (ADR-0078); Loosened
+	// how many of those changes claim less risk than before; ChangeSince
+	// when the fleet first saw the change seen first (zero where its
+	// schemas are not stored); and Change that change.
+	Changes     int
+	Loosened    int
+	ChangeSince time.Time
+	Change      MCPChangeNote
+}
+
+// MCPChangeNote is the one change to a server's tools its condition names: the
+// tool, by the server's own name for it, whether it was added or changed, and
+// whether it now claims less risk.
+type MCPChangeNote struct {
+	Tool, Kind string
+	Loosened   bool
 }
 
 // MCPApprovalNote is the one held call a server's condition names: the seat
@@ -1855,6 +1875,41 @@ var table = []rule{
 			"(`POST /mcp-approvals/<id>`, the ids in `GET /mcp-servers` `approvals`): Allow " +
 			"once, Always allow (which sets the tool to run without asking, at a recent " +
 			"step-up) or Deny. The run stays parked, its seat free, until somebody does."),
+	},
+	{
+		// A TOOL HELD FOR A CHANGE, at once: a server that changed a tool
+		// somebody allowed, or added one, has that tool asking a person
+		// before every call from now on, which nobody is told otherwise
+		// until a call is held. No span, as a refused name has none: a
+		// definition is changed or it is not, and a node restarting does
+		// not make it so.
+		kind: KindMCPToolsChanged,
+		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
+			if s.Changes == 0 {
+				return AlarmEntry{}, false
+			}
+			what := "changed since its level was decided"
+			if s.Change.Kind == "added" {
+				what = "was added since the server's first listing"
+			}
+			detail := fmt.Sprintf("%s on %s %s, and asks a person before each call until somebody "+
+				"accepts the change", s.Change.Tool, s.Server, what)
+			if s.Changes > 1 {
+				detail += fmt.Sprintf("; %d of its tools wait so in all", s.Changes)
+			}
+			switch {
+			case s.Loosened == 1 && s.Change.Loosened:
+				detail += "; it now claims to be less risky than before"
+			case s.Loosened > 0:
+				detail += fmt.Sprintf("; %d of them now claim to be less risky than before", s.Loosened)
+			}
+			return AlarmEntry{Detail: detail, Since: s.ChangeSince}, true
+		},
+		remedy: mcpRemedy("Review each change on the server's page, the definition its level " +
+			"was decided on beside the one listed now (`GET /mcp-servers/<name>` `changes`), " +
+			"and accept it or keep the tool blocked (`POST /mcp-servers/<name>/changes`, at a " +
+			"recent step-up). A change that claims less risk than before is the one to read " +
+			"first. Until then each changed tool asks before every call."),
 	},
 }
 

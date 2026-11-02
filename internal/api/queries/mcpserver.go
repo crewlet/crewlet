@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcpreview"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -38,6 +39,12 @@ type MCPListingReader interface {
 	// MCPToolSchemas reads the schemas stored under digests, leaving out a
 	// digest the store holds nothing under.
 	MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error)
+
+	// MCPAccepted is the definition every server's tools' levels were
+	// decided on (internal/coord's mcpaccepted.go), as this node holds
+	// them. An error is a copy that has not been read yet, never a fleet
+	// that has accepted nothing.
+	MCPAccepted(ctx context.Context) ([]coord.MCPAcceptedTool, error)
 }
 
 // MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole, the admin's
@@ -137,6 +144,15 @@ type MCPServerAnswer struct {
 	// when it is turned back on, and its row's state says it is off. Always
 	// a list; empty for a server the configuration does not declare.
 	Reaches []MCPReachView `json:"reaches"`
+
+	// Changes is every change the server made to its tools since their
+	// levels were decided, by tool (ADR-0078): a tool it added after its
+	// first listing, one it lists under another definition than the one
+	// accepted, and one it stopped listing. Each waits for somebody to
+	// accept or block it (`POST /mcp-servers/{name}/changes`). Empty for a
+	// server whose first listing has not been accepted yet. ALWAYS A LIST,
+	// the administrator's reading only.
+	Changes []MCPChangeView `json:"changes"`
 }
 
 // MCPReachView is one agent seat a server reaches, and why: through `access`
@@ -370,6 +386,14 @@ type MCPToolView struct {
 	// filed it, its starting level otherwise.
 	Level  config.MCPToolLevel `json:"level"`
 	Custom bool                `json:"custom"`
+	// Held is a tool whose definition changed since its level was decided
+	// (or that the server added since), which its level would let run
+	// unasked and which asks a person first until somebody accepts the
+	// change: its Level answers approve. Removed is a tool the server no
+	// longer lists, kept, named by what was accepted of it, until somebody
+	// accepts that it went ([MCPServerAnswer.Changes]).
+	Held    bool `json:"held"`
+	Removed bool `json:"removed"`
 
 	// starting is the level the tool's hints start it at, which the entry's
 	// levels are laid over ([config.MCPToolPolicy.Level]).
@@ -440,7 +464,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	out := MCPServerAnswer{
 		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
 		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
-		Reaches: []MCPReachView{}, UnlistedLevels: []string{},
+		Reaches: []MCPReachView{}, UnlistedLevels: []string{}, Changes: []MCPChangeView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPBlockDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 			MCPLimits: []configapi.MCPBlockDependant{},
@@ -498,8 +522,14 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	if latest := latestIdentified(listings); latest != nil {
 		out.ServerInfo, out.Instructions = latest.Info, latest.Instructions
 	}
+	accepted, err := s.MCPListings.MCPAccepted(ctx)
+	if err != nil {
+		return MCPServerAnswer{}, err
+	}
+	review := reviewOf(name, listings, accepted, entry)
 	tools, counted, kept := serverTools(listings, entry)
-	schemas, err := s.MCPListings.MCPToolSchemas(ctx, kept)
+	digests := slices.Compact(slices.Sorted(slices.Values(slices.Concat(kept, changeDigests(review.Changes)))))
+	schemas, err := s.MCPListings.MCPToolSchemas(ctx, digests)
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -516,6 +546,8 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		}
 		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
 	}
+	out.Tools = reviewTools(out.Tools, review, schemas)
+	out.Changes = changeViews(review, schemas)
 	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -708,7 +740,7 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 		// WHAT THE NODES DID, for a server no entry decides: a tool any
 		// listing says was left unfiled reads as blocked. The caller lays
 		// the entry's own decision over it where the server is declared.
-		hints := annotationsOf(shown.Hints)
+		hints := mcpreview.Annotations(shown.Hints)
 		risk := mcp.RiskOf(hints)
 		starting := config.MCPToolLevel(mcp.StartingLevel(risk))
 		level := starting
@@ -756,24 +788,6 @@ func UnlistedLevels(policy config.MCPToolPolicy, detail MCPServerAnswer) []strin
 		}
 	}
 	return out
-}
-
-// annotationsOf reads a listing's hint words back into the engine's tri-state.
-// A word this build does not write is unknown: never read as an assertion.
-func annotationsOf(h coord.MCPToolHints) mcp.Annotations {
-	word := func(w string) mcp.Hint {
-		switch w {
-		case coord.HintYes:
-			return mcp.Yes
-		case coord.HintNo:
-			return mcp.No
-		}
-		return mcp.Unknown
-	}
-	return mcp.Annotations{
-		ReadOnly: word(h.ReadOnly), Destructive: word(h.Destructive),
-		Idempotent: word(h.Idempotent), OpenWorld: word(h.OpenWorld),
-	}
 }
 
 // schemaObject decodes a stored schema, nil for none or one that is not a

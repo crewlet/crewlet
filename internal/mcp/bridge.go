@@ -246,6 +246,22 @@ func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 	return b.reindexLocked(before), true
 }
 
+// relisted files what a session listing its tools again lists (relist.go),
+// unless the session is no longer the one serving s, and reports what the
+// catalogue must change. Under the bridge's lock, as [Bridge.revived] is: a
+// listing that raced a stop or a restart files nothing.
+func (b *Bridge) relisted(s *server, c *client, defs []toolDef) (Change, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.servers[s.spec.Name] != s || s.live() != c {
+		return Change{}, false
+	}
+	before := maps.Clone(b.tools)
+	s.tools, s.blocked, s.refused = s.toolsFor(defs)
+	s.unlisted = unlistedOverrides(s.spec, defs)
+	return b.reindexLocked(before), true
+}
+
 // Stop shuts one server down and reports what left the catalogue.
 //
 // The Change is populated even when the stop itself errors: the server is

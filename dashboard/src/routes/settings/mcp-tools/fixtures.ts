@@ -324,6 +324,8 @@ export const LINEAR_DETAIL: McpServerAnswer = {
       output_schema: null,
       level: "allow",
       custom: false,
+      held: false,
+      removed: false,
     },
     {
       name: "linear_delete_issue",
@@ -342,6 +344,8 @@ export const LINEAR_DETAIL: McpServerAnswer = {
       output_schema: null,
       level: "allow",
       custom: false,
+      held: false,
+      removed: false,
     },
   ],
   tool_count: 2,
@@ -442,6 +446,7 @@ export const LINEAR_DETAIL: McpServerAnswer = {
   last_check: null,
   values: [],
   reaches: [{ seat: "backend-dev", reason: "every_agent", via: null, limited: null }],
+  changes: [],
 };
 
 /** Linear whole, as a member reads it. */

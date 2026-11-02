@@ -364,6 +364,10 @@ type Engine struct {
 	// of every node's ([mcpListings]).
 	listings mcpListings
 
+	// reviews is this node's watched copy of the definitions the fleet's
+	// MCP tools' levels were decided on ([mcpReviews]).
+	reviews mcpReviews
+
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
 	signIns deviceSignIns
@@ -767,8 +771,13 @@ type Engine struct {
 	// mcpRetryBase is the restart schedule's first wait for every bridge
 	// this engine builds and for its seats' runners, zero for
 	// [mcp.RestartBase]; [Options.mcpRetryBase].
-	mcpFileMu    sync.Mutex
-	mcpRetryBase time.Duration
+	//
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// for every bridge this engine builds, zero for [mcp.RelistFloor];
+	// [Options.mcpRelistBase].
+	mcpFileMu     sync.Mutex
+	mcpRetryBase  time.Duration
+	mcpRelistBase time.Duration
 
 	// seatMCP is one bridge per seat this node holds, for that seat's
 	// per-role children, with what keeps them converged while the seat is
@@ -1210,6 +1219,13 @@ type Options struct {
 	// without waiting fifteen seconds for it.
 	mcpRetryBase time.Duration
 
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// ([mcp.RelistFloor]), zero for it, and the rest of that schedule
+	// scales with it. UNEXPORTED for mcpRetryBase's reason: a case watching
+	// a server change its tools under a running engine would otherwise wait
+	// a minute for each listing.
+	mcpRelistBase time.Duration
+
 	// fakePlay scripts what a `providers.sandbox.fake` company's runs do
 	// ([sandbox.FakeRunner.Player]); nil plays each as the double's own
 	// demonstration ([demoRun]). UNEXPORTED for the reason usageEvery is:
@@ -1502,6 +1518,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
+		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		fakePlay:            opts.fakePlay,

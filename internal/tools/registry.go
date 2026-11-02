@@ -174,6 +174,26 @@ type Entry struct {
 	// wherever the tool goes, through every cut of a phase's universe. Never
 	// set on a builtin, which no level governs.
 	NeedsApproval bool
+
+	// Unreviewed reports, at each call, whether the tool's definition is not
+	// the one its level was decided on, so that a call to it asks a person
+	// first though its level is allow ([mcp.Tool.Unreviewed], ADR-0078).
+	// A function rather than a flag because it moves when a person accepts
+	// a change, which refiles nothing. Nil for every tool no change can
+	// hold: a builtin, and an MCP tool that asks before each call anyway.
+	Unreviewed func() bool
+}
+
+// asksFirst reports whether a call to the tool waits for a person's answer:
+// its level says so, or its definition changed since that level was decided.
+func (e Entry) asksFirst() (asks, changed bool) {
+	if e.NeedsApproval {
+		return true, false
+	}
+	if e.Unreviewed != nil && e.Unreviewed() {
+		return true, true
+	}
+	return false, false
 }
 
 // Name is the tool's catalogue name.
@@ -324,13 +344,21 @@ func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, o
 }
 
 // RegisterMCP adds a bridged MCP registration, carrying its annotations and
-// whether a call to it waits for a person's answer ([Entry.NeedsApproval]).
+// whether a call to it waits for a person's answer: by its level
+// ([Entry.NeedsApproval]), and, for a tool its level allows, by whether its
+// definition changed since ([Entry.Unreviewed]).
 func (r *Registry) RegisterMCP(reg mcp.Registration) error {
 	ann, approval := Annotations{}, false
+	var unreviewed func() bool
 	if t, ok := reg.Tool.(*mcp.Tool); ok {
 		ann, approval = t.Annotations(), t.Level() == mcp.LevelApprove
+		if t.Level() == mcp.LevelAllow {
+			unreviewed = t.Unreviewed
+		}
 	}
-	return r.RegisterWith(reg.Tool, reg.Origin, ann, func(e *Entry) { e.NeedsApproval = approval })
+	return r.RegisterWith(reg.Tool, reg.Origin, ann, func(e *Entry) {
+		e.NeedsApproval, e.Unreviewed = approval, unreviewed
+	})
 }
 
 // RequireApproval makes every call to the MCP tool filed as name wait for a

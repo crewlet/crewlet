@@ -303,6 +303,10 @@ export const ALARM: Record<
     title: ({ server, who }) =>
       who ? `${who} is waiting for your approval` : `A call to ${server} is waiting for approval`,
   },
+  mcp_tools_changed: {
+    tone: "warning",
+    title: ({ server }) => `${server} changed tools since you allowed them`,
+  },
 };
 
 /** Each fix's button, where the page itself carries it out. */
@@ -312,6 +316,7 @@ export const FIX: Record<McpFixKind, string> = {
   edit: "See which tools",
   sign_in: "See its sign-in",
   approve: "Open the Inbox",
+  review: "Review the changes",
 };
 
 /**

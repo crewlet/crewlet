@@ -58,6 +58,8 @@ const (
 	ToolServerLaunchesEnv      = "CREWLET_ENGINE_TEST_LAUNCHES"
 	ToolServerFailLaunchesEnv  = "CREWLET_ENGINE_TEST_FAIL_LAUNCHES"
 	ToolServerCrashLaunchesEnv = "CREWLET_ENGINE_TEST_CRASH_LAUNCHES"
+	ToolServerDescribeEnv      = "CREWLET_ENGINE_TEST_DESCRIBE"
+	ToolServerTTLEnv           = "CREWLET_ENGINE_TEST_TTL_MS"
 	ToolServerCrashCode        = 3
 	ToolServerLaunchToken      = "{launch}"
 )
@@ -69,6 +71,15 @@ const (
 // seconds for it.
 func WithMCPRetryBase(opts Options, base time.Duration) Options {
 	opts.mcpRetryBase = base
+	return opts
+}
+
+// WithMCPRelistBase is opts with every running MCP session listed again no
+// sooner than base rather than [mcp.RelistFloor], the rest of that schedule
+// scaled to match, for a test outside the package that watches a server change
+// its tools under a running engine.
+func WithMCPRelistBase(opts Options, base time.Duration) Options {
+	opts.mcpRelistBase = base
 	return opts
 }
 

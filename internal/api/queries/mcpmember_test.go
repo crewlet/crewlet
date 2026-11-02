@@ -324,7 +324,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		under("tools", nil), under("tools[]", []string{"name", "raw", "title", "description", "annotations",
 			"annotations.read_only", "annotations.destructive", "annotations.idempotent",
 			"annotations.open_world", "risk", "risk_declared", "external", "digest", "definitions",
-			"instances", "nodes", "input_schema", "output_schema", "level", "custom"})[1:],
+			"instances", "nodes", "input_schema", "output_schema", "level", "custom", "held", "removed"})[1:],
 		under("server_info", []string{"name", "title", "version", "protocol"}),
 		under("instances", nil), under("instances[]", []string{"seat", "node", "state", "since", "restarts",
 			"tools", "last_answer"})[1:],
@@ -352,7 +352,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
 				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls",
-				"reaches"}},
+				"reaches", "changes", "changes[].before.accepted_by"}},
 	} {
 		admin, member := keyPaths(asMap(t, tc.admin)), keyPaths(asMap(t, tc.member))
 		for _, key := range tc.without {
