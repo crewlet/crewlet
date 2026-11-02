@@ -27,7 +27,7 @@ import (
 //
 // Mutations: read the findings through code_findings_raiser_idx again — the
 // plan seeks every finding of the change and fetches each row, red; declare
-// the index without its predicate (replicated 0106) — every superseded
+// the index without its predicate (replicated 0109) — every superseded
 // finding is an entry of it, red.
 func TestAnInboxCardReadsNoSupersededFinding(t *testing.T) {
 	t.Parallel()

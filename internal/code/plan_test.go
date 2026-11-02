@@ -1093,7 +1093,7 @@ func registeredStatements() map[string]statement {
 		// change the page names is changesByIDSQL's row (its readiness the
 		// listing's statements), its description by the body's key; each one's open
 		// agent findings, a covering seek of the index partial on them alone
-		// (replicated 0106); the person's marks by
+		// (replicated 0109); the person's marks by
 		// their key; and where the notices of theirs a mark names sit, one
 		// seek of the notice's key a pair of the gesture's list.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
