@@ -96,6 +96,10 @@ type Resolver struct {
 	// [Resolver.Ahead] lays over this one: see [shadowsTold].
 	told *shadowsTold
 
+	// trying is the name [Resolver.Trying] answers first, whose shadow is
+	// not warned.
+	trying string
+
 	log *slog.Logger
 }
 
@@ -175,6 +179,14 @@ func (r *Resolver) Ahead(first Source) *Resolver {
 	return &Resolver{sources: sources, told: r.told, log: r.log}
 }
 
+// Trying is r with name answered by value first, for a value tested before it
+// is stored; hiding the stored one is intended, so that shadow is not warned.
+func (r *Resolver) Trying(name, value string) *Resolver {
+	out := r.Ahead(MapSource{name: value})
+	out.trying = name
+	return out
+}
+
 // LookupOK answers one variable by NAME, reporting whether any source held
 // it.
 //
@@ -217,6 +229,9 @@ func (r *Resolver) Lookup(name string) string {
 func (r *Resolver) warnShadowed(name, winner string, index int) {
 	if index >= len(r.sources)-1 {
 		return // the last source cannot be shadowing anything
+	}
+	if index == 0 && name != "" && name == r.trying {
+		return // a value under test hides what it replaces by design
 	}
 	var hidden Source
 	for _, src := range r.sources[index+1:] {
