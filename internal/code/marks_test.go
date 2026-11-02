@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,16 +147,20 @@ func TestACodeMarkIsDecidedOnThePersonsRecord(t *testing.T) {
 }
 
 // A CODE MARK NAMES ONLY THEIR NOTICES: a mark naming a record that reached
-// somebody else is refused naming it; a person marking another's record, and a
-// seat marking its own, are refused as not theirs to make — and none of them
-// lands a record.
+// somebody else is refused naming it — alone, or among founder's own notices
+// in one gesture; a person marking another's record, and a seat marking its
+// own, are refused as not theirs to make — and none of them lands a record.
+// A gesture naming several of founder's own notices finds every one, in the
+// one statement that reads where they sit, and lands.
 //
 // Mutation: find a notice's position by its record alone, whoever it reached
-// — the ask to plat-lead lands as one of founder's marks, red.
+// — the ask to plat-lead lands as one of founder's marks, red; take the first
+// notice the statement answers and no more — the gesture over founder's two
+// notices is refused naming the second, red.
 func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	_, _, repo, change := founderNotices(t, n, 0)
+	own, _, repo, change := founderNotices(t, n, 1)
 	w, _ := writerOn(t, n, n.pub)
 	ask := converse(t, w, asking(repo, change, dev, "plat-lead"))
 	theirs := code.NoticeID(n.recordAt(ask.Position).OpID, change)
@@ -165,6 +170,8 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 		want code.MarkRefusal
 	}{
 		"another's notice": {marking(code.MarkGesture{Read: []string{theirs}}), code.MarkInvalid},
+		"another's among their own": {marking(code.MarkGesture{Read: []string{own[0], theirs, own[1]}}),
+			code.MarkInvalid},
 		"another's record": {func() code.MarkWrite {
 			w := marking(code.MarkGesture{Read: []string{theirs}})
 			w.Handle = "cto"
@@ -180,6 +187,19 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 		if err != nil || res.Refusal != tc.want || !res.Position.IsZero() {
 			t.Errorf("%s: the mark answered %+v, %v; want it refused %s with nothing landed", name, res, err,
 				tc.want)
+		}
+		if tc.want == code.MarkInvalid && !strings.Contains(res.Detail, theirs) {
+			t.Errorf("%s: the refusal says %q, want it to name %s", name, res.Detail, theirs)
+		}
+	}
+	mark(t, m, marking(code.MarkGesture{Read: own}))
+	page, _ := readInbox(t, n, code.InboxQuery{}, "", 0)
+	if len(page.Notices) != len(own) {
+		t.Fatalf("founder's inbox holds %v, want their %d notices", idsOf(page), len(own))
+	}
+	for _, notice := range page.Notices {
+		if !notice.Read {
+			t.Errorf("after founder marked both their notices read, %s reads unread", notice.RecordID)
 		}
 	}
 }

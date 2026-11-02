@@ -419,35 +419,64 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 // handle's own code notices — each by its [NoticeID], the record and the
 // change, as an inbox notice carries it — and the first id that is none of
 // them, "" when every one is.
+//
+// ONE STATEMENT FOR THE GESTURE, whatever it names: a gesture names up to
+// [inbox.MaxEntries] notices, and the decide runs again on every round the
+// broker refuses, so a lookup a notice would be that many statements a round.
 func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []string) (map[string]uint64, string,
 	error) {
 
 	out := make(map[string]uint64, len(ids))
+	if len(ids) == 0 {
+		return out, "", nil
+	}
+	pairs := make([][2]string, 0, len(ids))
 	for _, id := range ids {
 		record, change, ok := splitNoticeID(id)
 		if !ok {
 			return nil, id, nil
 		}
+		pairs = append(pairs, [2]string{record, change})
+	}
+	list, err := json.Marshal(pairs)
+	if err != nil {
+		return nil, "", fmt.Errorf("code: name the notices a mark of %s names: %w", handle, err)
+	}
+	rows, err := tx.QueryContext(ctx, noticePositionsSQL, string(list), handle)
+	if err != nil {
+		return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var record, change string
 		var packed int64
-		switch err := tx.QueryRowContext(ctx, noticePositionSQL, record, change, handle).Scan(&packed); {
-		case errors.Is(err, sql.ErrNoRows):
-			return nil, id, nil
-		case err != nil:
-			return nil, "", fmt.Errorf("code: read where notice %s of %s sits: %w", id, handle, err)
+		if err := rows.Scan(&record, &change, &packed); err != nil {
+			return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
 		}
-		out[id] = uint64(packed)
+		out[NoticeID(record, change)] = uint64(packed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("code: read where the notices a mark of %s names sit: %w", handle, err)
+	}
+	for _, id := range ids {
+		if _, found := out[id]; !found {
+			return nil, id, nil
+		}
 	}
 	return out, "", nil
 }
 
 // The marks' reads, each registered in plan_test.go: a person's row by its
-// key, and one notice of theirs by the notice table's key — named, since the
-// planner would otherwise take the person's inbox range
-// (code_notifications_inbox_idx) and read every notice they hold to find one.
-// The row's one write is the applier's (apply_marks.go).
+// key, and the notices of theirs a gesture names by the notice table's key,
+// one seek a [record, change] pair of the JSON array bound — the key named,
+// since the planner would otherwise take the person's inbox range
+// (code_notifications_inbox_idx) and read every notice they hold to find
+// them. The row's one write is the applier's (apply_marks.go).
 const (
 	personMarksSQL = `SELECT generation, seen_stream, seen_through, read, unread, snoozed, primary_reasons,
 		position FROM code_person_marks WHERE handle = ?`
-	noticePositionSQL = `SELECT log_seq FROM code_notifications INDEXED BY sqlite_autoindex_code_notifications_1
-		WHERE record_id = ? AND change_id = ? AND recipient = ?`
+	noticePositionsSQL = `SELECT n.record_id, n.change_id, n.log_seq
+		FROM json_each(?1) AS j CROSS JOIN code_notifications AS n INDEXED BY sqlite_autoindex_code_notifications_1
+		WHERE n.record_id = CAST(j.value ->> 0 AS TEXT) AND n.change_id = CAST(j.value ->> 1 AS TEXT)
+			AND n.recipient = ?2`
 )
