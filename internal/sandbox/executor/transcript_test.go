@@ -3,12 +3,15 @@ package executor_test
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,22 +22,25 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A captured session read back as its transcript. Every archive here is
-// PACKED BY THE RUNNER'S OWN SCRIPT — a run in a real box whose stand-in
-// harness files its record where the pinned layout names, or the OpenCode
-// run's script exporting through the fake opencode — so a case reads exactly
-// the bytes a collection keeps, never a tar this file built by hand.
+// A captured session read back as its transcript. Every archive a run can
+// pack here is PACKED BY THE RUNNER'S OWN SCRIPT — a run in a real box whose
+// stand-in harness files its record where the pinned layout names, or the
+// OpenCode run's script exporting through the fake opencode — so a case reads
+// exactly the bytes a collection keeps. The archives no pack makes — bytes that
+// are no gzip, a gzip of no tar, a tar member that is sparse — are built here,
+// each saying why: they are what a box's own agent could leave in place of
+// what its run packed.
 
 // plantedToken is a GitHub token's shape, which the redaction knows: what a
 // harness's record carries when a run read a file holding one.
 var plantedToken = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 
-// claudeTranscript is the record the stand-in Claude Code files for its
+// claudeSessionRecord is the record the stand-in Claude Code files for its
 // session: a brief, the model's words, its thinking, a tool call answered as a
 // failure that quotes a token, the harness's own bookkeeping, a compaction
 // summary, a line that is no record, a subagent's task and its result, and a
 // last message of a couple of kibibytes.
-var claudeTranscript = []string{
+var claudeSessionRecord = []string{
 	`{"type":"user","message":{"role":"user","content":"Fix the flaky test in ENG-7."},"timestamp":"2026-10-30T12:00:00.000Z"}`,
 	`{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat</local-command-caveat>"},"timestamp":"2026-10-30T12:00:00.100Z"}`,
 	`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"the race is in the cache"}]},"timestamp":"2026-10-30T12:00:01.000Z"}`,
@@ -59,16 +65,25 @@ var claudeSidecar = []string{
 	`{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"The cache map is written unlocked."}]},"timestamp":"2026-10-30T12:00:29.000Z"}`,
 }
 
+// standInHead is how every stand-in `claude` here begins: it answers its
+// version, takes the session it was started in, and knows where the pinned
+// layout files that session's record (`$p`).
+const standInHead = `#!/bin/sh
+if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
+s= prev=; for a; do case "$prev" in --session-id|--resume) s=$a;; esac; prev=$a; done
+p=$CLAUDE_CONFIG_DIR/projects/$CLAUDE_CODE_PROJECT_DIR_NAME
+`
+
+// standInEnd is how every stand-in ends: on a successful result.
+const standInEnd = `printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s"}\n' "$s"
+`
+
 // transcriptHarness is a stand-in `claude` that files transcript and sidecar
 // as the session it was started in, where the pinned layout names them —
 // beside a tool result spilled to a file and a task list, which a capture packs
 // and a transcript does not read — and ends on a successful result.
 func transcriptHarness(transcript, sidecar []string) string {
-	return `#!/bin/sh
-if [ "$1" = --version ]; then echo '2.1.310 (Claude Code)'; exit 0; fi
-s= prev=; for a; do case "$prev" in --session-id|--resume) s=$a;; esac; prev=$a; done
-p=$CLAUDE_CONFIG_DIR/projects/$CLAUDE_CODE_PROJECT_DIR_NAME
-mkdir -p "$p/$s/subagents" "$p/$s/tool-results" "$CLAUDE_CONFIG_DIR/tasks/$s"
+	return standInHead + `mkdir -p "$p/$s/subagents" "$p/$s/tool-results" "$CLAUDE_CONFIG_DIR/tasks/$s"
 cat > "$p/$s.jsonl" <<'TRANSCRIPT'
 ` + strings.Join(transcript, "\n") + `
 TRANSCRIPT
@@ -77,16 +92,24 @@ cat > "$p/$s/subagents/agent-a1.jsonl" <<'SIDECAR'
 SIDECAR
 echo spilled > "$p/$s/tool-results/toolu_1.txt"
 echo '[]' > "$CLAUDE_CONFIG_DIR/tasks/$s/1.json"
-printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s"}\n' "$s"
-`
+` + standInEnd
 }
 
-// claudeCaptureOf runs the stand-in in a real box and answers the archive the
-// run packed, as the collection describes it, and its bytes.
+// claudeCaptureOf runs the stand-in that files transcript and sidecar in a
+// real box, and answers the archive the run packed, as the collection
+// describes it, and its bytes.
 func claudeCaptureOf(t *testing.T, transcript, sidecar []string) (sandbox.SessionArchive, []byte) {
 	t.Helper()
+	return claudeCaptureWith(t, transcriptHarness(transcript, sidecar))
+}
+
+// claudeCaptureWith runs the stand-in `claude` script in a real box, and
+// answers the archive the run packed, as the collection describes it, and its
+// bytes.
+func claudeCaptureWith(t *testing.T, script string) (sandbox.SessionArchive, []byte) {
+	t.Helper()
 	runner, b := realBox(t)
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", transcriptHarness(transcript, sidecar))
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/claude", script)
 	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	if res.Captured == nil {
 		t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
@@ -118,6 +141,30 @@ func openCodeCaptureOf(t *testing.T, export string) []byte {
 		t.Fatalf("the session was not captured: %v\n%s", err, run.stderr)
 	}
 	return raw
+}
+
+// readOpenCode is an OpenCode archive's transcript from its first entry, held
+// to bounds.
+func readOpenCode(t *testing.T, raw []byte, bounds executor.TranscriptBounds) executor.Transcript {
+	t.Helper()
+	got, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
+		executor.OpenCodeArchiveFormat, bytes.NewReader(raw), 0, bounds)
+	if err != nil {
+		t.Fatalf("ReadTranscriptWithin: %v", err)
+	}
+	return got
+}
+
+// readClaude is a Claude Code archive's transcript from its first entry, held
+// to bounds.
+func readClaude(t *testing.T, raw []byte, bounds executor.TranscriptBounds) executor.Transcript {
+	t.Helper()
+	got, err := executor.ReadTranscriptWithin(t.Context(), executor.ClaudeCodeName,
+		executor.ClaudeArchiveFormat, bytes.NewReader(raw), 0, bounds)
+	if err != nil {
+		t.Fatalf("ReadTranscriptWithin: %v", err)
+	}
+	return got
 }
 
 // shown is an entry as a case states it: who, which thread and tool, whether
@@ -174,8 +221,9 @@ func TestAClaudeCodeSessionReadsAsTheTranscriptItsHarnessRecorded(t *testing.T) 
 	if !strings.Contains(redacted, redact.Marker) {
 		t.Fatalf("the planted token is not one the redaction knows: %q", redacted)
 	}
-	described, raw := claudeCaptureOf(t, claudeTranscript, claudeSidecar)
-	got, err := executor.ReadTranscript(described.Harness, described.Format, bytes.NewReader(raw), 0)
+	described, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
+	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		bytes.NewReader(raw), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -255,12 +303,7 @@ func openCodeExportDoc() string {
 // part's result, or read the reasoning, and the case goes red.
 func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 	t.Parallel()
-	raw := openCodeCaptureOf(t, openCodeExportDoc())
-	got, err := executor.ReadTranscript(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		bytes.NewReader(raw), 0)
-	if err != nil {
-		t.Fatalf("ReadTranscript: %v", err)
-	}
+	got := readOpenCode(t, openCodeCaptureOf(t, openCodeExportDoc()), executor.TranscriptReadBounds())
 	if got.Cut != "" || got.More() {
 		t.Errorf("the read is cut %q, want the whole transcript", got.Cut)
 	}
@@ -281,6 +324,136 @@ func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 				got.Entries[2].At, got.Entries[3].At, started, ended)
 		}
 	}
+}
+
+// note is a note as the engine renders one for a running turn: its heading,
+// naming who sent it, its framing line, and the words.
+func note(who, words string) string {
+	return "## A note from " + who + ", sent while this turn was running\n" + who +
+		" sent this through Crewlet while the work was under way.\n\n" + words
+}
+
+// jsonText is text as a JSON string, quotes included.
+func jsonText(t *testing.T, text string) string {
+	t.Helper()
+	raw, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// A NOTE A PERSON SENT THE RUN READS AS A NOTE, WHEREVER ITS HARNESS FILED IT.
+// Claude Code hands a note to its model as a hook's additional context, and
+// keeps it in a record of its own: whichever record, under whichever field,
+// a note there reads as a note in its place — framed in a system reminder or
+// not, two of one step's notes as two — while a record that only says a note
+// reached the run is the harness's notice and no entry. OpenCode admits a note
+// as a person's message, and it reads as a note rather than a brief. A brief
+// that carries a note further down, as a launch's brief carries the notes that
+// arrived before it, is still the brief, and a tool's result quoting a note's
+// heading is still the tool's: text a tool produced is never a note.
+//
+// Mutation: skip the records the harness wrote for itself, read a note by its
+// record's shape alone, take a heading anywhere in a brief for a note, or read
+// OpenCode's note as a brief, and a row goes red.
+func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
+	t.Parallel()
+	batch := note("ada", "Target the release branch.") + "\n\n" + note("cy", "And keep the old flag.")
+	stop := "<system-reminder>\nStop hook additional context: " + note("bob", "Stop after the fix.") +
+		"\n</system-reminder>"
+	quoted := "notes.md: " + note("eve", "not a note") // a file a tool read
+	record := []string{
+		`{"type":"user","message":{"role":"user","content":` +
+			jsonText(t, "Fix the flake.\n\n"+note("ada", "use main")) + `},"timestamp":"2026-10-30T12:00:00.000Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"notes.md"}}]},"timestamp":"2026-10-30T12:00:01.000Z"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` +
+			jsonText(t, quoted) + `}]},"timestamp":"2026-10-30T12:00:02.000Z"}`,
+		`{"type":"attachment","attachment":{"type":"hook_additional_context","hookEvent":"PostToolBatch","content":[` +
+			jsonText(t, batch) + `]},"timestamp":"2026-10-30T12:00:03.000Z"}`,
+		`{"type":"system","subtype":"informational","content":"PostToolBatch says: crewlet: 2 notes from ada, cy reached the run","timestamp":"2026-10-30T12:00:03.100Z"}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":` + jsonText(t, stop) +
+			`},"timestamp":"2026-10-30T12:00:04.000Z"}`,
+	}
+	described, raw := claudeCaptureOf(t, record, nil)
+	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		bytes.NewReader(raw), 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	sameEntries(t, got.Entries, []shown{
+		{kind: executor.EntryBrief, text: "Fix the flake.\n\n" + note("ada", "use main")},
+		{kind: executor.EntryToolCall, tool: "Read", text: `{"file_path":"notes.md"}`},
+		{kind: executor.EntryToolResult, tool: "Read", text: quoted},
+		{kind: executor.EntryNote, text: note("ada", "Target the release branch.")},
+		{kind: executor.EntryNote, text: note("cy", "And keep the old flag.")},
+		{kind: executor.EntryNote, text: note("bob", "Stop after the fix.")},
+	})
+	if len(got.Entries) == 6 {
+		if want := time.Date(2026, 10, 30, 12, 0, 4, 0, time.UTC); !got.Entries[5].At.Equal(want) {
+			t.Errorf("the note at the finish is dated %s, want its record's %s", got.Entries[5].At, want)
+		}
+	}
+
+	export := `{"info":{},"messages":[` +
+		`{"info":{"role":"user"},"parts":[{"type":"text","text":"Fix the flake."}]},` +
+		`{"info":{"role":"user"},"parts":[{"type":"text","text":` + jsonText(t, note("ada", "Target main.")) + `}]}` +
+		`]}`
+	open := readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds())
+	sameEntries(t, open.Entries, []shown{
+		{kind: executor.EntryBrief, text: "Fix the flake."},
+		{kind: executor.EntryNote, text: note("ada", "Target main.")},
+	})
+}
+
+// A RECORD OF NO SHAPE THIS READ KNOWS IS SAID, NEVER READ AS SILENCE. A line
+// of Claude Code's record that is JSON but no object — an array, a number — is
+// no record; a person's or the model's record whose message is no object, or
+// whose content is neither text nor a list, has no shape this read knows; and
+// a message of an OpenCode export that is no object, or whose parts are no
+// list, is said too. Each is an entry where it was. A field a release retyped
+// inside a record is still skipped, the record read.
+//
+// Mutation: tolerate a record that is no object, a message or content of
+// another shape, or parts that are no list, and the entry vanishes; refuse a
+// retyped field and the record that held it does.
+func TestARecordOfNoShapeThisReadKnowsIsSaid(t *testing.T) {
+	t.Parallel()
+	described, raw := claudeCaptureOf(t, []string{
+		`[1]`,
+		`42`,
+		`{"type":"user","message":"Fix it."}`,
+		`{"type":"assistant","message":{"content":{"text":"an object"}}}`,
+		`{"type":"assistant","message":{"content":7}}`,
+		`{"type":"user","message":{"content":null}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"still read"}]},"timestamp":5}`,
+	}, nil)
+	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		bytes.NewReader(raw), 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	unshaped := "a message of the harness's record has no shape this read knows, and was not read"
+	sameEntries(t, got.Entries, []shown{
+		{kind: executor.EntryUnread, text: "a line of 3 bytes of the harness's record is not a record, and was not read"},
+		{kind: executor.EntryUnread, text: "a line of 2 bytes of the harness's record is not a record, and was not read"},
+		{kind: executor.EntryUnread, text: unshaped},
+		{kind: executor.EntryUnread, text: unshaped},
+		{kind: executor.EntryUnread, text: unshaped},
+		{kind: executor.EntryModel, text: "still read"},
+	})
+
+	export := `{"info":{},"messages":["not a message",` +
+		`{"info":{"role":"user"},"parts":{"type":"text","text":"parts of an object"}},` +
+		`{"info":{"role":"user"},"parts":[{"type":"text","text":"read"}]},` +
+		`{"info":{"role":"assistant","time":{"created":"soon"}},"parts":[{"type":"text","text":"retyped"}]}]}`
+	open := readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds())
+	sameEntries(t, open.Entries, []shown{
+		{kind: executor.EntryUnread, text: "a message of the export is not a message, and was not read"},
+		{kind: executor.EntryUnread, text: "a message of the export whose parts are not a list was not read"},
+		{kind: executor.EntryBrief, text: "read"},
+		{kind: executor.EntryModel, text: "retyped"},
+	})
 }
 
 // briefs is an export of n person's messages, `message 0` to `message n-1`.
@@ -311,8 +484,8 @@ func pageAll(t *testing.T, raw []byte, bounds executor.TranscriptBounds) []execu
 	t.Helper()
 	var pages []executor.Transcript
 	for from := 0; ; {
-		page, err := executor.ReadTranscriptWithin(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-			bytes.NewReader(raw), from, bounds)
+		page, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
+			executor.OpenCodeArchiveFormat, bytes.NewReader(raw), from, bounds)
 		if err != nil {
 			t.Fatalf("reading from %d: %v", from, err)
 		}
@@ -379,24 +552,26 @@ func TestATranscriptIsReadAPageAtATimeWithNothingLostBetweenPages(t *testing.T) 
 	}
 }
 
-// AN ENTRY IS REDACTED WHOLE BEFORE IT IS CUT. A tool's output longer than an
+// AN ENTRY IS REDACTED BEFORE IT IS CUT. A tool's output longer than an
 // entry's bound, a token straddling the bound, reads cut to the bound and
 // marked, its whole size stated — and with no part of the token in it: cut
 // first, the token's opening would no longer be a token the redaction knows.
+// And however long the text after it, a private key whose block begins inside
+// the bound and runs past it is read whole, and redacted as one: what is
+// redacted is all that can reach the bound and a key block's length past it.
 //
-// Mutation: cut the text before redacting it, and the opening of the token is
+// Mutation: cut the text before redacting it, or redact only the bound's own
+// bytes of a long text, and the opening of the token or the key's armour is
 // handed out.
-func TestAnEntryIsRedactedWholeBeforeItIsCut(t *testing.T) {
+func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 	t.Parallel()
-	output := strings.Repeat("x", 50) + " " + plantedToken + " the rest of the output"
-	export := `{"info":{},"messages":[{"info":{"role":"assistant"},"parts":[{"type":"tool","tool":"bash",` +
-		`"state":{"status":"completed","input":{},"output":"` + output + `"}}]}]}`
-	raw := openCodeCaptureOf(t, export)
-	got, err := executor.ReadTranscriptWithin(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		bytes.NewReader(raw), 0, within(func(b *executor.TranscriptBounds) { b.EntryBytes = 64 }))
-	if err != nil {
-		t.Fatalf("ReadTranscriptWithin: %v", err)
+	small := within(func(b *executor.TranscriptBounds) { b.EntryBytes = 64 })
+	tool := func(output string) string {
+		return `{"info":{},"messages":[{"info":{"role":"assistant"},"parts":[{"type":"tool","tool":"bash",` +
+			`"state":{"status":"completed","input":{},"output":` + jsonText(t, output) + `}}]}]}`
 	}
+	output := strings.Repeat("x", 50) + " " + plantedToken + " the rest of the output"
+	got := readOpenCode(t, openCodeCaptureOf(t, tool(output)), small)
 	if len(got.Entries) != 2 {
 		t.Fatalf("the transcript has %d entries, want the call and its result: %+v",
 			len(got.Entries), got.Entries)
@@ -412,6 +587,25 @@ func TestAnEntryIsRedactedWholeBeforeItIsCut(t *testing.T) {
 	if !strings.HasPrefix(result.Text, strings.Repeat("x", 50)+" "+redact.Marker) {
 		t.Errorf("the cut result is %q, want the output up to the token's redaction", result.Text)
 	}
+
+	// THE KEY'S ARMOUR STRADDLES THE BOUND, and the text runs a key block's
+	// length past what a read redacts beyond it.
+	body := strings.Repeat("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n", 20)
+	key := strings.Repeat("x", 49) + "\n-----BEGIN RSA PRIVATE KEY-----\n" + body +
+		"-----END RSA PRIVATE KEY-----\n" + strings.Repeat("y", executor.RedactContext+(4<<10))
+	got = readOpenCode(t, openCodeCaptureOf(t, tool(key)), small)
+	if len(got.Entries) != 2 {
+		t.Fatalf("the transcript has %d entries, want the call and its result", len(got.Entries))
+	}
+	result = got.Entries[1]
+	if strings.Contains(result.Text, "-----BEGIN") || strings.Contains(result.Text, "MIIEow") ||
+		!result.Cut || result.Bytes != len(key) {
+		t.Errorf("the key's result reads %q (cut %v, %d bytes), want it cut with the key redacted",
+			result.Text, result.Cut, result.Bytes)
+	}
+	if !strings.HasPrefix(result.Text, strings.Repeat("x", 49)+"\n"+redact.Marker) {
+		t.Errorf("the key's result is %q, want the output up to the key's redaction", result.Text)
+	}
 }
 
 // A READ STOPS AT ITS BUDGET AND SAYS SO. An archive whose decompressed bytes
@@ -425,17 +619,13 @@ func TestAReadStopsAtItsBudgetAndSaysSo(t *testing.T) {
 	t.Parallel()
 	raw := openCodeCaptureOf(t, briefs(50))
 	bounds := within(func(b *executor.TranscriptBounds) { b.ReadBytes = 1 << 10 })
-	first, err := executor.ReadTranscriptWithin(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		bytes.NewReader(raw), 0, bounds)
-	if err != nil {
-		t.Fatalf("ReadTranscriptWithin: %v", err)
-	}
+	first := readOpenCode(t, raw, bounds)
 	if first.Cut != executor.CutRead || first.More() || len(first.Entries) == 0 || len(first.Entries) >= 50 {
 		t.Fatalf("the read held %d entries cut %q (more %v), want some of the fifty, cut at the budget",
 			len(first.Entries), first.Cut, first.More())
 	}
-	again, err := executor.ReadTranscriptWithin(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		bytes.NewReader(raw), first.Next, bounds)
+	again, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
+		executor.OpenCodeArchiveFormat, bytes.NewReader(raw), first.Next, bounds)
 	if err != nil {
 		t.Fatalf("ReadTranscriptWithin from %d: %v", first.Next, err)
 	}
@@ -443,6 +633,177 @@ func TestAReadStopsAtItsBudgetAndSaysSo(t *testing.T) {
 		t.Errorf("a read from where the budget stopped one held %d entries cut %q, want none, "+
 			"cut at the same budget", len(again.Entries), again.Cut)
 	}
+}
+
+// A READ CUT BY ITS BUDGET HANDS OUT A PREFIX OF THE TRANSCRIPT. Wherever the
+// budget falls — between two lines of Claude Code's record or inside one — the
+// entries a cut read hands out are the whole read's, in its order, and none it
+// does not have: a line the budget cut in two is not a whole line, and read as
+// one it would be "a line that is no record", said where a valid one was.
+//
+// Mutation: hand the line a failed read cut short to the record's reader, and
+// a cut read ends on an entry the whole read does not have.
+func TestAReadCutByItsBudgetHandsOutAPrefixOfTheTranscript(t *testing.T) {
+	t.Parallel()
+	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
+	whole := readClaude(t, raw, executor.TranscriptReadBounds())
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inflated, err := io.Copy(io.Discard, zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cuts := 0
+	for budget := int64(512); budget < inflated; budget += 97 {
+		got := readClaude(t, raw, within(func(b *executor.TranscriptBounds) { b.ReadBytes = budget }))
+		switch got.Cut {
+		case executor.CutRead:
+			cuts++
+		case "":
+		default:
+			t.Fatalf("a read of %d bytes is cut %q", budget, got.Cut)
+		}
+		if len(got.Entries) > len(whole.Entries) ||
+			!slices.Equal(shownOf(got.Entries), shownOf(whole.Entries[:len(got.Entries)])) {
+			t.Fatalf("a read of %d bytes hands out %+v, which is not the start of the whole read's %+v",
+				budget, shownOf(got.Entries), shownOf(whole.Entries))
+		}
+	}
+	if cuts == 0 {
+		t.Fatal("no budget cut the read, so this proves nothing about a cut one")
+	}
+}
+
+// tarBlock is one header block of a ustar archive naming name, of typeflag,
+// with size bytes of data after it.
+func tarBlock(name string, typeflag byte, size int) []byte {
+	var b [512]byte
+	copy(b[0:100], name)
+	copy(b[100:108], "0000644\x00")
+	copy(b[108:116], "0000000\x00")
+	copy(b[116:124], "0000000\x00")
+	copy(b[124:136], fmt.Sprintf("%011o\x00", size))
+	copy(b[136:148], fmt.Sprintf("%011o\x00", 0))
+	b[156] = typeflag
+	copy(b[257:263], "ustar\x00")
+	copy(b[263:265], "00")
+	// THE CHECKSUM IS OF THE BLOCK with its own field read as spaces.
+	copy(b[148:156], "        ")
+	sum := 0
+	for _, c := range b {
+		sum += int(c)
+	}
+	copy(b[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	return b[:]
+}
+
+// paxRecord is one record of a PAX extended header: its whole length in
+// decimal, the length's own digits included, then `key=value` and a newline.
+func paxRecord(key, value string) string {
+	body := " " + key + "=" + value + "\n"
+	n := len(body) + 1
+	for len(strconv.Itoa(n))+len(body) != n {
+		n = len(strconv.Itoa(n)) + len(body)
+	}
+	return strconv.Itoa(n) + body
+}
+
+// padded is data and the zeros that fill out its last block.
+func padded(data []byte) []byte {
+	if rem := len(data) % 512; rem != 0 {
+		data = append(data, make([]byte, 512-rem)...)
+	}
+	return data
+}
+
+// sparseBomb is a gzipped tar whose one member is named as a session's
+// transcript and is a GNU sparse file (PAX format 1.0) declaring size bytes,
+// every one of them a hole: a few blocks of archive that hand their reader
+// size bytes the archive does not hold.
+//
+// BUILT BY HAND: no pack makes one — a box's tar archives the files a harness
+// wrote, and sparsely only when asked to — and archive/tar's writer drops the
+// records that make one. It is what a box's own agent could leave in place of
+// what its run packed.
+func sparseBomb(t *testing.T, size int64) []byte {
+	t.Helper()
+	name := "projects/" + executor.ClaudeProjectDir + "/s.jsonl"
+	pax := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.FormatInt(size, 10))
+	var raw bytes.Buffer
+	raw.Write(tarBlock("PaxHeaders/s.jsonl", 'x', len(pax)))
+	raw.Write(padded([]byte(pax)))
+	// THE MEMBER'S DATA IS ITS SPARSE MAP, and the map names no data: one
+	// block saying it has no entries, so the whole of its size is a hole.
+	raw.Write(tarBlock("GNUSparseFile.0/s.jsonl", '0', 512))
+	raw.Write(padded([]byte("0\n")))
+	raw.Write(make([]byte, 1024))
+	return gzipped(t, raw.String())
+}
+
+// A MEMBER HANDS OUT NO MORE THAN THE READ BUDGET, WHATEVER IT DECLARES. A
+// sparse member named as the transcript declares an exbibyte its archive does
+// not hold; what it hands the reader is held to the read budget apart from what
+// the archive inflates to — which it never reaches — so the read stops at the
+// budget and says so, as an archive that inflates past it does.
+//
+// Mutation: meter only what the archive inflates to, and the read counts the
+// member's holes for as long as it declares them: it never ends.
+func TestAMemberHandsOutNoMoreThanTheReadBudget(t *testing.T) {
+	t.Parallel()
+	got := readClaude(t, sparseBomb(t, 1<<62), within(func(b *executor.TranscriptBounds) {
+		b.ReadBytes = 1 << 20
+	}))
+	if got.Cut != executor.CutRead || len(got.Entries) != 0 {
+		t.Errorf("the sparse member read as %+v cut %q, want nothing, cut at the budget",
+			shownOf(got.Entries), got.Cut)
+	}
+}
+
+// A TRANSCRIPT THAT IS NO PLAIN FILE IS SAID, NOT READ THROUGH. A box's tar
+// packs a link as a link: a session's transcript that is a symbolic link names
+// a path the archive does not hold, and a subagent's that is a hard link to the
+// session's own names another member — neither is the record, so each is an
+// entry saying so, where the transcript was, and the session's own record is
+// read as ever.
+//
+// Mutation: read every member named like a transcript whatever it is, or skip
+// the ones that are no file silently, and a row goes red.
+func TestATranscriptThatIsNoPlainFileIsSaid(t *testing.T) {
+	t.Parallel()
+	notAFile := "a transcript of the harness's record is not a plain file in the archive, and was not read"
+	brief := `{"type":"user","message":{"role":"user","content":"Fix it."}}`
+
+	described, raw := claudeCaptureWith(t, standInHead+`mkdir -p "$p"
+cat > "$CLAUDE_CONFIG_DIR/outside.jsonl" <<'TRANSCRIPT'
+`+brief+`
+TRANSCRIPT
+ln -s ../../outside.jsonl "$p/$s.jsonl"
+`+standInEnd)
+	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		bytes.NewReader(raw), 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	sameEntries(t, got.Entries, []shown{{kind: executor.EntryUnread, text: notAFile}})
+
+	described, raw = claudeCaptureWith(t, standInHead+`mkdir -p "$p/$s/subagents"
+cat > "$p/$s.jsonl" <<'TRANSCRIPT'
+`+brief+`
+TRANSCRIPT
+ln "$p/$s.jsonl" "$p/$s/subagents/agent-a1.jsonl"
+`+standInEnd)
+	got, err = executor.ReadTranscript(t.Context(), described.Harness, described.Format,
+		bytes.NewReader(raw), 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	sameEntries(t, got.Entries, []shown{
+		{kind: executor.EntryBrief, text: "Fix it."},
+		{kind: executor.EntryUnread, thread: "agent-a1", text: notAFile},
+	})
 }
 
 // A PART OF THE RECORD PAST THE BOUND IS SAID WHERE IT WAS. A line of Claude
@@ -456,13 +817,9 @@ func TestAReadStopsAtItsBudgetAndSaysSo(t *testing.T) {
 // follows.
 func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
 	t.Parallel()
-	described, raw := claudeCaptureOf(t, claudeTranscript, claudeSidecar)
+	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
 	small := within(func(b *executor.TranscriptBounds) { b.LineBytes = 1 << 10 })
-	got, err := executor.ReadTranscriptWithin(described.Harness, described.Format,
-		bytes.NewReader(raw), 0, small)
-	if err != nil {
-		t.Fatalf("ReadTranscriptWithin: %v", err)
-	}
+	got := readClaude(t, raw, small)
 	kinds := make([]executor.EntryKind, len(got.Entries))
 	for i, e := range got.Entries {
 		kinds[i] = e.Kind
@@ -478,11 +835,7 @@ func TestAPartOfTheRecordPastTheBoundIsSaidWhereItWas(t *testing.T) {
 		`{"info":{"role":"user"},"parts":[{"type":"text","text":"first"}]},` +
 		`{"info":{"role":"assistant"},"parts":[{"type":"text","text":"` + strings.Repeat("y", 4<<10) + `"}]},` +
 		`{"info":{"role":"user"},"parts":[{"type":"text","text":"after"}]}]}`
-	open, err := executor.ReadTranscriptWithin(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		bytes.NewReader(openCodeCaptureOf(t, export)), 0, small)
-	if err != nil {
-		t.Fatalf("ReadTranscriptWithin: %v", err)
-	}
+	open := readOpenCode(t, openCodeCaptureOf(t, export), small)
 	if len(open.Entries) != 2 || open.Entries[0].Text != "first" ||
 		open.Entries[1].Kind != executor.EntryUnread || open.Cut != executor.CutRead {
 		t.Errorf("the export read as %+v cut %q, want the first message, then the oversized one "+
@@ -507,9 +860,9 @@ func (f *failingReader) Read(p []byte) (int, error) {
 }
 
 // AN ARCHIVE IS BLAMED ONLY FOR ITS OWN FAULTS. A harness or a format this
-// build does not pack is refused as unsupported before a byte is read; bytes
-// that are no gzip, and a gzip that holds no tar, are a malformed archive; and
-// a source that fails part way — an object the store stopped answering for, a
+// build does not pack is refused as unsupported before a byte is read; an
+// archive that is not what its format describes is a malformed one; and a
+// source that fails part way — an object the store stopped answering for, a
 // seal that no longer opens — is that failure, wrapped, never a malformed
 // archive, whatever the decompression made of the stream stopping.
 //
@@ -521,34 +874,100 @@ func TestAnArchiveIsBlamedOnlyForItsOwnFaults(t *testing.T) {
 		harness string
 		format  int
 	}{{"codex", 1}, {executor.ClaudeCodeName, executor.ClaudeArchiveFormat + 1}} {
-		_, err := executor.ReadTranscript(c.harness, c.format, strings.NewReader(""), 0)
+		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format, strings.NewReader(""), 0)
 		if !errors.Is(err, executor.ErrUnsupportedArchive) {
 			t.Errorf("%s's format %d: %v, want ErrUnsupportedArchive", c.harness, c.format, err)
 		}
 	}
-	for name, raw := range map[string][]byte{
-		"bytes that are no gzip":   []byte("not an archive"),
-		"a gzip that holds no tar": gzipped(t, strings.Repeat("not a tar header ", 64)),
-	} {
-		_, err := executor.ReadTranscript(executor.ClaudeCodeName, executor.ClaudeArchiveFormat,
-			bytes.NewReader(raw), 0)
-		if !errors.Is(err, executor.ErrMalformedArchive) {
-			t.Errorf("%s: %v, want ErrMalformedArchive", name, err)
-		}
-	}
-	var packed bytes.Buffer
-	zw := gzip.NewWriter(&packed)
-	if _, err := zw.Write([]byte(briefs(20))); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
 	stopped := errors.New("the store stopped answering")
-	_, err := executor.ReadTranscript(executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		&failingReader{data: packed.Bytes()[:packed.Len()/2], err: stopped}, 0)
+	packed := gzipped(t, briefs(20))
+	_, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		&failingReader{data: packed[:len(packed)/2], err: stopped}, 0)
 	if !errors.Is(err, stopped) || errors.Is(err, executor.ErrMalformedArchive) {
 		t.Errorf("a source that failed part way: %v, want its own failure and no malformed archive", err)
+	}
+}
+
+// A MALFORMED ARCHIVE IS SAID IN THIS PACKAGE'S WORDS ALONE. Each way an
+// archive is not one its format describes — no gzip, compressed bytes that do
+// not inflate, a stream cut short, a gzip of no tar, an export that is no
+// export document — is a malformed archive whose reason is the one sentence
+// this package writes for that way, and nothing the archive holds reaches the
+// reason or the error: an export whose document is a string planted with a
+// token and a mebibyte of a box's words is said as no export document, and
+// carries neither.
+//
+// Mutation: say a malformed archive in the decoder's words, or name the token
+// the export held where an object belonged, and the token, or the mebibyte,
+// reaches the reason.
+func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
+	t.Parallel()
+	_, capture := claudeCaptureOf(t, claudeSessionRecord, nil)
+	planted := plantedToken + strings.Repeat(" the box's words", 64<<10)
+	for _, c := range []struct {
+		name    string
+		harness string
+		format  int
+		raw     []byte
+		why     string
+	}{
+		{"bytes that are no gzip", executor.ClaudeCodeName, executor.ClaudeArchiveFormat,
+			[]byte("not an archive " + plantedToken), executor.WhyNotGzip},
+		// A GZIP HEADER, then a deflate block of the reserved type, which no
+		// encoder writes.
+		{"compressed bytes that do not inflate", executor.ClaudeCodeName, executor.ClaudeArchiveFormat,
+			[]byte{0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff}, executor.WhyCorrupt},
+		{"an archive cut short", executor.ClaudeCodeName, executor.ClaudeArchiveFormat,
+			capture[:len(capture)/2], executor.WhyCutShort},
+		{"a gzip of no tar", executor.ClaudeCodeName, executor.ClaudeArchiveFormat,
+			gzipped(t, strings.Repeat("not a tar header "+plantedToken, 64)), executor.WhyNotTar},
+		{"an export that is a string", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, jsonText(t, planted)), executor.WhyNotExport},
+		{"an export whose messages are a string", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":`+jsonText(t, planted)+`}`), executor.WhyNotExport},
+		{"an export cut short", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":[`), executor.WhyCutShort},
+	} {
+		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format, bytes.NewReader(c.raw), 0)
+		var malformed *executor.MalformedArchiveError
+		if !errors.As(err, &malformed) || !errors.Is(err, executor.ErrMalformedArchive) {
+			t.Errorf("%s: %v, want a malformed archive", c.name, err)
+			continue
+		}
+		if malformed.Why != c.why {
+			t.Errorf("%s is said %q, want %q", c.name, malformed.Why, c.why)
+		}
+		if said := err.Error(); strings.Contains(said, "ghp_") || strings.Contains(said, "box's words") {
+			t.Errorf("%s hands out what the archive holds: %.200q", c.name, said)
+		}
+	}
+}
+
+// A READ STOPS WHEN ITS CALLER IS GONE. A read whose context is done stops at
+// the next line or message it would read, with the context's own error — never
+// a transcript, and never a malformed archive.
+//
+// Mutation: drop the check between lines, and the read answers the whole
+// transcript to a caller that left.
+func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
+	t.Parallel()
+	_, claude := claudeCaptureOf(t, claudeSessionRecord, nil)
+	open := openCodeCaptureOf(t, briefs(3))
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	for name, c := range map[string]struct {
+		harness string
+		format  int
+		raw     []byte
+	}{
+		"claude-code": {executor.ClaudeCodeName, executor.ClaudeArchiveFormat, claude},
+		"opencode":    {executor.OpenCodeName, executor.OpenCodeArchiveFormat, open},
+	} {
+		got, err := executor.ReadTranscript(gone, c.harness, c.format, bytes.NewReader(c.raw), 0)
+		if !errors.Is(err, context.Canceled) || errors.Is(err, executor.ErrMalformedArchive) {
+			t.Errorf("%s read for a caller that left: (%d entries, %v), want the context's error",
+				name, len(got.Entries), err)
+		}
 	}
 }
 
@@ -580,5 +999,29 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	if bounds.ReadBytes < 8*executordomain.SessionMaxBytes {
 		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
 			executordomain.SessionMaxBytes)
+	}
+}
+
+// EVERY HARNESS THIS BUILD DRIVES CARRIES ITS SESSION, and the transcript is
+// read for each in the one format its runner packs: the harnesses whose
+// session is read are the harnesses [executor.Names] lists, from one list.
+//
+// Mutation: list a harness that carries no session, or read one in a format
+// its runner does not pack, and a row goes red.
+func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
+	t.Parallel()
+	formats := map[string]int{
+		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
+		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+	}
+	for _, name := range executor.Names() {
+		format, ok := formats[name]
+		if !ok {
+			t.Errorf("%s is a harness this build drives, and this case names no archive format of it", name)
+			continue
+		}
+		if carried, why := executor.Carries(name, format); !carried {
+			t.Errorf("%s's sessions are not read: %s", name, why)
+		}
 	}
 }

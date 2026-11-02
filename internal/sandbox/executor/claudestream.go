@@ -77,18 +77,24 @@ type claudeUsage struct {
 // convention every engine meter charges (llm.Completion.TotalTokens).
 func (u claudeUsage) total() int { return u.Input + u.Output + u.CacheRead + u.CacheCreate }
 
-// claudeBlock is one content block of a message.
+// claudeBlock is one content block of a message, as the stream carries it and
+// as the session's own record keeps it ([ReadTranscript]): ONE SHAPE for both,
+// because they are one format, and a second decoder of it is a second answer
+// to what a block holds.
 type claudeBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 
-	// A tool_use block.
+	// A tool_use block. Input is the call's input as the harness wrote it:
+	// the live transcript names its subject ([claudeToolLine]), and a
+	// session's transcript shows it whole.
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
-	Input claudeToolInput `json:"input"`
+	Input json.RawMessage `json:"input"`
 
 	// A tool_result block. Content is the result's text as a string or as
-	// text blocks; it is only ever read for a failed call.
+	// blocks ([claudeResultText]): the live transcript reads it for a failed
+	// call alone, and a session's transcript for every call.
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
 	Content   json.RawMessage `json:"content"`
@@ -307,7 +313,11 @@ func claudeBlocks(raw json.RawMessage) []claudeBlock {
 func claudeToolLine(block claudeBlock) string {
 	name := firstNonBlank(block.Name, "tool")
 	line := "[tool] " + name
-	in := block.Input
+	// DECODED LOOSELY, as the block around it is: a field a release retyped
+	// leaves the others named, and an input that is no object names no
+	// subject at all — the call's name is still its line.
+	var in claudeToolInput
+	_ = json.Unmarshal(block.Input, &in)
 	if detail := firstNonBlank(in.Command, in.FilePath, in.NotebookPath, in.Pattern,
 		in.URL, in.Query, in.Path, in.Description); detail != "" {
 		line += ": " + firstLine(detail, transcriptDetailLimit)
@@ -315,8 +325,10 @@ func claudeToolLine(block claudeBlock) string {
 	return line
 }
 
-// claudeResultText is a tool result's text, from a string or from its text
-// blocks.
+// claudeResultText is a tool result's text, from a string or from its blocks:
+// each text block's, a line apart, and an image named where it was — a result
+// that was a screenshot read as empty would say the tool answered nothing.
+// Decoded loosely, a block whose field a release retyped kept with the rest.
 func claudeResultText(raw json.RawMessage) string {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -330,14 +342,23 @@ func claudeResultText(raw json.RawMessage) string {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if json.Unmarshal(raw, &parts) != nil {
-		return ""
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		var mismatch *json.UnmarshalTypeError
+		if !errors.As(err, &mismatch) {
+			return ""
+		}
 	}
 	var texts []string
 	for _, part := range parts {
-		if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
+		switch {
+		case part.Type == "text" && strings.TrimSpace(part.Text) != "":
 			texts = append(texts, part.Text)
+		case part.Type == "image":
+			texts = append(texts, claudeImagePlaceholder)
 		}
 	}
 	return strings.Join(texts, "\n")
 }
+
+// claudeImagePlaceholder is what a tool result's image reads as in text.
+const claudeImagePlaceholder = "[an image]"

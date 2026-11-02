@@ -87,7 +87,7 @@ const maxLineBytes = sandbox.MaxFileBytes
 // is complete wherever it stops, and a running one's is the decoder's to
 // recognise as partial.
 func eachLine(r io.Reader, dec Decoder, bound int) error {
-	return readLines(r, bound,
+	return readLines(bufio.NewReaderSize(r, lineChunkBytes), bound,
 		func(line []byte) error {
 			dec.Line(line)
 			return nil
@@ -98,18 +98,28 @@ func eachLine(r io.Reader, dec Decoder, bound int) error {
 		})
 }
 
+// lineChunkBytes is the buffer a record is read through a chunk at a time: a
+// line longer than it is gathered across chunks, up to the bound a line is
+// held to, so it bounds how many reads a line takes rather than how long one
+// may be.
+const lineChunkBytes = 64 << 10
+
 // readLines is the one way a run's record is read a line at a time: line is
-// handed every line of r up to bound bytes, without its line break (the slice
-// reused once it returns), and skipped the size of every line past bound,
-// which is never held — its bytes are counted as they pass. The first error
-// either returns ends the read and is returned, which is how a reader that has
-// what it came for stops ([ReadTranscript]); so is a failure of r itself.
+// handed every line br reads up to bound bytes, without its line break (the
+// slice reused once it returns), and skipped the size of every line past
+// bound, which is never held — its bytes are counted as they pass. The first
+// error either returns ends the read and is returned, which is how a reader
+// that has what it came for stops ([ReadTranscript]); so is a failure of the
+// reader beneath br, and the line it cut short is handed to neither.
+//
+// THE BUFFER IS THE CALLER'S, so a reader of many records in a row — a
+// session's archive holds a transcript per subagent — resets one rather than
+// allocating one per record.
 //
 // ONE IMPLEMENTATION for a stream's decoder ([eachLine]) and a captured
 // session's transcript, because a second copy of the bound is a second answer
 // to how long a line may be.
-func readLines(r io.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
-	br := bufio.NewReaderSize(r, 64<<10)
+func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
 	var (
 		held []byte
 		over int64 // the size of a line already past the bound
@@ -131,6 +141,13 @@ func readLines(r io.Reader, bound int, line func([]byte) error, skipped func(int
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
+		// A READ THAT FAILED PART WAY THROUGH A LINE HANDS NOTHING ON: what it
+		// holds is not the line, and a reader handed it would take a record
+		// cut in two — by a budget, a store that stopped answering — for a
+		// line that is no record, said where a whole one was.
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
 		var stop error
 		if over > 0 {
 			stop = skipped(over)
@@ -144,8 +161,6 @@ func readLines(r io.Reader, bound int, line func([]byte) error, skipped func(int
 			return stop
 		case errors.Is(err, io.EOF):
 			return nil
-		case err != nil:
-			return err
 		}
 	}
 }

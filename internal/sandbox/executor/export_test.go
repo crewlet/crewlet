@@ -2,6 +2,7 @@ package executor
 
 import (
 	"cmp"
+	"context"
 	"io"
 	"time"
 
@@ -90,11 +91,21 @@ const ClaudeHookContext = claudeHookContext
 
 var ClaudeNoteEvents = []string{claudeEventToolBatch, claudeEventFinish}
 
+// The sentences a malformed archive is said in ([MalformedArchiveError.Why]),
+// one for each way an archive is not what its format describes.
+const (
+	WhyNotGzip   = whyNotGzip
+	WhyCorrupt   = whyCorrupt
+	WhyCutShort  = whyCutShort
+	WhyNotTar    = whyNotTar
+	WhyNotExport = whyNotExport
+)
+
 // ReadTranscriptWithin is [ReadTranscript] held to bounds: the cases about a
 // bound run at one they can fill — a page of three entries, a read budget of a
 // few kibibytes — and leave the engine's own to
 // [TestTheTranscriptBoundsAreTheEnginesOwn].
-func ReadTranscriptWithin(harness string, format int, archive io.Reader, from int,
+func ReadTranscriptWithin(ctx context.Context, harness string, format int, archive io.Reader, from int,
 	bounds TranscriptBounds) (Transcript, error) {
-	return readTranscript(harness, format, archive, from, bounds)
+	return readTranscript(ctx, harness, format, archive, from, bounds)
 }

@@ -215,10 +215,10 @@ type carrier interface {
 
 	// transcript reads an archive of ArchiveFormat, already decompressed, as
 	// the entries of the session's transcript, handing each to b in the
-	// order the harness recorded it ([ReadTranscript]): what the archive
-	// holds is the harness's own record, so reading it is the same knowledge
-	// as packing it, kept beside it.
-	transcript(b *transcriptBuilder, archive io.Reader) error
+	// order the harness recorded it, until ctx is done ([ReadTranscript]):
+	// what the archive holds is the harness's own record, so reading it is
+	// the same knowledge as packing it, kept beside it.
+	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
 }
 
 // sessionTotals is a harness whose result, on a run that continues a session, can
