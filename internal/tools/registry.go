@@ -171,22 +171,13 @@ type Entry struct {
 func (e Entry) Name() string { return e.Tool.Name() }
 
 // FromMCP is the server name for an MCP-served tool, and "" with false
-// otherwise.
+// otherwise ([mcp.OriginServer]).
 //
-// THE EMPTY NAME ON A MISS IS THE CONTRACT, not a courtesy: [strings.CutPrefix]
-// hands back its whole input when the prefix is absent, and returning that
-// unchecked gave every builtin the "server" `builtin` wherever the name was read
-// without the flag — the skill guard's check among them, whose server triggers
-// are documented as covering no builtin because a builtin's server is "", and
-// which a required skill naming a server called `builtin` would therefore have
-// matched against every engine tool.
-func (e Entry) FromMCP() (string, bool) {
-	server, ok := strings.CutPrefix(e.Origin, OriginMCPPrefix)
-	if !ok {
-		return "", false
-	}
-	return server, true
-}
+// THE EMPTY NAME ON A MISS IS THE CONTRACT, not a courtesy: a builtin's server
+// read as `builtin` gave the skill guard's check, whose server triggers are
+// documented as covering no builtin because a builtin's server is "", a match
+// against every engine tool for a required skill naming a server `builtin`.
+func (e Entry) FromMCP() (string, bool) { return mcp.OriginServer(e.Origin) }
 
 // Registry holds every tool the engine can offer.
 //

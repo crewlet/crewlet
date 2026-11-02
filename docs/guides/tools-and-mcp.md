@@ -475,9 +475,10 @@ re-publishes its MCP servers as they are at each beat on its presence heartbeat
 *Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
 started*, *Not reported* or *Disabled* (turned off, [below](#turning-a-server-off)) with one cell per live node and the first failure's
 reason and seat, and the first waiting instance's sentence and seat
-(`GET /mcp-servers`, which takes `admin` because it shows each server's
-configured launch, as `/config` does; the heartbeat carries each reason
-bounded, and the whole
+(`GET /mcp-servers`, everybody's, though only an administrator reads each
+server's configured launch, as `/config` shows it, and the reasons and
+sentences: see [Who sees what](#who-sees-what); the heartbeat carries each
+reason bounded, and the whole
 text is the node's `mcp_server_failed` log line, or `server_exited` for one
 that [went down after starting](#a-server-that-dies-or-will-not-start)). Clicking a server opens its own page:
 its state, reach and launch, every node's reason as the node reported it rather
@@ -492,7 +493,8 @@ therefore publishes what its own instances list, per server, and every node keep
 a watched copy of what the others publish. That is what puts a per-agent server's
 tools in the catalogue (`GET /tools` and the dashboard's `tools` push) on every
 node, including one that runs none of its children, and what one server's page
-reads (`GET /mcp-servers/{name}`, `admin`, see the
+reads (`GET /mcp-servers/{name}`, everybody's in
+[two readings](#who-sees-what), see the
 [API reference](../reference/api-endpoints.md#get-mcp-serversname)).
 
 - **What a listing holds.** Per server, the union of the node's instances: each
@@ -530,6 +532,73 @@ In the catalogue, a listed tool is added under a name nothing on the node
 already holds: one tool per name, as a model is offered, so a name a built-in
 or another server's tool wins shows that tool. A server's page lists every tool
 its server lists, whichever wins the name.
+
+### Who sees what
+
+Over the API, what each MCP server is doing and which tools it serves is
+everybody's: an agent without a tool is the first thing somebody asks about,
+and the answer is usually here. `GET /mcp-servers`, a server's
+`GET /mcp-servers/{name}` and the catalogue, `GET /mcp-catalogue`, answer a
+member in a reading of their own (`reading: "member"`): each server's name,
+title, what it is for and whether it is on, its state and its counts on each
+node, why an instance failed in [a class](#why-a-server-failed) and since
+when, each instance's seat and state, every tool it lists with its hints,
+risk and arguments, the tools not offered under their names, how it signs in
+(`none`, `headers` or `integration`) and the integration it reads, and the
+curated catalogue.
+
+A member's reading names no launch line, header, variable, account or call:
+no command, arguments or address; no failure's or wait's sentence, which can
+quote what a server said or name the variables an instance waits for; not the
+headers or variables a seat's credential goes in, nor the seats whose boxes
+are given the server; not the server's instructions or what removing it would
+take with it; not how its tools were used (`usage` and `calls`, which name seats, turns
+and outcomes); and no community registry or search. An administrator, whoever
+`config.read` admits, reads all of it (`reading: "admin"`), and every change
+is theirs. A member's answer is built from types of its own, copied field by
+field, so a field added to the administrator's answer reaches no member until
+it is added to theirs; the
+[API reference](../reference/api-endpoints.md#a-members-reading-of-mcp--tools)
+lists every field each reading carries.
+
+### How a server is used
+
+A server's page also answers how its tools were used over the last seven company
+days, today included (`usage` and `calls` on `GET /mcp-servers/{name}`, see the
+[API reference](../reference/api-endpoints.md#get-mcp-serversname)).
+
+- **Every call is filed under the server whose tool it named.** A call the
+  engine refused before any tool ran (the tool was not offered where it was
+  called, or a [required skill](../concepts/tool-skills.md#required-skills--load-before-use-enforcement)
+  was not loaded yet) is still that server's, so
+  a server's refused calls are counted. A call to a name nothing registered is
+  no server's.
+- **Four outcomes, each call in exactly one.** `answered`; `failed`, the server
+  answered with a failure of its own; `unavailable`, the server never saw the
+  call because it was not running or its session ended under it; and
+  `refused`, the engine refused it before it ran.
+- **Counts per tool, fleet-wide, for 181 days.** Each turn counts its own calls
+  as it runs (every phase's, every delegated worker's and its executor run's,
+  as the bridge recorded them) and states them on the record that ends it. Each
+  data node sums its turns' counts into the seat's day in the replicated
+  [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day),
+  so the counts survive the node that made the calls. A call counts on the day
+  its turn ended; a turn still running or parked has counted nothing yet. Each
+  tool's row carries the calls, the four outcomes, the time the calls that ran
+  took between them (a mean is that over the calls less the refused ones), the
+  newest call that ran, and the seats that made them.
+- **Recent calls are the turns' own detail.** The newest 50 calls in the same
+  days are read out of the phase records that made them, on every data node at
+  query time, with which nodes answered. Each names the seat, the turn, the
+  tool, the instant, the outcome, the class of a refusal and how long it took.
+  **Never its arguments or its result:** those are a model's and a server's
+  words and can hold a credential or a customer's data, and they stay on the
+  turn for whoever may read that seat's trail.
+- **The turns that called a tool** are `GET /turns?server=<name>&tool=<tool>`
+  (or `server=` alone for every tool of the server), read off the same counts
+  each turn's ending states.
+- **No argument is ever counted.** The counts are numbers per tool; nothing a
+  call carried is stored for them.
 
 ### Adding a server from the dashboard
 

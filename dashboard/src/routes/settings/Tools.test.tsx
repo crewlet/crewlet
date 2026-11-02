@@ -87,6 +87,7 @@ const org = {
 };
 
 const status: McpServersStatusAnswer = {
+  reading: "admin",
   builtin: [],
   nodes: [
     { id: "node-a", reported: true },
@@ -515,6 +516,7 @@ test("a server waiting for a provisioned credential names what it waits for, not
     "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
     "it starts once the seal reaches this node";
   const waiting: McpServersStatusAnswer = {
+    reading: "admin",
     builtin: [],
     nodes: [{ id: "node-a", reported: true }],
     servers: [

@@ -427,9 +427,16 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 					"want it left asleep", box.Paused(), box.Keepalives()-keepalives)
 			}
 
+			// THE ANNOUNCEMENT IS TAKEN BEFORE THE SIGNAL. Readmit re-fires
+			// the completion this node kept for the limit on a goroutine of
+			// its own, and that resume can finish the run and remove its
+			// row before this goroutine reads it: taken after, the read
+			// raced the re-fire and failed on a row that was rightly gone.
+			// Both deliveries then reach the claim, which is at most once,
+			// so the job is resumed once whichever wins.
 			rig.resumer.failWith(nil)
-			rig.coordinator.Readmit(conditionLimit, "swe")
 			payload, ev := rig.completion("t1")
+			rig.coordinator.Readmit(conditionLimit, "swe")
 			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
 			rig.coordinator.inflight.Wait()
 			if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Ended.Text != "fixed the flake" {

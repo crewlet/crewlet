@@ -184,8 +184,9 @@ func TestAToolCallIsTimedAndNamesItsOrigin(t *testing.T) {
 		if ex.StartedAt.Before(modelEnded) {
 			t.Errorf("%s began at %v, before its round's model half ended at %v", ex.Name, ex.StartedAt, modelEnded)
 		}
-		if ex.Origin != "mcp:github" || ex.Server != "github" {
-			t.Errorf("%s names origin %q server %q, want mcp:github / github", ex.Name, ex.Origin, ex.Server)
+		if ex.Origin != "mcp:github" || ex.Server != "github" || ex.Source != "mcp:github" {
+			t.Errorf("%s names origin %q server %q source %q, want mcp:github / github / mcp:github",
+				ex.Name, ex.Origin, ex.Server, ex.Source)
 		}
 		if ex.CallID == "" {
 			t.Errorf("%s carries no call id", ex.Name)
