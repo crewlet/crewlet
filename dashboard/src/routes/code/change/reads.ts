@@ -3,14 +3,14 @@
  * question, at the tab's floor on the code log.
  *
  * A PART IS READ A PAGE AT A TIME, its page the engine's largest (`code.
- * ReadQuery.Limit`: two hundred comments, reviews or findings): a change's
- * conversation past that is rare, and where a page carries a cursor the tab
- * that draws it SAYS that more exist rather than drawing a page as the whole.
- * A revision's FILES and a file's PATCH are not rare past one page — a large
- * change lists hundreds of files, and a generated file's patch runs to many
- * pages — so the Files tab follows both past their first page as the reader
- * asks (`Files.tsx`, through [changePartParams], so a later page asks its
- * first page's question).
+ * ReadQuery.Limit`: two hundred comments, reviews or findings), and EVERY
+ * PART A TAB DRAWS FOLLOWS ITS CURSOR AS THE READER ASKS — Load more — each
+ * later page its first page's question asked after the cursor the page before
+ * ended at ({@link usePagedChangePart}, through [changePartParams]). The
+ * engine pages a conversation OLDEST FIRST, so what one page leaves out is
+ * the newest: on a long-running change with several reviewers, the latest
+ * review, the latest replies and the newest findings. A revision's FILES and a
+ * file's PATCH page the same way (`Files.tsx`).
  * The one set read to its end is the reader's own standing findings, which a
  * review DECIDES (`useStandingFindings`).
  *
@@ -36,13 +36,17 @@
  * waits on the home's facts is read again without a clock of its own.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import {
   isAbort,
   QueryError,
+  type CodeChangeAnswer,
   type CodeChangeDetail,
+  type CodeCommentRow,
   type CodeFindingRow,
+  type CodeReviewRow,
   type CodeRevisionRow,
   type LogRefusal,
   type QueryRefusal,
@@ -117,20 +121,71 @@ export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () 
   }, [moved, enabled, again]);
 }
 
+/** The rows a page of a conversation's part carries, and each row's id. */
+const reviewsOf = (a: CodeChangeAnswer) => a.reviews ?? [];
+const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
+const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
+const rowId = (row: { id: string }) => row.id;
+const partNext = (a: CodeChangeAnswer) => a.next ?? "";
+
 /**
- * One part of a change, as its tab reads it: asked again when what it reads
- * moves — `moved`, where the tab names it finer than {@link partMovedBy}.
+ * Every page of a conversation's part the reader has asked for, joined first
+ * page first (`lib/usePaged.ts`): the first through the part's own question,
+ * each later one that question after the cursor the page before ended at —
+ * and every page held asked again when what the part reads moves (`moved`,
+ * {@link partMovedBy} where the tab names nothing finer), since a page the
+ * reader loaded is as stale as the first. `extra` narrows the part, as a
+ * revision narrows the findings.
  */
-export function useChangePart(
+function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: ChangePartName,
-  extra: Readonly<Record<string, string | number | undefined>> = {},
-  enabled = true,
-  moved: string = partMovedBy(change, part),
-) {
-  const read = useCodeQuery("code_change", changePartParams(change, part, extra), { enabled });
-  useAskAgainWhenMoved(moved, enabled, read.refetch);
-  return read;
+  part: "reviews" | "comments" | "findings",
+  pick: (a: CodeChangeAnswer) => readonly T[],
+  idOf: (row: T) => string,
+  extra: Readonly<Record<string, string | number | undefined>>,
+  moved: string,
+): Paged<T, CodeChangeAnswer> {
+  const { repo, number } = change;
+  const extraKey = JSON.stringify(extra);
+  const params = useMemo(
+    () => changePartParams({ repo, number }, part, JSON.parse(extraKey)),
+    [repo, number, part, extraKey],
+  );
+  const first = useCodeQuery("code_change", params);
+  const paged = usePaged(
+    first,
+    params,
+    (cursor) => codeRest.query("code_change", { ...params, cursor }),
+    pick,
+    idOf,
+    partNext,
+  );
+  useAskAgainWhenMoved(moved, true, paged.refresh);
+  return paged;
+}
+
+/** A change's reviews, every page the reader asked for, oldest first. */
+export function usePagedReviews(change: CodeChangeDetail): Paged<CodeReviewRow, CodeChangeAnswer> {
+  return usePagedPart(change, "reviews", reviewsOf, rowId, {}, partMovedBy(change, "reviews"));
+}
+
+/** A change's comments, every page the reader asked for, in thread order. */
+export function usePagedComments(
+  change: CodeChangeDetail,
+): Paged<CodeCommentRow, CodeChangeAnswer> {
+  return usePagedPart(change, "comments", commentsOf, rowId, {}, partMovedBy(change, "comments"));
+}
+
+/**
+ * A change's findings as revision `revision` reads them, every page the
+ * reader asked for, asked again when `moved` does.
+ */
+export function usePagedFindings(
+  change: CodeChangeDetail,
+  revision: number,
+  moved: string,
+): Paged<CodeFindingRow, CodeChangeAnswer> {
+  return usePagedPart(change, "findings", findingsOf, rowId, { revision }, moved);
 }
 
 /**

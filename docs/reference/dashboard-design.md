@@ -7822,7 +7822,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   timeline in the order the records landed on the code log — each review with
   its verdict and summary, each thread by its first comment with its replies
   under it, each revision pushed — never by a clock a node read, with the
-  reader's own comment below. **Files** is the revision's files (`rev=`, the
+  reader's own comment below. The engine pages reviews and comments oldest
+  first, so what one page leaves out is the newest: **Load more** under the
+  timeline asks each part's page after the cursor its last one ended at, and
+  the timeline is built over every page loaded, so a reply on a later page
+  joins its root. **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff), a page at a time — **Load more files** asks the page
   after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read
@@ -7832,7 +7836,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   page read (`lib/patchPages.ts`); every finding
   the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
   `code_get_change` reads by) is drawn under its last line, every thread on a
-  line of it under its line, and what has no line here — a finding whose own
+  line of it under its line — the findings and comments past their first page
+  loaded by **Load more findings and comments** above the diff, each part's
+  next page at one press — and what has no line here — a finding whose own
   lines changed (outdated), one whose file is gone, a thread on another
   revision — is drawn above the diff under a Disclosure that counts it, never
   dropped. **On the head, a reviewer picks lines by their numbers** and drafts
