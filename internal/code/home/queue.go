@@ -77,6 +77,17 @@ type TaskClose struct {
 //     landings are refused repo_mirrored: every live entry EJECTED
 //     repo_mirrored, and no train built for it ([queue.shed]).
 //
+// Beside them, every attempt it queued for a train it has since GIVEN UP — by
+// an eject, a dequeue, a target a person moved, a new train — still queued or
+// running on a commit no train of its target tests or landed is CANCELLED,
+// `dequeued` where a change its candidate merged left the queue and
+// `abandoned` otherwise (cancelAbandoned), by any turn but one that recorded
+// a new train (Work): the records that give a train up end its candidates and
+// leave its checks, which are the checks writer's, and each measures a commit
+// nothing will land while it holds a runner's cell ahead of the live train's.
+// A commit a later train tests again, which a chain built from the same rows
+// may, is queued again by that train's test (code.CheckReason.GivenUp).
+//
 // Each target's MERGE RATE is measured as its queue work is read — its
 // enqueues within code.MergeRateWindow against what its depth and batch land
 // at the rounds this node timed its trains at (mergerate.go) — and handed to
@@ -135,13 +146,25 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 // Every page counts its target's enqueues within the merge rate's window, and
 // a turn that read every page drops the merge rate of each target it did not
 // meet, whose queue has drained ([mergeRate]).
+//
+// The given-up trains' attempts the first page answers are cancelled once
+// every target has taken its step — and NOT in a turn whose step recorded a
+// new train: a chain built again from the same rows is the same commits byte
+// for byte (code/host's BuildChain), so the new train may test commits a
+// given-up attempt is measuring, and the next turn, which its candidate
+// record nudges, reads them as the live train's and cancels only the rest.
+// Cancelled one turn early, such a run would be cut and queued again
+// (code.CheckReason.GivenUp), which costs its cell the run so far.
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := code.ReadQuery{Kind: code.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &code.QueueDueQuery{
 		RepoID: repoID, EnqueuedSince: w.now().Add(-code.MergeRateWindow)}}
 	memo := newDefsMemo()
 	var (
-		failed []error
-		met    []string
+		failed    []error
+		met       []string
+		abandoned []code.AbandonedCheck
+		readAt    statelog.Position
+		built     bool
 	)
 	for {
 		a, err := w.estate.Read(ctx, q)
@@ -149,36 +172,48 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 			return errors.Join(append(failed, fmt.Errorf("home: read repository %s's queue work: %w", repoID,
 				err))...)
 		}
+		if q.Cursor == "" {
+			abandoned, readAt = a.QueueAbandoned, a.Position
+		}
 		if a.DueQueue != nil {
 			met = append(met, a.DueQueue.TargetRef)
-			if err := w.target(ctx, repoID, *a.DueQueue, memo, a.Position); err != nil {
+			recorded, err := w.target(ctx, repoID, *a.DueQueue, memo, a.Position)
+			if err != nil {
 				failed = append(failed, err)
 			}
+			built = built || recorded
 		}
 		if a.Next == "" {
 			w.rate.seen(repoID, met)
 		}
 		if a.Next == "" || ctx.Err() != nil {
-			return errors.Join(append(failed, ctx.Err())...)
+			break
 		}
 		q.Cursor = a.Next
 	}
+	if !built && ctx.Err() == nil {
+		if err := w.cancelAbandoned(ctx, repoID, abandoned, readAt); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return errors.Join(append(failed, ctx.Err())...)
 }
 
-// target is one target's next step, from the snapshot d was read in at.
+// target is one target's next step, from the snapshot d was read in at, and
+// whether it recorded a new train.
 func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo *defsMemo,
-	at statelog.Position) error {
+	at statelog.Position) (bool, error) {
 
 	w.rate.measure(repoID, d, w.now())
 	switch {
 	case len(d.Entries) == 0:
-		return nil
+		return false, nil
 	case d.Mirrored:
-		return w.shed(ctx, repoID, d, at)
+		return false, w.shed(ctx, repoID, d, at)
 	case len(d.Required) == 0:
-		return nil
+		return false, nil
 	case len(d.Train) > 0 && trainStands(d):
-		return w.test(ctx, repoID, d, memo, at)
+		return false, w.test(ctx, repoID, d, memo, at)
 	}
 	return w.build(ctx, repoID, d, at)
 }
@@ -229,17 +264,18 @@ func BatchOf(waiting, depth, batch int) int {
 }
 
 // build builds a train of d's live entries onto its tip as one chain and
-// records it, ejecting the entries the chain skipped. A chain is never
-// refused whole: an entry it did not reach within its time
-// (code.ChainBuildDeadline) or its objects' bound (code.MaxChainObjectBytes)
-// is absent from its answer, and stays queued for the train after this one.
-func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at statelog.Position) error {
+// records it, ejecting the entries the chain skipped; it answers whether the
+// train was recorded. A chain is never refused whole: an entry it did not
+// reach within its time (code.ChainBuildDeadline) or its objects' bound
+// (code.MaxChainObjectBytes) is absent from its answer, and stays queued for
+// the train after this one.
+func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at statelog.Position) (bool, error) {
 	about := fmt.Sprintf("target %s at %s", d.TargetRef, short(d.Tip))
 	if d.Tip == code.ZeroOID {
 		// NO TIP TO BUILD ONTO: the branch was deleted under its queue; a
 		// person's push creating it again gives its train a base.
 		w.log.Debug("code_queue_no_target", "repo", repoID, "about", about)
-		return nil
+		return false, nil
 	}
 	waiting := len(d.Entries)
 	if d.More {
@@ -257,14 +293,14 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	built, err := w.chains.BuildChain(ctx, b)
 	switch {
 	case err != nil:
-		return fmt.Errorf("home: build the train of %s: %w", about, err)
+		return false, fmt.Errorf("home: build the train of %s: %w", about, err)
 	case built.Status != "":
 		// THE REPOSITORY'S ROW REFUSES EVERY MERGE, as the copy the chain was
 		// to be built over holds it — past this snapshot: nothing was built,
 		// and the next turn reads the queue again (a pull mirror's, to shed).
 		w.log.Debug("code_queue_chain_refused", "repo", repoID, "about", about, "refusal", built.Status,
 			"detail", built.Detail)
-		return nil
+		return false, nil
 	}
 	applied := false
 	defer func() {
@@ -307,11 +343,11 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	}
 	if len(ejected) > 0 {
 		if err = w.eject(ctx, repoID, about, ejected, at); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if len(kept) == 0 {
-		return nil
+		return false, nil
 	}
 	cand := code.Candidate{RepoID: repoID, TargetRef: d.TargetRef, Train: train, BaseOID: d.Tip, Pack: built.Pack}
 	for start := 0; start < len(kept); start += n {
@@ -330,7 +366,10 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: opID, Seen: at, DropEpoch: built.DropEpoch,
 		Candidate: &cand})
 	if err != nil {
-		return fmt.Errorf("home: record the train of %s: %w", about, err)
+		// RECORDED OR NOT, NOBODY KNOWS: answered as recorded, so the
+		// given-up attempts wait a turn rather than cut a run the train
+		// may be testing.
+		return true, fmt.Errorf("home: record the train of %s: %w", about, err)
 	}
 	applied = res.Outcome == statelog.OutcomeApplied
 	if applied && res.Refusal == "" {
@@ -340,7 +379,7 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "candidate",
 			"refusal", res.Refusal, "detail", res.Detail)
 	}
-	return nil
+	return res.Refusal == "", nil
 }
 
 // test is a standing train's next step: its longest green prefix landed;
@@ -606,6 +645,40 @@ func (w *queue) eject(ctx context.Context, repoID, about string, entries []code.
 		}
 	}
 	return nil
+}
+
+// cancelAbandoned ends each of attempts — an attempt its queue queued, of a
+// train it has since given up (code.AbandonedCheck) — cancelled for its
+// reason, abandoned or dequeued, one check write an attempt, as the check work
+// ends a head's its change moved on from (checks.go's cancel): the commit it
+// measures is one nothing will land, and a runner claims oldest first, so
+// left alone it holds a cell — a git node's container or the company's e2b
+// box time — ahead of the live train's and its bisect's. A box running one
+// stops once its row has ended. A refusal is the rows answering — the attempt
+// ended meanwhile — and only a write that decided nothing fails the turn, the
+// repository then listed again; every attempt is asked either way.
+func (w *queue) cancelAbandoned(ctx context.Context, repoID string, attempts []code.AbandonedCheck,
+	at statelog.Position) error {
+
+	var failed []error
+	for _, x := range attempts {
+		summary := "its merge queue gave up the train this candidate was in"
+		if x.Reason == code.CheckReasonDequeued {
+			summary = "a change this candidate merged left its merge queue"
+		}
+		if err := w.checks.write(ctx, fmt.Sprintf("target %s candidate %s at %s", x.Target, x.CandidateID,
+			short(x.OID)), code.ChecksRequest{OpID: statelog.NewOpID(w.now(), ""), Seen: at,
+			Finished: &code.CheckFinished{CheckKey: x.CheckKey, State: code.CheckStateCancelled, Reason: x.Reason,
+				FinishedAt: w.now().UTC(), Summary: summary}},
+			fmt.Sprintf("cancel check %s of %s for %s", x.Name, short(x.OID), x.Target)); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if len(attempts) > 0 {
+		w.log.Debug("code_queue_checks_cancelled", "repo", repoID, "attempts", len(attempts),
+			"failed", len(failed))
+	}
+	return errors.Join(failed...)
 }
 
 // commitStates is where each of names stands on commit by its latest

@@ -32,6 +32,22 @@ import (
 // head's checks: a check is a measurement of a commit for its target, whatever
 // purpose queued it (ADR-0091), and a head its gate saw pass needs no run
 // again.
+//
+// A GIVEN-UP TRAIN'S CHECKS, ON THE FIRST PAGE: a repository's first page
+// answers, beside its first target's work, the attempts its queues queued
+// that have not ended, on a commit no train of their target tests or landed
+// ([AbandonedCheck]) — every target's, since an eject or a dequeue of a
+// target's last live entry leaves it no page of its own — which the home
+// cancels once its targets have taken their steps. An eject, a dequeue, a
+// target a person moved and a new candidate record each give a train up in
+// their apply and touch no check row, which is the checks writer's alone: so
+// the queue that gave the train up ends its attempts, as the check work ends a
+// head's its change moved on from. Left running, every one measures a commit
+// nothing will land while it holds a runner's cell ahead of the live train's,
+// since a runner claims oldest first — up to depth times the required checks
+// a red first candidate, an eject, a dequeue or a person's push. The listing
+// of repositories names, after those holding a live entry, those owing such a
+// cancellation, so a turn that failed to cancel is listed again.
 
 // QueueDue is one target's queue work as one snapshot holds it
 // ([ReadAnswer.DueQueue]).
@@ -136,13 +152,104 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 	return TipCheck{}, false
 }
 
+// AbandonedCheck is an attempt a merge queue queued — a candidate's tip's or
+// a bisect probe's — that has not ended, on a commit its target's queue no
+// longer tests: its key, the candidate it was queued for and the reason the
+// home cancels it for — [CheckReasonDequeued] where a change that candidate
+// merged left its queue, [CheckReasonAbandoned] for any other giving up.
+//
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
+// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
+// has run without it — none of the domain is on main — so a build answering a
+// `queue_due` read with none is one nobody ran; were one ever to run first,
+// its home would cancel nothing, which is what such a build knows.
+type AbandonedCheck struct {
+	CheckKey
+	CandidateID string      `json:"candidate_id"`
+	Reason      CheckReason `json:"reason"`
+}
+
+// MaxAbandonedChecks is the most given-up attempts one `queue_due` page
+// answers: a whole train's at the deepest queue and the widest gate,
+// MaxQueueDepth × MaxRequiredChecks — so the attempts one giving up leaves
+// are cancelled in one turn — and the rest on the next, which each
+// cancellation's record nudges.
+const MaxAbandonedChecks = MaxQueueDepth * MaxRequiredChecks
+
+// abandonedChecksIn is repository repoID's given-up attempts, at most
+// [MaxAbandonedChecks] in the order of code_checks_train_idx: one seek of that
+// index, each attempt's commit sought in code_queue_commit_idx and its
+// candidate in code_queue_dequeued_idx (replicated 0135).
+func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]AbandonedCheck, error) {
+	rows, err := tx.QueryContext(ctx, abandonedChecksSQL, repoID, MaxAbandonedChecks)
+	if err != nil {
+		return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []AbandonedCheck
+	for rows.Next() {
+		x := AbandonedCheck{CheckKey: CheckKey{RepoID: repoID}, Reason: CheckReasonAbandoned}
+		var dequeued bool
+		if err := rows.Scan(&x.Target, &x.CandidateID, &x.OID, &x.Name, &x.Attempt, &dequeued); err != nil {
+			return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+		}
+		if dequeued {
+			x.Reason = CheckReasonDequeued
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// The given-up trains' reads (registered in plan_test.go): a repository's
+// attempts over code_checks_train_idx, and the repositories holding one,
+// grouped on its leading column — each index's partial predicate spelled as
+// it declares it. An attempt is GIVEN UP where no entry of its target's queue
+// a train tests or landed was built at its commit (code_queue_commit_idx), and
+// NOT where its candidate is gone: a train built again from the same rows is
+// the same commits byte for byte (code/host's BuildChain), and its dispatch of
+// a commit an attempt is already measuring is answered from that attempt's row
+// (decideQueued), which keeps naming the candidate it was first queued for —
+// so the live train's own measurement may name a dropped candidate, and only
+// the commit says whether anything still tests it. A landed commit's checks
+// are its target's tip work's to read.
+const (
+	abandonedChecksSQL = `SELECT k.target_ref, k.candidate_id, k.commit_oid, k.name, k.attempt,
+			EXISTS (SELECT 1 FROM code_queue AS d INDEXED BY code_queue_dequeued_idx
+				WHERE d.repo_id = k.repo_id AND d.candidate_id = k.candidate_id
+					AND d.state = 'dequeued' AND d.candidate_id != '')
+		FROM code_checks AS k INDEXED BY code_checks_train_idx
+		WHERE k.repo_id = ?1 AND k.state IN ('queued', 'running') AND k.candidate_id != ''
+			AND ` + untested + `
+		ORDER BY k.target_ref, k.candidate_id, k.commit_oid, k.name, k.attempt LIMIT ?2`
+	abandonedReposSQL = `SELECT k.repo_id FROM code_checks AS k INDEXED BY code_checks_train_idx
+		WHERE k.repo_id > ?1 AND k.state IN ('queued', 'running') AND k.candidate_id != ''
+			AND ` + untested + `
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id AND r.status = 'active')
+		GROUP BY k.repo_id ORDER BY k.repo_id LIMIT ?2`
+	// untested is an attempt k's commit tested by no train of its target and
+	// landed by none.
+	untested = `NOT EXISTS (SELECT 1 FROM code_queue AS q INDEXED BY code_queue_commit_idx
+				WHERE q.repo_id = k.repo_id AND q.target_ref = k.target_ref AND q.commit_oid = k.commit_oid
+					AND q.state IN ('testing', 'landed') AND q.commit_oid != '')`
+)
+
 // dueQueue files repository repoID's next target's queue work after cursor —
 // "" for its first — into out, with that target as the next page's cursor.
 // The target is the first holding a live entry past cursor: the first page's
 // one row of queueOfRepoSQL, a later page's of queueOfRepoAfterSQL past every
 // seq of the cursor's target. A non-zero since counts the target's enqueues
-// from it ([enqueuedSince]) where its gate requires a check.
+// from it ([enqueuedSince]) where its gate requires a check. The first page
+// answers the repository's given-up attempts too ([abandonedChecksIn]),
+// whether or not a target holds a live entry.
 func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
+	if cursor == "" {
+		abandoned, err := abandonedChecksIn(ctx, tx, repoID)
+		if err != nil {
+			return err
+		}
+		out.QueueAbandoned = abandoned
+	}
 	stmt, args := queueOfRepoSQL, []any{repoID, 1}
 	if cursor != "" {
 		stmt, args = queueOfRepoAfterSQL, []any{repoID, cursor, cursor, cursor, int64(math.MaxInt64), 1}

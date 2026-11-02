@@ -66,7 +66,9 @@ import (
 //     did not run ([CheckReasonDefsInvalid]), once the target's file runs —
 //     and its requeue the next after an attempt its infrastructure ended
 //     ([CheckReason.Requeued]) while that attempt is below
-//     [AutoRequeueAttempts]; no attempt passes [MaxCheckAttempts]; an attempt
+//     [AutoRequeueAttempts], or after one its merge queue cancelled giving
+//     its train up ([CheckReason.GivenUp]), which measured nothing of the
+//     commit; no attempt passes [MaxCheckAttempts]; an attempt
 //     already queued is answered from its row, unchanged, so a home's second
 //     dispatch of a head for its target queues nothing — and its dispatch for
 //     another target queues that target's own.
@@ -933,7 +935,8 @@ func (d checksDecision) refuse(code CheckRefusal, detail string) checksDecision 
 // decideQueued is the attempt arithmetic: the attempt queued already is
 // answered from its row; otherwise it follows the latest attempt, which has
 // ended, and — for a requeue — ended for its infrastructure below
-// AutoRequeueAttempts; and none passes MaxCheckAttempts.
+// AutoRequeueAttempts, or cancelled by its merge queue giving its train up;
+// and none passes MaxCheckAttempts.
 func decideQueued(ctx context.Context, tx *sql.Tx, q CheckQueued, d checksDecision, held bool,
 	named func(CheckKey) string) (checksDecision, error) {
 
@@ -988,12 +991,13 @@ func decideQueued(ctx context.Context, tx *sql.Tx, q CheckQueued, d checksDecisi
 		return d.refuse(CheckRefusalRerunGenuine, fmt.Sprintf("%s ended %s (%s); the home's dispatch queues "+
 			"again only an attempt a dispatch errored for a checks file that did not run, and a rerun runs any "+
 			"other", named(prev), latest.State, latest.Reason)), nil
-	case q.Reason == QueueRequeue && (latest.State != CheckStateErrored || !latest.Reason.Requeued()):
+	case q.Reason == QueueRequeue && !requeuedAfter(latest.State, latest.Reason):
 		d.row = &latest
 		return d.refuse(CheckRefusalRerunGenuine, fmt.Sprintf("%s ended %s (%s), which its infrastructure "+
 			"did not cause; the home queues again only an attempt its runner lost or its box or setup "+
-			"failed", named(prev), latest.State, latest.Reason)), nil
-	case q.Reason == QueueRequeue && latest.Attempt >= AutoRequeueAttempts:
+			"failed, or one its merge queue cancelled giving its train up", named(prev), latest.State,
+			latest.Reason)), nil
+	case q.Reason == QueueRequeue && latest.State == CheckStateErrored && latest.Attempt >= AutoRequeueAttempts:
 		d.row = &latest
 		return d.refuse(CheckRefusalAttemptsExhausted, fmt.Sprintf("%s ended %s, and the home queues a "+
 			"check again on its own to at most attempt %d (code.AutoRequeueAttempts); a rerun runs it again",

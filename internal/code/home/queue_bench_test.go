@@ -42,6 +42,19 @@ import (
 // saturation — the time a person waits for a change, from the moment it was
 // queued, is what a batch is there to bound. Bounded: -benchtime 1x runs
 // each cell's 2 000 rounds once, a fixed seed a run.
+//
+// THE WORKER CANCELS A GIVEN-UP TRAIN'S CHECKS (queue.go's cancelAbandoned),
+// and the model holds it as it stands: a run lasts one round, and a train is
+// given up only between rounds — its culprit ejected after its bisect, its
+// target moved by a landing, a new train recorded — when every run it queued
+// has ended, so a cancellation ends no run the model charges and
+// `checks/landed` is what the worker spends with every cell it asks for free.
+// What cancelling saves is CELL TIME UNDER CONTENTION — a git node's
+// `git.max_checks` containers, the company's e2b box time — that a dead
+// train's runs would hold ahead of the live train's and its probes', which
+// claim oldest first: a model of unbounded cells prices none of it, so the
+// cancellation moves no figure here and no default (re-read on this code: the
+// table in config.CodeDefaultQueueBatch's comment, unchanged).
 func BenchmarkQueueThroughput(b *testing.B) {
 	for _, pct := range []int{1, 5, 10} {
 		for _, depth := range []int{1, 4, 8} {

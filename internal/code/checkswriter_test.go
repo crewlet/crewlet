@@ -409,6 +409,57 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	}
 }
 
+// A GIVEN-UP TRAIN'S CANCELLED ATTEMPT IS QUEUED AGAIN: an attempt a merge
+// queue's home cancelled giving its train up — `dequeued` or `abandoned` —
+// measured nothing of its commit, and a train built again from the same rows
+// is the same commits, so the home's requeue follows it, past
+// AutoRequeueAttempts (no cell failed it) and to MaxCheckAttempts alone; an
+// attempt cancelled for any other reason — a head its change moved on from —
+// is no requeue's.
+//
+// Mutation: answer GivenUp false → the requeue after a dequeue is refused,
+// red; hold a given-up requeue to AutoRequeueAttempts → the requeue past it
+// is refused, red; count a superseded cancel as given up → its requeue is
+// queued, red.
+func TestAGivenUpTrainsCancelledAttemptIsQueuedAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := changeRepo(t, n, "web")
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	cancelling := func(key code.CheckKey, reason code.CheckReason) code.ChecksRequest {
+		return code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_cancel"),
+			Finished: &code.CheckFinished{CheckKey: key, State: code.CheckStateCancelled, Reason: reason,
+				FinishedAt: harnessAt.Add(time.Minute), Summary: "its merge queue gave its train up"}}
+	}
+
+	res, err := w.Publish(ctx, queueing(checkOn(repo, 1), code.QueueDispatch))
+	requireChecked(t, "the dispatch", res, err)
+	for attempt := 1; attempt <= code.AutoRequeueAttempts+1; attempt++ {
+		reason := code.CheckReasonAbandoned
+		if attempt%2 == 1 {
+			reason = code.CheckReasonDequeued
+		}
+		res, err = w.Publish(ctx, cancelling(checkOn(repo, attempt), reason))
+		requireChecked(t, fmt.Sprintf("attempt %d cancelled %s", attempt, reason), res, err)
+		res, err = w.Publish(ctx, queueing(checkOn(repo, attempt+1), code.QueueRequeue))
+		requireChecked(t, fmt.Sprintf("the requeue after attempt %d cancelled %s", attempt, reason), res, err)
+		if res.Row == nil || res.Row.State != code.CheckStateQueued || res.Row.Attempt != attempt+1 {
+			t.Fatalf("the requeue after attempt %d cancelled %s is %+v, want attempt %d queued", attempt, reason,
+				res.Row, attempt+1)
+		}
+	}
+
+	moved := code.CheckKey{RepoID: repo, OID: oidOf("A"), Target: mainRef, Name: "unit", Attempt: 1}
+	res, err = w.Publish(ctx, queueing(moved, code.QueueDispatch))
+	requireChecked(t, "the other commit's dispatch", res, err)
+	res, err = w.Publish(ctx, cancelling(moved, code.CheckReasonSuperseded))
+	requireChecked(t, "the superseded head's cancel", res, err)
+	moved.Attempt = 2
+	res, err = w.Publish(ctx, queueing(moved, code.QueueRequeue))
+	requireCheckRefused(t, "a requeue after a superseded head's cancel", res, err, code.CheckRefusalRerunGenuine)
+}
+
 // THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and
 // a claim naming a person's CI are a principal's writes, asked only as a
 // rerun and a report (checkasks.go), so through the engine's own arms each is

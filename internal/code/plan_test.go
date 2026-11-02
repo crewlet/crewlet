@@ -306,6 +306,11 @@ const (
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	bodyKey       = "sqlite_autoindex_code_change_bodies_1"
+	// untestedKey and dequeuedKey are replicated 0135's indexes as a
+	// given-up attempt's tests seek them: its commit among the ones its
+	// target's trains test or landed, and its candidate among the dequeued.
+	untestedKey = "code_queue_commit_idx (repo_id=? AND target_ref=? AND commit_oid=?)"
+	dequeuedKey = "code_queue_dequeued_idx (repo_id=? AND candidate_id=?)"
 	// A change's conversation's keys.
 	conversationKey = "sqlite_autoindex_code_conversations_1"
 	reviewerKey     = "sqlite_autoindex_code_reviewers_1"
@@ -844,6 +849,15 @@ func registeredStatements() map[string]statement {
 			[]string{"code_queue_target_ejected_idx (repo_id=? AND target_ref=? AND ended_at>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
+		// A GIVEN-UP TRAIN'S CHECKS (queuework.go): a repository's attempts
+		// a queue queued, not yet ended, by the index partial on exactly
+		// those, each commit sought among the ones its target's trains test
+		// or landed and each candidate among the dequeued entries; and the
+		// repositories holding one, by its leading column.
+		"a repository's given-up train checks": {abandonedChecksSQL, []any{"repo-1", MaxAbandonedChecks},
+			[]string{"code_checks_train_idx (repo_id=?)", untestedKey, dequeuedKey}},
+		"repositories holding a given-up train's checks": {abandonedReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_checks_train_idx (repo_id>?)", untestedKey, repoKey + " (id=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"a target's green": {greenSQL, []any{"repo-1", "refs/heads/main"},

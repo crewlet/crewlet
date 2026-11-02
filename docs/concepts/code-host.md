@@ -6351,8 +6351,9 @@ queue order with their places, beside the trains testing a named
 repository's branches; `landings`, one protected branch's landings above its
 green row; and `green`, each protected branch's newest commit whose required
 checks passed. The repository's home reads a fourth, `queue_due` — the active
-repositories holding a live entry, and one repository's queue work a branch a
-page — which no person or seat may read.
+repositories holding a live entry or a given-up train's unfinished check, and
+one repository's queue work a branch a page, its first page with those
+checks — which no person or seat may read.
 
 #### What the home does with a queue
 
@@ -6416,6 +6417,20 @@ holds.
   four and 44 at eight, while a queue that never batches falls further
   behind with every red candidate. A larger batch spends fewer check runs a
   landed change (0.89 at two, 0.78 at four, 0.63 at eight) for that wait.
+- **Cancel what a given-up train still runs.** An eject, a dequeue, a person
+  moving the branch and a new train each give the branch's train up, and
+  its candidates' and probes' checks still queued or running measure commits
+  nothing will land — while holding a git node's `git.max_checks` cells or
+  the company's e2b box time ahead of the live train's, since a runner takes
+  the oldest queued first. The home **cancels** each of them, `dequeued`
+  where a change its candidate merged left the queue and `abandoned`
+  otherwise, and a box running one stops once its row has ended. A check is
+  given up by its COMMIT, not its candidate: a train built again from the
+  same entries is the same commits, and its test of one an earlier train's
+  run is measuring takes that run as its own, so the home cancels nothing in
+  the turn that records a train and, in the next, only what the new train
+  does not test. A commit a later train tests again after its run was
+  cancelled is queued again, up to the check's last attempt.
 - **Close the work item.** Once a landing has applied, every landed entry
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table

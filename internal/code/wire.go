@@ -1110,7 +1110,8 @@ const (
 	ReadQueue ReadKind = "queue"
 	// ReadQueueDue is the queue work a repository's HOME git node owes
 	// ([QueueDueQuery]): with no repository, the active repositories holding
-	// a live entry, by id; with one, its live entries in queue order. The
+	// a live entry or a given-up train's attempt, by id; with one, its queue
+	// work a target a page, and on its first page those attempts. The
 	// engine's own read, as `changes_due` is.
 	ReadQueueDue ReadKind = "queue_due"
 	// ReadLandings is one protected target's landings above its green
@@ -1664,6 +1665,11 @@ type ReadAnswer struct {
 	// queue work ([QueueDue]), the target the next page's cursor; nil past
 	// the last.
 	DueQueue *QueueDue `json:"due_queue,omitempty"`
+	// QueueAbandoned is, on a `queue_due` read's first page of one
+	// repository, the attempts its queues queued that have not ended, on
+	// commits no train of their target tests or landed ([AbandonedCheck]):
+	// what its home cancels once its targets have taken their steps.
+	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
 	// its page reaches; Ejected, on a named repository's first page, the

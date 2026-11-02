@@ -401,6 +401,26 @@ func (r CheckReason) Requeued() bool {
 	return r == CheckReasonRunnerLost || r == CheckReasonBoxFailed || r == CheckReasonSetupFailed
 }
 
+// GivenUp reports a cancellation a merge queue's home made of a train it gave
+// up — a change of it dequeued, or the train abandoned otherwise — which
+// measured nothing of the commit and judged nothing of it: a chain built again
+// from the same rows is the same commits byte for byte (code/host's
+// BuildChain), so a train built after the cancellation may test that commit
+// again, and its home queues the check again, below MaxCheckAttempts — never
+// AutoRequeueAttempts, since no cell failed it.
+func (r CheckReason) GivenUp() bool {
+	return r == CheckReasonDequeued || r == CheckReasonAbandoned
+}
+
+// requeuedAfter reports an ending the home's own requeue follows: one its
+// infrastructure caused, below [AutoRequeueAttempts], or a given-up train's
+// cancellation ([CheckReason.GivenUp]), below MaxCheckAttempts — the bound
+// the decide holds every attempt to.
+func requeuedAfter(state CheckState, reason CheckReason) bool {
+	return (state == CheckStateErrored && reason.Requeued()) ||
+		(state == CheckStateCancelled && reason.GivenUp())
+}
+
 // CheckRefusal is why a repository's checks writer decided nothing of a write
 // of its checks ([ChecksRequest]) — a code its asker reads as "<code>:
 // <sentence>", the sentence the decide's ([ChecksResult.Detail]). A named

@@ -21,7 +21,8 @@ import (
 //     coalesced: only the newest landing is ever dispatched, so a burst of
 //     landings costs one round of checks, not one a landing;
 //   - an attempt there its infrastructure ended is queued again below
-//     code.AutoRequeueAttempts;
+//     code.AutoRequeueAttempts, and one a merge queue cancelled giving its
+//     train up below code.MaxCheckAttempts;
 //   - every required check passed (or skipped) there: the green row moved onto
 //     it;
 //   - one failed there: the failed checks BISECTED over the landing rows —
@@ -192,7 +193,10 @@ func passedAll(l code.TipLanding, names []string) bool {
 // landingStates is where each of a set of checks stands on one landing by its
 // latest attempt: none (missing), errored at a dispatch for a checks file
 // that did not run (invalid), still to run (pending), ended by its
-// infrastructure below code.AutoRequeueAttempts (requeue), ended otherwise
+// infrastructure below code.AutoRequeueAttempts or cancelled by a merge queue
+// giving its train up below code.MaxCheckAttempts (requeue) — neither
+// measured the commit, and a chain built again is the same commits, so a live
+// train may test one a given-up train's cancellation left — ended otherwise
 // without a measurement (stuck), failed — and, beside them, passed.
 type landingStates struct {
 	missing, invalid, pending, requeue, stuck, failed []string
@@ -227,7 +231,8 @@ func statesOf(check func(name string) (code.TipCheck, bool), names []string) lan
 			s.pending = append(s.pending, name)
 		case c.State == code.CheckStateErrored && c.Reason == code.CheckReasonDefsInvalid:
 			s.invalid = append(s.invalid, name)
-		case c.State == code.CheckStateErrored && c.Reason.Requeued() && c.Attempt < code.AutoRequeueAttempts:
+		case c.State == code.CheckStateErrored && c.Reason.Requeued() && c.Attempt < code.AutoRequeueAttempts,
+			c.State == code.CheckStateCancelled && c.Reason.GivenUp() && c.Attempt < code.MaxCheckAttempts:
 			s.requeue = append(s.requeue, name)
 		default:
 			s.stuck = append(s.stuck, name)
