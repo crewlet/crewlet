@@ -1230,8 +1230,8 @@ publication, one rewrite of a repository at a time
 
 - **Weekly, on the maintainer's own schedule.** Every minute a git node lists
   the repositories it may owe an expunge — first those with one open or a
-  purge requested, then every active or archived repository last expunged a
-  week ago or never, least recently expunged first, a seat's
+  purge requested, then every active or archived repository last expunged or
+  found clean a week ago or never, least recently first, a seat's
   [scratch repositories](#repositories-made-by-tools) as much as projects —
   and for each it maintains, it **scans**: one walk of the repository's
   history from what it keeps (below) weighs what nothing reaches in the packs
@@ -1239,12 +1239,16 @@ publication, one rewrite of a repository at a time
   grace below — never in a younger pack, which it keeps whole. The expunge
   is **due** once that is more than a quarter of the repository's live pack
   bytes and at least 64 MiB, and it then rewrites only packs that hold some
-  of it, those freeing the most for their size first; below either, rewriting the kept packs, which
-  every git node holding the repository then downloads again, costs more
-  than the bytes it frees, and the repository is not scanned again on that
-  node for a week, so a clean repository's history is walked at most once a
-  week. The 64 MiB is provisional, until the expunge's benchmark has priced a
-  cycle against what it frees.
+  of it, those freeing the most for their size first: below a quarter,
+  rewriting the kept packs, which every git node holding the repository then
+  downloads again, costs more than the bytes it frees. A repository whose
+  live bytes are under 64 MiB is judged from its size alone, never
+  downloaded or walked. One found clean either way is recorded so on the
+  repository, which takes it off every git node's list for a week — after a
+  restart, an upgrade or a new git node as much as before — so a clean
+  repository's history is walked at most once a week. The 64 MiB is
+  provisional, until the expunge's benchmark has priced a cycle against
+  what it frees.
 - **At once, when a person purges** the repository's unreachable objects —
   `code_purge_unreachable` from your own assistant, **Purge unreachable
   history** on the repository's Settings tab in the dashboard, or

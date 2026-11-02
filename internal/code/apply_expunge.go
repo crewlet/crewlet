@@ -289,12 +289,29 @@ func (a *Applier) applyExpungeCommit(ctx context.Context, tx *sql.Tx, at applyCo
 			request, requested = "", 0
 		}
 	}
+	// THE COMMIT JUDGES THE REPOSITORY TOO: its instant is also when the
+	// repository was last judged (expunge_scanned_at), which the weekly arm
+	// of the expunge listing is keyed by ([ExpungeScan]).
 	if _, err := tx.ExecContext(ctx, commitCountersSQL, moved.addedLive.packs, moved.addedLive.bytes,
-		moved.addedLive.objects, at.at(), droppedObjects, droppedBytes, request, requested, at.packed,
+		moved.addedLive.objects, at.at(), at.at(), droppedObjects, droppedBytes, request, requested, at.packed,
 		c.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count the commit at %s: %w", at.position, err)
 	}
 	return moved.rows + 1, nil
+}
+
+// applyExpungeScan records a scan that found no expunge due ([ExpungeScan]):
+// the repository's expunge_scanned_at moves to the record's broker instant,
+// which the `expunge_due` listing's weekly arm is keyed by. The decide held
+// that no expunge was open; the apply writes the one column whatever the
+// repository's row holds, since a scan's record names nothing else.
+func (a *Applier) applyExpungeScan(ctx context.Context, tx *sql.Tx, at applyContext, sc ExpungeScan) (int,
+	error) {
+
+	if _, err := tx.ExecContext(ctx, scanSQL, at.at(), at.packed, sc.RepoID); err != nil {
+		return 0, fmt.Errorf("code: record %s's clean scan at %s: %w", sc.RepoID, at.position, err)
+	}
+	return 1, nil
 }
 
 // topOf reports whether ids are chain's top layers, in chain order — none
@@ -313,7 +330,8 @@ func topOf(chain []LayerRow, ids []string) bool {
 }
 
 // The expunge apply's statements, each registered in plan_test.go: the
-// repository's expunge state and its counters by its key; whether a pack of
+// repository's expunge state, its counters and its clean scan by its key;
+// whether a pack of
 // the repository dates its content from before a request, one seek of the
 // packs' content index (replicated 0090) that stops at its first row.
 const (
@@ -331,7 +349,8 @@ const (
 		published_packs = ?, published_objects = ?, layers_position = ?,
 		drop_epoch = ?, expunge_id = ?, version = ? WHERE id = ?`
 	commitCountersSQL = `UPDATE code_repos SET live_packs = live_packs + ?, live_bytes = live_bytes + ?,
-		live_objects = live_objects + ?, expunge_id = '', expunged_at = ?, expunge_dropped_objects = ?,
-		expunge_dropped_bytes = ?, expunge_request = ?, expunge_request_position = ?, version = ?
-		WHERE id = ?`
+		live_objects = live_objects + ?, expunge_id = '', expunged_at = ?, expunge_scanned_at = ?,
+		expunge_dropped_objects = ?, expunge_dropped_bytes = ?, expunge_request = ?,
+		expunge_request_position = ?, version = ? WHERE id = ?`
+	scanSQL = `UPDATE code_repos SET expunge_scanned_at = ?, version = ? WHERE id = ?`
 )

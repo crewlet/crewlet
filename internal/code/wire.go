@@ -967,10 +967,12 @@ const (
 	// ReadExpungeDue is the active and archived repositories with an
 	// expunge open or a purge requested, by id, each with what its
 	// maintainer finishes or serves it by — and, asked with
-	// [ReadQuery.ExpungedBefore], then every other active or archived
-	// repository last expunged at or before that instant or never, least
-	// recently expunged first, whose maintainer judges whether an expunge
-	// is due on its own schedule: the listing a repository's maintainer
+	// [ReadQuery.ScannedBefore], then every other active or archived
+	// repository last JUDGED at or before that instant or never — its
+	// last expunge's commit or its last clean scan's record
+	// ([ExpungeScan]), whichever came later — least recently judged first,
+	// whose maintainer judges whether an expunge is due on its own
+	// schedule: the listing a repository's maintainer
 	// polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
@@ -1405,19 +1407,20 @@ type ReadQuery struct {
 	// (ErrInvalid) — the push waits for another attempt, never answered as
 	// a repository with no green row.
 	MirrorPush *MirrorPushQuery `json:"mirror_push,omitempty"`
-	// ExpungedBefore asks an `expunge_due` read for its WEEKLY ARM beside
+	// ScannedBefore asks an `expunge_due` read for its WEEKLY ARM beside
 	// its open one: after every repository with an expunge open or a purge
 	// requested, every other active or archived repository — a scratch one
-	// as much as a project — last expunged at or before it, or never,
-	// least recently expunged first; the maintainer asks from its clock
-	// less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
+	// as much as a project — last judged at or before it (an expunge
+	// committed in it, or a scan of it found clean, [ExpungeScan]), or
+	// never, least recently judged first; the maintainer asks from its
+	// clock less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
 	// other kind. An estate request's field and no record's, so it takes
 	// no versionedFields row: under the code domain's stated condition (no
 	// build of main carries internal/code while it is unmerged) every node
 	// that serves the read reads it; were the domain to reach main first, a
 	// node of a build that predates it would answer the open arm alone,
 	// which delays an expunge on the schedule and drops no object.
-	ExpungedBefore time.Time `json:"expunged_before,omitzero"`
+	ScannedBefore time.Time `json:"scanned_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repository and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1740,14 +1743,16 @@ type CompactResult struct {
 
 // ExpungeProposal is what an expunge's asker hands the repository's committer
 // to decide ([Committer.ProposeExpunge]): EXACTLY ONE of a person's request, a
-// maintainer's begin and its commit, each decided alone as a record of its
-// own op. The set field's own id is the record's operation id — a request's
-// RequestID, a begin's ExpungeID, a commit's CommitID — and a begin's or a
-// commit's Seen its publish's session floor, so it carries nothing beside it.
+// maintainer's begin, its commit and its clean scan, each decided alone as a
+// record of its own op. The set field's own id is the record's operation id —
+// a request's RequestID, a begin's ExpungeID, a commit's CommitID, a scan's
+// ScanID — and a begin's, a commit's or a scan's Seen its publish's session
+// floor, so it carries nothing beside it.
 type ExpungeProposal struct {
 	Request *ExpungeRequest `json:"request,omitempty"`
 	Begin   *ExpungeBegin   `json:"begin,omitempty"`
 	Commit  *ExpungeCommit  `json:"commit,omitempty"`
+	Scan    *ExpungeScan    `json:"scan,omitempty"`
 }
 
 // ExpungeResult is what became of one expunge proposal.

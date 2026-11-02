@@ -1748,6 +1748,42 @@ type ExpungeCommit struct {
 	Add []PackRef `json:"add,omitempty"`
 }
 
+// ExpungeScan records that a scan on a repository's maintainer's own
+// schedule found NO expunge due: the repository's expunge_scanned_at moves to
+// the record's broker instant, so the `expunge_due` listing's weekly arm
+// leaves it out for [ExpungeInterval] ON EVERY NODE ([ReadQuery.ScannedBefore])
+// — whichever git node maintains it next, after a restart, a rolling upgrade
+// or a git node joining or leaving, reads the verdict from the rows rather
+// than downloading and walking the repository again, and no git node lists it
+// every minute meanwhile. A verdict kept in the scanning node's memory alone
+// was lost to each of those, so a fleet-wide deploy scanned every repository
+// in the fleet whatever its last scan, and every git node read every
+// repository through the estate every minute for the R scans a week of work.
+//
+// Decided by the repository's committer, as every expunge record is, by one
+// rule beside the repository's own: no expunge is open on it, since an open
+// one is finished, never judged. Its maintainer appends at most one a
+// repository an ExpungeInterval — and none for a repository an expunge
+// committed in, whose commit moves the same instant.
+//
+// Every field is in the base format, under the condition [OpExpungeScan]
+// states.
+type ExpungeScan struct {
+	RepoID string `json:"repo_id"`
+	// ScanID is minted ONCE by the node that scanned — a bare UUIDv7 — and
+	// is the record's operation id, so a scan's record asked again of the
+	// repository's runner-up after a committer went silent is the same
+	// record, collapsed by the operation ledger.
+	ScanID string `json:"scan_id"`
+	// Node is the git node that scanned, for whoever reads the log.
+	Node string `json:"node"`
+	// Seen is the code log's position the scan read the repository at — its
+	// sync's, or the listing row's version where the repository was judged
+	// from its row alone (its live bytes under ExpungeMinBytes) — the
+	// publish's session floor.
+	Seen statelog.Position `json:"seen"`
+}
+
 // ImportChunk lands one chunk of a repository's import ([CreateRepo.Import],
 // and a pull mirror's first fill): packs its home fetched from the other
 // host, and the refs they let it set — each a command whose Old is the ref as
@@ -1924,6 +1960,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ExpungeBegin](rec)
 	case kind == KindRepo && op == OpExpungeCommit:
 		return decodePayload[ExpungeCommit](rec)
+	case kind == KindRepo && op == OpExpungeScan:
+		return decodePayload[ExpungeScan](rec)
 	case kind == KindRepo && op == OpImportChunk:
 		return decodePayload[ImportChunk](rec)
 	case kind == KindRepo && op == OpImportDone:

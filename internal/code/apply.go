@@ -592,6 +592,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
 		payloadRepo = p.RepoID
+	case ExpungeScan:
+		payloadRepo = p.RepoID
 	case ImportChunk:
 		payloadRepo = p.RepoID
 	case ImportDone:
@@ -676,6 +678,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyExpungeBegin(ctx, tx, at, p)
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
+	case ExpungeScan:
+		return a.applyExpungeScan(ctx, tx, at, p)
 	case ImportChunk:
 		return a.applyImportChunk(ctx, tx, at, p)
 	case ImportDone:

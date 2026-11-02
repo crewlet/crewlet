@@ -209,8 +209,8 @@ func (f *benchFleet) livePacks(b *testing.B, name string) map[string]int64 {
 func (f *benchFleet) weekly(b *testing.B, name string) code.ExpungeCandidate {
 	b.Helper()
 	q := code.ReadQuery{Kind: code.ReadExpungeDue,
-		ExpungedBefore: time.Now().Add(code.PruneGrace + time.Hour - code.ExpungeInterval),
-		Fresh:          codetest.Linearizable}
+		ScannedBefore: time.Now().Add(code.PruneGrace + time.Hour - code.ExpungeInterval),
+		Fresh:         codetest.Linearizable}
 	for {
 		a, err := f.fleet.Data().Served().Read(b.Context(), q)
 		if err != nil {

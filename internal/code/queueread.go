@@ -312,7 +312,7 @@ func (q ReadQuery) validateQueueDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"expunge_tips", q.ExpungeTips != nil},
-		{"expunged_before", !q.ExpungedBefore.IsZero()},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
 	} {

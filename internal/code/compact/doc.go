@@ -38,8 +38,9 @@
 //     layers.go).
 //   - THE EXPUNGE LOOP ([Compactor.ExpungePass]): on every [ExpungePoll] it
 //     lists the repositories with an expunge open or a person's purge
-//     requested, then every other repository last expunged a week ago or
-//     never (`expunge_due`'s two arms), and for each it maintains runs ONE
+//     requested, then every other repository last judged — expunged, or
+//     scanned and found clean — a week ago or never (`expunge_due`'s two
+//     arms), and for each it maintains runs ONE
 //     CYCLE ([Compactor.Expunge]) — finishing an expunge left open from its
 //     rows, serving the purge from its scan to its commit, or, on its own
 //     schedule, judging whether one is due and running it when it is (# The
@@ -266,30 +267,39 @@
 // behind. THE MAINTAINER'S OWN SCHEDULE begins one too (M6-D8), with
 // code.PruneGrace: every active or archived repository — a scratch one as
 // much as a project, since a push is refused repo_size on live bytes whoever
-// owns them — last expunged code.ExpungeInterval ago or never is listed, least
-// recently expunged first, and its cycle — once its scan has found a pack it
-// may take — judges whether an expunge is DUE: what no ref, no drop the grace
-// keeps and no row in flight reaches OF THE PACKS A CYCLE MAY TAKE — those
-// whose newest content arrived code.PruneGrace or longer ago (below) — is
-// MORE than 1/code.ExpungeShare of the live pack bytes AND at least
-// code.ExpungeMinBytes, below which the fleet's re-download of the kept packs
-// costs more than it frees. Weighed over the whole repository instead,
-// garbage in a pack younger than the grace — a compaction's output, which
-// arrives when its newest input did, merging an old leak with a later push —
-// made the repository due while every pack a cycle could take held none of
-// it, and the cycle rewrote the old, garbage-free packs, which every git node
-// then downloaded again, to free nothing, every week. The weighing is ONE
-// `rev-list --objects --no-object-names --use-bitmap-index` from what is
-// kept, each object it prints looked up in each such pack's own version-2
-// index, and what none printed weighed at the bytes it takes in that pack —
-// its offset's distance to the next object's (reach.go). A repository found NOT DUE is left unscanned for
-// code.ExpungeInterval after, by the scan's instant on this node and never by
-// its row's version — a push moves the version, which would rescan a hot
-// repository at every pass, and a drop's grace or a pack's runs out by the
-// clock with no record moving it — so a clean repository's history is walked
-// at most once a week. A memo lost to a restart or a new maintainer costs one
-// scan. An expunge open with no request — one keeping code.PruneGrace — is
-// finished with that grace.
+// owns them — last JUDGED code.ExpungeInterval ago or never is listed, least
+// recently judged first, and its cycle first judges whether an expunge is
+// DUE: what no ref, no drop the grace keeps and no row in flight reaches OF
+// THE PACKS A CYCLE MAY TAKE — those whose newest content arrived
+// code.PruneGrace or longer ago (below) — is MORE than 1/code.ExpungeShare of
+// the live pack bytes AND at least code.ExpungeMinBytes, below which the
+// fleet's re-download of the kept packs costs more than it frees. Weighed
+// over the whole repository instead, garbage in a pack younger than the grace — a
+// compaction's output, which arrives when its newest input did, merging an
+// old leak with a later push — made the repository due while every pack a
+// cycle could take held none of it, and the cycle rewrote the old,
+// garbage-free packs, which every git node then downloaded again, to free
+// nothing, every week. The weighing is ONE `rev-list --objects
+// --no-object-names --use-bitmap-index` from what is kept, each object it
+// prints looked up in each such pack's own version-2 index, and what none
+// printed weighed at the bytes it takes in that pack — its offset's distance
+// to the next object's (reach.go). A repository whose live bytes are under
+// code.ExpungeMinBytes can never be due — what no tip reaches is at most its
+// live pack bytes — so it is judged from its listed row alone: no sync, no
+// admission, no walk, and a small project, a seat's scratch repository or an
+// archived one no cache holds is never downloaded to learn it. A repository
+// found NOT DUE either way is RECORDED so (code.ExpungeScan, one record on its
+// subject), which takes it out of the weekly arm for code.ExpungeInterval on
+// EVERY NODE — never a memo in the scanning process, which a restart, a
+// rolling upgrade or a git node joining or leaving lost, so a fleet-wide
+// deploy downloaded and walked every repository again, and with which every
+// git node went on listing nearly every repository every minute. By the
+// record's instant and never by the row's version — a push moves the version,
+// which would rescan a hot repository at every pass, and a drop's grace or a
+// pack's runs out by the clock with no record moving it — so a clean
+// repository's history is walked at most once a week, whichever node
+// maintains it. An expunge open with no request — one keeping code.PruneGrace
+// — is finished with that grace.
 //
 // THE SCAN is the copy's refs — its packed-refs as a scratch links it, one
 // moment's with the packs the scratch holds — the drops the grace keeps (the
@@ -313,7 +323,7 @@
 // GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects that no ref
 // reaches yet among them — a pack that frees nothing is never rewritten, and
 // a pack whose arrival is not known is passed over, the side the grace keeps;
-// a repository with no such pack is remembered not due with no walk at all.
+// a repository with no such pack is judged clean with no walk at all.
 // The schedule reserves every pack it may take from its scan through its walk
 // — the walk reads each one's index from the copy the scan pinned — and
 // narrows the reservation to its plan's inputs after. Either way the cycle

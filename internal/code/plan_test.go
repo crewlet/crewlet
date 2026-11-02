@@ -1182,14 +1182,15 @@ func registeredStatements() map[string]statement {
 		"request":              {requestSQL, []any{"r", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin counters":       {beginCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"scan":                 {scanSQL, []any{1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
-		// THE WEEKLY ARM of the same listing, least recently expunged first
+		// THE WEEKLY ARM of the same listing, least recently judged first
 		// up to an instant, from its start and after a cursor's row.
 		"expunge weekly": {expungeWeeklySQL, []any{2, MaxSnapshotItems},
-			[]string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
+			[]string{"code_repos_expunge_due_idx (expunge_scanned_at<=?)"}},
 		"expunge weekly after": {expungeWeeklyAfterSQL, []any{2, 1, 1, "repo-1", MaxSnapshotItems},
-			[]string{"code_repos_expunge_due_idx (expunged_at>=? AND expunged_at<=?)"}},
+			[]string{"code_repos_expunge_due_idx (expunge_scanned_at>=? AND expunge_scanned_at<=?)"}},
 		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},

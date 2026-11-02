@@ -1427,10 +1427,14 @@
 // [ReadExpungeDue] listing, in two arms: first the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
 // code_repos_expunging_idx (replicated 0087); then, asked with
-// [ReadQuery.ExpungedBefore], every other active or archived repository of
-// any kind last expunged at or before that instant or never, least recently
-// expunged first, one seek of code_repos_expunge_due_idx (the same
-// migration) — the engine's own read, its maintainer's weekly schedule — and
+// [ReadQuery.ScannedBefore], every other active or archived repository of
+// any kind last JUDGED at or before that instant or never — an expunge
+// committed in it, or its maintainer's scan of it found clean, a record of its
+// own ([ExpungeScan], [OpExpungeScan]), so the verdict is the fleet's rather
+// than one process's and a judged repository leaves every node's listing for
+// [ExpungeInterval] — least recently judged first, one seek of
+// code_repos_expunge_due_idx (replicated 0106) — the engine's own read, its
+// maintainer's weekly schedule — and
 // reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
 // objects the repository's ref drops left since an instant, one covering seek
 // of code_ref_drops' key, which replicated 0084 led with the instant for it;

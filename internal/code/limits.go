@@ -456,9 +456,10 @@ const (
 
 	// ExpungeInterval is how often a repository's maintainer ASKS whether an
 	// expunge is due on its own schedule — every active or archived
-	// repository, scratch ones included, last expunged this long ago or never
-	// ([ReadQuery.ExpungedBefore]) — and how long a repository found not due
-	// is left unscanned after (internal/code/compact).
+	// repository, scratch ones included, last judged this long ago or never
+	// ([ReadQuery.ScannedBefore]) — and so how long a repository an expunge
+	// committed in, or whose scan found it not due ([ExpungeScan]), is left
+	// out of every node's listing after (internal/code/compact).
 	//
 	// SEVEN DAYS: "at most weekly", half of [PruneGrace], so an object a drop
 	// left is taken within a week of its grace ending, and a repository's

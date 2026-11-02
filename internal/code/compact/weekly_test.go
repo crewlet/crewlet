@@ -1,15 +1,19 @@
 package compact_test
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AN EXPUNGE ON THE MAINTAINER'S OWN SCHEDULE: the `expunge_due` listing's
@@ -34,7 +38,7 @@ func (x *fixture) past() *compact.Compactor {
 // names it, asked from before, read linearizable, and whether it does.
 func (x *fixture) weekly(name string, before time.Time) (code.ExpungeCandidate, bool) {
 	x.t.Helper()
-	q := code.ReadQuery{Kind: code.ReadExpungeDue, ExpungedBefore: before, Fresh: codetest.Linearizable}
+	q := code.ReadQuery{Kind: code.ReadExpungeDue, ScannedBefore: before, Fresh: codetest.Linearizable}
 	for {
 		a, err := x.fleet.Data().Served().Read(x.c.Ctx, q)
 		if err != nil {
@@ -183,14 +187,18 @@ func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 	x.fresh()
 }
 
-// A CLEAN REPOSITORY IS SCANNED WEEKLY: a repository whose scan on the
-// maintainer's own schedule found it not due is left unscanned by every pass
-// for code.ExpungeInterval after — however often the weekly arm lists it, and
-// whatever is pushed meanwhile — and scanned again once the interval has
-// passed: its whole history is walked at most once a week.
+// A CLEAN REPOSITORY IS SCANNED WEEKLY, WHICHEVER NODE MAINTAINS IT: a scan
+// on the maintainer's own schedule that finds a repository not due records so
+// on the code log (code.ExpungeScan), so the weekly arm leaves it out for
+// code.ExpungeInterval on every node — a second compactor, as a restarted
+// node or a new maintainer runs, scans it no sooner, whatever is pushed
+// meanwhile — and lists it again, to be scanned again, once the interval has
+// passed: its whole history is walked at most once a week, and a deploy of
+// the whole fleet rescans nothing.
 //
-// Mutation: remember no clean scan (cleanAt false), or remember it by the
-// row's version (a push moves it), and the pass a day later scans again.
+// Mutation: record no scan (judgedClean proposes nothing), and the second
+// compactor's pass a day later scans again; have the scan's apply leave
+// expunge_scanned_at where it was, likewise.
 func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -202,18 +210,19 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 		defer mu.Unlock()
 		clock = to
 	}
-	c, _, l := x.compactorOf(func(o *compact.Options) {
-		o.Now = func() time.Time {
-			mu.Lock()
-			defer mu.Unlock()
-			return clock
-		}
-	})
-	compact.ExpungeFrom(c, 1)
-	scanned := func() int { return l.count("code_expunge_not_due", `"repo":"`+codetest.RepoName+`"`) }
-	// pass is one expunge pass, made again while its one scan answered busy
-	// (expungeWhileBusy's reason), for a minute at the most.
-	pass := func() {
+	now := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	first, _, l1 := x.compactorOf(func(o *compact.Options) { o.Now = now })
+	compact.ExpungeFrom(first, 1)
+	scanned := func() int {
+		return l1.count("code_expunge_not_due", `"repo":"`+codetest.RepoName+`"`)
+	}
+	// pass is one expunge pass of c, made again while its one scan answered
+	// busy (expungeWhileBusy's reason), for a minute at the most.
+	pass := func(c *compact.Compactor, l *logs) {
 		t.Helper()
 		deadline := time.Now().Add(time.Minute)
 		for {
@@ -229,24 +238,34 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 	}
 
 	began := clock
-	pass()
+	pass(first, l1)
 	if got := scanned(); got != 1 {
-		t.Fatalf("the first pass over a clean repository scanned it %d times, want once:\n%s", got, l)
+		t.Fatalf("the first pass over a clean repository scanned it %d times, want once:\n%s", got, l1)
+	}
+	if n := l1.count("code_expunge_scan_unrecorded"); n != 0 {
+		t.Fatalf("the clean scan's record was not appended:\n%s", l1)
+	}
+
+	// A RESTARTED NODE: a compactor of its own, with nothing in its memory.
+	second, _, l2 := x.compactorOf(func(o *compact.Options) { o.Now = now })
+	compact.ExpungeFrom(second, 1)
+	rescanned := func() int {
+		return l2.count("code_expunge_not_due", `"repo":"`+codetest.RepoName+`"`)
 	}
 	x.push(16 << 10)
 	at(began.Add(24 * time.Hour))
-	pass()
+	pass(second, l2)
 	at(began.Add(code.ExpungeInterval - time.Minute))
-	pass()
-	if got := scanned(); got != 1 {
-		t.Fatalf("passes within a week of a not-due scan scanned the repository %d times in all, want once:\n%s",
-			got, l)
+	pass(second, l2)
+	if got := rescanned(); got != 0 {
+		t.Fatalf("a second compactor's passes within a week of the first's not-due scan scanned the repository "+
+			"%d times, want none:\n%s", got, l2)
 	}
 	at(began.Add(code.ExpungeInterval + time.Minute))
-	pass()
-	if got := scanned(); got != 2 {
-		t.Fatalf("a pass a week after the not-due scan scanned the repository %d times in all, want twice:\n%s",
-			got, l)
+	pass(second, l2)
+	if got := rescanned(); got != 1 {
+		t.Fatalf("a pass a week after the not-due scan scanned the repository %d times, want once:\n%s",
+			got, l2)
 	}
 }
 
@@ -311,4 +330,48 @@ func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	if !x.liveHold(young) {
 		t.Errorf("the commit %s, in a pack younger than the grace, left the live packs", young)
 	}
+}
+
+// A REPOSITORY UNDER THE MINIMUM IS JUDGED FROM ITS ROW: a repository whose
+// live bytes are under the least an expunge frees can never be due — what no
+// tip reaches is at most its live bytes — so a pass answers it not due and
+// records the scan without syncing it (no download of a repository no cache
+// holds, no admission, no walk), and the weekly arm leaves it out for a week.
+//
+// Mutation: drop the row's check, and the scan syncs the small repository.
+func TestARepositoryUnderTheMinimumIsJudgedFromItsRow(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.push(16 << 10)
+	counted := &syncs{}
+	c, _, l := x.compactorOf(func(o *compact.Options) {
+		counted.Cache = o.Cache
+		o.Cache = counted
+	})
+	compact.ExpungeFrom(c, 1<<30)
+	cand, ok := x.weekly(codetest.RepoName, time.Now())
+	if !ok {
+		t.Fatalf("the weekly arm names no %s, never judged", codetest.RepoName)
+	}
+	if out, err := expungeWhileBusy(t, c, cand); out != compact.OutcomeNotDue {
+		t.Fatalf("a repository of %d live bytes under a least of a gibibyte answered %s, %v; want not due:\n%s",
+			cand.LiveBytes, out, err, l)
+	}
+	if n := counted.n.Load(); n != 0 {
+		t.Errorf("judging a repository under the least synced it %d times, want none", n)
+	}
+	if _, ok := x.weekly(codetest.RepoName, time.Now().Add(-time.Minute)); ok {
+		t.Error("the weekly arm still names the repository judged a moment ago")
+	}
+}
+
+// syncs is a compact.Cache that counts the syncs a compactor asks of it.
+type syncs struct {
+	compact.Cache
+	n atomic.Int64
+}
+
+func (s *syncs) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
+	s.n.Add(1)
+	return s.Cache.Sync(ctx, repoID, fresh)
 }

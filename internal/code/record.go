@@ -182,6 +182,18 @@ const (
 	// string(OpExpungeCommit)}, with the same companions. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
+	// OpExpungeScan records that a scan on a repository's maintainer's own
+	// schedule found NO expunge due ([ExpungeScan]): the repository leaves
+	// the `expunge_due` listing's weekly arm for ExpungeInterval on every
+	// node, on the repository's own subject, decided by the repository's
+	// committer alone. At most one a repository an ExpungeInterval.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// expunge_scan", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpExpungeScan)}, with the same companions. It is no gate.
+	OpExpungeScan OpKind = "expunge_scan"
+
 	// OpImportChunk lands one chunk of a repository's import — packs fetched
 	// from the host it is imported from and the refs they let it set — as a
 	// push row `via import`, on the repository's own subject
@@ -583,11 +595,12 @@ const (
 	OpQueueSweep OpKind = "queue_sweep"
 )
 
-// OpKinds are the fifty-four, in the order they are documented.
+// OpKinds are the fifty-five, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
-	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk, OpImportDone, OpMirrorSync, OpRename,
+	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpExpungeScan, OpImportChunk, OpImportDone, OpMirrorSync,
+	OpRename,
 	OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
