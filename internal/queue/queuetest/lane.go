@@ -2,6 +2,7 @@ package queuetest
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"sync"
@@ -152,6 +153,86 @@ func (s *suite) runLane(t *testing.T) {
 			t.Fatalf("after the requeue the first delivery was %v, want the person's "+
 				"partition whole, ahead of the backlog", got[0])
 		}
+	})
+
+	// waitingIs polls a subscription's waiting count until it is want: the
+	// count is allowed to trail a publish or a settlement by a moment.
+	waitingIs := func(t *testing.T, q queue.EventQueue, topic string, want queue.Waiting) {
+		t.Helper()
+		var got queue.Waiting
+		awaitState(t, fmt.Sprintf("the subscription waiting %+v", want), func() bool {
+			w, err := q.Waiting(ctx, topic, "g")
+			if err != nil {
+				t.Errorf("Waiting: %v", err)
+				return true
+			}
+			got = w
+			return got == want
+		})
+		if got != want {
+			t.Fatalf("waiting %+v, want %+v", got, want)
+		}
+	}
+
+	t.Run("waiting_counts_both_mailboxes_of_a_subscription", func(t *testing.T) {
+		t.Parallel()
+		// A seat with nothing attached waits for everything it holds, the
+		// person's message on the lane counted apart from the rest.
+		q := s.start(ctx, t)
+		topic := inbox()
+		queueBacklog(ctx, t, q, topic, "g", append(backlog(3), person())...)
+		waitingIs(t, q, topic, queue.Waiting{Priority: 1, Background: 3})
+		if w, err := q.Waiting(ctx, inbox(), "g"); err != nil || w != (queue.Waiting{}) {
+			t.Fatalf("a subscription that does not exist waits %+v (%v), want nothing", w, err)
+		}
+		other := "lane.none"
+		queueBacklog(ctx, t, q, other, "g", backlog(1)[0], person())
+		waitingIs(t, q, other, queue.Waiting{Background: 2})
+	})
+
+	t.Run("waiting_leaves_out_what_a_handler_is_running_on", func(t *testing.T) {
+		t.Parallel()
+		// THE TURN'S OWN MAIL IS NOT WAITING. While the person's partition
+		// runs, the two background events the drain took with it are still
+		// waiting for a handler, and once everything settles nothing is.
+		//
+		// HELD, then resumed off the test's goroutine: the whole backlog is
+		// in one drain, and a backend that dispatches inline runs the
+		// blocking handler on whoever resumed, never on the test. The
+		// release is a cleanup as well, so a failing case cannot leave a
+		// handler blocked under the queue's own stop.
+		q := s.start(ctx, t)
+		topic := inbox()
+		if _, err := q.EnsureSubscription(ctx, topic, "g"); err != nil {
+			t.Fatalf("EnsureSubscription: %v", err)
+		}
+		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var startOnce, releaseOnce sync.Once
+		releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+		t.Cleanup(releaseAll)
+		subscribeBatch(ctx, t, q, topic, "g", func(_ context.Context, evs []*events.Event) queue.Result {
+			if slices.Contains(labelsOf(evs), "person") {
+				startOnce.Do(func() { close(started) })
+				<-release
+			}
+			return queue.Ack()
+		}, queue.NewBatchOptions(0, 10))
+		for _, ev := range append(backlog(2), person()) {
+			publish(ctx, t, q, topic, ev)
+		}
+		go func() {
+			if err := q.ResumeTopic(context.WithoutCancel(ctx), topic, "g", holdReason); err != nil {
+				t.Errorf("ResumeTopic: %v", err)
+			}
+		}()
+		awaitSignal(t, started, "the person's partition running", nil)
+		waitingIs(t, q, topic, queue.Waiting{Background: 2})
+		releaseAll()
+		waitingIs(t, q, topic, queue.Waiting{})
 	})
 
 	t.Run("a_single_event_consumer_takes_the_lane_first", func(t *testing.T) {

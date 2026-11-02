@@ -120,6 +120,32 @@ func TestAnOlderRecordDoesNotOverwriteANewerOne(t *testing.T) {
 		t.Fatalf("the schedule-day holds %d fires after an older record with one "+
 			"was replayed over a newer one with two", n)
 	}
+
+	// AND A SCHEDULE-DAY OF SUPERSEDED FIRES ALONE, the day a seat's node
+	// set a fire aside for a schedule its own scheduler never fired: its
+	// guard is the newest version in that table too, or an older record
+	// replayed over it clears what the newer one said.
+	setAside := func(traces ...string) usage.Record {
+		r := usage.Record{RecordEnvelope: usage.RecordEnvelope{Writer: "node-b",
+			Subject: usage.Subject{Kind: usage.KindSchedule, Node: "node-b", Day: day,
+				ScopeType: "role", ScopeID: "Dev", Schedule: "standup"}}}
+		for _, trace := range traces {
+			r.Superseded = append(r.Superseded, usage.Superseded{TraceID: trace,
+				At: time.Date(2026, 9, 23, 13, 0, 0, 0, time.UTC)})
+		}
+		return r
+	}
+	for _, rec := range []statelogRecord{
+		recordAt(t, setAside("trace-8", "trace-9"), 30), recordAt(t, setAside("trace-8"), 21),
+	} {
+		if err := applyRecord(t.Context(), db, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(dump(t, db)["usage_schedule_superseded"]); n != 2 {
+		t.Fatalf("the schedule-day holds %d superseded fires after an older record "+
+			"with one was replayed over a newer one with two", n)
+	}
 }
 
 // THE HORIZON LEAVES WITH THE RECORD THAT MAKES IT OLD.

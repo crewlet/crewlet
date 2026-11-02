@@ -662,6 +662,15 @@ type ExecutorAnswerGiven struct {
 	// Coordinator.AnswerByTurn); `answer_executor` stamps it off the row it
 	// checked, and the answer desk will not deliver one without it.
 	LaunchID string `json:"launch_id"`
+
+	// Approval names the held call this answers, by its id, where the
+	// question is a call to a tool at Needs approval (internal/sandbox's
+	// HeldCall, ADR-0077), and is empty for every other answer. Stamped by
+	// `POST /mcp-approvals/{id}` alone, which decides who may approve; the
+	// node holding the seat records an answer to a held call only when it
+	// names that call, and records none that names one for a question that
+	// is not.
+	Approval string `json:"approval,omitempty"`
 }
 
 // EventType is the "executor_answer_given" wire type.

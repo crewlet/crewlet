@@ -162,6 +162,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
+	cases = append(cases, heldCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

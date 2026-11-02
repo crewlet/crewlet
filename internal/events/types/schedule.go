@@ -95,8 +95,14 @@ func (e ScheduledTaskFired) Summary() string {
 // this event, under THAT fire's own trace, so the schedule's history shows the
 // fire as skipped rather than as a dispatch with no turn behind it.
 type ScheduledFireSuperseded struct {
-	ScheduleName string `json:"schedule_name"`
-	TargetHandle string `json:"target_handle"`
+	// ScopeType, ScopeID and ScheduleName are the schedule's identity, the
+	// one the dispatch ledger keys the fire on: what the node that records
+	// this files it under in its own usage day, beside the fires its own
+	// scheduler sent (internal/usage).
+	ScopeType    ScheduleScope `json:"scope_type"`
+	ScopeID      string        `json:"scope_id"`
+	ScheduleName string        `json:"schedule_name"`
+	TargetHandle string        `json:"target_handle"`
 
 	// TaskID and ScheduledAt name the fire that was not run.
 	TaskID      string `json:"task_id"`
@@ -112,8 +118,10 @@ type ScheduledFireSuperseded struct {
 //
 // NOT A DISPATCH LEDGER OUTCOME. The ledger records what the scheduler did,
 // and the scheduler did fire it; the seat's node is what decided not to run
-// it, and it records that on the event log, where the history's derivation
-// reads it beside the turn a fire's trace ran.
+// it. That node records it on its event log and publishes it in its own usage
+// day, and the schedule's history reads it there by the fire's trace, which
+// is how it is found whichever data node ran the scheduler and whichever day
+// the fire was sent on (internal/usage).
 const ScheduleOutcomeSuperseded = "skipped_superseded"
 
 // EventType is the "scheduled_fire_superseded" wire type.

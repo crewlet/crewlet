@@ -448,7 +448,7 @@ lists the built-ins group by group, the discovery pair included (see the
 
 ### Per-Role MCP Servers (GitHub)
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Agent seats on at the GitHub integration get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ### Where a tool comes from
 
@@ -501,7 +501,9 @@ reads (`GET /mcp-servers/{name}`, everybody's in
   applied, how many instances list it, and a digest of the server's own
   definition. The server's identity and instructions from its handshake ride
   beside them. Each tool's input and output schemas are stored once under that
-  digest, however many nodes and seats list the tool.
+  digest, however many nodes and seats list the tool. A tool the server's entry
+  [blocks](#setting-each-tools-level) is listed too, marked blocked, so its page
+  shows it, and it stays out of the catalogue: no agent is offered it.
 - **The digest is the server's definition.** It covers the name the server uses,
   the title, the description, both schemas and the hints the server declared,
   and nothing of yours: changing a `tool_prefix` or an override never reads as
@@ -552,7 +554,9 @@ quote what a server said or name the variables an instance waits for; not the
 headers or variables a seat's credential goes in, nor the seats whose boxes
 are given the server; not the server's instructions or what removing it would
 take with it; not who called a tool (each tool's `seats`) nor any one call
-(`calls`, which names a seat, a turn and an outcome); and no community
+(`calls`, which names a seat, a turn and an outcome); not which servers each
+agent holds or how many tools they hand it (`agents`), which is read off the
+grants, as a seat's tool sources on the org chart are; and no community
 registry or search. An administrator, whoever
 `config.read` admits, reads all of it (`reading: "admin"`), and every change
 is theirs. A member's answer is built from types of its own, copied field by
@@ -614,29 +618,33 @@ an alarm's fix are the engine's.
 - **Servers.** For an administrator, **Needs attention** lists each server an
   [alarm](#a-servers-alarms) stands on, with the one fix the engine names:
   **Restart** (every instance, or the named agent's), **See its sign-in** (the
-  server's Connection tab, which links its integration's Agents tab) or **See
-  which tools** (the names no agent is offered, on its Tools tab). Four figures
+  server's Connection tab, which links its integration's Agents tab) or
+  **Change its prefix** (the server's tool prefix, in the edit wizard, for
+  names no agent is offered). Four figures
   follow (servers, running, MCP tools, and alarms standing), then a row per
   server with how it connects, its state, its tool count, the agents the
   engine grants it, and what last went wrong.
 - **A server's page** (`#/settings/mcp-tools/servers/{name}`). **Overview** is
-  each instance and its condition, when the server last answered, what it
-  reported itself as, and for an administrator the instructions it reports in
-  its handshake (shown to read, not handed to the agents: a seat's harness
-  reads the entry's [description](#saying-what-a-server-is-for)).
-  **Connection**, read only, is the address (any credential in it withheld) or
-  the command, its timeouts and tool prefix, how the engine signs in, and every
-  header or variable by name with the `${VAR}` it reads, never a value.
+  each instance and its condition, when the server last answered, its latest
+  [test](#testing-a-server) with **Test now**, what it reported itself as, and
+  for an administrator the instructions it reports in its handshake (shown to
+  read, not handed to the agents: a seat's harness reads the entry's
+  [description](#saying-what-a-server-is-for)). **Connection** is the address
+  (any credential in it withheld) or the command, its timeouts and tool
+  prefix, how the engine signs in, and every header or variable by name with
+  the `${VAR}` it reads and whether it is stored, never a value, each with
+  **Replace** ([Storing a header or variable](#storing-a-header-or-variable)).
   **Tools** is every tool the fleet lists with the engine's
   [risk](#what-a-tool-can-do) and its calls this week, and the names not
   offered with the engine's reason. **Activity** is the week's calls per tool,
   and for an administrator the newest calls.
-- **Changes.** A server's menu offers [**Restart**](#restarting-a-server-now),
-  **Disable** or **Enable** ([Turning a server off](#turning-a-server-off)) and
-  **Remove** ([Removing a server](#removing-a-server)), which first shows what
-  a dry run says names the server and the stored values only it reads, and
-  holds the removal until you clear those in the same change. **Add server**
-  opens the form below.
+- **Changes.** A server's menu offers [**Test**](#testing-a-server), **Edit**,
+  [**Restart**](#restarting-a-server-now), **Disable** or **Enable**
+  ([Turning a server off](#turning-a-server-off)) and **Remove**
+  ([Removing a server](#removing-a-server)), which first shows what a dry run
+  says names the server and the stored values only it reads, and holds the
+  removal until you clear those in the same change. **Add server** and **Edit**
+  open the wizard below.
 - **Built-in tools.** The engine's own tools by
   [group](#groups-and-who-may-call-each-one), each with what it can do and who
   may call it; a tool opens in the drawer with its arguments. A tool's own
@@ -645,20 +653,349 @@ an alarm's fix are the engine's.
 
 ### Adding a server from the dashboard
 
-**Add server** on Settings › MCP & tools (`admin`) writes
-the same `mcp_servers` entry you would write in YAML: a name, a command and its
-arguments (stdio) or an address (http), `shared` or one per seat, and the
-environment or headers — values as `${NAME}` pointers into the secret store,
-which the form offers as you type `$`. It checks the whole company with the
-server in it before storing, and adds it after every server already declared.
-A name the configuration already carries is refused; a name only a node still
-runs, from a revision it has not applied past yet, is free: the create is
-judged against the configuration alone. The name, the prefix, the keys and the
-address are held to [the naming rules](#naming-a-server-and-its-tools).
-Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [configure via the API](configure-via-api.md). A per-seat server still needs
-a seat to declare credentials for it under `mcp_env`, which is written in the
-org builder.
+**Add server** on Settings › MCP & tools (`admin`) is a wizard that writes the
+same `mcp_servers` entry you would write in YAML, and stores the values it is
+sent write-only. Its steps:
+
+1. **Source.** A server from the [curated catalogue](#the-curated-catalogue-and-a-community-registry)
+   (what the company already runs is listed apart as added, never offered
+   twice); an **address**, which the engine checks before anything is added
+   ([`POST /mcp-probe`](../reference/api-endpoints.md#post-mcp-probe)) and
+   says what answers there, the sign-in it asks for and how many tools it lists
+   to nobody; a **pasted** `mcpServers` block (Claude, Cursor), VS Code
+   `servers` block or registry `server.json`, which is read for its servers
+   and their header or variable names and never run, the values in it left
+   out for you to type where they are stored; or a **community** listing from
+   the registry the company names, marked *Not reviewed*.
+2. **Name**, and what the server is for.
+3. **Connection.** The address, or the command, its arguments and its
+   variables, and the tool prefix.
+4. **Sign-in.** The vendor's integration where the catalogue names one (each
+   agent gets its own instance, signed in as itself, and which agents get it
+   is set on that integration's Agents tab), a header, or none. What the
+   address check or the catalogue found is chosen already and said.
+5. **Test.** The entry as it would be written, with the values you typed,
+   tested before anything is stored ([Before you save](#testing-a-server)). A
+   per-agent server is tested as the agent you choose.
+6. **Review.** The engine's dry run of the entry: a problem is placed on the
+   field it names, the step that holds it marked, and nothing is saved.
+
+Saving writes the entry (`PUT /config/mcp-servers/{name}` with
+`If-None-Match: *` for a new name, see
+[configure via the API](configure-via-api.md)), then stores each value you
+typed through [the values route](#storing-a-header-or-variable): tested, sealed
+write-only, and the key pointed at the variable the engine chooses. So no value
+is ever written into the entry, and a value the server refuses stores nothing:
+the entry stays saved and the wizard open on what is left, and saving again
+sends only that. A per-agent server's own value is stored untested, since the
+engine tests it as each agent. A server added here has no `access`, so it
+reaches every agent seat (an integration's server, the agents on at its lane):
+see [Choosing which agents get a server](#choosing-which-agents-get-a-server).
+
+**Edit** opens the same wizard on a saved server, at the step its action is
+about. The name stays, a stored value shows as stored and is replaced only if
+you type a new one, and every field of the entry the wizard does not draw
+(timeouts, annotations, `optional_keys`, `enabled`, `access`) is written back
+as it was.
+A configuration another system manages refuses both. A name the configuration
+already carries is refused on add; a name only a node still runs, from a
+revision it has not applied past yet, is free. The name, the prefix, the keys
+and the address are held to [the naming rules](#naming-a-server-and-its-tools).
+The wizard does not set up an OAuth sign-in: a server that asks for one is
+said to, and is added with a header it accepts, or with its `oauth` block in
+the configuration ([Signing in with OAuth](#signing-in-with-oauth)). Editing a
+server that signs in with OAuth keeps its sign-in as it is.
+
+### Choosing which agents get a server
+
+A server reaches an agent through one grant, `access` on its `mcp_servers`
+entry, and through nothing else:
+
+```yaml
+mcp_servers:
+  - name: search                 # no access: every agent seat
+    command: search-mcp
+  - name: linear
+    transport: http
+    url: https://mcp.linear.app/mcp
+    headers: {Authorization: "Bearer ${LINEAR_KEY}"}
+    access:
+      units: [eng]               # every agent seat in eng and in every unit beneath it
+      seats: [pm]                # and this agent seat by name
+      except: [eng-intern]       # but not this one, though eng holds it
+```
+
+- **Absent, every agent seat** gets the server, including one added later.
+  `access: {}` names nobody, which the configuration answers with an advisory
+  (turn the server off with `enabled: false` if nothing should run it).
+- **Written, exactly the seats it names.** A unit is named by its key (its
+  `id`), and stands for every agent seat in it and in every unit beneath it,
+  so an agent that joins the team gets what the team has. A seat is named by
+  its handle. `except` leaves out seats a named unit holds. Names are matched
+  exactly, as `lead:` and `manages:` are.
+- **One grant for both kinds of server.** A shared server's one instance
+  offers its tools to the seats it is granted to and no other: the tools are
+  cut from every other seat's surface, its `tool_sources` and its prompt. A
+  per-agent server (`shared: false`) starts a child for each seat it is granted
+  to, and for nobody else.
+- **A server reading each agent's own vendor credential is granted by the
+  integration instead**: the agents on at its lane
+  (`roles[].integrations.<lane>.enabled`, the integration's Agents tab) get it,
+  because that lane is where the engine provisions, seals and binds each
+  agent's credential. Such a server takes no `access`, and one written is
+  refused. These are the servers that declare `seat_credentials` and the ones
+  the engine recognises (see [Seat credentials the engine binds](#seat-credentials-the-engine-binds)).
+- **A seat's `mcp_env` block holds values and grants nothing.** It is what the
+  seat's child of a server it already gets is started with. A block for a
+  server that does not reach the seat is refused, naming the block, and so is a
+  unit's block for a server that reaches none of the unit's own agents and an
+  executor box's `sandbox.mcp.servers` entry for a server the seat is not
+  granted: a change to a grant fails the write instead of leaving a block that
+  looks like one. A server turned off is held to the same rule, since it keeps
+  its grant for the day it is turned back on. The blocks the engine reads by
+  their own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`,
+  `confluence`) are the engine's as well as a server's, and are not held to it.
+- **A grant names only what the company holds**: a unit key that is no unit's,
+  a handle that is no seat's or is a person's (a person runs no tools), a name
+  listed twice, or a seat both named and left out, is refused at its entry.
+  Removing a seat or a unit a grant still names is refused the same way, so a
+  later seat or unit taking the same handle or key is never granted by a grant
+  written for another: change the server's `access` first.
+
+These are admission rules: a stored revision that breaks one still runs, by the
+grant as written, and every node reports it as a warning on each apply. A
+server's page answers who it reaches and why on its detail
+([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname),
+`reaches`, for an administrator).
+
+### Setting each tool's level
+
+Each tool a server lists runs at a level, set by `tools` on its `mcp_servers`
+entry: `allow` runs it, `approve` asks a person before each call, `blocked`
+never offers it.
+
+```yaml
+mcp_servers:
+  - name: tracker
+    transport: http
+    url: https://mcp.example.com/mcp
+    headers: {Authorization: "Bearer ${TRACKER_MCP_TOKEN}"}
+    tool_prefix: tr_
+    tools:
+      levels:
+        delete_project: blocked      # the server's own name, before tool_prefix
+        merge_projects: approve
+        list_projects: allow
+  - name: billing
+    command: billing-mcp
+    tools:
+      default: blocked               # every tool levels does not name
+      levels:
+        list_invoices: allow
+        refund: approve
+```
+
+- **A tool nothing sets starts at the level its hints give it.** With no
+  level of its own and no `default`, a tool its server marks read-only
+  (`readOnlyHint: true`) runs at `allow`, and every other tool asks first, at
+  `approve`, one whose hints say nothing included: a tool that declares
+  nothing is read as destructive. The hints read are the ones your
+  `tool_annotations` leave, so an override that marks a tool read-only lets it
+  run. The server's detail shows each tool's level and the `risk` it is read
+  at, and the test of a draft answers each tool's `starting_level`, so a new
+  server's levels can be decided before it is added.
+- **`allow` offers the tool and runs it.**
+- **`approve` offers the tool and holds each call for a person.** The tool is
+  filed, listed and offered like any other, and a call to it is never made
+  until somebody answers it: see [Asking a person before a tool
+  runs](#asking-a-person-before-a-tool-runs).
+- **`blocked` never offers the tool.** A blocked tool is never filed: it is in
+  no seat's surface, so no agent is offered it, lists it or can call it,
+  whether the call comes from a phase on the engine host (through
+  `crewlet mcp-relay` and the tool loop) or from an executor's box (through the
+  bridge), on a shared server and on every seat's child of a per-agent one.
+  The discovery tools do not list it either.
+- **`levels` names a tool by the server's own name for it**, the one its
+  listing gives before `tool_prefix`: `delete_project`, not
+  `tr_delete_project`. A name the server does not list sets nothing; the
+  server's detail names every such level (`unlisted_levels`), and so does the
+  answer to a write of the levels (`unlisted`).
+- **`default` is the level of every tool `levels` does not name**, including a
+  tool the server adds later. Unset, each such tool starts at the level its
+  hints give it, as above; `default: allow` runs every tool `levels` does not
+  hold back.
+- **Every tool is still shown to an administrator.** The server's detail
+  ([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname))
+  lists every tool with the `level` it runs at and whether `tools.levels` names
+  it (`custom`), and `baseline` is the default (null where the entry sets
+  none), so a tool blocked from the page can be let through again from it. The
+  `tools` push every reader shares lists only the tools an agent can be
+  offered.
+- **An executor box reaches a server whole.** A server a role's
+  `sandbox.mcp.servers` lists is dialled by the harness inside the box itself,
+  past the engine, so a level could not hold there, and a tool at `approve`
+  would run without anybody asked. So a box listing is refused for a server
+  whose every tool is not certain to run at `allow`: one whose entry says
+  `default: allow` and holds no tool back. A server whose entry sets no `tools`
+  is not one, since each tool it does not mark read-only starts at `approve`:
+  every server a box lists says `default: allow`. A level written on a server
+  a box lists is refused at that box's entry. The seat still reaches the server's
+  tools over the bridge, each at its level. A stored revision that breaks the
+  rule runs, its boxes given no such server, and warns.
+- **A change of level restarts the server's instances**, as a change to its
+  `tool_prefix` or `tool_annotations` does: a server's tools are filed when the
+  engine starts it.
+
+The server's Tools tab writes the levels with
+[`PUT /mcp-servers/{name}/tools`](../reference/api-endpoints.md#put-mcp-serversnametools),
+a change of the named tools only, at an administrator's recent step-up, as one
+revision of the company document.
+
+### Asking a person before a tool runs
+
+A call an agent makes to a tool at `approve` is never made until a person
+answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-run-in-the-shape-a-runs-ask-does.md)).
+
+- **From an executor's run, the call parks the run.** The bridge records the
+  call on the run's own record as the question it waits on, in the shape a
+  run's own question has ([Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)):
+  who called which tool on which server, the three answers, and the work item
+  the run is on. The harness is told the call was not made and to commit,
+  push and end its turn, and the run parks with its seat free for other work.
+  The question is put to the seat's lead, and shows in their Inbox.
+- **From any other phase, the call is refused.** The reviewer, delegated
+  workers, the onboarding pass and the side passes run inside one turn on the
+  engine host and have no run to park, so the call is refused as `forbidden`
+  and the model is told that the seat's own run, its executor, may ask.
+- **What the call would send stays sealed.** The arguments ride the run's
+  record encrypted under the fleet keyring, never in the question, the run's
+  call log or the turn's ledger, and are shown only to who may approve the
+  call: an administrator (the MCP answer's `approvals`) and the seat's lead
+  (the run on the executors board).
+- **An administrator or the seat's lead answers it**, with
+  [`POST /mcp-approvals/{id}`](../reference/api-endpoints.md#post-mcp-approvalsid),
+  a person and never Ask Crewlet:
+  - **Allow once** makes the call, and the run carries on with what it
+    returned.
+  - **Always allow** also sets the tool to `allow` on the server's entry, by
+    the server's own name for it, as a configuration write at a recent
+    step-up, before the call is made.
+  - **Deny** makes no call; the run carries on told the call was refused.
+
+  A chat reply in the conversation the run was started from never answers a
+  held call, and `answer_executor` refuses one.
+- **The call is made at most once.** The node holding the seat records the
+  first answer it takes, refuses a second (`409 stale_version` at the route),
+  marks the call on the run's record before it makes it, and records what it
+  returned. A later attempt at the same answer, after a node restart, hands
+  the run that result, or says the call may or may not have taken effect; it
+  never makes it again. A tool blocked or changed since the call was held is
+  not called, and the run is told why.
+- **The run carries on where it stopped**, in its own session in the box it
+  left where the box was kept, told the answer and the call's result (the
+  first 16 KiB of it); otherwise a fresh run starts and is told the call, the
+  answer and the result.
+- **A call that waits raises an alarm.** One that has waited ten minutes, a
+  third of the default pause TTL a parked run's box is kept for, raises
+  `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),
+  and every answer is audited as an `mcp_server_acted` with the tool and the
+  answer, never the arguments.
+
+### When a server changes a tool
+
+A tool's level is decided on the tool as its server defined it then, and holds
+for that definition alone
+([ADR-0078](../../adr/0078-a-tools-level-holds-only-for-the-definition-it-was-decided-on.md)).
+A server controls its own definitions and may change one at any moment, so a
+tool it changes, or adds, asks a person before each call until somebody looks
+at the change.
+
+- **A server's first listing is accepted as it is.** You chose the server with
+  it in front of you (the add flow tests it and shows each tool's starting
+  level), so the node that lists the server first records each tool's
+  definition as accepted.
+- **A changed or added tool asks first.** A tool the server lists under any
+  other definition (its title, description, schema or annotations changed),
+  or one it adds after its first listing, is held at Needs approval while its
+  level would let it run unasked: an executor's call parks its run on a
+  person's answer and every other phase is refused it, exactly as for a tool
+  at `approve` ([Asking a person before a tool runs](#asking-a-person-before-a-tool-runs)).
+  A tool that asks anyway, or is blocked, is not held further; its change
+  only waits to be reviewed. An executor's box is given no server a tool of
+  which waits, since a box reaches a server whole; the seat reaches its tools
+  over the bridge, where each call is decided.
+- **A tool the server stops listing keeps its row**, marked removed, until
+  somebody accepts that it went. A tool listed again after that is one the
+  server added.
+- **A change that claims less risk is flagged as loosened**: a destructive
+  tool that now says it is not, a tool that now says it is read-only, or one
+  that no longer says it reaches past the company. Read off the hints the
+  server declared, never your overrides, since the question is what the
+  server now claims, and it is the direction a server would move a tool it
+  wanted run unasked.
+- **The server's page lists every change**: `changes` on
+  [`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
+  names each tool with what moved (`added`, `removed`, or the parts:
+  `title`, `description`, `schema`, `annotations`), the definition accepted
+  beside the one listed now, whether it is loosened, whether it holds the
+  tool, and when the fleet first saw it. A held tool's row answers its level
+  as `approve` with `held: true`.
+- **Accept it or keep it blocked** with
+  [`POST /mcp-servers/{name}/changes`](../reference/api-endpoints.md#post-mcp-serversnamechanges),
+  naming each change by the digest of the definition you reviewed, at a
+  recent step-up. A definition the server swapped in since your review is
+  refused and nothing is decided, so a server cannot have a change accepted
+  that nobody read. Keeping a tool blocked sets its level to `blocked` and
+  records the definition you decided on. Always allow on a held call accepts
+  the definition the call was made under.
+- **The engine lists a running server again** when the `ttlMs` its listing
+  states runs out, held between one minute (a server cannot make the engine
+  list it constantly) and fifteen minutes (nor opt out of being watched),
+  fifteen minutes when it states none, and when it says its tool list
+  changed, no sooner than a minute after its last listing.
+- **A change that holds a tool raises `mcp_tools_changed`** on its server at
+  once ([A server's alarms](#a-servers-alarms)), naming the tool and whether it
+  now claims less risk. A removal, or a change to a tool that asks anyway,
+  raises nothing. Every review is audited as an `mcp_server_acted`, action
+  `review_changes`, naming the tools accepted and kept blocked.
+
+### Each agent's tools, and the budget
+
+An agent is handed every tool the servers it is granted offer, and a model
+chooses less reliably from a long list. For an administrator,
+[`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers) counts each
+agent's MCP tools (`agents`) and flags every agent holding more than
+`tool_budget`, 100:
+
+- **One row per agent seat**, in the chart's order, with the unit it sits in
+  and every server whose grant reaches it, on or off, each with why
+  ([Choosing which agents get a server](#choosing-which-agents-get-a-server)),
+  how many tools it offers the agent and the server's state.
+- **A tool counts where an agent can be offered it.** Every tool a server
+  lists at a level other than `blocked` counts, one at `approve` included,
+  since the agent is offered it and each call waits. A blocked tool and a tool
+  refused its name ([A tool's name](#a-tools-name)) do not, since no agent is
+  offered either, and a server turned off counts nothing, since it is granted
+  to nobody. The engine's own tools are not counted (`builtin_tools` says how
+  many every agent holds).
+- **Each name counts once.** Two of an agent's servers listing a tool under
+  the same name hand it one tool, so its total (`mcp_tools`) can be less than
+  its servers' counts added up.
+- **What the grant hands the agent, whatever its servers are doing now.** A
+  server that is down still counts the tools it listed, which come back when it
+  does, so an outage moves no agent across the budget. A per-agent server's
+  children each list what their own agent's credential reaches, and each agent
+  it reaches is counted the server's whole listing: the most any of them is
+  offered, so the count errs toward flagging an agent rather than missing one.
+- **Past the budget is a warning, never a refusal.** A seat's harness keeps an
+  MCP server's tools out of the requests that do not need them, so nothing
+  breaks; the model's choice is what suffers. To bring an agent back under it,
+  [block](#setting-each-tools-level) the tools it does not need, or narrow who
+  the busiest servers reach.
+
+The budget is 100: Windsurf loads at most 100 tools across all of a person's
+MCP servers, under the 128 VS Code is widely reported to stop at. It is the
+engine's, carried on the answer, and no setting moves it.
 
 ### Turning a server off
 
@@ -711,6 +1048,11 @@ reads is refused, since deleting it would sign that reader out. Deleting a
 value also takes `secrets.write`, so Ask Crewlet can remove a server for you
 and leaves its values to you. The whole request and its answers are in
 [the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
+
+A server the company is [signed in to with OAuth](#signing-in-with-oauth) gives
+its sign-in up with it: once the removal is written, the grant is revoked at
+the vendor where it offers that and forgotten, as a sign-out does, and the dry
+run says so (`dependants.oauth`).
 
 ### Saying what a server is for
 
@@ -1269,7 +1611,8 @@ recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 ### A server's alarms
 
 A server that stays down, an agent whose instance waits too long for its
-credential, and a tool no agent can be handed each raise an
+credential, a tool no agent can be handed, a call waiting too long for a
+person's approval, and a tool held because the server changed it each raise an
 [alarm](../reference/alarms.md), one per kind listing every server it stands
 on. Every data node judges them from every live node's heartbeat, so they read
 the same whichever node you ask, and a server turned off raises none.
@@ -1280,6 +1623,8 @@ the same whichever node you ask, and a server turned off raises none.
 | `mcp_server_partial` | Some instances serve, and one that does not has been down that long: one node, one agent's credentials or one child that keeps dying, rather than the server |
 | `mcp_server_waiting_long` | An agent's instance has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat (5m 15s), for a credential that integration mints |
 | `mcp_tools_refused` | A tool the server lists cannot be offered under its name ([A tool's name](#a-tools-name)): raised as soon as a node lists it, since no wait changes a name |
+| `mcp_approval_waiting` | An agent's run has waited ten minutes for a person to approve a call to one of the server's tools ([Asking a person before a tool runs](#asking-a-person-before-a-tool-runs)), a third of the default pause TTL, so an answer still carries the run on in the box it left; read off the runs' own records, its entry naming the seat whose run waits |
+| `mcp_tools_changed` | A tool the server changed since its level was decided, or added after its first listing, asks before each call though its level would run it unasked ([When a server changes a tool](#when-a-server-changes-a-tool)): raised at once, read off the fleet's listings and what was accepted of them, naming whether a change claims less risk than before |
 
 The outage is measured from the instance that went down first, kept across
 every retry of it, so a server whose last serving instance goes down moves from
@@ -1294,7 +1639,9 @@ named as `entry`), and the health count. [`GET /mcp-servers`](../reference/api-e
 carries the standing ones in `alarms`, each server with the one gesture that
 fixes it: a restart (of the whole server where nothing serves, of the one
 agent's instance where the rest serve), the integration minting the agent's
-credential, or the server's `tool_prefix`. An administrator's Inbox lists each
+credential, the server's `tool_prefix`, the answer to the calls waiting
+(`approve`, each call in `approvals`), or the review of its changed tools
+(`review`, each change in the server's `changes`). An administrator's Inbox lists each
 one under **Needs you**, linked to the server's page.
 
 ### Testing a server
@@ -1331,11 +1678,14 @@ it. Each test is recorded in the runtime audit as `mcp_server_acted`.
 
 **Before you save.** The add and edit flows test the entry you are writing
 ([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as the
-configuration would run it once saved. Since a draft runs a command on the
-engine host or dials an address with your stored values, it asks for the same
-rights a write does (`config.write` and `secrets.write`, with a recent
-step-up), and it is held to the configuration's own checks first. A draft's
-test is not kept.
+configuration would run it once saved, with the values you typed for it and
+not stored yet: each is read through the variable it will be stored under. The
+entry and every value cross the fleet sealed under its keyring, bound to the
+one test. Since a draft
+runs a command on the engine host or dials an address with your values, it asks
+for the same rights a write does (`config.write` and `secrets.write`, with a
+recent step-up), and it is held to the configuration's own checks first. A
+draft's test is not kept, and neither is any value typed for it.
 
 **Checking an address.** When you type a remote server's address, the add
 flow checks it ([`POST /mcp-probe`](../reference/api-endpoints.md#post-mcp-probe))
@@ -1357,11 +1707,190 @@ which you can configure as the server's address if you trust it. A redirect on
 the server's own origin, such as a moved path, is followed, and the headers you
 configured are only ever sent to that origin.
 
+### Storing a header or variable
+
+A server's **Connection** tab lists every header (a remote server) or variable
+(a local one) it is sent, by name: the variable each reads, whether the secret
+store holds it and who stored it last, never its value. **Replace** (or
+**Set**, for a key the store holds nothing for) stores a new one
+([`PUT /mcp-servers/{name}/values/{key}`](../reference/api-endpoints.md#put-mcp-serversnamevalueskey)):
+what the server is sent under the key, whole, as the curated catalogue's format
+says (`Bearer <API key>`, for one).
+
+1. **Tested first.** The server is tested as it would run with the new value,
+   where it runs, before anything is stored ([Testing a server](#testing-a-server)).
+   The test is sent the server's entry as the fleet's active configuration
+   states it, so a value stored straight after its entry is written is tested
+   before any node has applied that write.
+   A value the server refuses stores nothing, and you are told the stage and
+   the reason. You can store a value untested, for a server you cannot reach
+   yet.
+2. **Write-only.** The value is sealed in the
+   [secret store](../concepts/secret-store.md) on a row no reveal answers:
+   the engine reads it for the `${VAR}` that names it, and neither
+   `crewlet secrets get -reveal` nor the API's reveals hand it back, to anybody.
+   To change it, store a new one.
+3. **One gesture.** The key is pointed at the variable in the configuration
+   (`Authorization: "${MCP_LINEAR_AUTHORIZATION}"`) as one revision, or, where
+   it already read a variable of its own, that revision is re-activated, so the
+   running server is restarted with the new value either way.
+
+The variable is the key's own where it already reads one that nothing else in
+the configuration reads; otherwise it is `MCP_<SERVER>_<KEY>`. For a per-agent
+server, a value can be one agent's (`MCP_<SERVER>_<KEY>_<AGENT>`, written into
+that seat's `mcp_env` block, and tested as that agent), and only for an agent
+the server is already granted to. A key an integration fills for each agent
+(GitHub's token, for one) is never stored here.
+
+The secret of the OAuth client a server signs in with is stored the same way,
+under the key `oauth.client_secret` (its own variable, else
+`MCP_<SERVER>_OAUTH_CLIENT_SECRET`), and listed on the Connection tab beside
+the headers with `as: oauth`: it is sent to the server's authorization server,
+never to the server. A [service identity's](#signing-in-as-a-service-identity)
+is tested by signing in with it. The company's own client of a person's
+[sign-in](#signing-in-with-oauth) is first sent when the grant next renews,
+which a test does not do, so it is stored with `test=false`. A server whose
+sign-in has no secret (`client: cimd` or `dcr`) refuses the key.
+
+Storing a value is an administrator's, at a recent step-up, and Ask Crewlet
+never does it: a value it typed would sit in its conversation. A configuration
+another system manages refuses it; set the credential where that system
+reads it. Each store is recorded in the runtime audit as `mcp_server_acted`
+with the action `store_value`, naming the key and the variable.
+
+### Signing in with OAuth
+
+Many remote MCP servers (Linear, Notion, Sentry, Atlassian, Cloudflare, Stripe)
+sign you in with OAuth rather than a key in a header. Crewlet signs **the
+company** in once, as a person who can approve the server's access at its
+vendor, and keeps that one grant for every agent the server reaches:
+
+```yaml
+mcp_servers:
+  - name: linear
+    transport: http
+    url: https://mcp.linear.app/mcp
+    oauth:
+      client: cimd
+```
+
+`oauth.client` says how the engine registers at the server's authorization
+server, which [checking the address](#testing-a-server) tells you:
+
+| `client` | How |
+|---|---|
+| `cimd` | The engine's published client metadata document: its client id is the address `/webhooks/mcp-oauth/client-metadata.json` on your engine's public address, which the vendor reads. Nothing is registered and nothing is kept. Needs `api.external_url` on https |
+| `dcr` | The engine registers a client at the vendor when the sign-in starts (dynamic registration) and keeps what it is issued with the grant |
+| `own` | A client you registered at the vendor beforehand: its `client_id`, and its `client_secret` (a `${VAR}`) where it has one |
+
+`scopes` lists what to ask for; absent, the engine asks for the ones the server
+lists. A sign-in is the company's, so `oauth` is refused on a per-agent server
+(`shared: false`), on a local server, beside an `Authorization` header (the
+sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a
+server's values once, at its launch, and an access token runs out within the
+hour, so a box reaches the server through the bridge instead.
+
+**Signing in.** Until somebody signs in, the server is not started and its
+state is `needs_sign_in`. **Sign in** on its page
+([`POST /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#post-mcp-serversnameoauth))
+takes an administrator who stepped up recently, never Ask Crewlet. The engine
+reads the server's sign-in metadata, refuses an authorization server that does
+not offer PKCE with S256, and sends your browser to the vendor's consent page.
+When you approve, the vendor sends the browser back to
+`/webhooks/mcp-oauth` on your engine's public address, the engine exchanges the
+code, keeps the grant, and every node starts the server. A vendor that only
+sends people back to addresses it allowlists (Atlassian, for one) is given the
+two addresses the Servers answer names: `callback_url` and
+`client_metadata_url`.
+
+**What is kept, and where.** The refresh token, and the client a registration
+issued, are sealed in the company's secret store under a name of the engine's
+own that no `${VAR}` reaches and no person can list, reveal or delete through
+Settings, Secrets. Who signed in and when, the authorization server, the scopes
+and when the grant runs out are on the server's page. The access token is
+issued as the server is used and kept in each node's memory alone, never
+stored, logged or answered; each node renews its own as it runs out, one node
+at a time across the fleet, so a vendor that retires a refresh token at every
+renewal never sees a retired one again. A server that refuses a token is sent
+one renewed token once, and its refusal stands after that. A grant is sent only
+to the address it was issued for: change the server's `url` to another address
+and the server waits for a sign-in there, rather than taking the company's
+token with it.
+
+**When a sign-in stops working.** A vendor that refuses a renewal for good (the
+grant was revoked, or the person's access ended) is asked no more: the server
+is stopped, its state is `needs_sign_in`, and the alarm
+`mcp_oauth_needs_sign_in` quotes the vendor's words. A grant whose vendor
+states when it runs out raises `mcp_oauth_expiring` seven days before. Either
+way, signing in again replaces the grant, and the agents keep the server from
+then on.
+
+**Signing out.** **Sign out** on the server's page
+([`DELETE /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#delete-mcp-serversnameoauth))
+revokes the grant at the vendor where it offers revocation, forgets it here,
+and stops the server on every node. The page says whether the vendor revoked
+it; where the vendor offers no revocation, revoke the app's access in the
+vendor's own settings too.
+
+### Signing in as a service identity
+
+Some vendors offer a **service identity**: an OAuth client you register at the
+vendor that signs in as itself, with its client id and secret and no person
+behind it (OAuth's client credentials grant). The engine signs in as that
+client whenever the server needs a token:
+
+```yaml
+mcp_servers:
+  - name: vendor
+    transport: http
+    url: https://mcp.vendor.example.com/mcp
+    oauth:
+      grant: client_credentials
+      client_id: crewlet-agents
+      client_secret: ${VENDOR_CLIENT_SECRET}
+      scopes: [read]
+```
+
+`grant: client_credentials` needs `client_id` and `client_secret` (a `${VAR}`),
+and refuses `client`: a service identity is always your own client, so nothing
+is registered. `scopes` are what each token asks for; absent, the vendor issues
+the client's default. Every rule of a [sign-in](#signing-in-with-oauth) holds
+too: a remote, shared server, no `Authorization` header beside it, and never in
+a seat's `sandbox.mcp.servers`. `grant` left out is `authorization_code`, a
+person's sign-in.
+
+**Nobody signs in.** The server starts as soon as it is configured. Its `oauth`
+view on the Servers answer says `grant: client_credentials` and is always
+`connected`, and **Sign in** answers `409`. Each node reads the server's
+sign-in metadata the first time it needs a token, refuses an authorization
+server that lists the grants it issues without `client_credentials` or takes a
+client's secret by no method the engine sends one by, and asks the token
+endpoint for a token for this server. The secret goes by HTTP basic
+authentication, or in the request body where that is all the vendor takes,
+and only to a token endpoint on the server's own address or a public https
+address.
+
+**What is kept.** Nothing but your configuration. Each node holds the access
+token it is issued in its memory alone, never stored, logged or answered, asks
+for a new one shortly before it runs out, and once more when the server
+refuses it. There is no refresh token, grant record or sealed row, so a
+sign-out or a removal has nothing of a service identity's to revoke.
+
+**When the vendor refuses.** A refusal (a revoked or rotated secret, a client
+not allowed the grant, a scope it will not issue) fails the server's instances
+in the vendor's own words, classed `credential_rejected` or
+`missing_permission`, and raises `mcp_server_failing` as any failure does. The
+refusal is held for the restart schedule's wait, so the vendor is asked again
+at most once a wait rather than at every request; a new client id, secret or
+scopes is asked about at once. Store a new secret from the server's page
+([Storing a header or variable](#storing-a-header-or-variable)), which tests it
+by signing in with it first.
+
 ---
 
 ## Per-agent identity
 
-Each Role names its per-server credentials directly in `mcp_env`, so every agent authenticates as itself in external tools. The engine applies these as **env vars** for `stdio` servers and **HTTP headers** for `http` servers — it stays tool-agnostic, reading only `mcp_env` (and, for the Slack transport, `integrations.slack`):
+Each Role names its per-server credentials directly in `mcp_env`, so every agent authenticates as itself in external tools. A block holds values for a server the seat [is granted](#choosing-which-agents-get-a-server) and grants nothing itself. The engine applies these as **env vars** for `stdio` servers and **HTTP headers** for `http` servers — it stays tool-agnostic, reading only `mcp_env` (and, for the Slack transport, `integrations.slack`):
 
 ```yaml
 roles:
@@ -1477,9 +2006,9 @@ difference is a lifetime as much as a scope.
 
 | | `shared: true` (default) | `shared: false` |
 |---|---|---|
-| What it is | One child for the company | A **template**: one child per role that declares credentials for it |
+| What it is | One child for the company | A **template**: one child per agent seat it is [granted to](#choosing-which-agents-get-a-server) |
 | Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
-| Who can call it | Every seat | Only the seat whose child it is |
+| Who can call it | Every agent seat it is granted to | Only the seat whose child it is |
 | Lifetime | The config **epoch** — reconciled on every apply, stopped when a revision drops it | The seat's **lease** — spawned when this node claims the seat, reconciled in place on every apply while it holds it, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
@@ -1590,10 +2119,12 @@ side. A claimed seat therefore gets its own registry (the company's catalogue
 plus its own children's tools) and its own bridge (holding only its own
 children).
 
-**A seat that declares no `mcp_env` for a template gets no child.** A template
-with nobody's identity in it is a server nobody can act through, and offering
-its tools anyway would put entries in the prompt whose every call fails
-authentication.
+**A template starts a child for the seats it is granted to and no other**,
+whatever `mcp_env` blocks a seat holds ([Choosing which agents get a server](#choosing-which-agents-get-a-server)).
+A seat granted a template whose values it does not supply has its child held
+back for the value it is missing, named on the server's page, rather than
+started with an empty credential (see
+[A key that may go without its value](#a-key-that-may-go-without-its-value)).
 
 **A server that will not start costs its own tools and nothing else.** The seat
 keeps its builtins, the other servers keep working, and the operator sees that
@@ -1789,7 +2320,7 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This and a server's `tools` levels ([Setting each tool's level](#setting-each-tools-level)) are the *only* places tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
 
 ---
 

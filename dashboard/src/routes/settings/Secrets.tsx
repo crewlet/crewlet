@@ -227,7 +227,9 @@ async function readReferences(
  * `provision`. A `crewlet` command run while its node's engine is stopped
  * writes the store directly and keeps its own word: `cli` for
  * `crewlet secrets set`, `llm-login` for a harness's captured token or
- * exported login, `provision` for a provisioning run.
+ * exported login, `provision` for a provisioning run. Settings › Models stamps
+ * `models`, and Settings › MCP & tools `mcp` for a server's header or variable,
+ * which the store keeps write-only: no reveal answers it.
  *
  * `iam` marks the engine's own keys, which the listing never names, and a
  * rekey keeps the word it found. A word outside the table is a newer engine's,
@@ -241,6 +243,7 @@ const PROVENANCE: Record<string, string> = {
   "llm-login": "a harness's login, stored by crewlet llm while its node's engine was stopped",
   models:
     "a model's credential, stored from Settings › Models once it signed the model in on a test call",
+  mcp: "an MCP server's header or variable, stored from Settings › MCP & tools and never shown again",
 };
 
 /**
@@ -256,6 +259,7 @@ const SOURCE_WORDS: Record<string, string> = {
   cli: "CLI",
   "llm-login": "Harness login",
   models: "Models",
+  mcp: "MCP & tools",
 };
 
 /** A source in words, or the engine's own word for one this build does not know. */

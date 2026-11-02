@@ -175,14 +175,20 @@ func TestEachSeatCallsItsOwnChildAndNotAPeers(t *testing.T) {
 	}
 }
 
-// A SEAT THAT DECLARES NO CREDENTIALS FOR A TEMPLATE GETS NO CHILD.
-//
-// A template with nobody's identity in it is a server nobody can act through,
-// and spawning one anyway would put a tool in the prompt whose every call
-// fails on authentication.
-func TestASeatWithoutCredentialsGetsNoChild(t *testing.T) {
+// A SEAT A TEMPLATE IS NOT GRANTED TO GETS NO CHILD, whatever values it holds
+// for it, and a seat it is granted to gets one, with none: the grant is the
+// server's `access`, and an `mcp_env` block holds values only.
+func TestASeatATemplateIsNotGrantedToGetsNoChild(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(mcpCompany(false, "SEAT_TOKEN"), `    mcp_env:
+      tracker:
+        SEAT_TOKEN: "ceo-secret"
+`, "", 1)
+	doc = strings.Replace(doc, `    tool_prefix: "tracker_"
+`, `    tool_prefix: "tracker_"
+    access: {seats: [ceo]}
+`, 1)
+	doc = strings.Replace(doc, `    mcp_env:
       tracker:
         SEAT_TOKEN: "cto-secret"
 `, "", 1)
@@ -190,12 +196,12 @@ func TestASeatWithoutCredentialsGetsNoChild(t *testing.T) {
 	claimed(t, e, 2)
 
 	if names := surfaceOf(t, e, "cto"); slices.Contains(names, "tracker_probe") {
-		t.Errorf("a seat that declares no credentials was given the tool anyway: %v", names)
+		t.Errorf("a seat the template is not granted to was given its tool: %v", names)
 	}
-	// And the seat that DID declare them still has it, so the case above is
-	// the absence of a child rather than the absence of the wiring.
+	// And the seat it IS granted to has it with no block of its own, so the
+	// case above is the grant at work rather than the absence of the wiring.
 	if names := surfaceOf(t, e, "ceo"); !slices.Contains(names, "tracker_probe") {
-		t.Errorf("the seat that declared credentials lost its tool: %v", names)
+		t.Errorf("the seat the template is granted to has no tool: %v", names)
 	}
 }
 

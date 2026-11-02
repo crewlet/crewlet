@@ -1197,8 +1197,12 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 			},
 		}
 		for _, f := range s.Fires {
-			rec.Fires = append(rec.Fires, Fire{At: f.At, Target: f.Target,
-				Outcome: f.Outcome, TraceID: f.TraceID, TurnID: f.TurnID})
+			rec.Fires = append(rec.Fires, Fire{At: f.At, ScheduledAt: f.ScheduledAt,
+				FireLabel: f.FireLabel, Target: f.Target, Outcome: f.Outcome,
+				TraceID: f.TraceID, TurnID: f.TurnID})
+		}
+		for _, sup := range s.Superseded {
+			rec.Superseded = append(rec.Superseded, Superseded{TraceID: sup.TraceID, At: sup.At})
 		}
 		out = append(out, rec)
 	}
@@ -1208,6 +1212,7 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		// of it is that day byte for byte.
 		slices.SortFunc(out[i].Tokens, compareCell)
 		slices.SortStableFunc(out[i].Fires, compareFire)
+		slices.SortStableFunc(out[i].Superseded, compareSuperseded)
 		if err := out[i].Subject.Validate(); err != nil {
 			return nil, fmt.Errorf("usage: this node derived an object it cannot "+
 				"address on %s: %w", day, err)
@@ -1504,6 +1509,9 @@ func summary(r Record) string {
 	}
 	if len(r.Fires) > 0 {
 		out += fmt.Sprintf(" fires=%d", len(r.Fires))
+	}
+	if len(r.Superseded) > 0 {
+		out += fmt.Sprintf(" superseded=%d", len(r.Superseded))
 	}
 	return out
 }

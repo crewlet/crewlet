@@ -88,6 +88,12 @@ type Ask struct {
 	// asking: what a re-seeded run is told to check out once the answer
 	// arrives ([PendingRun.Branch]). Empty where it pushed nothing.
 	Branch string
+
+	// Held is the call to a tool at Needs approval the question asks a
+	// person about, nil for a question the run asked itself (ADR-0077).
+	// Its Decision is [HeldDecision], and it is recorded onto the row with
+	// the question ([PendingRun.HeldCall]), its LaunchID the job's.
+	Held *HeldCall
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
@@ -127,6 +133,9 @@ func (a Ask) ownFaults() []error {
 		note(fieldRefusal("branch", fmt.Sprintf("is %q, which is not a branch name git "+
 			"accepts (or is past %d bytes): name the branch exactly as you pushed it, "+
 			"or leave it out", a.Branch, MaxBranchBytes)))
+	}
+	if a.Held != nil {
+		found = append(found, a.Held.validate(a.Decision)...)
 	}
 	if d := a.Decision; d != nil {
 		if d.Question != a.Question {
@@ -226,10 +235,11 @@ func (r PendingRun) AskedBy(launch string) bool {
 }
 
 // withoutQuestion is the row as a collection that parks nothing reads it: the
-// job's question, its context, its decision, its audience and its branch
-// gone, whatever the job asked on its way out.
+// job's question, its context, its decision, its audience, its branch and any
+// call it held gone, whatever the job asked on its way out.
 func withoutQuestion(r PendingRun) PendingRun {
 	r.Question, r.QuestionContext, r.Decision, r.Audience, r.Branch = "", "", nil, "", ""
+	r.HeldCall = nil
 	return r
 }
 

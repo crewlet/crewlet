@@ -23,6 +23,7 @@ func scheduledFire(schedule, label string, due time.Time) *events.Event {
 	ev := events.New(types.TaskAssigned{
 		TaskID: "role:sre:" + schedule + ":" + label + ":sre", Agent: "a-1",
 		RoleName: "SRE", Description: "check the services", Schedule: schedule,
+		ScopeType: types.ScheduleScopeRole, ScopeID: "a-1",
 		ScheduledAt: due, TimeoutSeconds: 1800,
 	}, events.NewTrace())
 	ev.Source = "scheduler"
@@ -107,6 +108,14 @@ func TestFiresOfOneScheduleThatWaitedTogetherRunOnce(t *testing.T) {
 			superseded[rec.TaskID] = e.TraceID
 			if rec.SupersededBy != kept.TaskID || rec.TargetHandle != "sre" {
 				t.Errorf("superseded record = %+v", rec)
+			}
+			// FILED UNDER THE SCHEDULE'S WHOLE IDENTITY, which is what
+			// the seat's node publishes it under in its own usage day:
+			// a name alone could be either of two units' standups.
+			if rec.ScopeType != types.ScheduleScopeRole || rec.ScopeID != "a-1" ||
+				rec.ScheduleName != "health-check" {
+				t.Errorf("the superseded record names the schedule %s/%s/%s, want role/a-1/health-check",
+					rec.ScopeType, rec.ScopeID, rec.ScheduleName)
 			}
 		}
 	}

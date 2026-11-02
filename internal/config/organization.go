@@ -53,6 +53,7 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 	o.Normalize()
 	c.bindSeatTools(o)
 	c.bindSeatCredentials(o)
+	c.markAccessLanes(o)
 	return o, index
 }
 

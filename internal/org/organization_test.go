@@ -1280,3 +1280,37 @@ func TestAutoManagementRecordsWhatItAdded(t *testing.T) {
 		t.Errorf("after a second pass AutoManaged = %v, want %v", lead.AutoManaged, want)
 	}
 }
+
+// A SEAT KNOWS THE UNITS IT SITS IN, its own first and then each enclosing
+// one: what a grant to a unit reaches it through. A root seat moved into its
+// unit is placed there, a seat at the root is in none, a unit with no key adds
+// nothing, and a second pass lands on the same answer.
+func TestASeatKnowsTheUnitsItSitsIn(t *testing.T) {
+	t.Parallel()
+	o := &Organization{
+		Name:  "Acme",
+		Roles: []*Role{{Name: "CEO"}, {Name: "Moved", UnitRef: "web"}},
+		Units: []*Unit{{
+			Name: "Engineering", ID: "eng",
+			Roles: []*Role{{Name: "VP"}},
+			Children: []*Unit{{
+				Name: "Web", ID: "web",
+				Roles:    []*Role{{Name: "Front"}},
+				Children: []*Unit{{Roles: []*Role{{Name: "Keyless"}}}},
+			}},
+		}},
+	}
+	o.Normalize()
+	o.Normalize()
+	for handle, want := range map[string][]string{
+		"ceo":     nil,
+		"vp":      {"eng"},
+		"front":   {"web", "eng"},
+		"moved":   {"web", "eng"},
+		"keyless": {"web", "eng"},
+	} {
+		if got := o.Role(handle).UnitKeys; !slices.Equal(got, want) {
+			t.Errorf("%s sits in %v, want %v", handle, got, want)
+		}
+	}
+}

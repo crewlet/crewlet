@@ -13,13 +13,17 @@
 import type {
   McpAlarmKind,
   McpAuth,
+  McpAuthMethod,
   McpCallOutcome,
   McpFailureClass,
   McpFixKind,
   McpInstanceState,
   McpRisk,
   McpServerState,
+  McpStepState,
+  McpTestStage,
 } from "~/contract/mcp.ts";
+import type { StepState } from "@crewlethq/ui";
 import type { BuiltinGate } from "~/contract/tools.ts";
 import { managedSentence, unsettledSentence } from "~/protocol/configAnswer.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
@@ -37,6 +41,7 @@ export const STATE: Record<McpServerState, { label: string; tone: Tone }> = {
   failing: { label: "Failed", tone: "danger" },
   waiting: { label: "Waiting", tone: "info" },
   disabled: { label: "Disabled", tone: "neutral" },
+  needs_sign_in: { label: "Needs sign-in", tone: "warning" },
   not_started: { label: "Not started", tone: "neutral" },
   unreported: { label: "Not reported", tone: "neutral" },
 };
@@ -60,6 +65,38 @@ export const AUTH: Record<McpAuth, string> = {
   none: "None",
   headers: "Values the configuration sets",
   integration: "The integration's own credential, per agent",
+  oauth: "OAuth, signed in for the company",
+};
+
+/** A stage a test walks, in a word: what the engine did there. */
+export const STAGE: Record<McpTestStage, string> = {
+  address: "Address",
+  resolve: "Resolve",
+  connect: "Connect",
+  tls: "Certificate",
+  launch: "Launch",
+  discover: "Discover",
+  list: "List tools",
+};
+
+/**
+ * How a stage went, as the kit's step list draws it: a stage the test never
+ * reached is still to come, a skipped one (a certificate over plain http)
+ * has nothing to report.
+ */
+export const STAGE_STATE: Record<McpStepState, StepState> = {
+  passed: "done",
+  failed: "failed",
+  skipped: "pending",
+  not_reached: "pending",
+};
+
+/** A sign-in method in a few words, for a card, a fact or a sentence. */
+export const SIGN_IN: Record<McpAuthMethod, { label: string; noun: string }> = {
+  integration: { label: "Integration", noun: "an integration" },
+  oauth: { label: "OAuth", noun: "OAuth" },
+  headers: { label: "Header", noun: "a header" },
+  none: { label: "None", noun: "no sign-in" },
 };
 
 /** How a call ended. */
@@ -288,13 +325,33 @@ export const ALARM: Record<
     title: ({ server, count }) =>
       count === 1 ? `1 ${server} tool is not offered` : `${count} ${server} tools are not offered`,
   },
+  mcp_oauth_needs_sign_in: {
+    tone: "warning",
+    title: ({ server }) => `${server} needs somebody to sign in`,
+  },
+  mcp_oauth_expiring: {
+    tone: "info",
+    title: ({ server }) => `${server}'s sign-in runs out soon`,
+  },
+  mcp_approval_waiting: {
+    tone: "warning",
+    title: ({ server, who }) =>
+      who ? `${who} is waiting for your approval` : `A call to ${server} is waiting for approval`,
+  },
+  mcp_tools_changed: {
+    tone: "warning",
+    title: ({ server }) => `${server} changed tools since you allowed them`,
+  },
 };
 
 /** Each fix's button, where the page itself carries it out. */
 export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",
-  edit: "See which tools",
+  edit: "Change its prefix",
+  sign_in: "See its sign-in",
+  approve: "Open the Inbox",
+  review: "Review the changes",
 };
 
 /**

@@ -314,6 +314,8 @@ MCP tools (Jira, Slack, GitHub, and so on) are discovered from the configured MC
 
 **The executor holds every one of them from its launch**, and no catalogue of them is in its prompt. The [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) serves the engine's own tools as the MCP server `crewlet` and each MCP server the seat holds under the server's own name, with what the company says the server is for (its `description`) as that server's MCP instructions; every call on every one of them is decided and recorded as the seat's, as a call to `crewlet` is. A role with 50–150 MCP tools would otherwise send their definitions with every request, and the harness keeps them out of the requests that do not need them itself, server by server, as it does for a person: Claude Code defers every MCP server's tools behind its tool search and keeps `crewlet` loaded, and OpenCode offers the seat's servers through Code Mode — one `execute` tool, a short catalogue and a `search()` — and `crewlet`'s tools directly. A server the seat runs in its box (`role.sandbox.mcp.servers`) is reached there under the same name, and is not served over the bridge.
 
+**A tool's level decides whether a call runs** ([Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level)): a blocked tool is in no seat's surface, and a call to a tool at Needs approval (`approve`, which a tool whose server does not mark it read-only starts at) is never made by the surface it reaches. The executor's call is recorded as its run's question and the run parks until a person answers ([A call held for approval](code-sandbox.md#a-call-held-for-approval)); a phase on this host is refused it, since it has no run to park.
+
 The phases on this host that discover their MCP tools walk the discover-then-activate flow instead:
 
 1. `list_mcp_server_tools(server)` — returns the `name: description` listing for one server.
@@ -321,7 +323,7 @@ The phases on this host that discover their MCP tools walk the discover-then-act
 
 Both meta-tools are available to the onboarding pass. A worker gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach; a pair from anywhere else never reaches it (`activate_tool` and `list_mcp_server_tools` are on the worker denylist by name, because a pair bound to another surface would activate tools onto that one).
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the executor run's own work in its box, with its own checkout, shell and git ([code sandbox](code-sandbox.md)). See [GitHub Integration](../integrations/github.md).
+Agent seats on at the GitHub integration get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the executor run's own work in its box, with its own checkout, shell and git ([code sandbox](code-sandbox.md)). See [GitHub Integration](../integrations/github.md).
 
 ---
 

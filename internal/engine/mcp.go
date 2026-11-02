@@ -117,6 +117,20 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: err})
 			continue
 		}
+		// SIGNED IN TO WITH OAUTH: started under the company's grant, read
+		// afresh at each pass, and held back while nobody holds one (or its
+		// vendor refused to renew it), which a person ends by signing in
+		// (mcpoauth.go); or as its service identity, whose tokens are issued
+		// as it is used (mcpserviceidentity.go). Retired below if it was
+		// running.
+		if server.OAuth != nil {
+			bearer, needed := e.tokenSourceFor(ctx, server, env)
+			if needed != nil {
+				outcomes = append(outcomes, mcpOutcome{server: server.Name, err: needed})
+				continue
+			}
+			spec.Bearer = bearer
+		}
 		specs = append(specs, spec)
 	}
 	outcomes = e.withheldForCredentials(ctx, outcomes)
@@ -165,6 +179,12 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 			log.InfoContext(ctx, "mcp_server_retired", "server", name, "detail", turnedOffDetail)
 			continue
 		}
+		if needed := signInHeld(outcomes, name); needed != nil {
+			// A GRANT GIVEN UP OR REFUSED STOPS THE SERVER, by the rule that
+			// would not start it: nobody is signed in to it any more.
+			log.InfoContext(ctx, "mcp_server_retired", "server", name, "detail", needed.Error())
+			continue
+		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name,
 			"detail", "the revision no longer declares this shared server")
 	}
@@ -181,6 +201,17 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
 	e.mcpMu.Unlock()
+}
+
+// signInHeld is the sign-in a pass held server back for, nil where it did not.
+func signInHeld(outcomes []mcpOutcome, server string) *signInNeeded {
+	for _, o := range outcomes {
+		var needed *signInNeeded
+		if o.server == server && errors.As(o.err, &needed) {
+			return needed
+		}
+	}
+	return nil
 }
 
 // serversTurnedOff names the servers cfg declares and turns off
@@ -538,10 +569,10 @@ func (e *Engine) ToolsFor(handle string) *tools.Registry {
 // pair rather than two reads an apply can land between.
 //
 // The seat's own registry when this node has claimed it and started its
-// per-role children, and the epoch's shared one otherwise. Never nil for a
-// live epoch: a seat with no per-role children still has the builtins, and
-// answering nil would fail the turn rather than run it with the tools it
-// does have.
+// per-role children, and the epoch's shared one as the seat holds it otherwise
+// ([grantedSurface]). Never nil for a live epoch: a seat with no per-role
+// children still has the builtins, and answering nil would fail the turn
+// rather than run it with the tools it does have.
 func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	e.mcpMu.Lock()
 	reg := e.seatTools[handle]
@@ -552,7 +583,29 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	if c == nil {
 		return nil
 	}
-	return c.Tools
+	return grantedSurface(c, c.Org.AgentSeatByHandle(handle))
+}
+
+// grantedSurface is the epoch's surface as seat holds it: a clone of it without
+// the tools of each shared server the seat is not granted
+// ([config.MCPServer.Grants]).
+//
+// ONE INSTANCE, FILED ONCE, HELD BY SOME: a shared server runs one instance for
+// the company and files its tools into the epoch's registry, and a seat's
+// surface is cut from that registry, so a server granted to chosen seats is cut
+// out here for every other one. Every surface a seat's turn is built against
+// comes through this: a held seat's ([seatSurface]) and the fallback for a seat
+// this node holds no children for. A seat the epoch does not have (nil) holds no
+// shared server.
+func grantedSurface(c *Company, seat *org.Role) *tools.Registry {
+	reg := c.Tools.Clone()
+	for i := range c.Config.MCPServers {
+		server := &c.Config.MCPServers[i]
+		if server.IsShared() && !server.Grants(seat) {
+			reg.UnregisterOrigin(tools.Origin(server.Name))
+		}
+	}
+	return reg
 }
 
 // startAll brings a set of servers up CONCURRENTLY and files what they
@@ -659,9 +712,9 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // seatSpecs is every per-role child this seat needs.
 //
 // Keyed off [config.MCPServer.Grants], the rule the org projection publishes
-// too: a `shared: false` server the seat declares no credentials for gets no
-// child, because a template with nobody's identity in it is a server nobody
-// can act through, and a server turned off gets none for anybody.
+// too: a `shared: false` server gets a child for each agent seat its grant
+// reaches and for no other, whatever `mcp_env` blocks the seat holds, and a
+// server turned off gets none for anybody.
 //
 // A child one of whose values references a variable that resolves to nothing
 // — the seat's block or the template's own, under a key not declared optional
@@ -678,8 +731,8 @@ func seatSpecs(
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
 		// The epoch runs the shared ones; a template this seat is not
-		// granted has nobody's identity to run as, and one turned off is
-		// granted to nobody.
+		// granted is not this seat's to run, and one turned off is granted
+		// to nobody.
 		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}
@@ -792,6 +845,7 @@ func serverSpec(server *config.MCPServer, instance string, v serverValues) (mcp.
 		Args:                server.Args,
 		URL:                 v.url,
 		ToolPrefix:          server.ToolPrefix,
+		Levels:              toolLevels(server.Tools),
 		AnnotationOverrides: annotationOverrides(server.ToolAnnotations),
 		StartupTimeout:      mcpTimeout(server.StartupTimeoutSeconds),
 		RequestTimeout:      mcpTimeout(server.RequestTimeoutSeconds),
@@ -815,6 +869,26 @@ func withheldByInstance(outcomes []mcpOutcome) map[string]*credentialMissing {
 		}
 	}
 	return withheld
+}
+
+// toolLevels converts the entry's tool levels ([config.MCPToolPolicy]) into
+// what the MCP client files the server's tools by: a blocked tool is never
+// filed and a tool at approve asks a person before each call, on this server's
+// every instance, shared or a seat's own child.
+//
+// AN UNSET DEFAULT STAYS UNSET: it leaves each tool the levels do not name at
+// the level its hints start it at, which only the server's listing can say,
+// so it is decided where the tools are filed ([mcp.Levels.Of]) and never
+// written out here as one level for every tool.
+func toolLevels(p config.MCPToolPolicy) mcp.Levels {
+	out := mcp.Levels{Default: mcp.Level(p.Default)}
+	if len(p.Levels) > 0 {
+		out.Tools = make(map[string]mcp.Level, len(p.Levels))
+		for tool, level := range p.Levels {
+			out.Tools[tool] = mcp.Level(level)
+		}
+	}
+	return out
 }
 
 // annotationOverrides converts the operator's per-tool hints.

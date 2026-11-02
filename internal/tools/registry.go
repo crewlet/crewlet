@@ -165,6 +165,35 @@ type Entry struct {
 	// kept beside the entries is one each cut would have to remember to
 	// carry. On the entry, it goes wherever the tool goes.
 	ServerDescription string
+
+	// NeedsApproval is whether a call to this tool waits for a person's
+	// answer before it runs: an MCP tool its server's entry sets at approve,
+	// by its own level, the entry's default, or the level its hints start it
+	// at ([mcp.Definition.Level]). Decided by the surface a call reaches
+	// ([Surface]), on the entry for the reason ServerDescription is: it goes
+	// wherever the tool goes, through every cut of a phase's universe. Never
+	// set on a builtin, which no level governs.
+	NeedsApproval bool
+
+	// Unreviewed reports, at each call, whether the tool's definition is not
+	// the one its level was decided on, so that a call to it asks a person
+	// first though its level is allow ([mcp.Tool.Unreviewed], ADR-0078).
+	// A function rather than a flag because it moves when a person accepts
+	// a change, which refiles nothing. Nil for every tool no change can
+	// hold: a builtin, and an MCP tool that asks before each call anyway.
+	Unreviewed func() bool
+}
+
+// asksFirst reports whether a call to the tool waits for a person's answer:
+// its level says so, or its definition changed since that level was decided.
+func (e Entry) asksFirst() (asks, changed bool) {
+	if e.NeedsApproval {
+		return true, false
+	}
+	if e.Unreviewed != nil && e.Unreviewed() {
+		return true, true
+	}
+	return false, false
 }
 
 // Name is the tool's catalogue name.
@@ -270,7 +299,8 @@ func (r *Registry) Register(tool Callable, origin string) error {
 }
 
 // Option is a registration detail that is neither the tool, its origin nor
-// its annotations — today only [DeliversTo].
+// its annotations: [DeliversTo] for a first-party tool, and an MCP tool's
+// approval ([Registry.RegisterMCP]).
 type Option func(*Entry)
 
 // DeliversTo marks a first-party tool as one whose successful call reaches
@@ -313,13 +343,22 @@ func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, o
 	return nil
 }
 
-// RegisterMCP adds a bridged MCP registration, carrying its annotations.
+// RegisterMCP adds a bridged MCP registration, carrying its annotations and
+// whether a call to it waits for a person's answer: by its level
+// ([Entry.NeedsApproval]), and, for a tool its level allows, by whether its
+// definition changed since ([Entry.Unreviewed]).
 func (r *Registry) RegisterMCP(reg mcp.Registration) error {
-	ann := Annotations{}
+	ann, approval := Annotations{}, false
+	var unreviewed func() bool
 	if t, ok := reg.Tool.(*mcp.Tool); ok {
-		ann = t.Annotations()
+		ann, approval = t.Annotations(), t.Level() == mcp.LevelApprove
+		if t.Level() == mcp.LevelAllow {
+			unreviewed = t.Unreviewed
+		}
 	}
-	return r.RegisterWith(reg.Tool, reg.Origin, ann)
+	return r.RegisterWith(reg.Tool, reg.Origin, ann, func(e *Entry) {
+		e.NeedsApproval, e.Unreviewed = approval, unreviewed
+	})
 }
 
 // Unregister removes a tool, reporting whether it was there.

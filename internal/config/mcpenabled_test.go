@@ -20,6 +20,7 @@ mcp_servers:
     transport: http
     shared: false
     url: https://docs.example.com/mcp
+    tools: {default: allow}
 ` + serverLines + `
 units:
   - name: Engineering

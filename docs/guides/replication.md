@@ -775,7 +775,9 @@ hold identical rows.
 day (the spend by phase, worker, model and provider slot, the turns that ended
 and how: failed, reviewed, first pass, sent back, a duration histogram; the
 calls its seats' turns made to each MCP server's tool and how they ended; the
-pages its seats read; the schedules it fired) from its own event log, every 15
+pages its seats read; the schedules it fired, and the fires its seats did not
+run because a later fire of the schedule ran in their place) from its own
+event log, every 15
 seconds while the day moves, and publishes each object's whole cumulative value.
 A node without `data` keeps no event log of its own: what its seats did is
 handed to the data node that keeps its events, and is counted in that node's

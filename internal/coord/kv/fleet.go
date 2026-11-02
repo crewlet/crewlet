@@ -2051,6 +2051,7 @@ type secretRecord struct {
 	OperatorID    string    `json:"operator_id,omitempty"`
 	Source        string    `json:"source,omitempty"`
 	OpID          string    `json:"op_id,omitempty"`
+	WriteOnly     bool      `json:"write_only,omitempty"`
 }
 
 // Secret reads one sealed value.
@@ -2137,7 +2138,7 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
 		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy,
 		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source, OpID: rec.OpID,
+		Source: rec.Source, OpID: rec.OpID, WriteOnly: rec.WriteOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the secret: %w", err)
@@ -2225,7 +2226,7 @@ func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
 		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy,
 		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source, OpID: rec.OpID,
+		Source: rec.Source, OpID: rec.OpID, WriteOnly: rec.WriteOnly,
 	}, true
 }
 
@@ -2472,20 +2473,21 @@ func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64
 
 // ---- the scheduled-fire claims ----------------------------------------- //
 
-// ClaimFire records one fire identity, reporting whether this call wrote it.
+// ClaimFire records one runner's claim on a minute, reporting whether this
+// call wrote it.
 //
 // Create, so the first writer wins and every later tick — this node's own
 // re-evaluated minute, or a peer that has just picked up the scheduler duty —
 // reads false and does not dispatch.
-func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (bool, error) {
-	if key == "" {
-		return false, errors.New("coord/kv: a fire claim needs a key")
+func (f *FleetStore) ClaimFire(ctx context.Context, minute, runner string, at time.Time) (bool, error) {
+	if minute == "" {
+		return false, errors.New("coord/kv: a fire claim needs a minute")
 	}
 	raw, err := json.Marshal(fireRecord{At: at.UTC()})
 	if err != nil {
 		return false, fmt.Errorf("coord/kv: encode the fire claim: %w", err)
 	}
-	_, err = f.create(ctx, f.fires, encodeKey(key), raw)
+	_, err = f.create(ctx, f.fires, fireKey(minute, runner), raw)
 	switch {
 	case err == nil:
 		return true, nil
@@ -2499,6 +2501,50 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 		return false, unavailable("claim the fire", err)
 	}
 }
+
+// FireMinuteClaimed reports whether any runner, or none, holds the minute.
+//
+// ONE FILTERED LISTING of the minute's own keys, which the broker matches:
+// the minute is a key segment of its own ([fireKey]), so the question costs
+// what that minute holds (a claim per runner at most) and never a read of
+// every claim the fleet has made this week.
+func (f *FleetStore) FireMinuteClaimed(ctx context.Context, minute string) (bool, error) {
+	if minute == "" {
+		// Refused before it becomes a filter. An empty minute composes a
+		// filter matching nothing, and "nothing matched" is the answer
+		// that writes a skip into the schedule's history.
+		return false, errors.New("coord/kv: a fire minute read needs a minute")
+	}
+	held := false
+	err := f.eachUnder(ctx, f.fires, coord.DocumentFilter(minute), "the fire claims",
+		func(jetstream.KeyValueEntry) error {
+			held = true
+			return nil
+		})
+	if err != nil {
+		return false, err
+	}
+	return held, nil
+}
+
+// fireKey is one runner's claim on a minute: the minute, then the runner, each
+// its own key segment.
+//
+// THE MINUTE LEADS so that every claim on one minute shares a prefix the
+// broker can filter on ([FleetStore.FireMinuteClaimed]).
+//
+// THE RUNNER SEGMENT CARRIES A ONE-BYTE MARK because a catchup skip names no
+// runner, and the key grammar refuses an empty segment ([coord.DocumentKey]).
+// Marked, the skip's segment is the mark alone and a runner's is the mark and
+// its handle, which keeps the mapping injective: no handle can spell the
+// skip's segment, and no two handles spell one segment.
+func fireKey(minute, runner string) string {
+	return coord.DocumentKey(minute, fireRunnerMark+runner)
+}
+
+// fireRunnerMark prefixes the runner segment of a fire claim ([fireKey]). A
+// literal byte of the key grammar, so it reads as itself in the bucket.
+const fireRunnerMark = "_"
 
 // fireRecord is one claim on the wire. The instant is diagnostic — an operator
 // asking "when was the 09:00 standup claimed, and by a tick or a catchup pass"

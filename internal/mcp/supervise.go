@@ -87,6 +87,21 @@ type Supervision struct {
 	// multiple of the base. A deployment has no reason to set it; it exists
 	// so a test can watch a schedule play out without waiting minutes for it.
 	RetryBase time.Duration
+
+	// Unreviewed reports whether the definition a server lists for a tool,
+	// by the server's own name for it and the definition's digest, is not
+	// the one its level was decided on, so that a call to it asks a person
+	// first until somebody accepts the change ([Tool.Unreviewed],
+	// ADR-0078). Asked at each call, on the caller's goroutine. Nil decides
+	// nothing: every tool runs at its level.
+	Unreviewed func(server, tool, digest string) bool
+
+	// RelistBase replaces [RelistFloor] as the soonest a running session is
+	// listed again, zero for RelistFloor, and SCALES THE SCHEDULE with it:
+	// the ceiling stays the same multiple of the floor (relist.go). As
+	// RetryBase, it exists so a test can watch a server change its tools
+	// without waiting minutes for it.
+	RelistBase time.Duration
 }
 
 // restartCeilingRatio is the ceiling's multiple of the base: twenty, the seat
@@ -192,6 +207,10 @@ type server struct {
 	// their name ([Bridge.RefusedTools]), set with tools from the same
 	// listing and guarded by the same mu.
 	refused []RefusedTool
+	// blocked are the tools that listing named and the entry blocks
+	// ([Bridge.BlockedTools]): definitions, never filed. Set with tools from
+	// the same listing and guarded by the same mu.
+	blocked []*Definition
 
 	// answered is when the server last answered, in Unix nanoseconds: a
 	// start that listed its tools, or a tool call that came back. ATOMIC,
@@ -397,21 +416,17 @@ func (s *server) nudge() {
 	}
 }
 
-// supervise is the server's supervisor, for its whole life: wait for the
-// session to end, bring the server back, repeat — until Stop, which ends ctx
-// ([supervision]).
+// supervise is the server's supervisor, for its whole life: list the session
+// again on its schedule until it ends, bring the server back, repeat, until
+// Stop, which ends ctx ([supervision]).
 func (s *server) supervise(ctx context.Context) {
 	defer close(s.done)
 	for {
 		if c := s.live(); c != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-c.ended():
-			}
-			// A stop and a death at the same instant is a stop: the
-			// owner's shutdown clears the client away itself.
-			if ctx.Err() != nil {
+			// LISTED AGAIN WHILE IT SERVES, on the server's schedule and
+			// whenever it says its tools changed (relist.go), until the
+			// session ends.
+			if !s.serve(ctx, c) {
 				return
 			}
 			s.died(ctx, c)

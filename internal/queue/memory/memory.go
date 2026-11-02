@@ -270,6 +270,13 @@ type subscription struct {
 	draining         bool
 	drainAgain       bool
 	drainAgainBypass bool
+
+	// drained is the events a drain took out of the mailbox and has not yet
+	// dispatched: still waiting for a handler, as the broker's fetched and
+	// undispatched messages are, so [Queue.Waiting] counts them beside the
+	// mailbox. A partition leaves it when its handler starts, and a
+	// partition handed back leaves it for the mailbox.
+	drained map[*events.Event]struct{}
 }
 
 func (s *subscription) membersOf(client *Queue) []*consumer {
@@ -1243,6 +1250,41 @@ func (q *Queue) Backlog(topic, group string) []*events.Event {
 		return nil
 	}
 	return slices.Clone(sub.mail)
+}
+
+// Waiting reports what a subscription holds that no handler is running on
+// ([queue.EventQueue.Waiting]): its mailbox, and what a drain took and has not
+// dispatched yet. The twin has one mailbox per subscription, so a laned
+// topic's priority lane is its marked events, which is exactly what the
+// broker's lane holds ([queue.SubjectFor]).
+func (q *Queue) Waiting(_ context.Context, topic, group string) (queue.Waiting, error) {
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if q.notStartedLocked() {
+		return queue.Waiting{}, ErrNotStarted
+	}
+	if q.broker.down {
+		return queue.Waiting{}, ErrBrokerDown
+	}
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return queue.Waiting{}, nil
+	}
+	var w queue.Waiting
+	count := func(ev *events.Event) {
+		if queue.HasLane(topic) && queue.Prioritized(ev) {
+			w.Priority++
+			return
+		}
+		w.Background++
+	}
+	for _, ev := range sub.mail {
+		count(ev)
+	}
+	for ev := range sub.drained {
+		count(ev)
+	}
+	return w, nil
 }
 
 // DeadLetters reports the events a subscription gave up on. They live at

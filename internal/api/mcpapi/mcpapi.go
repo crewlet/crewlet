@@ -1,10 +1,15 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
 // [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
 // server is added from, `GET /mcp-servers/{name}`, one server whole,
-// `POST /mcp-servers/{name}/retry`, a restart of it now, and the tests:
+// `POST /mcp-servers/{name}/retry`, a restart of it now, the tests:
 // `POST /mcp-servers/{name}/check` of a saved server, `POST /mcp-checks` of a
 // draft and `POST /mcp-probe` of an address before a server is added at it
-// (check.go).
+// (check.go), `PUT /mcp-servers/{name}/values/{key}`, a header or variable
+// stored write-only, tested first (values.go),
+// `PUT /mcp-servers/{name}/tools`, the level each of its tools runs at
+// (tools.go), and the OAuth sign-in: `POST` and
+// `DELETE /mcp-servers/{name}/oauth` and `GET /mcp-sign-ins/{id}`
+// (oauth.go).
 //
 // # Routes, not registry questions
 //
@@ -50,6 +55,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -58,6 +64,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -98,14 +105,39 @@ type Options struct {
 	// serves no configuration surface, answers a draft's test unavailable.
 	Drafts DraftChecker
 
+	// Documents writes a stored value's pointer; nil answers it unavailable.
+	Documents ValueDocuments
+
+	// Tools writes a server's tool levels; nil answers it unavailable.
+	Tools ToolDocuments
+
+	// Approvals finds a held call and delivers its answer; nil answers an
+	// approval unavailable.
+	Approvals Approvals
+
+	// Reviews reads a server's tool changes and writes a decision about
+	// one (changes.go); nil leaves the review route answered unavailable.
+	Reviews Reviews
+
+	// Values is the secret store a value is sealed in: required.
+	Values ValueStore
+
+	// Now stamps a stored value; nil is the wall clock.
+	Now func() time.Time
+
+	// SignIns starts, reads and ends a server's OAuth sign-in (oauth.go):
+	// required, since only the engine holds the grant.
+	SignIns SignIns
+
 	// Audit is where each gesture's `mcp_server_acted` is published: this
 	// node's queue, whose publish listener writes the event store.
 	// Required: a restart leaves no record anywhere else.
 	Audit operator.AuditPublisher
 
 	// Guard decides each route's policy. Nil is the request context's
-	// principal with no org chart, which every route here asks for alone:
-	// no verb they take asks a relation.
+	// principal with no org chart, which decides every verb here but one: an
+	// approval (`tools.approve`) asks whether the caller leads the seat
+	// whose run made the call, which only a guard over the chart answers.
 	Guard authz.Guard
 }
 
@@ -117,6 +149,13 @@ type Service struct {
 	restarter Restarter
 	checker   Checker
 	drafts    DraftChecker
+	documents ValueDocuments
+	tools     ToolDocuments
+	approvals Approvals
+	reviews   Reviews
+	values    ValueStore
+	now       func() time.Time
+	signIns   SignIns
 	audit     operator.AuditPublisher
 	guard     authz.Guard
 }
@@ -139,8 +178,20 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Checker is required: a test is asked of the nodes " +
 			"that run the server through the engine")
 	}
+	if opts.SignIns == nil {
+		return nil, errors.New("mcpapi: Options.SignIns is required: a server's OAuth grant is the " +
+			"engine's")
+	}
 	if opts.Audit == nil {
 		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
+	}
+	if opts.Values == nil {
+		return nil, errors.New("mcpapi: Options.Values is required: a server's header or variable is " +
+			"sealed in the fleet's secret store")
+	}
+	now := opts.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
 	}
 	registry := opts.Registry
 	if registry == nil {
@@ -151,8 +202,9 @@ func New(opts Options) (*Service, error) {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
-		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, audit: opts.Audit,
-		guard: guard}, nil
+		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
+		tools: opts.Tools, approvals: opts.Approvals, reviews: opts.Reviews, values: opts.Values, now: now,
+		signIns: opts.SignIns, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -195,8 +247,78 @@ func (s *Service) Routes(mux authz.Mux) error {
 		return err
 	}
 	probes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerProbe))
-	return probes.Handle("POST /mcp-probe", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
-		s.audited(types.MCPServerProbe, s.serveProbe))
+	if err := probes.Handle("POST /mcp-probe", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
+		s.audited(types.MCPServerProbe, s.serveProbe)); err != nil {
+		return err
+	}
+	// A value is a credential: `secrets.write`, never the assistant's, with
+	// `config.write` asked in the handler (values.go).
+	values := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerStoreValue))
+	if err := values.Handle("PUT /mcp-servers/{name}/values/{key}", authz.Policy{Action: authz.ActionSecretWrite},
+		s.audited(types.MCPServerStoreValue, s.serveValue)); err != nil {
+		return err
+	}
+	// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as a configuration
+	// write is (tools.go): `config.write`, a check on `dry_run=true` and a
+	// revision summary, both declared here for the assistant's preview.
+	// Letting a tool through is a write like blocking one, at the
+	// configuration verb's own step-up.
+	tools := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSetTools))
+	if err := tools.Handle("PUT /mcp-servers/{name}/tools",
+		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
+		s.audited(types.MCPServerSetTools, s.serveTools)); err != nil {
+		return err
+	}
+	// A SIGN-IN MAKES THE CREDENTIAL every agent reaches the server with,
+	// and a sign-out ends it: `secrets.write` both, the step-up and the
+	// human-only list with it (oauth.go). A start adds a sign-in of its own
+	// (authz.Effect).
+	signIns := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSignIn))
+	if err := signIns.Handle("POST /mcp-servers/{name}/oauth",
+		authz.Policy{Action: authz.ActionSecretWrite}.Creating(),
+		s.audited(types.MCPServerSignIn, s.serveStartSignIn)); err != nil {
+		return err
+	}
+	signOuts := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSignOut))
+	if err := signOuts.Handle("DELETE /mcp-servers/{name}/oauth",
+		authz.Policy{Action: authz.ActionSecretWrite},
+		s.audited(types.MCPServerSignOut, s.serveSignOut)); err != nil {
+		return err
+	}
+	// OUTSIDE /mcp-servers/, for the catalogue's reason: the id is a
+	// sign-in's, not a server's.
+	if err := router.Handle("GET /mcp-sign-ins/{id}", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveSignIn)); err != nil {
+		return err
+	}
+	// A CHANGED TOOL'S REVIEW (changes.go) is a configuration write at the
+	// configuration verb's own step-up, since accepting a change can let a
+	// tool run unasked again, and a block writes a revision; the summary
+	// is declared for the assistant's preview.
+	changes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerReviewChanges))
+	if err := changes.Handle("POST /mcp-servers/{name}/changes",
+		authz.Policy{Action: authz.ActionConfigWrite}.Rewriting().Summarised(),
+		s.audited(types.MCPServerReviewChanges, s.serveChanges)); err != nil {
+		return err
+	}
+	// A HELD CALL'S ANSWER (approvals.go), outside /mcp-servers/ for the
+	// catalogue's reason: decided on the caller's own record here, which
+	// admits a person and no agent and no assistant, and on the seat whose
+	// run made the call once the handler has read it. It acts on the held
+	// call and keeps it, as an answer to a run's question does.
+	approvals := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerApprove))
+	return approvals.Handle("POST /mcp-approvals/{id}",
+		authz.Policy{Action: authz.ActionToolsApprove, Object: ownRecord}.Rewriting(),
+		s.audited(types.MCPServerApprove, s.serveApproval))
+}
+
+// ownRecord is the caller's own record, which a verb a person takes about a
+// seat is admitted on before the handler knows the seat: every principal that
+// has one and may act at all is admitted to it, as internal/api/workapi
+// admits a person's verbs before their name resolves.
+func ownRecord(r *http.Request) authz.Object {
+	principal, _ := iam.From(r.Context())
+	return authz.Object{Kind: authz.KindPerson, Owner: iam.RecordOwner(principal)}
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a

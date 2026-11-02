@@ -134,7 +134,7 @@ roles:
 	mustCompany(t, `
 name: Acme
 mcp_servers:
-  - {name: tracker, command: tracker-mcp, enabled: false}
+  - {name: tracker, command: tracker-mcp, enabled: false, tools: {default: allow}}
 units:
   - name: Eng
     id: eng

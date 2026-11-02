@@ -699,6 +699,17 @@ export interface Overlay {
   /** The seat's models at their usage limit, or null while they are not.
    *  Always present, so a limit that lifted is shed. */
   provider_limit?: ProviderLimit | null;
+  /** What waits in the seat's inbox that no turn is running on yet, as the
+   *  node holding the seat reports it (`livestate.Waiting`); null while no
+   *  holder has reported it, or once its holder went quiet. */
+  waiting?: InboxWaiting | null;
+}
+
+/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
+ *  the seat (the priority lane), `background` the rest of its work. */
+export interface InboxWaiting {
+  priority: number;
+  background: number;
 }
 
 /**
@@ -1735,12 +1746,14 @@ export interface ScheduleRow {
   problem?: string;
 }
 
-/** One fire, from the at-most-once dispatch ledger.
+/** One fire, from the schedules' replicated history: every data node's fires,
+ *  each with what became of it.
  *
- *  `outcome` has exactly three values — `fired`, `skipped_catchup` and
- *  `skipped_paused` (the runner seat was paused when the fire came due) —
- *  because this is a DISPATCH ledger and not a turn-outcome one. Nothing here
- *  can say a turn failed; the turn says that. */
+ *  `outcome` is what the scheduler recorded (`fired`, `skipped_catchup`, or
+ *  `skipped_paused` for a runner seat that was paused when the fire came due),
+ *  or `skipped_superseded` for a fire its seat did not run because a later
+ *  fire of the same schedule ran in its place. None of them is a turn's
+ *  outcome: nothing here can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
   /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
@@ -1749,12 +1762,13 @@ export interface ScheduleRunRow {
    *  node is running. */
   scope_name: string;
   schedule_name: string;
-  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  /** The tick this fire stands for, as the dispatch ledger's own
+   *  at-most-once key. */
   fire_label: string;
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "";
+  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
   trace_id: string;
 }
 
@@ -1766,7 +1780,7 @@ export interface SchedulesAnswer {
   recent_runs?: ScheduleRunRow[];
 }
 
-/** One schedule's own dispatch history, newest first. */
+/** One schedule's own history, newest first. */
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
@@ -5315,10 +5329,13 @@ export interface SecretRow {
   updated_by_kind?: string;
   operator_id?: string;
   /** Which write path last stored it, in that path's own word — `api`,
-   *  `setup`, `provision`, `cli` or `llm-login` — never a word the writer
-   *  chose.
+   *  `setup`, `provision`, `cli`, `llm-login`, `models` or `mcp` — never a
+   *  word the writer chose.
    *  What each means is `provenance` in routes/settings/Secrets.tsx. */
   source: string;
+  /** Whether no reveal answers the value: one stored from Settings › MCP &
+   *  tools, which the engine reads for its `${VAR}` and never hands back. */
+  write_only: boolean;
 }
 
 /**

@@ -356,9 +356,17 @@ type Engine struct {
 	// ([mcpRestarts]).
 	restarts mcpRestarts
 
+	// oauth is this node's part in its MCP servers' OAuth sign-ins: the
+	// state signer and each server's access token source ([oauthState]).
+	oauth oauthState
+
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings
+
+	// reviews is this node's watched copy of the definitions the fleet's
+	// MCP tools' levels were decided on ([mcpReviews]).
+	reviews mcpReviews
 
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
@@ -779,8 +787,13 @@ type Engine struct {
 	// mcpRetryBase is the restart schedule's first wait for every bridge
 	// this engine builds and for its seats' runners, zero for
 	// [mcp.RestartBase]; [Options.mcpRetryBase].
-	mcpFileMu    sync.Mutex
-	mcpRetryBase time.Duration
+	//
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// for every bridge this engine builds, zero for [mcp.RelistFloor];
+	// [Options.mcpRelistBase].
+	mcpFileMu     sync.Mutex
+	mcpRetryBase  time.Duration
+	mcpRelistBase time.Duration
 
 	// seatMCP is one bridge per seat this node holds, for that seat's
 	// per-role children, with what keeps them converged while the seat is
@@ -895,6 +908,10 @@ type Engine struct {
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
+
+	// inboxReports is this node's waiting-mail loop over the seats it holds
+	// (inboxreport.go); nil until Start arms it.
+	inboxReports *inboxReporter
 
 	// refusals is how this node's gates tell that loop a window has started
 	// refusing ([refusalLatch]). Built with the engine rather than with the
@@ -1218,6 +1235,13 @@ type Options struct {
 	// without waiting fifteen seconds for it.
 	mcpRetryBase time.Duration
 
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// ([mcp.RelistFloor]), zero for it, and the rest of that schedule
+	// scales with it. UNEXPORTED for mcpRetryBase's reason: a case watching
+	// a server change its tools under a running engine would otherwise wait
+	// a minute for each listing.
+	mcpRelistBase time.Duration
+
 	// fakePlay scripts what a `providers.sandbox.fake` company's runs do
 	// ([sandbox.FakeRunner.Player]); nil plays each as the double's own
 	// demonstration ([demoRun]). UNEXPORTED for the reason usageEvery is:
@@ -1510,6 +1534,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
+		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		fakePlay:            opts.fakePlay,
@@ -2428,6 +2453,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// AND WHAT WAITS IN THE INBOXES OF THE SEATS THIS NODE HOLDS, after the
+	// host for the same reason: what it reads is the seats the host claimed.
+	// See inboxreport.go.
+	e.startInboxReports(ctx)
 	// A PERSON'S MESSAGE QUEUED BEHIND A BUSY SEAT, shown as queued. See
 	// queued.go. After the host, like the meters, because what it answers
 	// is whether this node runs the seat.
@@ -2837,6 +2866,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
+	e.stopInboxReports()
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()

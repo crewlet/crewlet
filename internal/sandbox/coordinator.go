@@ -2563,6 +2563,20 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			answered(run, types.AnswerNotAwaiting)
 			return AnswerNotMine, nil
 		}
+		if heldMismatch(run, given) {
+			// A HELD CALL IS ANSWERED BY ITS APPROVAL ALONE, and only a held
+			// call is: the route that decides who may approve one stamps its
+			// id, and every other route that answers a run stamps none.
+			// Spent, said, and never recorded: recorded, it would make or
+			// refuse a call nobody who may approve it decided.
+			log.ErrorContext(ctx, "sandbox_answer_approval_mismatched",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "approval", given.Approval,
+				"held", run.HeldCall != nil, "answered_by", given.AnsweredBy,
+				"detail", "an answer by turn names a held call the run's question is not, or "+
+					"answers a held call without naming it; it is spent without resuming the run")
+			answered(run, types.AnswerUnoffered)
+			return AnswerNotMine, nil
+		}
 		words, answer, err := answerGivenOf(run, given, trigger, c.now())
 		if err != nil {
 			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_executor`
@@ -5171,6 +5185,11 @@ type AskedRun struct {
 	// inside a fence of its turn's token; nil for an answer by turn, the
 	// answering person's own instruction, which it reads defused.
 	Label *provenance.Label
+
+	// Held is the call to a tool at Needs approval the question was about,
+	// with the answer's choice and the writes that make it at most once;
+	// nil for every other question (ADR-0077).
+	Held *HeldResume
 }
 
 // askedRun is what run's recorded answer resumes it with: the words its seal

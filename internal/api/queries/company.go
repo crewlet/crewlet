@@ -27,9 +27,9 @@ import (
 
 // RecentRunsLimit bounds the schedule history a listing carries.
 //
-// The dispatch ledger holds every fire inside its retention window, and the
-// screen shows a recent-activity strip beside the schedule table. Fifty is a
-// page of it; the ledger's own retention is what bounds the table.
+// The usage domain holds every data node's fires for its whole horizon, and
+// the screen shows a recent-activity strip beside the schedule table. Fifty is
+// a page of it; one schedule's own history is `schedule_runs`.
 const RecentRunsLimit = 50
 
 // schedules answers the schedules question: what is configured, and what
@@ -38,8 +38,10 @@ const RecentRunsLimit = 50
 // The two halves come from different places on purpose. The configured
 // schedules are a PROJECTION of the org — computed, never stored — so a
 // schedule an operator just added shows immediately rather than after its
-// first fire. The history is the dispatch ledger, which is the only thing that
-// knows what actually happened.
+// first fire. The history is the usage domain's fires (ADR-0020), every data
+// node's, which is the one place that knows what became of each fire: the
+// dispatch ledger records `fired` when the scheduler sends it, before the
+// seat's node decides whether a later fire runs in its place.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
 	return map[string]any{
 		"schedules":   s.ConfiguredSchedules(),
@@ -83,39 +85,6 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 		return []schedule.Row{}
 	}
 	return rows
-}
-
-// recentRuns is the dispatch history, or an empty list.
-//
-// DEGRADES rather than fails: the configured schedules are the half an
-// operator opens this screen for, and refusing to show them because the
-// history is unreadable would blank the page over its footnote.
-func (s Sources) recentRuns(ctx context.Context) []map[string]any {
-	if s.Runs == nil {
-		return []map[string]any{}
-	}
-	runs, err := s.Runs.Recent(ctx, RecentRunsLimit)
-	if err != nil {
-		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
-		return []map[string]any{}
-	}
-	names := s.scopeNames()
-	out := make([]map[string]any, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, map[string]any{
-			"scope_type":    string(run.Scope),
-			"scope_id":      run.ScopeID,
-			"scope_name":    names.of(run.Scope, run.ScopeID),
-			"schedule_name": run.ScheduleName,
-			"fire_label":    run.FireLabel,
-			"target_handle": run.TargetHandle,
-			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
-			"fired_at":      isoOrEmpty(run.FiredAt),
-			"outcome":       string(run.Outcome),
-			"trace_id":      run.TraceID,
-		})
-	}
-	return out
 }
 
 // integrations answers how each external surface is wired, and what has come

@@ -130,8 +130,8 @@ type Mailboxes interface {
 // to remove.
 type DutyFunc func(ctx context.Context) (bool, error)
 
-// Options configures a [Scheduler]. Everything but the first three has a
-// working default.
+// Options configures a [Scheduler]. Everything but the first three and
+// ClaimRetention has a working default.
 type Options struct {
 	// Publisher is where fires go. Required.
 	Publisher Publisher
@@ -148,6 +148,23 @@ type Options struct {
 	// default here on purpose: silently accepting no ledger is how a fleet
 	// ends up firing every schedule once per node.
 	Ledger Claimer
+
+	// ClaimRetention is how long Ledger remembers a claim: in the engine,
+	// the fleet's fire retention (coord.FireRetention), since the fleet
+	// answers every question the scheduler asks of its ledger. Required,
+	// and refused when not positive.
+	//
+	// It bounds the one judgement the first tick after a restart makes
+	// about the past: whether the most recent fire was MISSED. That is
+	// read from the ledger ([Claimer.MinuteClaimed]), and a fire older than
+	// the ledger's memory reads unclaimed whether it ran or not, so a
+	// monthly schedule restarted a fortnight after its fire recorded that
+	// fire as missed. Past this horizon the tick records nothing.
+	//
+	// No default, for the reason Ledger has none: a guessed retention
+	// longer than the real one writes those misses back, and the engine
+	// is the one caller that knows the real one.
+	ClaimRetention time.Duration
 
 	// Zone is the company's clock (ADR-0018), which a schedule that names
 	// no zone of its own is evaluated in. Nil is UTC.
@@ -240,6 +257,10 @@ type Scheduler struct {
 	tick   time.Duration
 	jitter time.Duration
 
+	// claimRetention is how long the ledger remembers a claim; see
+	// [Options.ClaimRetention].
+	claimRetention time.Duration
+
 	catchupMin time.Duration
 	catchupMax time.Duration
 
@@ -272,6 +293,8 @@ var (
 	ErrNoOrg       = errors.New("schedule: no org provider")
 	ErrNoLedger    = errors.New("schedule: no dispatch ledger")
 	ErrTickTooLong = errors.New("schedule: tick interval is a minute or more")
+
+	ErrNoClaimRetention = errors.New("schedule: no claim retention for the dispatch ledger")
 )
 
 // New builds a Scheduler, applying defaults and refusing an unusable wiring.
@@ -286,6 +309,9 @@ func New(opts Options) (*Scheduler, error) {
 		// with a process-local claim looks identical to a correct one until
 		// there are two nodes, and then every company gets two standups.
 		return nil, ErrNoLedger
+	case opts.ClaimRetention <= 0:
+		return nil, fmt.Errorf("%w: got %v; set Options.ClaimRetention to how long the ledger "+
+			"keeps a claim (the engine passes coord.FireRetention)", ErrNoClaimRetention, opts.ClaimRetention)
 	case opts.Tick >= MaxTick:
 		return nil, fmt.Errorf("%w: %v — cron fires at minute granularity, so a tick that "+
 			"long steps over fires rather than delaying them", ErrTickTooLong, opts.Tick)
@@ -305,6 +331,8 @@ func New(opts Options) (*Scheduler, error) {
 		paused:     opts.Paused,
 		trace:      cmpOrFunc(opts.Trace, newTrace),
 		mailboxes:  opts.Mailboxes,
+
+		claimRetention: opts.ClaimRetention,
 	}
 	// A max below the min is a config the operator did not mean; taking the
 	// min is the conservative reading, since it can only shorten the window
@@ -420,8 +448,9 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 	// so a seat whose mailbox never came back leaves a row saying so rather
 	// than a fire that silently never happened. A first tick holds its
 	// window without that test: it replays only the most recent missed fire,
-	// and its own catchup window records that one as skipped once it ages
-	// out ([Scheduler.due]).
+	// and once that one ages out of its own catchup window it is recorded as
+	// missed, unless some runner already holds its minute
+	// ([Scheduler.recordMissed]).
 	if len(deferred) > 0 && (first || at.Sub(windowStart) <= s.catchupMax) {
 		log.InfoContext(ctx, "schedule_window_held", "deferred", len(deferred),
 			"detail", "a runner seat's mailbox could not be confirmed, so its fire was not "+
@@ -485,7 +514,7 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 
 	toFire, toSkip := s.due(expr, loc, e, at, windowStart, first)
 	for _, ft := range toSkip {
-		s.recordSkip(ctx, e, "", ft, loc)
+		s.recordMissed(ctx, e, ft, loc)
 	}
 	if len(toFire) == 0 {
 		return 0, nil
@@ -518,7 +547,8 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 }
 
 // due returns the canonical UTC fire times this tick should dispatch, and the
-// ones it should record as a deliberate catchup skip.
+// ones that fell outside the catchup window, which the tick records as missed
+// unless somebody already holds their minute ([Scheduler.recordMissed]).
 //
 // The jitter shifts each schedule's EFFECTIVE firing instant by a
 // deterministic offset so a popular cron minute does not stampede. The
@@ -545,8 +575,18 @@ func (s *Scheduler) due(expr cron.Expr, loc *time.Location, e Entry, at, windowS
 	if !ok || !e.Schedule.CatchesUp() {
 		return nil, nil
 	}
-	if age := effNow.Sub(prev); age <= s.catchupWindow(expr, loc, effNow) {
+	age := effNow.Sub(prev)
+	if age <= s.catchupWindow(expr, loc, effNow) {
 		return []time.Time{prev}, nil
+	}
+	// PAST WHAT THE LEDGER REMEMBERS, the fire is neither fired nor judged.
+	// Whether it was missed is read from the ledger, and a claim on it is
+	// written no earlier than the fire was due, so a fire younger than the
+	// retention has every claim it ever got still held. An older one reads
+	// unclaimed whether it ran or not, and recording it as missed wrote a
+	// skip beside a monthly report that went out a fortnight ago.
+	if age >= s.claimRetention {
+		return nil, nil
 	}
 	return nil, []time.Time{prev}
 }
@@ -669,6 +709,8 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		RoleName:    seat.Name,
 		Description: e.Schedule.Task,
 		Schedule:    e.Schedule.Name,
+		ScopeType:   e.Scope,
+		ScopeID:     e.ScopeID,
 		ScheduledAt: fireUTC.UTC(),
 
 		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
@@ -738,6 +780,41 @@ func FirePartition(e Entry) string {
 		url.PathEscape(e.ScopeID) + "/" + url.PathEscape(e.Schedule.Name)
 }
 
+// recordMissed records the first tick's most recent fire as missed, if it was.
+//
+// A FIRE IS MISSED ONLY WHEN NOBODY HOLDS ITS MINUTE. The most recent fire
+// before a restart is usually one the node ran before it went down: claimed
+// fired for its runners, or skipped paused for a paused one. Its skip names no
+// runner, so claiming it collides with none of theirs ([Scheduler.recordSkip])
+// and cannot itself say whether the minute ran. Every restart past the catchup
+// window therefore recorded the last fire it had sent as missed as well, and
+// the schedule's history showed one tick twice, fired and skipped. So the
+// ledger is asked about the minute as a whole first, and a minute any runner,
+// or an earlier pass's skip, already holds records nothing.
+//
+// AN UNREADABLE LEDGER RECORDS NOTHING, the direction that costs a history row
+// rather than inventing one: nothing is dispatched either way, and a skip
+// written on a guess is a miss that never happened.
+func (s *Scheduler) recordMissed(ctx context.Context, e Entry, fireUTC time.Time, loc *time.Location) {
+	minute := FireMinute{
+		Scope:        e.Scope,
+		ScopeID:      e.ScopeID,
+		ScheduleName: e.Schedule.Name,
+		FireLabel:    FireLabel(fireUTC, loc),
+	}
+	held, err := s.ledger.MinuteClaimed(ctx, minute)
+	if err != nil {
+		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name,
+			"scope_type", e.Scope, "scope_id", e.ScopeID, "fire_label", minute.FireLabel, "error", err,
+			"detail", "whether the fire ran could not be read, so it is not recorded as missed")
+		return
+	}
+	if held {
+		return
+	}
+	s.recordSkip(ctx, e, "", fireUTC, loc)
+}
+
 // recordSkip notes, once, that a missed fire was deliberately not backfilled.
 //
 // A catchup skip's row carries an EMPTY runner handle, which is what keeps it
@@ -746,19 +823,29 @@ func FirePartition(e Entry) string {
 // corrected tick needs. A fire a tick deferred until it aged out
 // ([Scheduler.Tick]) names its runner, because it is that runner's fire that
 // was missed and its colleagues' were sent.
+//
+// LOGGED ONLY WHEN THIS CALL RECORDED IT. A skip an earlier pass already
+// claimed is the same miss, and every restart used to announce it again.
 func (s *Scheduler) recordSkip(ctx context.Context, e Entry, handle string, fireUTC time.Time, loc *time.Location) {
-	if _, err := s.ledger.Claim(ctx, Run{
+	label := FireLabel(fireUTC, loc)
+	claimed, err := s.ledger.Claim(ctx, Run{
 		FireKey: FireKey{
 			Scope:        e.Scope,
 			ScopeID:      e.ScopeID,
 			ScheduleName: e.Schedule.Name,
-			FireLabel:    FireLabel(fireUTC, loc),
+			FireLabel:    label,
 			TargetHandle: handle,
 		},
 		ScheduledAt: fireUTC,
 		Outcome:     OutcomeSkippedCatchup,
-	}); err != nil {
-		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name,
+			"handle", handle, "fire_label", label, "error", err)
+		return
+	}
+	if !claimed {
+		return
 	}
 	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "handle", handle, "scope_type", e.Scope,
 		"scope", e.ScopeName, "scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))

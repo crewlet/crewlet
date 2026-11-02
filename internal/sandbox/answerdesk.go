@@ -48,6 +48,27 @@ func (d AnswerDesk) Run(ctx context.Context, turnID string) (PendingRun, bool, e
 	return d.Pending.Get(ctx, turnID)
 }
 
+// Held is the active run whose row holds held call id ([PendingRun.HeldCall]),
+// false where none does: the run a held call's approval answers
+// (`POST /mcp-approvals/{id}`, ADR-0077).
+//
+// OVER EVERY ACTIVE RUN, as the board reads them: a held call is named by its
+// own id, which a person read off the Inbox or the MCP answer, and nothing
+// indexes a run by it. The fleet holds one row per run that still owns
+// engine-side state, which is what a person's gesture reads.
+func (d AnswerDesk) Held(ctx context.Context, id string) (PendingRun, bool, error) {
+	runs, err := d.Pending.ListActive(ctx)
+	if err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: reading the runs for held call %s: %w", id, err)
+	}
+	for _, run := range runs {
+		if run.HeldCall != nil && run.HeldCall.ID == id {
+			return run, true, nil
+		}
+	}
+	return PendingRun{}, false, nil
+}
+
 // Answerer is who gave the answer run has recorded, as its seal names them
 // ([AnswerWords.By]), for a person told their own answer came second: empty
 // where the run holds none, or its seal does not open on this node — under a

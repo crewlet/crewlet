@@ -460,3 +460,28 @@ func TestAnAnswerIsToTheQuestionItsPersonRead(t *testing.T) {
 		t.Fatalf("delivered %+v, want nothing", desk.delivered)
 	}
 }
+
+// A HELD CALL IS NEVER ANSWERED HERE (ADR-0077): answer_executor asks whether
+// the caller may answer the run, which its requester may, and a call held for
+// approval is a seat lead's or an administrator's to answer, through
+// `POST /mcp-approvals/{id}`, which also writes the level Always allow sets.
+// So the tool refuses it as forbidden, names the route, and delivers nothing.
+//
+// Mutation: drop the held-call refusal, and the requester's answer is
+// delivered.
+func TestAHeldCallIsNotAnsweredByAnswerExecutor(t *testing.T) {
+	t.Parallel()
+	run := parked(t, "t1", sandbox.StatusAwaiting)
+	run.HeldCall = &sandbox.HeldCall{ID: "0190f3a8-0000-7000-8000-000000000001", LaunchID: run.LaunchID,
+		Server: "tracker", Tool: "tr_close_issue"}
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+	got, err := answerExecutorTool(t, desk).Call(t.Context(), map[string]any{"turn_id": "t1",
+		"launch_id": run.LaunchID, "choice": sandbox.HeldOnce})
+	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
+		!strings.Contains(got.Output, "/mcp-approvals/"+run.HeldCall.ID) {
+		t.Fatalf("an answer to a held call = %+v, %v, want it refused naming the approval route", got, err)
+	}
+	if len(desk.delivered) != 0 {
+		t.Fatalf("delivered %+v, want nothing", desk.delivered)
+	}
+}

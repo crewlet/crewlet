@@ -1,6 +1,7 @@
 package schedule_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -12,8 +13,10 @@ import (
 // internal/schedule/sqlledger — a divergence between them is a failing case
 // there or here, never a production surprise on whichever node runs the other.
 func TestMemoryLedgerContract(t *testing.T) {
-	scheduletest.Run(t, func(t *testing.T) schedule.Ledger {
-		return schedule.NewMemoryLedger()
+	scheduletest.Run(t, func(t *testing.T) scheduletest.Backend {
+		l := schedule.NewMemoryLedger()
+		return scheduletest.Backend{Ledger: l,
+			Rows: func(context.Context) ([]schedule.Run, error) { return l.Rows(), nil }}
 	})
 }
 
@@ -28,8 +31,7 @@ func TestTheZeroMemoryLedgerIsUsable(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Claim on a zero MemoryLedger = %v, %v; want true, nil", ok, err)
 	}
-	rows, err := l.Recent(t.Context(), 10)
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("Recent = %d rows, %v; want 1, nil", len(rows), err)
+	if rows := l.Rows(); len(rows) != 1 {
+		t.Fatalf("the twin holds %d rows, want the 1 it granted", len(rows))
 	}
 }

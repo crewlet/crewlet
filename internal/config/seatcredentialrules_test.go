@@ -38,7 +38,7 @@ func TestAnMCPEnvCredentialFollowsTheIntegrationsMode(t *testing.T) {
 	t.Parallel()
 	seat := `
 roles:
-  - {name: SRE, handle: sre, mcp_env: {slack: {SLACK_MCP_XOXB_TOKEN: "${SRE_SLACK}"}}}
+  - {name: SRE, handle: sre, integrations: {slack: {enabled: true}}, mcp_env: {slack: {SLACK_MCP_XOXB_TOKEN: "${SRE_SLACK}"}}}
 `
 	err := rejects(t, "name: Acme\n"+slackEngine+slackServer+seat,
 		"roles[0].mcp_env.slack.SLACK_MCP_XOXB_TOKEN")

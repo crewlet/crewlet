@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // fakeChecker records each test it is asked for, refuses the ones refusals
@@ -40,7 +41,7 @@ func (f *fakeChecker) CheckServer(_ context.Context, req mcpapi.CheckRequest) (m
 	if err, refused := f.refusals[req.Server+"/"+req.Seat]; refused {
 		return mcpapi.Check{}, err
 	}
-	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft != nil, By: req.By.Name,
+	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft, By: req.By.Name,
 		At: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Node: "node-a", OK: true,
 		Nodes: []mcpapi.CheckedNode{servingNode("node-a"), {Node: "node-b", Reason: "did not answer within 4m15s"}}}, nil
 }
@@ -119,7 +120,7 @@ func checkSurface(t *testing.T, checker mcpapi.Checker, drafts mcpapi.DraftCheck
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
 		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: checker,
-		Drafts: drafts, Audit: audit})
+		Drafts: drafts, Values: valueStore(t), SignIns: &fakeSignIns{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestASavedServerIsTestedAndEveryCallAudited(t *testing.T) {
 	if code, _ := send(t, svc, admin, "/mcp-servers/tracker/check", `{"seat":"ceo"}`); code != http.StatusOK {
 		t.Errorf("a test for a seat answered %d", code)
 	}
-	if got := checker.requests(); got[len(got)-1].Seat != "ceo" || got[len(got)-1].Draft != nil {
+	if got := checker.requests(); got[len(got)-1].Seat != "ceo" || got[len(got)-1].Entry != nil {
 		t.Errorf("asked %+v, want the saved server for the seat", got[len(got)-1])
 	}
 	for _, tc := range []struct {
@@ -291,7 +292,7 @@ func TestADraftIsDecidedAsTheWriteItStandsForBeforeItIsRead(t *testing.T) {
 		t.Fatalf("a new draft = %d %v", code, body)
 	}
 	got := checker.requests()
-	if len(got) != 1 || got[0].Draft == nil || got[0].Draft.Command != "wiki-mcp" {
+	if len(got) != 1 || !got[0].Draft || got[0].Entry == nil || got[0].Entry.Command != "wiki-mcp" {
 		t.Fatalf("asked %+v, want the draft as the dry run left it", got)
 	}
 	if code, _ := send(t, svc, fresh, "/mcp-checks", `{"entity":{"name":"tracker","command":"tracker-mcp-2"}}`); code != http.StatusOK {
@@ -366,5 +367,63 @@ func TestASurfaceNeedsAChecker(t *testing.T) {
 	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
 		Detail: noDetail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}}); err == nil {
 		t.Error("a surface with no checker was built")
+	}
+}
+
+// A DRAFT IS TESTED WITH THE VALUES TYPED FOR IT, each read through the
+// variable the values route would store it under in the company the draft
+// makes (the key's own where only it reads one, MCP_<SERVER>_<KEY> otherwise),
+// and no answer, refusal or audit row carries one. Mutation: drop the values
+// from the request, or choose the variable anywhere but the slot, and this is
+// red.
+func TestADraftIsTestedWithTheValuesTypedForIt(t *testing.T) {
+	t.Parallel()
+	checker := &fakeChecker{}
+	audit := &recordedAudit{}
+	svc := checkSurface(t, checker, &fakeDrafts{}, audit)
+	fresh := proved(time.Minute)
+	const typed = "Bearer typed-value-not-real"
+	draft := `{"entity":{"name":"wiki","transport":"http","url":"https://wiki.example.com/mcp",` +
+		`"headers":{"X-Team":"${WIKI_TEAM}"}},"values":{"X-Team":"team-value-not-real","Authorization":"  ` + typed + `  "}}`
+
+	code, body := send(t, svc, fresh, "/mcp-checks", draft)
+	if code != http.StatusOK || body["draft"] != true {
+		t.Fatalf("a draft with typed values = %d %v", code, body)
+	}
+	asked := checker.requests()
+	if len(asked) != 1 || !slices.Equal(asked[0].Values, []mcpapi.ValueTry{
+		{Key: "Authorization", Variable: "MCP_WIKI_AUTHORIZATION", Value: typed},
+		{Key: "X-Team", Variable: "WIKI_TEAM", Value: "team-value-not-real"},
+	}) {
+		t.Fatalf("tested %+v, want each trimmed value under the variable it would be stored under", asked)
+	}
+	raw, _ := json.Marshal(body)
+	row, _ := json.Marshal(audit.last(t))
+	for _, said := range []string{string(raw), string(row)} {
+		if strings.Contains(said, "not-real") {
+			t.Errorf("a value under test was written back: %s", said)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		values string
+		code   int
+	}{
+		"a value over two lines":  {`{"Authorization":"Bearer one-not-real\nBearer two"}`, http.StatusBadRequest},
+		"an empty value":          {`{"Authorization":"   "}`, http.StatusBadRequest},
+		"a key no value may take": {`{"Authorization: x":"Bearer one-not-real"}`, http.StatusBadRequest},
+		"values over one stored value's bound": {
+			`{"A":"` + strings.Repeat("a", secrets.MaxValueBytes/2+1) + `","B":"` +
+				strings.Repeat("b", secrets.MaxValueBytes/2+1) + `"}`, http.StatusRequestEntityTooLarge},
+	} {
+		code, body := send(t, svc, fresh, "/mcp-checks",
+			`{"entity":{"name":"wiki","transport":"http","url":"https://wiki.example.com/mcp"},"values":`+tc.values+`}`)
+		said, _ := json.Marshal(body)
+		if code != tc.code || strings.Contains(string(said), "not-real") || strings.Contains(string(said), "aaaa") {
+			t.Errorf("%s = %d %s, want %d naming no value", name, code, said, tc.code)
+		}
+	}
+	if len(checker.requests()) != 1 {
+		t.Errorf("a refused draft was tested: %+v", checker.requests())
 	}
 }

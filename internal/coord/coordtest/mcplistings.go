@@ -29,14 +29,23 @@ func (h *fleetHarness) listing(server, node string, epoch int64, tools ...string
 		Tools:        []coord.MCPListedTool{},
 	}
 	for _, name := range tools {
+		hints := coord.MCPToolHints{ReadOnly: coord.HintYes, Destructive: coord.HintNo,
+			Idempotent: coord.HintUnknown, OpenWorld: coord.HintYes}
 		l.Tools = append(l.Tools, coord.MCPListedTool{
-			Name: name, Raw: name, Description: "does " + name,
-			Hints: coord.MCPToolHints{ReadOnly: coord.HintYes, Destructive: coord.HintNo,
-				Idempotent: coord.HintUnknown, OpenWorld: coord.HintYes},
+			Name: name, Raw: name, Description: "does " + name, Hints: hints, Declared: hints,
 			Digest: aDigest(server + "/" + name), SchemaKept: true, Instances: 2,
+			Parts: aParts(server + "/" + name),
 		})
 	}
 	return l
+}
+
+// aParts names each part of a definition from seed, as internal/mcp names
+// them.
+func aParts(seed string) coord.MCPToolParts {
+	part := func(which string) string { return aDigest(seed + "#" + which)[:coord.MCPToolPartLength] }
+	return coord.MCPToolParts{Title: part("title"), Description: part("description"),
+		Schema: part("schema"), Hints: part("hints")}
 }
 
 func (h *fleetHarness) putListing(f coord.Fleet, l coord.MCPListing) coord.MCPListing {
@@ -122,7 +131,9 @@ var mcpListingCases = []fleetCase{{
 				Title: strings.Repeat("t", 3*coord.MaxMCPToolTitleBytes),
 				Hints: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
 					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
-				Digest: aDigest(name), Instances: 1,
+				Declared: coord.MCPToolHints{ReadOnly: coord.HintUnknown, Destructive: coord.HintUnknown,
+					Idempotent: coord.HintUnknown, OpenWorld: coord.HintUnknown},
+				Digest: aDigest(name), Instances: 1, Parts: aParts(name),
 			})
 		}
 		l.Instructions = strings.Repeat("i", 3*coord.MaxMCPInstructionsBytes)

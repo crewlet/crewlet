@@ -84,7 +84,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: cipher, Node: "core-1",
-		Secrets: fleetsecrets.New(plane, cipher),
+		Secrets: fleetsecrets.New(plane, cipher), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -340,7 +340,7 @@ func TestAConfigQuestionOnARevisionThisNodeCannotOpenSaysWhatFixesIt(t *testing.
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: keyring(), Node: "core-1",
-		Secrets: fleetsecrets.New(plane, keyring()),
+		Secrets: fleetsecrets.New(plane, keyring()), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -368,4 +368,13 @@ func TestAConfigQuestionOnARevisionThisNodeCannotOpenSaysWhatFixesIt(t *testing.
 				"words: %q", what, revision.Detail)
 		}
 	}
+}
+
+// noGrants is an engine nobody has signed in to any MCP server through.
+type noGrants struct{}
+
+func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
+
+func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
 }

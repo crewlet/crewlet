@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -213,16 +214,35 @@ type UsageRead struct {
 	LastTurnID, LastWorkKey, LastQuery string
 }
 
-// UsageSchedule is one schedule's fires on this node in the window.
+// UsageSchedule is one schedule's fires on this node in the window, and the
+// fires of it this node's seats did not run.
 type UsageSchedule struct {
 	ScopeType, ScopeID, Name string
 
+	// Fires are the dispatches this node's scheduler recorded.
 	Fires []UsageFire
+
+	// Superseded are the fires of this schedule a seat on this node did
+	// not run, because a later fire ran in its place: whichever node's
+	// scheduler sent them, and whichever day it did.
+	Superseded []UsageSuperseded
+}
+
+// UsageSuperseded is one fire a seat did not run, named by the trace it was
+// sent under, and when its seat's node recorded that.
+type UsageSuperseded struct {
+	TraceID string
+	At      time.Time
 }
 
 // UsageFire is one dispatch the scheduler recorded.
 type UsageFire struct {
 	At time.Time
+
+	// ScheduledAt is the instant the fire was due and FireLabel that tick
+	// as the ledger keys it, which on a catch-up is not when it ran.
+	ScheduledAt time.Time
+	FireLabel   string
 
 	// Target is the seat it was dispatched to, empty for a catchup that
 	// was skipped and so resolved no runner; Outcome is the dispatch
@@ -267,10 +287,10 @@ type UsageMark struct {
 // summary, and a summary row that lands in a later custody batch than its
 // turn's end must move the fingerprint — and the settle's mark — when it does.
 // The superseded fire's record is the seventh, for the auxiliary record's
-// reason: it is what turns a fire's outcome from fired into skipped
-// ([DB.usageSchedules]), it lands when the seat's node merges the fires (long
-// after the scheduler wrote its row), and a day whose only change was that
-// record would otherwise never be derived again.
+// reason: it is a fire this node's seat did not run ([DB.usageSchedules]),
+// filed on the day it was recorded, which is when the seat came back to its
+// waiting fires rather than when the scheduler sent them, and a day whose only
+// change was that record would otherwise never be derived again.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
@@ -1248,12 +1268,8 @@ func usageToolsSQL(w UsageWindow) (string, []any) {
 		[]any{turnCompleted, EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
-// scheduleOutcomeFired is the dispatch ledger's word for a fire it sent
-// (schedule.OutcomeFired). Spelled here because the scheduler's package
-// depends on this one; the ledger's contract suite holds the word.
-const scheduleOutcomeFired = "fired"
-
-// usageSchedules reads the fires this node's scheduler recorded in the window.
+// usageSchedules reads the fires this node's scheduler recorded in the window,
+// and the fires this node's seats did not run.
 //
 // THE TURN IS FOUND BY THE TRACE, and only where this node ran it: a fire is
 // dispatched to a seat's mailbox and whichever node holds that seat runs the
@@ -1263,30 +1279,26 @@ const scheduleOutcomeFired = "fired"
 // NOT THROUGH THE KEPT-ROWS PREDICATE, and that is the one read here that
 // deliberately does not take it: `scheduled_runs` is this node's scheduler's
 // own ledger, which custody never writes, and the turn is a LABEL rather than
-// a count — the turn a trace ran is that turn whichever data node keeps its
+// a count: the turn a trace ran is that turn whichever data node keeps its
 // rows, so a row of a batch in flight names it as truly as a kept one does.
 // The price is stated in the file doc: the label is read off any row of the
 // trace at any time, and is neither fingerprinted nor marked, so a custody
 // write can set it and a settle as not kept clear it with no derivation of the
-// day following — a record published in between may carry a label a later one
-// drops. A kept settle never moves it: the rows were already read while in
+// day following, and a record published in between may carry a label a later
+// one drops. A kept settle never moves it: the rows were already read while in
 // flight.
 //
-// AND A FIRE THE SEAT DID NOT RUN IS FOUND THE SAME WAY, as a label off its
-// own trace: a fire the seat's node superseded with a later one of the same
-// schedule carries a [types.ScheduledFireSuperseded] record under its trace,
-// and reads as [types.ScheduleOutcomeSuperseded] rather than as a dispatch
-// with no turn behind it. Only a FIRED row can be superseded; a skip was
-// never sent.
+// A FIRE'S OUTCOME IS THE LEDGER'S, as the scheduler recorded it. Whether the
+// seat then ran it is a fact of the SEAT'S node, which is often not this one,
+// and of the day the seat came back, which is often not the fire's: so this
+// node reports the fires of each schedule that ITS seats did not run
+// ([usageSupersededSQL]), on the day it recorded each, and the schedule's
+// history joins the two by trace wherever they were published
+// (usage.ScheduleRuns).
 func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT r.scope_type, r.scope_id, r.schedule_name, r.target_handle,
-		       r.fired_at,
-		       CASE WHEN r.outcome = ? AND r.trace_id != '' AND EXISTS (
-		                SELECT 1 FROM crewlet_events s
-		                 WHERE s.trace_id = r.trace_id AND s.event_type = ?)
-		            THEN ? ELSE r.outcome END,
-		       r.trace_id,
+		       r.fired_at, r.scheduled_at, r.fire_label, r.outcome, r.trace_id,
 		       COALESCE((SELECT e.turn_id FROM crewlet_events e
 		                  WHERE r.trace_id != '' AND e.trace_id = r.trace_id
 		                    AND e.turn_id != ''
@@ -1294,31 +1306,130 @@ func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule
 		  FROM scheduled_runs r
 		 WHERE r.fired_at >= ? AND r.fired_at < ?
 		 ORDER BY r.scope_type, r.scope_id, r.schedule_name, r.fired_at, r.target_handle`,
-		scheduleOutcomeFired, types.ScheduledFireSuperseded{}.EventType(),
-		types.ScheduleOutcomeSuperseded, EncodeTime(w.Start), EncodeTime(w.End))
+		EncodeTime(w.Start), EncodeTime(w.End))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the usage day's schedule fires: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []UsageSchedule
+	of := func(scopeType, scopeID, name string) *UsageSchedule {
+		if n := len(out); n > 0 && out[n-1].ScopeType == scopeType &&
+			out[n-1].ScopeID == scopeID && out[n-1].Name == name {
+			return &out[n-1]
+		}
+		out = append(out, UsageSchedule{ScopeType: scopeType, ScopeID: scopeID, Name: name})
+		return &out[len(out)-1]
+	}
 	for rows.Next() {
 		var (
 			scopeType, scopeID, name string
 			f                        UsageFire
-			at                       int64
+			at, due                  int64
 		)
-		if err := rows.Scan(&scopeType, &scopeID, &name, &f.Target, &at,
-			&f.Outcome, &f.TraceID, &f.TurnID); err != nil {
+		if err = rows.Scan(&scopeType, &scopeID, &name, &f.Target, &at, &due,
+			&f.FireLabel, &f.Outcome, &f.TraceID, &f.TurnID); err != nil {
 			return nil, fmt.Errorf("store: scan the usage day's schedule fires: %w", err)
 		}
-		f.At = DecodeTime(at)
-		if n := len(out); n > 0 && out[n-1].ScopeType == scopeType &&
-			out[n-1].ScopeID == scopeID && out[n-1].Name == name {
-			out[n-1].Fires = append(out[n-1].Fires, f)
+		f.At, f.ScheduledAt = DecodeTime(at), DecodeTime(due)
+		s := of(scopeType, scopeID, name)
+		s.Fires = append(s.Fires, f)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read the usage day's schedule fires: %w", err)
+	}
+	superseded, err := d.usageSuperseded(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	// ONE LIST PER SCHEDULE, the ledger's fires and the seats' supersedes
+	// side by side, in the order the record carries them.
+	for _, sup := range superseded {
+		s := lookupSchedule(out, sup.ScopeType, sup.ScopeID, sup.Name)
+		if s == nil {
+			out = append(out, UsageSchedule{ScopeType: sup.ScopeType,
+				ScopeID: sup.ScopeID, Name: sup.Name})
+			s = &out[len(out)-1]
+		}
+		s.Superseded = append(s.Superseded, sup.UsageSuperseded)
+	}
+	slices.SortStableFunc(out, func(a, b UsageSchedule) int {
+		return cmp.Or(cmp.Compare(a.ScopeType, b.ScopeType),
+			cmp.Compare(a.ScopeID, b.ScopeID), cmp.Compare(a.Name, b.Name))
+	})
+	return out, nil
+}
+
+// lookupSchedule is the schedule named by its identity among out, or nil.
+func lookupSchedule(out []UsageSchedule, scopeType, scopeID, name string) *UsageSchedule {
+	for i := range out {
+		if out[i].ScopeType == scopeType && out[i].ScopeID == scopeID && out[i].Name == name {
+			return &out[i]
+		}
+	}
+	return nil
+}
+
+// supersededRow is one fire a seat on this node did not run, with the
+// schedule it belongs to.
+type supersededRow struct {
+	ScopeType, ScopeID, Name string
+	UsageSuperseded
+}
+
+// usageSupersededSQL reads the fires this node's seats did not run in the
+// window, off their [types.ScheduledFireSuperseded] records: each under its
+// own fire's trace, which is what the schedule's history joins it to the fire
+// by.
+//
+// THE ROWS THIS NODE KEEPS, like every count here ([keptRowSQL]): a record a
+// stateless node's seat wrote reaches a data node's log in a custody batch,
+// and until the batch settles two logs can hold it. Published by both, the
+// fact would still be one fact, but a day is what its node keeps, and the
+// settle that makes it this node's derives the day again ([usageEventTypes]).
+// A record that names no trace joins no fire, and one that names no schedule
+// has nowhere to be filed, so neither is reported.
+func usageSupersededSQL(w UsageWindow) (string, []any) {
+	return `
+		SELECT COALESCE(json_extract(e.payload, '$.scope_type'), ''),
+		       COALESCE(json_extract(e.payload, '$.scope_id'), ''),
+		       COALESCE(json_extract(e.payload, '$.schedule_name'), ''),
+		       e.trace_id, e.event_time
+		  FROM crewlet_events AS e
+		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+		   AND e.trace_id != ''
+		   AND ` + keptRowSQL + `
+		 ORDER BY e.event_time, e.event_id`,
+		[]any{types.ScheduledFireSuperseded{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
+}
+
+// usageSuperseded reads [usageSupersededSQL]: every fire of a schedule a seat
+// on this node did not run in the window, once per trace.
+func (d *DB) usageSuperseded(ctx context.Context, w UsageWindow) ([]supersededRow, error) {
+	query, args := usageSupersededSQL(w)
+	rows, err := d.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read the usage day's superseded fires: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []supersededRow
+	seen := map[string]bool{}
+	for rows.Next() {
+		var (
+			r  supersededRow
+			at int64
+		)
+		if err := rows.Scan(&r.ScopeType, &r.ScopeID, &r.Name, &r.TraceID, &at); err != nil {
+			return nil, fmt.Errorf("store: scan the usage day's superseded fires: %w", err)
+		}
+		// ONCE PER FIRE: a turn that fails and comes back merges its
+		// fires again and records each again (internal/engine), and the
+		// first record is when the fire was first set aside.
+		if r.ScopeType == "" || r.ScopeID == "" || r.Name == "" || seen[r.TraceID] {
 			continue
 		}
-		out = append(out, UsageSchedule{ScopeType: scopeType, ScopeID: scopeID,
-			Name: name, Fires: []UsageFire{f}})
+		seen[r.TraceID] = true
+		r.At = DecodeTime(at)
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

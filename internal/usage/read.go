@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -298,14 +299,22 @@ func SeatDays(ctx context.Context, estate Estate, q SpendQuery) ([]SeatDay, erro
 }
 
 // ScheduleRun is one schedule fire some node dispatched, as the company feed
-// reads it.
+// and the schedules' history read it.
 type ScheduleRun struct {
 	Day, Node          string
 	ScopeType, ScopeID string
 	Name               string
 	FiredAt            time.Time
-	Target, Outcome    string
-	TraceID, TurnID    string
+
+	// ScheduledAt is the instant the fire was due, and FireLabel that tick
+	// as the dispatch ledger keys it (the schedule's local wall-clock
+	// minute). They differ from FiredAt on a catch-up, where the tick being
+	// made up is the fact a reader is after.
+	ScheduledAt time.Time
+	FireLabel   string
+
+	Target, Outcome string
+	TraceID, TurnID string
 }
 
 // Key is the run's tiebreak among fires at one instant, and with FiredAt its
@@ -323,13 +332,19 @@ type ScheduleRunsQuery struct {
 	BeforeAt  time.Time
 	BeforeKey string
 
+	// ScopeType, ScopeID and Name narrow to ONE schedule's fires: all three,
+	// or none. A schedule's identity is the whole tuple the dispatch ledger
+	// keys a fire on, since two units can each declare a `standup` and a
+	// read keyed on the name would merge two teams' histories.
+	ScopeType, ScopeID, Name string
+
 	// Target narrows to the fires addressed to one seat.
 	Target string
 
-	// Outcome narrows to the fires recorded under one outcome (`fired`,
-	// `skipped_catchup`, `skipped_paused`, or `skipped_superseded` for a fire
-	// its seat did not run because a later fire of the schedule ran in its
-	// place); empty is every one.
+	// Outcome narrows to the fires under one outcome as the history reports
+	// it ([fireOutcomeSQL]): `fired`, `skipped_catchup`, `skipped_paused`, or
+	// `skipped_superseded` for a fire its seat did not run because a later
+	// fire of the schedule ran in its place. Empty is every one.
 	Outcome string
 
 	// Limit is how many rows; one more is read to say whether there are
@@ -337,60 +352,70 @@ type ScheduleRunsQuery struct {
 	Limit int
 }
 
+// scheduleOutcomeFired is the dispatch ledger's word for a fire it sent
+// (schedule.OutcomeFired), spelled here because this package does not depend
+// on the scheduler's; TestAFireItsSeatDidNotRunReadsAsSkipped holds the two
+// together.
+const scheduleOutcomeFired = "fired"
+
+// fireOutcomeSQL is a fire's outcome as the schedule's history reports it, over
+// a `usage_schedule_runs` row aliased `r`, with [fireOutcomeArgs] bound to it.
+//
+// THE LEDGER'S WORD, UNLESS THE FIRE WAS NOT RUN. The scheduler's node records
+// what it did, which for a fire it sent is `fired`; the seat's node records a
+// fire it set aside because a later fire of the schedule ran in its place, in
+// its own schedule-day (`usage_schedule_superseded`). The two are usually
+// different nodes, and the second is filed on the day the seat came back
+// rather than the day of the fire, so they are joined here, by the fire's
+// trace, at read time: the one place both halves are, whichever nodes and
+// days published them. Only a FIRED row can be superseded; a skip was never
+// sent.
+const fireOutcomeSQL = `CASE WHEN r.outcome = ? AND r.trace_id != '' AND EXISTS (
+		SELECT 1 FROM usage_schedule_superseded AS s WHERE s.trace_id = r.trace_id)
+	THEN ? ELSE r.outcome END`
+
+// fireOutcomeArgs are [fireOutcomeSQL]'s arguments, in its order.
+func fireOutcomeArgs() []any {
+	return []any{scheduleOutcomeFired, types.ScheduleOutcomeSuperseded}
+}
+
 // ScheduleRuns reads one page of the schedule fires every data node recorded,
-// newest first, through `usage_schedule_runs_fired_idx` (replicated 0029).
+// newest first: the company's through `usage_schedule_runs_newest_idx` and one
+// schedule's through `usage_schedule_runs_schedule_idx` (replicated 0076),
+// each walked in the page's own order and stopped at the page.
 //
 // EVERY DATA NODE'S FIRES, which is the domain's point: a schedule fires on
 // whichever node holds its duty (a duty takes `workers`, which takes `data`),
 // and the company's account of its schedules is the union — including a node
 // that has since left. The horizon is the applier's (181 days); nothing older
 // is here to page to.
+//
+// THE ONE READ OF A FIRE'S HISTORY. The company feed, the schedules' recent
+// runs and one schedule's own history all page it, so a fire reads as the
+// same outcome on every surface that shows it ([fireOutcomeSQL]).
 func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	[]ScheduleRun, bool, error) {
 
-	if q.Limit < 1 {
-		return nil, false, fmt.Errorf("usage: a schedule-run page is at least one row, not %d", q.Limit)
+	query, args, invalid := scheduleRunsSQL(q)
+	if invalid != nil {
+		return nil, false, invalid
 	}
-	where := "1 = 1"
-	var args []any
-	if !q.BeforeAt.IsZero() {
-		at := store.EncodeTime(q.BeforeAt)
-		where += ` AND fired_at <= ? AND NOT (fired_at = ? AND
-			(node || char(31) || scope_type || char(31) || scope_id || char(31) ||
-			 name || char(31) || target) >= ?)`
-		args = append(args, at, at, q.BeforeKey)
-	}
-	if q.Target != "" {
-		where += " AND target = ?"
-		args = append(args, q.Target)
-	}
-	if q.Outcome != "" {
-		where += " AND outcome = ?"
-		args = append(args, q.Outcome)
-	}
-	args = append(args, q.Limit+1)
 	var out []ScheduleRun
 	err := estate.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT day, node, scope_type, scope_id, name, fired_at, target,
-			       outcome, trace_id, turn_id
-			  FROM usage_schedule_runs
-			 WHERE `+where+`
-			 ORDER BY fired_at DESC, node DESC, scope_type DESC, scope_id DESC,
-			          name DESC, target DESC
-			 LIMIT ?`, args...)
+		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var r ScheduleRun
-			var fired int64
+			var fired, due int64
 			if err := rows.Scan(&r.Day, &r.Node, &r.ScopeType, &r.ScopeID, &r.Name,
-				&fired, &r.Target, &r.Outcome, &r.TraceID, &r.TurnID); err != nil {
+				&fired, &due, &r.FireLabel, &r.Target, &r.Outcome, &r.TraceID,
+				&r.TurnID); err != nil {
 				return err
 			}
-			r.FiredAt = store.DecodeTime(fired)
+			r.FiredAt, r.ScheduledAt = store.DecodeTime(fired), store.DecodeTime(due)
 			out = append(out, r)
 		}
 		return rows.Err()
@@ -403,4 +428,52 @@ func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 		out = out[:q.Limit]
 	}
 	return out, more, nil
+}
+
+// scheduleRunsSQL is the statement [ScheduleRuns] pages with, and its
+// arguments: one more row than the page, to say whether there are more.
+func scheduleRunsSQL(q ScheduleRunsQuery) (string, []any, error) {
+	if q.Limit < 1 {
+		return "", nil, fmt.Errorf("usage: a schedule-run page is at least one row, not %d", q.Limit)
+	}
+	where := "1 = 1"
+	// THE ORDER EVERY PAGE IS READ IN: newest first, then the rest of the
+	// row's identity, which is what [ScheduleRun.Key] resumes after. One
+	// schedule's page leaves out the three columns it fixes, which order
+	// nothing there, so the planner reads it off that schedule's index
+	// rather than sorting the schedule's fires; with them in, it sorted.
+	order := "fired_at DESC, node DESC, scope_type DESC, scope_id DESC, name DESC, target DESC"
+	var args []any
+	switch named := q.ScopeType != "" || q.ScopeID != "" || q.Name != ""; {
+	case named && (q.ScopeType == "" || q.ScopeID == "" || q.Name == ""):
+		return "", nil, fmt.Errorf("usage: a schedule is named by its scope type, "+
+			"scope id and name together, and this read names %q/%q/%q",
+			q.ScopeType, q.ScopeID, q.Name)
+	case named:
+		where += " AND scope_type = ? AND scope_id = ? AND name = ?"
+		args = append(args, q.ScopeType, q.ScopeID, q.Name)
+		order = "fired_at DESC, node DESC, target DESC"
+	}
+	if !q.BeforeAt.IsZero() {
+		at := store.EncodeTime(q.BeforeAt)
+		where += ` AND fired_at <= ? AND NOT (fired_at = ? AND
+			(node || char(31) || scope_type || char(31) || scope_id || char(31) ||
+			 name || char(31) || target) >= ?)`
+		args = append(args, at, at, q.BeforeKey)
+	}
+	if q.Target != "" {
+		where += " AND target = ?"
+		args = append(args, q.Target)
+	}
+	if q.Outcome != "" {
+		where += " AND (" + fireOutcomeSQL + ") = ?"
+		args = append(append(args, fireOutcomeArgs()...), q.Outcome)
+	}
+	return `
+		SELECT day, node, scope_type, scope_id, name, fired_at, scheduled_at,
+		       fire_label, target, ` + fireOutcomeSQL + `, trace_id, turn_id
+		  FROM usage_schedule_runs AS r
+		 WHERE ` + where + `
+		 ORDER BY ` + order + `
+		 LIMIT ?`, append(append(fireOutcomeArgs(), args...), q.Limit+1), nil
 }

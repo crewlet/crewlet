@@ -682,9 +682,13 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 			// write: a row a person wrote through their machine token is
 			// theirs, and saying which token is what tells it from one
 			// they wrote themselves.
+			source := string(r.Source)
+			if r.WriteOnly {
+				source += " (write-only)"
+			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.KeyID,
 				r.UpdatedAt.Format(time.RFC3339),
-				describeAuthor(r.UpdatedBy, r.OperatorID), r.Source)
+				describeAuthor(r.UpdatedBy, r.OperatorID), source)
 		}
 		if err = w.Flush(); err != nil {
 			return err

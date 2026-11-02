@@ -1100,7 +1100,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
-	input.Resume = runnerResume(in, e.runSteers.carried(in.Run))
+	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher))
 	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1446,7 +1446,10 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 // run's row and the resume's own input: what the run did, where, under which
 // entry, and what carries it on. steered is every note the turn has read
 // ([runSteers.carried]).
-func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
+//
+// seal opens a held call's arguments and seals its result (ADR-0077): nil on a
+// node without the fleet keyring's cipher, where a held call is not made.
+func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) *runner.Resume {
 	return &runner.Resume{
 		State: in.State, Answer: in.Answer,
 		// WHICH BOX DID THE WORK. Off the run's own row, because this
@@ -1478,7 +1481,7 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).
-		Asked: runnerAsked(in.Asked),
+		Asked: runnerAsked(in.Asked, seal),
 		Lost:  runnerLost(in.Lost),
 		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
 		// [Engine.signInReplaced].
@@ -1490,16 +1493,79 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 }
 
 // runnerAsked is the coordinator's account of an answered question in the
-// runner's terms, nil for a resume no answer drove.
-func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
+// runner's terms, nil for a resume no answer drove: a held call's arguments
+// opened from their seal, and its mark and result written through the claim
+// ([heldCommit]).
+func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked {
 	if asked == nil {
 		return nil
 	}
-	return &runner.Asked{
+	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
 		Label: asked.Label,
 	}
+	if held := asked.Held; held != nil {
+		call := held.Call
+		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
+			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
+		if sandbox.HeldMakes(held.Choice) {
+			args, err := seal.OpenArguments(held.TurnID, call)
+			if err != nil {
+				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
+				// node cannot open leaves the call unmade, and the run is
+				// told so.
+				log.Error("held_call_arguments_unopened", "turn_id", held.TurnID,
+					"held_call", call.ID, "tool", call.Tool, "error", err.Error())
+				out.Held.Unopened = "its arguments could not be opened on the node carrying the " +
+					"run on, so the engine could not make the call as it was approved; call it " +
+					"again to ask afresh"
+			}
+			out.Held.Args = args
+		}
+	}
+	return out
+}
+
+// heldCommit is [runner.HeldCommit] over the claim's writes
+// ([sandbox.HeldResume]) and the fleet keyring's seal, which the result is
+// sealed under on the row and opened from for a later attempt.
+type heldCommit struct {
+	held *sandbox.HeldResume
+	seal *sandbox.CallSeal
+}
+
+// Begin marks the held call; see [runner.HeldCommit].
+func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
+	call, first, err := h.held.Mark(ctx)
+	switch {
+	case err != nil:
+		return runner.HeldPrior{}, err
+	case first:
+		return runner.HeldPrior{First: true}, nil
+	case !call.Made():
+		return runner.HeldPrior{}, nil
+	}
+	result, err := h.seal.OpenResult(h.held.TurnID, call)
+	if err != nil {
+		// RECORDED, AND UNREADABLE HERE: the call was made, and what it
+		// returned cannot be handed over, which the run is told as a call
+		// whose result is unknown. Never made again.
+		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
+			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
+		return runner.HeldPrior{}, nil
+	}
+	return runner.HeldPrior{Made: true, Result: result}, nil
+}
+
+// Record seals and records what the held call returned; see
+// [runner.HeldCommit].
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult) error {
+	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
+	if err != nil {
+		return err
+	}
+	return h.held.Record(ctx, sealed)
 }
 
 // runnerLost is the coordinator's account of a lost job in the runner's terms,
@@ -1955,9 +2021,15 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // with no per-tool control left, so what it is given is the decision, and it
 // is made here rather than inherited. And never one the company has turned off
 // ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
-// day it is turned back on, and gives the box nothing until then. Nor one whose
-// address, resolved, is one the engine would not dial its own child of the
-// server at ([config.MCPAddressProblem]).
+// day it is turned back on, and gives the box nothing until then. Nor one the
+// seat is not granted ([config.MCPServer.Grants]): a box reaches a server's
+// tools as surely as the seat's surface does, so it is held to the one grant
+// the surface is. Nor one whose address, resolved, is one the engine would not
+// dial its own child of the server at ([config.MCPAddressProblem]). Nor one
+// any tool of which is held back from the agents
+// ([config.MCPToolPolicy.AllowsEveryTool]): the harness in the box dials the
+// server itself, past the engine, so it would reach every tool the server
+// lists, and the seat reaches the allowed ones over the bridge anyway.
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -2021,6 +2093,37 @@ func sandboxMCP(
 					"is given it")
 			continue
 		}
+		if !server.Grants(seat) {
+			// OUT OF THE SCOPE, as one turned off is: declared, and not
+			// this seat's. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_not_granted", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is not granted to "+
+					"this seat (mcp_servers[].access, or the integration lane for a server "+
+					"reading each agent's own credential)")
+			continue
+		}
+		if !server.Tools.AllowsEveryTool() {
+			// OUT OF THE SCOPE, as one not granted is: a box reaches a
+			// server whole, so a level that holds a tool back could not
+			// hold there. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_levelled", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server in its box: some of its "+
+					"tools are held back from the agents (mcp_servers[].tools), and a box "+
+					"reaches a server whole; the seat reaches its allowed tools over the bridge")
+			continue
+		}
+		if server.OAuth != nil {
+			// A BOX CANNOT RENEW A SIGN-IN: it is handed a server's values
+			// once, at its launch, and admission refuses the listing; one a
+			// stored revision still carries reaches the server through the
+			// bridge instead.
+			log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is signed in to with "+
+					"OAuth, and the box reaches its tools through the bridge")
+			continue
+		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)
@@ -2075,6 +2178,10 @@ func (e *Engine) boxServers(
 	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
 	servers, withheld := sandboxMCP(env, c, seat, settings,
 		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
+	// A SERVER A TOOL OF WHICH CHANGED is not the box's either (ADR-0078):
+	// the run's facts at launch, not the configuration's, so outside
+	// sandboxMCP, which decides from the revision alone.
+	servers = e.withoutChangedServers(ctx, seat.Handle(), servers)
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)

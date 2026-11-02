@@ -514,6 +514,8 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	r := queries.NewRegistry()
 	src := mcpSources(t, mcpFleet(t))
 	src.Alarms = mcpEvaluation
+	src.Sandbox, src.HeldCalls = heldRuns(t)
+	src.MCPListings = fakeListings{}
 	queries.Register(r, src)
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
@@ -521,6 +523,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "McpServersStatusAnswer", []map[string]any{body}, false)
+	holdShape(t, "McpApproval", rowsOf(t, body["approvals"]), false)
 	holdShape(t, "McpStatusNode", rowsOf(t, body["nodes"]), false)
 	servers := rowsOf(t, body["servers"])
 	holdShape(t, "McpServerStatus", servers, false)
@@ -530,6 +533,13 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	holdShape(t, "McpServerNode", cells, false)
 	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
+	agents := rowsOf(t, body["agents"])
+	holdShape(t, "McpAgentTools", agents, false)
+	var agentServers []map[string]any
+	for _, a := range agents {
+		agentServers = append(agentServers, rowsOf(t, a["servers"])...)
+	}
+	holdShape(t, "McpAgentServer", agentServers, false)
 
 	var refused, shadowed []map[string]any
 	for _, s := range servers {
@@ -572,8 +582,9 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	holdShape(t, "McpAlarmEntry", entries, false)
 	holdShape(t, "McpFix", fixes, false)
 	for name, want := range map[string][]string{
-		"McpAlarmKind": stringsOf(statelog.PerServerKinds()),
-		"McpFixKind":   stringsOf(queries.MCPFixKinds),
+		"McpAlarmKind":      stringsOf(statelog.PerServerKinds()),
+		"McpFixKind":        stringsOf(queries.MCPFixKinds),
+		"McpApprovalStatus": stringsOf(queries.MCPApprovalStatuses),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {

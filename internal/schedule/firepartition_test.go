@@ -53,6 +53,14 @@ func TestEveryFireOfAScheduleSharesOnePartition(t *testing.T) {
 			t.Errorf("fire %d says it was due at %s, want %s", i, fire.ScheduledAt,
 				tickAt(want, 0, 0))
 		}
+		// AND WHOSE SCHEDULE IT IS, whole: the scope a fire the seat does
+		// not run is filed under, beside the name two units can share. A
+		// role schedule's scope is its own seat, by the seat's agent id.
+		if fire.ScopeType != types.ScheduleScopeRole || fire.ScopeID == "" ||
+			fire.ScopeID != fire.Agent {
+			t.Errorf("fire %d names its schedule's scope as %q/%q, want role/%s",
+				i, fire.ScopeType, fire.ScopeID, fire.Agent)
+		}
 	}
 }
 

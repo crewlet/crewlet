@@ -87,9 +87,38 @@ function Fix({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
+          href={href(["settings", "mcp-tools", "servers", server], {
+            flow: "edit",
+            step: "connection",
+          })}
         >
           {FIX.edit}
+        </ButtonLink>
+      );
+    case "sign_in":
+      return (
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={href(["settings", "mcp-tools", "servers", server], { tab: "connection" })}
+        >
+          {FIX.sign_in}
+        </ButtonLink>
+      );
+    case "approve":
+      return (
+        <ButtonLink size="small" variant="secondary" href={href(["inbox"])}>
+          {FIX.approve}
+        </ButtonLink>
+      );
+    case "review":
+      return (
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
+        >
+          {FIX.review}
         </ButtonLink>
       );
   }
@@ -143,6 +172,16 @@ function itemFor(
       body =
         "The instance starts once the integration seals the credential it mints for the agent. Its Agents tab says whether the agent is turned on there.";
       break;
+    case "mcp_tools_changed":
+      meta = <>Each changed tool asks first{since ? <>, {since}</> : null}</>;
+      body =
+        "The server changed tools since their levels were decided, or added some. Each asks a person before every call until somebody reviews the change and accepts it or keeps it blocked.";
+      break;
+    case "mcp_approval_waiting":
+      meta = <>Its run is parked{since ? <>, {since}</> : null}</>;
+      body =
+        "It called a tool that asks a person before each call. Allow it once, always, or deny it; until then the run waits and its seat takes other work.";
+      break;
     case "mcp_tools_refused": {
       const one = (row?.refused_count ?? refused.length) === 1;
       meta = listed(refused.map((t) => t.tool));
@@ -150,6 +189,16 @@ function itemFor(
       details = refused.map((t) => t.message);
       break;
     }
+    case "mcp_oauth_needs_sign_in":
+      meta = <>No agent can call its tools{since ? <>, {since}</> : null}</>;
+      body =
+        "An administrator signs the company in to it again from its Connection tab, and the engine renews the sign-in from then on.";
+      break;
+    case "mcp_oauth_expiring":
+      meta = <>Its vendor set when the sign-in runs out</>;
+      body =
+        "Sign in again before then. A new sign-in replaces the old one, and the agents keep the server throughout.";
+      break;
   }
   return {
     key: `${alarm.kind}:${entry.key}:${entry.seat}`,

@@ -1179,8 +1179,12 @@ const (
 	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
 	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
 	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
-	// link.
-	initialBudget = 381 << 10
+	// link. The MCP sign-in (the Inbox's words for its two alarm kinds, which
+	// the entry carries as it carries every MCP kind's, and the settings code
+	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
+	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
+	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
+	initialBudget = 382 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1518,7 +1522,27 @@ const (
 	// rather than of lib/scroller.ts, which the shell imports, and a
 	// transcript's prose takes the shared .prose rule rather than a rule of
 	// its own in the one sheet. 5339 KiB.
-	treeBudget = 5<<20 + 219<<10
+	// The MCP sign-in (the state, auth method, alarm kinds and fix the page
+	// and the Inbox name, the Remove dialog's sentence, and the contract's
+	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
+	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
+	// +0.3 KiB. 5341 KiB.
+	// The changed-tools alarm (its kind and review fix in the Inbox's and the
+	// page's words, and the page's alarm row) took it from 5341.0 KiB to
+	// 5341.7 KiB (+0.8 KiB): the settings chunk +0.5 KiB, the entry script
+	// +0.2 KiB and the Access chunk +0.1 KiB. 5342 KiB.
+	// Settings › MCP & tools' add and edit wizard (its source, name,
+	// connection, sign-in, test and review steps, the Test and Replace value
+	// dialogs), net of the Add dialog and its form helpers it replaces, took
+	// it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP
+	// sign-in, from 5338.8 KiB to 5381.5 KiB, that was the settings chunk
+	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
+	// setup wizard, key and value rows, source editor and file drop the
+	// wizard is the first settings screen to draw), and 5.6 KiB less of
+	// shared code Rollup moved between chunks and of the Add dialog's rules
+	// out of the one sheet. The page is all in the settings chunk, so the
+	// initial load did not grow. 5385 KiB.
+	treeBudget = 5<<20 + 265<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

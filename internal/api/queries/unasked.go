@@ -35,10 +35,9 @@ type WorkSearcher interface {
 // [memread.Reader].
 //
 // Consumer-defined like every other seam here, and over memread's own answer
-// types for the reason [ScheduleRuns] is over `schedule.Run`: the rows stay one
-// shape rather than a copy this package would have to keep matching, and the
-// shape is built where every node — not only one serving this API — can build
-// it.
+// types: the rows stay one shape rather than a copy this package would have to
+// keep matching, and the shape is built where every node (not only one serving
+// this API) can build it.
 //
 // HANDED A [memread.Seat] WHOLE — its agent id and its handle — resolved by
 // this package from the org its answer is made of, so the node that answers

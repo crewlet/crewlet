@@ -165,6 +165,9 @@ type Service struct {
 
 	// secrets is the company's credential store ([Options.Secrets]).
 	secrets Secrets
+	// grants is the engine's hold on each MCP server's OAuth grant
+	// ([Options.Grants]).
+	grants Grants
 }
 
 // Secrets is the company's credential store as a removal reads and writes it:
@@ -177,6 +180,21 @@ type Secrets interface {
 	// Unset deletes the value stored under name, reporting whether there
 	// was one.
 	Unset(ctx context.Context, name string) (bool, error)
+}
+
+// Grants is the engine's hold on each MCP server's OAuth grant, as a removal of
+// the server reads and gives it up (mcpremoval.go). The engine itself, in
+// `crewlet run`.
+type Grants interface {
+	// HeldMCPGrant reports whether anybody holds a grant for server.
+	HeldMCPGrant(ctx context.Context, server string) (bool, error)
+	// RevokeMCPServerGrant revokes the grant of entry's server at its
+	// vendor where it offers that and forgets it, answering what the
+	// vendor was asked (`revoked`, `not_offered`, `failed`), its words
+	// where it refused, and whether there was a grant. entry is the server
+	// as the document before the removal configured it.
+	RevokeMCPServerGrant(ctx context.Context, entry *config.MCPServer) (revocation, said string,
+		held bool, err error)
 }
 
 // Options wire the service.
@@ -250,6 +268,10 @@ type Options struct {
 	// the rows, and a surface built without it would answer a removal that
 	// asked for a credential to go by keeping it.
 	Secrets Secrets
+
+	// Grants is the engine's hold on each MCP server's OAuth grant: what a
+	// removal of the server revokes. Required.
+	Grants Grants
 }
 
 // New builds the service.
@@ -285,6 +307,9 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Node is required: a write whose " +
 			"activation goes unanswered names the node whose history alone holds " +
 			"the revision it stored, and the engine's node id is that name")
+	case opts.Grants == nil:
+		return nil, errors.New("configapi: Options.Grants is required: removing an MCP server " +
+			"revokes the OAuth grant the engine holds for it")
 	case opts.Secrets == nil:
 		return nil, errors.New("configapi: Options.Secrets is required: removing an " +
 			"MCP server deletes the stored values only it read, and those live in " +
@@ -298,7 +323,7 @@ func New(opts Options) (*Service, error) {
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
-		node:    opts.Node, raises: opts.Raises, secrets: opts.Secrets,
+		node:    opts.Node, raises: opts.Raises, secrets: opts.Secrets, grants: opts.Grants,
 	}
 	if s.raises == nil {
 		s.raises = failClosedRaises(s.Managed)

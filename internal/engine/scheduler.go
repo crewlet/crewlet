@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
@@ -126,6 +127,10 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// schedules for the life of the process.
 		Org:    func() *org.Organization { return e.Company().Org },
 		Ledger: claimer,
+		// What the fleet's fire claims are kept for, since the fleet
+		// answers whether a fire ran: a restart judges no fire older than
+		// that missed.
+		ClaimRetention: coord.FireRetention,
 		// The node's own config posture. A node that cannot apply the
 		// current epoch must not fire the previous company's crons — and
 		// unlike a delivery there is no queued copy to fall back on, so a

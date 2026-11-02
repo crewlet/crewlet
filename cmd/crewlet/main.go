@@ -46,7 +46,6 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1977,6 +1976,9 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 	}
 	return configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
+		// AND EACH MCP SERVER'S OAUTH GRANT, which a removal of the server
+		// revokes: the engine's own.
+		Grants: e,
 		// THE POINTER, without which the write routes have nothing to
 		// activate against. It was missing, so every /config write on
 		// this binary reached a nil plane: the live-edit path that is the
@@ -2354,7 +2356,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card.
 			Objects: e.Backends().Fleet,
-			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because
 			// the answerer it registered on every node is the other
@@ -2431,6 +2432,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
 			// seal says: opened under this node's fleet keyring.
 			RunAnswers: e.AnswerSeal(),
+			// WHAT A HELD CALL WOULD SEND, sealed on its run's row and
+			// opened under this node's fleet keyring for who may approve
+			// it.
+			HeldCalls: sandbox.NewCallSeal(e.Cipher()),
 			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
 			// owns the run. The ENGINE's reader, because the answerer
 			// it registered on every node is the other half of the same

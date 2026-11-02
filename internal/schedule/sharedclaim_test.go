@@ -85,30 +85,30 @@ func TestADistinctFireIsNotSuppressed(t *testing.T) {
 	_ = ctx
 }
 
-// The collision the FireKey struct exists to rule out, now that the identity
-// has to become one string for the coordination store. Two DIFFERENT fires
-// must never claim one key — the second is then silently never dispatched,
-// which is the same "one of the two standups vanishes" the struct avoided by
-// not joining at all.
+// The collision the FireMinute struct exists to rule out, now that the minute
+// has to become one string for the coordination store. Two DIFFERENT minutes
+// must never share one key: a fire of the second is then silently never
+// dispatched, which is the same "one of the two standups vanishes" the struct
+// avoided by not joining at all.
 func TestADelimiterInANameDoesNotCollideWithItsNeighbour(t *testing.T) {
 	t.Parallel()
 	// A pipe that moves across a field boundary. A naive join renders both
-	// of these "unit|a|b|c|d" — a unit "a|b" with a schedule "c", and a
+	// of these "unit|a|b|c|d": a unit "a|b" with a schedule "c", and a
 	// unit "a" with a schedule "b|c", are different fires.
-	pipe := [2]schedule.FireKey{
+	pipe := [2]schedule.FireMinute{
 		{Scope: types.ScheduleScopeUnit, ScopeID: "a|b", ScheduleName: "c", FireLabel: "d"},
 		{Scope: types.ScheduleScopeUnit, ScopeID: "a", ScheduleName: "b|c", FireLabel: "d"},
 	}
 	// And the escape character itself. If the backslash did not escape
 	// itself first, a literal `\p` in a name would render the same as an
-	// escaped pipe — the escaping would just have moved the collision one
+	// escaped pipe: the escaping would just have moved the collision one
 	// level down instead of removing it.
-	escape := [2]schedule.FireKey{
+	escape := [2]schedule.FireMinute{
 		{Scope: types.ScheduleScopeUnit, ScopeID: `\p`, ScheduleName: "c"},
 		{Scope: types.ScheduleScopeUnit, ScopeID: "|", ScheduleName: "c"},
 	}
-	for _, pair := range [][2]schedule.FireKey{pipe, escape} {
-		first, second := schedule.FireClaimKey(pair[0]), schedule.FireClaimKey(pair[1])
+	for _, pair := range [][2]schedule.FireMinute{pipe, escape} {
+		first, second := schedule.FireMinuteKey(pair[0]), schedule.FireMinuteKey(pair[1])
 		if first == second {
 			t.Errorf("%+v and %+v both render %q — one of the two fires is suppressed",
 				pair[0], pair[1], first)
@@ -118,7 +118,11 @@ func TestADelimiterInANameDoesNotCollideWithItsNeighbour(t *testing.T) {
 
 type refusingFleet struct{ err error }
 
-func (r refusingFleet) ClaimFire(context.Context, string, time.Time) (bool, error) {
+func (r refusingFleet) ClaimFire(context.Context, string, string, time.Time) (bool, error) {
+	return false, r.err
+}
+
+func (r refusingFleet) FireMinuteClaimed(context.Context, string) (bool, error) {
 	return false, r.err
 }
 
@@ -136,6 +140,65 @@ func TestAnUnreachableClaimStoreIsAnErrorNotALostRace(t *testing.T) {
 	won, err := claimer.Claim(context.Background(), fire("cto", "standup", "20260314T0900", "cto"))
 	if won {
 		t.Error("a fire was granted by a store that could not be read")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the store's own error wrapped", err)
+	}
+}
+
+// THE FLEET ANSWERS WHETHER A MINUTE RAN, never the node's own ledger. The
+// duty moved: the node that fired 09:00 went away, and its successor's first
+// tick asks about that minute with an EMPTY local ledger. Read locally, the
+// minute looked missed and the successor recorded a skip beside the fire.
+func TestTheDutyMovingDoesNotRecordTheLastHoldersFireAsMissed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fleet := memory.NewFleet()
+	first, err := schedule.NewSharedClaimer(fleet, schedule.NewMemoryLedger())
+	if err != nil {
+		t.Fatalf("NewSharedClaimer: %v", err)
+	}
+	successorLedger := schedule.NewMemoryLedger()
+	second, err := schedule.NewSharedClaimer(fleet, successorLedger)
+	if err != nil {
+		t.Fatalf("NewSharedClaimer: %v", err)
+	}
+
+	run := fire("cto", "standup", "20260314T0900", "cto")
+	if won, err := first.Claim(ctx, run); err != nil || !won {
+		t.Fatalf("the first claim: won=%v err=%v", won, err)
+	}
+	held, err := second.MinuteClaimed(ctx, run.FireMinute)
+	if err != nil {
+		t.Fatalf("the successor's read: %v", err)
+	}
+	if !held {
+		t.Error("the successor read the minute its predecessor fired as unclaimed, so its " +
+			"catchup pass records that fire as missed")
+	}
+	if rows := successorLedger.Rows(); len(rows) != 0 {
+		t.Errorf("the successor's own ledger holds %v, want nothing: the answer is the fleet's", rows)
+	}
+
+	other := fire("cto", "standup", "20260315T0900", "cto")
+	if held, err := second.MinuteClaimed(ctx, other.FireMinute); err != nil || held {
+		t.Errorf("a minute nobody claimed reads held=%v err=%v, want false, nil", held, err)
+	}
+}
+
+// A minute the fleet could not be asked about is an error, not "nobody
+// claimed it": the second answer writes a skip into the schedule's history.
+func TestAnUnreachableFleetIsAnUnknownMinuteNotAnUnclaimedOne(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("the broker is unreachable")
+	claimer, err := schedule.NewSharedClaimer(refusingFleet{err: boom}, schedule.NewMemoryLedger())
+	if err != nil {
+		t.Fatalf("NewSharedClaimer: %v", err)
+	}
+	held, err := claimer.MinuteClaimed(context.Background(),
+		fire("cto", "standup", "20260314T0900", "cto").FireMinute)
+	if held {
+		t.Error("a minute was reported claimed by a store that could not be read")
 	}
 	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the store's own error wrapped", err)

@@ -427,6 +427,24 @@ vendors' keys are kept under too — Qwen Code's `OPENAI_API_KEY` — is never r
 this way: such an entry names its key. One whose named reference resolves to
 nothing runs on nothing rather than borrowing it.
 
+### Write-only values
+
+A value stored from Settings › MCP & tools, a server's header or variable, is
+sealed on a row marked **write-only**
+([Storing a header or variable](../guides/tools-and-mcp.md#storing-a-header-or-variable)).
+The engine's resolver opens it, so the `${VAR}` that names it resolves on every
+node as any stored value does; every read that would hand it to a person or a
+command refuses it, naming why: `GET /secrets/{name}?reveal=true`, `POST
+/secrets/reveal`, `crewlet secrets get -reveal` and a command resolving its
+company document, through a node or with the engine stopped. The listing says
+which rows are write-only (`crewlet secrets list` marks the source
+`(write-only)`).
+
+The mark belongs to the row: storing the same name again, from the page or
+through `PUT /secrets/{name}`, keeps it, since what replaces a write-only
+value is still that server's credential, and a rekey re-seals the row with it.
+Only removing the row clears it.
+
 ### From a provisioner
 
 Every provisioning CLI takes `-secret-store` in place of `-env-file`:

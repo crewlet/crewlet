@@ -694,6 +694,20 @@ type Role struct {
 	// wire form: it is derived, and a caller building a Role leaves it empty.
 	AutoManaged []string `yaml:"-" json:"-"`
 
+	// UnitKeys is the key of the unit this seat sits in, then the key of each
+	// unit enclosing that one, outward to the top, as [Organization.Normalize]
+	// placed it; empty for a seat at the root. Derived, and not part of the
+	// wire form: it is what an MCP server's grant to a unit is decided from,
+	// since a grant to a unit reaches the seats beneath it at any depth.
+	UnitKeys []string `yaml:"-" json:"-"`
+
+	// AccessLanes is every integration lane this agent seat is on at
+	// (`roles[].integrations.<lane>.enabled`), sorted. Set where the config
+	// layer builds the organization, because the lanes are written on the
+	// authored seat; derived, and not part of the wire form. It is what a
+	// tool server bound to a vendor's per-seat credential is granted by.
+	AccessLanes []string `yaml:"-" json:"-"`
+
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
 	// TokenBudget caps this seat's spend per calendar window; a window it

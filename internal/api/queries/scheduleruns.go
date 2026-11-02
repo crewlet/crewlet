@@ -1,4 +1,4 @@
-// One schedule's own dispatch history.
+// A schedule's fires, the company's and one schedule's own.
 
 package queries
 
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // MaxScheduleRuns bounds one schedule's history page.
@@ -43,38 +44,72 @@ func (s Sources) scheduleRuns(ctx context.Context, p Params) (any, error) {
 	}
 
 	limit := Clamp(p.Int("limit", 0), MaxScheduleRuns, MaxScheduleRuns)
-	runs, err := s.Runs.RecentFor(ctx, scope, scopeID, name, limit)
+	runs, more, err := usage.ScheduleRuns(ctx, s.Usage, usage.ScheduleRunsQuery{
+		ScopeType: string(scope), ScopeID: scopeID, Name: name, Limit: limit,
+	})
 	if err != nil {
 		return nil, err
 	}
 	names := s.scopeNames()
-	out := make([]map[string]any, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, map[string]any{
-			"scope_type":    string(run.Scope),
-			"scope_id":      run.ScopeID,
-			"scope_name":    names.of(run.Scope, run.ScopeID),
-			"schedule_name": run.ScheduleName,
-			// THE FIRE LABEL IS THE IDENTITY of one fire — the minute it
-			// was scheduled for — which is what tells a catchup fire from
-			// the tick that should have run it.
-			"fire_label":    run.FireLabel,
-			"target_handle": run.TargetHandle,
-			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
-			"fired_at":      isoOrEmpty(run.FiredAt),
-			"outcome":       string(run.Outcome),
-			"trace_id":      run.TraceID,
-		})
-	}
 	return map[string]any{
 		"scope_type":    string(scope),
 		"scope_id":      scopeID,
 		"scope_name":    names.of(scope, scopeID),
 		"schedule_name": name,
-		"runs":          out,
+		"runs":          scheduleRunRows(names, runs),
 		// SAYS WHEN IT CUT, like every other page in this tree: a page
 		// that filled is indistinguishable from a schedule that has fired
-		// exactly that many times.
-		"truncated": len(out) == limit,
+		// exactly that many times. The read takes one row past the page,
+		// so a schedule that has fired exactly fifty times is not called
+		// cut.
+		"truncated": more,
 	}, nil
+}
+
+// recentRuns is the company's newest fires across every schedule, or an empty
+// list.
+//
+// DEGRADES rather than fails: the configured schedules are the half an
+// operator opens this screen for, and refusing to show them because the
+// history is unreadable would blank the page over its footnote.
+func (s Sources) recentRuns(ctx context.Context) []map[string]any {
+	if s.Usage == nil {
+		return []map[string]any{}
+	}
+	runs, _, err := usage.ScheduleRuns(ctx, s.Usage, usage.ScheduleRunsQuery{Limit: RecentRunsLimit})
+	if err != nil {
+		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
+		return []map[string]any{}
+	}
+	return scheduleRunRows(s.scopeNames(), runs)
+}
+
+// scheduleRunRows is a page of fires as both schedule answers send it.
+//
+// ONE SHAPE for the company's recent runs and one schedule's history, because
+// the screen draws both with one row and joins the first onto its schedules by
+// the identity the second is asked by.
+func scheduleRunRows(names scopeNames, runs []usage.ScheduleRun) []map[string]any {
+	out := make([]map[string]any, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, map[string]any{
+			"scope_type":    run.ScopeType,
+			"scope_id":      run.ScopeID,
+			"scope_name":    names.of(types.ScheduleScope(run.ScopeType), run.ScopeID),
+			"schedule_name": run.Name,
+			// THE FIRE LABEL IS THE IDENTITY of one fire — the minute it
+			// was scheduled for — which is what tells a catchup fire from
+			// the tick that should have run it.
+			"fire_label":    run.FireLabel,
+			"target_handle": run.Target,
+			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
+			"fired_at":      isoOrEmpty(run.FiredAt),
+			// WHAT BECAME OF THE FIRE, not only what the scheduler did:
+			// `skipped_superseded` is a fire its seat did not run because
+			// a later fire of the schedule ran in its place.
+			"outcome":  run.Outcome,
+			"trace_id": run.TraceID,
+		})
+	}
+	return out
 }
