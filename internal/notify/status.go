@@ -331,11 +331,31 @@ type session struct {
 }
 
 // wait is one person's message queued behind the seat's current work: the
-// wake that carries it, and the order it was queued in on this driver.
+// wake that carries it, the order it was queued in on this driver, and when.
 type wait struct {
 	wake string
 	seq  uint64
+	at   time.Time
 }
+
+// maxWaitAge is the longest a queued line stands for one message with nothing
+// ending it, the backstop under every way a wait is meant to end: the turn
+// that picks the message up ([StatusDriver.Begin], then Dequeue), the dispatch
+// that settles it, including a hand-back that dead-letters it (the engine's
+// Dispatcher.Settled), the seat leaving this node ([StatusDriver.ClearFor])
+// and the driver stopping ([StatusDriver.Stop]). A wait one of those missed
+// would otherwise be re-asserted on every heartbeat for the life of the
+// process.
+//
+// ONE HOUR, and a judgment rather than a measurement: nothing bounds how long
+// a seat may legitimately be busy (an executor run has no run-time limit), so
+// any bound can end a line that was still true. An hour is twice the ack
+// window a running turn's own mail must settle in (jetstream DefaultAckWait),
+// long enough that only a seat held by an executor outlasts it; past it the
+// seat's own state on Live and the Agents page says more than a line that has
+// not moved. Ending the line never touches the message, which stays on the
+// seat's inbox.
+const maxWaitAge = time.Hour
 
 // queued reports whether this indicator says "queued": somebody's message is
 // waiting and no turn is working here yet. Caller holds the driver's mutex.
@@ -381,8 +401,8 @@ type StatusOptions struct {
 	Phrases Phrases
 
 	// Now is the clock: how long a settled message is remembered
-	// ([StatusDriver.Dequeue]). Nil is the wall clock, so a test need not
-	// supply one.
+	// ([StatusDriver.Dequeue]) and how old a queued line is ([maxWaitAge]).
+	// Nil is the wall clock, so a test need not supply one.
 	Now func() time.Time
 }
 
@@ -732,9 +752,10 @@ func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata 
 		return false
 	}
 	d.queuedSeq++
+	now := d.now()
 	if s, live := d.sessions[key]; live {
 		if !slices.ContainsFunc(s.waits, func(w wait) bool { return w.wake == wake }) {
-			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq})
+			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq, at: now})
 		}
 		queued := s.queued()
 		d.mu.Unlock()
@@ -744,7 +765,7 @@ func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata 
 		return true
 	}
 	s := &session{
-		key: key, waits: []wait{{wake: wake, seq: d.queuedSeq}},
+		key: key, waits: []wait{{wake: wake, seq: d.queuedSeq, at: now}},
 		seed: wake,
 		poke: make(chan struct{}, 1),
 		stop: make(chan struct{}), done: make(chan struct{}),
@@ -964,8 +985,35 @@ func (d *StatusDriver) run(ctx context.Context, s *session) {
 		if s.stopped() {
 			return
 		}
+		// AND A WAIT PAST ITS AGE ENDS HERE ([maxWaitAge]). An indicator
+		// it was the last thing holding comes down: this goroutine took it
+		// out of the map, so no teardown will, and it is between posts, so
+		// its clear cannot be overtaken by one.
+		if d.expire(s) {
+			d.clear(ctx, s.key)
+			return
+		}
 		d.repost(ctx, s)
 	}
+}
+
+// expire drops the session's waits older than [maxWaitAge], and reports
+// whether that left it holding nothing, in which case it has also been taken
+// out of the driver's map. A session a teardown already took out is the
+// teardown's to clear, and is left to it.
+func (d *StatusDriver) expire(s *session) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(s.waits) == 0 {
+		return false
+	}
+	now := d.now()
+	s.waits = slices.DeleteFunc(s.waits, func(w wait) bool { return now.Sub(w.at) > maxWaitAge })
+	if len(s.holds) > 0 || len(s.waits) > 0 || d.sessions[s.key] != s {
+		return false
+	}
+	delete(d.sessions, s.key)
+	return true
 }
 
 // stopped reports whether a teardown has asked this session's goroutine to

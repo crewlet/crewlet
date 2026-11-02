@@ -1,7 +1,10 @@
 package notify_test
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -138,5 +141,45 @@ func TestALateAnnouncementForASettledMessageQueuesNothing(t *testing.T) {
 		if line == "is queued behind its current task" {
 			t.Fatal("the line said queued for a message already picked up")
 		}
+	}
+}
+
+// A QUEUED LINE NOTHING ENDS COMES DOWN AT ITS MAXIMUM AGE. Every way a wait
+// is meant to end (the turn that picks it up, the dispatch that settles it,
+// the seat leaving this node, the driver stopping) can be missed by a path
+// nobody foresaw, and a line nothing ends is re-asserted on every heartbeat
+// for the life of the process. An hour after it was queued it is taken down;
+// before that it stands.
+func TestAQueuedLineNothingEndsComesDownAtItsMaximumAge(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		now = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); defer mu.Unlock(); now = now.Add(d) }
+	p := newPoster() // a heartbeat every 20 ms, which is where the age is checked
+	d := notify.NewStatusDriver(notify.StatusOptions{Poster: p, Mode: notify.StatusAddressed, Now: clock})
+	t.Cleanup(func() { d.Stop(context.Background()) })
+
+	if !d.Queue(t.Context(), "pm", "wake-1", chatMeta(nil)) {
+		t.Fatal("no queued line was raised")
+	}
+	p.shownAtLeast(t, 2)
+	advance(59 * time.Minute)
+	shown := len(p.shown())
+	p.shownAtLeast(t, shown+1)
+	if p.clears() != 0 {
+		t.Fatalf("the line came down after 59 minutes; it stands for an hour")
+	}
+	advance(2 * time.Minute)
+	deadline := time.Now().Add(2 * time.Second)
+	for p.clears() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a queued line an hour and a minute old is still up")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(d.Live()); got != 0 {
+		t.Fatalf("the driver still holds %d indicators after the line expired", got)
 	}
 }
