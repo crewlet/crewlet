@@ -273,15 +273,18 @@ function valueColumns(
       key: "stored",
       header: "Stored",
       shrink: true,
-      cell: (v: McpValueState) => (
-        <Text as="span" variant="caption" tone="secondary">
-          {v.stored_at
-            ? `${fmtDate(v.stored_at)}${v.stored_by ? ` by ${v.stored_by}` : ""}`
-            : v.bound_by
-              ? "When the agent starts"
-              : "Never"}
-        </Text>
-      ),
+      // WHEN OVER WHO, two lines, so neither is cut against the row's action.
+      cell: (v: McpValueState) =>
+        v.stored_at ? (
+          <TableTwoLineCell
+            value={fmtDate(v.stored_at)}
+            {...(v.stored_by ? { detail: `by ${v.stored_by}` } : {})}
+          />
+        ) : (
+          <Text as="span" variant="caption" tone="secondary">
+            {v.bound_by ? "When the agent starts" : "Never"}
+          </Text>
+        ),
     },
     // AN ACTIONS COLUMN ONLY WHERE A ROW HAS AN ACTION: a value an
     // integration binds for each agent is replaced nowhere here, and an empty

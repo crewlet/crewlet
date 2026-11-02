@@ -95,7 +95,15 @@ test("the connection names the address and the headers to an administrator alone
   detail = {
     ...LINEAR_DETAIL,
     values: [
-      { ...value, key: "Authorization", variable: "LINEAR_TOKEN", set: true, bound_by: null },
+      {
+        ...value,
+        key: "Authorization",
+        variable: "LINEAR_TOKEN",
+        set: true,
+        bound_by: null,
+        stored_at: "2026-11-01T11:00:00Z",
+        stored_by: "jane.doe",
+      },
       { ...value, key: "X-Team", variable: "", set: true, bound_by: null },
       { ...value, key: "X-Agent", variable: "", set: true, bound_by: "github" },
       { ...value, key: "X-Region", variable: "MCP_LINEAR_X_REGION", set: false, bound_by: null },
@@ -110,6 +118,7 @@ test("the connection names the address and the headers to an administrator alone
   expect(screen.getByText("Set in the configuration")).toBeDefined();
   expect(screen.getByText("Each agent's own, from github")).toBeDefined();
   expect(screen.getByRole("button", { name: "Replace Authorization" })).toBeDefined();
+  expect(screen.getByText("by jane.doe")).toBeDefined();
   expect(screen.getByRole("button", { name: "Set X-Region" })).toBeDefined();
   expect(screen.queryByRole("button", { name: /X-Agent/ })).toBeNull();
   expect(screen.getByText("120 s (the default)")).toBeDefined();
