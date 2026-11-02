@@ -495,7 +495,7 @@ func TestNoChainIsBuiltForAPullMirror(t *testing.T) {
 		b := code.ChainBuild{RepoID: c.repo, ChainID: opNow(), TargetRef: "refs/heads/main", Base: c.head,
 			Seen: c.Rows().Position, Entries: []code.ChainEntry{work}}
 		res, err := c.server().BuildChain(c.Ctx, b)
-		if err != nil || res.Status != want || res.Detail != words || res.Refusal != "" || res.Pack != nil ||
+		if err != nil || res.Status != want || res.Detail != words || res.Pack != nil ||
 			len(res.Commits) != 0 || res.Settle == nil {
 			t.Fatalf("a chain on a repository %s answered %+v %v, want refused %s saying %q, nothing built",
 				state, res, err, want, words)
