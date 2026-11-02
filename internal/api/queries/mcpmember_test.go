@@ -183,6 +183,9 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 				{Node: "node-b", Reason: "reason-sentinel: no answer within 2s"}},
 		}},
 	}
+	// AND THE HISTORY the detail reads its usage and recent calls from, which
+	// a member's reading leaves out whole.
+	s, _ = withHistory(t, s)
 	r := queries.NewRegistry()
 	queries.Register(r, s)
 	// read is what ctx's principal is answered: the list, and each server's

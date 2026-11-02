@@ -552,7 +552,8 @@ no command, arguments or address; no failure's or wait's sentence, which can
 quote what a server said or name the variables an instance waits for; not the
 headers or variables a seat's credential goes in, nor the seats whose boxes
 are given the server; not the server's instructions or what removing it would
-take with it; and no community registry or search. An administrator, whoever
+take with it; not how its tools were used (`usage` and `calls`, which name seats, turns
+and outcomes); and no community registry or search. An administrator, whoever
 `config.read` admits, reads all of it (`reading: "admin"`), and every change
 is theirs. A member's answer is built from types of its own, copied field by
 field, so a field added to the administrator's answer reaches no member until
