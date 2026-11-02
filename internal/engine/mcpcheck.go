@@ -511,7 +511,7 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 	case openErr != nil:
 		report = mcp.Unstarted(mcp.Spec{Name: ask.Server},
 			"this node could not open the value under test: "+openErr.Error())
-	case ask.Seat == uuid.Nil && ask.Draft == nil && server.OAuth != nil:
+	case ask.Seat == uuid.Nil && ask.Draft == nil && server.PersonSignIn():
 		// A SAVED SERVER SIGNED IN TO WITH OAUTH is tested under its grant,
 		// as it runs, a value under test included. A draft never is,
 		// whatever its name: the grant's token goes to the address it was
@@ -580,9 +580,10 @@ func testedEntry(c *Company, ask mcpCheckAsk) *config.MCPServer {
 // values a start of it would be given: the same resolution
 // ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
 // and the same launch ([mcp.Test]); with tried, the key reads the value.
-// bearer is the grant's token source of a saved server signed in to with
-// OAuth, nil for any other, and is sent only where the test dials the origin
-// the saved server is dialled at.
+// bearer is the grant's token source of a saved server a person signed in to
+// with OAuth, nil for any other, and is sent only where the test dials the
+// origin the saved server is dialled at. A service identity signs in for the
+// test itself.
 func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
 	env *config.Resolver, mint *seatMint, tried *MCPValueTry, bearer mcp.BearerSource) mcp.TestReport {
 
@@ -614,16 +615,34 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	if bearer != nil && mcp.SameOrigin(values.url, e.resolver().Value(server.URL)) {
 		spec.Bearer = bearer
 	}
+	// A SERVICE IDENTITY SIGNS IN FOR ITS TEST, saved or a draft, with what
+	// the test resolves, a value under test included: its own client, for
+	// the address under test, so no token goes anywhere it was not issued
+	// for. A source of its own, which asks the vendor now rather than
+	// answering with a token this node already holds, and holds nothing the
+	// running server reads.
+	if server.OAuth.ServiceIdentity() {
+		spec.Bearer = &oauthSource{engine: e, server: instance, service: e.newServiceIdentity(server, env)}
+	}
 	ctx, cancel := context.WithTimeout(ctx, mcpCheckBudget(server))
 	defer cancel()
 	return mcp.Test(ctx, spec, nil)
 }
 
-// withTried points tried's key at its variable in copies: the seat's block
-// for a seat's test, the server's own map otherwise.
+// withTried points tried's key at its variable in copies: the OAuth client's
+// secret for [config.MCPValueClientSecret], the seat's block for a seat's test,
+// the server's own map otherwise.
 func withTried(server *config.MCPServer, block map[string]string, forSeat bool,
 	tried *MCPValueTry) (*config.MCPServer, map[string]string) {
 
+	// THE OAUTH CLIENT'S SECRET is the server's own, whichever seat asks,
+	// and is sent to its authorization server alone.
+	if tried.Key == config.MCPValueClientSecret && server.OAuth != nil {
+		copied, signIn := *server, *server.OAuth
+		signIn.ClientSecret = "${" + tried.Variable + "}"
+		copied.OAuth = &signIn
+		return &copied, block
+	}
 	point := func(values map[string]string) map[string]string {
 		out := make(map[string]string, len(values)+1)
 		for key, value := range values {
