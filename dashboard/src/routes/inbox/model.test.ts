@@ -24,6 +24,7 @@ import {
   inboxSelection,
   inboxRows,
   nextAfter,
+  noticeFloor,
   noticeNote,
   noticeRows,
   noticeTitle,
@@ -445,6 +446,28 @@ describe("mark all read", () => {
         codeNotice("y", { log_generation: 1, log_seq: 2 }),
       ]),
     ).toEqual({ tracker: "CREWLET_TRACKER_LOG@1:90", code: "CREWLET_CODE_LOG@1:4" });
+  });
+});
+
+// A MARK'S FLOOR IS THE FURTHEST NOTICE IT NAMES, so the deciding node waits
+// for every one of them. Mutation: take the first notice named rather than the
+// furthest — the generation-two notice is waited for at generation one, red.
+describe("a mark's floor", () => {
+  test("is the furthest of the notices it names, by generation then sequence", () => {
+    expect(
+      noticeFloor([
+        notice("a", { log_generation: 1, log_seq: 90 }),
+        notice("b", { log_generation: 2, log_seq: 3 }),
+        notice("c", { log_generation: 1, log_seq: 95 }),
+      ]),
+    ).toBe("CREWLET_TRACKER_LOG@2:3");
+    expect(noticeFloor([notice("a", { log_generation: 1, log_seq: 7 })])).toBe(
+      "CREWLET_TRACKER_LOG@1:7",
+    );
+  });
+
+  test("is none for no notices, which waits for nothing", () => {
+    expect(noticeFloor([])).toBeUndefined();
   });
 });
 

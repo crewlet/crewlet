@@ -78,7 +78,7 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	// nothing and the comparison below is the whole of the refusal.
 	for name, write := range map[string]func() error{
 		"the inbox": func() error {
-			_, err := bob.MarkInbox(t.Context(), "op-inbox", "ana",
+			_, err := bob.MarkInbox(t.Context(), "op-inbox", "ana", statelog.Position{},
 				inbox.Gesture[worklet.Reason]{Read: []string{notices[0].RecordID}}, worklet.PersonAuthority{})
 			return err
 		},
@@ -124,7 +124,7 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	r.drain()
 
 	// AND HER OWN WRITES LAND, or the guard would be refusing everything.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-own-inbox", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-own-inbox", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{notices[0].RecordID}}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("ana's own inbox write: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{notices[0].RecordID}}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 	n := noticesFor(t, r, "ana", 4)
 	later := wednesday.Add(24 * time.Hour)
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-setup", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-setup", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		ReadThrough: positionOf(n[0]),
 		Snooze:      []inbox.Snooze{{RecordID: n[2].RecordID, Until: later}},
 		Read:        []string{n[3].RecordID},
@@ -253,7 +253,7 @@ func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 	r.drain()
 	before := r.person("ana")
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-done", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-done", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{n[1].RecordID}}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("mark one read: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAConcurrentSnoozeAndReadBothLand(t *testing.T) {
 	n := noticesFor(t, r, "ana", 2)
 	later := wednesday.Add(24 * time.Hour)
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-snooze", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-snooze", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: later}},
 	}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("snooze from one tab: %v", err)
@@ -297,7 +297,7 @@ func TestAConcurrentSnoozeAndReadBothLand(t *testing.T) {
 	// NOT DRAINED: the snooze is on the log and not in the rows, which is
 	// the state a second tab's gesture meets.
 	r.applyWhileWriting()
-	if _, err := r.writer.MarkInbox(t.Context(), "op-read", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-read", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Read: []string{n[1].RecordID},
 	}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("read from another tab: %v", err)
@@ -327,7 +327,7 @@ func TestReadThroughNeverMovesBackwards(t *testing.T) {
 
 	mark := func(op string, at *statelog.Position) {
 		t.Helper()
-		if _, err := r.writer.MarkInbox(t.Context(), op, "ana",
+		if _, err := r.writer.MarkInbox(t.Context(), op, "ana", statelog.Position{},
 			inbox.Gesture[worklet.Reason]{ReadThrough: at}, worklet.PersonAuthority{}); err != nil {
 			t.Fatalf("read through %s: %v", at, err)
 		}
@@ -363,7 +363,7 @@ func TestAGestureLongerThanAListIsRefusedInboxFull(t *testing.T) {
 	for i := range inbox.MaxEntries + 1 {
 		ids = append(ids, "r-"+itoa(i))
 	}
-	_, err := r.writer.MarkInbox(t.Context(), "op-full", "ana",
+	_, err := r.writer.MarkInbox(t.Context(), "op-full", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: ids}, worklet.PersonAuthority{})
 	if !errors.Is(err, inbox.ErrFull) {
 		t.Fatalf("a gesture naming %d notices answered %v, want inbox.ErrFull",
@@ -412,7 +412,7 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 	n := allNoticesFor(t, r, "ana", inbox.MaxEntries+2)
 	mark := func(op string, g inbox.Gesture[worklet.Reason]) error {
 		t.Helper()
-		_, err := r.writer.MarkInbox(t.Context(), op, "ana", g, worklet.PersonAuthority{})
+		_, err := r.writer.MarkInbox(t.Context(), op, "ana", statelog.Position{}, g, worklet.PersonAuthority{})
 		r.drain()
 		return err
 	}
@@ -571,12 +571,12 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 	r := newRoundTrip(t)
 	n := noticesFor(t, r, "ana", 2)
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-all", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-all", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{ReadThrough: positionOf(n[1])}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.MarkInbox(t.Context(), "op-unread", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-unread", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Unread: []string{n[0].RecordID}}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("mark one unread: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 
 	// Moving the position to the same place is not moving it: nothing to
 	// publish, and the mark stands.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-all-again", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-all-again", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{ReadThrough: positionOf(n[1])}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read again: %v", err)
 	}
@@ -599,7 +599,7 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 	routeAs(t, r, r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{}),
 		"t-ana-next", "ENG-9", "ana")
 	newest := r.inbox(worklet.InboxQuery{Handle: "ana"}).Notices[0]
-	if _, err := r.writer.MarkInbox(t.Context(), "op-all-3", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-all-3", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{ReadThrough: positionOf(newest)}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read past it: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 func TestAMarkNamingNoRecordIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	_, err := r.writer.MarkInbox(t.Context(), "op-nothing", "ana",
+	_, err := r.writer.MarkInbox(t.Context(), "op-nothing", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{"no-such-record"}}, worklet.PersonAuthority{})
 	if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), "no-such-record") {
 		t.Fatalf("a mark naming no record answered %v", err)
@@ -626,20 +626,20 @@ func TestAMarkNamingNoRecordIsRefused(t *testing.T) {
 
 	n := noticesFor(t, r, "ana", 1)
 	// ONE ID IN TWO LISTS is a contradiction nothing could order.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-both", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-both", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Read: []string{n[0].RecordID}, Unread: []string{n[0].RecordID},
 	}, worklet.PersonAuthority{}); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("one notice both read and unread answered %v", err)
 	}
 	// AND A READ-THROUGH ON ANOTHER STREAM is refused: an inbox is read
 	// through the stream its notices are on.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-dead", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-dead", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		ReadThrough: &statelog.Position{Stream: "CREWLET_SOMETHING_ELSE", Seq: 4},
 	}, worklet.PersonAuthority{}); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("a read-through on another stream answered %v", err)
 	}
 	// AND A GESTURE THAT SAYS NOTHING is refused rather than published.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-empty", "ana",
+	if _, err := r.writer.MarkInbox(t.Context(), "op-empty", "ana", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{}, worklet.PersonAuthority{}); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("an empty gesture answered %v", err)
 	}
@@ -656,7 +656,7 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	n := noticesFor(t, r, "ana", 1)
 
 	future := wednesday.Add(time.Hour)
-	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: future}},
 	}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
@@ -750,7 +750,7 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 
 	n := noticesFor(t, r, "ana", 1)
 	// A SNOOZE PAST THE HORIZON is a delete that does not say so.
-	_, err = r.writer.MarkInbox(t.Context(), "op-far", "ana", inbox.Gesture[worklet.Reason]{
+	_, err = r.writer.MarkInbox(t.Context(), "op-far", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID,
 			Until: wednesday.Add(inbox.MaxSnoozeAhead + 24*time.Hour)}},
 	}, worklet.PersonAuthority{})
@@ -758,14 +758,14 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 		t.Fatalf("a snooze past the horizon was accepted: %v", err)
 	}
 	// AND ONE ALREADY DUE is not a snooze at all.
-	_, err = r.writer.MarkInbox(t.Context(), "op-past", "ana", inbox.Gesture[worklet.Reason]{
+	_, err = r.writer.MarkInbox(t.Context(), "op-past", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(-time.Hour)}},
 	}, worklet.PersonAuthority{})
 	if !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("a snooze into the past answered %v", err)
 	}
 	// AND ONE INSIDE IT LANDS, or the guard would refuse every snooze.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-near", "ana", inbox.Gesture[worklet.Reason]{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-near", "ana", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(24 * time.Hour)}},
 	}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("an ordinary snooze was refused: %v", err)
@@ -823,7 +823,7 @@ func TestAPersonsOwnGesturesLandOnTheirSeatsRecord(t *testing.T) {
 		t.Fatalf("WritePins: %v", err)
 	}
 	r.drain()
-	if _, err := person.MarkInbox(t.Context(), "op-read", "jane-founder",
+	if _, err := person.MarkInbox(t.Context(), "op-read", "jane-founder", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{notices[0].RecordID}},
 		worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
@@ -862,7 +862,7 @@ func TestAPersonStillWritesNobodyElsesRecord(t *testing.T) {
 	})
 	for name, write := range map[string]func(handle string) error{
 		"the inbox": func(handle string) error {
-			_, err := person.MarkInbox(t.Context(), "op-inbox-"+handle, handle,
+			_, err := person.MarkInbox(t.Context(), "op-inbox-"+handle, handle, statelog.Position{},
 				inbox.Gesture[worklet.Reason]{PrimaryReasons: &[]worklet.Reason{worklet.ReasonMention}},
 				worklet.PersonAuthority{})
 			return err

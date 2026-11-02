@@ -123,8 +123,8 @@ type TrackerWriter interface {
 		prior worklet.ViewPrior) (worklet.WriteResult, error)
 	WriteTypes(ctx context.Context, opID string, types []worklet.TaskType) (worklet.WriteResult, error)
 	WriteFields(ctx context.Context, opID string, fields []worklet.FieldDef) (worklet.WriteResult, error)
-	MarkInbox(ctx context.Context, opID, handle string, gesture inbox.Gesture[worklet.Reason],
-		authority worklet.PersonAuthority) (worklet.WriteResult, error)
+	MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
+		gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string, gesture worklet.PinGesture,
 		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
@@ -1323,22 +1323,30 @@ var opWriteFields = define("tracker.write_fields", opIdempotentWrite, trackerDom
 	})
 
 type markInboxArgs struct {
-	OpID      string
-	Handle    string
+	OpID   string
+	Handle string
+	// Seen is how far the asker read the Worklet's log, which the decide
+	// on whichever holder answers waits for ([worklet.Writer.MarkInbox]).
+	// ADDITIVE ON THE WIRE: an older peer decodes past it and decides as it
+	// always did, and an older sender's request carries the zero position,
+	// which waits for nothing.
+	Seen      statelog.Position
 	Gesture   inbox.Gesture[worklet.Reason]
 	Authority worklet.PersonAuthority
 }
 
 // A GESTURE, never the lists: the tracker resolves it against the record its
 // own decide reads, so a caller never sends back a list it read in another
-// transaction — on whichever holder answers.
+// transaction — on whichever holder answers. And the CALLER'S FLOOR rides with
+// it rather than in this node's session: it is how far one person's page read
+// the log, a claim this request alone is held to.
 var opMarkInbox = define("tracker.mark_inbox", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a markInboxArgs) (worklet.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
 			return worklet.WriteResult{}, err
 		}
-		return w.MarkInbox(ctx, a.OpID, a.Handle, a.Gesture, a.Authority)
+		return w.MarkInbox(ctx, a.OpID, a.Handle, a.Seen, a.Gesture, a.Authority)
 	})
 
 type writePinsArgs struct {

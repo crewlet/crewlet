@@ -147,7 +147,7 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	seen, bad := codeMarkFloor(args)
+	seen, bad := markFloor(args, topics.CodeLogStream, "code log", "code")
 	if bad != "" {
 		return failed(bad), nil
 	}
@@ -179,12 +179,15 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return answer, nil
 }
 
-// codeMarkFloor is the `seen` argument as a position on the code log, the
-// zero position where the call names none, or why it is not one. A position on
-// another log is refused here rather than waited for: a coordinate on the
-// Worklet's log says nothing of how far the code log was read, and the writer
-// would refuse it anyway (code.MarkWrite.Validate).
-func codeMarkFloor(args map[string]any) (statelog.Position, string) {
+// markFloor is a mark's `seen` argument as a position on stream — the log of
+// the domain whose notices the mark names, called logName in a refusal, whose
+// notices are kind's — the zero position where the call names none, or why it
+// is not one. ONE PARSER FOR BOTH INBOX TOOLS (mark_inbox and code_mark_inbox),
+// since the floor is the same claim over either log. A position on another
+// log is refused here rather than waited for: a coordinate on one domain's log
+// says nothing of how far another's was read, and each writer would refuse it
+// anyway (code.MarkWrite.Validate, worklet.Writer.MarkInbox).
+func markFloor(args map[string]any, stream, logName, kind string) (statelog.Position, string) {
 	raw := strings.TrimSpace(argString(args, "seen"))
 	if raw == "" {
 		return statelog.Position{}, ""
@@ -193,9 +196,9 @@ func codeMarkFloor(args map[string]any) (statelog.Position, string) {
 	if err != nil {
 		return statelog.Position{}, "seen: " + err.Error()
 	}
-	if at.Stream != topics.CodeLogStream {
-		return statelog.Position{}, fmt.Sprintf("seen: %s is a position on another log than the code log "+
-			"(%s) — pass the `position` of a code notice", raw, topics.CodeLogStream)
+	if at.Stream != stream {
+		return statelog.Position{}, fmt.Sprintf("seen: %s is a position on another log than the %s "+
+			"(%s) — pass the `position` of a %s notice", raw, logName, stream, kind)
 	}
 	return at, ""
 }

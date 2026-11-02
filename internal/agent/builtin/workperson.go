@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -62,7 +63,7 @@ import (
 // its own — an agent never re-orders a colleague's queue — and refuses a write
 // nobody admitted.
 type PersonWriter interface {
-	MarkInbox(ctx context.Context, opID, handle string,
+	MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
 		gesture inbox.Gesture[worklet.Reason],
 		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
@@ -383,7 +384,11 @@ func (t *markInbox) Description() string {
 		"everything up to a log position — pass the newest notice you have " +
 		"seen, as `<stream>@<generation>:<sequence>` — and never moves your " +
 		"position backwards. Only what you name changes: every other mark, " +
-		"snooze and your read position stay exactly as they are."
+		"snooze and your read position stay exactly as they are. Pass `seen`, " +
+		"the newest tracker-log position you read (a notice's own `position`), " +
+		"so the mark waits for the notices you were shown rather than being " +
+		"refused by a node not yet at them. Your code notices are marked with " +
+		"code_mark_inbox: each domain keeps its own marks."
 }
 
 func (t *markInbox) Parameters() map[string]any {
@@ -424,6 +429,16 @@ func (t *markInbox) Parameters() map[string]any {
 					"A position at or behind the one you have read to " +
 					"changes nothing.",
 			},
+			"seen": map[string]any{
+				"type": "string",
+				"description": "How far you have read the tracker's log, " +
+					"`<stream>@<generation>:<sequence>` — the `position` " +
+					"of the newest work notice you were shown, or the " +
+					"tracker source's `newest`. The mark is decided once " +
+					"its node has applied it, so a notice you were shown " +
+					"is never refused as unknown because the node asked " +
+					"had not reached it yet. Omit it to wait for nothing.",
+			},
 			"primary_reasons": map[string]any{
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
@@ -463,8 +478,12 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 	if bad != "" {
 		return failed(bad)
 	}
+	seen, bad := markFloor(args, topics.TrackerLogStream, "tracker's log", "work")
+	if bad != "" {
+		return failed(bad)
+	}
 	opID := opIDFor(actor, worklet.MarkInboxTool, "inbox", handle, args)
-	result, err := writer.MarkInbox(ctx, opID, handle, gesture, authority)
+	result, err := writer.MarkInbox(ctx, opID, handle, seen, gesture, authority)
 	if err != nil {
 		return writeFailure(ctx, actor, worklet.MarkInboxTool, err)
 	}

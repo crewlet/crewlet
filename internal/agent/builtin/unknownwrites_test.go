@@ -101,7 +101,7 @@ func (u *unknownWriter) WritePins(_ context.Context, opID, _ string,
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
+func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string, _ statelog.Position,
 	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
