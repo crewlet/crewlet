@@ -501,7 +501,9 @@ reads (`GET /mcp-servers/{name}`, everybody's in
   applied, how many instances list it, and a digest of the server's own
   definition. The server's identity and instructions from its handshake ride
   beside them. Each tool's input and output schemas are stored once under that
-  digest, however many nodes and seats list the tool.
+  digest, however many nodes and seats list the tool. A tool the server's entry
+  [blocks](#blocking-a-servers-tools) is listed too, marked blocked, so its page
+  shows it, and it stays out of the catalogue: no agent is offered it.
 - **The digest is the server's definition.** It covers the name the server uses,
   the title, the description, both schemas and the hints the server declared,
   and nothing of yours: changing a `tool_prefix` or an override never reads as
@@ -720,6 +722,67 @@ grant as written, and every node reports it as a warning on each apply. A
 server's page answers who it reaches and why on its detail
 ([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname),
 `reaches`, for an administrator).
+
+### Blocking a server's tools
+
+Each tool a server lists runs at a level, set by `tools` on its `mcp_servers`
+entry:
+
+```yaml
+mcp_servers:
+  - name: tracker
+    transport: http
+    url: https://mcp.example.com/mcp
+    headers: {Authorization: "Bearer ${TRACKER_MCP_TOKEN}"}
+    tool_prefix: tr_
+    tools:
+      levels:
+        delete_project: blocked      # the server's own name, before tool_prefix
+        merge_projects: blocked
+  - name: billing
+    command: billing-mcp
+    tools:
+      default: blocked               # every tool levels does not name
+      levels:
+        list_invoices: allow
+        get_invoice: allow
+```
+
+- **`allow` offers the tool; `blocked` never does.** A blocked tool is never
+  filed: it is in no seat's surface, so no agent is offered it, lists it or can
+  call it, whether the call comes from a phase on the engine host (through
+  `crewlet mcp-relay` and the tool loop) or from an executor's box (through the
+  bridge), on a shared server and on every seat's child of a per-agent one.
+  The discovery tools do not list it either.
+- **`levels` names a tool by the server's own name for it**, the one its
+  listing gives before `tool_prefix`: `delete_project`, not
+  `tr_delete_project`. A name the server does not list blocks nothing; the
+  server's detail names every such level (`unlisted_levels`), and so does the
+  answer to a write of the levels (`unlisted`).
+- **`default` is the level of every tool `levels` does not name**, including a
+  tool the server adds later. Unset, it is `allow`, so a server with no `tools`
+  offers every tool it lists.
+- **A blocked tool is still shown to an administrator.** The server's detail
+  ([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname))
+  lists every tool with the `level` it runs at and whether `tools.levels` names
+  it (`custom`), and `baseline` is the default, so a tool blocked from the page
+  can be let through again from it. The `tools` push every reader shares lists
+  only the tools an agent can be offered.
+- **An executor box reaches a server whole.** A server a role's
+  `sandbox.mcp.servers` lists is dialled by the harness inside the box itself,
+  past the engine, so a level could not hold there. So a box listing is
+  refused for a server with any tool at a level other than `allow`, and a level
+  written on a server a box lists is refused at that box's entry; the seat still
+  reaches the server's allowed tools over the bridge. A stored revision that
+  breaks the rule runs, its boxes given no such server, and warns.
+- **A change of level restarts the server's instances**, as a change to its
+  `tool_prefix` or `tool_annotations` does: a server's tools are filed when the
+  engine starts it.
+
+The server's Tools tab writes the levels with
+[`PUT /mcp-servers/{name}/tools`](../reference/api-endpoints.md#put-mcp-serversnametools),
+a change of the named tools only, at an administrator's recent step-up, as one
+revision of the company document.
 
 ### Turning a server off
 
@@ -1890,7 +1953,7 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This and a server's `tools` levels ([Blocking a server's tools](#blocking-a-servers-tools)) are the *only* places tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
 
 ---
 

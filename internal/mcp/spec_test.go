@@ -72,13 +72,13 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	base := Spec{
 		Name: "github", Transport: TransportHTTP,
 		URL: "https://api.example/mcp", Headers: map[string]string{"Authorization": "Bearer a"},
-		ToolPrefix: "gh_", ExcludeTools: []string{"noisy"},
+		ToolPrefix: "gh_", Levels: Levels{Tools: map[string]Level{"noisy": LevelBlocked}},
 		AnnotationOverrides: map[string]Annotations{"gh_create_pr": {ReadOnly: No}},
 	}
 
 	same := base
 	same.Headers = map[string]string{"Authorization": "Bearer a"}
-	same.ExcludeTools = []string{"noisy"}
+	same.Levels = Levels{Default: LevelAllow, Tools: map[string]Level{"noisy": LevelBlocked}}
 	same.AnnotationOverrides = map[string]Annotations{"gh_create_pr": {ReadOnly: No}}
 	if !base.SameProcess(same) || !base.SameCatalogue(same) {
 		t.Fatal("an identically-valued copy compared as different")
@@ -115,10 +115,15 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 	if !reprefixed.SameProcess(base) || base.SameCatalogue(reprefixed) {
 		t.Fatal("a prefix renames every tool without touching the child")
 	}
-	reexcluded := same
-	reexcluded.ExcludeTools = nil
-	if !reexcluded.SameProcess(base) || base.SameCatalogue(reexcluded) {
-		t.Fatal("an exclusion list changes the catalogue, not the child")
+	reblocked := same
+	reblocked.Levels = Levels{}
+	if !reblocked.SameProcess(base) || base.SameCatalogue(reblocked) {
+		t.Fatal("a tool's level changes the catalogue, not the child")
+	}
+	blockedByDefault := same
+	blockedByDefault.Levels = Levels{Default: LevelBlocked, Tools: map[string]Level{"noisy": LevelBlocked}}
+	if !blockedByDefault.SameProcess(base) || base.SameCatalogue(blockedByDefault) {
+		t.Fatal("a default level changes the catalogue, not the child")
 	}
 }
 

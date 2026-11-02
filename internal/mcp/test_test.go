@@ -174,7 +174,7 @@ func TestALocalServerThatExitsIsReportedInItsOwnWords(t *testing.T) {
 // A SERVER THAT WORKS IS WALKED THROUGH EVERY STAGE, each timed, the ones its
 // address has no need of skipped, and its tools as the engine would offer
 // them: the prefix applied, an operator's override over the server's hints,
-// the ones excluded left out, and a name no model can be handed refused.
+// the ones blocked left out, and a name no model can be handed refused.
 func TestAServerThatWorksPassesEveryStageItNeeds(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 60)
@@ -184,7 +184,7 @@ func TestAServerThatWorksPassesEveryStageItNeeds(t *testing.T) {
 		`{"name":"`+long+`","inputSchema":{"type":"object"}}]`)
 	spec := httpSpec("remote", srv.URL)
 	spec.ToolPrefix = "acme_"
-	spec.ExcludeTools = []string{"hidden"}
+	spec.Levels = Levels{Tools: map[string]Level{"hidden": LevelBlocked, "search": LevelAllow}}
 	spec.AnnotationOverrides = map[string]Annotations{"acme_drop": {Destructive: No}}
 	report := Test(t.Context(), spec, discardLogger())
 	if report.Failure != nil {
@@ -205,7 +205,7 @@ func TestAServerThatWorksPassesEveryStageItNeeds(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	if !slices.Equal(names, []string{"acme_search", "acme_drop", "acme_" + long}) {
-		t.Fatalf("tools = %v, want the prefixed listing without the excluded one", names)
+		t.Fatalf("tools = %v, want the prefixed listing without the blocked one", names)
 	}
 	if report.Tools[1].Annotations.Destructive != No || report.Tools[0].Annotations.ReadOnly != Yes {
 		t.Errorf("hints = %+v, want the server's with the override over them", report.Tools[:2])

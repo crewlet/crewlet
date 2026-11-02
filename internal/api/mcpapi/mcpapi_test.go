@@ -337,8 +337,9 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatalf("an admin read %d %v", code, body)
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
-		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
-		"last_failure", "resolved", "usage", "calls", "last_check", "values", "reaches")
+		"baseline", "unlisted_levels", "server_info", "instructions", "dependants", "instances",
+		"instance_nodes", "last_success", "last_failure", "resolved", "usage", "calls", "last_check", "values",
+		"reaches")
 	instance := body["instances"].([]any)[0].(map[string]any)
 	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
 		"wait", "last_failure", "last_answer")
@@ -360,7 +361,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	tool := body["tools"].([]any)[0].(map[string]any)
 	holdKeys(t, "a tool", tool, "name", "raw", "title", "description", "annotations", "risk",
 		"risk_declared", "external", "digest", "definitions", "instances", "nodes", "input_schema",
-		"output_schema")
+		"output_schema", "level", "custom")
 	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
 		t.Errorf("the tool answered %v", tool)
 	}

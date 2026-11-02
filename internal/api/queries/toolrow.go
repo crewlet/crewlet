@@ -140,6 +140,10 @@ func CatalogueRow(entry tools.Entry, delivers string) ToolRow {
 // calls, and a listed tool under it is not offered. And a name is listed once,
 // by the first listing naming it, the listings being ordered by server as a
 // bridge orders its winners.
+//
+// NEVER A BLOCKED TOOL ([coord.MCPListedTool.Blocked]): the catalogue is what
+// the agents are offered, and a blocked tool is offered to none. Its name is
+// left free, as no instance filed it.
 func ListedRows(taken []ToolRow, listings []coord.MCPListing,
 	schemas map[string]coord.MCPToolSchema) []ToolRow {
 
@@ -150,7 +154,7 @@ func ListedRows(taken []ToolRow, listings []coord.MCPListing,
 	var out []ToolRow
 	for _, l := range listings {
 		for _, t := range l.Tools {
-			if _, ok := held[t.Name]; ok {
+			if _, ok := held[t.Name]; ok || t.Blocked {
 				continue
 			}
 			held[t.Name] = struct{}{}

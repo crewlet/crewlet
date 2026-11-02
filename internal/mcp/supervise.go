@@ -192,6 +192,10 @@ type server struct {
 	// their name ([Bridge.RefusedTools]), set with tools from the same
 	// listing and guarded by the same mu.
 	refused []RefusedTool
+	// blocked are the tools that listing named and the entry blocks
+	// ([Bridge.BlockedTools]): definitions, never filed. Set with tools from
+	// the same listing and guarded by the same mu.
+	blocked []*Definition
 
 	// answered is when the server last answered, in Unix nanoseconds: a
 	// start that listed its tools, or a tool call that came back. ATOMIC,

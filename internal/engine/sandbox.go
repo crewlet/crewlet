@@ -1852,7 +1852,11 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // seat is not granted ([config.MCPServer.Grants]): a box reaches a server's
 // tools as surely as the seat's surface does, so it is held to the one grant
 // the surface is. Nor one whose address, resolved, is one the engine would not
-// dial its own child of the server at ([config.MCPAddressProblem]).
+// dial its own child of the server at ([config.MCPAddressProblem]). Nor one
+// any tool of which is held back from the agents
+// ([config.MCPToolPolicy.AllowsEveryTool]): the harness in the box dials the
+// server itself, past the engine, so it would reach every tool the server
+// lists, and the seat reaches the allowed ones over the bridge anyway.
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1924,6 +1928,17 @@ func sandboxMCP(
 				"detail", "the executor is not given this server: it is not granted to "+
 					"this seat (mcp_servers[].access, or the integration lane for a server "+
 					"reading each agent's own credential)")
+			continue
+		}
+		if !server.Tools.AllowsEveryTool() {
+			// OUT OF THE SCOPE, as one not granted is: a box reaches a
+			// server whole, so a level that holds a tool back could not
+			// hold there. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_levelled", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server in its box: some of its "+
+					"tools are held back from the agents (mcp_servers[].tools), and a box "+
+					"reaches a server whole; the seat reaches its allowed tools over the bridge")
 			continue
 		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)

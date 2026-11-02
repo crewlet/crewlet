@@ -251,6 +251,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		// A STORED VALUE IS A CREDENTIAL, never the assistant's: its
 		// pointer's config.write is asked in the handler (values.go).
 		"PUT /mcp-servers/{name}/values/{key}": authz.ActionSecretWrite,
+		// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as any write of
+		// it: checked on dry_run and summarised (tools.go).
+		"PUT /mcp-servers/{name}/tools": authz.ActionConfigWrite,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {
@@ -266,6 +269,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		if got := mux.policies[pattern]; got.Effect != effect {
 			t.Errorf("%s declares effect %q, want %q", pattern, got.Effect, effect)
 		}
+	}
+	if tools := mux.policies["PUT /mcp-servers/{name}/tools"]; !tools.DryRun || !tools.Summary {
+		t.Errorf("PUT /mcp-servers/{name}/tools declares %+v, want a dry run and a summary", tools)
 	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))

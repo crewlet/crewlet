@@ -173,6 +173,11 @@ type MCPServer struct {
 	// over what the server said.
 	ToolAnnotations map[string]ToolAnnotations `yaml:"tool_annotations,omitempty" json:"tool_annotations,omitempty" desc:"Per-tool behavioural-hint overrides, keyed by bare tool name."`
 
+	// Tools sets the level each of the server's tools runs at
+	// ([MCPToolPolicy]): a tool at `blocked` is never offered to an agent.
+	// Absent, every tool the server lists is offered.
+	Tools MCPToolPolicy `yaml:"tools,omitempty" json:"tools,omitzero" desc:"The level each tool runs at: default for every tool, levels for one tool by the server's own name. allow offers it; blocked never offers it to an agent. Absent = every tool allowed."`
+
 	// StartupTimeoutSeconds bounds launching the process (or opening the
 	// session) and the handshake, and separately the first tool listing, so
 	// a start can take up to twice it before the server is given up on.
@@ -335,6 +340,7 @@ func (m *MCPServer) validate(path Path) error {
 	}
 
 	m.validateSeatCredentials(&p, at(path, "seat_credentials"))
+	m.Tools.validate(&p, at(path, "tools"))
 
 	// NO NUMBER IN EITHER MESSAGE. The defaults are the MCP client's
 	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where

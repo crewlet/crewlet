@@ -36,9 +36,9 @@ import (
 // file inside a package can never read one outside it.
 const (
 	toolServerModeEnv = engine.ToolServerModeEnv
-	// toolServerToolEnv names the single tool this server publishes, with
-	// launchToken in it replaced by the launch's number, so a server can
-	// list a different tool after a restart.
+	// toolServerToolEnv names the tools this server publishes,
+	// comma-separated, with launchToken in each replaced by the launch's
+	// number, so a server can list a different tool after a restart.
 	toolServerToolEnv = engine.ToolServerToolEnv
 	// toolServerEchoEnv names an environment variable whose value is
 	// reported back in the tool's description.
@@ -227,9 +227,12 @@ func answerRPC(line string) bool {
 		if key := os.Getenv(toolServerEchoEnv); key != "" {
 			desc = key + "=" + os.Getenv(key)
 		}
-		reply(req.ID, fmt.Sprintf(
-			`{"tools":[{"name":%q,"description":%q,"inputSchema":{"type":"object"}}]}`,
-			name, desc), "")
+		listed := make([]string, 0, 1)
+		for _, one := range strings.Split(name, ",") {
+			listed = append(listed, fmt.Sprintf(
+				`{"name":%q,"description":%q,"inputSchema":{"type":"object"}}`, one, desc))
+		}
+		reply(req.ID, `{"tools":[`+strings.Join(listed, ",")+`]}`, "")
 	case "tools/call":
 		reply(req.ID, `{"content":[{"type":"text","text":"ok"}]}`, "")
 		return true

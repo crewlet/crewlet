@@ -105,6 +105,7 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 		"McpStepState":            stringsOf(mcp.StepStates),
 		"McpValueAs":              stringsOf(config.MCPValueAses),
 		"McpReachReason":          stringsOf(config.MCPReachReasons()),
+		"McpToolLevel":            stringsOf(config.MCPToolLevels),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)
 		if err != nil {

@@ -27,10 +27,14 @@ const (
 	MCPServerProbe MCPServerAction = "probe"
 	// MCPServerStoreValue stores a server's header or variable, write-only.
 	MCPServerStoreValue MCPServerAction = "store_value"
+	// MCPServerSetTools sets the levels of a server's tools, or with
+	// [MCPServerActed.DryRun] checks a change to them.
+	MCPServerSetTools MCPServerAction = "set_tools"
 )
 
 // MCPServerActions is every action, for a reader's copy.
-var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue}
+var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue,
+	MCPServerSetTools}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -69,6 +73,9 @@ type MCPServerActed struct {
 	// Key and Variable name a stored value's key and secret, never the value.
 	Key      string `json:"key,omitempty"`
 	Variable string `json:"variable,omitempty"`
+	// DryRun is a change to the server's tool levels checked and not
+	// written; the revision a written one stored names its levels.
+	DryRun bool `json:"dry_run,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
@@ -100,6 +107,11 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		text = "stored " + e.Key + " of MCP server " + e.Server
 		if e.Variable != "" {
 			text += " as " + e.Variable
+		}
+	case MCPServerSetTools:
+		text = "set the tool levels of MCP server " + e.Server
+		if e.DryRun {
+			text = "checked a change to the tool levels of MCP server " + e.Server
 		}
 	default:
 		text = string(e.Action) + " MCP server " + e.Server

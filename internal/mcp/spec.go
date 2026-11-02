@@ -70,10 +70,13 @@ type Spec struct {
 	// keeping two servers' identically-named tools apart in one catalogue.
 	ToolPrefix string
 
-	// ExcludeTools names tools to skip. Matched against the SERVER's own tool
-	// name, before ToolPrefix is applied — an operator excluding a tool has
-	// the server's listing in front of them, not the engine's catalogue.
-	ExcludeTools []string
+	// Levels is the level each tool the server lists runs at ([Levels]): a
+	// tool at [LevelBlocked] is never filed, so no catalogue holds it and
+	// no model is offered, lists or calls it. Matched against the SERVER's
+	// own tool name, before ToolPrefix is applied: an operator setting a
+	// level has the server's listing in front of them, not the engine's
+	// catalogue.
+	Levels Levels
 
 	// AnnotationOverrides are operator-supplied behavioural hints layered over
 	// what the server advertises, for servers that under-annotate.
@@ -178,8 +181,8 @@ func (s Spec) SameProcess(other Spec) bool {
 //
 // This is what a live config diff should branch on, not SameProcess. Three of
 // these fields change nothing about the child and everything about the
-// catalogue — the prefix renames every tool, the exclusions remove some, and
-// the annotation overrides decide whether a sub-agent may call one. A diff
+// catalogue: the prefix renames every tool, the levels block some, and the
+// annotation overrides decide whether a sub-agent may call one. A diff
 // that compares only the process fields gives an operator who adds
 // tool_annotations to a running server no effect at all and no way to tell
 // why: the edit activates, the revision advances, and the guard goes on
@@ -187,6 +190,6 @@ func (s Spec) SameProcess(other Spec) bool {
 func (s Spec) SameCatalogue(other Spec) bool {
 	return s.SameProcess(other) &&
 		s.ToolPrefix == other.ToolPrefix &&
-		slices.Equal(s.ExcludeTools, other.ExcludeTools) &&
+		s.Levels.same(other.Levels) &&
 		maps.Equal(s.AnnotationOverrides, other.AnnotationOverrides)
 }
