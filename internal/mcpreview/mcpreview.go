@@ -101,6 +101,7 @@ const (
 // kinds a reader is shown beside [KindAdded] and [KindRemoved].
 type Part string
 
+// The parts of a definition, each named by the word a change kind reads.
 const (
 	PartTitle       Part = "title"
 	PartDescription Part = "description"

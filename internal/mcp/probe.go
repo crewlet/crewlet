@@ -268,7 +268,7 @@ func (c *probeConn) recordTTL(result json.RawMessage, said json.Number) json.Raw
 		return result
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(result, &fields); err != nil {
+	if err = json.Unmarshal(result, &fields); err != nil {
 		return result
 	}
 	fields["ttlMs"] = json.RawMessage("0")
