@@ -37,22 +37,90 @@ import (
 
 // ---- fixtures ------------------------------------------------------------ //
 
-// statusAsker is the git nodes' status scatter as the health tools see it: one
-// report, and every repository it was asked about.
+// statusAsker is the git nodes' roster and status scatter as the health tools
+// see them, over one fleet: report is every git node's status and its part in
+// the coverage, the roster every node either names — listed in reverse and
+// twice, so a reader that does not sort it reads it wrong — and each question
+// is answered as the engine answers it, by the nodes it asks alone, each with
+// its hot list only where asked, complete where every one answered. It keeps
+// every repository it was asked about, and every question.
 type statusAsker struct {
-	mu     sync.Mutex
-	report builtin.CodeStatusReport
-	err    error
-	asked  []string
+	mu        sync.Mutex
+	report    builtin.CodeStatusReport
+	err       error // CodeStatus's
+	rosterErr error // GitNodes'
+	asked     []string
+	asks      []builtin.CodeStatusAsk
 }
 
 var _ builtin.StatusAsker = (*statusAsker)(nil)
 
-func (s *statusAsker) CodeStatus(_ context.Context, repoID string) (builtin.CodeStatusReport, error) {
+func (s *statusAsker) GitNodes(context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.asked = append(s.asked, repoID)
-	return s.report, s.err
+	if s.rosterErr != nil {
+		return nil, s.rosterErr
+	}
+	var ids []string
+	for _, n := range s.report.Coverage.Nodes {
+		ids = append(ids, n.ID)
+	}
+	for _, st := range s.report.Statuses {
+		ids = append(ids, st.Node)
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	slices.Reverse(ids)
+	return append(ids, ids...), nil
+}
+
+func (s *statusAsker) CodeStatus(_ context.Context, ask builtin.CodeStatusAsk) (builtin.CodeStatusReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, ask.Repo)
+	s.asks = append(s.asks, builtin.CodeStatusAsk{Nodes: slices.Clone(ask.Nodes), Every: ask.Every,
+		Repo: ask.Repo, Hot: ask.Hot})
+	if s.err != nil {
+		return builtin.CodeStatusReport{}, s.err
+	}
+	part := map[string]eventfan.NodeCoverage{}
+	for _, n := range s.report.Coverage.Nodes {
+		part[n.ID] = n
+	}
+	statusOf := map[string]host.CodeStatus{}
+	for _, st := range s.report.Statuses {
+		statusOf[st.Node] = st
+	}
+	out := builtin.CodeStatusReport{Coverage: eventfan.Coverage{Nodes: []eventfan.NodeCoverage{},
+		Complete: true}}
+	for _, id := range ask.Nodes {
+		st, answered := statusOf[id]
+		n, named := part[id]
+		switch {
+		case !named && answered:
+			n = eventfan.NodeCoverage{ID: id, Answered: true}
+		case !named:
+			n = eventfan.NodeCoverage{ID: id, Error: "did not answer"}
+		}
+		out.Coverage.Nodes = append(out.Coverage.Nodes, n)
+		out.Coverage.Complete = out.Coverage.Complete && n.Answered
+		if answered {
+			if !ask.Hot {
+				st.Hot = nil
+			}
+			out.Statuses = append(out.Statuses, st)
+		}
+	}
+	return out, nil
+}
+
+// questions is every question asked so far, and forgets them.
+func (s *statusAsker) questions() []builtin.CodeStatusAsk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.asks
+	s.asks = nil
+	return out
 }
 
 // grantHost is a code host that answers a read of one repository by name as
@@ -1239,20 +1307,34 @@ func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 }
 
 // A FLEET OF GIT NODES PAST ONE ANSWER IS PAGED, NEVER REFUSED — code_status's
-// answer about the fleet and its answer about one repository alike.
+// answer about the fleet and its answer about one repository alike — AND A
+// PAGE ASKS ITS OWN GIT NODES ALONE.
 //
 // Four hundred git nodes, half with ids long enough that a hundred rows outgrow
 // one answer, and a tenth that did not answer: whole, either answer is far past
 // ToolAnswerBytes. Read a page at a time, every page fits one answer and goes
 // out compact; walking the pages by `next` lists every git node once and in id
 // order — each answered node's row, and every node's part in the coverage, an
-// unanswered node's included — with the whole scatter's `complete` on every
-// page; a page of a hundred is cut whole-row; the hot list rides the first page
+// unanswered node's included — the roster sorted however it was listed; a
+// page of a hundred is cut whole-row; the hot list rides the fleet's first page
 // alone; `node` reads one git node, one that did not answer as its coverage;
 // and arguments that cannot be read are refused.
 //
+// Every call asks the git nodes exactly one question, and only the fleet's
+// first page asks every git node, each for its hot list: a later page — and
+// every page of a repository — asks the `limit` nodes after its cursor, and no
+// hot list, and `node` asks that node alone, so walking N git nodes costs the
+// N answers of its pages plus one fleet-wide first page, never N answers a
+// page. A page's `complete` is whether every node it lists answered — on the
+// fleet's first page, whether every git node did, its hot list drawn from all
+// of them. A refused call, a node that is no live git node among them, asks
+// nobody; and a roster that cannot be read is refused, unavailable, before
+// anybody is asked.
+//
 // Mutation: send the page `limit` asks whole rather than cut to one answer,
-// ignore `cursor`, or send the hot list on every page, and a case is red.
+// ignore `cursor`, send the hot list on every page, ask every git node for
+// every page, read the roster in the order it was listed, or give the fleet's
+// first page its listed nodes' `complete`, and a case is red.
 func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	t.Parallel()
 	const nodes = 400
@@ -1296,8 +1378,42 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	}
 	_, chart := healthChart(t)
 	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
-	tool := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
-		Code: healthCode(repos, chart)}, chart)[builtin.CodeStatusTool]
+	asker := &statusAsker{report: report}
+	tool := healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)},
+		chart)[builtin.CodeStatusTool]
+
+	// question is the one question a call with args asks the git nodes.
+	question := func(args map[string]any) builtin.CodeStatusAsk {
+		fleet, repo := args["repo"] == nil, ""
+		if !fleet {
+			repo = siteID
+		}
+		if node, ok := args["node"].(string); ok {
+			return builtin.CodeStatusAsk{Nodes: []string{node}, Repo: repo, Hot: fleet}
+		}
+		cursor, _ := args["cursor"].(string)
+		if fleet && cursor == "" {
+			return builtin.CodeStatusAsk{Nodes: all, Every: true, Hot: true}
+		}
+		limit := 25
+		if l, ok := args["limit"].(int); ok {
+			limit = l
+		}
+		rest := all[afterCursor(all, cursor):]
+		return builtin.CodeStatusAsk{Nodes: rest[:min(limit, len(rest))], Repo: repo}
+	}
+	asked := func(args map[string]any, want []builtin.CodeStatusAsk) {
+		t.Helper()
+		got := asker.questions()
+		same := len(got) == len(want)
+		for i := 0; same && i < len(got); i++ {
+			same = slices.Equal(got[i].Nodes, want[i].Nodes) && got[i].Every == want[i].Every &&
+				got[i].Repo == want[i].Repo && got[i].Hot == want[i].Hot
+		}
+		if !same {
+			t.Errorf("%v asked the git nodes %s, want %s", args, describeAsks(got), describeAsks(want))
+		}
+	}
 
 	type page struct {
 		Nodes []struct {
@@ -1321,6 +1437,7 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 		case strings.Contains(got.Output, "\n"):
 			t.Fatalf("%v was answered indented; a page goes out compact, as it was measured", args)
 		}
+		asked(args, []builtin.CodeStatusAsk{question(args)})
 		var p page
 		if err := json.Unmarshal([]byte(got.Output), &p); err != nil {
 			t.Fatalf("%v: %v", args, err)
@@ -1341,6 +1458,15 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 		}
 		return out
 	}
+	// listedAnswered is whether every node p lists answered.
+	listedAnswered := func(p page) bool {
+		for _, n := range p.Coverage.Nodes {
+			if !n.Answered {
+				return false
+			}
+		}
+		return true
+	}
 	with := func(form map[string]any, key string, v any) map[string]any {
 		args := maps.Clone(form)
 		args[key] = v
@@ -1358,10 +1484,13 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 			if len(p.Coverage.Nodes) > most {
 				t.Errorf("a page of %v listed %d nodes, want at most %d", args, len(p.Coverage.Nodes), most)
 			}
-			if p.Coverage.Complete {
-				t.Errorf("a page of %v reads its coverage complete; the scatter was not", args)
+			fleetFirst := pages == 0 && args["repo"] == nil
+			if want := listedAnswered(p) && !fleetFirst; p.Coverage.Complete != want {
+				t.Errorf("page %d of %v reads complete %v, want %v: whether every node it lists answered, "+
+					"and on the fleet's first page whether every git node did", pages, args,
+					p.Coverage.Complete, want)
 			}
-			if (p.Hot != nil) != (pages == 0 && args["repo"] == nil) {
+			if (p.Hot != nil) != fleetFirst {
 				t.Errorf("page %d of %v carries a hot list: %v; it rides the fleet's first page alone",
 					pages, args, p.Hot != nil)
 			}
@@ -1385,6 +1514,14 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 		if form["repo"] == nil && (first.Hot == nil || len(*first.Hot) == 0) {
 			t.Errorf("the fleet's first page carries no hot list")
 		}
+		// THE FIRST TWO GIT NODES BOTH ANSWERED: the fleet's first page is
+		// still incomplete — its hot list is every git node's, and a tenth
+		// of them did not answer — and the repository's is complete.
+		if two := read(with(form, "limit", 2)); !slices.Equal(covered(two), all[:2]) ||
+			two.Coverage.Complete != (form["repo"] != nil) {
+			t.Errorf("%v: a first page of two answered nodes covered %v complete %v, want %v complete %v",
+				form, covered(two), two.Coverage.Complete, all[:2], form["repo"] != nil)
+		}
 		for _, most := range []int{25, 100} {
 			args := form
 			if most != 25 {
@@ -1403,14 +1540,15 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 				"answer", form, len(full.Coverage.Nodes))
 		}
 		if one := read(with(form, "node", answered[5])); !slices.Equal(rows(one), answered[5:6]) ||
-			!slices.Equal(covered(one), answered[5:6]) || one.Next != "" {
-			t.Errorf("%v: node read %v (coverage %v, next %q), want %s alone", form, rows(one), covered(one),
-				one.Next, answered[5])
+			!slices.Equal(covered(one), answered[5:6]) || one.Next != "" || !one.Coverage.Complete {
+			t.Errorf("%v: node read %v (coverage %+v, next %q), want %s alone, complete", form, rows(one),
+				one.Coverage, one.Next, answered[5])
 		}
 		if quiet := read(with(form, "node", silent[0])); len(quiet.Nodes) != 0 ||
-			!slices.Equal(covered(quiet), silent[:1]) || quiet.Coverage.Nodes[0].Answered {
+			!slices.Equal(covered(quiet), silent[:1]) || quiet.Coverage.Nodes[0].Answered ||
+			quiet.Coverage.Complete {
 			t.Errorf("%v: a node that did not answer read rows %v and coverage %+v, want no row and its "+
-				"coverage", form, rows(quiet), quiet.Coverage.Nodes)
+				"coverage, incomplete", form, rows(quiet), quiet.Coverage)
 		}
 		for _, c := range []struct {
 			args    map[string]any
@@ -1425,8 +1563,51 @@ func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 			if got := callTool(asAdmin(), t, tool, c.args); tools.RefusalOf(got) != c.refusal {
 				t.Errorf("%v answered (%v) %q, want %v", c.args, tools.RefusalOf(got), got.Output, c.refusal)
 			}
+			asked(c.args, nil)
 		}
 	}
+
+	asker.mu.Lock()
+	asker.rosterErr = errors.New("the coordination store is away")
+	asker.mu.Unlock()
+	for _, form := range []map[string]any{{}, {"repo": "site"}, {"node": answered[5]}} {
+		if got := callTool(asAdmin(), t, tool, form); tools.RefusalOf(got) != tools.RefusalUnavailable {
+			t.Errorf("%v with no roster answered (%v) %q, want unavailable", form, tools.RefusalOf(got), got.Output)
+		}
+		asked(form, nil)
+	}
+}
+
+// afterCursor is where the ids after cursor begin in sorted ids.
+func afterCursor(ids []string, cursor string) int {
+	i, found := slices.BinarySearch(ids, cursor)
+	if found {
+		i++
+	}
+	return i
+}
+
+// describeAsks is asks as a failure message reads them: each question's node
+// count, its first and last node, and its flags.
+func describeAsks(asks []builtin.CodeStatusAsk) string {
+	var out []string
+	for _, a := range asks {
+		first, last := "", ""
+		if len(a.Nodes) > 0 {
+			first, last = clipID(a.Nodes[0]), clipID(a.Nodes[len(a.Nodes)-1])
+		}
+		out = append(out, fmt.Sprintf("{%d nodes %s..%s every=%v repo=%q hot=%v}", len(a.Nodes), first, last,
+			a.Every, a.Repo, a.Hot))
+	}
+	return "[" + strings.Join(out, " ") + "]"
+}
+
+// clipID is an id short enough for a failure message.
+func clipID(id string) string {
+	if len(id) > 12 {
+		return id[:12] + "…"
+	}
+	return id
 }
 
 // AN ALARM'S WAKE ASKS FLEET_HEALTH ONLY FOR WHAT IS FIRING.

@@ -370,7 +370,7 @@ func TestEveryPushTheNodeAdmitsIsRecordedHoweverItEnds(t *testing.T) {
 			}), types.AuditRefused, host.RefusalPushTooLarge},
 	} {
 		t.Run(step.name, func(t *testing.T) {
-			before, pushes := len(c.Fleet.Audited()), node.Host().Status(id).Repo.Day.Pushes
+			before, pushes := len(c.Fleet.Audited()), node.Host().Status(host.StatusAsk{Repo: id}).Repo.Day.Pushes
 			step.push(t)
 			audited := c.Fleet.Audited()[before:]
 			// FAILED, stamped for a refused push as for a failed one, so the
@@ -389,7 +389,7 @@ func TestEveryPushTheNodeAdmitsIsRecordedHoweverItEnds(t *testing.T) {
 			if got != want {
 				t.Errorf("the push was recorded as %+v, want %+v", got, want)
 			}
-			if n := node.Host().Status(id).Repo.Day.Pushes; n != pushes+1 {
+			if n := node.Host().Status(host.StatusAsk{Repo: id}).Repo.Day.Pushes; n != pushes+1 {
 				t.Errorf("the repository's heat counts %d pushes after the push, want %d", n, pushes+1)
 			}
 		})

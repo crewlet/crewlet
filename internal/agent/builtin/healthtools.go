@@ -107,17 +107,42 @@ type LeaseLister interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
-// StatusAsker asks every git node of the fleet what its code host says of
-// itself, about one repository beside the node where repoID is not "" —
-// internal/engine's scatter on crewlet.code.status, declared by its consumer.
+// StatusAsker is the fleet's git nodes and what each code host says of itself
+// — internal/engine's roster off the presence leases and its scatter on
+// crewlet.code.status, declared by their consumer.
 type StatusAsker interface {
-	CodeStatus(ctx context.Context, repoID string) (CodeStatusReport, error)
+	// GitNodes is every live git node by id, in no order promised: the keys
+	// code_status pages by, once it has sorted them ([codeStatus.ask]).
+	GitNodes(ctx context.Context) ([]string, error)
+	// CodeStatus asks the git nodes ask names, and no other, and waits for
+	// those alone.
+	CodeStatus(ctx context.Context, ask CodeStatusAsk) (CodeStatusReport, error)
+}
+
+// CodeStatusAsk is one status question: which git nodes answer it, and what
+// each answer carries beside the node's cache.
+type CodeStatusAsk struct {
+	// Nodes is the git nodes asked, by id. The report covers these and no
+	// other: a reply from a node it does not name is dropped — an older
+	// build's, which answers whatever the question names — and the ask
+	// ends once every one of them has answered.
+	Nodes []string
+	// Every says Nodes is every git node GitNodes listed, so the question
+	// names none and every git node answers it: the question stays the same
+	// few bytes however large the fleet, where naming the whole roster would
+	// send every node the roster.
+	Every bool
+	// Repo is the id of a repository each node reports beside itself; ""
+	// asks about none.
+	Repo string
+	// Hot asks each node for its hot list (host.StatusAsk.Hot).
+	Hot bool
 }
 
 // CodeStatusReport is the git nodes' answers to one status question, as the
 // node that asked heard them: each node's own account, and which of the git
 // nodes it asked answered — the one coverage shape every fanned answer carries
-// (internal/eventfan).
+// (internal/eventfan), complete where every node asked answered.
 type CodeStatusReport struct {
 	Statuses []host.CodeStatus
 	Coverage eventfan.Coverage
@@ -611,20 +636,41 @@ const codeStatusJudges = 8
 // state on a node some three hundred and fifty, each beside the node's part in
 // the coverage, so a couple of hundred git nodes read past ToolAnswerBytes whole
 // and the answer was refused, with nothing to narrow it by but the node list it
-// could not read. So both answers are PAGED, by node id, over every git node the
-// scatter asked or heard from ([reportNodes]) — a node that did not answer is a
-// page's row of coverage with no status beside it, so a page is bounded by its
-// count of nodes whoever answered — and every page is cut whole-row at the
-// answer as it is sent ([foreignRead.fit]), so no page passes ToolAnswerBytes.
-// `node` reads one git node. A page's `coverage` lists its own nodes' parts, and
-// its `complete` is the WHOLE scatter's, so every page says whether any git node
-// anywhere did not answer.
+// could not read. So both answers are PAGED, by node id, over the live git
+// nodes the presence leases list (StatusAsker.GitNodes) — a node that did not
+// answer is a page's row of coverage with no status beside it, so a page is
+// bounded by its count of nodes whoever answered — and every page is cut
+// whole-row at the answer as it is sent ([foreignRead.fit]), so no page passes
+// ToolAnswerBytes. `node` reads one git node.
+//
+// AND THE PAGE IS WHAT IS ASKED, NOT ONLY WHAT IS SENT ([codeStatus.ask]): the
+// roster is read first — a read of the coordination store this node holds, no
+// git node asked — and the status question names the page's nodes alone, so a
+// node it does not name answers nothing and the ask ends once the page's nodes
+// have answered. A page costs its own nodes' answers, never the fleet's, and
+// waits on its own slowest node, never on one silent anywhere in the fleet:
+// asking the whole fleet for every page made walking N git nodes cost N²/limit
+// answers, each with its node's hot list, and every page wait the whole
+// two-second budget on one silent node. A page's `coverage` lists its own
+// nodes' parts, and its `complete` says whether every one it lists answered —
+// on the fleet's first page, whether every git node did, its hot list being
+// drawn from all of them.
+//
+// A ROSTER THAT COULD NOT BE READ IS REFUSED, unavailable, as fleet_health
+// refuses it, rather than paged over whoever answered a question asked of
+// everybody: keys taken from each page's answerers move between pages, so a
+// node silent on one page's ask and heard on the next could fall behind a
+// cursor already past it, and a listing that skips a node it cannot see is
+// the fleet with nodes missing that fleet_health declines to show.
 //
 // THE HOT LIST RIDES THE FIRST PAGE ALONE: it is the fleet's, already bounded by
 // cache.HotRepos a window however many git nodes there are (some fifteen KB at
 // most), and a seat's copy of it costs a read of the code host's rows for every
-// repository judged ([codeStatus.hottest]), neither of which a later page
-// repeats. With `node` it is that node's own.
+// repository judged ([codeStatus.hottest]). So the fleet's first page is the one
+// question every git node answers, each with its hot list (host.StatusAsk.Hot);
+// every other question — a later page, a repository's, a `node` read of the
+// repository — asks no node for its list, which is the bulk of a status. With
+// `node` the first page's list is that node's own, asked of it alone.
 //
 // TWENTY-FIVE a page by default, fleet_health's and the code tools' listing's
 // page: a screen of nodes, and the whole of most fleets. A HUNDRED at most, as
@@ -650,8 +696,10 @@ func (t *codeStatus) Description() string {
 		"hottest of the hour and of the day. With `repo`, that one repository on every git node "+
 		"instead. Git nodes by id, a page at a time: pass `next` back as `cursor` until no `next` "+
 		"comes back; the hot list rides the first page. `node` reads one git node, with its own hot "+
-		"list. It reports what the nodes counted and judges nothing; `coverage` names a node of the "+
-		"page that did not answer, and its `complete` says whether any git node did not.", cache.HotRepos)
+		"list. A page asks only its own git nodes. It reports what the nodes counted and judges "+
+		"nothing; `coverage` names a node of the page that did not answer, and its `complete` says "+
+		"whether every node the page lists answered — on the fleet's first page, whose hot list is "+
+		"every git node's, whether every git node did.", cache.HotRepos)
 }
 
 func (t *codeStatus) Parameters() map[string]any {
@@ -754,12 +802,8 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if strings.TrimSpace(argString(args, "repo")) != "" {
 		return t.oneRepo(ctx, turn, c, args, q)
 	}
-	report, err := t.deps.Status.CodeStatus(ctx, "")
-	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
-			"just now. Try again shortly."), nil
-	}
-	rest, refusal := t.pageOf(report, q)
+	first := q.cursor == ""
+	page, more, report, refusal := t.ask(ctx, q, "", first)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -771,16 +815,14 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		hot      *[]hotOnNode
 		withheld int
 	)
-	if q.cursor == "" {
+	if first {
 		// THE FIRST PAGE CARRIES THE HOT LIST: the fleet's, or with `node`
-		// that node's own — judged for the caller here alone, so a later
-		// page costs no read of the code host's rows.
+		// that node's own — each the nodes asked, and no other ([codeStatus.ask])
+		// — judged for the caller here alone, so a later page costs no read of
+		// the code host's rows.
 		var entries []cache.RepoHeat
 		var pairs []hotOnNode
 		for _, s := range report.Statuses {
-			if q.node != "" && s.Node != q.node {
-				continue
-			}
 			for _, r := range s.Hot {
 				entries = append(entries, r.RepoHeat)
 				pairs = append(pairs, hotOnNode{Node: s.Node, RepoStatus: r})
@@ -797,9 +839,9 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		hot, withheld = &list, w
 	}
 	read := newForeignRead(turn, c.asker.Seat)
-	return t.cut(ctx, read, rest, q.limit, func(nodes []string, next string) any {
+	return t.cut(ctx, read, page, more, func(nodes []string, next string) any {
 		a := codeStatusFleet{Nodes: make([]gitNodeStatus, 0, len(nodes)), Hot: hot, Withheld: withheld,
-			Next: next, Coverage: coverageOf(report.Coverage, nodes)}
+			Next: next, Coverage: coverageOf(report.Coverage, nodes, first && q.node == "")}
 		for _, id := range nodes {
 			if s, ok := statusOf[id]; ok {
 				a.Nodes = append(a.Nodes, gitNodeStatus{Node: s.Node, At: s.At, Cache: s.Cache})
@@ -834,78 +876,103 @@ func (t *codeStatus) query(args map[string]any) (codeStatusQuery, *tools.Result)
 	return q, nil
 }
 
-// pageOf is the git nodes of report the page q asks for may list, by id: every
-// one after q.cursor, or q.node alone — refused not found where report names
-// no such node.
-func (t *codeStatus) pageOf(report CodeStatusReport, q codeStatusQuery) ([]string, *tools.Result) {
-	ids := reportNodes(report)
-	if q.node == "" {
-		return ids[sortedAfter(ids, func(id string) string { return id }, q.cursor):], nil
+// ask is the page q asks for and the git nodes' answers to it: the page's git
+// nodes by id — the q.limit live git nodes after q.cursor, or q.node alone —
+// whether live git nodes follow it, and the report of a status question about
+// the repository whose id is repoID ("" none) asked of the page's nodes alone,
+// or, where hot is set without q.node, of every git node with its hot list:
+// the fleet's first page. Refused unavailable where the roster or the nodes
+// could not be read, and not found where q.node is no live git node — said at
+// once, never waited out as a node that does not answer.
+func (t *codeStatus) ask(ctx context.Context, q codeStatusQuery, repoID string, hot bool) (
+	page []string, more bool, report CodeStatusReport, refusal *tools.Result) {
+
+	roster, err := t.deps.Status.GitNodes(ctx)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not read the fleet's git "+
+			"nodes from the coordination store just now, so it says nothing rather than show a fleet "+
+			"with nodes missing. Try again shortly.")
+		return nil, false, CodeStatusReport{}, &r
 	}
-	if _, found := slices.BinarySearch(ids, q.node); !found {
-		r := refused(tools.RefusalNotFound, fmt.Sprintf("%s: no git node is named %q — a git node is a "+
-			"live node with the git role, or one that answered. Leave `node` out to list them.", t.Name(),
-			clip(q.node)))
-		return nil, &r
+	// SORTED AND EACH ONCE HERE, by the reader whose keyset needs it: a page
+	// begins after its cursor by binary search, so a roster in lease order
+	// would skip and repeat nodes between pages.
+	slices.Sort(roster)
+	roster = slices.Compact(roster)
+	if q.node != "" {
+		if _, found := slices.BinarySearch(roster, q.node); !found {
+			r := refused(tools.RefusalNotFound, fmt.Sprintf("%s: no git node is named %q — a git node is "+
+				"a live node with the git role. Leave `node` out to list them.", t.Name(), clip(q.node)))
+			return nil, false, CodeStatusReport{}, &r
+		}
+		page = []string{q.node}
+	} else {
+		rest := roster[sortedAfter(roster, func(id string) string { return id }, q.cursor):]
+		page, more = rest[:min(q.limit, len(rest))], len(rest) > q.limit
 	}
-	return []string{q.node}, nil
+	question := CodeStatusAsk{Nodes: page, Repo: repoID, Hot: hot}
+	if hot && q.node == "" {
+		// THE FLEET'S HOT LIST IS EVERY GIT NODE'S, so its page alone asks
+		// them all.
+		question.Nodes, question.Every = roster, true
+	}
+	report, err = t.deps.Status.CodeStatus(ctx, question)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
+			"just now. Try again shortly.")
+		return nil, false, CodeStatusReport{}, &r
+	}
+	return page, more, report, nil
 }
 
-// cut is the answer of the longest page of rest's first limit nodes that fits
-// one tool answer as it is sent: build makes the answer listing nodes, with
-// next the id the following page begins after ("" on the last). The listing
-// is keyset by id, so the next page begins after the last node kept, whether
-// limit or the answer's size cut it.
-func (t *codeStatus) cut(ctx context.Context, read *foreignRead, rest []string, limit int,
+// cut is the answer of the longest prefix of page that fits one tool answer as
+// it is sent: build makes the answer listing nodes, with next the id the
+// following page begins after — "" on the last, where nothing is left of page
+// and more says no live git node follows it. The listing is keyset by id, so
+// the next page begins after the last node kept, whether limit or the
+// answer's size cut it.
+func (t *codeStatus) cut(ctx context.Context, read *foreignRead, page []string, more bool,
 	build func(nodes []string, next string) any) (tools.Result, error) {
 
-	k, rendered, err := read.fit(min(limit, len(rest)), func(k int) any {
+	k, rendered, err := read.fit(len(page), func(k int) any {
 		next := ""
-		if k > 0 && k < len(rest) {
-			next = rest[k-1]
+		if k > 0 && (k < len(page) || more) {
+			next = page[k-1]
 		}
-		return build(rest[:k], next)
+		return build(page[:k], next)
 	})
 	switch {
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
-	case k == 0 && len(rest) > 0:
+	case k == 0 && len(page) > 0:
 		return failed(fmt.Sprintf("%s: git node %q alone is past one answer — its id is that long — so "+
 			"no page holds it whole. Pass %q as `cursor` to read the nodes after it.", t.Name(),
-			clip(rest[0]), rest[0])), nil
+			clip(page[0]), page[0])), nil
 	}
 	return compactAnswer(rendered, "Ask for fewer git nodes with `limit`, or for one with `node`.")
 }
 
-// reportNodes is every git node report names, by id and once: each the
-// scatter asked or heard from (its coverage) and each that answered — the keys
-// code_status pages by, so a node that did not answer holds its place in the
-// listing as one that did.
-func reportNodes(report CodeStatusReport) []string {
-	ids := make([]string, 0, len(report.Coverage.Nodes)+len(report.Statuses))
-	for _, n := range report.Coverage.Nodes {
-		ids = append(ids, n.ID)
-	}
-	for _, s := range report.Statuses {
-		ids = append(ids, s.Node)
-	}
-	slices.Sort(ids)
-	return slices.Compact(ids)
-}
-
 // coverageOf is cover's part for nodes — each node's own, in nodes' order, a
-// node cover does not name left out — with cover's Complete: whether the WHOLE
-// scatter was, which every page reports whatever nodes it lists.
-func coverageOf(cover eventfan.Coverage, nodes []string) eventfan.Coverage {
+// node cover does not name left out. Complete is, where whole, cover's own —
+// every node the question was asked of, which on the fleet's first page is
+// every git node its hot list was drawn from — and otherwise whether every node
+// listed answered: a page's question asked a few nodes past what the answer
+// had room for, and those are the next page's to report.
+func coverageOf(cover eventfan.Coverage, nodes []string, whole bool) eventfan.Coverage {
 	part := make(map[string]eventfan.NodeCoverage, len(cover.Nodes))
 	for _, n := range cover.Nodes {
 		part[n.ID] = n
 	}
-	out := eventfan.Coverage{Nodes: make([]eventfan.NodeCoverage, 0, len(nodes)), Complete: cover.Complete}
+	out := eventfan.Coverage{Nodes: make([]eventfan.NodeCoverage, 0, len(nodes)), Complete: true}
 	for _, id := range nodes {
-		if n, ok := part[id]; ok {
+		n, ok := part[id]
+		if ok {
 			out.Nodes = append(out.Nodes, n)
 		}
+		out.Complete = out.Complete && ok && n.Answered
+	}
+	if whole {
+		out.Complete = cover.Complete
 	}
 	return out
 }
@@ -923,12 +990,7 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 	if refusal != nil {
 		return *refusal, nil
 	}
-	report, err := t.deps.Status.CodeStatus(ctx, repo.ID)
-	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
-			"just now. Try again shortly."), nil
-	}
-	rest, refusal := t.pageOf(report, q)
+	page, more, report, refusal := t.ask(ctx, q, repo.ID, false)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -941,9 +1003,9 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 		onNode[s.Node] = on
 	}
 	read := newForeignRead(turn, c.asker.Seat)
-	return t.cut(ctx, read, rest, q.limit, func(nodes []string, next string) any {
+	return t.cut(ctx, read, page, more, func(nodes []string, next string) any {
 		a := codeStatusRepo{Repo: repo.Name, ID: repo.ID, Nodes: make([]repoOnNode, 0, len(nodes)),
-			Next: next, Coverage: coverageOf(report.Coverage, nodes)}
+			Next: next, Coverage: coverageOf(report.Coverage, nodes, false)}
 		for _, id := range nodes {
 			if on, ok := onNode[id]; ok {
 				a.Nodes = append(a.Nodes, on)

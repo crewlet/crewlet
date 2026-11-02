@@ -15,11 +15,14 @@ import (
 // since it offers its tips; a fetch that finds its client up to date is still
 // a fetch; and every answer adds the bytes git wrote its client. The status
 // reads it back with the node, its cache, and the repository's copy in
-// service, among the hottest and asked about by id.
+// service, among the hottest and asked about by id — the hot list only where
+// it is asked for, since a status asked without it is one whose reader would
+// throw it away.
 //
 // Mutation: count no fetch at the advertisement, count a clone for any fetch
 // that wants (ignoring its haves), or count no push at its record, and the
-// counts below go wrong.
+// counts below go wrong; fill the hot list whatever the ask, or never, and the
+// last checks go red.
 func TestTheHostCountsEachRequestsUseIntoItsRepositorysHeat(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -30,7 +33,7 @@ func TestTheHostCountsEachRequestsUseIntoItsRepositorysHeat(t *testing.T) {
 	id := c.Rows().Repo.ID
 	status := func(step string) host.RepoStatus {
 		t.Helper()
-		st := node.Host().Status(id)
+		st := node.Host().Status(host.StatusAsk{Repo: id})
 		if st.Repo == nil || st.Repo.ID != id {
 			t.Fatalf("%s: the status asked about %s answered %+v", step, id, st.Repo)
 		}
@@ -62,7 +65,10 @@ func TestTheHostCountsEachRequestsUseIntoItsRepositorysHeat(t *testing.T) {
 	p.Git().Run(t, clone, "fetch", "--quiet", "origin")
 	check("a fetch with nothing new", status("a fetch with nothing new").Day, 3, 1, 2, bytes)
 
-	st := node.Host().Status("")
+	if bare := node.Host().Status(host.StatusAsk{}); bare.Hot != nil {
+		t.Fatalf("a status not asked for its hot list carries %+v", bare.Hot)
+	}
+	st := node.Host().Status(host.StatusAsk{Hot: true})
 	if st.Node != node.ID() || st.Repo != nil || st.Cache.Warm != 1 || st.Cache.Bytes <= 0 {
 		t.Fatalf("the node's status = node %q, repo %+v, cache %+v; want %s, no repository asked about, one "+
 			"warm repository and its bytes", st.Node, st.Repo, st.Cache, node.ID())

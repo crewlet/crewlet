@@ -710,7 +710,9 @@ size is read rather than refused; `firing` narrows it to the nodes whose own
 table has an alarm firing — what an alarm's wake asks it — counting the nodes
 that cannot say as `unevaluated`, and `node` reads one node. `code_status`
 pages its git nodes the same way, the hot list on the first page alone, and
-`node` reads one git node. In a turn
+`node` reads one git node; a page asks only the git nodes it lists, and waits
+for none other, so its cost and its wait do not grow with the fleet — the
+fleet's first page alone asks every git node, for its hot list. In a turn
 somebody woke, a seat reads them only for somebody
 of the company who may act: a turn a stranger woke, or a person who may not
 act in the company now, is answered nothing by either. The repositories

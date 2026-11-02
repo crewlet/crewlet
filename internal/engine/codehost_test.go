@@ -440,12 +440,15 @@ func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
 // serving the code host with its host's own status — the node, its cache, and
 // the repository's heat and copy in service, as the person's clone and push
 // through the engine's host left them. The wire is the question's and the
-// answer's own (version, repo, status). A question at a version this build
-// does not speak is answered by nobody, which its asker reads as a node that
-// did not answer, never as a guess at its fields.
+// answer's own (version, repo, nodes, without_hot, status). A question that
+// names its git nodes is answered by those alone, under the id the node's own
+// host gives it. A question at a version this build does not speak is answered
+// by nobody, which its asker reads as a node that did not answer, never as a
+// guess at its fields.
 //
 // Mutation: register no answerer beside the host (buildCodeHost), and the
-// question is answered by nobody.
+// question is answered by nobody; register it under another id than the
+// host's, and the question naming the node is not answered, red.
 func TestAGitNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	t.Parallel()
 	b := gitNodeBootstrap(t, nil)
@@ -492,14 +495,35 @@ func TestAGitNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 		t.Fatalf("the answer %s: %v", replies[0], err)
 	}
 	st := answer.Status
-	if answer.Version != 1 || st.Node != h.Status("").Node || st.Cache.Warm != 1 || st.Cache.Budget <= 0 {
+	self := h.Status(host.StatusAsk{}).Node
+	if answer.Version != 1 || st.Node != self || st.Cache.Warm != 1 || st.Cache.Budget <= 0 {
 		t.Fatalf("the answer is version %d from node %q with cache %+v, want version 1 from %q, its one "+
-			"warm repository and its budget", answer.Version, st.Node, st.Cache, h.Status("").Node)
+			"warm repository and its budget", answer.Version, st.Node, st.Cache, self)
 	}
 	if st.Repo == nil || st.Repo.ID != id || st.Repo.Day.Pushes != 1 || st.Repo.Day.Fetches != 1 ||
 		st.Repo.Copy == nil {
 		t.Fatalf("the repository asked about is answered %+v, want web's heat — the founder's one clone of it "+
 			"empty and one push — and its copy in service", st.Repo)
+	}
+	if len(st.Hot) != 1 || st.Hot[0].ID != id {
+		t.Fatalf("a question that names no node and leaves its hot list asked is answered hot %+v, want web",
+			st.Hot)
+	}
+
+	// A QUESTION THAT NAMES ITS NODES is answered by those alone, by the id
+	// the node's host gives itself — and one that asks for no hot list gets
+	// none. (Read into a cleared answer: decoding leaves a field the JSON
+	// does not carry as it was.)
+	answer.Status = host.CodeStatus{}
+	if replies := ask(`{"version":1,"nodes":["`+self+`"],"without_hot":true}`, 10*time.Second); len(replies) != 1 {
+		t.Fatalf("a question naming the git node was answered %d times, want once", len(replies))
+	} else if err := json.Unmarshal(replies[0], &answer); err != nil || answer.Status.Node != self ||
+		answer.Status.Hot != nil {
+		t.Fatalf("a question naming the git node and no hot list is answered %s (%v), want its status "+
+			"with no hot list", replies[0], err)
+	}
+	if replies := ask(`{"version":1,"nodes":["another-git-node"]}`, time.Second); len(replies) != 0 {
+		t.Fatalf("a question naming another git node was answered by this one: %s", replies)
 	}
 
 	if replies := ask(`{"version":2}`, time.Second); len(replies) != 0 {
