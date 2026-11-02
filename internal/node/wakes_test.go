@@ -177,6 +177,41 @@ func TestAWakeToAConfirmedSeatMakesNoBrokerCall(t *testing.T) {
 	}
 }
 
+// listingQueue journals each subscription listing beside the publishes
+// publishingQueue journals.
+type listingQueue struct {
+	*publishingQueue
+}
+
+func (q *listingQueue) ListSubscriptions(ctx context.Context, pattern string) ([]queue.Subscription, error) {
+	q.log.add("list " + pattern)
+	return q.publishingQueue.ListSubscriptions(ctx, pattern)
+}
+
+// A WAKE FOR A SEAT OUTSIDE THE COMPANY RUNS NO PASS. Its mailbox is the
+// retirement sweep's, so the node has nothing to confirm, and a pass on its
+// behalf would list the broker's subscriptions once per wake, under the lock
+// every other wake's confirmation waits on: a feed's backlog for a removed seat
+// is one wake per record. The company's own seats have no mailbox here, so a
+// pass that did run would have to list.
+func TestAWakeForASeatOutsideTheCompanyRunsNoPass(t *testing.T) {
+	q, log := wakeBroker(t)
+	n := wakesNode(t, &listingQueue{publishingQueue: &publishingQueue{recordingQueue: q}})
+
+	if err := n.Wakes().Publish(t.Context(), inbox("retired"), wake("late")); err != nil {
+		t.Fatalf("publish to a seat outside the company: %v", err)
+	}
+	if err := n.ConfirmMailbox(t.Context(), seatID("retired")); err != nil {
+		t.Fatalf("confirm a seat outside the company: %v", err)
+	}
+
+	want := []string{"publish " + inbox("retired")}
+	if got := log.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("the node made %v, want only the publish %v: a seat outside the company "+
+			"ran a mailbox pass", got, want)
+	}
+}
+
 func labelsOf(evs []*events.Event) []string {
 	out := make([]string, 0, len(evs))
 	for _, ev := range evs {

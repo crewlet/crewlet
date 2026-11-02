@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // A WAKE REACHES A MAILBOX OR IS REFUSED, never dropped on the way.
@@ -97,17 +98,30 @@ func (n *Node) ConfirmMailbox(ctx context.Context, id uuid.UUID) error {
 	if n.mail.has(id) {
 		return nil
 	}
+	// A SEAT OUTSIDE THE COMPANY IS ANSWERED BEFORE ANY PASS. Its mailbox is
+	// the retirement sweep's, not this node's to make, so there is nothing
+	// to confirm; and a pass on its behalf would cost a broker listing per
+	// wake (a feed's backlog for a removed seat is one wake per record), each
+	// serialised under the lock every other wake's confirmation waits on.
 	company := n.cfg.Seats()
+	seat, ok := seatNamed(addressable(company), id)
+	if !ok {
+		return nil
+	}
 	n.ensureMailboxes(ctx, company)
 	if n.mail.has(id) {
 		return nil
 	}
-	for _, s := range addressable(company) {
+	return fmt.Errorf("node: the mailbox of seat %q is not complete, so its wake was not "+
+		"published; publish it again once the broker answers: %w", seat.Handle, queue.ErrUnavailable)
+}
+
+// seatNamed is the seat of seats whose id is id, and false for none.
+func seatNamed(seats []placement.Seat, id uuid.UUID) (placement.Seat, bool) {
+	for _, s := range seats {
 		if s.ID == id {
-			return fmt.Errorf("node: the mailbox of seat %q is not complete, so its wake "+
-				"was not published; publish it again once the broker answers: %w",
-				s.Handle, queue.ErrUnavailable)
+			return s, true
 		}
 	}
-	return nil
+	return placement.Seat{}, false
 }
