@@ -51,8 +51,12 @@ export function stubCodeEngine(answers: Record<string, (url: URL) => Response>):
   return asked;
 }
 
-/** Mount `screen` at `hash`, inside the frame every Code screen reads through. */
-export function mountCode(hash: string, screen: ReactNode) {
+/**
+ * Mount `screen` at `hash`, inside the frame every Code screen reads through,
+ * and answer the store its socket reports to — for a case that takes the
+ * socket away and back.
+ */
+export function mountCode(hash: string, screen: ReactNode): Store {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(CODE_ORG);
@@ -69,4 +73,5 @@ export function mountCode(hash: string, screen: ReactNode) {
       </SessionReading>
     </ClientContext.Provider>,
   );
+  return store;
 }

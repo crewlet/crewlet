@@ -1723,6 +1723,10 @@ function offline(err) {
 * finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
+/** Whether a response's `Cache-Control` names `immutable` (RFC 8246). */
+function markedImmutable(headers) {
+	return (headers.get("Cache-Control") ?? "").split(",").some((directive) => directive.trim().toLowerCase() === "immutable");
+}
 /** A deadline as a person would say it: seconds under two minutes, minutes
 *  under two hours, else hours — a backup's twelve-hour wait read as "720
 *  minutes" is a number nobody reads at a glance. */
@@ -1913,7 +1917,8 @@ async function attempt(method, path, options) {
 		status: response.status,
 		body: text,
 		etag: response.headers.get("ETag"),
-		marked: markedByEngine(response.headers)
+		marked: markedByEngine(response.headers),
+		immutable: markedImmutable(response.headers)
 	};
 	let parsed = null;
 	if (text !== "") try {
@@ -1934,7 +1939,8 @@ async function attempt(method, path, options) {
 		status: response.status,
 		body: parsed,
 		etag: response.headers.get("ETag"),
-		marked: markedByEngine(response.headers)
+		marked: markedByEngine(response.headers),
+		immutable: markedImmutable(response.headers)
 	};
 }
 /** The body alone, for the callers that need nothing else. */

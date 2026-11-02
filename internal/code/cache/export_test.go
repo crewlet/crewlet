@@ -624,7 +624,7 @@ func Pin(c *Cache, repoID string) (Synced, bool) {
 	if e.current == nil {
 		return Synced{}, false
 	}
-	return c.pin(e, e.current, SyncNone), true
+	return c.pin(e, e.current), true
 }
 
 // Retire retires repoID's current incarnation, as a rebuild that replaced it

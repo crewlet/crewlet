@@ -341,7 +341,7 @@ const (
 	// some thirty-three times that, which no seat working as intended meets,
 	// and it caps what a seat pushing in a loop costs the code log at a
 	// thousand push records a day — a seat's push alone in its record is
-	// at most 1 604 bytes, from its coding box (internal/code's
+	// at most 1 625 bytes, from its coding box (internal/code's
 	// BenchmarkPushLogBytes, its push=box arm; 1 481 where the engine builds
 	// it for a tool), so about 1.6 MB a day — rather than without bound.
 	DefaultCodePushesPerSeatDay = 1_000
@@ -815,8 +815,7 @@ var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
 // where a change's code would read what the engine reads — the keyring that
 // signs every run's token among it.
 func CodeCheckCellRefusal(p Placement) string {
-	switch p {
-	case PlacementDirect:
+	if p == PlacementDirect {
 		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
 			"own code, which would read what the engine reads; run it in a container or on e2b"
 	}

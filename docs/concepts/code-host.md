@@ -400,7 +400,8 @@ each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 whose gate requires a check queued rather than merged ([The merge
 queue](#the-merge-queue)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
-(`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
+where it asks for them (`GET /code/repos/{name}?gates=true`'s `gates`, and
+`code_get_repo`), and a push is held
 to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
 rules](#protection-rules)): a gate judges a change's merge, never a push. No
 other read carries
@@ -467,8 +468,8 @@ whole list the asker read elsewhere — so two requests giving one owner a glob
 each both land; an owner left with no glob is no path owner any more, and an
 owner a change gives globs to must be one the chart holds, while one it only
 removes them from need not be. A repository's detail answers its path owners
-(`GET /code/repos/{name}`), in their one order: by kind, then reference, each
-one's globs sorted.
+where it asks for them (`GET /code/repos/{name}?path_owners=true`), in their
+one order: by kind, then reference, each one's globs sorted.
 
 Where a rule's [merge gate](#merge-gates) sets `owners_approve`, a merge into
 its branches waits for an approval eligible for every owned glob it touches, so
@@ -749,7 +750,7 @@ other host the same one way.
 |---|---|---|---|
 | **Import** (`import`, `crewlet code import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
 | **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
-| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while the repository moves, once every 15 minutes while it is idle |
+| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while a ref it covers moves — a minute's records that move none of them (a seat's pushes to its own branches, a check's results) dial nobody — and the other host read again every 15 minutes whatever moved |
 
 **A push mirror publishes what passed, never what was pushed last.** A branch
 a [protection rule](#protection-rules) protects is pushed at its
@@ -759,11 +760,16 @@ other host has it, `waiting`. Every move of a protected branch leaves a landing
 row, which is what makes its green commit the one to follow. A branch no rule
 protects moves with no landing and no green row, so it is pushed at its tip, as
 every tag is: a tag names one commit for good. Each push compares what the
-other host holds of the covered refs (one `git ls-remote`) with what the
+other host holds of the covered refs (one `git ls-remote` of its branches and
+tags alone, so a forge's pull-request refs are never sent) with what the
 repository says it should, and pushes only the difference, forced
 (`git push --force --porcelain`), from a scratch over the cache's copy, never
 from the copy itself. A ref the other host rejects — a protection or a hook
 there refusing the force-push or the deletion — fails the attempt, naming it.
+An attempt whose covered refs, target and patterns are what the last one left
+the other host level with, within 15 minutes, ends there without dialing it;
+once 15 minutes have passed it reads the other host whatever moved, so a
+writer there that is not the mirror is undone within the interval.
 
 **It pushes as a seat, never as a bot.** `mirror_to.as` names the seat whose own
 identity at the other host the push carries: the token the mirror's
@@ -806,11 +812,16 @@ failure in a row. A mirror not brought level for longer than its own refresh —
 its 15-minute interval and 15 minutes of grace for an attempt in flight —
 raises [`code_mirror_failing`](../reference/alarms.md) on its home, naming the
 repository that has waited longest; a node that is no longer a repository's
-home stops counting its mirror, and a node that restarts counts from its first
-attempt. Every push that moved something is recorded in the event log as
+home stops counting its mirror, and a node that restarts counts from the
+first pass that asks it for the mirror. A mirror whose attempt waits behind
+others for one of the node's two slots, or is still running — a first push of
+a large repository — is not level either, and is counted all the same. Every
+push that moved something is recorded in the event log as
 `code_mirror_pushed` — the repository, the other host, the seat it pushed as,
-the refs it set and deleted and the protected branches it held back — the one
-durable account of what the company published, and when.
+the refs it set and deleted and the protected branches it held back, each the
+first 16 in ref order beside the count of all of them, so that a first push of
+a repository of tens of thousands of refs is still one event the stream takes —
+the one durable account of what the company published, and when.
 
 ---
 
@@ -1618,8 +1629,8 @@ one](../guides/code.md#open-a-change-from-a-push)).
   that made it, and a push the seat's coding box made the coding run that
   pushed it too, and the change keeps both as the turn and the run that
   opened it. A coding box's push also names the work item its run was charged
-  to, by its identity in its tracker, and the change carries that item, as
-  the seat's own `code_open_change` would ([A run's
+  to, by its identity in its tracker and its project, and the change carries
+  that item whole, as the seat's own `code_open_change` would ([A run's
   changes](code-sandbox.md#a-runs-changes)); a person's push names none.
   Whoever may push the branch may open a change from it, so the push's own
   update is the check.

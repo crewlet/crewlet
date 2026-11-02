@@ -134,10 +134,16 @@ function stubEngine({
   commitAnswer = commit(),
   compare = {},
   act = () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13", receipt: {} }),
+  patch = [PATCH],
+  files = [[{ path: "app.go", status: "M", added: 1, deleted: 1 }]],
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
   act?: () => Promise<Response> | Response;
+  /** A file's patch as its pages: page n is answered from the cursor `p:<n>`, as the engine cuts one at a line. */
+  patch?: readonly string[];
+  /** The diff's files as their pages: page n is answered from the cursor `f:<n>`. */
+  files?: readonly (readonly Record<string, unknown>[])[];
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -169,20 +175,27 @@ function stubEngine({
           });
         case "/query/code_commit":
           return json(commitAnswer);
-        case "/query/code_diff":
+        case "/query/code_diff": {
+          const file = p.get("file");
+          const page = Number((p.get("cursor") ?? "p:0").slice(2));
+          const pages = file !== null ? patch.length : files.length;
           return json({
             repo: "web",
             kind: "diff",
+            ...(page + 1 < pages ? { next: `${file !== null ? "p" : "f"}:${page + 1}` } : {}),
             diff: {
               base: p.get("base"),
               head: p.get("head"),
-              files: [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
-              total: 1,
+              // A FILE'S PATCH IS ANSWERED WITH THAT FILE, as the engine's
+              // is; a listing with its page of files.
+              files: file !== null ? files.flat().filter((f) => f.path === file) : files[page],
+              total: files.flat().length,
               added: 1,
               deleted: 1,
-              ...(p.get("file") ? { patch: PATCH } : {}),
+              ...(file !== null ? { patch: patch[page] } : {}),
             },
           });
+        }
         case "/query/code_compare":
           return json({
             repo: "web",
@@ -275,6 +288,57 @@ test("a commit's diff is against its first parent, its patch drawn", async () =>
   expect(patch?.searchParams.get("base")).toBe(PARENT);
 });
 
+// A FILE'S PATCH IS READ WHOLE, A PAGE AT A TIME: the engine cuts a patch
+// past one answer's bound at a line, and the page after it is asked from the
+// cursor the page before ended at, its hunks drawn under the first's — never
+// a first page drawn as the file's whole change. Mutation: ask the next page
+// without its cursor, or draw the first page's text alone, and this fails.
+test("a patch past one page draws the rest of its hunks when the reader asks", async () => {
+  const { asked } = stubEngine({
+    patch: [
+      `${["--- a/app.go", "+++ b/app.go", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
+      ["@@ -40,2 +40,2 @@", " still", "-alpha", "+omega"].join("\n"),
+    ],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}`);
+
+  expect(await screen.findByText("new")).toBeTruthy();
+  expect(screen.queryByText("omega")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load more lines" }));
+
+  expect(await screen.findByText("omega")).toBeTruthy();
+  expect(screen.getByText("new")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load more lines" })).toBeNull();
+  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "p:1");
+  expect(second?.searchParams.get("file")).toBe("app.go");
+  expect(second?.searchParams.get("head")).toBe(SHA);
+});
+
+// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: a diff's files
+// are a page at a time, and a link or a reload naming a file past the first
+// page reads its patch all the same, the file described by that patch's own
+// answer — a binary one said as binary, with no line drawn. Mutation: open
+// only a file the loaded pages list, or take a file's kind from the listing
+// alone, and this fails.
+test.each([
+  ["its patch", { path: "z.go", status: "A", added: 2, deleted: 0 }, "new"],
+  [
+    "that it is binary",
+    { path: "z.go", status: "A", added: 0, deleted: 0, binary: true },
+    "A binary file: git draws no lines of it.",
+  ],
+])("a file the address names past the first page of files draws %s", async (_what, zgo, drawn) => {
+  const { asked } = stubEngine({
+    files: [[{ path: "app.go", status: "M", added: 1, deleted: 1 }], [zgo]],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=z.go`);
+
+  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  expect(await within(region).findByText(drawn)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Load more files" })).toBeTruthy();
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("file") === "z.go")).toBe(true);
+});
+
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty
 // tree. Mutation: skip the diff of a root commit, or diff it against itself,
 // and this fails.
@@ -303,6 +367,22 @@ test("a comparison reads what head changed since the merge base, and its preview
   const compare = reads(asked, "code_compare")[0];
   expect(compare?.searchParams.get("base")).toBe("HEAD");
   expect(compare?.searchParams.get("head")).toBe("retry");
+});
+
+// A COMPARISON'S TWO PICKERS LIST ONE READ of the repository's branches and
+// of its tags, each up to a thousand refs: never one read a picker. Mutation:
+// let each picker read its own listings, and this fails.
+test("a comparison's two pickers share one read of the branches and the tags", async () => {
+  const { asked } = stubEngine();
+  mount(<ComparePage repo="web" />, "#/code/repos/web/compare?head=retry");
+
+  expect(await screen.findByText("Conflicts")).toBeTruthy();
+  // BOTH PICKERS ARE DRAWN, whatever role their searchable trigger takes.
+  expect(document.querySelector('[aria-label="Base"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="Compared"]')).not.toBeNull();
+  await waitFor(() => expect(reads(asked, "code_refs").length).toBeGreaterThanOrEqual(2));
+  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
+  expect(listings.sort()).toEqual([null, "refs/tags/"]);
 });
 
 // OPEN CHANGE IS ONE code_open_change of the branch compared into the base

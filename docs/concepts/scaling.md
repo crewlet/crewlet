@@ -546,9 +546,9 @@ and an index of each coding run's pushes, where the report of [what a run
 pushed](code-sandbox.md#what-a-run-pushed-is-reported-for-it) scans its
 repositories' pushes since its launch instead — some 40 to 100 bytes a push
 each, 1.8 to 4.5 GB each at 250 000 pushes a day. The
-code log, which keeps only the trim's window of records, takes 1 604 bytes
+code log, which keeps only the trim's window of records, takes 1 625 bytes
 for a seat's coding box's push in a record of its own (1 481 where the engine
-builds it for a tool) and about 1 020 for each of a burst group commit holds
+builds it for a tool) and about 1 040 for each of a burst group commit holds
 together, the merges of the packs those pushes add
 43 to 108 bytes a push more — the more a merge takes at once, the less —
 and the sweeps that remove the rows a merge retired, a day later, up to 44
@@ -588,7 +588,8 @@ changes those pushes revise append their opens, reviews, comments, merges and
 every revision's facts and mergeability — several times the push records'
 bytes — which is why the log's ceiling is derived from the mutation log's
 rather than from its pushes alone, and why a company whose seats open changes
-sets it to the ratio the two logs' `bytes_per_day` show
+sets it from the reference company's day before its streams exist and, once
+they do, moves it to the ratio the two logs' `bytes_per_day` show
 ([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized),
 [what the code log's reservation costs](../guides/replication.md#what-the-code-logs-reservation-costs)).
 The push records fit the ceiling a first boot derives from 50 GiB free or more

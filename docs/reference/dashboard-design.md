@@ -7789,8 +7789,12 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   under it, each revision pushed — never by a clock a node read, with the
   reader's own comment below. **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
-  engine's interdiff) and one file's patch (`file=`) as git wrote it, read
-  into the one `DiffView` and drawn `layout=unified` or `split`; every finding
+  engine's interdiff), a page at a time — **Load more files** asks the page
+  after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read
+  into the one `DiffView` and drawn `layout=unified` or `split` — a patch
+  past one answer a page at a time, **Load more lines** asking the page
+  after from the cursor the last one ended at, and the hunks drawn from every
+  page read (`lib/patchPages.ts`); every finding
   the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
   `code_get_change` reads by) is drawn under its last line, every thread on a
   line of it under its line, and what has no line here — a finding whose own
@@ -7850,7 +7854,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the form is one the engine takes. The new repository reads `importing`
   until its home git node has landed the source.
 - **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
-  read at the tab's floor and again every minute) and its CONTENT, which its
+  read at the tab's floor and again every minute, the row alone: its path
+  owners and its rules' merge gates are its Settings tab's own ask,
+  `path_owners=true` and `gates=true`, read as the tab opens) and its CONTENT, which its
   home git node answers: a directory's listing (`code_tree`, and `code_blob`
   for a path under the root, which answers a directory's listing where the
   path names one, so a path is one read), a file's lines (`code_blob`, a page
@@ -7861,6 +7867,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  The revision picker lists the first page of the branches and of the tags
+  (`code_refs`), read ONCE by the page while its Files or Commits tab is open
+  and handed to every picker it draws — a comparison's two pickers share one
+  read too — so a move between the root and a path, or between the two tabs,
+  asks neither listing again.
   Opening a directory or a file is a new place in the history; picking lines,
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's
@@ -7920,7 +7931,11 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   made on; a root commit's every file it holds, from git's empty tree), by
   both whole ids, so every page of it is immutable: the files a page at a
   time, and one file's patch (`file=`, the first where none is named) in the
-  one `DiffView`, `layout=unified` or `split`. A change's revisions link
+  one `DiffView`, `layout=unified` or `split`, a page at a time as a
+  change's is (**Load more lines**). The file `file=` names is read whether
+  or not a page of files read so far lists it — a link to a file past the
+  first page opens it — and is described by its patch's own answer (its
+  status, its modes, whether git calls it binary). A change's revisions link
   their heads here.
 - **A comparison**, `#/code/repos/{name}/compare`, compares `head=` with
   `base=` (none is the default branch), each named as a revision on the
@@ -7951,8 +7966,15 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
   filters said as controls, every one in the address, so a search is a link.
   It is asked when the reader presses Search, never as they type: a search
-  across the company is a request to every git node. And it takes no floor:
-  it answers at the commit each repository was searched at (`tips`). The
+  across the company is a request to every git node. A press is a step Back
+  takes, its phrase, path and ref pushed onto the history (the mode and the
+  repository narrow the search on screen and replace), and the boxes follow
+  the address whenever it moves, so they never show one search over the
+  lines of another. A reconnect asks again only a search that never reached
+  the engine, as ⌘K's Code tab does: a rolling restart reconnects every
+  socket, and each open search asked again would be one more request to
+  every git node for an answer that already names its commits. And it takes
+  no floor: it answers at the commit each repository was searched at (`tips`). The
   lines are grouped by repository and then by file in the engine's order —
   repository, path, line — never re-sorted; each line's number opens its file
   on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
@@ -8035,8 +8057,13 @@ what is on screen, and the engine's `Retry-After` is the retry. It keeps
 `useQuery`'s floor: a write this tab makes to the code log raises the floor
 there (`SESSION_QUERIES.code`), every ask of a code question names it, and the
 write asks again. An answer read by object id is immutable, a strong `ETag`
-and `Cache-Control: immutable`, and the hook keeps its tag, so a read again
-names it and a `304` is the answer it already holds. The engine's reader gates
+and `Cache-Control: immutable`, and the TAB keeps it — the 64 most recently
+read (`IMMUTABLE_KEPT`), a page of 56 KiB at most each — so the same question
+asked again by any screen or pager (a diff's file read again, a Permalink
+come back to, a page of a patch) is answered with no request; the transport
+asks with `no-store`, so the browser's own cache answers none of it. An
+answer the tab has let go of while a screen still holds it is asked again
+naming its tag, and a `304` is the answer the screen holds. The engine's reader gates
 read a code question where it is asked, as they read every other:
 `useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
 

@@ -12,15 +12,26 @@
  * parameters — the same filters said as controls, which the engine reads by
  * the grammar's rule (a repository or a path widens the search, a second ref
  * is refused). Every one of them is in the address
- * (`#/code/search?q=&mode=&repo=&path=&ref=`), so a search is a link, and the
- * back button walks a reader's searches rather than their keystrokes.
+ * (`#/code/search?q=&mode=&repo=&path=&ref=`), so a search is a link. A press
+ * of Search PUSHES its phrase, path and ref (`nav.submit`), so the back button
+ * walks a reader's searches rather than their keystrokes; the mode and the
+ * repository are controls that narrow the search on screen, and replace. The
+ * boxes are a draft of what the address says (`useDraft`), seeded again
+ * whenever it comes to say something else — Back, or ⌘K's "See every match"
+ * opening a phrase on this screen — so a box never shows one phrase over the
+ * lines of another.
  *
  * # Asked when the reader presses Search, never per keystroke
  *
  * A search across the company is a scatter over every git node that holds a
  * repository the reader reads: one signed request each, and a second round
  * for what the first left unanswered. So the phrase is asked when it is
- * submitted, as Work's search is, and never as it is typed.
+ * submitted, as Work's search is, and never as it is typed — and a reconnect
+ * asks again only a search that never reached the engine
+ * (`refetchOnReconnect: "unreached"`): an answer names the commit each
+ * repository was searched at, so asking again only repeats the work, and a
+ * rolling restart reconnecting every socket would ask every open tab's at
+ * once.
  *
  * # Over REST, at no floor
  *
@@ -35,7 +46,7 @@
  * and a warning where any repository was left unanswered or the lines cut.
  */
 
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef } from "react";
 import {
   Button,
   Callout,
@@ -46,7 +57,7 @@ import {
   Skeleton,
 } from "@crewlethq/ui";
 import { SearchGlyph } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { QueryState } from "~/components/common.tsx";
 import { CODE_SEARCH_MODES } from "~/contract/code.ts";
@@ -79,19 +90,23 @@ export function Search() {
   // `/` FOCUSES THIS SCREEN'S PHRASE rather than opening the palette over it.
   const box = useRef<HTMLInputElement>(null);
   useSearchTarget(box);
-  const [q, setQ] = useParam("q", "", "filter");
+  const nav = useNavigator();
+  const [q] = useParam("q", "", "filter");
   const [modeRaw, setMode] = useParam("mode", "literal", "filter");
   const mode = asMode(modeRaw);
   const [repo, setRepo] = useParam("repo", EVERY_REPO, "filter");
-  const [path, setPath] = useParam("path", "", "filter");
-  const [ref, setRef] = useParam("ref", "", "filter");
-  // WHAT IS TYPED IS NOT YET ASKED: see the file's doc.
-  const [typed, setTyped] = useState({ q, path, ref });
+  const [path] = useParam("path", "", "filter");
+  const [ref] = useParam("ref", "", "filter");
+  // WHAT IS TYPED IS NOT YET ASKED, and is the address's again whenever the
+  // address moves: see the file's doc.
+  const [typedQ, setTypedQ] = useDraft(q);
+  const [typedPath, setTypedPath] = useDraft(path);
+  const [typedRef, setTypedRef] = useDraft(ref);
   const asked = q.trim() !== "";
   const answer = useCodeQuery(
     "code_search",
     { q, mode, repo: repo || undefined, path: path || undefined, ref: ref || undefined },
-    { enabled: asked },
+    { enabled: asked, refetchOnReconnect: "unreached" },
   );
   // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
   // first page, by name.
@@ -114,9 +129,7 @@ export function Search() {
         className="work-search-form"
         onSubmit={(e) => {
           e.preventDefault();
-          setQ(typed.q.trim());
-          setPath(typed.path.trim());
-          setRef(typed.ref.trim());
+          nav.submit({ q: typedQ.trim(), path: typedPath.trim(), ref: typedRef.trim() });
         }}
       >
         <div className="work-search-phrase">
@@ -127,8 +140,8 @@ export function Search() {
             ref={box}
             leading={<SearchGlyph size="sm" />}
             placeholder="A name, a string or a pattern (repo:, path: and ref: filter it)"
-            value={typed.q}
-            onChange={(e) => setTyped({ ...typed, q: e.target.value })}
+            value={typedQ}
+            onChange={(e) => setTypedQ(e.target.value)}
           />
         </div>
         <div className="work-search-how">
@@ -162,14 +175,14 @@ export function Search() {
           <Input
             aria-label="Path"
             placeholder="Path, e.g. internal/"
-            value={typed.path}
-            onChange={(e) => setTyped({ ...typed, path: e.target.value })}
+            value={typedPath}
+            onChange={(e) => setTypedPath(e.target.value)}
           />
           <Input
             aria-label="Ref"
             placeholder="Branch, tag or commit"
-            value={typed.ref}
-            onChange={(e) => setTyped({ ...typed, ref: e.target.value })}
+            value={typedRef}
+            onChange={(e) => setTypedRef(e.target.value)}
           />
         </div>
       </form>

@@ -571,18 +571,27 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 // much shorter that mutation log is than without the code log, and whether
 // the vector changelog beside it still holds a year-five re-embedding.
 //
+// THE SAME FIT IS WHAT THE PRE-BOOT STEP COSTS. Before the first boot no log
+// exists and the company has no byte rate of its own to read, so one whose
+// seats will work through changes sets the code log at the reference day's
+// ratio, twice the mutation log at its least — the set ceiling k two finds —
+// and the pages that tell it to print that ceiling on 100 GiB free and what
+// the mutation log and the vector changelog are created at beside it.
+//
 // Mutation: compare against the mutation log beside a derived code log
 // rather than without one, and the figures the pages print fall by about a
-// third; hold the share at k one and a half, and the re-embedding fits.
+// third; hold the share at k one and a half, and the re-embedding fits;
+// print the pre-boot step at k one, and its ceiling and logs move off what
+// the pages say.
 func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
 	t.Parallel()
 	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
 	const example = 100 * gib
 	without := firstBootFit(t, config.Stream{}, example, codeLog)[trackerLog].Bytes
-	// AT K TIMES: the mutation log and the vector changelog a first boot
-	// creates beside the least code log set at no less than k times the
-	// mutation log beside it.
-	at := func(k int64) (mutation, vectorLog int64) {
+	// AT K TIMES: the least code log set at no less than k times the
+	// mutation log beside it, and the mutation log and the vector changelog
+	// a first boot creates beside that ceiling.
+	at := func(k int64) (codeCeiling, mutation, vectorLog int64) {
 		lo, hi := config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling
 		for lo < hi {
 			mid := lo + (hi-lo)/2
@@ -594,11 +603,11 @@ func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
 			}
 		}
 		fit := firstBootFit(t, config.Stream{CodeLogMaxBytes: lo}, example, "")
-		return fit[trackerLog].Bytes, fit[vectors].Bytes
+		return lo, fit[trackerLog].Bytes, fit[vectors].Bytes
 	}
 	shorter := make(map[int64]int64)
 	for _, k := range []int64{2, 3} {
-		mutation, vectorLog := at(k)
+		_, mutation, vectorLog := at(k)
 		shorter[k] = int64(math.Round(100 * (1 - float64(mutation)/float64(without))))
 		if vectorLog >= yearFivePeak {
 			t.Errorf("a code log at %d times the mutation log on %d GiB free leaves the vector "+
@@ -618,10 +627,35 @@ func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
 		"the mutation log about %d %% shorter than without the code log, and at three times about "+
 		"%d %% shorter, and the vector changelog beside it too small for a year-five re-embedding",
 		shorter[2], shorter[3])
+	// THE PRE-BOOT STEP: the code log set at twice the mutation log beside
+	// it, the reference day's least, and the two logs a first boot creates
+	// beside that ceiling — one figure for both, since their asks are the
+	// same quarter of the volume and the fit scales them alike.
+	preBootCode, preBootMutation, preBootVectors := at(2)
+	if gibText(preBootMutation) != gibText(preBootVectors) {
+		t.Errorf("beside a code log set at %d bytes on %d GiB free the mutation log is created at %d "+
+			"bytes and the vector changelog at %d, which the pages print as one figure: reword them",
+			preBootCode, example/gib, preBootMutation, preBootVectors)
+	}
+	preBoot := fmt.Sprintf("at 100 GiB free a code log set at twice the mutation log beside it is %s "+
+		"GiB, and the mutation log and the vector changelog are each created at %s GiB",
+		gibText(preBootCode), gibText(preBootMutation))
 	for _, file := range []string{"docs/guides/replication.md", "internal/config/retention.go"} {
-		if !strings.Contains(prose(t, file), want) {
-			t.Errorf("%s does not say %q", file, want)
+		page := prose(t, file)
+		for _, say := range []string{want, preBoot} {
+			if !strings.Contains(page, say) {
+				t.Errorf("%s does not say %q", file, say)
+			}
 		}
+	}
+	// The YAML reference prints the same two figures in the field's comment,
+	// read with its "#" markers off as a reader reads it.
+	const reference = "docs/getting-started/configuration.md"
+	commented := strings.Join(slices.DeleteFunc(strings.Fields(prose(t, reference)),
+		func(field string) bool { return field == "#" }), " ")
+	if say := fmt.Sprintf("(at 100 GiB free, %s GiB beside a mutation log of %s GiB)",
+		gibText(preBootCode), gibText(preBootMutation)); !strings.Contains(commented, say) {
+		t.Errorf("%s does not say %q", reference, say)
 	}
 }
 

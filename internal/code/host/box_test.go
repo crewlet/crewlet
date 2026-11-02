@@ -945,19 +945,20 @@ func TestABoxPushNamesItsRun(t *testing.T) {
 
 // A BOX'S PUSH ON AN ITEM WITH A LONG KEY LANDS: a work key a vendor wrote
 // past the bound — a GitLab merge request's, nesting its project's whole path
-// — is fitted where the host stamps it (code.FitProvenance), so the run's
-// every push is not refused as an invalid proposal for a label it never
-// chose; the two ids are the engine's own and stamped whole.
+// — and that project's path itself are fitted where the host stamps them
+// (code.FitProvenance), so the run's every push is not refused as an invalid
+// proposal for a label it never chose; the two ids are the engine's own and
+// stamped whole.
 //
-// Mutation: stamp the key raw — the push is refused as an invalid proposal —
-// red.
+// Mutations: stamp the key raw, or the project raw — the push is refused as
+// an invalid proposal — red.
 func TestABoxPushOnAnItemWithALongKeyLands(t *testing.T) {
 	t.Parallel()
 	c, _ := boxCase(t, codetest.SoloOptions{})
 	ref, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
 	long := strings.Repeat("group/", 48) + "project!12"
 	c.Fleet.Runs().SetProvenance(ref, code.RunProvenance{WorkBackend: "gitlab", WorkKey: long,
-		Model: "fixture-model", CodingAgent: "claude-code"})
+		WorkProject: strings.TrimSuffix(long, "!12"), Model: "fixture-model", CodingAgent: "claude-code"})
 	clone := box.Clone(c.BoxURL(0))
 	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
 	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"

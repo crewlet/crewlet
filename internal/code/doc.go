@@ -616,13 +616,14 @@
 // carries the company day its quota counted it on ([PushEntry.Day]),
 // nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
 // and about 893 in a burst. A seat's CODING BOX's push of the commit takes
-// 224.0 bytes more than a person's (push=box): its principal names, beside
+// 245.0 bytes more than a person's (push=box): its principal names, beside
 // the run the engine's write names, the coding run that pushed — the
 // launch's id, a UUID — the coding agent the box ran (`claude-code`) and
-// the identity of the work item its run was launched for (a Worklet task's
-// UUID, [RunProvenance.WorkID], 49 of those bytes), and its way is `git`;
-// so 1 604 bytes alone in its record and about 1 016 in a burst (the
-// person's 792 and the same 224), the most a seat's push takes of the log, at which the code log's
+// the identity and the project of the work item its run was launched for (a
+// Worklet task's UUID, [RunProvenance.WorkID], 49 of those bytes, and its
+// project's key, [RunProvenance.WorkProject], 21 for `ENG`), and its way is
+// `git`; so 1 625 bytes alone in its record and about 1 037 in a burst (the
+// person's 792 and the same 245), the most a seat's push takes of the log, at which the code log's
 // day prices every one of the reference company's (internal/worklet's
 // codeLogDay). The compactions that merge the pushes' packs add
 // their own records, MEASURED a push (internal/code/compact's steady arms,
@@ -1021,7 +1022,8 @@
 // gate a read left nil, so no consumer can take a gate nobody read for a rule
 // that has none. A read that presents the gates asks one repository's detail
 // for them ([ReadQuery.Gates], [RepoDetail.Gates]) — the API's question of a
-// repository, code_get_repo — and a decide that rewrites the settings reads
+// repository where its caller asks (`gates=true`), code_get_repo — and a
+// decide that rewrites the settings reads
 // the rules whole beside the row, as it reads the path owners
 // ([protectionsIn]): the lifecycle decides and the reconcile.
 //

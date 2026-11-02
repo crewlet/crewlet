@@ -81,7 +81,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	}
 	var after *searchPlace
 	if sq.After != nil {
-		raw, err := sq.After.Raw()
+		raw, err := sq.After.Raw() //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return code.GitAnswer{}, err
 		}

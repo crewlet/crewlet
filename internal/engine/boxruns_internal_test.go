@@ -83,7 +83,8 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 		turn, launch := uuid.Must(uuid.NewV7()).String(), uuid.NewString()
 		row := sandbox.PendingRun{TurnID: turn, LaunchID: launch, Status: tc.status, AgentHandle: "alice",
 			CodingAgent: "claude-code", Launch: sandbox.LaunchRecord{Model: "m"},
-			WorkItem: &types.WorkItem{Backend: "native", ID: "0190d8f0-9999-7000-8000-0123456789ab", Key: "ENG-1"},
+			WorkItem: &types.WorkItem{Backend: "native", ID: "0190d8f0-9999-7000-8000-0123456789ab", Key: "ENG-1",
+				Project: "ENG"},
 			Repos: []sandbox.RunRepo{{Repo: "web", RepoID: uuid.NewString(), Branch: "seats/alice/x",
 				Access: sandbox.RepoWrite}, {Repo: "api", RepoID: uuid.NewString(), Access: "admin"}}}
 		if tc.ended {
@@ -99,7 +100,7 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 		}
 		want := host.BoxRun{Ref: host.BoxRunRef{TurnID: turn, LaunchID: launch}, Live: tc.live, Status: tc.status,
 			Seat: "alice", Provenance: code.RunProvenance{TurnID: turn, RunID: launch, WorkBackend: "native",
-				WorkID: "0190d8f0-9999-7000-8000-0123456789ab", WorkKey: "ENG-1", Model: "m",
+				WorkID: "0190d8f0-9999-7000-8000-0123456789ab", WorkKey: "ENG-1", WorkProject: "ENG", Model: "m",
 				CodingAgent: "claude-code"},
 			Repos: []host.BoxGrant{
 				{RepoID: row.Repos[0].RepoID, Name: "web", Access: code.AccessWrite, Branch: "refs/heads/seats/alice/x"},

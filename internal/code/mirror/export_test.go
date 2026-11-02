@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -103,13 +104,53 @@ func StartOrder(queued []string, ended map[string]time.Time) []string {
 	}
 }
 
+// FailingPastThePromise is what [Mirrors.AlarmReading] counts a second after
+// the last of turns, where MaxAttempts push mirrors' attempts started at the
+// first of them and run through every one — each of their repositories
+// worked at every turn, as the listing names them — and a pull mirror is
+// listed and worked at each turn while they hold every slot.
+func FailingPastThePromise(turns []time.Time) int {
+	now := turns[0]
+	m := &Mirrors{now: func() time.Time { return now }, known: map[mirrorKey]listed{},
+		running: map[mirrorKey]bool{}, memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{},
+		queued: map[mirrorKey]queuedAttempt{}}
+	var repos []string
+	for i := range MaxAttempts {
+		key := mirrorKey{repo: fmt.Sprintf("busy-%d", i), out: true}
+		l := listed{kind: kindPush, name: key.repo}
+		m.known[key], m.running[key] = l, true
+		m.claim(key, l, now)
+		repos = append(repos, key.repo)
+	}
+	late := mirrorKey{repo: "late"}
+	for _, at := range turns {
+		now = at
+		m.known[late] = listed{kind: kindSync, name: late.repo}
+		for _, repo := range append(slices.Clone(repos), late.repo) {
+			if err := m.Work(context.Background(), repo, statelog.Position{}); err != nil {
+				panic(err)
+			}
+		}
+	}
+	now = now.Add(time.Second)
+	var r statelog.Reading
+	m.AlarmReading(&r)
+	return r.CodeMirrorFailing
+}
+
+// RefsOf is the branches and tags of the repository at dir as every attempt
+// lists a copy's or a scratch's ([Mirrors.refs]).
+func (m *Mirrors) RefsOf(ctx context.Context, dir string) (map[string]string, error) {
+	return m.refs(ctx, dir, "")
+}
+
 // Remembered is how many entries the worker holds of the repositories its
-// listings named: what they said, its attempts' memory, its health and its
-// queued attempts, together.
+// listings named: what they said, its attempts' memory, its health, what its
+// pushes left level and its queued attempts, together.
 func (m *Mirrors) Remembered() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.known) + len(m.memory) + len(m.health) + len(m.queued)
+	return len(m.known) + len(m.memory) + len(m.health) + len(m.levels) + len(m.queued)
 }
 
 // FailingWhileQueued is what [Mirrors.AlarmReading] counts a second after the

@@ -701,23 +701,53 @@ type CodeMirrorPushed struct {
 	// "<ref> <oid>"; Deleted the refs it deleted there, which the repository
 	// no longer has; Waiting the protected branches it left where they were,
 	// none of whose commits newer than what the other host holds is green.
-	Updated []string `json:"updated,omitempty"`
-	Deleted []string `json:"deleted,omitempty"`
-	Waiting []string `json:"waiting,omitempty"`
+	// Each is the first [CodeMirrorPushedRefs] of its kind in ref order, and
+	// its count beside it all of them ([CodeMirrorPushed.WithRefs]).
+	Updated      []string `json:"updated,omitempty"`
+	UpdatedCount int      `json:"updated_count,omitempty"`
+	Deleted      []string `json:"deleted,omitempty"`
+	DeletedCount int      `json:"deleted_count,omitempty"`
+	Waiting      []string `json:"waiting,omitempty"`
+	WaitingCount int      `json:"waiting_count,omitempty"`
+}
+
+// CodeMirrorPushedRefs is the most refs each list of a [CodeMirrorPushed]
+// names: SIXTEEN, the first in ref order, beside the count of the whole list.
+// A first push of a repository sets every ref it covers, up to
+// code.MaxRefsPerRepo (100 000), and an account naming them all — some 60
+// bytes a ref — is megabytes on every data node's event log, and past some 45
+// bytes a ref name over queue.MaxPayloadBytes (8 MiB): refused at its publish
+// and lost, the very push the audit most needs. Sixteen keeps the worst case —
+// three lists of refs at gitref.MaxRefNameBytes (255) whose every byte JSON
+// escapes to six, each beside a SHA-256 id — some 77 KB, two orders of
+// magnitude under that ceiling, as events.MaxDiagnosticBytes reasons for a
+// free-text field.
+const CodeMirrorPushedRefs = 16
+
+// WithRefs is e with what one push moved: each of updated, deleted and
+// waiting — in ref order — cut to its first [CodeMirrorPushedRefs], and
+// counted whole.
+func (e CodeMirrorPushed) WithRefs(updated, deleted, waiting []string) CodeMirrorPushed {
+	first := func(refs []string) []string { return slices.Clone(refs[:min(len(refs), CodeMirrorPushedRefs)]) }
+	e.Updated, e.UpdatedCount = first(updated), len(updated)
+	e.Deleted, e.DeletedCount = first(deleted), len(deleted)
+	e.Waiting, e.WaitingCount = first(waiting), len(waiting)
+	return e
 }
 
 // EventType is the "code_mirror_pushed" wire type.
 func (CodeMirrorPushed) EventType() string { return "code_mirror_pushed" }
 
-// SummaryFor names the repository, the other host and what moved there.
+// SummaryFor names the repository, the other host and what moved there, by
+// the counts of the whole push.
 func (e CodeMirrorPushed) SummaryFor(actor string) string {
-	what := "pushed " + e.RepoName + " to its mirror " + e.URL + ": " + strconv.Itoa(len(e.Updated)) +
+	what := "pushed " + e.RepoName + " to its mirror " + e.URL + ": " + strconv.Itoa(e.UpdatedCount) +
 		" ref(s) set"
-	if len(e.Deleted) > 0 {
-		what += ", " + strconv.Itoa(len(e.Deleted)) + " deleted"
+	if e.DeletedCount > 0 {
+		what += ", " + strconv.Itoa(e.DeletedCount) + " deleted"
 	}
-	if len(e.Waiting) > 0 {
-		what += ", " + strconv.Itoa(len(e.Waiting)) + " waiting for green"
+	if e.WaitingCount > 0 {
+		what += ", " + strconv.Itoa(e.WaitingCount) + " waiting for green"
 	}
 	return lead(actor, what)
 }

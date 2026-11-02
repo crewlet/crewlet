@@ -33,21 +33,11 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import {
-  Button,
-  Callout,
-  Disclosure,
-  Input,
-  Select,
-  Skeleton,
-  Stack,
-  Tag,
-  Textarea,
-} from "@crewlethq/ui";
+import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import {
   CATEGORY_CHOICES,
@@ -58,19 +48,24 @@ import {
   severityWord,
 } from "~/lib/code.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { lineSide, parsePatch } from "~/lib/patch.ts";
+import { lineSide } from "~/lib/patch.ts";
+import { usePatchPages } from "~/lib/patchPages.ts";
 import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
+  CodeChangeAnswer,
   CodeChangeDetail,
   CodeCommentRow,
   CodeDiffFile,
   CodeFindingPlace,
   CodeFindingRow,
 } from "~/protocol/index.ts";
+import { PatchPager } from "../PatchPager.tsx";
 import { ReplyComposer, Thread } from "./Conversation.tsx";
-import { useChangePart } from "./reads.ts";
+import { CHANGE_POLL_MS, changePartParams, useChangePart } from "./reads.ts";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -91,6 +86,13 @@ function numberOn(line: DiffLine, side: "old" | "new"): number | null {
   if (side === "new") return line.after;
   return line.kind === "add" ? null : line.before;
 }
+
+// A PAGE OF A REVISION'S FILES, as `usePaged` reads it: its files, each by its
+// path (base64 where git cannot spell it as text), and the cursor to the next.
+// MODULE CONSTANTS, so the list is the same list until a page arrives.
+const filesOf = (a: CodeChangeAnswer): readonly CodeDiffFile[] => a.diff?.files ?? [];
+const fileId = (f: CodeDiffFile): string => f.path_b64 ?? f.path;
+const nextOf = (a: CodeChangeAnswer): string => a.next ?? "";
 
 /** One finding as its revision places it: raised here, moved, outdated or gone. */
 interface Placed {
@@ -115,16 +117,33 @@ export function Files({ change }: { change: CodeChangeDetail }) {
   const sinceAsked = wholeParam(sinceParam);
   const since = sinceAsked !== null && sinceAsked < rev ? sinceAsked : null;
   const file = fileParam || threadRoot?.anchor?.path || "";
-  const files = useChangePart(change, "files", {
-    revision: rev,
-    ...(since !== null ? { since_revision: since } : {}),
-  });
+  // THE REVISION'S FILES, EVERY PAGE THE READER ASKS FOR: a revision of a
+  // large change lists past one answer (a few hundred files a page), and each
+  // later page is the `files` part's own question from the cursor the page
+  // before ended at, joined to it (`lib/usePaged.ts`).
+  const filesParams = useMemo(
+    () =>
+      changePartParams({ repo: change.repo, number: change.number }, "files", {
+        revision: rev,
+        ...(since !== null ? { since_revision: since } : {}),
+      }),
+    [change.repo, change.number, rev, since],
+  );
+  const files = useCodeQuery("code_change", filesParams, { pollMs: CHANGE_POLL_MS });
+  const pagedFiles = usePaged(
+    files,
+    filesParams,
+    (cursor) => codeRest.query("code_change", { ...filesParams, cursor }),
+    filesOf,
+    fileId,
+    nextOf,
+  );
   const findings = useChangePart(change, "findings", { revision: rev });
   // A FINDING IS DRAFTED ON THE HEAD, read whole: the lines a review of the
   // head judges, never an interdiff's or an earlier revision's.
   const drafting = rev === change.revision && since === null && changeLive(change.state);
   const drafts = useReviewDrafts(change.id, rev);
-  const listed = files.data?.diff?.files ?? [];
+  const listed = pagedFiles.items;
   const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
   return (
     <Stack gap={3}>
@@ -179,7 +198,7 @@ export function Files({ change }: { change: CodeChangeDetail }) {
         detail={files.detail}
         loading={files.loading && !files.data}
         empty={
-          files.data && listed.length === 0
+          files.data && listed.length === 0 && !pagedFiles.more
             ? {
                 title: "No file changed",
                 hint: "This revision changes nothing against what it is compared with.",
@@ -188,24 +207,39 @@ export function Files({ change }: { change: CodeChangeDetail }) {
         }
       >
         <div className="code-files">
-          <ul className="code-files__list" aria-label="Files changed">
-            {listed.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className="code-files__file"
-                  aria-current={f.path === file || undefined}
-                  onClick={() => setFile(f.path)}
+          <Stack gap={2}>
+            <ul className="code-files__list" aria-label="Files changed">
+              {listed.map((f) => (
+                <li key={fileId(f)}>
+                  <button
+                    type="button"
+                    className="code-files__file"
+                    aria-current={f.path === file || undefined}
+                    onClick={() => setFile(f.path)}
+                  >
+                    <span className="mono">{f.path}</span>{" "}
+                    <span className="muted">
+                      {f.status} +{f.added} −{f.deleted}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {pagedFiles.more && (
+              <span>
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={pagedFiles.next}
+                  disabled={pagedFiles.paging}
+                  loading={pagedFiles.paging}
                 >
-                  <span className="mono">{f.path}</span>{" "}
-                  <span className="muted">
-                    {f.status} +{f.added} −{f.deleted}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {files.data?.next && <p className="muted">More files changed than one page lists.</p>}
+                  Load more files
+                </Button>
+              </span>
+            )}
+            {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
+          </Stack>
           {file ? (
             <FileDiff
               change={change}
@@ -255,14 +289,26 @@ function FileDiff({
   drafts: ReviewDrafts | null;
   thread: string;
 }) {
-  const patch = useChangePart(
-    change,
-    "diff",
-    { revision: rev, file: path, ...(since !== null ? { since_revision: since } : {}) },
-    !entry?.binary,
+  const params = useMemo(
+    // THE CHANGE BY ITS NAME: a poll hands in a new detail of the same change,
+    // which is the same question.
+    () =>
+      changePartParams({ repo: change.repo, number: change.number }, "diff", {
+        revision: rev,
+        file: path,
+        ...(since !== null ? { since_revision: since } : {}),
+      }),
+    [change.repo, change.number, rev, path, since],
   );
-  const text = patch.data?.diff?.patch ?? "";
-  const hunks = useMemo(() => parsePatch(text), [text]);
+  const patch = useCodeQuery("code_change", params, {
+    enabled: !entry?.binary,
+    pollMs: CHANGE_POLL_MS,
+  });
+  // EVERY PAGE OF THE PATCH the reader asks for, each its part's own question
+  // from the cursor the page before it ended at (`lib/patchPages.ts`).
+  const { paged, hunks } = usePatchPages(patch, params, (cursor) =>
+    codeRest.query("code_change", { ...params, cursor }),
+  );
   const [pick, setPick] = useState<Pick | null>(null);
   const ofFile: Placed[] = findings
     .filter((f) => f.path === path)
@@ -394,11 +440,7 @@ function FileDiff({
               return n !== null && n >= pick.start && n <= pick.end;
             }}
           />
-          {patch.data?.next && (
-            <Callout variant="neutral">
-              This file's patch runs past one page: its end is not drawn.
-            </Callout>
-          )}
+          <PatchPager paged={paged} />
         </>
       )}
     </section>

@@ -11,8 +11,9 @@
  * a file, a blame, a history — which the repository's home git node answers
  * (`code_tree`, `code_blob`, `code_blame`, `code_log`), every revision a
  * request names by a ref resolved once, at the caller's freshness. A revision
- * named by a whole commit id is answered immutably, and the hook keeps its
- * tag, so a Permalink is read once and never sent twice. Content is not polled:
+ * named by a whole commit id is answered immutably, and the tab keeps the
+ * answer (`lib/useCodeQuery.ts`), so a Permalink left and come back to is
+ * answered with no request while the tab keeps it. Content is not polled:
  * a reader reading a file reads the revision they opened, and the Permalink
  * names it whole.
  *
@@ -68,6 +69,7 @@ import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
 import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
+import { useRevisions } from "./refs.tsx";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -93,6 +95,12 @@ export function RepositoryPage({ repo }: { repo: string }) {
   const named = isRepoName(repo);
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named, pollMs: REPO_POLL_MS });
   const [tab, setTab] = useTab<RepoTab>("tab", REPO_TABS);
+  // THE BRANCHES AND TAGS ITS PICKERS LIST, read here — once, under the
+  // repository's current name — while a tab that draws a picker is open, so a
+  // move between the root and a path, or between Files and Commits, asks
+  // neither listing again (`refs.tsx`'s useRevisions).
+  const current = read.data?.repo?.name ?? "";
+  const revisions = useRevisions(current, current !== "" && (tab === "files" || tab === "commits"));
   const panelId = useId();
   if (!named) {
     return (
@@ -169,9 +177,9 @@ export function RepositoryPage({ repo }: { repo: string }) {
         tabIndex={0}
       >
         {tab === "overview" && <Overview repo={detail} />}
-        {tab === "files" && <Files repo={detail} />}
+        {tab === "files" && <Files repo={detail} revisions={revisions} />}
         {tab === "branches" && <Branches repo={detail} />}
-        {tab === "commits" && <Commits repo={detail} />}
+        {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
         {tab === "settings" && <Settings repo={detail} />}
@@ -362,7 +370,28 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
   // THE CONFIGURATION, offered only to a reader who may open it — the rule
   // every lock is drawn by.
   const canConfigure = held !== null && closedBy(CONFIG_PATH, held) === null;
-  const gates = new Map((repo.gates ?? []).map((g) => [g.pattern, g.gate]));
+  // WHO OWNS ITS PATHS AND ITS RULES' MERGE GATES are this tab's alone, asked
+  // by name (`path_owners`, `gates`): the page's own read of the row, polled
+  // every minute, carries neither — at their bound a quarter and half a
+  // mebibyte of JSON. Asked once as the tab opens, at the tab's floor, and
+  // again after a write of the reader's own, as every code question is.
+  const settings = useCodeQuery("code_repo", { name: repo.name, path_owners: true, gates: true });
+  const full = settings.data?.repo;
+  const gates = new Map((full?.gates ?? []).map((g) => [g.pattern, g.gate]));
+  const owners = full?.path_owners ?? [];
+  const detailState =
+    settings.loading && !full ? (
+      <Skeleton variant="text" rows={2} label="Loading its rules and owners" />
+    ) : (
+      <QueryState
+        error={settings.error}
+        refusal={settings.refusal}
+        detail={settings.detail}
+        loading={false}
+      >
+        {null}
+      </QueryState>
+    );
   const rules = repo.protections ?? [];
   return (
     <Stack gap={4}>
@@ -427,6 +456,10 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         <h3 className="t-label">Protection rules</h3>
         {rules.length === 0 ? (
           <p className="muted">No rule protects a ref: anybody who may write may push to any.</p>
+        ) : !full ? (
+          // A RULE IS NEVER DRAWN WITHOUT ITS GATE, which a line with none
+          // would read as: the rules wait for the read that carries them.
+          detailState
         ) : (
           <ul className="code-rules">
             {rules.map((rule) => {
@@ -446,11 +479,13 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       </section>
       <section aria-label="Path owners">
         <h3 className="t-label">Path owners</h3>
-        {(repo.path_owners ?? []).length === 0 ? (
+        {!full ? (
+          detailState
+        ) : owners.length === 0 ? (
           <p className="muted">No path is owned: a change asks reviews of nobody by its paths.</p>
         ) : (
           <ul className="code-rules">
-            {(repo.path_owners ?? []).map((p) => (
+            {owners.map((p) => (
               <li key={`${p.owner.kind}:${p.owner.ref}`}>
                 <span>{ownerName(p.owner)}</span>
                 <span className="muted mono">{p.paths.join(", ")}</span>

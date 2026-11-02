@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -45,6 +46,21 @@ type source struct {
 	// `GET info/refs?service=git-upload-pack`, whatever the protocol does
 	// after it.
 	reads *atomic.Int64
+	// served counts the bytes the served repository answered upload-pack's
+	// requests with past its advertisement — under protocol v2, which every
+	// git the engine runs speaks, each ls-refs listing and each fetch.
+	served *atomic.Int64
+}
+
+// counted is a response every byte of which is added to n.
+type counted struct {
+	http.ResponseWriter
+	n *atomic.Int64
+}
+
+func (c counted) Write(p []byte) (int, error) {
+	c.n.Add(int64(len(p)))
+	return c.ResponseWriter.Write(p)
 }
 
 func newSource(t *testing.T) *source {
@@ -53,12 +69,15 @@ func newSource(t *testing.T) *source {
 	root := t.TempDir()
 	bare := filepath.Join(root, "src.git")
 	c.Run(t, "", "init", "-q", "--bare", bare)
-	reads := &atomic.Int64{}
+	reads, served := &atomic.Int64{}, &atomic.Int64{}
 	backend := c.HTTPBackend(root)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs") &&
 			r.URL.Query().Get("service") == "git-upload-pack" {
 			reads.Add(1)
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+			w = counted{ResponseWriter: w, n: served}
 		}
 		backend.ServeHTTP(w, r)
 	}))
@@ -69,7 +88,8 @@ func newSource(t *testing.T) *source {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", ca)
-	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git", reads: reads}
+	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git", reads: reads,
+		served: served}
 }
 
 // commit commits files in the source's work tree.
@@ -782,6 +802,248 @@ func TestAPushMirrorWaitsForGreen(t *testing.T) {
 	}
 }
 
+// pushMirrored is a harness whose source takes pushes — the other host a
+// push mirror pushes to — and the repository "pushed", declared with the
+// settings settings gives for that host's URL, with a person's work tree and
+// a push of refspecs from it to "pushed", which fails the case unless every
+// ref went through.
+func pushMirrored(t *testing.T, settings func(url string) code.RepoSettings) (*harness, *codetest.Person, string,
+	func(refspecs ...string)) {
+
+	t.Helper()
+	h := newHarness(t, code.Limits{})
+	h.src.c.Run(t, "", "--git-dir="+h.src.bare, "config", "http.receivepack", "true")
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: settings(h.src.url)})
+	p := codetest.NewPerson(t, h.f, "ceo")
+	url := h.f.Nodes()[0].URL() + "/git/pushed"
+	wt := p.Init()
+	push := func(refspecs ...string) {
+		t.Helper()
+		if got := p.Push(t.Context(), wt, url, refspecs...); got.Err != nil {
+			t.Fatalf("push %v: %s", refspecs, got)
+		}
+	}
+	return h, p, wt, push
+}
+
+// mirroredTo is the fixture settings — main protected by a rule with no
+// gate, so every push to it lands its green — with a push mirror to url
+// covering refs (the defaults, where it names none).
+func mirroredTo(url string, refs ...string) code.RepoSettings {
+	s := codetest.Settings()
+	s.MirrorTo = &code.MirrorTarget{URL: url, Credential: "${MIRROR_TOKEN}", As: codetest.FixturePat, Refs: refs}
+	return s
+}
+
+// A MIRROR LISTS A COPY PAST WHAT A CAPTURE HOLDS, LEAVING THE SEATS OUT:
+// every attempt lists the branches and tags of a copy or a scratch, and a
+// repository may hold far more of them than gitproc.CaptureMax holds of a
+// listing — here more tags than a megabyte of `<id> <ref>` lines — beside
+// branches in the seats' namespace; the listing answers every tag and main,
+// and none of the seats' branches, which for-each-ref leaves out itself.
+//
+// Mutation: capture the listing (Cmd.Stdout nil), and git's output outgrows
+// it; drop for-each-ref's --exclude, and the seats' branches are listed.
+func TestAMirrorListsACopyPastWhatACaptureHoldsLeavingTheSeatsOut(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	f := gittest.NewFixture(t)
+	s := gittest.Bare(t, f)
+	tags := gitproc.CaptureMax / 40 // each line at least an id, a space and a ref: past 40 bytes
+	refs := map[string]string{"refs/heads/main": f.Tip()}
+	for i := range tags {
+		refs[fmt.Sprintf("refs/tags/t-%06d", i)] = f.Tip()
+	}
+	for i := range 3 {
+		refs[fmt.Sprintf("%sana/w-%d", gitref.SeatsRoot, i)] = f.Tip()
+	}
+	gittest.SetRefs(t, s.Dir, refs)
+	got, err := h.mirrors().RefsOf(t.Context(), s.Dir)
+	if err != nil {
+		t.Fatalf("listing a copy of %d tags: %v", tags, err)
+	}
+	if len(got) != tags+1 || got["refs/heads/main"] != f.Tip() {
+		t.Errorf("the listing named %d refs (main at %q); want main at %s and %d tags", len(got),
+			got["refs/heads/main"], f.Tip(), tags)
+	}
+	for ref := range got {
+		if strings.HasPrefix(ref, gitref.SeatsRoot) {
+			t.Errorf("the listing named %s, in the seats' namespace", ref)
+		}
+	}
+}
+
+// A PUSH MIRROR LANDS BESIDE A FORGE'S OTHER REFS: the other host holds
+// more refs than a capture holds of a listing — a forge's pull-request refs,
+// refs/pull/<n>/head, which no push mirror covers — and the push mirror's
+// main still lands there, and the other host answers its listing with a few
+// bytes rather than the pull-request refs: its ls-remote asks for the
+// branches and tags its patterns reach, which protocol v2 sends as ref
+// prefixes, never for the whole advertisement. Once the other host also
+// holds as many branches beside main — refs the arms do reach, and the
+// listing reads as it streams — the mirror's next main still lands.
+//
+// Mutation: list the other host with `ls-remote --refs` alone and capture
+// it, and its listing outgrows the capture, failing every attempt; drop the
+// arms alone, and the other host answers with every pull-request ref;
+// capture the listing of the arms, and the branches outgrow it.
+func TestAPushMirrorLandsBesideAForgesOtherRefs(t *testing.T) {
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings { return mirroredTo(url) })
+	theirs := h.src.commit(map[string]string{"x": "x\n"}, "the forge's own")
+	h.src.push("HEAD:refs/pull/0/head")
+	var create strings.Builder
+	pulls := gitproc.CaptureMax / 40 // each line an id, a tab and refs/pull/<n>/head: past 40 bytes
+	for n := 1; n < pulls; n++ {
+		fmt.Fprintf(&create, "create refs/pull/%d/head %s\n", n, theirs)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(create.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("creating %d pull-request refs at the other host: %v\n%s", pulls, err, stderr)
+	}
+
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main")
+	h.src.served.Store(0)
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != a {
+		t.Fatalf("the other host's main is %q beside its %d pull-request refs; want %s", got, pulls, a)
+	}
+	if got, whole := h.src.served.Load(), int64(pulls)*40; got >= whole {
+		t.Errorf("the other host answered the mirror's listing with %d bytes; want far under the %d its "+
+			"pull-request refs alone take, which the mirror never asks for", got, whole)
+	}
+
+	// AS MANY BRANCHES BESIDE MAIN: an arm the mirror asks for, past what a
+	// capture holds, which the listing reads as it streams.
+	var branches strings.Builder
+	for n := range pulls {
+		fmt.Fprintf(&branches, "create refs/heads/b-%06d %s\n", n, theirs)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(branches.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("creating %d branches at the other host: %v\n%s", pulls, err, stderr)
+	}
+	b := p.Commit(wt, map[string]string{"b": "b\n"}, "second")
+	push("HEAD:refs/heads/main")
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(h.mirrors())
+	if got := h.src.held()["refs/heads/main"]; got != b {
+		t.Fatalf("the other host's main is %q beside its %d other branches; want %s", got, pulls, b)
+	}
+}
+
+// A PUSH MIRROR DELETES WHAT THE REPOSITORY DROPPED, AND NEVER A BRANCH IT
+// HOLDS BACK: a push mirror covering main, release and every tag first gives
+// the other host all three; then the repository deletes its tag v1 and a
+// rule comes to protect release with a check none of its commits has passed,
+// so release has no green commit — and the next attempt deletes v1 at the
+// other host and leaves its release where it was, held back as waiting
+// rather than deleted as a ref the push does not set. The announcement
+// names both.
+//
+// Mutation: emit no deletion, and the other host keeps v1; delete a waiting
+// branch like any ref the push does not set, and the other host loses
+// release.
+func TestAPushMirrorDeletesWhatTheRepositoryDropped(t *testing.T) {
+	covers := []string{"refs/heads/main", "refs/heads/release", "refs/tags/*"}
+	var settings code.RepoSettings
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings {
+		settings = mirroredTo(url, covers...)
+		return settings
+	})
+	m := h.mirrors()
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main", "HEAD:refs/heads/release", "HEAD:refs/tags/v1")
+	h.pass(m)
+	if held := h.src.held(); held["refs/heads/release"] != a || held["refs/tags/v1"] != a {
+		t.Fatalf("the first push left the other host holding %v; want release and v1 at %s", held, a)
+	}
+
+	gated := settings
+	gated.Protections = append(slices.Clone(settings.Protections), code.Protection{
+		PushRule: code.PushRule{Pattern: "refs/heads/release", DirectPush: code.DirectPersons},
+		Gate: &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+			Checks: []string{"unit"}, Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteNone}})
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: gated})
+	push(":refs/tags/v1")
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(m)
+	held := h.src.held()
+	if got, ok := held["refs/tags/v1"]; ok {
+		t.Errorf("the other host still holds v1 at %s once the repository deleted it; want it deleted", got)
+	}
+	if got := held["refs/heads/release"]; got != a {
+		t.Errorf("the other host's release is %q while release waits for green; want it left at %s", got, a)
+	}
+	pushed := h.events.all()
+	if last := pushed[len(pushed)-1]; !slices.Equal(last.Deleted, []string{"refs/tags/v1"}) ||
+		!slices.Equal(last.Waiting, []string{"refs/heads/release"}) {
+		t.Errorf("the last push announced %+v; want v1 deleted and release waiting", last)
+	}
+}
+
+// A PUSH MIRROR DIALS ONLY WHEN WHAT IT COVERS MOVED: once its first push
+// has left the other host level, a nudge of its repository a minute later
+// that moved no ref it covers — a push of a branch beside main — reads the
+// rows and dials nobody; once an interval has passed, a nudge reads the other
+// host again whatever moved, and puts back what another writer moved there;
+// and a nudge after main itself moved dials and pushes it.
+//
+// Mutation: dial on every nudge (drop the comparison with what the last
+// attempt left level), and the push beside main dials; never read the other
+// host again (drop the interval), and the other writer's main stays.
+func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings { return mirroredTo(url) })
+	var dials atomic.Int64
+	h.dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
+		dials.Add(1)
+		return gitproc.ResolveRemote(ctx, url, true)
+	}
+	m := h.mirrors()
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main")
+	h.pass(m)
+	if got := h.src.held()["refs/heads/main"]; got != a || dials.Load() != 1 {
+		t.Fatalf("the first push left the other host's main at %q after %d dials; want %s after one", got,
+			dials.Load(), a)
+	}
+	id := h.rows("pushed").Repo.ID
+	nudge := func(after time.Duration) {
+		t.Helper()
+		h.advance(after)
+		if err := m.Work(t.Context(), id, statelog.Position{}); err != nil {
+			t.Fatalf("nudge %s: %v", id, err)
+		}
+		m.Wait()
+	}
+
+	// NOTHING IT COVERS MOVED: a branch beside main.
+	b := p.Commit(wt, map[string]string{"b": "b\n"}, "second")
+	push("HEAD:refs/heads/feature")
+	nudge(mirror.PushPace + time.Second)
+	if got := dials.Load(); got != 1 {
+		t.Errorf("a nudge after a push of nothing the mirror covers dialed the other host (%d dials); want "+
+			"none", got-1)
+	}
+
+	// AN INTERVAL ON: another writer moved main at the other host, and the
+	// next nudge reads it and puts main back.
+	h.src.commit(map[string]string{"x": "x\n"}, "somebody else's")
+	h.src.push("+HEAD:refs/heads/main")
+	nudge(code.MirrorInterval)
+	if got := h.src.held()["refs/heads/main"]; got != a || dials.Load() != 2 {
+		t.Errorf("an interval on, the other host's main is %q after %d dials; want %s put back after two",
+			got, dials.Load(), a)
+	}
+
+	// MAIN MOVED: dialed, and pushed.
+	push("HEAD:refs/heads/main")
+	nudge(mirror.PushPace + time.Second)
+	if got := h.src.held()["refs/heads/main"]; got != b || dials.Load() != 3 {
+		t.Errorf("after main moved the other host's main is %q after %d dials; want %s after three", got,
+			dials.Load(), b)
+	}
+}
+
 // busyLane is the git node's pool with every refusal of a maintenance slot
 // told on refused: the moment an attempt's cut finds the lane full.
 type busyLane struct {
@@ -987,5 +1249,29 @@ func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
 	if got := mirror.FailingWhileQueued(turns); got != 1 {
 		t.Fatalf("a mirror queued at every pass for %v counts %d failing; want 1", turns[len(turns)-1].Sub(at),
 			got)
+	}
+}
+
+// AN ATTEMPT RUNNING PAST ITS PROMISE IS FAILING: two push mirrors whose
+// attempts — first pushes of large repositories, say — hold both of a node's
+// slots for longer than the promise, and a pull mirror queued behind them,
+// are all three counted by code_mirror_failing: each is asked for at every
+// pass, which is what says the node is still its home, whether the ask found
+// its attempt running or queued it. Where an attempt's start stood for "still
+// home", the two running past the promise went uncounted, and a node whose
+// every mirror was stalled behind them read none failing.
+//
+// Mutation: record an ask only where it starts or queues an attempt, and the
+// two running attempts count none.
+func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	var turns []time.Time
+	for d := time.Duration(0); d <= code.MirrorInterval+mirror.AttemptDeadline; d += time.Minute {
+		turns = append(turns, at.Add(d))
+	}
+	if got, want := mirror.FailingPastThePromise(turns), mirror.MaxAttempts+1; got != want {
+		t.Fatalf("%d attempts running and a mirror queued behind them for %v count %d failing; want %d",
+			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want)
 	}
 }

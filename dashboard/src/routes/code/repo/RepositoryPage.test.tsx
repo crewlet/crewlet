@@ -15,7 +15,7 @@
  * says how far an import went and where the mirrors stand.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -85,6 +85,7 @@ function detail(extra: Record<string, unknown> = {}) {
         },
       },
     ],
+    path_owners: [{ owner: { kind: "unit", ref: "engineering" }, paths: ["src/**"] }],
     ...extra,
   };
 }
@@ -131,8 +132,20 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
       switch (url.pathname) {
         case "/auth/session":
           return new Promise<Response>(() => {});
-        case "/query/code_repo":
-          return json({ repo, position: POSITION, level: "session" });
+        case "/query/code_repo": {
+          // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
+          // the engine answers them.
+          const { gates, path_owners, ...row } = repo;
+          return json({
+            repo: {
+              ...row,
+              ...(p.get("gates") === "true" ? { gates } : {}),
+              ...(p.get("path_owners") === "true" ? { path_owners } : {}),
+            },
+            position: POSITION,
+            level: "session",
+          });
+        }
         case "/query/code_refs":
           return json({
             refs:
@@ -341,6 +354,30 @@ test("a directory is read at the address's revision and its entries open at it",
   expect(read?.searchParams.get("ref")).toBe("feature");
 });
 
+// THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
+// move from the root to a path draws another picker, and so does the
+// Commits tab, and none of them asks either listing again — each is up to a
+// thousand refs. Mutation: let each picker read its own listings, and this
+// fails.
+test("the revision picker's branches and tags are read once while the reader moves", async () => {
+  const asked = stubEngine();
+  mount("#/code/repos/web?tab=files");
+
+  await screen.findByRole("link", { name: "src/" });
+  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
+  act(() => {
+    location.hash = "#/code/repos/web?tab=files&path=src";
+  });
+  expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
+  act(() => {
+    location.hash = "#/code/repos/web?tab=commits";
+  });
+  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
+
+  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
+  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+});
+
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line
 // to the address, Shift extends the run, and the Permalink names the commit
 // the branch resolved to, whole, with the lines. Mutation: mark by index
@@ -365,6 +402,31 @@ test("a file's picked lines are its address, and its Permalink names the commit"
   fireEvent.click(screen.getByRole("button", { name: "Line 1" }));
   await waitFor(() => expect(location.hash).toContain("lines=1"));
   expect(location.hash).not.toContain("lines=1-");
+});
+
+// A FILE'S TEXT IS SPLIT INTO LINES ONCE A PAGE, never on a render that
+// brought no page: a press on a line writes the address and draws the screen
+// again, and a file read to its end is a mebibyte split on every such press.
+// Mutation: build the file's pages afresh on every render, or split them
+// without keeping the lines, and this fails.
+test("a press on a line does not split the file's text again", async () => {
+  stubEngine();
+  mount("#/code/repos/web?tab=files&path=src%2Fapp.go");
+
+  const line1 = await screen.findByRole("button", { name: "Line 1" });
+  const split = vi.spyOn(String.prototype, "split");
+  try {
+    fireEvent.click(line1);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Line 1" }).getAttribute("aria-pressed")).toBe(
+        "true",
+      ),
+    );
+    const file = "package app\n\nfunc Run() {}\n";
+    expect(split.mock.contexts.filter((self) => String(self) === file)).toHaveLength(0);
+  } finally {
+    split.mockRestore();
+  }
 });
 
 // THE BLAME IS READ AT THE COMMIT THE FILE WAS, and each run of lines one
@@ -429,11 +491,19 @@ test("the history is read at the revision and the path, with who pushed each com
 // they are changed. Mutation: offer an edit, drop the link, or leave the
 // queue's landing out of the gate, and this fails.
 test("a declared repository's settings are shown and lead to the configuration", async () => {
-  stubEngine();
+  const asked = stubEngine();
   mount("#/code/repos/web?tab=settings");
 
   expect(await screen.findByText("refs/heads/main")).toBeTruthy();
-  expect(screen.getByText(/one approval/)).toBeTruthy();
+  expect(await screen.findByText(/one approval/)).toBeTruthy();
+  expect(screen.getByText("src/**")).toBeTruthy();
+  // THE GATES AND THE PATH OWNERS ARE THE TAB'S OWN ASK: the page's polled
+  // read of the row asks for neither (at their bound, three quarters of a
+  // mebibyte of JSON a minute).
+  const asks = reads(asked, "code_repo").map(
+    (u) => `${u.searchParams.get("path_owners")}/${u.searchParams.get("gates")}`,
+  );
+  expect(new Set(asks)).toEqual(new Set(["null/null", "true/true"]));
   expect(screen.getByText(/landed by its queue, each change tested merged/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open the configuration" }).getAttribute("href")).toBe(
     "#/settings/config",

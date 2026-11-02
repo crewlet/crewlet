@@ -270,6 +270,7 @@ export const CODE_ALARM_KINDS = [
   "code_compaction_behind",
   "code_maintenance_refused",
   "code_merge_rate_over_capacity",
+  "code_mirror_failing",
   "code_refs_near_limit",
 ] as const;
 

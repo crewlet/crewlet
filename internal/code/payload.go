@@ -186,9 +186,15 @@ func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 // once idle, so indexing them would build and keep an index on the git nodes
 // for every experiment a seat makes; a search naming one still reads it.
 //
-// This build records the mode, serves it on every repository's row and lets
-// a person or a maintaining seat change it; no node of it keeps an index or
-// answers a search.
+// THE GIT NODES READ IT. Each one's indexer (internal/code/cache) keeps a code
+// index of every indexed repository whose git order it is among the first
+// [IndexHolders] of, built at each new tip of the default branch, and keeps
+// none of a grep one. A search naming one repository is a git read of it
+// ([GitSearch], answered by internal/code/query): from that index where the
+// answering node holds it at the searched tip, else with git grep. A search
+// of more is internal/codesearch's scatter, which reads every indexed
+// repository the asker may read and a grep one only when a repo: filter
+// names it.
 type SearchMode string
 
 const (
@@ -1259,6 +1265,25 @@ type RunProvenance struct {
 	// carrying no item on its node alone, and two data nodes' change rows
 	// would disagree.
 	WorkID string `json:"work_id,omitempty"`
+	// WorkProject is that work item's PROJECT in its tracker
+	// (types.WorkItem.Project), carried exactly as WorkID is: stamped on a
+	// coding box's push from its run's row by the box's admission, empty on
+	// every other write, and A RECORD'S FIELD AND NO ROW'S — the change the
+	// push opens keeps it (code_changes.work_project), so the change carries
+	// its item in the one shape a code_open_change of the same turn, or the
+	// engine's own open at the run's collection, gives it, and every wake
+	// built from the change names the item's project (MetaWorkProject).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as WorkID's above: no build that
+	// carries the code domain has run without it — none of the domain is on
+	// main — and while that is so, every build that meets a push record reads
+	// it. Once a build without it has run, it takes {Name:
+	// "RunProvenance.WorkProject", Since: <the next version>, Op: "push",
+	// Path: []string{"mutation", "pushes", "principal", "run",
+	// "work_project"}} in versionedFields: a reader without it would open the
+	// push's change with no project on its node alone, and two data nodes'
+	// change rows would disagree.
+	WorkProject string `json:"work_project,omitempty"`
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
 	Model string `json:"model,omitempty"`
@@ -1299,10 +1324,12 @@ func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
 // 32), a model id a provider's (the longest Bedrock ARN form is about 120), a
 // coding agent a name the sandbox configuration chose ("claude-code"), a work
 // item's id its tracker's (a native task's UUID, `<repository id>#<number>` on
-// GitHub). 256 is past every one of them, and what the bound buys is a push
-// entry whose size is known before it is measured: seven fields at it are
-// about ten kibibytes of a record's mebibyte even where JSON spells every byte
-// in six.
+// GitHub), its project the tracker's key for one (Worklet's and Jira's a short
+// key, GitLab's a group path, fitted where a nested one runs longer). 256 is
+// past every one of them but that path's deepest, and what the bound buys is a
+// push entry whose size is known before it is measured: eight fields at it are
+// twelve kibibytes of a record's mebibyte even where JSON spells every byte in
+// six.
 const MaxProvenanceBytes = 256
 
 // Validate refuses a run no push may carry ([ErrInvalid], naming the field):
@@ -1339,10 +1366,12 @@ func (r RunProvenance) invalid() string {
 		return "run_id: a coding agent's push names the coding run it pushed for"
 	case r.WorkID != "" && r.WorkBackend == "":
 		return "work_backend: a work item's id is its identity in one tracker, and names that tracker"
+	case r.WorkProject != "" && r.WorkBackend == "":
+		return "work_backend: a work item's project is a project in one tracker, and names that tracker"
 	}
 	for _, f := range []struct{ name, value string }{
 		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_id", r.WorkID}, {"work_key", r.WorkKey},
-		{"model", r.Model}, {"coding_agent", r.CodingAgent},
+		{"work_project", r.WorkProject}, {"model", r.Model}, {"coding_agent", r.CodingAgent},
 	} {
 		switch {
 		case len(f.value) > MaxProvenanceBytes:

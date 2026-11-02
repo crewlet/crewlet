@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -41,16 +43,79 @@ type pushed struct {
 	updated, deleted, waiting []string
 }
 
+// level is what a push mirror's last attempt left the other host level with,
+// as a digest ([coverage]), and when it read — or pushed — the other host so:
+// what lets a nudge that moved nothing the mirror covers end without dialing
+// ([Mirrors.stillLevel]). A digest rather than the refs themselves: a mirror
+// of a repository of code.MaxRefsPerRepo refs would keep megabytes here.
+type level struct {
+	digest [sha256.Size]byte
+	at     time.Time
+}
+
+// coverage is the digest of what a push mirror holds the other host to: the
+// other host's URL, the patterns it covers — a pattern added can delete
+// refs there with nothing of the copy's moving — every covered ref with the
+// commit it is to hold, and every branch held back.
+func coverage(url string, patterns []string, want map[string]string, waiting []string) [sha256.Size]byte {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00", url)
+	for _, p := range patterns {
+		fmt.Fprintf(h, "%s\n", p)
+	}
+	h.Write([]byte{0})
+	for _, ref := range slices.Sorted(maps.Keys(want)) {
+		fmt.Fprintf(h, "%s %s\n", ref, want[ref])
+	}
+	h.Write([]byte{0})
+	for _, ref := range waiting {
+		fmt.Fprintf(h, "%s\n", ref)
+	}
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// stillLevel reports whether key's push mirror covers what its last attempt
+// left the other host level with (sum), read so within an interval of now:
+// a nudge that moved nothing it covers — a seat's push to its own branches,
+// a check's result, a change's record — then dials nobody, where it dialed
+// the other host once a [PushPace] while the repository was busy. Once an
+// interval the other host is read again whatever moved, so a writer there
+// that is not the mirror is undone within code.MirrorInterval.
+func (m *Mirrors) stillLevel(key mirrorKey, sum [sha256.Size]byte, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.levels[key]
+	return ok && l.digest == sum && now.Sub(l.at) < code.MirrorInterval
+}
+
+// leveled records that the other host was read, or pushed, level with sum at
+// read, before its listing ran.
+func (m *Mirrors) leveled(key mirrorKey, sum [sha256.Size]byte, read time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.levels[key] = level{digest: sum, at: read}
+}
+
+// unlevel forgets what key's push mirror last left the other host level with.
+func (m *Mirrors) unlevel(key mirrorKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.levels, key)
+}
+
 // push is one attempt of repoID's PUSH MIRROR (M6-D16): the push mirror and
 // the repository's green rows read in one snapshot (`mirror_push`), this
 // node's copy synced at or past it, the seat it pushes as judged against the
 // chart this node holds (code.MirrorSeatRefusal), the refs it covers chosen —
 // each protected branch at its GREEN commit, and held where it has none, every
-// other ref at its tip — and compared with what the other host holds
-// (`ls-remote`), and the difference pushed, forced, from a scratch over the
-// copy's incarnation. A nil error is a mirror the other host now holds level,
-// or found level; the push's account is published (code_mirror_pushed) where
-// it moved anything.
+// other ref at its tip — and, unless they are what the last attempt left the
+// other host level with within an interval ([Mirrors.stillLevel]), compared
+// with what the other host holds (`ls-remote`), and the difference pushed,
+// forced, from a scratch over the copy's incarnation. A nil error is a mirror
+// the other host now holds level, or found or was left level; the push's
+// account is published (code_mirror_pushed) where it moved anything.
 func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	outcome := "current"
 	defer func() {
@@ -58,6 +123,9 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 			return
 		}
 		if err != nil {
+			// What the other host holds after a failure is not known here,
+			// so the next attempt dials it whatever it covers.
+			m.unlevel(mirrorKey{repo: repoID, out: true})
 			outcome = "failed"
 			m.log.Warn("code_mirror_attempt_failed", "repo", repoID, "attempt", "push", "error", err,
 				"detail", "the other host holds what the last push left there; the next attempt reads the "+
@@ -93,20 +161,32 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	if why := code.MirrorSeatRefusal(to.As, s.Repo, m.o.Roster()); why != "" {
 		return fmt.Errorf("mirror: %s's push mirror pushes as nobody it may: %s", s.Repo.Name, why)
 	}
-	want, waiting, err := m.covered(ctx, s, to, ans.Green)
+	patterns := to.Refs
+	if len(patterns) == 0 {
+		patterns = DefaultRefs(s.Repo.DefaultBranch)
+	}
+	want, waiting, err := m.covered(ctx, s, patterns, ans.Green)
 	if err != nil {
 		return err
+	}
+	key, sum, read := mirrorKey{repo: repoID, out: true}, coverage(to.URL, patterns, want, waiting), m.now()
+	if m.stillLevel(key, sum, read) {
+		// NOTHING IT COVERS MOVED since the other host was last level with
+		// it, an interval ago at most: a nudge from a seat's push, a check's
+		// result or a change's record dials nobody.
+		return nil
 	}
 	remote, err := m.o.Dial(ctx, to.URL, to.Credential)
 	if err != nil {
 		return fmt.Errorf("mirror: dial %s's push mirror: %w", s.Repo.Name, err)
 	}
-	have, err := m.remoteRefs(ctx, remote, to, s.Repo.DefaultBranch)
+	have, err := m.remoteRefs(ctx, remote, patterns)
 	if err != nil {
 		return err
 	}
 	specs, out := diffRefs(want, waiting, have)
 	if len(specs) == 0 {
+		m.leveled(key, sum, read)
 		return nil
 	}
 	sc, err := m.o.Cache.NewScratch(ctx, s, statelog.NewOpID(m.now(), ""))
@@ -119,29 +199,26 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 			return fmt.Errorf("mirror: push %s to %s: %w", s.Repo.Name, remote, err)
 		}
 	}
+	m.leveled(key, sum, read)
 	outcome = "pushed"
-	m.announcePushed(ctx, types.CodeMirrorPushed{RepoID: repoID, RepoName: s.Repo.Name, URL: to.URL, As: to.As,
-		Updated: out.updated, Deleted: out.deleted, Waiting: out.waiting})
+	m.announcePushed(ctx, types.CodeMirrorPushed{RepoID: repoID, RepoName: s.Repo.Name, URL: to.URL,
+		As: to.As}.WithRefs(out.updated, out.deleted, out.waiting))
 	return nil
 }
 
-// covered is the refs of the copy s the push mirror to covers — its own
-// patterns, or [DefaultRefs] — each with the commit the other host is to
-// hold: a branch a protection rule of the repository protects at its GREEN
-// row's commit, the newest whose required checks passed, and none where it
-// has no green row — it is waiting, held where the other host has it; every
+// covered is the refs of the copy s the push mirror covers — patterns, its
+// own or [DefaultRefs] — each with the commit the other host is to hold: a
+// branch a protection rule of the repository protects at its GREEN row's
+// commit, the newest whose required checks passed, and none where it has no
+// green row — it is waiting, held where the other host has it; every
 // other ref — an unprotected branch, a tag — at what the copy holds. A
 // protected branch is the one whose every move leaves a landing row
 // (internal/code's pushlandings.go), so the green row is what a mirror of it
 // follows; an unprotected branch moves with no landing and no green, so a
 // green row it kept from a protection since removed is never followed.
-func (m *Mirrors) covered(ctx context.Context, s cache.Synced, to code.MirrorTarget, green []code.GreenRow) (
+func (m *Mirrors) covered(ctx context.Context, s cache.Synced, patterns []string, green []code.GreenRow) (
 	want map[string]string, waiting []string, err error) {
 
-	patterns := to.Refs
-	if len(patterns) == 0 {
-		patterns = DefaultRefs(s.Repo.DefaultBranch)
-	}
 	held, err := m.refs(ctx, s.Dir, "")
 	if err != nil {
 		return nil, nil, err
@@ -181,35 +258,54 @@ func protected(rules []code.PushRule, ref string) bool {
 }
 
 // remoteRefs is every ref the other host holds that the push mirror covers —
-// its patterns, or the defaults read against defaultBranch — and the object
-// each names: ONE `ls-remote --refs` (peeled tags left out, so a tag is the
-// object its ref names, as the copy's for-each-ref lists it).
-func (m *Mirrors) remoteRefs(ctx context.Context, remote gitproc.Remote, to code.MirrorTarget,
-	defaultBranch string) (map[string]string, error) {
+// patterns, its own or [DefaultRefs] — and the object each names: ONE
+// `ls-remote --refs` (peeled tags left out, so a tag is the object its ref
+// names, as the copy's for-each-ref lists it) of the ARMS the patterns reach,
+// `--branches` and `--tags` — a push mirror's patterns are refs/heads/ or
+// refs/tags/ globs alone (config's validateMirrorRefs) — which protocol v2
+// sends the other host as its ref prefixes, so a forge's refs/pull/* and the
+// like are never advertised to the mirror at all. A pattern argument would
+// not do it: ls-remote matches one against each ref's tail on the client,
+// after the whole advertisement has come. STREAMED (gitproc.Lines), never
+// captured: what the other host holds under the arms grows with it, past
+// what a capture holds (gitproc.CaptureMax, 1 MiB).
+func (m *Mirrors) remoteRefs(ctx context.Context, remote gitproc.Remote, patterns []string) (map[string]string,
+	error) {
 
-	patterns := to.Refs
-	if len(patterns) == 0 {
-		patterns = DefaultRefs(defaultBranch)
-	}
-	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
-		Args: []string{"ls-remote", "--refs", remote.URL()}, Remote: &remote,
-		Class: gitproc.ClassTransfer, Share: share, Deadline: gitproc.RemoteDeadline(0, 0),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("mirror: list the refs of %s: %w\n%s", remote, err, res.Stderr)
+	var arms []string
+	for _, arm := range []struct{ prefix, flag string }{{"refs/heads/", "--branches"}, {"refs/tags/", "--tags"}} {
+		if slices.ContainsFunc(patterns, func(p string) bool { return strings.HasPrefix(p, arm.prefix) }) {
+			arms = append(arms, arm.flag)
+		}
 	}
 	out := map[string]string{}
-	lines := bufio.NewScanner(bytes.NewReader(res.Stdout))
-	for lines.Scan() {
-		oid, ref, ok := strings.Cut(lines.Text(), "\t")
+	if len(arms) == 0 {
+		// No pattern reaches a branch or a tag, so the mirror covers nothing
+		// there — and ls-remote with neither flag would list every ref.
+		return out, nil
+	}
+	lines := gitproc.NewLines(func(line []byte) error {
+		oid, ref, ok := strings.Cut(string(line), "\t")
 		if !ok || !gitref.ValidOID(oid) {
-			return nil, fmt.Errorf("mirror: ls-remote printed %q", lines.Text())
+			return fmt.Errorf("mirror: ls-remote printed %q", line)
 		}
 		if matchesAny(patterns, ref) {
 			out[ref] = oid
 		}
+		return nil
+	})
+	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
+		Args:   append([]string{"ls-remote", "--refs"}, append(arms, remote.URL())...),
+		Remote: &remote, Stdout: lines,
+		Class: gitproc.ClassTransfer, Share: share, Deadline: gitproc.RemoteDeadline(0, 0),
+	})
+	if err == nil {
+		err = lines.Close()
 	}
-	return out, lines.Err()
+	if err != nil {
+		return nil, fmt.Errorf("mirror: list the refs of %s: %w\n%s", remote, err, res.Stderr)
+	}
+	return out, nil
 }
 
 // diffRefs is the refspecs that bring the other host, holding have, level

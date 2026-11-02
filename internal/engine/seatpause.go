@@ -507,7 +507,7 @@ func (e *Engine) clearRemovedSeatPauses(ctx context.Context, next *Company) {
 	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
-	if _, err := e.fleetCompany(ctx, next); err != nil {
+	if err := e.fleetCompany(ctx, next); err != nil {
 		log.DebugContext(ctx, "seat_pauses_not_swept", "reason", err.Error(),
 			"detail", "a removed seat's pause is cleared by the company the fleet "+
 				"is pointed at; this one is not it yet")

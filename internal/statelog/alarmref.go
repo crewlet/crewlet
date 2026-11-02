@@ -267,7 +267,10 @@ var alarmMeaning = map[Kind]string{
 		"pull mirror holds what its source held that long ago. Raised by " +
 		"the home git node alone, from its own memory of its attempts: a " +
 		"node that stops being a repository's home stops counting its " +
-		"mirrors, and a node that restarts counts from its first attempt.",
+		"mirrors, and a node that restarts counts from the first pass that " +
+		"asks it for each mirror. A mirror whose attempt waits behind " +
+		"others for one of the node's two slots, or is still running, is " +
+		"not level either, and is counted all the same.",
 }
 
 const alarmHeader = `# Alarms

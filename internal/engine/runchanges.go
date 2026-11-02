@@ -34,8 +34,10 @@ import (
 // AN ASK OPENS ITS CHANGE ONCE A LAUNCH ([openOpID]): from the branch the
 // run's push record says it delivered, as the seat it ran for, carrying the
 // work item the run was charged to and naming the turn and the run that
-// opened it — the open a code_open_change of the same turn would make,
-// decided by the repository's committer at or past the read. Asked again by a
+// opened it, held to the colleague whose ask woke the launching turn as the
+// box's pushes are ([openCeiling]) — the open a code_open_change of the same
+// turn would make, decided by the repository's committer at or past the read,
+// from its own chart. Asked again by a
 // retried collection, on this node or another, the open is the same
 // operation: the read finds the change it opened and names it opened, or the
 // operation ledger answers the record that landed.
@@ -227,6 +229,7 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 	}
 	res, err := reader.Change(ctx, code.ChangeProposal{OpID: op,
 		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: run.AgentHandle}, Seen: at,
+		Ceiling: openCeiling(run),
 		Open: &code.ChangeOpen{RepoID: r.RepoID, ChangeID: id, SourceRef: branchRef(r.Branch),
 			TargetRef: r.Open.Target, Title: title, Draft: r.Open.Draft, WorkItem: item, TurnID: run.TurnID,
 			RunID: run.LaunchID}})
@@ -254,6 +257,29 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 			"repo", r.Repo, "branch", r.Branch, "detail", out.Unopened)
 	}
 	return out
+}
+
+// openCeiling is whom the open a run asked for is made for (code.WriteCeiling):
+// the colleague SEAT whose ask woke the launching turn, as the run's row names
+// it (sandbox.PendingRun.CodeCeiling) — the seat the box's admission already
+// holds every push of the run to (code.Grant.Under) — and nil for a run no
+// colleague seat bounds: a turn nobody woke, one the seat itself woke, and one
+// a person woke, who bounds nothing.
+//
+// THE OPEN IS THE TURN'S OWN WRITE, made late: a code_open_change of the same
+// turn carries the same ceiling (internal/agent/builtin's codeCaller), and the
+// committer judges it against its own chart when it decides the open
+// (code.WriteCeiling's changeRefusal) — never the launching node's one
+// resolution of the repositories, which a later activation may have moved —
+// sparing the seat's own work, an open of a branch under its own namespace or
+// in a repository it owns, as it spares the tool's. Left off, a colleague an
+// activation shut out of the repository between the launch and the collection
+// would have a change opened for them that their own ask could no longer make.
+func openCeiling(run sandbox.PendingRun) *code.WriteCeiling {
+	if run.CodeCeiling == "" {
+		return nil
+	}
+	return &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: run.CodeCeiling}
 }
 
 // deliveredTitle is the title of the change a run's ask opens without naming

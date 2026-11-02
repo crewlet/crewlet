@@ -229,10 +229,7 @@ func build(b *testing.B, dir string, corpus []corpusFile, ids []codeindex.OID, o
 // every tenth of the heap's growth (GOGC=10) for the length of the build, so
 // the peak is read within a tenth of itself.
 func buildPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order []int, segmentBytes int64) int64 {
-	dir, err := os.MkdirTemp(b.TempDir(), "peak-*")
-	if err != nil {
-		b.Fatal(err)
-	}
+	dir := b.TempDir()
 	base := heap()
 	old := debug.SetGCPercent(10)
 	defer debug.SetGCPercent(old)
@@ -352,15 +349,11 @@ func BenchmarkCodeIndex(b *testing.B) {
 		got     *built
 		elapsed time.Duration
 	)
-	root := b.TempDir()
 	for b.Loop() {
 		if got != nil {
 			got.unmap(b)
 		}
-		dir, err := os.MkdirTemp(root, "build-*")
-		if err != nil {
-			b.Fatal(err)
-		}
+		dir := b.TempDir()
 		start := time.Now()
 		got = build(b, dir, corpus, ids, order, codeindex.SegmentSourceBytes)
 		elapsed = time.Since(start)

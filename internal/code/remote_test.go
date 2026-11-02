@@ -3,6 +3,7 @@ package code_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -169,12 +170,14 @@ func TestAChunkLandsOnlyInItsTurn(t *testing.T) {
 // repository's detail names the import's source, how many of its chunks have
 // landed and, once it ended, when and why it ended short; a pull mirror's names
 // its source and its last sync's instant — what a person who imported it or
-// set the mirror reads its progress by. A repository with neither details
-// none.
+// set the mirror reads its progress by; a push mirror's names it whole, the
+// seat it pushes as and its refs included, and none once it is removed. A
+// repository with neither details none.
 //
 // Mutations: serve no import progress (Chunks left 0) — the detail after a
 // chunk says none landed, red; drop the sync's instant from the read — the
-// mirror reads as never synced, red.
+// mirror reads as never synced, red; serve no push mirror — the detail of one
+// says none, red.
 func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -235,6 +238,22 @@ func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	requireSynced(t, "the sync", res, err)
 	if got := detail("web"); !got.MirrorSyncedAt.After(imported.MirrorSyncedAt) {
 		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant past its import's end", got)
+	}
+
+	// A PUSH MIRROR WHOLE — its host, its credential, the seat it pushes as
+	// and its refs in their order — which the dashboard draws the mirror and
+	// its seat from; and none once its settings no longer name one.
+	target := *mirrorTarget
+	target.Refs = []string{"refs/heads/main", "refs/tags/*"}
+	published := suiteSettings()
+	published.MirrorTo = &target
+	n.ensure("published", published, t3)
+	if got := detail("published").MirrorTo; got == nil || !reflect.DeepEqual(*got, target) {
+		t.Fatalf("a push mirror details %+v, want it whole: %+v", got, target)
+	}
+	n.ensure("published", suiteSettings(), harnessAt)
+	if got := detail("published"); got.MirrorTo != nil {
+		t.Fatalf("a push mirror removed still details %+v", got.MirrorTo)
 	}
 }
 

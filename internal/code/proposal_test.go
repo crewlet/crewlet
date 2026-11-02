@@ -102,17 +102,20 @@ func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 // carry. And for a SEAT'S push, whose principal carries the run behind it,
 // every field of the run at MaxProvenanceBytes of what JSON spells six times
 // over — a coding box's run id at its one spelling, a UUID's, beside its
-// coding agent at that bound — the way — the longest, and a coding box's —
-// and the company day its committer stamps on the entry at its longest: the
-// principal and the way are measured as their proposer stamped them, so the
-// room they take is room the commands are not admitted to, and so is the
-// day's, which no proposer sends.
+// coding agent and its work item's identity and project at that bound, which
+// the box's admission alone stamps — the way — the longest, and a coding
+// box's — and the company day its committer stamps on the entry at its
+// longest: the principal and the way are measured as their proposer stamped
+// them, so the room they take is room the commands are not admitted to, and
+// so is the day's, which no proposer sends.
 //
 // Mutations: measure the completed entry with the principal's run dropped
 // (completed() clearing w.Principal.Run) — the seat's push is admitted
 // commands its run then has no room beside, and its entry runs past EntryRoom;
 // measure a seat's entry without its day — the entry its committer stamps
-// outgrows the bound, red.
+// outgrows the bound; measure the box's run without its work item's identity
+// and project (completed() clearing them) — the box is admitted commands they
+// have no room beside, and its entry runs past EntryRoom, red.
 func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	t.Parallel()
 	node := strings.Repeat("n", 64)
@@ -121,6 +124,7 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 		Run: code.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest, Model: costliest}}
 	box := seat
 	box.Run.RunID, box.Run.CodingAgent = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", costliest
+	box.Run.WorkID, box.Run.WorkProject = costliest, costliest
 	for _, arm := range []struct {
 		name      string
 		principal code.Principal

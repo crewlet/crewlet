@@ -258,23 +258,25 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		}
 		q.Change = n
 	}
-	// ONE REPOSITORY IN DETAIL ANSWERS WHO OWNS ITS PATHS AND ITS RULES'
-	// MERGE GATES: this question is the read of those
-	// ([code.ReadQuery.PathOwners], [code.ReadQuery.Gates]), where a tool's
-	// resolution of a repository reads its detail for its row alone.
-	q.PathOwners = kind == code.ReadRepo
-	q.Gates = kind == code.ReadRepo
-	// A HISTORY IN BRIEF ([code.ReadQuery.Brief]) is asked as `true`, and
-	// anything else but `false` is refused rather than read as a whole
-	// history: a page a screen polls is several hundred kilobytes heavier
-	// read whole. `brief` and `push` on a read that is no push history are
-	// the reader's to refuse, naming them.
-	switch brief := strings.TrimSpace(p.String("brief")); brief {
-	case "", "false":
-	case "true":
-		q.Brief = true
-	default:
-		return code.ReadQuery{}, badParams("brief", brief, []string{"true", "false"})
+	// WHO OWNS A REPOSITORY'S PATHS AND ITS RULES' MERGE GATES are answered
+	// to a question that ASKS for them, `path_owners=true` and `gates=true`
+	// ([code.ReadQuery.PathOwners], [code.ReadQuery.Gates]), and to no other:
+	// at their bound they are a quarter and half a mebibyte of JSON, and a
+	// question of one repository is mostly asked for its row — a screen's
+	// header, polled every minute, a comparison learning its default branch.
+	// Each on a read that answers no repository's detail is the reader's to
+	// refuse, naming it. A HISTORY IN BRIEF ([code.ReadQuery.Brief]) is
+	// asked the same way, `brief=true`: a page a screen polls is several
+	// hundred kilobytes heavier read whole, and `brief` and `push` on a read
+	// that is no push history are the reader's to refuse.
+	if q.PathOwners, err = askedFor(p, "path_owners"); err != nil {
+		return code.ReadQuery{}, err
+	}
+	if q.Gates, err = askedFor(p, "gates"); err != nil {
+		return code.ReadQuery{}, err
+	}
+	if q.Brief, err = askedFor(p, "brief"); err != nil {
+		return code.ReadQuery{}, err
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
@@ -300,6 +302,22 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		q.Limit = int(n)
 	}
 	return q, nil
+}
+
+// askedFor reads a parameter that asks a read for something more, or less,
+// than its default answer: `true` asks, `false` or nothing does not, and
+// anything else is refused [ErrBadParams] naming the two spellings rather than
+// read as either — a typo that read as "not asked" would answer without what
+// the caller asked for and never say so.
+func askedFor(p Params, key string) (bool, error) {
+	switch v := strings.TrimSpace(p.String(key)); v {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, badParams(key, v, []string{"true", "false"})
+	}
 }
 
 // codeRefusal is a code read's failure in this surface's ONE vocabulary: a

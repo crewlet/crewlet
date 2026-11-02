@@ -233,6 +233,48 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 	}
 }
 
+// A RUN'S OPEN IS HELD TO WHOEVER WOKE ITS TURN (M4-decisions D30, U40 (a)):
+// a run whose launching turn a colleague seat woke — its row naming that seat
+// (sandbox.PendingRun.CodeCeiling), which the box's admission holds every
+// push of the run to — asks its open at collection carrying that colleague as
+// the write's ceiling, as a code_open_change of the same turn would, so the
+// repository's committer judges the open for the colleague from its own chart
+// when it decides it, never from the launch's one resolution. A run no
+// colleague bounds asks it for its seat alone.
+//
+// Mutation: leave the ceiling off the open (openOne) — the colleague's run
+// asks its open as the seat alone, red.
+func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
+	t.Parallel()
+	branch := "refs/heads/seats/swe/ENG-42"
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1}}
+	for _, tc := range []struct {
+		name, colleague string
+		want            *code.WriteCeiling
+	}{
+		{"a colleague's ask", "designer", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "designer"}},
+		{"nobody's ask", "", nil},
+	} {
+		run := openingRun()
+		run.CodeCeiling = tc.colleague
+		host := newChangeHost()
+		if _, opened, err := readerOf(host).Changes(t.Context(), run, recordOf(pushed), true); err != nil ||
+			len(opened) != 1 || !opened[0].Opened {
+			t.Fatalf("%s: the collection answered %+v, %v; want its change opened", tc.name, opened, err)
+		}
+		_, writes, _ := host.asked()
+		if len(writes) != 1 {
+			t.Fatalf("%s: the collection asked %+v, want one open", tc.name, writes)
+		}
+		if got := writes[0].Ceiling; !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: the open was asked for %+v, want %+v", tc.name, got, tc.want)
+		}
+		if got := writes[0].Asker; got != (code.Principal{Kind: code.PrincipalAgent, Seat: "swe"}) {
+			t.Errorf("%s: the open was asked by %+v, want the run's seat", tc.name, got)
+		}
+	}
+}
+
 // A RUN'S CHANGE IS TITLED WHATEVER ITS BRANCH IS NAMED: a run that delivered
 // a commit with no subject asks the open titled by its branch's name, made a
 // title as a push's change is (code.DeliveredTitle) — and a branch git accepts

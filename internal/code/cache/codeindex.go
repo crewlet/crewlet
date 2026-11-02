@@ -905,7 +905,7 @@ func (b *indexBuild) openBuilt(rel string, part codeIndexPart) (builtSegment, er
 	// Read-only, and mapped by the time it closes: a close's error has
 	// nothing left to lose.
 	defer func() { _ = f.Close() }()
-	if err := b.c.maps.reserve(); err != nil {
+	if err = b.c.maps.reserve(); err != nil {
 		return builtSegment{}, err
 	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(part.Bytes), unix.PROT_READ, unix.MAP_SHARED)

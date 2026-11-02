@@ -1932,10 +1932,14 @@ type Stream struct {
 	// its changes' records — opens, reviews, comments, merges, every
 	// revision's facts and mergeability, and its queue's and checks' where
 	// they run — take nearly twice to about eight times what its tracker
-	// writes and its seats' reads take a day. Such a company sets
-	// this field to the ratio its two logs' crewlet.statelog.log.bytes_per_day
-	// show before the first boot, or raises the log with `crewlet retention
-	// set-capacity` once it exists.
+	// writes and its seats' reads take a day. Such a company sizes the log
+	// in two steps. Before the first boot neither log exists, so it sets
+	// this field from the reference company's day: twice the mutation log's
+	// ceiling, that day's least, which a set ceiling takes from the derived
+	// logs' share whole ([DerivedCodeLogNumerator] prints what that costs
+	// them on 100 GiB free). Once the streams exist, its own ratio is the
+	// two logs' crewlet.statelog.log.bytes_per_day, and `crewlet retention
+	// set-capacity` moves the log to it.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the

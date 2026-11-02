@@ -57,7 +57,7 @@ import type {
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
 import { subjectOf } from "../repo/History.tsx";
-import { RefPicker, revisionWord } from "../repo/refs.tsx";
+import { RefPicker, revisionWord, useRevisions } from "../repo/refs.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 
 /** The default branch, as a revision a comparison asks the engine for. */
@@ -71,6 +71,10 @@ export function ComparePage({ repo }: { repo: string }) {
   const read = useCodeQuery("code_repo", { name: repo }, { enabled: named });
   const [base, setBase] = useParam("base", "", "filter");
   const [head, setHead] = useParam("head", "", "filter");
+  // ONE READ OF THE BRANCHES AND TAGS FOR BOTH PICKERS (`refs.tsx`'s
+  // useRevisions), under the repository's current name.
+  const current = read.data?.repo?.name ?? "";
+  const revisions = useRevisions(current, current !== "");
   if (!named) {
     return (
       <EmptyState
@@ -92,12 +96,19 @@ export function ComparePage({ repo }: { repo: string }) {
   return (
     <Stack gap={4}>
       <div className="toolbar">
-        <RefPicker repo={detail} value={base} onChoose={setBase} label="Base" />
+        <RefPicker
+          repo={detail}
+          revisions={revisions}
+          value={base}
+          onChoose={setBase}
+          label="Base"
+        />
         <span className="muted" aria-hidden="true">
           ←
         </span>
         <RefPicker
           repo={detail}
+          revisions={revisions}
           value={head}
           onChoose={setHead}
           label="Compared"

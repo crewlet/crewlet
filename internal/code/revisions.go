@@ -662,11 +662,13 @@ func (b *changeBook) move(e PushEntry) {
 // entries move it.
 //
 // IT CARRIES ITS PUSH'S WORK ITEM where the push names the item's identity
-// — a coding box's, stamped from its run's row ([RunProvenance.WorkID]) — as
-// a code_open_change of the same turn carries it: by its tracker, its id and
-// the key it showed, and no project, which a push's run does not name. A
-// push that names its item by tracker and key alone — the history's label,
-// which a tracker may give another item — opens a change that carries none.
+// — a coding box's, stamped from its run's row ([RunProvenance.WorkID],
+// [RunProvenance.WorkProject]) — as a code_open_change of the same turn and
+// the engine's open at the run's collection carry it: by its tracker, its id,
+// the key it showed and its project, so one run's item lands in one shape
+// however its change was opened. A push that names its item by tracker and key
+// alone — the history's label, which a tracker may give another item — opens
+// a change that carries none.
 //
 // It answers the change's id, or "" and why it opened none — a guard the
 // decide's rules keep from ever failing (pushOpen), which the apply logs and
@@ -707,7 +709,8 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 		turn: e.Principal.Run.TurnID, run: e.Principal.Run.RunID, openedAt: b.at, opened: b.packed, version: 1,
 		position: b.packed}
 	if run := e.Principal.Run; run.WorkID != "" {
-		row.work = types.WorkItem{Backend: types.WorkBackend(run.WorkBackend), ID: run.WorkID, Key: run.WorkKey}
+		row.work = types.WorkItem{Backend: types.WorkBackend(run.WorkBackend), ID: run.WorkID, Key: run.WorkKey,
+			Project: run.WorkProject}
 	}
 	if b.next > 0 {
 		b.next++

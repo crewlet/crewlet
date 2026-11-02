@@ -152,9 +152,13 @@ function RepoFold({ repo }: { repo: CodeRepoSummary }) {
   );
 }
 
-/** One repository's rules with their gates. */
-function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
-  const read = useCodeQuery("code_repo", { name: repo.name });
+/**
+ * One repository's rules with their gates — asked for by name (`gates`): a
+ * repository's question answers its row alone unless asked for more, and
+ * this fold reads no path owner.
+ */
+export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
+  const read = useCodeQuery("code_repo", { name: repo.name, gates: true });
   const lines = protectionLines(repo.protections ?? [], read.data?.repo?.gates);
   return (
     <div className="col gap-1">

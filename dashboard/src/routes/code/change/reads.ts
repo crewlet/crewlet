@@ -6,6 +6,11 @@
  * ReadQuery.Limit`: two hundred comments, reviews or findings): a change's
  * conversation past that is rare, and where a page carries a cursor the tab
  * that draws it SAYS that more exist rather than drawing a page as the whole.
+ * A revision's FILES and a file's PATCH are not rare past one page — a large
+ * change lists hundreds of files, and a generated file's patch runs to many
+ * pages — so the Files tab follows both past their first page as the reader
+ * asks (`Files.tsx`, through [changePartParams], so a later page asks its
+ * first page's question).
  */
 
 import { useMemo } from "react";
@@ -23,25 +28,36 @@ export const CHANGE_POLL_MS = 60_000;
 /** The most rows a part's page reads: the engine's own bound for the conversation's parts. */
 export const PART_PAGE = 200;
 
+/** A part of a change the page reads. */
+export type ChangePart = "reviewers" | "comments" | "reviews" | "findings" | "files" | "diff";
+
+/** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
+export function changePartParams(
+  change: Pick<CodeChangeDetail, "repo" | "number">,
+  part: ChangePart,
+  extra: Readonly<Record<string, string | number | undefined>> = {},
+) {
+  const listed = part !== "files" && part !== "diff";
+  return {
+    name: change.repo,
+    change: change.number,
+    part,
+    ...(listed ? { limit: PART_PAGE } : {}),
+    ...extra,
+  };
+}
+
 /** One part of a change, as its tab reads it. */
 export function useChangePart(
   change: CodeChangeDetail,
-  part: "reviewers" | "comments" | "reviews" | "findings" | "files" | "diff",
+  part: ChangePart,
   extra: Readonly<Record<string, string | number | undefined>> = {},
   enabled = true,
 ) {
-  const listed = part !== "files" && part !== "diff";
-  return useCodeQuery(
-    "code_change",
-    {
-      name: change.repo,
-      change: change.number,
-      part,
-      ...(listed ? { limit: PART_PAGE } : {}),
-      ...extra,
-    },
-    { enabled, pollMs: CHANGE_POLL_MS },
-  );
+  return useCodeQuery("code_change", changePartParams(change, part, extra), {
+    enabled,
+    pollMs: CHANGE_POLL_MS,
+  });
 }
 
 /**

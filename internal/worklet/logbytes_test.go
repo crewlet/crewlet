@@ -62,7 +62,7 @@ const (
 // a push costs, measured") and what a box's principal — the seat, the run
 // behind it and the coding run that pushed — its way and the company day its
 // quota counted it on take of the log beyond it (its push=box arm). A seat's
-// push the engine builds for a tool takes 74 bytes less (its push=agent arm),
+// push the engine builds for a tool takes 144 bytes less (its push=agent arm),
 // and which of a company's seats push from their boxes and which through
 // their tools is no figure the reference company has, so the day prices every
 // push at the box's, at its least as at its most — as it prices the
@@ -92,11 +92,12 @@ const (
 // repositories a minute where one runs.
 //
 // A push's box names the work item its run was launched for by its identity
-// (code.RunProvenance.WorkID, a native task's UUID), which the push=box arm
-// carries: 224 bytes beside a person's push, 49 of them that identity.
+// and its project (code.RunProvenance.WorkID, a native task's UUID, and
+// .WorkProject, its project's key), which the push=box arm carries: 245 bytes
+// beside a person's push, 49 of them that identity and 21 that project.
 const (
 	referencePushesADay = 3_000
-	codePushRecordBytes = 1_604
+	codePushRecordBytes = 1_625
 	// codeEnginePushRecordBytes is a seat's push the engine builds for a
 	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
 	// no term of the day, which prices every push at the box's, and printed
@@ -426,7 +427,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.3 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.4 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -630,21 +631,21 @@ var codeLogUnwritten = map[code.OpKind]struct {
 // priced into the day or argued out of it here.
 var codeLogPushVias = map[code.PushVia]string{
 	code.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
-		"coding box's push (1 481 bytes alone in its record against 1 604, BenchmarkPushLogBytes), " +
+		"coding box's push (1 481 bytes alone in its record against 1 625, BenchmarkPushLogBytes), " +
 		"at which the day prices every one of the reference company's 3 000 a day, and a " +
 		"person's takes it less still, naming no run and no day",
 	code.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
 		"(code.Proposal.Validate), naming the coding run that pushed, its coding agent and its work " +
-		"item's identity beside the turn — the push term's records (codeLogDay), at which the day " +
+		"item's identity and project beside the turn — the push term's records (codeLogDay), at which the day " +
 		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
-		"(1 380 bytes alone in its record against a box's 1 604), and none of the reference company's " +
+		"(1 380 bytes alone in its record against a box's 1 625), and none of the reference company's " +
 		"3 000 is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush " +
 		"refs a record, once a repository when a person imports it",
 	code.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past code.RefExpiry, on the " +
 		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +
 		"more, and up to code.MaxCommandsPerPush of them a record with no pack, no run and no day — a " +
 		"deletion command takes its record under a tenth of a seat's push (a ref and two ids against " +
-		"1 604 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
+		"1 625 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
 		"fortnight earlier did, which the push term already prices",
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (code.OpMerge), which the day prices one a change " +
@@ -766,6 +767,7 @@ func principalAbsent(prefix string, carried ...string) map[string]string {
 		"run.run_id":       "the coding run that pushed, and the measured record is a tool's",
 		"run.coding_agent": "the coding agent a box ran, and the measured record is a tool's",
 		"run.work_id":      "the work item's identity, which a box's admission alone stamps",
+		"run.work_project": "the work item's project, which a box's admission alone stamps",
 	} {
 		if !slices.Contains(carried, key) {
 			absent[prefix+"."+key] = why
@@ -807,7 +809,8 @@ var codeLogFields = map[code.OpKind]struct {
 		carried: []string{"repo_id", "pushes.push_id", "pushes.principal.kind",
 			"pushes.principal.seat", "pushes.principal.run.turn_id",
 			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
-			"pushes.principal.run.work_id", "pushes.principal.run.model", "pushes.principal.run.run_id",
+			"pushes.principal.run.work_id", "pushes.principal.run.work_project", "pushes.principal.run.model",
+			"pushes.principal.run.run_id",
 			"pushes.principal.run.coding_agent", "pushes.via", "pushes.node", "pushes.commands.ref",
 			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
@@ -1583,7 +1586,10 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 //
 // Mutation: change any published figure, a corpus's rate or text,
 // MaxTurnSummary, a term of the code log's day, code.BarrierRecordBytes or
-// config.DefaultMinAge, and a page no longer says what this package measures.
+// config.DefaultMinAge, and a page no longer says what this package measures;
+// tell a company to set the code log from its two logs' bytes_per_day before
+// its first boot, on any page that sizes the code log, and it fails naming the
+// sentence.
 func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	t.Parallel()
 	whole, half := referenceCorpus.cost, halfTextCorpus.cost
@@ -1885,6 +1891,65 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			}
 		}
 	}
+
+	// THE CODE LOG IS SIZED IN TWO STEPS, AND NEITHER NAMES WHAT IS NOT THERE
+	// YET. Before the first boot neither log exists, so no bytes_per_day has
+	// been measured: a page telling a company whose seats work through changes
+	// to set the code log from its two logs' bytes_per_day before its first
+	// boot gives it a step nobody can follow, and it boots on the derived two
+	// thirds, far below its day (above). So every page that sizes the code log
+	// gives the step before the first boot from the reference company's day —
+	// the ratio's least, and what a ceiling set at it costs — and the measured
+	// ratio only once the streams exist, and no sentence of any of them names
+	// a first boot and bytes_per_day together. The YAML reference's comment is
+	// read with its markers off, as a reader reads it. A page that names
+	// both words and gives no step of its own (deployment.md, retention.md)
+	// is scanned all the same.
+	steps := map[string]string{
+		"internal/config/retention.go": "Before the first boot neither log exists and nothing of its own " +
+			"has been measured, so the reference company's day above is the figure it has: it sets " +
+			"stream.code_log_max_bytes at twice the mutation log's ceiling, that day's least",
+		"internal/config/bootstrap.go": "Before the first boot neither log exists, so it sets this field " +
+			"from the reference company's day: twice the mutation log's ceiling, that day's least",
+		"docs/guides/replication.md": "Before the first boot neither log exists, so the company has no " +
+			"day of its own to measure and the reference company's is the figure there is: set " +
+			"`stream.code_log_max_bytes` at twice the mutation log's ceiling, that day's least",
+		"docs/getting-started/configuration.md": "Before the first boot neither log exists, so such a " +
+			"company sets this from that day: twice the mutation log's ceiling, its least",
+		"docs/concepts/scaling.md": "sets it from the reference company's day before its streams exist " +
+			"and, once they do, moves it to the ratio the two logs' `bytes_per_day` show",
+	}
+	for _, file := range []string{"internal/config/retention.go", "internal/config/bootstrap.go",
+		"docs/guides/replication.md", "docs/getting-started/configuration.md", "docs/concepts/scaling.md",
+		"docs/guides/deployment.md", "docs/guides/retention.md"} {
+		page := uncommented(prose(t, file))
+		if step, gives := steps[file]; gives && !strings.Contains(page, step) {
+			t.Errorf("%s does not say %q", file, step)
+		}
+		for _, sentence := range strings.Split(page, ". ") {
+			lower := strings.ToLower(sentence)
+			if strings.Contains(lower, "first boot") && strings.Contains(lower, "bytes_per_day") {
+				t.Errorf("%s names a first boot and bytes_per_day in one sentence, a step nobody can "+
+					"follow, since no log exists before it to have measured a day: give the step "+
+					"before the first boot from the reference company's day, and the measured "+
+					"ratio once the streams exist: %q", file, sentence)
+			}
+		}
+	}
+}
+
+// uncommented is a page's prose with a YAML comment's markers taken off, as
+// a reader reads a commented block: every "#" standing alone, which
+// configuration.md's reference sets before each line of a field's comment.
+func uncommented(page string) string {
+	fields := strings.Fields(page)
+	kept := fields[:0]
+	for _, field := range fields {
+		if field != "#" {
+			kept = append(kept, field)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why one is not

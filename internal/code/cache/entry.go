@@ -1252,10 +1252,11 @@ func (c *Cache) reader(inc *incarnation) gitproc.Repairer {
 
 // pin hands inc to a reader — a use (used) — under a name of its own
 // (Synced.Repairer), live on inc until the reader lets it go: what the
-// observer holds the reader's reports under (report.go). The entry's mu is
-// held.
-func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
-	return c.pinAs(e, inc, kind, true)
+// observer holds the reader's reports under (report.go). It is no round's
+// answer, so its kind is SyncNone; a round's own pin names its kind through
+// pinAs. The entry's mu is held.
+func (c *Cache) pin(e *entry, inc *incarnation) Synced {
+	return c.pinAs(e, inc, SyncNone, true)
 }
 
 // pinAs is pin, the pin and its release a USE (used) only where use says
@@ -1285,16 +1286,18 @@ func (c *Cache) pinAs(e *entry, inc *incarnation, kind SyncKind, use bool) Synce
 	}
 }
 
-// release is reader by letting inc go — a use (used) — handing every report
-// held for it to the ordinary report rules (handOn). The last release of a
+// release lets inc go from a pin that is no reader's (noReader) — a push's
+// scratch or an advertisement view (scratch.go) — a use (used); a reader's
+// pin lets go through its Synced's release, which hands every report held
+// for it to the ordinary report rules (handOn). The last release of a
 // RETIRED incarnation moves its directory into trash/ and kicks the janitor;
 // the removal itself is the janitor's, so a request that lets go of a 20 GiB
 // directory returns at once. The last release of a current incarnation while
 // an eviction is due (overBudget) kicks the janitor too: a repository too large
 // to keep is served while a request holds it, and evicted as soon as none
 // does rather than at the next tick. Safe after Stop.
-func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
-	c.releaseAs(e, inc, by, true)
+func (c *Cache) release(e *entry, inc *incarnation) {
+	c.releaseAs(e, inc, noReader, true)
 }
 
 // releaseAs is release, a use only where use says so: a pin that was no use

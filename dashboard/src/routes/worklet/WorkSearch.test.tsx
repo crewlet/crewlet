@@ -14,7 +14,7 @@
  * alone would still be a fact nobody can name.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";
@@ -210,4 +210,29 @@ test("a hit's snippet is drawn as prose, without its markdown marks", async () =
   const row = rowOf("Authentication rework");
   expect(row.textContent).toContain("Repro: run make soak on a #cold node");
   expect(row.textContent).not.toContain("**");
+});
+
+// A PRESS OF SEARCH IS A STEP BACK TAKES, and the box follows the address
+// when it moves under the open screen: a box seeded once, on mount, showed
+// the old phrase over the new hits after Back, and sent it on the next press.
+test("a search pressed is a history entry, and the box follows the address", async () => {
+  const asked: Record<string, unknown>[] = [];
+  mount([hit({})], {}, asked);
+  const box = screen.getByRole("searchbox", {
+    name: "Search the company’s work",
+  }) as HTMLInputElement;
+  expect(box.value).toBe("auth");
+
+  const before = history.length;
+  fireEvent.change(box, { target: { value: "billing" } });
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await waitFor(() => expect(asked.at(-1)?.q).toBe("billing"));
+  expect(history.length).toBe(before + 1);
+
+  act(() => {
+    history.pushState(null, "", "#/worklet/search?q=deploys");
+    window.dispatchEvent(new Event("crewlet:route"));
+  });
+  await waitFor(() => expect(asked.at(-1)?.q).toBe("deploys"));
+  expect(box.value).toBe("deploys");
 });

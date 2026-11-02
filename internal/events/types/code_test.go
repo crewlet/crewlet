@@ -2,9 +2,13 @@ package types
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A READ OF CODE IS ITS READER'S ACT: the actor is the seat that read, or the
@@ -83,5 +87,59 @@ func TestAnUnknownCodeReadVia(t *testing.T) {
 	}
 	if read.Via.Valid() || read.PrincipalKind.Valid() || read.Reads != 2 || read.Bytes != 12 {
 		t.Errorf("decoded %+v; want the newer build's values, reported unknown", *read)
+	}
+}
+
+// A MIRROR PUSH'S ACCOUNT IS BOUNDED, AND COUNTS THE WHOLE PUSH: a push
+// setting far more refs than an account names — a first push sets every ref
+// a mirror covers, up to code.MaxRefsPerRepo — each a name at
+// gitref.MaxRefNameBytes made of the byte JSON escapes longest, beside as
+// many deletions and branches held back, announces the first
+// CodeMirrorPushedRefs of each list in ref order and every one in its count,
+// and its whole event, at that worst, encodes two orders of magnitude under
+// the queue's payload ceiling, where an account naming every ref of a first
+// push is refused at its publish and lost.
+//
+// Mutation: keep every ref in the lists, and the event outgrows the bound;
+// count the cut lists rather than the push, and the counts say sixteen.
+func TestAMirrorPushsAccountIsBoundedAndCountsThePush(t *testing.T) {
+	t.Parallel()
+	const refs = 1_000 // a push batch's worth: some fifty times the bound, named whole
+	name := strings.Repeat("<", 255-len("refs/tags/")-len("000000-"))
+	oid := strings.Repeat("a", 64)
+	var updated, deleted, waiting []string
+	for i := range refs {
+		ref := fmt.Sprintf("refs/tags/%06d-%s", i, name)
+		updated = append(updated, ref+" "+oid)
+		deleted = append(deleted, ref)
+		waiting = append(waiting, ref)
+	}
+	ev := CodeMirrorPushed{RepoID: "r1", RepoName: "web", URL: "https://example.com/acme/web.git",
+		As: "ana"}.WithRefs(updated, deleted, waiting)
+	for _, list := range []struct {
+		name        string
+		got, whole  []string
+		count, want int
+	}{
+		{"updated", ev.Updated, updated, ev.UpdatedCount, refs},
+		{"deleted", ev.Deleted, deleted, ev.DeletedCount, refs},
+		{"waiting", ev.Waiting, waiting, ev.WaitingCount, refs},
+	} {
+		if !slices.Equal(list.got, list.whole[:CodeMirrorPushedRefs]) || list.count != list.want {
+			t.Errorf("%s names %d refs counting %d; want the first %d counting %d", list.name, len(list.got),
+				list.count, CodeMirrorPushedRefs, list.want)
+		}
+	}
+	raw, err := json.Marshal(events.New(ev, events.TraceContext{}))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if limit := queue.MaxPayloadBytes / 100; len(raw) > limit {
+		t.Errorf("the account of a push of %d refs encodes to %d bytes; want at most %d, two orders of "+
+			"magnitude under queue.MaxPayloadBytes", refs, len(raw), limit)
+	}
+	if got, want := ev.SummaryFor("web"), "1000 ref(s) set, 1000 deleted, 1000 waiting"; !strings.Contains(
+		got, want) {
+		t.Errorf("SummaryFor = %q; want it to say %q", got, want)
 	}
 }

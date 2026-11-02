@@ -606,7 +606,8 @@ var cacheWriters = []writerRow{
 			"repository — whose one argument not spelled as a literal is the source's URL, which the one outbound " +
 			"dial (gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
 	{"internal/code/mirror/push.go", kindGit + " ls-remote",
-		"a push mirror's read of the refs the other host holds — `ls-remote --refs <url>`, in no repository — " +
+		"a push mirror's read of the refs the other host holds — `ls-remote --refs [--branches] [--tags] " +
+			"<url>`, in no repository — " +
 			"whose one argument not spelled as a literal is the other host's URL, which the one outbound dial " +
 			"(gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
 	{"internal/code/mirror/push.go", kindGit + " push",

@@ -401,7 +401,7 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 		return queueNotApplied(ctx, at, b.RepoID, "", b.TargetRef+" holds no landing of "+short(b.OID)+" at "+
 			b.Position.String())
 	}
-	if _, err := tx.ExecContext(ctx, brokenLandingSQL, b.RepoID, b.TargetRef, b.Position.Packed(),
+	if _, err = tx.ExecContext(ctx, brokenLandingSQL, b.RepoID, b.TargetRef, b.Position.Packed(),
 		b.Ordinal); err != nil {
 		return 0, fmt.Errorf("code: mark %s's landing at %s broken at %s: %w", b.TargetRef, b.Position,
 			at.position, err)

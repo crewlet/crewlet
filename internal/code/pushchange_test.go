@@ -563,13 +563,15 @@ func TestAChangeIsOpenedFromThePushsOneBranch(t *testing.T) {
 // A BOX'S PUSH OPENS ITS CHANGE ON ITS RUN'S WORK ITEM (M4-decisions D34): a
 // coding box's `git push -o change` names the item its run was charged to by
 // its identity — stamped from the run's row by the box's admission
-// (RunProvenance.WorkID) — and the change it opens carries that item, its
-// tracker, id and key, as the turn's own code_open_change would; a push that
-// names its item by tracker and key alone, the history's label, opens one
-// carrying none.
+// (RunProvenance.WorkID, .WorkProject) — and the change it opens carries that
+// item, its tracker, id, key and project, in the one shape the turn's own
+// code_open_change and the engine's open at the run's collection give it; a
+// push that names its item by tracker and key alone, the history's label,
+// opens one carrying none.
 //
-// Mutation: leave the push's work item off the change its entry opens
-// (changeBook.open), and the box's change carries none — red.
+// Mutations: leave the push's work item off the change its entry opens
+// (changeBook.open), and the box's change carries none — red; leave its
+// project off, and the change carries the item without it — red.
 func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -577,7 +579,8 @@ func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 	boxed := func(workID string) code.Principal {
 		who := dev
 		who.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), RunID: uuid.NewString(),
-			CodingAgent: "claude-code", WorkBackend: string(types.WorkWorklet), WorkID: workID, WorkKey: "ENG-42"}
+			CodingAgent: "claude-code", WorkBackend: string(types.WorkWorklet), WorkID: workID, WorkKey: "ENG-42",
+			WorkProject: "ENG"}
 		return who
 	}
 	for _, tc := range []struct {
@@ -585,7 +588,8 @@ func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 		want               types.WorkItem
 	}{
 		{"by its identity", "web", "0190d8f0-3333-7000-8000-0123456789ab",
-			types.WorkItem{Backend: types.WorkWorklet, ID: "0190d8f0-3333-7000-8000-0123456789ab", Key: "ENG-42"}},
+			types.WorkItem{Backend: types.WorkWorklet, ID: "0190d8f0-3333-7000-8000-0123456789ab", Key: "ENG-42",
+				Project: "ENG"}},
 		{"by its label alone", "api", "", types.WorkItem{}},
 	} {
 		repo := changeRepo(t, n, tc.repo)

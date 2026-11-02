@@ -7,9 +7,15 @@
  * said to be the default, never as blank.
  */
 
-import { expect, test } from "vitest";
-import type { CompanyDocument, FleetAnswer, FleetNode } from "~/protocol/index.ts";
-import { codeAlarmsOf, codePolicyOf, protectionLines } from "./Code.tsx";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import type { CodeRepoSummary, CompanyDocument, FleetAnswer, FleetNode } from "~/protocol/index.ts";
+import { RepoProtection, codeAlarmsOf, codePolicyOf, protectionLines } from "./Code.tsx";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const node = (id: string, alarms?: FleetNode["alarms"]): FleetNode =>
   ({ id, roles: ["data", "git"], broker: "embedded", ...(alarms ? { alarms } : {}) }) as FleetNode;
@@ -102,4 +108,52 @@ test("each protected rule says its own gate, or that it has none once the detail
   expect(read[1]?.says).toBe(
     "only a person pushes to it directly, forced pushes allowed; no merge gate",
   );
+});
+
+/** A declared repository whose main branch takes no direct push. */
+const REPO = {
+  id: "id-web",
+  name: "web",
+  status: "active",
+  managed_by: "config",
+  kind: "project",
+  owner: { kind: "unit", ref: "engineering" },
+  visibility: "company",
+  search: "indexed",
+  default_branch: "main",
+  protections: [{ pattern: "refs/heads/main", direct_push: "none" }],
+} as unknown as CodeRepoSummary;
+
+// A REPOSITORY'S FOLD ASKS ITS DETAIL FOR THE GATES BY NAME: the engine
+// answers a repository's question with its row alone unless asked for more,
+// and a detail read without them would say "no merge gate" of every rule.
+// Mutation: drop `gates` from the question, and this fails.
+test("a repository's fold asks for its rules' gates and draws each rule's", async () => {
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      asked.push(url);
+      if (url.pathname !== "/query/code_repo") return new Promise<Response>(() => {});
+      const gated = url.searchParams.get("gates") === "true";
+      return new Response(
+        JSON.stringify({
+          repo: {
+            ...REPO,
+            ...(gated
+              ? { gates: [{ pattern: "refs/heads/main", gate: { approvals: "one" } }] }
+              : {}),
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  render(<RepoProtection repo={REPO} />);
+
+  expect(await screen.findByText(/a merge into it is .*one approval/)).toBeTruthy();
+  const read = asked.find((u) => u.pathname === "/query/code_repo");
+  expect(read?.searchParams.get("gates")).toBe("true");
+  expect(read?.searchParams.has("path_owners")).toBe(false);
 });

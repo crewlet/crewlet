@@ -28,7 +28,7 @@
  * tomorrow, and an answer the engine marks immutable.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Button, ButtonLink, Callout, Skeleton, Stack } from "@crewlethq/ui";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -55,7 +55,7 @@ import type {
   CodeTreeEntry,
 } from "~/protocol/index.ts";
 import { commitHref, repoHref } from "../paths.ts";
-import { RefPicker, revisionWord } from "./refs.tsx";
+import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
 type PathPart = CodeTreeEntry | CodeBlobAnswer;
@@ -74,7 +74,7 @@ function commitOf(rev: string, answer: CodeGitAnswer | null, param = "ref"): str
   return answer?.resolved?.[param]?.oid ?? "";
 }
 
-export function Files({ repo }: { repo: CodeRepoDetail }) {
+export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Revisions }) {
   const [ref, setRef] = useParam("ref", "", "filter");
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
@@ -84,7 +84,7 @@ export function Files({ repo }: { repo: CodeRepoDetail }) {
       <p className="muted">Nobody has pushed a branch yet: {repo.default_branch} holds no file.</p>
     );
   }
-  const place = { repo, rev: ref, path, onRev: setRef };
+  const place = { repo, revisions, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
   ) : (
@@ -100,13 +100,15 @@ export function Files({ repo }: { repo: CodeRepoDetail }) {
 
 interface Place {
   repo: CodeRepoDetail;
+  /** The repository's branches and tags, read once by its page ([useRevisions]). */
+  revisions: Revisions;
   rev: string;
   path: string;
   onRev: (rev: string) => void;
 }
 
 /** The repository's root at the revision: its listing. */
-function RootListing({ repo, rev, path, onRev }: Place) {
+function RootListing({ repo, revisions, rev, path, onRev }: Place) {
   const params = useMemo(
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
@@ -124,6 +126,7 @@ function RootListing({ repo, rev, path, onRev }: Place) {
     <Stack gap={3}>
       <FilesBar
         repo={repo}
+        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -137,6 +140,7 @@ function RootListing({ repo, rev, path, onRev }: Place) {
 /** A path under the root: a directory's listing, or a file's lines or its blame. */
 function PathView({
   repo,
+  revisions,
   rev,
   path,
   onRev,
@@ -169,6 +173,7 @@ function PathView({
     <Stack gap={3}>
       <FilesBar
         repo={repo}
+        revisions={revisions}
         rev={rev}
         path={path}
         onRev={onRev}
@@ -201,6 +206,7 @@ function PathView({
  */
 function FilesBar({
   repo,
+  revisions,
   rev,
   path,
   onRev,
@@ -215,7 +221,7 @@ function FilesBar({
   const at = (p: string) => repoHref(repo.name, { tab: "files", ref: rev, path: p });
   return (
     <div className="toolbar">
-      <RefPicker repo={repo} value={rev} onChoose={onRev} />
+      <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={onRev} />
       <nav aria-label="Path" className="row gap-1 wrap mono">
         <a className="prose-link" href={at("")}>
           {repo.name}
@@ -288,6 +294,18 @@ function PathBody({
   picked?: LineRun | null;
   onPick?: (run: LineRun | null) => void;
 }) {
+  // A FILE'S PAGES AND A LISTING'S ENTRIES, kept for as long as the pages
+  // read are — `paged.items` changes only when a page arrives — so the file's
+  // text is joined and split once a page, never on a render that brought
+  // none: a line pressed, or the repository's row read again every minute.
+  const pages = useMemo(
+    () => paged.items.filter((p): p is CodeBlobAnswer => !("mode" in p)),
+    [paged.items],
+  );
+  const entries = useMemo(
+    () => paged.items.filter((p): p is CodeTreeEntry => "mode" in p),
+    [paged.items],
+  );
   if (first.loading && !first.data) {
     return <Skeleton variant="text" rows={8} label={`Loading ${path || repo.name}`} />;
   }
@@ -300,7 +318,6 @@ function PathBody({
   }
   const more = <Pager paged={paged} what={first.data.blob ? "lines" : "entries"} />;
   if (first.data.blob) {
-    const pages = paged.items.filter((p): p is CodeBlobAnswer => !("mode" in p));
     return (
       <>
         <Source path={path} pages={pages} picked={picked} onPick={onPick} />
@@ -308,7 +325,6 @@ function PathBody({
       </>
     );
   }
-  const entries = paged.items.filter((p): p is CodeTreeEntry => "mode" in p);
   return (
     <>
       <Listing
@@ -442,15 +458,14 @@ function Source({
   }, [pages]);
   const from = head?.start_line ?? 1;
   usePickInView(path, picked, lines.length > 0);
-  if (!head) return null;
-  if (head.binary) {
-    return (
-      <p className="muted">{`A binary file of ${fmtBytes(head.size)}: git draws no lines of it.`}</p>
-    );
-  }
-  if (head.lines === 0) return <p className="muted">This file is empty.</p>;
-  const shown = from + lines.length - 1;
-  const pick = (n: number, extend: boolean) => {
+  // ONE PRESS FOR EVERY LINE, the same function whatever is picked, reading
+  // the pick as it is when pressed: a line is drawn again only when its own
+  // number, text or pick changes ([SourceLine]), so a press redraws the lines
+  // whose pick it moved rather than every line of the file.
+  const now = useRef({ picked, onPick });
+  now.current = { picked, onPick };
+  const press = useCallback((n: number, extend: boolean) => {
+    const { picked, onPick } = now.current;
     if (!onPick) return;
     if (extend && picked) {
       onPick({ start: Math.min(picked.start, n), end: Math.max(picked.end, n) });
@@ -459,7 +474,15 @@ function Source({
     } else {
       onPick({ start: n, end: n });
     }
-  };
+  }, []);
+  if (!head) return null;
+  if (head.binary) {
+    return (
+      <p className="muted">{`A binary file of ${fmtBytes(head.size)}: git draws no lines of it.`}</p>
+    );
+  }
+  if (head.lines === 0) return <p className="muted">This file is empty.</p>;
+  const shown = from + lines.length - 1;
   return (
     <Stack gap={2}>
       <p className="t-caption">
@@ -469,26 +492,53 @@ function Source({
       <div className="code-source" role="region" aria-label={`The lines of ${path}`}>
         {lines.map((text, i) => {
           const n = from + i;
-          const on = picked !== null && n >= picked.start && n <= picked.end;
           return (
-            <div key={n} id={`L${n}`} className="code-source__line" data-picked={on || undefined}>
-              <button
-                type="button"
-                className="code-source__number"
-                aria-label={`Line ${n}`}
-                aria-pressed={on}
-                onClick={(event) => pick(n, event.shiftKey)}
-              >
-                {n}
-              </button>
-              <span className="code-source__text">{text}</span>
-            </div>
+            <SourceLine
+              key={n}
+              n={n}
+              text={text}
+              on={picked !== null && n >= picked.start && n <= picked.end}
+              press={press}
+            />
           );
         })}
       </div>
     </Stack>
   );
 }
+
+/**
+ * One line of a file: its number, which picks it, and its text. MEMOIZED on
+ * what it draws, so a file of thousands of lines redraws, on a press, the
+ * lines whose pick changed — each line is three elements, and a file read to
+ * its end is tens of thousands of them.
+ */
+const SourceLine = memo(function SourceLine({
+  n,
+  text,
+  on,
+  press,
+}: {
+  n: number;
+  text: string;
+  on: boolean;
+  press: (n: number, extend: boolean) => void;
+}) {
+  return (
+    <div id={`L${n}`} className="code-source__line" data-picked={on || undefined}>
+      <button
+        type="button"
+        className="code-source__number"
+        aria-label={`Line ${n}`}
+        aria-pressed={on}
+        onClick={(event) => press(n, event.shiftKey)}
+      >
+        {n}
+      </button>
+      <span className="code-source__text">{text}</span>
+    </div>
+  );
+});
 
 /**
  * Scroll the first line an address picks into view, ONCE a file's lines have

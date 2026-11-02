@@ -277,7 +277,7 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b code.Cha
 				// THE CHAIN'S TIME RAN OUT, NOT THE ENTRY'S: it had less
 				// than a merge is given, so it is no larger for it — it and
 				// the rest are the next chain's.
-				if err := bd.prune(kept); err != nil {
+				if err = bd.prune(kept); err != nil {
 					return code.ChainResult{}, err
 				}
 				break
