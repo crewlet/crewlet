@@ -161,9 +161,11 @@ func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager) sandb
 // on, as the company this node runs picks it ([Company.relaunchTarget]) — what
 // the read surface hands [sandbox.ReadContinuityOf] for each row of a seat's
 // sessions (internal/api/queries' `continuable`), so the row is decided by the
-// member and the runner a relaunch would take. A node running no company, or
-// none that reaches a sandbox cell, and a handle the company holds no seat
-// under, have no member to say anything of, which the target says.
+// member and the runner a relaunch would take — and, where the company keeps no
+// session, that a relaunch continues no kept one, by the keep the coordinator's
+// launch asks ([executorKeep.Keeps]). A node running no company, or none that
+// reaches a sandbox cell, and a handle the company holds no seat under, have no
+// member to say anything of, which the target says.
 func (e *Engine) RelaunchTarget(handle string) sandbox.RelaunchTarget {
 	company := e.Company()
 	if company == nil || company.catalogue == nil || company.Org == nil {
@@ -173,7 +175,11 @@ func (e *Engine) RelaunchTarget(handle string) sandbox.RelaunchTarget {
 	if seat == nil {
 		return sandbox.RelaunchTarget{Why: "the company this node runs holds no seat " + handle}
 	}
-	return company.relaunchTarget(seat, company.catalogue)
+	target := company.relaunchTarget(seat, company.catalogue)
+	if !(executorKeep{engine: e}).Keeps() {
+		target.NoKept = sandbox.NoKeptSession
+	}
+	return target
 }
 
 // sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil

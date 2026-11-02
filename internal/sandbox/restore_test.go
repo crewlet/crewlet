@@ -808,9 +808,10 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 // continued only in the box the run parked in, where the run holds that box and
 // names its session and the relaunch's member is of the box's harness in its
 // cell, the launch's own test of a box it continues in; anywhere else, not at
-// all. And it is undecided, never a no, wherever a relaunch would not decide
-// now either: a job still working or being collected, a capture still being
-// kept, and every member of the seat's chain sitting out.
+// all — and only that, in a company that keeps no session. And it is
+// undecided, never a no, wherever a relaunch would not decide now either: a job
+// still working or being collected, a capture still being kept, and every
+// member of the seat's chain sitting out.
 //
 // Mutation: drop the parked box's half, read any undecided state as a no, or
 // let a box of another harness or cell count as the parked one, and a case goes
@@ -861,6 +862,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			target: RelaunchTarget{Why: "the seat's chain has no runner member"}},
 		"a decided ending": {target: target, decided: true, whyHolds: "is ending",
 			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
+		"a company that keeps no session": {decided: true, in: ContinuesInParkedBox,
+			whyHolds: "keeps no executor session",
+			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Restorer: fakeRestorer{},
+				NoKept: NoKeptSession}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -926,6 +931,46 @@ func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 		if asked := askedRun(said, AnswerWords{Text: "use main"}); asked.SessionID != tc.want {
 			t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
 		}
+	}
+}
+
+// A COMPANY THAT KEEPS NO SESSION CONTINUES NONE IT KEPT BEFORE. With
+// `turn_engine.conversation_session.enabled: false` nothing is kept, and a
+// relaunch continues at most the session its own box holds — whatever a capture
+// kept while the switch was on, which the relaunch's caller is told it does not
+// continue, and which the launch, asked to continue it all the same, does not
+// fetch: it starts a session of its own.
+//
+// Mutation: continue a kept capture whatever the switch says, at either check,
+// and the relaunch restores a session the company keeps none of.
+func TestACompanyThatKeepsNoSessionContinuesNoneItKeptBefore(t *testing.T) {
+	t.Parallel()
+	rig, restore, kept := keptTurn(t)
+	keep := rig.coordinator.keep.(*sessionKeep)
+	keep.mu.Lock()
+	keep.policy.Keep = false
+	keep.mu.Unlock()
+	if continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); why != NoKeptSession ||
+		continued.Capture.CaptureSeq != 0 {
+		t.Fatalf("the relaunch continues %+v (%q), want none, said: the company keeps none", continued, why)
+	}
+	launcher, err := NewCoordinator(CoordinatorOptions{
+		Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease),
+		Restore: restore, Keep: keep, SpoolDir: rig.coordinator.spoolDirectory(),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(launcher.Stop)
+	if _, err := launcher.Launch(t.Context(), rig.manager, continuingKept(kept)); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	started := rig.runner.Started()
+	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" ||
+		len(rig.runner.Carried()) != 0 {
+		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own",
+			last.Resume, last.Brief)
 	}
 }
 

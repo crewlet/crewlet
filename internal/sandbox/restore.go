@@ -267,6 +267,13 @@ type RelaunchTarget struct {
 	// takes the relaunch decides what it continues. A relaunch now is held
 	// until one is back, and asks again then.
 	Waiting bool
+
+	// NoKept is why a relaunch of the seat's turn continues no kept session
+	// whatever the turn kept, "" where it may: the company keeps none
+	// ([NoKeptSession]), as the coordinator's own check says it at the launch
+	// ([Coordinator.continuesNoKept]). A relaunch then continues at most the
+	// session the box its run parked in holds.
+	NoKept string
 }
 
 // restorer is the target's runner as [ContinuityOf] asks it: its own, or one
@@ -346,6 +353,9 @@ func ReadContinuityOf(row executordomain.Session, run *PendingRun, target Relaun
 		return ReadContinuity{Why: target.Why}
 	}
 	kept := ContinuityOf(row, run, run.LaunchSeq, target.restorer())
+	if target.NoKept != "" {
+		kept = SessionContinuity{Why: target.NoKept}
+	}
 	switch {
 	case kept.Continues:
 		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInAnyBox}
@@ -442,8 +452,8 @@ const relaunchCaptureWait = 15 * time.Second
 func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	restorer SessionRestorer) (ContinuedSession, string) {
 
-	if c.restore == nil {
-		return ContinuedSession{}, "this node continues no kept session: it was built with nothing to restore one from"
+	if why := c.continuesNoKept(); why != "" {
+		return ContinuedSession{}, why
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	switch {
@@ -472,6 +482,27 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	answer.Capture, answer.Row = *run.Kept, row
 	return answer, ""
 }
+
+// continuesNoKept is why this coordinator continues no kept session at all,
+// "" where it may: a node built with nothing to restore one from, or a company
+// that keeps no session as this node's revision says ([SessionKeep.Keeps]) —
+// `turn_engine.conversation_session.enabled: false`, under which no session is
+// kept and a relaunch continues at most the one its own box holds, whatever a
+// capture kept while the switch was on.
+func (c *Coordinator) continuesNoKept() string {
+	switch {
+	case c.restore == nil:
+		return "this node continues no kept session: it was built with nothing to restore one from"
+	case c.keep != nil && !c.keep.Keeps():
+		return NoKeptSession
+	}
+	return ""
+}
+
+// NoKeptSession is why a relaunch continues no kept session in a company that
+// keeps none: what a launch logs and a reader of a session is told.
+const NoKeptSession = "the company keeps no executor session (turn_engine.conversation_session.enabled " +
+	"is false), so a relaunch continues at most the session its own box holds"
 
 // followedContext is what the last request of the session of run's current
 // job carried, as that job's newest capture measured it, kept or not; zero
@@ -620,8 +651,8 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 
-	if c.restore == nil {
-		return continuedLaunch{}, "this node continues no kept session"
+	if why := c.continuesNoKept(); why != "" {
+		return continuedLaunch{}, why
 	}
 	kept := opened.Kept
 	if kept == nil || kept.LaunchSeq != want.LaunchSeq || kept.CaptureSeq != want.CaptureSeq {
