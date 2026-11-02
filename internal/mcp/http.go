@@ -3,11 +3,14 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +19,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -64,10 +68,14 @@ const protocolVersionHeader = "Mcp-Protocol-Version"
 // stream would carry nothing anyone reads. It is also the other thing the
 // probe's wrapper costs, so leaving it nominally enabled would be a lie about
 // what the connection does.
+//
+// A REDIRECT IS FOLLOWED WITHIN THE CONFIGURED ORIGIN ALONE ([sameOrigin]):
+// see [httpIdentity.redirect].
 func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity) {
 	ident := &httpIdentity{
 		base:    httpx.Transport(),
 		headers: maps.Clone(spec.Headers),
+		origin:  originOf(spec.URL),
 		server:  spec.Name,
 		log:     log,
 	}
@@ -76,9 +84,76 @@ func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity
 	ident.setDeadline(spec.startupTimeout())
 	return &sdk.StreamableClientTransport{
 		Endpoint:             spec.URL,
-		HTTPClient:           &http.Client{Transport: ident},
+		HTTPClient:           &http.Client{Transport: ident, CheckRedirect: ident.redirect},
 		DisableStandaloneSSE: true,
 	}, ident
+}
+
+// maxRedirects bounds the redirects one request follows within its server's
+// origin: net/http's own default, which no MCP server needs more than one of
+// (a trailing slash, a path the server moved).
+const maxRedirects = 10
+
+// ErrRedirectedAway is a server that answered with a redirect to an address
+// outside its configured origin, which the engine does not follow.
+var ErrRedirectedAway = errors.New("mcp: the server redirected to another origin")
+
+// redirect is the connection's redirect policy: a redirect within the
+// configured origin (scheme, host and port) is followed, and one to anywhere
+// else is refused.
+//
+// REFUSED, NOT FOLLOWED THROUGH THE GUARD. The configured address is the
+// operator's, dialled as it stands whatever network it is on, and carries the
+// headers configured for it; an address a redirect names is the server's
+// (ADR-0072). Followed, a 307 or a 308 would carry the JSON-RPC body to it,
+// and a hop the guard admitted would still reach an origin nobody configured.
+// Refused, the request fails with a sentence naming the origin it was sent
+// to, which an operator who trusts it writes as the server's address. The
+// round tripper sets the configured headers on a request to the configured
+// origin alone ([httpIdentity.RoundTrip]), so no credential leaves it either
+// way.
+func (h *httpIdentity) redirect(req *http.Request, via []*http.Request) error {
+	if !sameOrigin(req.URL, h.origin) {
+		return classify(FailNoEndpoint, fmt.Errorf("%w: it answered with a redirect to %s, which is not "+
+			"the server's address. Set the server's url to that address if it is the one to use",
+			ErrRedirectedAway, redact.URL(req.URL.String())))
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("mcp: the server redirected %d times without answering", len(via))
+	}
+	return nil
+}
+
+// origin is a URL's scheme, host and port, the port written out where the
+// URL leaves it to the scheme.
+type origin struct{ scheme, host, port string }
+
+// originOf is raw's origin, the zero origin for an address that does not
+// parse, which no request's origin equals.
+func originOf(raw string) origin {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return origin{}
+	}
+	return originOfURL(u)
+}
+
+func originOfURL(u *url.URL) origin {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return origin{scheme: strings.ToLower(u.Scheme), host: strings.ToLower(u.Hostname()), port: port}
+}
+
+// sameOrigin reports whether u is at o: the same scheme, host and port.
+func sameOrigin(u *url.URL, o origin) bool {
+	return o != (origin{}) && originOfURL(u) == o
 }
 
 // httpIdentity is the round tripper for one remote server: it carries the
@@ -87,8 +162,11 @@ func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity
 type httpIdentity struct {
 	base    http.RoundTripper
 	headers map[string]string
-	server  string
-	log     *slog.Logger
+	// origin is the configured address's: the one origin a request is sent
+	// the configured headers to.
+	origin origin
+	server string
+	log    *slog.Logger
 
 	// protocolVersion is set once, after the handshake settles. Atomic
 	// because the session's requests run on their own goroutines.
@@ -139,8 +217,14 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	// Clone: RoundTrippers must not mutate the request they are handed.
 	req = req.Clone(ctx)
-	for k, v := range h.headers {
-		req.Header.Set(k, v)
+	// THE CONFIGURED HEADERS GO TO THE CONFIGURED ORIGIN ALONE. The redirect
+	// policy refuses every other origin before a request to it is made; this
+	// is the same rule where the headers are set, so no path that reaches
+	// this tripper can carry them elsewhere.
+	if sameOrigin(req.URL, h.origin) {
+		for k, v := range h.headers {
+			req.Header.Set(k, v)
+		}
 	}
 	if req.Header.Get(protocolVersionHeader) == "" {
 		if v := h.protocolVersion.Load(); v != nil {
@@ -193,12 +277,14 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// One byte over the cap is read on purpose, so a body sitting exactly on
 	// it is not mistaken for an overflowing one.
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody+1))
+	// THE ADDRESS REDACTED: a server's address can carry its key in the query,
+	// which the log's own pass does not recognise by shape.
 	if readErr != nil {
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
-			"method", req.Method, "url", req.URL.String(), "body_error", readErr.Error())
+			"method", req.Method, "url", redact.URL(req.URL.String()), "body_error", readErr.Error())
 	} else {
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
-			"method", req.Method, "url", req.URL.String(),
+			"method", req.Method, "url", redact.URL(req.URL.String()),
 			"response_body", boundedBody(body))
 	}
 	h.failed.Store(&answerFailure{status: resp.StatusCode, class: classOfStatus(resp.StatusCode,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -108,7 +109,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	case TransportHTTP:
 		transport, ident = newHTTPTransport(spec, log)
 		c.ident = ident
-		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", spec.URL)
+		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", redact.URL(spec.URL))
 	default:
 		transport, c.child, err = newStdioTransport(spec, log)
 		if err != nil {
