@@ -32,6 +32,7 @@ export interface Markable {
 export function NoticeActions({
   notice,
   source,
+  seen,
   now,
   zone,
   maxSnoozeAhead,
@@ -40,6 +41,11 @@ export function NoticeActions({
   notice: Markable;
   /** The domain the notice is kept by, whose tool marks it. */
   source: "tracker" | "code";
+  /**
+   * A code notice's own position, `<stream>@<generation>:<sequence>`: the
+   * floor its mark waits for (`code_mark_inbox`'s `seen`).
+   */
+  seen?: string;
   now: number;
   /** The company's clock, which "tomorrow at nine" is read on. */
   zone: string | undefined;
@@ -59,9 +65,12 @@ export function NoticeActions({
   const [read, setRead] = useState(notice.read);
   const [snoozed, setSnoozed] = useState(Boolean(notice.snoozed));
   const id = notice.record_id;
-
+  // A CODE MARK CARRIES THE NOTICE'S OWN POSITION as its floor (`seen`): it is
+  // decided by whichever data node is asked, which may not have reached the
+  // notice this page was read with, and it waits for it there rather than
+  // refusing a notice the person is looking at as none of theirs.
   const mark = async (args: Parameters<typeof write.run>[0], done: string): Promise<boolean> => {
-    const result = await write.run(args, { done });
+    const result = await write.run(source === "code" && seen ? { ...args, seen } : args, { done });
     return Boolean(result && (result.kind === "applied" || result.kind === "pending"));
   };
   const snooze = async (until: string) => {

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
@@ -28,6 +30,14 @@ import (
 // ONE GESTURE, NEVER THE LISTS — the arguments mark_inbox takes, read by the
 // one parser ([gestureOf]) over the code host's reasons — decided by the code
 // host on the person's own record (code.Marks).
+//
+// THE CALLER'S FLOOR TRAVELS WITH THE GESTURE (`seen`): a mark is decided by
+// whichever data node the router reaches, which may be behind the one the
+// inbox page was read from, and a decide below a notice's record finds no row
+// for it — a refusal of a notice the person was just shown. So the caller says
+// how far it has read the code log, the decide waits for that position, and a
+// node that cannot reach it hands the mark to the next one (code.MarkWrite's
+// Seen) rather than refusing what is merely late.
 //
 // THE OPERATOR CATALOGUE'S ALONE, and a PERSON'S: a seat has no inbox to mark
 // — it is woken, never shown a list — and a person's marks are their own,
@@ -53,7 +63,9 @@ func (t *codeMarkInbox) Description() string {
 		"back, `snooze` puts them off until a time, `unsnooze` brings a snoozed one back now. `read_through` " +
 		"reads everything up to a position on the code log — the newest code notice you have seen, as " +
 		"`<stream>@<generation>:<sequence>` — and never moves your position backwards. Only what you name " +
-		"changes. Your work notices are marked with " + worklet.MarkInboxTool + ": each domain keeps its own marks."
+		"changes. Pass `seen`, the newest code-log position you read (a notice's own `position`), so the " +
+		"mark waits for the notices you were shown rather than being refused by a node not yet at them. " +
+		"Your work notices are marked with " + worklet.MarkInboxTool + ": each domain keeps its own marks."
 }
 
 func (t *codeMarkInbox) Parameters() map[string]any {
@@ -90,6 +102,13 @@ func (t *codeMarkInbox) Parameters() map[string]any {
 				"description": "Read every code notice at or before this position on the code log, " +
 					"`<stream>@<generation>:<sequence>` — a code notice's `log_stream`, `log_generation` and " +
 					"`log_seq`. A position at or behind the one you have read to changes nothing.",
+			},
+			"seen": map[string]any{
+				"type": "string",
+				"description": "How far you have read the code log, `<stream>@<generation>:<sequence>` — the " +
+					"`position` of the newest code notice you were shown, or the code source's `newest`. The mark " +
+					"is decided once its node has applied it, so a notice you were shown is never refused as " +
+					"unknown because the node asked had not reached it yet. Omit it to wait for nothing.",
 			},
 			"primary_reasons": map[string]any{
 				"type":  "array",
@@ -128,10 +147,14 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
+	seen, bad := codeMarkFloor(args)
+	if bad != "" {
+		return failed(bad), nil
+	}
 	handle := c.asker.Seat
 	opID := opIDFor(actor, t.Name(), codeMarkVerb, handle, args)
 	res, err := t.deps.Writer.Mark(ctx, code.MarkWrite{OpID: opID, Asker: c.asker, Handle: handle,
-		Gesture: code.MarkGestureOf(gesture)})
+		Gesture: code.MarkGestureOf(gesture), Seen: seen})
 	if err != nil {
 		var unserved *estate.ErrUnserved
 		if errors.Is(err, estate.ErrOutcomeUnknown) || errors.As(err, &unserved) && unserved.Silent() {
@@ -154,6 +177,27 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"position": positionOf(res.Position),
 	}, actor))
 	return answer, nil
+}
+
+// codeMarkFloor is the `seen` argument as a position on the code log, the
+// zero position where the call names none, or why it is not one. A position on
+// another log is refused here rather than waited for: a coordinate on the
+// Worklet's log says nothing of how far the code log was read, and the writer
+// would refuse it anyway (code.MarkWrite.Validate).
+func codeMarkFloor(args map[string]any) (statelog.Position, string) {
+	raw := strings.TrimSpace(argString(args, "seen"))
+	if raw == "" {
+		return statelog.Position{}, ""
+	}
+	at, err := statelog.ParsePosition(raw)
+	if err != nil {
+		return statelog.Position{}, "seen: " + err.Error()
+	}
+	if at.Stream != topics.CodeLogStream {
+		return statelog.Position{}, fmt.Sprintf("seen: %s is a position on another log than the code log "+
+			"(%s) — pass the `position` of a code notice", raw, topics.CodeLogStream)
+	}
+	return at, ""
 }
 
 // markRefused is a mark the code host refused, in its class: a mark of

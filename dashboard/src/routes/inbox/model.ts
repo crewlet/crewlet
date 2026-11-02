@@ -89,6 +89,7 @@ import type {
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
+  InboxPosition,
   WorkAskRow,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
@@ -346,9 +347,17 @@ export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
       newest[n.source] = n;
     }
   }
-  const spelled = (n: InboxNotice | null) =>
-    n ? `${n.position.stream}@${n.position.generation ?? 0}:${n.position.seq}` : null;
+  const spelled = (n: InboxNotice | null) => (n ? spelledPosition(n.position) : null);
   return { tracker: spelled(newest.tracker), code: spelled(newest.code) };
+}
+
+/**
+ * A notice's position as a write's argument spells one,
+ * `<stream>@<generation>:<sequence>` — what `read_through` reads through and
+ * `code_mark_inbox`'s `seen` waits for.
+ */
+export function spelledPosition(p: InboxPosition): string {
+  return `${p.stream}@${p.generation ?? 0}:${p.seq}`;
 }
 
 // ---------------------------------------------------------------------------

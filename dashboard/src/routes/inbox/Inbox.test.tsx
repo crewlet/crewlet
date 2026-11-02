@@ -1579,7 +1579,11 @@ describe("the pane", () => {
     expect(updates.getByText("Retry the upload once")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
-    expect(posted).toEqual([{ tool: "code_mark_inbox", args: { read: ["c-5"] } }]);
+    // ITS OWN POSITION RIDES AS THE FLOOR, which the deciding node waits for.
+    // Mutation: drop `seen` from NoticeActions' code write, red.
+    expect(posted).toEqual([
+      { tool: "code_mark_inbox", args: { read: ["c-5"], seen: "CREWLET_CODE_LOG@1:5" } },
+    ]);
   });
 
   // THE INTENT-FIRST CARD: the work item the change implements and its
@@ -1790,7 +1794,10 @@ describe("the pane", () => {
     await settle();
     expect(posted).toEqual([
       { tool: "mark_inbox", args: { read_through: "CREWLET_TRACKER_LOG@1:12" } },
-      { tool: "code_mark_inbox", args: { read_through: "CREWLET_CODE_LOG@1:5" } },
+      {
+        tool: "code_mark_inbox",
+        args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
+      },
     ]);
   });
 

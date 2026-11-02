@@ -112,9 +112,19 @@ type PersonMarks struct {
 // MarkWrite is one gesture a person makes over their own code notices: the
 // operation it is named by, who asks — the person, by the credential they act
 // through and the human seat they hold — whose record it is, the gesture, and
-// the position on the code log the asker last read, which the decide waits
-// for (a mark of a notice this node has not applied yet is refused naming it
-// otherwise).
+// Seen, the position on the code log the asker last read.
+//
+// SEEN IS THE ASKER'S FLOOR, and the decide waits for it ([statelog.Request]'s
+// Session) before it opens its snapshot. A mark is unkeyed and asked of
+// whichever data node the router reaches (estate's code.mark), and the inbox
+// page that showed the notice may have been read from a peer ahead of it: a
+// decide below the notice's record finds no row for it and refuses the mark
+// as naming none of the person's notices — a refusal that is false the moment
+// the node catches up. With the floor, a node that cannot reach it within the
+// write budget answers [ErrNotServing] and the router asks the next one; a
+// notice it then still cannot find is truly none of theirs. The zero position
+// waits for nothing: a gesture naming no notice (`read_through`, the primary
+// reasons) reads no notice row.
 type MarkWrite struct {
 	OpID    string            `json:"op_id"`
 	Asker   Principal         `json:"asker"`

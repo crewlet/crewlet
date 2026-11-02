@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -303,4 +304,56 @@ func TestReadThroughIsAPositionOnTheCodeLog(t *testing.T) {
 	if page.SeenThrough.Stream != topics.CodeLogStream || page.SeenThrough.Packed() != uint64(through.Packed()) {
 		t.Errorf("founder's code inbox has read through %+v, want %s on the code log", page.SeenThrough, through)
 	}
+}
+
+// A CODE MARK WAITS FOR THE ASKER'S FLOOR: a mark is asked of whichever data
+// node the router reaches, and the inbox page that showed the notice may have
+// been read from a peer ahead of it. Asked of a node that has not applied the
+// notice's record, a mark with no floor finds no row for it and is refused as
+// naming none of founder's notices; the same gesture carrying the position the
+// asker read (the notice's own) waits for the node to reach it and lands. A
+// node that cannot reach the floor within the write budget answers
+// ErrNotServing — the router asks the next data node — and appends nothing,
+// never the false "not one of their notices".
+//
+// Mutation: publish the mark without the asker's floor (drop `Session:
+// w.Seen`), and the gesture carrying it is refused invalid on the node behind,
+// red; the held node answers a refusal rather than ErrNotServing, red.
+func TestACodeMarkWaitsForTheAskersFloor(t *testing.T) {
+	t.Parallel()
+	t.Run("past the asker's floor", func(t *testing.T) {
+		t.Parallel()
+		a, b := newTwoNodes(t)
+		storedBefore(b, time.Hour)
+		ids, at, _, _ := founderNotices(t, a, 0)
+		m := markerOn(t, b, b.pub)
+		blind, err := m.Mark(t.Context(), marking(code.MarkGesture{Read: []string{ids[0]}}))
+		if err != nil || blind.Refusal != code.MarkInvalid {
+			t.Fatalf("a mark with no floor on a node behind the notice answered %+v, %v; want it refused "+
+				"invalid, or this case proves nothing", blind, err)
+		}
+		floored := marking(code.MarkGesture{Read: []string{ids[0]}})
+		floored.Seen = at[0]
+		res := mark(t, m, floored)
+		if rec := b.recordAt(res.Position); rec.Subject != code.PersonSubject("founder") || rec.Op != code.OpMarks {
+			t.Errorf("the mark landed %+v, want op marks on person.founder", rec.RecordEnvelope)
+		}
+	})
+	t.Run("past what the writer reaches in its budget", func(t *testing.T) {
+		t.Parallel()
+		a, b := newTwoNodes(t)
+		storedBefore(b, time.Hour)
+		ids, at, _, _ := founderNotices(t, a, 0)
+		b.hold()
+		m := markerOn(t, b, b.pub)
+		before := b.end()
+		w := marking(code.MarkGesture{Read: []string{ids[0]}})
+		w.Seen = at[0]
+		if res, err := m.Mark(t.Context(), w); !errors.Is(err, code.ErrNotServing) {
+			t.Fatalf("a marks writer behind the asker's floor answered %+v, %v; want ErrNotServing", res, err)
+		}
+		if got := b.end() - before; got != 0 {
+			t.Fatalf("%d records appended, want none", got)
+		}
+	})
 }

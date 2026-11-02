@@ -117,6 +117,7 @@ import {
   rowKey,
   rowName,
   rowWho,
+  spelledPosition,
   type AnswerWords,
   type FollowThrough,
   type InboxRow,
@@ -456,6 +457,11 @@ function ChangeNoticePane({
       <NoticeActions
         notice={notice}
         source="code"
+        seen={spelledPosition({
+          stream: notice.log_stream,
+          generation: notice.log_generation,
+          seq: notice.log_seq,
+        })}
         now={now}
         zone={zone}
         maxSnoozeAhead={maxSnoozeAhead}

@@ -714,8 +714,14 @@ function MarkAllRead({ through }: { through: ReadThrough }) {
           if (through.tracker) {
             void tracker.run({ read_through: through.tracker }, { done: "Marked all read" });
           }
+          // THE CODE WRITE WAITS FOR WHAT IT READS THROUGH: the newest code
+          // notice loaded is how far this page read the code log, so the
+          // node that decides it is held to having applied it.
           if (through.code) {
-            void code.run({ read_through: through.code }, { done: "Marked all read" });
+            void code.run(
+              { read_through: through.code, seen: through.code },
+              { done: "Marked all read" },
+            );
           }
         }}
       >

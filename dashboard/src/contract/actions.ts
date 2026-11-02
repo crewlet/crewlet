@@ -457,9 +457,12 @@ export const ACTIONS = {
   },
   // THE CODE HOST'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
   // its own notices on its own log, so a code notice is marked here and
-  // "Mark all read" sends both.
+  // "Mark all read" sends both. `seen` is how far this page read the code log
+  // (the notice's own position, or the newest loaded): the mark is decided by
+  // whichever data node is asked, and it waits for that position rather than
+  // refusing a notice the person was shown as unknown.
   code_mark_inbox: {
-    args: ["read", "unread", "snooze", "unsnooze", "read_through"],
+    args: ["read", "unread", "snooze", "unsnooze", "read_through", "seen"],
     domain: "code",
     apps: [],
     refreshes: [],
