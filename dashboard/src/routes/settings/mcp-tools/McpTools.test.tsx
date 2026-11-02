@@ -181,9 +181,12 @@ test("a server's row says its condition, its reach and what went wrong in the en
   expect(within(docs).getByText("docs-mcp --read-only")).toBeDefined();
   cleanup();
 
-  // A MEMBER reads what a server is for, never its address or command.
+  // A MEMBER reads what a server is for, never its address or command, and
+  // no reach, which the engine does not push them: never "No agent".
   current = mcpData("member");
   mountAt({ hash: "#/settings/mcp-tools" });
+  expect(screen.queryByText("Used by")).toBeNull();
+  expect(screen.queryByText("No agent")).toBeNull();
   expect(screen.queryByText("mcp.linear.app")).toBeNull();
   expect(screen.queryByText("docs-mcp --read-only")).toBeNull();
   expect(screen.getByText("Searches the engineering handbook")).toBeDefined();

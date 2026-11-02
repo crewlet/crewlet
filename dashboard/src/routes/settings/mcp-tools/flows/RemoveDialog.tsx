@@ -139,7 +139,7 @@ export function RemoveDialog({
     setBusy(false);
   };
 
-  const losing = data.reaches(server.name).map((s) => s.name);
+  const losing = (data.reaches(server.name) ?? []).map((s) => s.name);
   const deps = load.kind === "ready" ? load.dependants : null;
   const elsewhere = deps ? deps.mcp_env.length + deps.sandbox.length : 0;
   // FOCUS STARTS ON CANCEL, as in every prompt of the family: Remove is
@@ -190,9 +190,11 @@ export function RemoveDialog({
       ) : (
         <div className="mcp-stack">
           <Text as="p">
-            {losing.length > 0
-              ? `${listed(losing)} ${losing.length === 1 ? "loses" : "lose"} its ${plural(server.tools, "tool")} on ${losing.length === 1 ? "its" : "their"} next turn. A running turn finishes first.`
-              : "No agent reaches it, so no agent loses a tool."}{" "}
+            {losing.length === 0
+              ? "No agent reaches it, so no agent loses a tool."
+              : server.tools > 0
+                ? `${listed(losing)} ${losing.length === 1 ? "loses" : "lose"} its ${plural(server.tools, "tool")} on ${losing.length === 1 ? "its" : "their"} next turn. A running turn finishes first.`
+                : `${listed(losing)} ${losing.length === 1 ? "is" : "are"} no longer granted it from ${losing.length === 1 ? "its" : "their"} next turn.`}{" "}
             Its history goes with it. Disabling keeps everything instead.
           </Text>
           {deps && elsewhere > 0 ? (

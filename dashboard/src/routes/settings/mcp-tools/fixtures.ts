@@ -440,7 +440,16 @@ export const LINEAR_MEMBER_DETAIL: McpMemberServerAnswer = {
 
 /** The page's whole reading of the company, as the hook joins it, in one reader's reading. */
 export function mcpData(reading: "admin" | "member", reload: () => void = () => {}): McpData {
-  const seats = indexOrg(MCP_ORG as never).seats.filter((s) => s.kind === "agent");
+  // A MEMBER'S ORG CARRIES NO `tool_sources`: the engine pushes each seat's
+  // grants to an administrator alone.
+  const org =
+    reading === "admin"
+      ? MCP_ORG
+      : {
+          ...MCP_ORG,
+          roles: MCP_ORG.roles.map(({ tool_sources: _t, ...role }) => role),
+        };
+  const seats = indexOrg(org as never).seats.filter((s) => s.kind === "agent");
   return {
     ...mcpViewOf(reading === "admin" ? ADMIN_STATUS : MEMBER_STATUS, seats),
     loading: false,

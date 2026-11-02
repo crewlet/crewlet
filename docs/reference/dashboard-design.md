@@ -8921,8 +8921,11 @@ is read only: for an admin the address or the command, then the transport,
 where it runs, its instances, the start and call timeouts with which are the
 default, its tool prefix; how the engine signs in (and an integration's link
 to its Agents tab); and for an admin every header or variable the entry sends,
-by name, with the `${VAR}` it reads or that it is written in the configuration,
-never a value. **Tools** lists the names no agent is offered under them with
+by name, with the `${VAR}` it reads where its value is that reference alone
+(the engine masks every other value, so it reads *Set in the configuration*),
+never a value. A member's org carries no agent's grants (the engine pushes
+`tool_sources` to an admin alone), so for a member the list draws no **Used
+by** and a server's page no reach, rather than *No agent*. **Tools** lists the names no agent is offered under them with
 the engine's reason, then every tool the fleet lists with its description, the
 engine's risk (*Read only*, *Writes*, *Destructive*, starred where the server
 declared nothing) and its calls over the week, with a search and the risk's

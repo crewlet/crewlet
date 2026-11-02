@@ -70,7 +70,9 @@ export function ServerPage({
     { label: "Status", value: <StateLine server={server} /> },
     { label: "Connection", value: `${w.where}, ${w.scope.toLowerCase()}` },
     { label: "Tools", value: toolCount > 0 ? String(toolCount) : "None listed" },
-    { label: "Reaches", value: reach.length > 0 ? plural(reach.length, "agent") : "No agent" },
+    ...(reach
+      ? [{ label: "Reaches", value: reach.length > 0 ? plural(reach.length, "agent") : "No agent" }]
+      : []),
   ];
   const answer = detail.data;
   return (

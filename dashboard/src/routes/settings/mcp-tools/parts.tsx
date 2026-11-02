@@ -160,7 +160,7 @@ export function RiskChips({
  * each agent seat.
  */
 export function ReachCell({ server, data }: { server: McpMemberServerStatus; data: McpData }) {
-  const reach = data.reaches(server.name);
+  const reach = data.reaches(server.name) ?? [];
   if (reach.length === 0) {
     return (
       <Text as="span" variant="caption" tone="tertiary">

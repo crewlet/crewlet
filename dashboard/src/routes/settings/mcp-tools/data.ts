@@ -60,8 +60,15 @@ export interface McpData {
   agents: readonly Seat[];
   /** A seat's name by its handle; the handle where the chart holds no such seat. */
   seatName: (handle: string) => string;
-  /** The agent seats the engine grants a server, from their `tool_sources`. */
-  reaches: (name: string) => readonly Seat[];
+  /**
+   * The agent seats the engine grants a server, from their `tool_sources`;
+   * null where the engine did not say. It pushes `tool_sources` to an
+   * administrator alone, since they are derived from each seat's credentials,
+   * so a member's org carries none, and an absent list is not "no agent".
+   */
+  reaches: (name: string) => readonly Seat[] | null;
+  /** Whether the engine pushed the agent seats' grants: an administrator's org carries them. */
+  reachKnown: boolean;
   loading: boolean;
   /** Why the list was not answered, as `QueryState` draws it; null while it was. */
   failure: {
@@ -138,6 +145,7 @@ export function mcpViewOf(
   const servers: readonly McpMemberServerStatus[] = answer?.servers ?? [];
   const byName = new Map(servers.map((s) => [s.name, s]));
   const names = new Map(seats.map((s) => [s.handle, s.name]));
+  const reachKnown = seats.some((s) => s.raw.tool_sources !== undefined);
   return {
     admin: answer?.reading === "admin",
     answer,
@@ -149,7 +157,9 @@ export function mcpViewOf(
     builtin: answer?.builtin ?? [],
     agents: seats,
     seatName: (handle) => names.get(handle) ?? handle,
-    reaches: (name) => seats.filter((s) => (s.raw.tool_sources ?? []).includes(originOf(name))),
+    reaches: (name) =>
+      reachKnown ? seats.filter((s) => (s.raw.tool_sources ?? []).includes(originOf(name))) : null,
+    reachKnown,
   };
 }
 

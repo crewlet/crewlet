@@ -239,13 +239,20 @@ function ServersTable({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
           sortValue: (s) => s.tools,
           cell: (s) => <ToolsCell server={s} />,
         },
-        {
-          key: "reach",
-          header: "Used by",
-          floor: "9rem",
-          drop: 3,
-          cell: (s) => <ReachCell server={s} data={data} />,
-        },
+        // WHO A SERVER REACHES, where the engine said: it pushes each agent
+        // seat's grants to an administrator alone, and a column of "No agent"
+        // for a member would be a claim nobody made.
+        ...(data.reachKnown
+          ? [
+              {
+                key: "reach",
+                header: "Used by",
+                floor: "9rem",
+                drop: 3,
+                cell: (s: McpMemberServerStatus) => <ReachCell server={s} data={data} />,
+              },
+            ]
+          : []),
         {
           key: "error",
           header: "Last error",
