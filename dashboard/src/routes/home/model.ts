@@ -458,8 +458,8 @@ export const FEED_PHRASES = {
 
 /**
  * What a schedule row says the scheduler did, per ledger outcome — each said
- * as what happened. The engine's feed carries only RUNS (`fired`); the skips
- * are here so that a row carrying one can never read "ran", which is the
+ * as what happened. The engine's feed carries only RUNS (`fired`); the two
+ * skips are here so that a row carrying one can never read "ran", which is the
  * sentence a tick nobody ran must not say.
  */
 export const SCHEDULE_OUTCOMES = {
@@ -471,10 +471,6 @@ export const SCHEDULE_OUTCOMES = {
   skipped_paused: {
     one: "skipped a tick while its runner was paused",
     many: (n: number) => `skipped ${n.toLocaleString()} ticks while its runner was paused`,
-  },
-  skipped_superseded: {
-    one: "skipped a tick a later run replaced",
-    many: (n: number) => `skipped ${n.toLocaleString()} ticks later runs replaced`,
   },
 } as const satisfies Record<string, { one: string; many: (n: number) => string }>;
 
