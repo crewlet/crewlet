@@ -295,6 +295,13 @@ func (n *Node) listMailboxes(ctx context.Context) (map[uuid.UUID]struct{}, bool)
 		if !ok || sub.Group != topics.AgentInboxGroup(id) {
 			continue
 		}
+		// A MAILBOX WITHOUT ITS PRIORITY LANE IS NOT A MAILBOX YET: a
+		// person's message to the seat is published to the lane and would
+		// reach nobody. Left out, it is ensured on this pass like a missing
+		// one, which completes it (queue.Subscription.Partial).
+		if sub.Partial {
+			continue
+		}
 		out[id] = struct{}{}
 	}
 	return out, true

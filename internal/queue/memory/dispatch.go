@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -97,8 +98,7 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 		sub.cursor++
 
 		if !m.batched {
-			ev := sub.mail[0]
-			sub.mail = sub.mail[1:]
+			ev := takeOneLocked(sub)
 			b.mu.Unlock()
 			b.deliverOne(ctx, sub, m, ev)
 			continue
@@ -174,12 +174,51 @@ func deliverableLocked(m *consumer) bool {
 // Draining everything already waiting into ONE delivery per partition is the
 // property inbox batching exists for: events that queued while an agent was
 // busy must arrive as one turn, not N.
+//
+// ON A LANED TOPIC THE LANE IS TAKEN FIRST ([queue.HasLane]): every priority
+// event the mailbox holds, wherever it sits, in the order it holds them, and
+// the head of the rest after that. One slice models the broker's two
+// mailboxes because the two orders it has to keep, the lane's among itself
+// and the topic's among itself, are both the slice's order: a priority event
+// published behind a backlog is the broker's lane message that a drain
+// fetches before the topic, and a hand-back that returns either kind to the
+// front keeps it ahead of its own kind, as the broker's redelivery does.
 func takeChunkLocked(sub *subscription, m *consumer) []*events.Event {
 	n := min(m.options.EffectiveMaxBatch(), len(sub.mail))
-	chunk := make([]*events.Event, n)
-	copy(chunk, sub.mail[:n])
-	sub.mail = sub.mail[n:]
+	if !queue.HasLane(sub.topic) {
+		chunk := make([]*events.Event, n)
+		copy(chunk, sub.mail[:n])
+		sub.mail = sub.mail[n:]
+		return chunk
+	}
+	chunk := make([]*events.Event, 0, n)
+	rest := make([]*events.Event, 0, len(sub.mail))
+	for _, ev := range sub.mail {
+		if len(chunk) < n && queue.Prioritized(ev) {
+			chunk = append(chunk, ev)
+			continue
+		}
+		rest = append(rest, ev)
+	}
+	take := n - len(chunk)
+	chunk = append(chunk, rest[:take]...)
+	sub.mail = rest[take:]
 	return chunk
+}
+
+// takeOneLocked removes the event a single-event consumer is handed next: the
+// lane's first on a laned topic, as [takeChunkLocked] takes a batch, and the
+// head of the mailbox otherwise.
+func takeOneLocked(sub *subscription) *events.Event {
+	i := 0
+	if queue.HasLane(sub.topic) {
+		if j := slices.IndexFunc(sub.mail, queue.Prioritized); j >= 0 {
+			i = j
+		}
+	}
+	ev := sub.mail[i]
+	sub.mail = append(sub.mail[:i:i], sub.mail[i+1:]...)
+	return ev
 }
 
 func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer, ev *events.Event) {

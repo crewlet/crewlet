@@ -62,12 +62,34 @@ func (q *Queue) Peer(ctx context.Context, opts ...queue.Option) (*Queue, error) 
 // is what turned an unrelated merge red on main: a baseline snapshot read
 // empty, the same read a moment later saw the event, and Quiesce — which
 // with nothing attached writes nothing at all — was blamed for it.
+//
+// ON A LANED TOPIC THE LANE'S MAIL IS PART OF IT ([queue.HasLane]), listed
+// first, because a subscription's mail is both of its mailboxes and the lane
+// is the one it takes first.
 func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Event, error) {
 	stream, err := q.streamFor(ctx, topic)
 	if err != nil {
 		return nil, err
 	}
-	cons, err := q.js.Consumer(ctx, stream, consumerName(topic, group))
+	var out []*events.Event
+	if queue.HasLane(topic) {
+		lane := queue.LaneOf(topic)
+		held, err := q.backlogOf(ctx, stream, lane, consumerName(lane, group))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, held...)
+	}
+	held, err := q.backlogOf(ctx, stream, topic, consumerName(topic, group))
+	if err != nil {
+		return nil, err
+	}
+	return append(out, held...), nil
+}
+
+// backlogOf is [Queue.Backlog] for one durable consumer reading one subject.
+func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*events.Event, error) {
+	cons, err := q.js.Consumer(ctx, stream, name)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) {
 			return nil, nil

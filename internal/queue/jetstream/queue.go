@@ -1226,7 +1226,12 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	if err != nil {
 		return fmt.Errorf("serialize event %s: %w", ev.Type, err)
 	}
-	if _, err := q.js.Publish(ctx, topic, data); err != nil {
+	// THE LANE A MARKED EVENT TRAVELS, on the topic's own stream; every
+	// listener below still hears the topic it was published to, because
+	// the lane is how this backend keeps one subscription's order and not
+	// a different destination.
+	subject := queue.SubjectFor(topic, ev)
+	if _, err := q.js.Publish(ctx, subject, data); err != nil {
 		// TRANSLATED, not passed through. "Too large" is the one publish
 		// failure a producer must not retry, and nats.ErrMaxPayload is
 		// this backend's private word for it — a caller matching on that
@@ -1234,7 +1239,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// contract forbids. Wrapped rather than replaced so the original
 		// still reads in a log.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "publish", topic, len(data)),
+			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "publish", subject, len(data)),
 				queue.ErrTooLarge, err)
 		}
 		// MARKED, for the contract's reason: a broker that did not
@@ -1242,7 +1247,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// leader did not answer — is a condition a caller retries,
 		// and an unmarked one reads above this package as the node's
 		// own fault. See [Queue.brokerFailed].
-		return fmt.Errorf("publish %s: %w", topic, q.brokerFailed(ctx, err))
+		return fmt.Errorf("publish %s: %w", subject, q.brokerFailed(ctx, err))
 	}
 
 	// Listeners run inline, and must: the event store's writer is one of
@@ -1298,7 +1303,27 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	if err != nil {
 		return false, err
 	}
-	name := consumerName(topic, group)
+	made, err := q.ensureMailbox(ctx, stream, topic, consumerName(topic, group),
+		subscriptionMetadata(topic, group))
+	if err != nil || !queue.HasLane(topic) {
+		return made, err
+	}
+	// THE LANE WITH IT, on the same stream and under the same rule: a
+	// priority event published before its lane's consumer exists is dropped
+	// by interest retention exactly as a topic's would be. A lane the broker
+	// already holds costs a lookup, as the topic's does.
+	lane := queue.LaneOf(topic)
+	laneMade, err := q.ensureMailbox(ctx, stream, lane, consumerName(lane, group),
+		laneMetadata(topic, group))
+	return made || laneMade, err
+}
+
+// ensureMailbox looks up one durable consumer and creates it if the broker
+// does not say it holds it: the topic's own for every subscription, and the
+// priority lane's beside it on a laned topic ([queue.HasLane]). It reports
+// whether this call provisioned it.
+func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
+	meta map[string]string) (bool, error) {
 
 	// Reporting whether THIS call created it is part of the contract, so
 	// look first rather than inferring from an upsert. The lookup also
@@ -1374,11 +1399,11 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 
 	_, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
-		FilterSubject: topic,
+		FilterSubject: filter,
 		// The pair, verbatim. The durable name cannot carry it (it is a
 		// lossy rewrite plus a digest), and ListSubscriptions has to hand
 		// back exactly what the caller created. Carried on the CREATE.
-		Metadata:  subscriptionMetadata(topic, group),
+		Metadata:  meta,
 		AckPolicy: jetstream.AckExplicitPolicy,
 		// Earliest, always. A consumer created at "latest" exists and
 		// still discards everything published before its first
@@ -1532,6 +1557,17 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	if err != nil {
 		return false, err
 	}
+	// THE LANE FIRST, so a delete the broker refuses part way leaves the
+	// topic's consumer standing, which a listing still finds and a retry
+	// finishes; the other order would leave a lane no listing names.
+	if queue.HasLane(topic) {
+		lane := queue.LaneOf(topic)
+		err := q.js.DeleteConsumer(ctx, stream, consumerName(lane, group))
+		if err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
+			return false, fmt.Errorf("delete the priority lane of %s/%s: %w", topic, group,
+				q.brokerFailed(ctx, err))
+		}
+	}
 	err = q.js.DeleteConsumer(ctx, stream, consumerName(topic, group))
 	switch {
 	case err == nil:
@@ -1551,10 +1587,21 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 const (
 	metaTopic = "crewlet.topic"
 	metaGroup = "crewlet.group"
+
+	// metaLaneOf marks a consumer as the priority lane of the topic it
+	// names ([queue.LaneOf]), so a listing reads it as part of that topic's
+	// subscription rather than as a subscription of its own.
+	metaLaneOf = "crewlet.lane_of"
 )
 
 func subscriptionMetadata(topic, group string) map[string]string {
 	return map[string]string{metaTopic: topic, metaGroup: group}
+}
+
+// laneMetadata is what a priority lane's consumer records: the lane's own
+// pair, which derives its durable name, and the topic it is the lane of.
+func laneMetadata(topic, group string) map[string]string {
+	return map[string]string{metaTopic: queue.LaneOf(topic), metaGroup: group, metaLaneOf: topic}
 }
 
 // subscriptionStreams names the streams the engine itself defines, taken from
@@ -1627,6 +1674,10 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 	}
 
 	var out []queue.Subscription
+	// lanes is every priority lane the broker holds, by the pair of the
+	// subscription it belongs to, so a laned subscription whose lane is
+	// missing can be listed as Partial once every consumer has been read.
+	lanes := map[queue.Subscription]bool{}
 	for _, name := range streams {
 		stream, err := q.js.Stream(ctx, name)
 		if errors.Is(err, jetstream.ErrStreamNotFound) {
@@ -1638,6 +1689,10 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		}
 		consumers := stream.ListConsumers(ctx)
 		for info := range consumers.Info() {
+			if of, ok := laneOf(info); ok {
+				lanes[of] = true
+				continue
+			}
 			sub, ok := q.subscriptionOf(ctx, name, info)
 			if ok && topics.Match(topicPattern, sub.Topic) {
 				out = append(out, sub)
@@ -1648,6 +1703,9 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 				q.brokerFailed(ctx, err))
 		}
 	}
+	for i, sub := range out {
+		out[i].Partial = queue.HasLane(sub.Topic) && !lanes[sub]
+	}
 	slices.SortFunc(out, func(a, b queue.Subscription) int {
 		if c := strings.Compare(a.Topic, b.Topic); c != 0 {
 			return c
@@ -1655,6 +1713,26 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		return strings.Compare(a.Group, b.Group)
 	})
 	return out, nil
+}
+
+// laneOf reports the subscription a consumer is the priority lane of, and
+// false for any consumer that is not one.
+//
+// PROVEN THE WAY A PAIR IS ([pairOf]): the lane's own pair must derive the
+// consumer's durable name, and that pair must be the lane of the topic the
+// metadata names. Metadata that fails either check proves nothing, and the
+// consumer falls through to the ordinary reading, which reports it.
+func laneOf(info *jetstream.ConsumerInfo) (queue.Subscription, bool) {
+	if info == nil || info.Config.Durable == "" {
+		return queue.Subscription{}, false
+	}
+	meta := info.Config.Metadata
+	topic, lane, group := meta[metaLaneOf], meta[metaTopic], meta[metaGroup]
+	if topic == "" || group == "" || lane != queue.LaneOf(topic) ||
+		consumerName(lane, group) != info.Config.Durable {
+		return queue.Subscription{}, false
+	}
+	return queue.Subscription{Topic: topic, Group: group}, true
 }
 
 // subscriptionOf reads the pair a consumer was created for, reporting false for

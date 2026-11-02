@@ -632,6 +632,13 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		}
 		wake.Payload[TriggerField] = trigger
 	}
+	// A PERSON WAITING GOES FIRST: a wake that owes a person an answer
+	// rides the seat's priority lane, ahead of whatever background work the
+	// seat has queued (see priority.go). The mark is on the event, so a park
+	// or a requeue of this wake keeps it.
+	if out.Addressed && WrittenByPerson(reg, r.Inbound) {
+		queue.Prioritize(wake)
+	}
 	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
 	// agent id derived from the handle (ADR-0013). A party with no id never
 	// reaches here — the addressability guard above has already skipped it.

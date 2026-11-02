@@ -295,8 +295,9 @@ stopping it.
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
 
-The stream carries the other half: one durable consumer per seat inbox,
-attached only by the node holding that seat's lease. That consumer **is** the
+The stream carries the other half: one durable consumer per seat inbox, plus
+one for the inbox's priority lane, both attached only by the node holding that
+seat's lease. That consumer **is** the
 mailbox — it holds an unowned seat's mail until somebody claims it, and it is
 created with no inactivity threshold precisely so nothing reaps it while a seat
 is between owners. It also has to exist *before* anything publishes: the agent

@@ -408,6 +408,14 @@ type PublishListener func(ctx context.Context, topic string, ev *events.Event)
 type Subscription struct {
 	Topic string
 	Group string
+
+	// Partial reports a subscription on a laned topic ([HasLane]) whose
+	// priority lane the broker does not hold: its topic's mail is retained
+	// and its lane's is not, so a priority event published to it reaches
+	// nobody. EnsureSubscription completes it. A reader that converges
+	// mailboxes treats a partial one as missing; a reader that retires them
+	// treats it as present, because its retained mail is still somebody's.
+	Partial bool
 }
 
 // Publisher is the write half of the queue.
@@ -425,6 +433,11 @@ type EventQueue interface {
 	// Publish sends an event to a topic. It must not return until the
 	// event is persisted: callers rely on "published means durable".
 	//
+	// An event marked [Prioritize] and published to a laned topic is
+	// written to the topic's priority lane ([SubjectFor]), where every
+	// subscription on the topic takes it ahead of the topic's other mail.
+	// The mark on an event published to any other topic changes nothing.
+	//
 	// It names the event's ORIGIN. An event whose Node is empty leaves
 	// carrying the node this client was built for ([WithNode]), stamped
 	// before any publish listener or consumer can see it; one that already
@@ -440,7 +453,8 @@ type EventQueue interface {
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 
 	// Subscribe attaches a competing-consumer handler to topic/group.
-	// Exactly one member of a group receives each message.
+	// Exactly one member of a group receives each message. On a laned topic
+	// the handler is handed the lane's mail before the topic's.
 	Subscribe(ctx context.Context, topic, group string, h Handler) error
 
 	// SubscribeBatch attaches with batched, key-partitioned delivery:
@@ -449,6 +463,10 @@ type EventQueue interface {
 	// dispatch one handler call per partition oldest-partition-first,
 	// and ack per partition. A failing partition never blocks or replays
 	// a different one.
+	//
+	// On a laned topic a drain takes the priority lane's mail first, and a
+	// partition holding a priority event is dispatched ahead of every other
+	// ([OrderForDispatch]).
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.
@@ -516,7 +534,9 @@ type EventQueue interface {
 
 	// EnsureSubscription creates the durable subscription if absent,
 	// with NO consumer attached, positioned at the earliest message.
-	// Creating an existing subscription is success.
+	// Creating an existing subscription is success. On a laned topic it
+	// creates the priority lane with it, and completes a [Subscription]
+	// listed as Partial.
 	//
 	// The bool reports whether this call found it absent AND then
 	// provisioned it. That is exact on a backend with one writer, and on
@@ -533,8 +553,9 @@ type EventQueue interface {
 	EnsureSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// DeleteSubscription destroys the subscription and its retained
-	// mail. Must not require a local consumer: decommissioning a role
-	// cannot depend on which node happened to run the seat.
+	// mail, its priority lane's included. Must not require a local
+	// consumer: decommissioning a role cannot depend on which node
+	// happened to run the seat.
 	//
 	// It DETACHES THIS CLIENT FIRST, and a delete the broker does not
 	// hear — ErrUnavailable — has still done that: the detach is this
@@ -554,7 +575,9 @@ type EventQueue interface {
 	// EnsureSubscription, Subscribe or SubscribeBatch, by any client of
 	// the broker, attached or not. A deleted subscription is not listed,
 	// and neither is an ephemeral SubscribeStream subscription, which is
-	// not a mailbox. An empty pattern is refused rather than read as
+	// not a mailbox. A priority lane is part of its topic's subscription
+	// and never listed as one of its own; a laned subscription whose lane
+	// is missing is listed with Partial set. An empty pattern is refused rather than read as
 	// "everything"; ">" asks for everything.
 	//
 	// It exists because a durable subscription outlives every record of
@@ -935,7 +958,13 @@ func eventType(ev *events.Event) string {
 // OrderForDispatch establishes BOTH levels of ordering a drained batch
 // needs, and is the one place either is decided.
 //
-// Between partitions: oldest constituent event first. Receive order alone
+// Between partitions: a partition holding a priority event ([Prioritized])
+// first, then oldest constituent event first within each of the two classes.
+// The priority class is what a laned topic's drain exists for: the lane's
+// mail is taken first so that a person waiting on a seat is answered before
+// the seat's background work, and a drain that took both and dispatched the
+// older background partition first would hand that back. Oldest first within
+// the class is what it always was. Receive order alone
 // starves a quiet partition behind a hot one under deferral — the quiet
 // partition's requeued copies re-enter the topic AFTER whatever arrived
 // during the hot one's turn, so receive-ordered dispatch picks the hot one
@@ -975,6 +1004,7 @@ func eventType(ev *events.Event) string {
 func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event) []Partition[T] {
 	out := slices.Clone(parts)
 	oldest := make(map[string]time.Time, len(out))
+	urgent := make(map[string]bool, len(out))
 	for i, p := range out {
 		items := slices.Clone(p.Items)
 		slices.SortStableFunc(items, func(a, b T) int {
@@ -992,6 +1022,9 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 			if ev == nil {
 				continue
 			}
+			if Prioritized(ev) {
+				urgent[p.Key] = true
+			}
 			if min.IsZero() || ev.Timestamp.Before(min) {
 				min = ev.Timestamp
 			}
@@ -999,6 +1032,12 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 		oldest[p.Key] = min
 	}
 	slices.SortStableFunc(out, func(a, b Partition[T]) int {
+		if ua, ub := urgent[a.Key], urgent[b.Key]; ua != ub {
+			if ua {
+				return -1
+			}
+			return 1
+		}
 		ta, tb := oldest[a.Key], oldest[b.Key]
 		switch {
 		// A partition with no comparable timestamp sorts LAST, and
