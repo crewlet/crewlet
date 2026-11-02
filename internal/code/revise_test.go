@@ -44,19 +44,39 @@ func (n *node) tip(repo, ref string) (string, statelog.Position) {
 // revising is the home's write of revision rev's facts on change — its head
 // head, against target at its tip — touching touched, the path owners matched
 // against owners: what a home that read them would send, its owners matched
-// by code.MatchOwners. Its base is A, and its head's tree its head's own, so
-// no two heads hold the same code unless a case says they do (codeOf).
+// by code.MatchOwners and the human paths its target's gate names by
+// code.MatchTargetHumanPaths, against the gates repo's rules hold now. Its
+// base is A, and its head's tree its head's own, so no two heads hold the same
+// code unless a case says they do (codeOf).
 func (n *node) revising(repo, change string, rev int64, head, target string, owners []code.PathOwner,
 	touched ...string) code.ConversationWrite {
 
 	n.t.Helper()
 	tip, at := n.tip(repo, target)
 	matched, digest := code.MatchOwners(owners, touched, false)
+	held, humanDigest, err := code.MatchTargetHumanPaths(n.gatesOfID(repo), target, touched, false,
+		code.RevisionClasses{})
+	if err != nil {
+		n.t.Fatalf("match %s's human paths: %v", target, err)
+	}
 	return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Revise: &code.Revise{
 		RepoID: repo, ChangeID: change, N: rev, HeadOID: head, TargetRef: target, TargetOID: tip,
 		TargetPosition: at, BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"),
 		HeadTree: oidOf("the tree of " + head), PatchID: oidOf("patch-" + head), Touched: touched, Node: n.id,
-		RequestedOwners: matched, OwnersDigest: digest}}
+		RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held, HumanPathsDigest: humanDigest}}
+}
+
+// gatesOfID is the merge gates of the repository whose id is repo, as a
+// person's read of its detail that asks for them answers them (gatesOf).
+func (n *node) gatesOfID(repo string) []code.RuleGate {
+	n.t.Helper()
+	var name string
+	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(n.t.Context(), `SELECT name FROM code_repos WHERE id = ?`, repo).Scan(&name)
+	}); err != nil {
+		n.t.Fatalf("read repository %s's name: %v", repo, err)
+	}
+	return n.gatesOf(name)
 }
 
 // codeOf is w's revise as one holding the trees of the code named held — the
@@ -489,6 +509,70 @@ func TestAnOwnerChangeMakesTheFactsDueAgain(t *testing.T) {
 	before := n.end()
 	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go"))
 	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "holds facts against")
+}
+
+// A HUMAN PATH CHANGE MAKES THE FACTS DUE AGAIN: which of a gate's human paths
+// hold a revision is its home's match, recorded on its facts beside the
+// digest of the repository's rules' human paths it was made against — so a
+// rule change that adds a human path makes the change due its facts again,
+// the revise matched against the old rules is refused superseded, and the one
+// matched against the rules the repository holds now lands, naming the entry
+// that holds it, after which the change is no longer due them. A rule change
+// that moves no human path — its merge_by — makes nothing due.
+//
+// Mutations: drop the human paths' term of the due listing — the change is
+// not due its facts after the rule change, red; skip the decide's digest
+// check — the stale revise lands, red.
+func TestAHumanPathChangeMakesTheFactsDueAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := ownedChange(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	first := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml")
+	res, err := w.Converse(t.Context(), first)
+	requireConversed(t, res, err)
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against its repository's rules is due them again")
+	}
+	stale := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml")
+
+	gate := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+		HumanPaths: []code.HumanPath{{Glob: "deploy/**"}}, Landing: code.Landing{Depth: 4, Batch: 4},
+		DeleteSource: code.DeleteSeats}
+	s := gatedSettings(gate)
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	n.ensure("web", s, t1)
+	if !n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against human paths its repository has changed since is " +
+			"not due them again")
+	}
+	before := n.end()
+	res, err = w.Converse(t.Context(), stale)
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "human paths")
+
+	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml"))
+	requireConversed(t, res, err)
+	var held string
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT human_paths FROM code_revision_facts
+			WHERE change_id = ? AND n = 1`, change).Scan(&held)
+	}); err != nil {
+		t.Fatalf("read the facts' human paths: %v", err)
+	}
+	if held != `{"held":[0]}` {
+		t.Fatalf("the facts matched again record the human paths %q, want deploy/** holding them", held)
+	}
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched again is still due them")
+	}
+
+	gate.MergeBy = code.MergeByMaintainers
+	s = gatedSettings(gate)
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	n.ensure("web", s, t1)
+	if n.factsDue(repo, change) {
+		t.Fatal("a rule change that moves no human path makes the facts due again")
+	}
 }
 
 // factsDue reports whether repo's due listing names change as due its head

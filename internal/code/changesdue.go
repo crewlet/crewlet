@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -18,12 +19,13 @@ import (
 // an ACTIVE repository, its target a live branch, owes its home:
 //
 //   - its head revision's FACTS, where it holds none against the branch it
-//     merges into, matched against the path owners its repository holds
-//     (code_revision_facts by its key — a revision with no row, one read
-//     against another branch, the change retargeted since, or one whose
-//     owners_digest is not its repository's, its owners changed since), which
-//     the home reads and records ([Revise]) — or, finding a head its target
-//     holds, lands ([ChangeLanded]);
+//     merges into, matched against the path owners and the rules' human
+//     paths its repository holds (code_revision_facts by its key — a revision
+//     with no row, one read against another branch, the change retargeted
+//     since, or one whose owners_digest or human_paths_digest is not its
+//     repository's, its owners or its rules changed since), which the home
+//     reads and records ([Revise]) — or, finding a head its target holds,
+//     lands ([ChangeLanded]);
 //   - its head revision's MERGE, where it holds no mergeability of that
 //     revision against that branch (code_mergeability by its key), which the
 //     home merges and records ([Mergeability]) — or lands, as above;
@@ -288,15 +290,16 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
-	// THE OWNERS RIDE ONLY A PAGE NAMING A CHANGE OWING ITS FACTS — the one
-	// thing its home matches them against — read last, in the same snapshot
-	// as the changes they are matched for. Most reads a nudge makes name
-	// none, and owners at their bound would cost every such read a quarter
-	// of a mebibyte read, encoded and, answered from another node, shipped
-	// for nothing. Their ROOM is their bound ([MaxPathOwnersBytes], which a
-	// write is held to), reserved before the changes are read, so a page
-	// that turns out to need them always fits them.
-	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - MaxPathOwnersBytes}
+	// THE OWNERS AND THE GATES RIDE ONLY A PAGE NAMING A CHANGE OWING ITS
+	// FACTS — what its home matches the touched paths against — read last, in
+	// the same snapshot as the changes they are matched for. Most reads a
+	// nudge makes name none, and at their bounds the owners are a quarter of
+	// a mebibyte and the gates half of one, which every such read would read,
+	// encode and, answered from another node, ship for nothing. Their ROOM is
+	// their bounds ([MaxPathOwnersBytes], [maxGatesBytes]), reserved before
+	// the changes are read, so a page that turns out to need them always
+	// fits them.
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - MaxPathOwnersBytes - maxGatesBytes}
 	if err := dueChangesPage(ctx, tx, q, &pg, r.pageRows, out); err != nil {
 		return err
 	}
@@ -307,9 +310,20 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	if err != nil {
 		return err
 	}
-	out.PathOwners = owners
+	gates, err := gatesIn(ctx, tx, repoID)
+	if err != nil {
+		return err
+	}
+	out.PathOwners, out.Gates = owners, gates
 	return nil
 }
+
+// maxGatesBytes is the most a repository's merge gates, each named by its
+// rule's pattern ([RuleGate]), may weigh as JSON: MaxProtectionsPerRepo rules,
+// each a gate of at most MaxGateBytes beside a pattern of at most a ref's
+// bytes and the object around them — the half a mebibyte a due page reserves
+// for them beside the owners.
+const maxGatesBytes = MaxProtectionsPerRepo * (MaxGateBytes + gitref.MaxRefNameBytes + len(`{"pattern":"","gate":},`))
 
 // dueChangesPage is a page of a repository's due changes into out — its asks
 // due a settling and its rechecks first, on its first page — within pg.
@@ -330,7 +344,7 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch,
-		digests.owners)
+		digests.owners, digests.humanPaths)
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 	}
@@ -471,7 +485,8 @@ const (
 				WHERE t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
 					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f CROSS JOIN code_repos AS o
 							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
-								AND o.id = c.repo_id AND o.owners_digest = f.owners_digest)
+								AND o.id = c.repo_id AND o.owners_digest = f.owners_digest
+								AND o.human_paths_digest = f.human_paths_digest)
 						OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 							WHERE ` + mergeHeld + `)
 						OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)))
@@ -507,7 +522,7 @@ const (
 			t.position,
 			NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 				WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
-					AND f.owners_digest = ?5),
+					AND f.owners_digest = ?5 AND f.human_paths_digest = ?6),
 			NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 				WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref),
 			EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)
@@ -517,7 +532,7 @@ const (
 			AND t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
 			AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 					WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
-						AND f.owners_digest = ?5)
+						AND f.owners_digest = ?5 AND f.human_paths_digest = ?6)
 				OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 					WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref)
 				OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `))

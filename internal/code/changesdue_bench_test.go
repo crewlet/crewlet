@@ -74,8 +74,9 @@ func BenchmarkChangesDue(b *testing.B) {
 					SELECT printf('%s-c%06d', ?, i), ?, 0, 0, 1, 1, 1 FROM k`, []any{changes, id, id}},
 				{`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 					INSERT INTO code_revision_facts (change_id, n, target_ref, target_oid, target_position,
-						base_tree, head_tree, touched_count, node, owners_digest, bytes, position, classes, touched)
-					SELECT printf('%s-c%06d', ?, i), 1, 'refs/heads/main', '', ?, '', '', 1, 'node-a', '', 0, 1,
+						base_tree, head_tree, touched_count, node, owners_digest, human_paths_digest, bytes, position,
+						classes, touched)
+					SELECT printf('%s-c%06d', ?, i), 1, 'refs/heads/main', '', ?, '', '', 1, 'node-a', '', '', 0, 1,
 						'', '' FROM k`, []any{changes, id, tip}},
 				{`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 					INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid, target_position,

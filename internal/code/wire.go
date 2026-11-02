@@ -1492,6 +1492,16 @@ type ReadAnswer struct {
 	DueTips    []TipDue         `json:"due_tips,omitempty"`
 	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
 	PathOwners []PathOwner      `json:"path_owners,omitempty"`
+	// Gates is, beside PathOwners and on the same pages, the repository's
+	// rules' merge gates, each named by its rule's pattern ([RuleGate]): what
+	// its home matches the touched paths against for the human paths each
+	// change's target is held to ([MatchTargetHumanPaths]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:
+	// no build that carries the code domain has run without this field — none
+	// of the domain is on main.
+	Gates []RuleGate `json:"gates,omitempty"`
 	// AskSettles is, on the first page of one repository's `changes_due`
 	// read, its changes whose asks for review no longer match the change's
 	// state — an ended change's asks still waiting, a reopened change's asks

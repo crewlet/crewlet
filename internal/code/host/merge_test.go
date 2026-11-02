@@ -134,12 +134,17 @@ func (c *mergeCase) recordFacts(n int64) code.ChangeDue {
 		c.T.Fatalf("read revision %d's facts: %+v %v", d.Revision, read, err)
 	}
 	f := read.RevisionFacts
-	_, digest := code.MatchOwners(nil, f.Touched, f.TouchesAll)
+	_, digest := code.MatchOwners(due.PathOwners, f.Touched, f.TouchesAll)
+	held, humanDigest, err := code.MatchTargetHumanPaths(due.Gates, d.TargetRef, f.Touched, f.TouchesAll, f.Classes)
+	if err != nil {
+		c.T.Fatalf("match revision %d's human paths: %v", d.Revision, err)
+	}
 	res, err := seam.Converse(c.Ctx, code.ConversationWrite{OpID: opNow(), Revise: &code.Revise{RepoID: c.repo,
 		ChangeID: d.ID, N: d.Revision, HeadOID: d.Head, TargetRef: d.TargetRef, TargetOID: d.Tip,
 		TargetPosition: d.TipPosition, BaseOID: f.MergeBase, BaseTree: f.BaseTree, HeadTree: f.HeadTree,
 		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
-		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
+		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest, HumanPaths: held,
+		HumanPathsDigest: humanDigest}})
 	if err != nil || res.Refusal != "" {
 		c.T.Fatalf("record revision %d's facts: %+v %v", d.Revision, res, err)
 	}

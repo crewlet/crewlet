@@ -5594,6 +5594,13 @@ was past its bound.
   change whose facts were matched before its repository's owners changed is
   due its facts again at its home's next pass: the same tip read again
   replaces them, asking any owner the new match adds.
+- **So are the human paths that hold it.** The home matches the touched
+  paths against the [human paths](#the-merge-gate) the change's target's gate
+  names too, and the facts record which hold the revision for a person and
+  which their `unless` waives, beside the digest of the repository's rules'
+  human paths it matched against, which the decide holds to its own
+  snapshot's as it holds the owners'. A change whose facts were matched
+  before a rule's human paths changed is due its facts again in the same way.
 - **An owner who cannot review is skipped, and the facts say why**: a seat
   whose grant is below `review` (`below_review`), an author of the change
   (`author`), a unit nobody leads (`no_lead`), an owner the chart holds no seat
@@ -6004,8 +6011,20 @@ merged by somebody, and landed by its queue:
   owners added or removed since — `owners_approval` is `computing` until the
   home matches the paths again, which the change is due at the home's next
   pass.
-  The gate's human paths, at most 32 a rule, are matched against the paths
-  the facts list, and a glob this build cannot read holds the change.
+- **No human path's glob is matched in a judgment either.** A branch's human
+  paths are every matching rule's — up to 64 rules of 32 each, and the
+  checks' directory — and the home matches them against the touched paths
+  beside the owners, recording which entries hold the revision and which
+  their `unless` waives, with the digest of the repository's rules' human
+  paths it matched against; a glob this build cannot read holds the change.
+  Where the repository's rules' human paths digest to another value than the
+  match recorded — a human path added or removed, a pattern moved, a rule
+  that requires checks or stops — `human_approval` is `computing` until the
+  home matches the paths again, which every live change of the repository is
+  due at the home's next pass. A change to anything else of a rule makes
+  nothing due. Whether every path is of a class `approvals_unless` exempts is
+  counted from how many paths the facts list and the classes they record,
+  never read from the paths.
 - **A change to the checks waits for a person.** A gate that requires checks
   holds `.crewlet/**` — the directory the [checks file](#the-checks-file)
   lives in, and whatever script beside it a check runs — as one of its human
