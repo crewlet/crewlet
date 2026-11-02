@@ -1508,7 +1508,17 @@ const (
 	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
 	// page is all in the settings chunk, so the initial load only lost that
 	// 0.4 KiB. 5329 KiB.
-	treeBudget = 5<<20 + 209<<10
+	// The Sessions view under an agent's Memory tab (the seat's executor
+	// sessions, the latest begun first, and one session's transcript a page
+	// at a time: its entries, the states a session that cannot be read is
+	// answered in, and the account of how its turn ended) took it from
+	// 5328.2 KiB to 5337.8 KiB (+9.6 KiB): the agents chunk +9.4 KiB, the
+	// remedy chunk +0.2 KiB for keepInView, which Conversations and Sessions
+	// now share from lib/scroller.ts, and the one sheet +0.1 KiB for the
+	// view's rules. The view itself is all in the agents chunk; the shell
+	// preloads the remedy chunk and links the sheet, so the initial load
+	// gained what those two did, under 0.1 KiB once compressed. 5338 KiB.
+	treeBudget = 5<<20 + 218<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
