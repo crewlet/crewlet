@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // PushedRef is one ref a coding run moved on the engine's own code host, as the
@@ -38,26 +39,45 @@ type PushedRef struct {
 // box can write as it likes. Declared here, by its consumer; the engine
 // implements it over the code host's reads.
 type RunPushes interface {
-	// Pushed is every ref run's launch moved on the repositories it may push
-	// to ([Pushable]), each collapsed per (repository, ref), each repository
-	// in the order the run was given them and its refs in the order the run
-	// FIRST pushed them, at most [MaxPushedRefs] of them; more is what the
-	// read had no room to hold. An error is the record UNREAD, and never
-	// stands for "nothing pushed".
-	Pushed(ctx context.Context, run PendingRun) (refs []PushedRef, more int, err error)
-	// Changes names each branch of pushed — run's refs as Pushed answered
-	// them — with the live change it heads ([PushedRef.Change]), and, where
-	// open is set, opens the change each repository run was given asks for
-	// ([RunRepo.Open]) from the branch the run delivered — ONCE A LAUNCH,
-	// so a collection retried, on this node or another, opens nothing
-	// twice — answering pushed named and what became of each ask, in the
-	// order run was given its repositories ([OpenedChange]); where open is
-	// not set it opens nothing and answers no ask. An ask the code host
-	// refused or could not be asked is an entry saying so, never an error:
-	// an error is the branches' changes UNREAD — pushed answered as given
-	// and nothing opened.
-	Changes(ctx context.Context, run PendingRun, pushed []PushedRef, open bool) (named []PushedRef,
+	// Pushed is run's push record ([PushRecord]): every ref its launch moved
+	// on the repositories it may push to ([Pushable]). An error is the
+	// record UNREAD, and never stands for "nothing pushed".
+	Pushed(ctx context.Context, run PendingRun) (PushRecord, error)
+	// Changes names each branch of record — run's refs as Pushed answered
+	// them, read at or past the position it answered them at — with the live
+	// change it heads ([PushedRef.Change]), and, where open is set, opens the
+	// change each repository run was given asks for ([RunRepo.Open]) from the
+	// branch the run delivered — ONCE A LAUNCH, so a collection retried, on
+	// this node or another, opens nothing twice — answering record's refs
+	// named and what became of each ask, in the order run was given its
+	// repositories ([OpenedChange]); where open is not set it opens nothing
+	// and answers no ask. An ask the code host refused or could not be asked
+	// is an entry saying so, never an error: an error is the branches'
+	// changes UNREAD — record's refs answered as given and nothing opened.
+	Changes(ctx context.Context, run PendingRun, record PushRecord, open bool) (named []PushedRef,
 		opened []OpenedChange, err error)
+}
+
+// PushRecord is what a run's push record says it moved, as [RunPushes.Pushed]
+// read it.
+type PushRecord struct {
+	// Refs is every ref the run moved, each collapsed per (repository, ref),
+	// each repository in the order the run was given them and its refs in the
+	// order the run FIRST pushed them, at most [MaxPushedRefs] of them; More
+	// is what the read had no room to hold.
+	Refs []PushedRef
+	More int
+	// At is the position on the code log the record was read at: where its
+	// one barrier put the read. THE COLLECTION'S ONLY BARRIER: every push
+	// the run made, every `git push -o change` open those pushes carried and
+	// every open an earlier collection of the same launch saw land is at or
+	// below it — the barrier began after each of them — so
+	// [RunPushes.Changes] reads the branches' changes at `session` floored
+	// here and answers what a second linearizable read would, without
+	// appending a second barrier to the code log for every collected run;
+	// an open still in flight is the operation ledger's to answer either way.
+	// Zero for a run given no repository to push to, which reads nothing.
+	At statelog.Position
 }
 
 // MaxPushedRefs is the most refs of a run's push record the engine holds while

@@ -20,7 +20,8 @@ import (
 // Every later page at session at the first page's position, so no node
 // behind the snapshot the first page read answers a later one — leaving out
 // pushes the run made before that snapshot — and no later page pays a barrier
-// of its own. The barrier is the seats' to pay for — the code log census's
+// of its own, nor does the read of the changes the run's branches head
+// ([runPushes.Changes]). The barrier is the seats' to pay for — the code log census's
 // seats' term counts it beside their other reads of the log, while
 // code.GitReadsPerDay, the term for persons and their CI, does not (its doc
 // says so) — and the read is only asked for a run given a repository to push
@@ -71,24 +72,26 @@ func (e *Engine) codeRunPushes() runPushes {
 	}}
 }
 
-// Pushed reads what run's launch pushed — see [runPushes].
-func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) ([]sandbox.PushedRef, int, error) {
+// Pushed reads what run's launch pushed — see [runPushes]. The record's
+// position is its first page's: the barrier the collection pays, which every
+// later read of the collection is floored at ([sandbox.PushRecord.At]).
+func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) (sandbox.PushRecord, error) {
 	repos := sandbox.Pushable(run.Repos)
 	if len(repos) == 0 {
-		return nil, 0, nil
+		return sandbox.PushRecord{}, nil
 	}
 	launch, err := statelog.ParsePosition(run.CodeLaunch)
 	switch {
 	case err != nil:
-		return nil, 0, fmt.Errorf("engine: run %s's launch position %q cannot be read: %w", run.TurnID,
-			run.CodeLaunch, err)
+		return sandbox.PushRecord{}, fmt.Errorf("engine: run %s's launch position %q cannot be read: %w",
+			run.TurnID, run.CodeLaunch, err)
 	case launch.Stream != topics.CodeLogStream:
-		return nil, 0, fmt.Errorf("engine: run %s's launch position %s is on another log than the code log",
-			run.TurnID, launch)
+		return sandbox.PushRecord{}, fmt.Errorf("engine: run %s's launch position %s is on another log than "+
+			"the code log", run.TurnID, launch)
 	}
 	reader, err := p.code()
 	if err != nil {
-		return nil, 0, err
+		return sandbox.PushRecord{}, err
 	}
 	ids := make([]string, len(repos))
 	names := make(map[string]string, len(repos))
@@ -99,27 +102,33 @@ func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) ([]sandbo
 		RunPushes: &code.RunPushesQuery{Run: run.LaunchID, Repos: ids, After: launch},
 		Fresh:     statelog.Freshness{Level: statelog.ReadLinearizable}}
 	var pushed pushCollapse
-	for first := true; ; first = false {
+	var at statelog.Position
+	for {
 		answer, readErr := reader.Read(ctx, q)
 		if readErr != nil {
-			return nil, 0, fmt.Errorf("engine: read what run %s pushed: %w", run.TurnID, readErr)
+			return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: %w", run.TurnID, readErr)
+		}
+		if at.IsZero() {
+			// THE FIRST PAGE'S POSITION IS THE RECORD'S, whether or not a
+			// page follows it: what the changes are read at, too.
+			if answer.Position.IsZero() || answer.Position.Stream != topics.CodeLogStream {
+				return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: its first page was "+
+					"answered at %s, no position of the code log", run.TurnID, answer.Position)
+			}
+			at = answer.Position
+			q.Fresh = statelog.FloorAt(statelog.ReadSession, at)
 		}
 		if addErr := pushed.add(answer.Pushes, names); addErr != nil {
-			return nil, 0, fmt.Errorf("engine: read what run %s pushed: %w", run.TurnID, addErr)
+			return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: %w", run.TurnID, addErr)
 		}
-		switch {
-		case answer.Next == "":
-			return pushed.refs, pushed.more, nil
-		case answer.Next == q.Cursor:
+		switch answer.Next {
+		case "":
+			return sandbox.PushRecord{Refs: pushed.refs, More: pushed.more, At: at}, nil
+		case q.Cursor:
 			// A PAGE THAT DID NOT MOVE would be read for ever: every page
 			// the code host serves advances by at least one push.
-			return nil, 0, fmt.Errorf("engine: read what run %s pushed: the code host answered cursor %q "+
-				"again", run.TurnID, answer.Next)
-		case first && (answer.Position.IsZero() || answer.Position.Stream != topics.CodeLogStream):
-			return nil, 0, fmt.Errorf("engine: read what run %s pushed: its first page was answered at %s, "+
-				"no position of the code log", run.TurnID, answer.Position)
-		case first:
-			q.Fresh = statelog.FloorAt(statelog.ReadSession, answer.Position)
+			return sandbox.PushRecord{}, fmt.Errorf("engine: read what run %s pushed: the code host answered "+
+				"cursor %q again", run.TurnID, answer.Next)
 		}
 		q.Cursor = answer.Next
 	}

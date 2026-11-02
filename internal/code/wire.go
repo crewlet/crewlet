@@ -673,22 +673,35 @@ type RunPushesQuery struct {
 	After statelog.Position `json:"after"`
 }
 
-// BranchChangesQuery is a `branch_changes` read: one repository by its id and
-// the branches whose live changes the read answers, each a whole ref under
-// refs/heads/, one to [MaxRefsPerQuery] of them, each once — a collected
-// coding run's branches, which the engine names each delivered ref's change
-// by. One seek of code_changes_open_idx a branch, the index partial on the
-// live states that holds at most one change a branch, so the read costs its
-// branches and never the repository's changes.
+// BranchChangesQuery is a `branch_changes` read: the repositories a collected
+// coding run was given to push to, one to [MaxRunRepos] of them, each by its
+// id and once, each with the branches of it whose live changes the read
+// answers — each a whole ref under refs/heads/, once, [MaxRefsPerQuery] in
+// all — which the engine names each delivered ref's change by. One seek of
+// code_changes_open_idx a branch, the index partial on the live states that
+// holds at most one change a branch, so the read costs its branches and never
+// the repositories' changes.
+//
+// EVERY REPOSITORY IN ONE READ: one transaction at one checkpoint, so a
+// collection names every branch the run delivered with one estate read — one
+// round trip from a node without the data role — where a read a repository
+// was one each.
 type BranchChangesQuery struct {
+	Repos []RepoBranches `json:"repos"`
+}
+
+// RepoBranches is one repository of a [BranchChangesQuery]: its id, and the
+// branches of it whose live changes the read answers.
+type RepoBranches struct {
 	RepoID string   `json:"repo_id"`
 	Refs   []string `json:"refs"`
 }
 
 // BranchChange is the live change one branch of a `branch_changes` read heads:
-// the branch as the query named it, the change's id and its number on its
-// repository.
+// the repository and the branch as the query named them, the change's id and
+// its number on its repository.
 type BranchChange struct {
+	RepoID   string `json:"repo_id"`
 	Ref      string `json:"ref"`
 	ChangeID string `json:"change_id"`
 	Number   int64  `json:"number"`
@@ -1032,9 +1045,9 @@ const (
 	// `expunge_tips` is: a push mirror's seat is judged by its home before
 	// each push ([MirrorSeatRefusal]), never as the asker of a read.
 	ReadMirrorPush ReadKind = "mirror_push"
-	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
-	// heads ([BranchChangesQuery]), in the order the query names the
-	// branches, a branch heading none left out. The engine's own read, as
+	// ReadBranchChanges is the LIVE CHANGE each branch of the repositories it
+	// names heads ([BranchChangesQuery]), in the order the query names the
+	// repositories and their branches, a branch heading none left out. The engine's own read, as
 	// `run_pushes` is, which no principal makes and no grant holds: what it
 	// names each ref a collected coding run moved by — the change the run
 	// delivered to — and what tells it whether the change a run asked to
@@ -1506,7 +1519,7 @@ type ReadQuery struct {
 	// node of a build that predates it would answer the open arm alone,
 	// which delays an expunge on the schedule and drops no object.
 	ScannedBefore time.Time `json:"scanned_before,omitzero"`
-	// BranchChanges is a `branch_changes` read's repository and branches:
+	// BranchChanges is a `branch_changes` read's repositories and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
 	// build that predates the kind refuses the read as a kind it does not
@@ -1659,7 +1672,8 @@ type ReadAnswer struct {
 	// which its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
-	// change, in the query's order, a branch heading none left out.
+	// change, in the query's order of repositories and branches, a branch
+	// heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
 	// DueQueue is a `queue_due` read's page of one repository: one target's
 	// queue work ([QueueDue]), the target the next page's cursor; nil past

@@ -11,7 +11,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// spyRecordAt is the position on the code log every push record a pushSpy
+// answers was read at.
+var spyRecordAt = statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 41}
 
 // pushSpy is a [RunPushes] answering what a case scripts and recording every
 // run it was asked about.
@@ -25,22 +31,25 @@ type pushSpy struct {
 	// and is closed by the first read to arrive.
 	held chan struct{}
 	// changes, set, answers every Changes call; unset, Changes names nothing
-	// and opens nothing. changed records whether each call was asked to open.
+	// and opens nothing. changed records whether each call was asked to open,
+	// and records the push record each was handed.
 	changes func(run PendingRun, pushed []PushedRef, open bool) ([]PushedRef, []OpenedChange, error)
 	changed []bool
+	records []PushRecord
 }
 
-func (s *pushSpy) Changes(_ context.Context, run PendingRun, pushed []PushedRef,
+func (s *pushSpy) Changes(_ context.Context, run PendingRun, record PushRecord,
 	open bool) ([]PushedRef, []OpenedChange, error) {
 
 	s.mu.Lock()
 	s.changed = append(s.changed, open)
+	s.records = append(s.records, record)
 	changes := s.changes
 	s.mu.Unlock()
 	if changes == nil {
-		return pushed, nil, nil
+		return record.Refs, nil, nil
 	}
-	return changes(run, pushed, open)
+	return changes(run, record.Refs, open)
 }
 
 // opens is whether each Changes call was asked to open, in order.
@@ -50,7 +59,14 @@ func (s *pushSpy) opens() []bool {
 	return slices.Clone(s.changed)
 }
 
-func (s *pushSpy) Pushed(ctx context.Context, run PendingRun) ([]PushedRef, int, error) {
+// handed is the push record each Changes call was handed, in order.
+func (s *pushSpy) handed() []PushRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.records)
+}
+
+func (s *pushSpy) Pushed(ctx context.Context, run PendingRun) (PushRecord, error) {
 	s.mu.Lock()
 	s.asked = append(s.asked, run)
 	refs, more, err, held := s.refs, s.more, s.err, s.held
@@ -61,9 +77,12 @@ func (s *pushSpy) Pushed(ctx context.Context, run PendingRun) ([]PushedRef, int,
 		// collection runs under is ended.
 		close(held)
 		<-ctx.Done()
-		return nil, 0, ctx.Err()
+		return PushRecord{}, ctx.Err()
 	}
-	return refs, more, err
+	if err != nil {
+		return PushRecord{}, err
+	}
+	return PushRecord{Refs: refs, More: more, At: spyRecordAt}, nil
 }
 
 // answer scripts what every later read answers.
@@ -173,17 +192,19 @@ func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 
 // A COLLECTED RUN'S REPORT SAYS THE CHANGES IT DELIVERED TO (M4-decisions
 // D33): the engine names each ref the run pushed by the live change its branch
-// heads, and opens the change the run asked to open — asked to open only for a
-// run that finished its work, succeeded and asked nothing — and the run's
-// report says both: each ref beside its change, and what became of each ask,
-// opened or why not; the run's record carries each ref's change. A run that
+// heads, read at the push record's position so the collection pays its one
+// barrier alone, and opens the change the run asked to open — asked to open
+// only for a run that finished its work, succeeded and asked nothing — and
+// the run's report says both: each ref beside its change, and what became of
+// each ask, opened or why not; the run's record carries each ref's change. A run that
 // stopped on a question opens none, the job that carries it on opening the
 // change, and one that did not succeed says it opened none; a run that pushed
 // nothing and asked nothing says nothing more.
 //
 // Mutations: ask the engine to open for a run that did not succeed — the
 // open flag, red; leave the opened lines out of runReport — red; leave the
-// change off the phase record — red.
+// change off the phase record — red; hand Changes the refs without the
+// record's position — red.
 func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	t.Parallel()
 	opening := func(r *PendingRun) {
@@ -210,6 +231,12 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	}
 	if got := rig.pushes.opens(); !slices.Equal(got, []bool{true}) {
 		t.Fatalf("the engine was asked to open %v, want once, for a run that finished", got)
+	}
+	// READ AT THE RECORD'S POSITION: the changes are asked of the record as
+	// it was read, its one barrier's position with it.
+	if got := rig.pushes.handed(); len(got) != 1 || got[0].At != spyRecordAt ||
+		!slices.EqualFunc(got[0].Refs, pushed, func(a, b PushedRef) bool { return a == b }) {
+		t.Fatalf("the changes were asked of %+v, want the record read at %s", got, spyRecordAt)
 	}
 	calls := rig.resumer.calls()
 	if len(calls) != 1 {
