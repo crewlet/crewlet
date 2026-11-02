@@ -115,6 +115,10 @@ type Options struct {
 	// approval unavailable.
 	Approvals Approvals
 
+	// Reviews reads a server's tool changes and writes a decision about
+	// one (changes.go); nil leaves the review route answered unavailable.
+	Reviews Reviews
+
 	// Values is the secret store a value is sealed in: required.
 	Values ValueStore
 
@@ -148,6 +152,7 @@ type Service struct {
 	documents ValueDocuments
 	tools     ToolDocuments
 	approvals Approvals
+	reviews   Reviews
 	values    ValueStore
 	now       func() time.Time
 	signIns   SignIns
@@ -198,8 +203,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		tools: opts.Tools, approvals: opts.Approvals, values: opts.Values, now: now, signIns: opts.SignIns,
-		audit: opts.Audit, guard: guard}, nil
+		tools: opts.Tools, approvals: opts.Approvals, reviews: opts.Reviews, values: opts.Values, now: now,
+		signIns: opts.SignIns, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -284,6 +289,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// sign-in's, not a server's.
 	if err := router.Handle("GET /mcp-sign-ins/{id}", authz.Policy{Action: authz.ActionConfigRead},
 		http.HandlerFunc(s.serveSignIn)); err != nil {
+		return err
+	}
+	// A CHANGED TOOL'S REVIEW (changes.go) is a configuration write at the
+	// configuration verb's own step-up, since accepting a change can let a
+	// tool run unasked again, and a block writes a revision; the summary
+	// is declared for the assistant's preview.
+	changes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerReviewChanges))
+	if err := changes.Handle("POST /mcp-servers/{name}/changes",
+		authz.Policy{Action: authz.ActionConfigWrite}.Summarised(),
+		s.audited(types.MCPServerReviewChanges, s.serveChanges)); err != nil {
 		return err
 	}
 	// A HELD CALL'S ANSWER (approvals.go), outside /mcp-servers/ for the

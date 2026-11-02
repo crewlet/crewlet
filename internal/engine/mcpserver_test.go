@@ -227,12 +227,24 @@ func answerRPC(line string) bool {
 		if key := os.Getenv(toolServerEchoEnv); key != "" {
 			desc = key + "=" + os.Getenv(key)
 		}
+		// A DEFINITION THAT CHANGES UNDER A RUNNING SERVER: the
+		// description is read at each listing from the file named, so a
+		// case changes the tool by writing it.
+		if path := os.Getenv(engine.ToolServerDescribeEnv); path != "" {
+			if raw, err := os.ReadFile(path); err == nil {
+				desc = strings.TrimSpace(string(raw))
+			}
+		}
 		listed := make([]string, 0, 1)
 		for _, one := range strings.Split(name, ",") {
 			listed = append(listed, fmt.Sprintf(
 				`{"name":%q,"description":%q,"inputSchema":{"type":"object"}}`, one, desc))
 		}
-		reply(req.ID, `{"tools":[`+strings.Join(listed, ",")+`]}`, "")
+		ttl := ""
+		if ms := os.Getenv(engine.ToolServerTTLEnv); ms != "" {
+			ttl = `,"ttlMs":` + ms
+		}
+		reply(req.ID, `{"tools":[`+strings.Join(listed, ",")+`]`+ttl+`}`, "")
 	case "tools/call":
 		reply(req.ID, `{"content":[{"type":"text","text":"ok"}]}`, "")
 		return true

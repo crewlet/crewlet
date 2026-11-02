@@ -80,10 +80,15 @@ const (
 	// person's approval on the server, each by its id in the answer's
 	// `approvals` (`POST /mcp-approvals/{id}`).
 	MCPFixApprove MCPFixKind = "approve"
+	// MCPFixReview reviews the server's changed tools: each change in the
+	// detail's `changes`, accepted or kept blocked
+	// (`POST /mcp-servers/{name}/changes`).
+	MCPFixReview MCPFixKind = "review"
 )
 
 // MCPFixKinds is every gesture, for the gate holding the dashboard's copy.
-var MCPFixKinds = []MCPFixKind{MCPFixRestart, MCPFixIntegration, MCPFixEdit, MCPFixSignIn, MCPFixApprove}
+var MCPFixKinds = []MCPFixKind{MCPFixRestart, MCPFixIntegration, MCPFixEdit, MCPFixSignIn, MCPFixApprove,
+	MCPFixReview}
 
 // Valid reports whether k is a gesture this build sends.
 func (k MCPFixKind) Valid() bool { return slices.Contains(MCPFixKinds, k) }
@@ -102,7 +107,8 @@ type mcpFix struct {
 // A SERVER NOTHING SERVES IS RESTARTED WHOLE, since every instance is down; a
 // partial one only where its failure is, so the agents it serves keep their
 // sessions. A wait is the integration's to end, a refused name the
-// configuration's, and a held call a person's answer.
+// configuration's, a held call a person's answer, and a changed tool a
+// person's review.
 var mcpFixes = map[statelog.Kind]mcpFix{
 	statelog.KindMCPServerFailing:     {kind: MCPFixRestart},
 	statelog.KindMCPServerPartial:     {kind: MCPFixRestart, oneSeat: true},
@@ -111,6 +117,7 @@ var mcpFixes = map[statelog.Kind]mcpFix{
 	statelog.KindMCPOAuthNeedsSignIn:  {kind: MCPFixSignIn},
 	statelog.KindMCPOAuthExpiring:     {kind: MCPFixSignIn},
 	statelog.KindMCPApprovalWaiting:   {kind: MCPFixApprove, oneSeat: true},
+	statelog.KindMCPToolsChanged:      {kind: MCPFixReview},
 }
 
 // latestAlarms is this node's latest alarm evaluation, nil where none has run

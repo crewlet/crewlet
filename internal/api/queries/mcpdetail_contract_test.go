@@ -80,6 +80,10 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	holdShape(t, "McpServerInfo", one(checked[0]["server_info"]), false)
 	holdShape(t, "McpValueState", rowsOf(t, admin["values"]), false)
 	holdShape(t, "McpReach", rowsOf(t, admin["reaches"]), false)
+	changes := rowsOf(t, admin["changes"])
+	holdShape(t, "McpChangeView", changes, false)
+	holdShape(t, "McpAcceptedView", one(changes[0]["before"]), false)
+	holdShape(t, "McpListedView", one(changes[0]["after"]), false)
 
 	member := asMap(t, queries.MemberMCPServer(detail))
 	holdShape(t, "McpMemberServerAnswer", []map[string]any{member}, false)

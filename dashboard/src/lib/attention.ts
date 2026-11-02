@@ -599,6 +599,12 @@ const MCP_ALARM_WORDS: Record<
         : `A call to ${e.key} is waiting for approval`,
     detail: () => "Its run is parked until somebody allows or denies the call.",
   },
+  mcp_tools_changed: {
+    severity: "caution",
+    icon: "settings",
+    title: (e) => `${e.key} changed a tool since it was allowed`,
+    detail: () => "Each changed tool asks before every call until somebody reviews the change.",
+  },
 };
 
 /**

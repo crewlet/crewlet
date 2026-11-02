@@ -259,6 +259,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/oauth":   authz.ActionSecretWrite,
 		"DELETE /mcp-servers/{name}/oauth": authz.ActionSecretWrite,
 		"GET /mcp-sign-ins/{id}":           authz.ActionConfigRead,
+		// A CHANGED TOOL'S REVIEW, which can let a tool run unasked again
+		// (changes.go).
+		"POST /mcp-servers/{name}/changes": authz.ActionConfigWrite,
 		// A HELD CALL'S ANSWER, decided again on the run's seat once the
 		// handler has read it (approvals.go).
 		"POST /mcp-approvals/{id}": authz.ActionToolsApprove,
@@ -282,6 +285,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 	}
 	if tools := mux.policies["PUT /mcp-servers/{name}/tools"]; !tools.DryRun || !tools.Summary {
 		t.Errorf("PUT /mcp-servers/{name}/tools declares %+v, want a dry run and a summary", tools)
+	}
+	if changes := mux.policies["POST /mcp-servers/{name}/changes"]; changes.DryRun || !changes.Summary {
+		t.Errorf("POST /mcp-servers/{name}/changes declares %+v, want a summary and no dry run", changes)
 	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))

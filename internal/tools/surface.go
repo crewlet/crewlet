@@ -114,6 +114,11 @@ type HeldCall struct {
 	Name  string
 	Entry Entry
 	Args  map[string]any
+	// Changed is a call held because the tool's definition changed since
+	// its level was decided ([Entry.Unreviewed]), not because of the level:
+	// the question says so, since what releases the tool for good is
+	// accepting the change.
+	Changed bool
 }
 
 // WithHolder installs what records a call to a tool at Needs approval, and
@@ -455,8 +460,8 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 		}
 	}
 
-	if e.NeedsApproval && !approved {
-		return s.hold(ctx, span, name, e, args, turn), nil
+	if asks, changed := e.asksFirst(); asks && !approved {
+		return s.hold(ctx, span, name, e, args, turn, changed), nil
 	}
 
 	if server, ok := e.FromMCP(); ok {
@@ -557,24 +562,29 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 // record that it ended the job, and is recorded without its arguments, which
 // ride the run's row sealed.
 func (s *Surface) hold(ctx context.Context, span trace.Span, name string, e Entry,
-	args toolargs.Args, turn *turnctx.Turn) toolloop.ToolResult {
+	args toolargs.Args, turn *turnctx.Turn, changed bool) toolloop.ToolResult {
 
 	if s.holder == nil {
 		seat := "this agent"
 		if handle := turn.Handle(); handle != "" {
 			seat = handle
 		}
-		msg := fmt.Sprintf("%s was not called: it needs a person's approval before each call, "+
+		why := "it needs a person's approval before each call"
+		if changed {
+			why = "its definition changed since it was allowed, so it needs a person's " +
+				"approval before each call until somebody accepts the change"
+		}
+		msg := fmt.Sprintf("%s was not called: %s, "+
 			"and this %s phase cannot wait for an answer. Only %s's own run, its executor, can "+
 			"ask a person to approve a call. Carry on without it, or leave the call to that run.",
-			name, s.Phase(), seat)
+			name, why, s.Phase(), seat)
 		s.record(Call{Name: name, Args: args.Map(), Output: msg, Failed: true, Cause: RefusalForbidden})
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", "refused_needs_approval"))
 		return toolloop.ToolResult{Output: msg, Failed: true, Cause: RefusalForbidden, Source: e.Origin}
 	}
-	res, held := s.holder.Hold(ctx, turn, HeldCall{Name: name, Entry: e, Args: args.Map()})
+	res, held := s.holder.Hold(ctx, turn, HeldCall{Name: name, Entry: e, Args: args.Map(), Changed: changed})
 	cause := res.Cause
 	if held || cause == nil {
 		// HELD IS NOT A FAILURE OF ANYBODY'S, but the call did not happen,

@@ -88,6 +88,7 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 	if len(c.Config.MCPServers) > 0 {
 		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
 		heldConditions(out.MCPServers, e.heldRuns(ctx))
+		e.changedConditions(ctx, c, out.MCPServers)
 		out.MCPServersAt = now
 	}
 }
