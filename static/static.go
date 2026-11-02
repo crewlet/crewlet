@@ -14,9 +14,13 @@
 // nothing here is the thing under test; `make dashboard` regenerates it,
 // `make dashboard-check` fails when it has drifted from its source, and the
 // dashboard's own suites run against dashboard/src under Vitest rather than
-// against these files. The one exception is dashboard/protocol.js, the second
-// build target, which internal/e2e replays a real company's socket frames
-// through.
+// against these files.
+//
+// THE PROTOCOL MODULE (`protocol/protocol.js`) is the source's second build
+// target, which internal/e2e replays a real company's socket frames through:
+// committed, rebuilt and diffed with the dashboard, and NOT embedded. No page
+// loads it and the engine serves it to nobody, so in the embedded tree it was
+// 124 KiB of a test's module in every engine binary and image.
 //
 // THE ARTIFACT TREE (`artifacts/`) is the dashboard source's third build
 // target (`dashboard/vite.runtime.config.ts`): `runtime/<contract>/` installs

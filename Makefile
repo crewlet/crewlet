@@ -288,12 +288,15 @@ clean: ## remove the build output (./crewlet, dist/ and build/)
 
 # The dashboard's source lives here; its BUILD OUTPUT is committed to
 # static/dashboard and static/artifacts (the page runtime and the artifact
-# kit, the third build target), both of which package static embeds.
+# kit, the third build target), both of which package static embeds, and to
+# static/protocol (the wire protocol alone, the second), which it does not.
 UI := dashboard
 
 # Every tree the dashboard's build writes, and so every tree the drift gate
-# judges.
-UI_OUT := static/dashboard static/artifacts
+# judges: the two package static embeds, and static/protocol, the wire
+# protocol alone, which internal/e2e replays frames through and no binary
+# carries.
+UI_OUT := static/dashboard static/artifacts static/protocol
 
 # npm ci rather than npm install: the lockfile is the pin, and `install` is
 # allowed to move it. A build whose dependency versions drift is a build whose
@@ -303,7 +306,7 @@ $(UI)/node_modules: $(UI)/package-lock.json | require-npm
 	cd $(UI) && npm ci
 	@touch $(UI)/node_modules
 
-dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard and static/artifacts (commit the result)
+dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard, static/artifacts and static/protocol (commit the result)
 	cd $(UI) && npm run build
 
 dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
@@ -337,8 +340,8 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # the index.html that imports the new chunk and the deletion of the old one,
 # the diff is empty, and the binary serves a shell asking for a module it does
 # not embed. The second question is `git ls-files --others`: is there
-# anything on disk under static/dashboard or static/artifacts the index does
-# not hold at all.
+# anything on disk under static/dashboard, static/artifacts or
+# static/protocol the index does not hold at all.
 #
 # `--others` WITHOUT `--exclude-standard`, so an ignored file fails too. The
 # embed is `all:dashboard`, which ships every file on disk whatever
@@ -355,12 +358,12 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # checkout the index IS HEAD, so the two readings agree there. The listing
 # drops the staged-only lines (`grep -v '^. '`, an unchanged second column)
 # for the same reason: what it prints is the drift and nothing else.
-dashboard-check: $(UI)/node_modules ## fail if static/dashboard or static/artifacts is not what dashboard/ builds (ci: dashboard)
+dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifacts or static/protocol is not what dashboard/ builds (ci: dashboard)
 	cd $(UI) && npm run build
 	@untracked="$$(git ls-files --others -- $(UI_OUT))" || exit 1; \
 	if ! git diff --exit-code -- $(UI_OUT) || [ -n "$$untracked" ]; then \
 	  { echo; \
-	    echo "static/dashboard or static/artifacts is not what dashboard/ builds."; \
+	    echo "static/dashboard, static/artifacts or static/protocol is not what dashboard/ builds."; \
 	    echo "What a rebuild changed or wrote that the index does not carry:"; \
 	    git status --porcelain --untracked-files=all --ignored=matching \
 	      -- $(UI_OUT) | grep -v '^. '; \

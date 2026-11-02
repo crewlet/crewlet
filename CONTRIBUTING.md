@@ -375,14 +375,15 @@ What follows are the prerequisites that legitimately vary by machine.
   the skip has no entry in `internal/skipgate/allowed.go` — a run that got past
   `require-node` fails on it rather than reporting a pass.
 
-  It needs no npm and no build: `static/dashboard/protocol.js` is committed
-  along with the rest of the built tree.
+  It needs no npm and no build: `static/protocol/protocol.js` is committed
+  along with the rest of the built tree, beside the embedded `static/dashboard`
+  rather than in it, since no page loads it.
 
-  **Which dashboard the replay tests is a parameter.** The replay is
+  **Which protocol module the replay tests is a parameter.** The replay is
   `internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it, and it
-  reads the tree from `CREWLET_DASHBOARD_ROOT`, which the Go half always sets
-  to `static/dashboard`, the tree the binary embeds. Unset, it is that same
-  tree, and a relative value is read against the repository — the nearest
+  reads the module's directory from `CREWLET_PROTOCOL_ROOT`, which the Go half
+  always sets to `static/protocol`, the committed build. Unset, it is that same
+  directory, and a relative value is read against the repository — the nearest
   directory above the script holding a `go.mod` — rather than the directory it
   is run from.
 

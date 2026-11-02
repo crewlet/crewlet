@@ -2,7 +2,7 @@
  * The wire protocol, on its own.
  *
  * This barrel is a real build target, not just an import convenience:
- * `vite.protocol.config.ts` emits it as `static/dashboard/protocol.js`, plain
+ * `vite.protocol.config.ts` emits it as `static/protocol/protocol.js`, plain
  * unminified ESM, so `internal/e2e/golden_test.go` can replay a real company's
  * captured socket frames through the client's OWN dispatch table under bare
  * `node`. Nothing in this directory may import React, touch the DOM at module

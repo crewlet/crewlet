@@ -74,7 +74,7 @@ func servedTree(t *testing.T) string {
 // Every one of these is a real failure mode of a committed build artifact: a
 // merge that took one side's index.html and the other's assets, a `git add`
 // that missed the fonts directory, a build run with the protocol config
-// skipped. Each leaves a tree that looks plausible in a diff and serves a blank
+// skipped or writing into the served tree. Each leaves a tree that looks plausible in a diff and serves a blank
 // page.
 func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	t.Parallel()
@@ -109,10 +109,18 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 
 	// The protocol bundle is a SEPARATE build target and is easy to forget:
 	// internal/e2e replays a real company's socket frames through it under
-	// plain node, and without it that gate silently has nothing to run.
-	if _, err := os.Stat(filepath.Join(served, "protocol.js")); err != nil {
-		t.Errorf("no protocol.js — internal/e2e's client replay has nothing to "+
-			"run against; `npm run build` in dashboard/ emits it: %v", err)
+	// plain node, and without it that gate silently has nothing to run. It is
+	// built BESIDE the served tree and never into it: no page loads it, and
+	// in static/dashboard it rode the embed into every engine binary.
+	protocol := filepath.Join(staticDir(t), "protocol", "protocol.js")
+	if _, err := os.Stat(protocol); err != nil {
+		t.Errorf("no %s — internal/e2e's client replay has nothing to run against; "+
+			"`npm run build` in dashboard/ emits it: %v", protocol, err)
+	}
+	if _, err := os.Stat(filepath.Join(served, "protocol.js")); err == nil {
+		t.Errorf("static/dashboard holds protocol.js, which no page loads, and the embed carries " +
+			"every file there into every engine binary: dashboard/vite.protocol.config.ts builds it " +
+			"into static/protocol")
 	}
 
 	// The faces are embedded rather than fetched, which is what makes the
@@ -663,12 +671,6 @@ func TestBareFocusRulesReadTheSelectorList(t *testing.T) {
 	}
 }
 
-// protocolModule is the second build target: the socket client alone, which
-// internal/e2e replays captured frames through. No page imports it, so the
-// crawl from the shell never reaches it, and a gate over "everything the
-// engine serves as a script" has to name it.
-const protocolModule = dashboardBase + "protocol.js"
-
 // A priceForm is one shape a price takes in a built module.
 type priceForm struct {
 	what string
@@ -805,10 +807,11 @@ func pricesInModule(module []byte) []priceFound {
 // `cost_usd` into a `costUSD` nothing drew.
 //
 // Every module the shell reaches, lazy chunks included, through the crawl
-// TestTheShellLoadsFromTheBinary uses, and protocol.js, which no page imports.
+// TestTheShellLoadsFromTheBinary uses: every script the engine serves, since
+// protocol.js, which no page imports, is built beside the served tree
+// (static/protocol) and served by nobody.
 func TestTheDashboardRendersNoPrice(t *testing.T) {
 	t.Parallel()
-	a := embeddedDashboard.app
 	c := embeddedDashboard.crawl
 	// A crawl that lost a file would scan less than the engine serves and
 	// call it clean. TestTheShellLoadsFromTheBinary names each problem; this
@@ -818,15 +821,14 @@ func TestTheDashboardRendersNoPrice(t *testing.T) {
 			"price in one of them would go unseen; TestTheShellLoadsFromTheBinary names them",
 			len(c.problems))
 	}
-	modules := map[string][]byte{protocolModule: mustFetch(t, a, protocolModule, "text/javascript")}
+	modules := map[string][]byte{}
 	for _, f := range c.ofKind(".js") {
 		modules[f.url] = f.body
 	}
-	// A FLOOR: the entry, the React chunk the build splits out, and
-	// protocol.js. A crawl that reached nothing would otherwise pass.
-	if len(modules) < 3 {
-		t.Fatalf("scanned %d modules; the entry, the React chunk and protocol.js are three",
-			len(modules))
+	// A FLOOR: the entry and the React chunk the build splits out. A crawl
+	// that reached nothing would otherwise pass.
+	if len(modules) < 2 {
+		t.Fatalf("scanned %d modules; the entry and the React chunk are two", len(modules))
 	}
 	for url, body := range modules {
 		for _, p := range pricesInModule(body) {
@@ -1150,7 +1152,14 @@ const (
 	// 18 KiB, each fetched only when it is opened. It moved to 4.375 MiB
 	// then (4,587,520 bytes), the most that still refuses a doubled 2.3 MB
 	// baseline (4.6 MB): the next screen past it is the decision this
-	// budget was set to force, a smaller bundle or a new bound for it.
+	// budget was set to force, a smaller bundle or a new bound for it. The
+	// code host's import, mirror, index, purge and search screens took it
+	// past, to 4,591,624 bytes, and the answer was the smaller bundle:
+	// protocol.js, the wire protocol alone that internal/e2e replays frames
+	// through and no page loads, was built into static/dashboard and so
+	// embedded, 127,188 bytes every binary carried for a test. Built into
+	// static/protocol, which nothing embeds, it left the tree at 4,464,436
+	// bytes, about 4.26 MiB, under the same bound.
 	treeBudget = 4<<20 + 384<<10
 )
 

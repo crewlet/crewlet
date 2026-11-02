@@ -41,7 +41,7 @@ import (
 // executor and reviewer loop against a scripted model behind the real CLI
 // backend, and reads the result off a WebSocket dialled the way the dashboard
 // dials it, then feeds those exact frames through the dashboard's OWN protocol
-// module (the store and the socket, built as static/dashboard/protocol.js).
+// module (the store and the socket, built as static/protocol/protocol.js).
 //
 // It is the only test that can catch the class of bug it was written for. The
 // turn engine emitted NO events at all when this was written: every payload
@@ -859,13 +859,13 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // The replay script beside this file, replayScript, drives the dashboard's
 // own protocol module, the store and the socket built as
-// static/dashboard/protocol.js, over the frames this server produced; it is
-// told where that build is through dashboardEnv. The script is named relative
+// static/protocol/protocol.js, over the frames this server produced; it is
+// told where that build is through protocolEnv. The script is named relative
 // to this package's directory, where `go test` runs every test binary by
 // contract, so its path has no depth to count.
 const (
 	replayScript  = "replay.mjs"
-	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
+	protocolEnv   = "CREWLET_PROTOCOL_ROOT"
 	replayTimeout = 60 * time.Second
 )
 
@@ -1172,7 +1172,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the capture: %v", err)
 	}
 
-	tree := filepath.Join(sourcetree.Root(t), "static", "dashboard")
+	protocol := filepath.Join(sourcetree.Root(t), "static", "protocol")
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
@@ -1181,7 +1181,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		t.Fatalf("writing the act answer: %v", err)
 	}
 	cmd := exec.CommandContext(runCtx, node, replayScript, path, actPath)
-	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
+	cmd.Env = append(os.Environ(), protocolEnv+"="+protocol)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {
 		t.Fatalf("the replay did not finish within %s:\n%s", replayTimeout, out)
