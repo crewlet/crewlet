@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -249,6 +250,17 @@ func (l *launchDecided) get() SessionDecision {
 // launch armed them; every later rebuild of the guard reads, beside it, what the
 // box said on the job's record ([Resume.Continued]), and takes the skills only
 // where it says the session was continued.
+//
+// THE GUARD ON THE PATH OF THE REQUEST THAT SAID IT, AND THE FRAME OFF IT. The
+// guard is put right before that request is served, as every request of the
+// run waits on, so no call is admitted against the guard of a session the run
+// is not in. The frame is a publish the broker answers — its acknowledgement
+// waited for, its listeners run inline — and that request is the run's first to
+// its bridge, its harness's MCP handshake as likely as not, which a harness
+// holds to a short connect timeout: a broker having a slow moment would drop
+// the run's tools from its harness for the sake of a record. So it goes out on
+// its own, within [startedFrameBudget], as the job's record of the same word
+// is written by the engine's bridge ledger.
 func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, system prompts.Prompt,
 	surface *tools.Surface, caps roundCaps, b launchBriefs, decided *launchDecided) func(bool) {
 
@@ -261,9 +273,23 @@ func (r *Runner) sessionStarted(ctx context.Context, emit emitter, round int, sy
 			return
 		}
 		r.armSession(surface, nil, nil)
-		emit.prompted(base, phase.Execute, round, system, b.fresh, caps)
+		go func() {
+			ctx, cancel := context.WithTimeout(base, startedFrameBudget)
+			defer cancel()
+			emit.prompted(ctx, phase.Execute, round, system, b.fresh, caps)
+		}()
 	}
 }
+
+// startedFrameBudget bounds the publish of the frame stating the fresh brief a
+// run was handed where its box started a session of its own
+// ([Runner.sessionStarted]): FIVE SECONDS, the publisher's own wait for a
+// broker's acknowledgement, which a healthy broker gives in milliseconds — a
+// publish not answered in that is one an outage holds, which this record does
+// not wait out. A frame that missed it leaves the continuation as the round's
+// opening frame; the run's collection still says it started a session of its
+// own (`harness_session_continued`, `harness_session_fell_back`).
+const startedFrameBudget = 5 * time.Second
 
 // armSession re-arms the run's guard with exactly the skills in loaded and those
 // calls loaded ([skills.Guard.Replace], [Runner.observeLoads]): the skills the
