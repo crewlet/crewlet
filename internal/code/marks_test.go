@@ -208,10 +208,14 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 // snoozed, the first page of three is the three that are not — a full page,
 // never an empty one with a cursor behind it — the snoozed scope lists exactly
 // the three put off, and `unread` past a read-through position lists only what
-// sits above it, every page carrying its cursor where more remain.
+// sits above it, every page carrying its cursor where more remain — and, with
+// the oldest notice marked unread again, that notice too, in its place below
+// the four above the position, on the next page when a page of four holds
+// those.
 //
 // Mutation: filter the page after the scan — the first page reads none of the
-// snoozed three and answers empty, red.
+// snoozed three and answers empty, red; seek no unread mark below the
+// position — the notice marked unread again is never listed, red.
 func TestTheCodeInboxFiltersInTheScan(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -246,6 +250,20 @@ func TestTheCodeInboxFiltersInTheScan(t *testing.T) {
 	unread, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 0)
 	if got, want := idsOf(unread), newestFirst(ids[2:]); !slices.Equal(got, want) {
 		t.Errorf("unread past %s lists %v, want what sits above it %v", through, got, want)
+	}
+	mark(t, m, marking(code.MarkGesture{Unread: []string{ids[0]}}))
+	again, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 0)
+	if got, want := idsOf(again), append(newestFirst(ids[2:]), ids[0]); !slices.Equal(got, want) {
+		t.Errorf("unread past %s with %s marked unread again lists %v, want %v — an unread mark below the "+
+			"position brings its notice back, in its place", through, ids[0], got, want)
+	}
+	page, next = readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 4)
+	if got, want := idsOf(page), newestFirst(ids[2:]); !slices.Equal(got, want) || next == "" {
+		t.Errorf("a page of four of those five lists %v with cursor %q, want %v and a cursor", got, next, want)
+	}
+	rest, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, next, 4)
+	if got := idsOf(rest); !slices.Equal(got, ids[:1]) {
+		t.Errorf("the page after it lists %v, want the notice marked unread again, %v", got, ids[:1])
 	}
 	primary, _ := readInbox(t, n, code.InboxQuery{Reasons: []code.Reason{code.ReasonMention},
 		Snoozed: inbox.SnoozeInclude}, "", 0)

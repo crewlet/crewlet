@@ -1087,15 +1087,22 @@ func registeredStatements() map[string]statement {
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
-		// notices newest first, every filter bound; each change the page
-		// names is changesByIDSQL's row (its readiness the listing's
-		// statements), its description by the body's key; each one's open
+		// notices newest first, every filter bound — under `unread` its lower
+		// bound the seen-through position — and the notices an unread mark
+		// brings back below it, one seek of the notice's key a pair; each
+		// change the page names is changesByIDSQL's row (its readiness the
+		// listing's statements), its description by the body's key; each one's open
 		// agent findings, a range of the raiser index; the person's marks by
 		// their key; and where the notices of theirs a mark names sit, one
 		// seek of the notice's key a pair of the gesture's list.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
 			"exclude", "[]", "[]", 50},
 			[]string{"code_notifications_inbox_idx (recipient=? AND log_seq>? AND log_seq<?)"}},
+		"the notices an unread page brings back below the position": {inboxMarkedSQL,
+			[]any{`[["record-1","repo-1-change-000001"]]`, "founder", int64(1) << 62, 0, 0, "[]", "exclude", "[]",
+				"[]"},
+			[]string{"SCAN json_each AS j",
+				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
 			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
 		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
