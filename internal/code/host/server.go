@@ -166,7 +166,13 @@ type Timing struct {
 	Handshake time.Duration
 	// Stall is how long a transfer's git process — an advertisement,
 	// upload-pack, receive-pack — may read and write nothing before the pool
-	// ends it (gitproc.Cmd.Stall).
+	// ends it (gitproc.Cmd.Stall). Git's own keepalives are five seconds
+	// apart at any Timing, and between them a healthy transfer may write
+	// nothing at all: a receive-pack, from its pack's last byte until its
+	// hook answers — its unpack, its connectivity check, the hook's start and
+	// the push's decide and apply, the session's keepalive beginning only a
+	// Keepalive after the hook does. So a case that sets it below five
+	// seconds holds only a stand-in git to it, never a real transfer.
 	Stall time.Duration
 	// SpoolWait is the longest a fetch request waits its turn for room in
 	// the spool allowance before it is answered 503 (spool.go).
