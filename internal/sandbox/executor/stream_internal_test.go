@@ -78,15 +78,25 @@ func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 	}
 }
 
-// THE WINDOW STARTS ON A LINE, and a line longer than the window keeps its own
-// end on a character, marked.
+// THE WINDOW STARTS ON A LINE, past the context a read that began inside the
+// stream opens with, and everything before it is counted; a line longer than
+// the window keeps its own end on a character, marked — and one a read began
+// inside keeps its end past the context too.
 func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	t.Parallel()
-	stream := []byte("first line\nsecond line\nthird line\n")
-	tail := sandbox.FileTail{Data: stream[5:], Size: int64(len(stream))}
-	got, unread := streamEnd(tail, 1<<10)
-	if got != "second line\nthird line\n" || unread != int64(len("first line\n")) {
-		t.Errorf("streamEnd = %q, %d unread; want the partial first line dropped and counted", got, unread)
+	const keep = 1 << 10
+	const line = "a line the process wrote\n"
+	stream := strings.Repeat(line, (keep+redactContext)/len(line)+100)
+	read := keep + redactContext
+	if (len(stream)-read)%len(line) == 0 {
+		t.Fatal("the read opens on a line; the case needs one that opens inside a line, as a byte count lands")
+	}
+	tail := sandbox.FileTail{Data: []byte(stream[len(stream)-read:]), Size: int64(len(stream))}
+	got, unread := streamEnd(tail, keep)
+	if got == "" || len(got) > keep || !strings.HasPrefix(got, line) || !strings.HasSuffix(stream, got) ||
+		unread != int64(len(stream)-len(got)) {
+		t.Errorf("streamEnd = %d bytes opening %.30q, %d unread; want whole lines of the stream's end, at "+
+			"most %d bytes, and every byte before them counted", len(got), got, unread, keep)
 	}
 
 	long := []byte(strings.Repeat("日", 2000))
@@ -94,6 +104,62 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	kept, marked := strings.CutPrefix(got, "…")
 	if !marked || len(kept) > 100 || !utf8.ValidString(kept) {
 		t.Errorf("a line longer than the window = %q; want its end, marked, on a character", got)
+	}
+
+	one := strings.Repeat("x", 3*redactContext)
+	tail = sandbox.FileTail{Data: []byte(one[len(one)-read:]), Size: int64(len(one))}
+	got, unread = streamEnd(tail, keep)
+	kept, marked = strings.CutPrefix(got, "…")
+	if !marked || len(kept) != keep || unread != int64(len(one)-keep) {
+		t.Errorf("a line a read began inside = %d bytes, marked %v, %d unread; want its last %d bytes, "+
+			"marked, and the rest counted", len(kept), marked, unread, keep)
+	}
+}
+
+// A KEY THAT BEGAN BEFORE THE READ IS NEVER SHOWN, however much the redaction
+// shrinks what comes after it. Read from inside, its BEGIN not in the text, a
+// key is redacted only as far back as a read from its END reaches, and three
+// lines in a row that are not the key's stop that read: the lines above them
+// are published (package redact's doc). The context a read takes before what
+// it keeps is there to read such a key whole; but bounded by the redacted
+// text's bytes, what was kept reached back into the context whenever the keys
+// after it collapsed into their markers, and brought the published lines.
+//
+// Mutation: keep the end of the whole read's redaction (sandbox.KeepEnd over
+// redact.Secrets of every whole line read), and the key's body is shown.
+func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
+	t.Parallel()
+	const body = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"
+	const other = "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7MaV0gM9g7x3E8Mq1"
+	begin, end := "-----BEGIN RSA PRIVATE KEY-----\n", "-----END RSA PRIVATE KEY-----\n"
+	var s strings.Builder
+	s.WriteString(strings.Repeat("compiling a package of the build\n", 50))
+	s.WriteString(begin)
+	opened := s.Len()
+	s.WriteString(strings.Repeat(body+"\n", 40))
+	s.WriteString(strings.Repeat("retrying the upload in two seconds\n", 3))
+	s.WriteString(strings.Repeat(body+"\n", 5) + end)
+	// Keys enough after it to fill the context, each a twenty-two byte
+	// marker once redacted.
+	for range 45 {
+		s.WriteString(begin + strings.Repeat(other+"\n", 25) + end)
+	}
+	s.WriteString("done\n")
+	stream := s.String()
+	// The read opens inside the key's body, ten lines and a few bytes in,
+	// and keeps what is past the context.
+	data := []byte(stream[opened+10*(len(body)+1)+7:])
+	keep := len(data) - redactContext
+	if keep <= 0 {
+		t.Fatalf("the read is %d bytes; the case needs more than the %d of context", len(data), redactContext)
+	}
+	got, unread := streamEnd(sandbox.FileTail{Data: data, Size: int64(len(stream))}, keep)
+	if strings.Contains(got, body[:24]) || strings.Contains(got, other[:24]) || redact.Contains(got) {
+		t.Errorf("a key's body reached what is shown:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "done\n") || unread <= int64(len(stream)-len(data)) {
+		t.Errorf("shown = …%q with %d unread; want the stream's end, and its start and the context counted",
+			got[max(0, len(got)-40):], unread)
 	}
 }
 

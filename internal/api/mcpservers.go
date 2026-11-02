@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
 )
 
 // mcpRestarter is the engine as the MCP server routes restart a server
@@ -24,8 +25,31 @@ func (m mcpRestarter) RestartServer(ctx context.Context, name, seat string, by i
 	return mcpapi.Restart{Server: r.Server, Seat: r.Seat, At: r.At, Node: r.Node}, nil
 }
 
-// restartErr is an engine refusal as the route answers it, the engine's
-// sentence kept beside the route's sentinel.
+// mcpChecker is the engine as the MCP test routes test a server and check an
+// address through, its refusals mapped onto mcpapi's as a restart's are.
+type mcpChecker struct{ e *engine.Engine }
+
+func (m mcpChecker) CheckServer(ctx context.Context, req mcpapi.CheckRequest) (mcpapi.Check, error) {
+	r, err := m.e.CheckMCPServer(ctx, engine.MCPCheckRequest{Server: req.Server, Draft: req.Draft,
+		Seat: req.Seat, By: req.By})
+	if err != nil {
+		return mcpapi.Check{}, restartErr(err)
+	}
+	out := mcpapi.Check{Server: r.Server, Seat: r.Seat, Draft: r.Draft, At: r.At, By: r.By, Node: r.Node,
+		OK: r.OK, Nodes: make([]mcpapi.CheckedNode, 0, len(r.Nodes))}
+	for _, n := range r.Nodes {
+		out.Nodes = append(out.Nodes, mcpapi.CheckedNode{Node: n.Node, Answered: n.Answered, Reason: n.Reason,
+			Report: n.Report})
+	}
+	return out, nil
+}
+
+func (m mcpChecker) CheckAddress(ctx context.Context, address string) mcp.AddressCheck {
+	return m.e.CheckMCPAddress(ctx, address)
+}
+
+// restartErr is an engine refusal of a server gesture as the route answers
+// it, the engine's sentence kept beside the route's sentinel.
 func restartErr(err error) error {
 	for engineErr, routeErr := range map[error]error{
 		engine.ErrNoMCPServer:       mcpapi.ErrNoSuchServer,
@@ -33,6 +57,7 @@ func restartErr(err error) error {
 		engine.ErrMCPSeatOnShared:   mcpapi.ErrSeatOnShared,
 		engine.ErrNoAgentSeat:       mcpapi.ErrNoSuchSeat,
 		engine.ErrMCPSeatNotGranted: mcpapi.ErrSeatNotGranted,
+		engine.ErrMCPSeatRequired:   mcpapi.ErrSeatRequired,
 	} {
 		if errors.Is(err, engineErr) {
 			return fmt.Errorf("%w: %w", routeErr, err)

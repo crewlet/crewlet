@@ -167,6 +167,44 @@ func TestALiveReadingOfTheErrorStreamStartsOnALine(t *testing.T) {
 	}
 }
 
+// A LIVE READING READS A KEY BEGUN BEFORE IT AS A KEY. A reading begins at the
+// start of the stream's last window, and a window can open inside a private
+// key's block: read from inside, its BEGIN not in the text, a key is redacted
+// only as far back as a read from its END reaches, and three lines in a row
+// that are not the key's stop that read — the lines above them are published
+// (package redact's doc). So the error stream's reading reads the context
+// before its window as well, never shows it, and shows only what it settles.
+//
+// Mutation: begin the reading with no context (the follower never hands
+// pendingText its lead), and the key's lines above the three are shown.
+func TestALiveReadingReadsAKeyBegunBeforeItAsAKey(t *testing.T) {
+	t.Parallel()
+	const body = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	head := strings.Repeat("compiling a package of the build\n", 100) +
+		"-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(body+"\n", 40)
+	rest := strings.Repeat("retrying the upload in two seconds\n", 3) + strings.Repeat(body+"\n", 5) +
+		"-----END RSA PRIVATE KEY-----\n"
+	// The window opens inside the key's body, ten lines and a few bytes
+	// under its BEGIN: what the stream holds from there is exactly a window.
+	inside := 30*(len(body)+1) - 7
+	padding := executor.LiveWindow - inside - len(rest)
+	const progress = "progress of the build so far\n"
+	pad := strings.Repeat(progress, padding/len(progress)-1)
+	pad += strings.Repeat("x", padding-len(pad)-1) + "\n"
+	b.Put(paths(b).Err(), head+rest+pad)
+
+	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	if strings.Contains(got.Text, body[:24]) {
+		t.Fatalf("the reading showed a key's lines whose BEGIN came before it: %.300q", got.Text)
+	}
+	if !strings.Contains(got.Text, redact.Marker) || !strings.HasSuffix(got.Text, pad) || !got.Front {
+		t.Errorf("the reading = %.200q … %q, front %v; want the key's marker, the stream after it, "+
+			"and its start said", got.Text, tailOf(got.Text, 40), got.Front)
+	}
+}
+
 // A STREAM THAT OUTRUNS THE READING BEGINS AGAIN, UNDER ANOTHER NAME. A burst
 // past what one read catches up — a tool's echoed output of a large file —
 // is read from the stream's end again rather than in full, and the reading's

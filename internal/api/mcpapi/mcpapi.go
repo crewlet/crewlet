@@ -1,7 +1,10 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
 // [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
-// server is added from, `GET /mcp-servers/{name}`, one server whole, and
-// `POST /mcp-servers/{name}/retry`, a restart of it now.
+// server is added from, `GET /mcp-servers/{name}`, one server whole,
+// `POST /mcp-servers/{name}/retry`, a restart of it now, and the tests:
+// `POST /mcp-servers/{name}/check` of a saved server, `POST /mcp-checks` of a
+// draft and `POST /mcp-probe` of an address before a server is added at it
+// (check.go).
 //
 // # Routes, not registry questions
 //
@@ -26,8 +29,9 @@
 //
 // # A gesture is audited, refusals included
 //
-// A restart changes runtime state and writes no record anywhere else, so every
-// call to it is one `mcp_server_acted`, its outcome and refusal read off the
+// A restart changes runtime state and writes no record anywhere else, and a
+// test starts a process or dials an address at a person's word, so every call
+// to either is one `mcp_server_acted`, its outcome and refusal read off the
 // answer the route wrote, and a refusal the guard made before the handler ran
 // is rendered through the same audit ([Service.refusedAudited]), as a model
 // gesture's is (internal/api/llmapi).
@@ -85,6 +89,15 @@ type Options struct {
 	// the engine can tell every node.
 	Restarter Restarter
 
+	// Checker tests a server where it runs and checks an address: required,
+	// since only the engine can ask the nodes that run a server.
+	Checker Checker
+
+	// Drafts holds a draft entry to the configuration's own dry run, as a
+	// draft is tested only as a write would leave it. Nil, on a node that
+	// serves no configuration surface, answers a draft's test unavailable.
+	Drafts DraftChecker
+
 	// Audit is where each gesture's `mcp_server_acted` is published: this
 	// node's queue, whose publish listener writes the event store.
 	// Required: a restart leaves no record anywhere else.
@@ -102,6 +115,8 @@ type Service struct {
 	registry  Searcher
 	detail    func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
 	restarter Restarter
+	checker   Checker
+	drafts    DraftChecker
 	audit     operator.AuditPublisher
 	guard     authz.Guard
 }
@@ -120,6 +135,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Restarter is required: a restart is asked of the " +
 			"fleet through the engine")
 	}
+	if opts.Checker == nil {
+		return nil, errors.New("mcpapi: Options.Checker is required: a test is asked of the nodes " +
+			"that run the server through the engine")
+	}
 	if opts.Audit == nil {
 		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
 	}
@@ -132,7 +151,8 @@ func New(opts Options) (*Service, error) {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
-		restarter: opts.Restarter, audit: opts.Audit, guard: guard}, nil
+		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, audit: opts.Audit,
+		guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -155,9 +175,28 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// the guard's refusal through the audit, so a refused call is recorded
 	// too.
 	restarts := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerRestart))
-	return restarts.Handle("POST /mcp-servers/{name}/retry",
+	if err := restarts.Handle("POST /mcp-servers/{name}/retry",
 		authz.Policy{Action: authz.ActionToolsRetry}.Rewriting(),
-		s.audited(types.MCPServerRestart, s.serveRestart))
+		s.audited(types.MCPServerRestart, s.serveRestart)); err != nil {
+		return err
+	}
+	// A TEST OF A SAVED SERVER RECORDS ITS LATEST TEST, a write of the
+	// server's own state as a model's check is; a draft's and an address's
+	// record nothing, so their POSTs read. Each on a router of its own whose
+	// refusal is audited, as the restart's is.
+	checks := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerCheck))
+	if err := checks.Handle("POST /mcp-servers/{name}/check",
+		authz.Policy{Action: authz.ActionToolsCheck}.Rewriting(),
+		s.audited(types.MCPServerCheck, s.serveCheck)); err != nil {
+		return err
+	}
+	if err := checks.Handle("POST /mcp-checks", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
+		s.audited(types.MCPServerCheck, s.serveDraftCheck)); err != nil {
+		return err
+	}
+	probes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerProbe))
+	return probes.Handle("POST /mcp-probe", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
+		s.audited(types.MCPServerProbe, s.serveProbe))
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a
