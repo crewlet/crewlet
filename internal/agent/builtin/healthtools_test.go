@@ -1238,6 +1238,197 @@ func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	}
 }
 
+// A FLEET OF GIT NODES PAST ONE ANSWER IS PAGED, NEVER REFUSED — code_status's
+// answer about the fleet and its answer about one repository alike.
+//
+// Four hundred git nodes, half with ids long enough that a hundred rows outgrow
+// one answer, and a tenth that did not answer: whole, either answer is far past
+// ToolAnswerBytes. Read a page at a time, every page fits one answer and goes
+// out compact; walking the pages by `next` lists every git node once and in id
+// order — each answered node's row, and every node's part in the coverage, an
+// unanswered node's included — with the whole scatter's `complete` on every
+// page; a page of a hundred is cut whole-row; the hot list rides the first page
+// alone; `node` reads one git node, one that did not answer as its coverage;
+// and arguments that cannot be read are refused.
+//
+// Mutation: send the page `limit` asks whole rather than cut to one answer,
+// ignore `cursor`, or send the hot list on every page, and a case is red.
+func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
+	t.Parallel()
+	const nodes = 400
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	wide := strings.Repeat("g", 600) // an id long enough that a hundred rows outgrow one answer
+	var all, answered, silent []string
+	report := builtin.CodeStatusReport{Coverage: eventfan.Coverage{Nodes: []eventfan.NodeCoverage{}}}
+	for i := range nodes {
+		id := fmt.Sprintf("git-%03d", i)
+		if i%2 == 0 {
+			id += "-" + wide
+		}
+		all = append(all, id)
+		if i%10 == 3 {
+			silent = append(silent, id)
+			report.Coverage.Nodes = append(report.Coverage.Nodes, eventfan.NodeCoverage{ID: id,
+				Error: "did not answer inside 5s"})
+			continue
+		}
+		answered = append(answered, id)
+		report.Coverage.Nodes = append(report.Coverage.Nodes, eventfan.NodeCoverage{ID: id, Answered: true})
+		s := host.CodeStatus{Node: id, At: at, Cache: cache.Status{Since: at, Bytes: int64(i) << 20,
+			Budget: 8 << 30, Warm: int64(i)},
+			Repo: &host.RepoStatus{RepoHeat: cache.RepoHeat{ID: siteID, Name: "site",
+				Hour: cache.Use{Fetches: int64(i)}}}}
+		if i < 40 {
+			s.Hot = []host.RepoStatus{{RepoHeat: cache.RepoHeat{
+				ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", i), Name: fmt.Sprintf("repo-%03d", i),
+				Hour: cache.Use{Fetches: int64(100 - i)}, Day: cache.Use{Fetches: int64(i + 1)}}}}
+		}
+		report.Statuses = append(report.Statuses, s)
+	}
+	for _, list := range [][]string{all, answered, silent} {
+		slices.Sort(list)
+	}
+	slices.SortFunc(report.Coverage.Nodes, func(a, b eventfan.NodeCoverage) int {
+		return strings.Compare(a.ID, b.ID)
+	})
+	if whole, _ := json.Marshal(report); len(whole) <= 4*builtin.ToolAnswerBytes {
+		t.Fatalf("the fleet's report is %d bytes whole; the case needs one far past an answer", len(whole))
+	}
+	_, chart := healthChart(t)
+	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
+	tool := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
+		Code: healthCode(repos, chart)}, chart)[builtin.CodeStatusTool]
+
+	type page struct {
+		Nodes []struct {
+			Node string `json:"node"`
+		} `json:"nodes"`
+		Hot *[]struct {
+			Node string `json:"node"`
+		} `json:"hot"`
+		Next     string            `json:"next"`
+		Coverage eventfan.Coverage `json:"coverage"`
+	}
+	read := func(args map[string]any) page {
+		t.Helper()
+		got := callTool(asAdmin(), t, tool, args)
+		switch {
+		case got.Failed:
+			t.Fatalf("%v was refused: %s", args, got.Output)
+		case len(got.Output) > builtin.ToolAnswerBytes:
+			t.Fatalf("%v answered %d bytes, past one tool answer's %d", args, len(got.Output),
+				builtin.ToolAnswerBytes)
+		case strings.Contains(got.Output, "\n"):
+			t.Fatalf("%v was answered indented; a page goes out compact, as it was measured", args)
+		}
+		var p page
+		if err := json.Unmarshal([]byte(got.Output), &p); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return p
+	}
+	rows := func(p page) []string {
+		var out []string
+		for _, n := range p.Nodes {
+			out = append(out, n.Node)
+		}
+		return out
+	}
+	covered := func(p page) []string {
+		var out []string
+		for _, n := range p.Coverage.Nodes {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	with := func(form map[string]any, key string, v any) map[string]any {
+		args := maps.Clone(form)
+		args[key] = v
+		return args
+	}
+	// walk reads every page args asks for, each at most `most` nodes, and
+	// answers the answered nodes' rows and every node's coverage it listed.
+	walk := func(args map[string]any, most int) (gotRows, gotCovered []string) {
+		t.Helper()
+		for pages := 0; ; pages++ {
+			if pages > nodes {
+				t.Fatalf("paging %v never ended", args)
+			}
+			p := read(args)
+			if len(p.Coverage.Nodes) > most {
+				t.Errorf("a page of %v listed %d nodes, want at most %d", args, len(p.Coverage.Nodes), most)
+			}
+			if p.Coverage.Complete {
+				t.Errorf("a page of %v reads its coverage complete; the scatter was not", args)
+			}
+			if (p.Hot != nil) != (pages == 0 && args["repo"] == nil) {
+				t.Errorf("page %d of %v carries a hot list: %v; it rides the fleet's first page alone",
+					pages, args, p.Hot != nil)
+			}
+			gotRows, gotCovered = append(gotRows, rows(p)...), append(gotCovered, covered(p)...)
+			if p.Next == "" {
+				return gotRows, gotCovered
+			}
+			if c := covered(p); len(c) == 0 || p.Next != c[len(c)-1] {
+				t.Fatalf("next %q is not the last node of its page", p.Next)
+			}
+			args = with(args, "cursor", p.Next)
+		}
+	}
+
+	for _, form := range []map[string]any{{}, {"repo": "site"}} {
+		first := read(form)
+		if len(first.Coverage.Nodes) != 25 || first.Next != all[24] {
+			t.Errorf("%v's first page lists %d nodes and next %q, want the default twenty-five and %q",
+				form, len(first.Coverage.Nodes), first.Next, all[24])
+		}
+		if form["repo"] == nil && (first.Hot == nil || len(*first.Hot) == 0) {
+			t.Errorf("the fleet's first page carries no hot list")
+		}
+		for _, most := range []int{25, 100} {
+			args := form
+			if most != 25 {
+				args = with(form, "limit", most)
+			}
+			gotRows, gotCovered := walk(args, most)
+			if !slices.Equal(gotRows, answered) || !slices.Equal(gotCovered, all) {
+				t.Errorf("paging %v by %d read %d rows and %d nodes' coverage, want every answered node's "+
+					"row (%d) and every node's coverage (%d) once, in id order", form, most, len(gotRows),
+					len(gotCovered), len(answered), len(all))
+			}
+		}
+		if full := read(with(form, "limit", 100)); len(full.Coverage.Nodes) == 0 ||
+			len(full.Coverage.Nodes) >= 100 {
+			t.Errorf("%v: a hundred rows half with long ids listed %d, want them cut whole-row to fit one "+
+				"answer", form, len(full.Coverage.Nodes))
+		}
+		if one := read(with(form, "node", answered[5])); !slices.Equal(rows(one), answered[5:6]) ||
+			!slices.Equal(covered(one), answered[5:6]) || one.Next != "" {
+			t.Errorf("%v: node read %v (coverage %v, next %q), want %s alone", form, rows(one), covered(one),
+				one.Next, answered[5])
+		}
+		if quiet := read(with(form, "node", silent[0])); len(quiet.Nodes) != 0 ||
+			!slices.Equal(covered(quiet), silent[:1]) || quiet.Coverage.Nodes[0].Answered {
+			t.Errorf("%v: a node that did not answer read rows %v and coverage %+v, want no row and its "+
+				"coverage", form, rows(quiet), quiet.Coverage.Nodes)
+		}
+		for _, c := range []struct {
+			args    map[string]any
+			refusal tools.Refusal
+		}{
+			{with(form, "node", "git-999"), tools.RefusalNotFound},
+			{with(with(form, "node", answered[5]), "cursor", all[3]), tools.RefusalInvalid},
+			{with(with(form, "node", answered[5]), "limit", 10), tools.RefusalInvalid},
+			{with(form, "limit", 0), tools.RefusalInvalid},
+			{with(form, "limit", 101), tools.RefusalInvalid},
+		} {
+			if got := callTool(asAdmin(), t, tool, c.args); tools.RefusalOf(got) != c.refusal {
+				t.Errorf("%v answered (%v) %q, want %v", c.args, tools.RefusalOf(got), got.Output, c.refusal)
+			}
+		}
+	}
+}
+
 // AN ALARM'S WAKE ASKS FLEET_HEALTH ONLY FOR WHAT IS FIRING.
 //
 // Every turn an alarm starts reads fleet_health, so the wake sends its seat

@@ -454,7 +454,7 @@ func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// whole-row wherever they would outgrow one answer as it is sent. The
 	// listing is keyset by id, so the next page begins after the last row
 	// kept.
-	rest := nodes[sortedAfter(nodes, q.cursor):]
+	rest := nodes[sortedAfter(nodes, func(n nodeHealth) string { return n.ID }, q.cursor):]
 	page := func(k int) any {
 		a := answer
 		a.Nodes = rest[:k]
@@ -476,14 +476,15 @@ func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"firing with `firing`, or for one node with `node`.")
 }
 
-// sortedAfter is where in nodes, sorted by id, the first node after cursor
-// stands: 0 for no cursor.
-func sortedAfter(nodes []nodeHealth, cursor string) int {
+// sortedAfter is where in rows, sorted by the id idOf reads, the first row
+// after cursor stands: 0 for no cursor. Both health tools page their nodes by
+// it.
+func sortedAfter[T any](rows []T, idOf func(T) string, cursor string) int {
 	if cursor == "" {
 		return 0
 	}
-	i, found := slices.BinarySearchFunc(nodes, cursor, func(n nodeHealth, id string) int {
-		return cmp.Compare(n.ID, id)
+	i, found := slices.BinarySearchFunc(rows, cursor, func(r T, id string) int {
+		return cmp.Compare(idOf(r), id)
 	})
 	if found {
 		i++
@@ -603,6 +604,38 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 // only queue behind the estate answerer's slots every other caller shares.
 const codeStatusJudges = 8
 
+// The code_status pages: the git nodes by id, a page at a time.
+//
+// A FLEET'S GIT NODES OUTGROW ONE ANSWER. A git node's row is some two hundred
+// and thirty bytes as it is sent — its cache's figures — and one repository's
+// state on a node some three hundred and fifty, each beside the node's part in
+// the coverage, so a couple of hundred git nodes read past ToolAnswerBytes whole
+// and the answer was refused, with nothing to narrow it by but the node list it
+// could not read. So both answers are PAGED, by node id, over every git node the
+// scatter asked or heard from ([reportNodes]) — a node that did not answer is a
+// page's row of coverage with no status beside it, so a page is bounded by its
+// count of nodes whoever answered — and every page is cut whole-row at the
+// answer as it is sent ([foreignRead.fit]), so no page passes ToolAnswerBytes.
+// `node` reads one git node. A page's `coverage` lists its own nodes' parts, and
+// its `complete` is the WHOLE scatter's, so every page says whether any git node
+// anywhere did not answer.
+//
+// THE HOT LIST RIDES THE FIRST PAGE ALONE: it is the fleet's, already bounded by
+// cache.HotRepos a window however many git nodes there are (some fifteen KB at
+// most), and a seat's copy of it costs a read of the code host's rows for every
+// repository judged ([codeStatus.hottest]), neither of which a later page
+// repeats. With `node` it is that node's own.
+//
+// TWENTY-FIVE a page by default, fleet_health's and the code tools' listing's
+// page: a screen of nodes, and the whole of most fleets. A HUNDRED at most, as
+// fleet_health's: a hundred rows of the larger kind with their coverage, some
+// forty KB, beside the hot list's fifteen, are inside one answer, and a page
+// that would not be — long node ids — is cut.
+const (
+	defaultCodeStatusPage = 25
+	maxCodeStatusPage     = 100
+)
+
 type codeStatus struct{ deps HealthDeps }
 
 var _ tools.SeatCallable = (*codeStatus)(nil)
@@ -615,8 +648,10 @@ func (t *codeStatus) Description() string {
 		"over the last hour and day, and the fleet's hottest repositories — each node's own count "+
 		"of the fetches, clones, pushes and bytes it served of one, and its copy there, the %d "+
 		"hottest of the hour and of the day. With `repo`, that one repository on every git node "+
-		"instead. It reports what the nodes counted and judges nothing; `coverage` names a node "+
-		"that did not answer.", cache.HotRepos)
+		"instead. Git nodes by id, a page at a time: pass `next` back as `cursor` until no `next` "+
+		"comes back; the hot list rides the first page. `node` reads one git node, with its own hot "+
+		"list. It reports what the nodes counted and judges nothing; `coverage` names a node of the "+
+		"page that did not answer, and its `complete` says whether any git node did not.", cache.HotRepos)
 }
 
 func (t *codeStatus) Parameters() map[string]any {
@@ -628,6 +663,21 @@ func (t *codeStatus) Parameters() map[string]any {
 				"description": "One repository's name, as " + CodeListReposTool + " lists it, " +
 					"to read on every git node; the fleet's hottest when left out.",
 			},
+			"node": map[string]any{
+				"type":        "string",
+				"description": "One git node's id, to read that node alone.",
+			},
+			"cursor": map[string]any{
+				"type": "string",
+				"description": "The `next` of the previous page, handed back unchanged; leave it out " +
+					"for the first page.",
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("How many git nodes a page lists, 1 to %d; %d by default. A "+
+					"page that would outgrow one answer holds fewer, and says where the next begins.",
+					maxCodeStatusPage, defaultCodeStatusPage),
+			},
 		},
 	}
 }
@@ -636,15 +686,21 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// codeStatusFleet is code_status's answer about the fleet's git nodes.
+// codeStatusFleet is code_status's answer about the fleet's git nodes: one
+// page of them.
 type codeStatusFleet struct {
 	Nodes []gitNodeStatus `json:"nodes"`
-	Hot   []hotOnNode     `json:"hot"`
+	// Hot is the hot list, on the first page alone — present there, empty or
+	// not — and absent on every later one.
+	Hot *[]hotOnNode `json:"hot,omitempty"`
 	// Withheld is how many repositories hotter than the list's cut the answer
 	// leaves out because the caller's grant does not read them — a seat's
 	// only, and never one below the cut, which is not in the list whoever
-	// reads it ([codeStatus.hottest]).
-	Withheld int               `json:"withheld,omitempty"`
+	// reads it ([codeStatus.hottest]). On the page carrying the list.
+	Withheld int `json:"withheld,omitempty"`
+	// Next is the id the next page begins after, handed back as `cursor`;
+	// absent on the last page.
+	Next     string            `json:"next,omitempty"`
 	Coverage eventfan.Coverage `json:"coverage"`
 }
 
@@ -661,11 +717,14 @@ type hotOnNode struct {
 	host.RepoStatus
 }
 
-// codeStatusRepo is code_status's answer about one repository.
+// codeStatusRepo is code_status's answer about one repository: one page of
+// the git nodes.
 type codeStatusRepo struct {
-	Repo     string            `json:"repo"`
-	ID       string            `json:"id"`
-	Nodes    []repoOnNode      `json:"nodes"`
+	Repo  string       `json:"repo"`
+	ID    string       `json:"id"`
+	Nodes []repoOnNode `json:"nodes"`
+	// Next is as codeStatusFleet's.
+	Next     string            `json:"next,omitempty"`
 	Coverage eventfan.Coverage `json:"coverage"`
 }
 
@@ -688,42 +747,173 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	q, refusal := t.query(args)
+	if refusal != nil {
+		return *refusal, nil
+	}
 	if strings.TrimSpace(argString(args, "repo")) != "" {
-		return t.oneRepo(ctx, turn, c, args)
+		return t.oneRepo(ctx, turn, c, args, q)
 	}
 	report, err := t.deps.Status.CodeStatus(ctx, "")
 	if err != nil {
 		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
 			"just now. Try again shortly."), nil
 	}
-	answer := codeStatusFleet{Nodes: make([]gitNodeStatus, 0, len(report.Statuses)),
-		Coverage: report.Coverage}
-	var entries []cache.RepoHeat
-	var pairs []hotOnNode
+	rest, refusal := t.pageOf(report, q)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	statusOf := make(map[string]host.CodeStatus, len(report.Statuses))
 	for _, s := range report.Statuses {
-		answer.Nodes = append(answer.Nodes, gitNodeStatus{Node: s.Node, At: s.At, Cache: s.Cache})
-		for _, r := range s.Hot {
-			entries = append(entries, r.RepoHeat)
-			pairs = append(pairs, hotOnNode{Node: s.Node, RepoStatus: r})
+		statusOf[s.Node] = s
+	}
+	var (
+		hot      *[]hotOnNode
+		withheld int
+	)
+	if q.cursor == "" {
+		// THE FIRST PAGE CARRIES THE HOT LIST: the fleet's, or with `node`
+		// that node's own — judged for the caller here alone, so a later
+		// page costs no read of the code host's rows.
+		var entries []cache.RepoHeat
+		var pairs []hotOnNode
+		for _, s := range report.Statuses {
+			if q.node != "" && s.Node != q.node {
+				continue
+			}
+			for _, r := range s.Hot {
+				entries = append(entries, r.RepoHeat)
+				pairs = append(pairs, hotOnNode{Node: s.Node, RepoStatus: r})
+			}
 		}
+		kept, w, failure := t.hottest(ctx, turn, c, entries)
+		if failure != nil {
+			return *failure, nil
+		}
+		list := make([]hotOnNode, 0, len(kept))
+		for _, i := range kept {
+			list = append(list, pairs[i])
+		}
+		hot, withheld = &list, w
 	}
-	slices.SortFunc(answer.Nodes, func(a, b gitNodeStatus) int { return cmp.Compare(a.Node, b.Node) })
-	hot, withheld, failure := t.hottest(ctx, turn, c, entries)
-	if failure != nil {
-		return *failure, nil
-	}
-	answer.Withheld = withheld
-	answer.Hot = make([]hotOnNode, 0, len(hot))
-	for _, i := range hot {
-		answer.Hot = append(answer.Hot, pairs[i])
-	}
-	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
-		"Name one repository with `repo` to read it alone.")
+	read := newForeignRead(turn, c.asker.Seat)
+	return t.cut(ctx, read, rest, q.limit, func(nodes []string, next string) any {
+		a := codeStatusFleet{Nodes: make([]gitNodeStatus, 0, len(nodes)), Hot: hot, Withheld: withheld,
+			Next: next, Coverage: coverageOf(report.Coverage, nodes)}
+		for _, id := range nodes {
+			if s, ok := statusOf[id]; ok {
+				a.Nodes = append(a.Nodes, gitNodeStatus{Node: s.Node, At: s.At, Cache: s.Cache})
+			}
+		}
+		return a
+	})
 }
 
-// oneRepo is code_status about the repository args names, on every git node.
+// codeStatusQuery is the page one code_status call asks for.
+type codeStatusQuery struct {
+	node   string
+	cursor string
+	limit  int
+}
+
+// query is the call's paging arguments, or the refusal of ones it cannot read
+// — refused before anything is read.
+func (t *codeStatus) query(args map[string]any) (codeStatusQuery, *tools.Result) {
+	q := codeStatusQuery{node: strings.TrimSpace(argString(args, "node")),
+		cursor: strings.TrimSpace(argString(args, "cursor")),
+		limit:  argInt(args, "limit", defaultCodeStatusPage)}
+	switch {
+	case q.limit < 1 || q.limit > maxCodeStatusPage:
+		r := failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxCodeStatusPage))
+		return q, &r
+	case q.node != "" && (q.cursor != "" || args["limit"] != nil):
+		r := failed(fmt.Sprintf("%s: `node` reads that one git node, so it takes no `cursor` or "+
+			"`limit`.", t.Name()))
+		return q, &r
+	}
+	return q, nil
+}
+
+// pageOf is the git nodes of report the page q asks for may list, by id: every
+// one after q.cursor, or q.node alone — refused not found where report names
+// no such node.
+func (t *codeStatus) pageOf(report CodeStatusReport, q codeStatusQuery) ([]string, *tools.Result) {
+	ids := reportNodes(report)
+	if q.node == "" {
+		return ids[sortedAfter(ids, func(id string) string { return id }, q.cursor):], nil
+	}
+	if _, found := slices.BinarySearch(ids, q.node); !found {
+		r := refused(tools.RefusalNotFound, fmt.Sprintf("%s: no git node is named %q — a git node is a "+
+			"live node with the git role, or one that answered. Leave `node` out to list them.", t.Name(),
+			clip(q.node)))
+		return nil, &r
+	}
+	return []string{q.node}, nil
+}
+
+// cut is the answer of the longest page of rest's first limit nodes that fits
+// one tool answer as it is sent: build makes the answer listing nodes, with
+// next the id the following page begins after ("" on the last). The listing
+// is keyset by id, so the next page begins after the last node kept, whether
+// limit or the answer's size cut it.
+func (t *codeStatus) cut(ctx context.Context, read *foreignRead, rest []string, limit int,
+	build func(nodes []string, next string) any) (tools.Result, error) {
+
+	k, rendered, err := read.fit(min(limit, len(rest)), func(k int) any {
+		next := ""
+		if k > 0 && k < len(rest) {
+			next = rest[k-1]
+		}
+		return build(rest[:k], next)
+	})
+	switch {
+	case err != nil:
+		return labelFault(ctx, t.Name(), err), nil
+	case k == 0 && len(rest) > 0:
+		return failed(fmt.Sprintf("%s: git node %q alone is past one answer — its id is that long — so "+
+			"no page holds it whole. Pass %q as `cursor` to read the nodes after it.", t.Name(),
+			clip(rest[0]), rest[0])), nil
+	}
+	return compactAnswer(rendered, "Ask for fewer git nodes with `limit`, or for one with `node`.")
+}
+
+// reportNodes is every git node report names, by id and once: each the
+// scatter asked or heard from (its coverage) and each that answered — the keys
+// code_status pages by, so a node that did not answer holds its place in the
+// listing as one that did.
+func reportNodes(report CodeStatusReport) []string {
+	ids := make([]string, 0, len(report.Coverage.Nodes)+len(report.Statuses))
+	for _, n := range report.Coverage.Nodes {
+		ids = append(ids, n.ID)
+	}
+	for _, s := range report.Statuses {
+		ids = append(ids, s.Node)
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
+}
+
+// coverageOf is cover's part for nodes — each node's own, in nodes' order, a
+// node cover does not name left out — with cover's Complete: whether the WHOLE
+// scatter was, which every page reports whatever nodes it lists.
+func coverageOf(cover eventfan.Coverage, nodes []string) eventfan.Coverage {
+	part := make(map[string]eventfan.NodeCoverage, len(cover.Nodes))
+	for _, n := range cover.Nodes {
+		part[n.ID] = n
+	}
+	out := eventfan.Coverage{Nodes: make([]eventfan.NodeCoverage, 0, len(nodes)), Complete: cover.Complete}
+	for _, id := range nodes {
+		if n, ok := part[id]; ok {
+			out.Nodes = append(out.Nodes, n)
+		}
+	}
+	return out
+}
+
+// oneRepo is code_status about the repository args names, on the page of git
+// nodes q asks for.
 func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
-	args map[string]any) (tools.Result, error) {
+	args map[string]any, q codeStatusQuery) (tools.Result, error) {
 
 	name, refusal := repoArg(t.Name(), args)
 	if refusal != nil {
@@ -738,18 +928,29 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
 			"just now. Try again shortly."), nil
 	}
-	answer := codeStatusRepo{Repo: repo.Name, ID: repo.ID, Nodes: make([]repoOnNode, 0, len(report.Statuses)),
-		Coverage: report.Coverage}
+	rest, refusal := t.pageOf(report, q)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	onNode := make(map[string]repoOnNode, len(report.Statuses))
 	for _, s := range report.Statuses {
 		on := repoOnNode{Node: s.Node, At: s.At, RepoStatus: host.RepoStatus{RepoHeat: cache.RepoHeat{ID: repo.ID}}}
 		if s.Repo != nil && s.Repo.ID == repo.ID {
 			on.RepoStatus = *s.Repo
 		}
-		answer.Nodes = append(answer.Nodes, on)
+		onNode[s.Node] = on
 	}
-	slices.SortFunc(answer.Nodes, func(a, b repoOnNode) int { return cmp.Compare(a.Node, b.Node) })
-	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
-		"Ask again: one repository's state on every git node does not outgrow an answer.")
+	read := newForeignRead(turn, c.asker.Seat)
+	return t.cut(ctx, read, rest, q.limit, func(nodes []string, next string) any {
+		a := codeStatusRepo{Repo: repo.Name, ID: repo.ID, Nodes: make([]repoOnNode, 0, len(nodes)),
+			Next: next, Coverage: coverageOf(report.Coverage, nodes)}
+		for _, id := range nodes {
+			if on, ok := onNode[id]; ok {
+				a.Nodes = append(a.Nodes, on)
+			}
+		}
+		return a
+	})
 }
 
 // hottest is the fleet's hot list as the caller is answered it — which of

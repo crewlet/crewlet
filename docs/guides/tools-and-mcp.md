@@ -708,7 +708,9 @@ table's to say. `fleet_health` answers a page of nodes at a time by id
 (`limit` 1 to 100, 25 by default; `next` back as `cursor`), so a fleet of any
 size is read rather than refused; `firing` narrows it to the nodes whose own
 table has an alarm firing — what an alarm's wake asks it — counting the nodes
-that cannot say as `unevaluated`, and `node` reads one node. In a turn
+that cannot say as `unevaluated`, and `node` reads one node. `code_status`
+pages its git nodes the same way, the hot list on the first page alone, and
+`node` reads one git node. In a turn
 somebody woke, a seat reads them only for somebody
 of the company who may act: a turn a stranger woke, or a person who may not
 act in the company now, is answered nothing by either. The repositories
