@@ -53,7 +53,7 @@ func (r executorRestore) Session(ctx context.Context, handle, turn string,
 
 // Fetch copies the sealed object row names into dst.
 func (r executorRestore) Fetch(ctx context.Context, row executordomain.Session, dst io.Writer) error {
-	store, err := executorKeep{engine: r.engine}.sessionStore()
+	store, err := r.engine.executorSessionStore()
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func (r executorRestore) Fetch(ctx context.Context, row executordomain.Session, 
 
 // OpenSpooled opens a spool Fetch wrote.
 func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reader) (io.Reader, error) {
-	store, err := executorKeep{engine: r.engine}.sessionStore()
+	store, err := r.engine.executorSessionStore()
 	if err != nil {
 		return nil, err
 	}
