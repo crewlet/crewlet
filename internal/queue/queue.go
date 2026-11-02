@@ -592,6 +592,20 @@ type EventQueue interface {
 	// the deployment and nothing can ever find it.
 	ListSubscriptions(ctx context.Context, topicPattern string) ([]Subscription, error)
 
+	// Waiting reports the mail a subscription holds that no handler of THIS
+	// client is running on, per mailbox of a laned topic ([Waiting]): what
+	// is waiting for the subscription's consumer, whether it was never
+	// delivered, was fetched in a drain and not yet dispatched, or was
+	// handed back. The mail a handler of this client is running on is not
+	// waiting and is not counted, which is why the count is asked of the
+	// client that holds the subscription's attachment: any other client
+	// counts that mail too.
+	//
+	// A DISPLAY, NOT A LEDGER. A backend may answer from consumer state
+	// that trails a publish by a moment; nothing may decide delivery on it.
+	// A subscription that does not exist waits for nothing.
+	Waiting(ctx context.Context, topic, group string) (Waiting, error)
+
 	// SubscribeStream creates an ephemeral per-caller broadcast
 	// subscription — every subscriber receives every matching event.
 	// topicPattern supports `*` (one segment) and `>` (trailing

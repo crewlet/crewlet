@@ -105,6 +105,12 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 		}
 
 		chunk := takeChunkLocked(sub, m)
+		if sub.drained == nil {
+			sub.drained = map[*events.Event]struct{}{}
+		}
+		for _, ev := range chunk {
+			sub.drained[ev] = struct{}{}
+		}
 		b.mu.Unlock()
 		b.deliverBatch(ctx, sub, m, chunk)
 	}
@@ -290,11 +296,16 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			//
 			// THE REST OF THE DRAIN IS CHARGED FOR THE HAND-BACK, exactly
 			// as the partition that stopped it was: see [Broker.restoreLocked].
+			for _, rest := range parts[i:] {
+				undrainLocked(sub, rest.Items)
+			}
 			dead := b.restoreLocked(sub, parts[i:], inChunk, m.client.maxRedeliveries)
 			b.mu.Unlock()
 			b.logDeadLetters(ctx, sub, dead)
 			return
 		}
+		// RUNNING NOW, so no longer waiting ([Queue.Waiting]).
+		undrainLocked(sub, part.Items)
 		b.mu.Unlock()
 
 		evs := part.Items
@@ -322,6 +333,15 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 				delete(inChunk, ev)
 			}
 		}
+	}
+}
+
+// undrainLocked takes events out of what a drain is holding undispatched
+// ([subscription.drained]): their handler is starting, or they are going back
+// to the mailbox.
+func undrainLocked(sub *subscription, evs []*events.Event) {
+	for _, ev := range evs {
+		delete(sub.drained, ev)
 	}
 }
 
