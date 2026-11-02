@@ -677,7 +677,7 @@ test("a private room the reader is not in refuses every write, a reaction includ
     members: [],
   };
   mount();
-  await waitFor(() => expect(callout(/private room you’re not in/i)).not.toBeNull());
+  await waitFor(() => expect(callout(/you’re not one of them/i)).not.toBeNull());
   // NO BOX TO TYPE IN: the bar says why in its place.
   expect(screen.queryByLabelText("Message #board")).toBeNull();
 });

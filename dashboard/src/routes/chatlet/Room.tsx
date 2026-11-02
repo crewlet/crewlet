@@ -347,9 +347,9 @@ function Conversation({ channelID }: { channelID: string }) {
         {/*
           THE BOX IS OFFERED WHEREVER THE ENGINE TAKES THE POST, by the one
           rule the room reads (`scope.tsx`'s `roomRules`, the engine's write
-          gate mirrored): an archived room, a private room the reader is not
-          in and a kind this build cannot classify refuse it, and nothing
-          else does. Somebody outside a public room or a team's room may say
+          gate mirrored): an archived room, a private room or a direct
+          conversation the reader is not in, and a kind this build cannot
+          classify refuse it, and nothing else does. Somebody outside a public room or a team's room may say
           something there, and a team's lead answers a person nobody else is
           following; the bar above the box says where they stand and what
           they can do about it, and never stands in for the box.

@@ -56,15 +56,18 @@ import { useChatRead } from "~/lib/chatLive.ts";
 import { useChatFrame, useOpenRoom } from "./nav.tsx";
 import type { OutboxHandle } from "./outbox.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
-import { knownKind, NEWER_ROOM } from "./rooms.ts";
+import { knownKind, membersOnly, NEWER_ROOM } from "./rooms.ts";
 
 /** Why an archived room takes no new messages. */
 export const ARCHIVED =
   "This room is archived. You can still read it and edit, delete or react to what’s in it, but it takes no new messages.";
 
-/** Why a private room the reader is outside takes nothing from them. */
+/**
+ * Why a room only its own people may write to takes nothing from a reader
+ * outside it: a private room, or a direct conversation they are not in.
+ */
 export const OUTSIDER =
-  "This is a private room you’re not in, so you can’t post or react here. An admin can still take a message down.";
+  "Only the people in this room can post or react here, and you’re not one of them. An admin can still take a message down.";
 
 /** What every control says before the room's own answer has come. */
 export const READING = "Reading the room before anything in it can change.";
@@ -156,7 +159,10 @@ export function roomRules(
   }
   const archived = !!channel.archived_at;
   const unknown = !knownKind(channel.kind);
-  const outsider = channel.kind === "private" && detail?.data?.member === false;
+  // THE ENGINE'S WRITE GATE, `reachable`: a members-only room refuses
+  // somebody outside it, and every other kind it can classify takes them, a
+  // team's room included.
+  const outsider = membersOnly(channel.kind) && detail?.data?.member === false;
   const inside = detail?.data?.member === true;
   return {
     post: archived ? ARCHIVED : unknown ? NEWER_ROOM : outsider ? OUTSIDER : "",

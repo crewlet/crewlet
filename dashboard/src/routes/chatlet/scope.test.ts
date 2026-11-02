@@ -47,6 +47,27 @@ describe("a room's rules, one per change", () => {
     expect(rules.members).toBe(OUTSIDE_MEMBERS);
   });
 
+  test("a post is refused where the engine's write gate refuses it, and taken everywhere else", () => {
+    // `reachable` in internal/chatlet: a members-only room (a private room or
+    // a direct conversation) refuses somebody outside it, and a public room
+    // or a team's room takes their post.
+    const cases: [Partial<ChatChannel>, boolean, string][] = [
+      [{ kind: "public" }, false, ""],
+      [{ kind: "unit", unit: "eng" }, false, ""],
+      [{ kind: "private" }, false, OUTSIDER],
+      [{ kind: "dm", name: undefined }, false, OUTSIDER],
+      [{ kind: "group", name: undefined }, false, OUTSIDER],
+      [{ kind: "private" }, true, ""],
+      [{ kind: "dm", name: undefined }, true, ""],
+      [{ kind: "unit", unit: "eng" }, true, ""],
+    ];
+    for (const [over, member, want] of cases) {
+      const rules = roomRules(room(over), detail(member));
+      expect(rules.post, `${over.kind}, member ${member}`).toBe(want);
+      expect(rules.react, `${over.kind}, member ${member}`).toBe(want);
+    }
+  });
+
   test("a kind this build cannot classify refuses every change", () => {
     const rules = roomRules(room({ kind: "galaxy" }), detail(true));
     expect(Object.values(rules)).toEqual(Array(7).fill(NEWER_ROOM));
