@@ -38,13 +38,27 @@ export function openerNow(): Opener | null {
   return name ? { selector: NAMED, name } : null;
 }
 
+/**
+ * Focuses `el`. A HEADING TAKES FOCUS AS A READING POSITION, with no ring: it
+ * is focused so assistive technology reads from it after the page under it
+ * changed, and it is no control (`tabIndex=-1`), so a ring around it says a
+ * reader can act on something they cannot. A script's focus with no pointer
+ * before it (a wizard opened at its own address) otherwise matches
+ * `:focus-visible` and draws the document's ring around the heading. A
+ * control keeps the browser's own treatment.
+ */
+export function focusQuietly(el: HTMLElement): void {
+  if (/^H[1-6]$/.test(el.tagName)) el.focus({ focusVisible: false });
+  else el.focus();
+}
+
 /** Calls `find` on each of the next frames until it answers, then focuses what it found. */
 export function focusWhenShown(find: () => HTMLElement | null, frames = 30): void {
   let left = frames;
   const attempt = () => {
     const el = find();
     if (el) {
-      el.focus();
+      focusQuietly(el);
       return;
     }
     if (--left > 0) requestAnimationFrame(attempt);
