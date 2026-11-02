@@ -554,7 +554,9 @@ quote what a server said or name the variables an instance waits for; not the
 headers or variables a seat's credential goes in, nor the seats whose boxes
 are given the server; not the server's instructions or what removing it would
 take with it; not who called a tool (each tool's `seats`) nor any one call
-(`calls`, which names a seat, a turn and an outcome); and no community
+(`calls`, which names a seat, a turn and an outcome); not which servers each
+agent holds or how many tools they hand it (`agents`), which is read off the
+grants, as a seat's tool sources on the org chart are; and no community
 registry or search. An administrator, whoever
 `config.read` admits, reads all of it (`reading: "admin"`), and every change
 is theirs. A member's answer is built from types of its own, copied field by
@@ -926,6 +928,44 @@ units:
 These limits are admission rules beside the lead's own: a stored revision that
 breaks one runs, its limits holding as written (a level this build cannot read
 blocks the tool), and warns.
+
+### Each agent's tools, and the budget
+
+An agent is handed every tool the servers it is granted offer, and a model
+chooses less reliably from a long list. For an administrator,
+[`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers) counts each
+agent's MCP tools (`agents`) and flags every agent holding more than
+`tool_budget`, 100:
+
+- **One row per agent seat**, in the chart's order, with the unit it sits in
+  and every server whose grant reaches it, on or off, each with why
+  ([Choosing which agents get a server](#choosing-which-agents-get-a-server)),
+  how many tools it offers the agent and the server's state.
+- **A tool counts where an agent can be offered it.** Every tool a server
+  lists at a level other than `blocked` counts, one at `approve` included,
+  since the agent is offered it and each call waits. A blocked tool and a tool
+  refused its name ([A tool's name](#a-tools-name)) do not, since no agent is
+  offered either, and a server turned off counts nothing, since it is granted
+  to nobody. The engine's own tools are not counted (`builtin_tools` says how
+  many every agent holds).
+- **Each name counts once.** Two of an agent's servers listing a tool under
+  the same name hand it one tool, so its total (`mcp_tools`) can be less than
+  its servers' counts added up.
+- **What the grant hands the agent, whatever its servers are doing now.** A
+  server that is down still counts the tools it listed, which come back when it
+  does, so an outage moves no agent across the budget. A per-agent server's
+  children each list what their own agent's credential reaches, and each agent
+  it reaches is counted the server's whole listing: the most any of them is
+  offered, so the count errs toward flagging an agent rather than missing one.
+- **Past the budget is a warning, never a refusal.** A seat's harness keeps an
+  MCP server's tools out of the requests that do not need them, so nothing
+  breaks; the model's choice is what suffers. To bring an agent back under it,
+  [block](#setting-each-tools-level) the tools it does not need, or narrow who
+  the busiest servers reach.
+
+The budget is 100: Windsurf loads at most 100 tools across all of a person's
+MCP servers, under the 128 VS Code is widely reported to stop at. It is the
+engine's, carried on the answer, and no setting moves it.
 
 ### Turning a server off
 
