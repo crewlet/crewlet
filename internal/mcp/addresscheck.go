@@ -134,6 +134,9 @@ type OAuthEndpoints struct {
 	// endpoint, nil where it says nothing (which RFC 8414 reads as
 	// client_secret_basic).
 	TokenAuthMethods []string
+	// GrantTypes are the grants the authorization server says it issues
+	// tokens by, empty where it says nothing.
+	GrantTypes []string
 	// IssuerInResponse is whether it names itself in each authorization
 	// response (RFC 9207), which a sign-in then requires.
 	IssuerInResponse bool
@@ -249,6 +252,7 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 		ClientIDMetadataDocument      bool     `json:"client_id_metadata_document_supported"`
 		CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
 		TokenEndpointAuthMethods      []string `json:"token_endpoint_auth_methods_supported"`
+		GrantTypesSupported           []string `json:"grant_types_supported"`
 		IssuerParameterSupported      bool     `json:"authorization_response_iss_parameter_supported"`
 		ScopesSupported               []string `json:"scopes_supported"`
 	}
@@ -292,6 +296,7 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 		ClientIDMetadataDocument: asm.ClientIDMetadataDocument,
 		PKCEMethods:              words(asm.CodeChallengeMethodsSupported),
 		TokenAuthMethods:         words(asm.TokenEndpointAuthMethods),
+		GrantTypes:               words(asm.GrantTypesSupported),
 		IssuerInResponse:         asm.IssuerParameterSupported,
 		Scopes:                   slices.Clone(out.Scopes),
 		ResourceScopes:           resourceScopes,

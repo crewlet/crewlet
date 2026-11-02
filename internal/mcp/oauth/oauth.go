@@ -23,6 +23,16 @@
 //     vendor beforehand and configured its id, and its secret where it has
 //     one.
 //
+// # Or a service identity, with no person
+//
+// The client credentials grant (RFC 6749, 4.4): the engine signs in as a client
+// the company registered at the vendor, with its id and secret, whenever it
+// needs an access token ([ClientCredentials]). Nothing is consented to and
+// nothing is renewed: a token that runs out is asked for again. The secret is
+// sent only to the token endpoint the server's metadata names, by the method
+// that metadata offers ([CheckClientCredentials]), and never where it offers
+// none the engine uses.
+//
 // # Held to the specification's floor, and refused below it
 //
 //   - PKCE S256 AND NOTHING ELSE. A server whose authorization server does
@@ -293,6 +303,60 @@ func Exchange(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, code, 
 	return tokens, nil
 }
 
+// GrantClientCredentials is the client credentials grant's name on the wire
+// and in an authorization server's `grant_types_supported`.
+const GrantClientCredentials = "client_credentials"
+
+// CheckClientCredentials refuses a service identity's sign-in at ep before its
+// secret is sent anywhere: an authorization server whose metadata names no
+// token endpoint, lists the grants it issues by without client credentials,
+// or takes a client's secret by no method the engine sends one by.
+//
+// AN AUTHORIZATION SERVER THAT LISTS NO GRANTS is asked: RFC 8414 reads
+// silence as authorization code alone, and several that issue tokens to a
+// service identity say nothing, so the token endpoint's answer is the one
+// that counts.
+func CheckClientCredentials(ep *mcp.OAuthEndpoints) error {
+	switch {
+	case ep == nil:
+		return errors.New("the server's sign-in metadata could not be read")
+	case ep.Token == "":
+		return errors.New("the authorization server's metadata names no token endpoint")
+	case len(ep.GrantTypes) > 0 && !slices.Contains(ep.GrantTypes, GrantClientCredentials):
+		return fmt.Errorf("the authorization server issues tokens by %s, not to a service "+
+			"identity's client credentials; sign in as a person instead (oauth.grant: "+
+			"authorization_code)", strings.Join(ep.GrantTypes, ", "))
+	}
+	_, err := secretMethod(ep)
+	return err
+}
+
+// ClientCredentials asks ep's token endpoint for an access token as client, a
+// confidential client signing in as itself (RFC 6749, 4.4), for the resource
+// ep names (RFC 8707) and the scopes given, none asking for the client's
+// default. A refresh token the answer carries is dropped: RFC 6749 says one
+// is not issued for this grant, and a token that runs out is asked for again.
+func ClientCredentials(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, scopes []string,
+	now time.Time) (Tokens, error) {
+
+	if client.Secret == "" {
+		return Tokens{}, errors.New("a service identity signs in with its client's secret, and none was given")
+	}
+	form := url.Values{
+		"grant_type": {GrantClientCredentials},
+		"resource":   {ep.Resource},
+	}
+	if len(scopes) > 0 {
+		form.Set("scope", strings.Join(scopes[:min(len(scopes), maxScopes)], " "))
+	}
+	tokens, err := tokenRequest(ctx, ep, client, form, now)
+	if err != nil {
+		return Tokens{}, err
+	}
+	tokens.Refresh, tokens.RefreshExpiry = "", time.Time{}
+	return tokens, nil
+}
+
 // Refresh renews a grant (RFC 6749, 6): a new access token, and the refresh
 // token that replaces the one sent where the server rotates it.
 func Refresh(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, refresh string,
@@ -461,22 +525,52 @@ func tokenRequest(ctx context.Context, ep *mcp.OAuthEndpoints, client Client, fo
 	return out, nil
 }
 
+// The two ways the engine sends a client's secret (RFC 6749, 2.3.1), as an
+// authorization server's `token_endpoint_auth_methods_supported` names them.
+const (
+	methodBasic = "client_secret_basic"
+	methodPost  = "client_secret_post"
+)
+
+// secretMethod is how a confidential client's secret is sent to ep: HTTP basic
+// authentication where the authorization server offers it or names no method
+// (RFC 8414 reads silence as basic), else the form body where it offers that.
+// An authorization server that offers neither takes a secret by a method the
+// engine does not use (a signed assertion, a client certificate), and the
+// secret is sent nowhere rather than by a method it did not offer.
+func secretMethod(ep *mcp.OAuthEndpoints) (string, error) {
+	switch {
+	case len(ep.TokenAuthMethods) == 0 || slices.Contains(ep.TokenAuthMethods, methodBasic):
+		return methodBasic, nil
+	case slices.Contains(ep.TokenAuthMethods, methodPost):
+		return methodPost, nil
+	}
+	return "", fmt.Errorf("the authorization server takes a client's secret by %s, and the "+
+		"engine sends one by %s or %s alone", strings.Join(ep.TokenAuthMethods, ", "), methodBasic,
+		methodPost)
+}
+
 // post sends form to address, one of ep's endpoints, authenticated as client:
 // a public client names itself in the body; a confidential one sends its
-// secret by HTTP basic authentication unless the server offers only the
-// body (RFC 6749, 2.3.1).
+// secret by the method [secretMethod] chooses.
 func post(ctx context.Context, ep *mcp.OAuthEndpoints, address string, client Client,
 	form url.Values) (*http.Response, error) {
 
+	method := ""
+	if client.Secret != "" {
+		var err error
+		if method, err = secretMethod(ep); err != nil {
+			return nil, err
+		}
+	}
 	hc, u, err := mcp.ServerNamedClient(ep.Server, address, requestBudget)
 	if err != nil {
 		return nil, err
 	}
-	basic := client.Secret != "" && (len(ep.TokenAuthMethods) == 0 ||
-		slices.Contains(ep.TokenAuthMethods, "client_secret_basic"))
+	basic := method == methodBasic
 	switch {
 	case basic:
-	case client.Secret != "":
+	case method == methodPost:
 		form.Set("client_id", client.ID)
 		form.Set("client_secret", client.Secret)
 	default:
