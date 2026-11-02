@@ -122,7 +122,7 @@ export interface Draft {
   clientId: string;
   /** Its secret as typed, stored write-only after the entry and never shown back. */
   clientSecret: string;
-  /** An edit's entry reads a stored client secret already, so "" keeps it. */
+  /** An edit's entry names its client's secret already, so "" keeps it. */
   secretStored: boolean;
   /** The scopes asked for, space separated; "" asks for the server's default. */
   scopes: string;
@@ -260,7 +260,9 @@ export function fromServer(
       signIn === "oauth" && oauth?.grant === "client_credentials" ? "client_credentials" : signIn,
     oauthClient: client === "dcr" || client === "own" ? client : "cimd",
     clientId: text(oauth?.client_id),
-    secretStored: values.some((v) => v.key === CLIENT_SECRET && v.set),
+    // NAMED BY THE ENTRY, as a header row is stored: what the store holds
+    // for it is the Connection tab's to say.
+    secretStored: typeof oauth?.client_secret === "string" && oauth.client_secret !== "",
     scopes: Array.isArray(oauth?.scopes) ? oauth.scopes.map(String).join(" ") : "",
     headers: http ? rows(entity.headers) : [],
     env: http ? [] : rows(entity.env),

@@ -197,7 +197,9 @@ test("the connection's sign-in card says where an OAuth sign-in is and offers wh
   expect(screen.queryByText("oauth.client_secret")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Replace the client secret" }));
   expect(onFlow).toHaveBeenLastCalledWith("value", "linear", { key: "oauth.client_secret" });
-  expect(screen.getByText("No header")).toBeDefined();
+  // AN OAUTH SERVER WITH NO HEADER has no headers card: the wizard draws no
+  // header rows for it, so an empty card's Edit would lead nowhere.
+  expect(screen.queryByText("Request headers")).toBeNull();
 });
 
 // THE TOOLS: each with the risk the engine read, a tool that declares nothing

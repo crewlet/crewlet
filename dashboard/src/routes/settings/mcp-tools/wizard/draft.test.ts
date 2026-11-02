@@ -425,6 +425,8 @@ describe("an OAuth sign-in", () => {
     const d = fromServer(saved, [secret], null, "oauth");
     expect(d.signIn).toBe("client_credentials");
     expect(d.secretStored).toBe(true);
+    // NAMED BY THE ENTRY is kept, whatever the store holds for it now.
+    expect(fromServer(saved, [{ ...secret, set: false }], null, "oauth").secretStored).toBe(true);
     expect(entityOf(d, saved)).toEqual(saved);
     expect(valuesOf(d)).toEqual({});
     expect(missingIn(d, "signin")).toEqual({});

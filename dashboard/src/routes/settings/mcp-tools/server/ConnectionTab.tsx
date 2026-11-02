@@ -210,19 +210,25 @@ export function ConnectionTab({
         </Card>
       ) : null}
 
-      {admin && server.configured && (values.length > 0 || resolved?.auth !== "integration") ? (
+      {admin &&
+      server.configured &&
+      (values.length > 0 || (resolved?.auth !== "integration" && !oauth)) ? (
         <Card padding="none">
           <Card.Header
             icon={<KeyGlyph size="sm" />}
             count={values.length || undefined}
             actions={
-              <Button
-                size="small"
-                variant="secondary"
-                onClick={() => edit(http ? "signin" : "connection")}
-              >
-                Edit
-              </Button>
+              // AN OAUTH SERVER'S HEADERS are no row of the wizard's, which
+              // writes them back as they are, so nothing here edits them.
+              oauth ? undefined : (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => edit(http ? "signin" : "connection")}
+                >
+                  Edit
+                </Button>
+              )
             }
           >
             <Card.Title>{http ? "Request headers" : "Environment"}</Card.Title>
