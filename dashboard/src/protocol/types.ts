@@ -3765,10 +3765,11 @@ export interface PageDetail {
 
 /**
  * A point on one of the engine's state logs, as an answer reports it —
- * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
- * off a write's answer: a position this file declared again would be a second
- * shape for one value, and the floor and a chat cursor would be free to come
- * to mean different things by it.
+ * DECLARED ONCE, in `contract/positions.ts`, which the floor that parses the
+ * same point off a write's answer (`session.ts`) and the answers declared in
+ * the contract import too: a position this file declared again would be a
+ * second shape for one value, and the floor and a chat cursor would be free to
+ * come to mean different things by it.
  *
  * Chatlet needs the shape by name for a reason the other answers do not: a READ
  * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client

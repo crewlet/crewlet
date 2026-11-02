@@ -16,6 +16,8 @@
  * one redaction pass over each at the read, whatever the capture did.
  */
 
+import type { LogPosition } from "./positions.ts";
+
 /** How a turn ended, in the engine's four words (`executordomain.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
 
@@ -65,13 +67,6 @@ export interface ExecutorSessionRow {
   object_bytes: number;
 }
 
-/** Where on the executor log an answer's rows were read. */
-interface LogPosition {
-  stream: string;
-  generation: number;
-  seq: number;
-}
-
 /** A page of a seat's executor sessions, the latest begun first. */
 export interface ExecutorSessionsAnswer {
   handle: string;
@@ -98,9 +93,9 @@ export type TranscriptEntryKind =
  * Why a page of a transcript ends before the transcript does
  * (`executor.TranscriptCuts`): at the most entries or bytes a page holds, with
  * more after it, or at the most one read takes, with nothing a later page could
- * add.
+ * add. Composed into the answer alone: the screen reads it off a page.
  */
-export type TranscriptCut = "entries" | "bytes" | "read";
+type TranscriptCut = "entries" | "bytes" | "read";
 
 /** One entry of a transcript, in the order the harness recorded it. */
 export interface TranscriptEntry {

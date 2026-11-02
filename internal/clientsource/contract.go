@@ -235,6 +235,7 @@ var contract = []Entry{
 	// positions.ts
 	{"GENERATION_STRIDE", ReadScalar,
 		"internal/api.TestTheDashboardUnpacksAPositionWithTheEnginesStride"},
+	{"LogPosition", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// closecodes.ts
 	{"CLOSE_UNAUTHENTICATED", ReadScalar,

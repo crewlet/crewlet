@@ -1,7 +1,7 @@
 /**
- * How the engine PACKS a state log's position into one number, so the
- * dashboard can unpack it for a person to read — and the chat screen can PACK
- * a read cursor in the same number space.
+ * What a state log's position IS on the wire, and how the engine PACKS one
+ * into one number, so the dashboard can unpack it for a person to read — and
+ * the chat screen can PACK a read cursor in the same number space.
  *
  * A COPY of `statelog.GenerationStride`, held to it, and to packing as
  * `statelog.Position.Packed` packs, by `internal/api`'s
@@ -24,3 +24,21 @@
  * moves only when an operator re-anchors one.
  */
 export const GENERATION_STRIDE = 1_099_511_627_776;
+
+/**
+ * A point on one of the engine's state logs: the three fields
+ * `statelog.Position` marshals, and the parsed form of the string the engine
+ * spells it as, `<stream>@<generation>:<sequence>` (`protocol/session.ts`'s
+ * `parsePosition`).
+ *
+ * DECLARED ONCE, HERE, for every answer that carries one: an answer declared in
+ * this directory imports nothing outside it, so the session floors in
+ * `protocol/` import this rather than the other way round, and `types.ts`
+ * re-exports it. Held to what the engine marshals by `internal/api/queries`'
+ * `TestTheSessionsScreenReadsWhatTheAnswersSend`.
+ */
+export interface LogPosition {
+  stream: string;
+  generation: number;
+  seq: number;
+}

@@ -23,9 +23,9 @@ import (
 // rows whose endings carry every field, a transcript page that is cut and one
 // that could not be read, entries of every optional key (a subagent's, which
 // only Claude Code's archive has, read as the entry type itself encodes), and
-// the bounds. And the four closed sets the screen names words for are the
-// engine's: the transcript's states, the entries' kinds, a page's cuts and an
-// ending's outcomes.
+// the bounds, and the log position both answers carry. And the four closed
+// sets the screen names words for are the engine's: the transcript's states,
+// the entries' kinds, a page's cuts and an ending's outcomes.
 //
 // Mutation: rename a JSON key on either answer, add one, or add a state or a
 // kind on one side only, and this names it.
@@ -92,6 +92,13 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		t.Fatalf("the answer's bounds are %v", answers[0]["bounds"])
 	}
 	holdShape(t, "TranscriptBounds", []map[string]any{bounds}, false)
+	// THE POSITION BOTH ANSWERS CARRY is the engine's statelog.Position, and
+	// the dashboard declares it once, for every answer that carries one.
+	var positions []map[string]any
+	for _, answer := range append([]map[string]any{list}, answers...) {
+		positions = append(positions, asMap(t, answer["position"]))
+	}
+	holdShape(t, "LogPosition", positions, false)
 
 	for name, engine := range map[string][]string{
 		"TranscriptState":     stringsOf(queries.TranscriptStates),
