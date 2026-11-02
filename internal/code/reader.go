@@ -1658,6 +1658,14 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: resolve: only a change read, or a listing of one repository's changes or "+
 			"checks, resolves the repository it names", ErrInvalid)
 	}
+	// A FIELD ONE PRINCIPAL'S KIND READS ALONE is refused on every other
+	// kind here, before any kind's own rules, for the resolution's reason:
+	// the engine's own reads below validate against lists of their own,
+	// which a field added after them is missing from, and were answered
+	// with it ignored.
+	if err := q.kindOwnedField(); err != nil {
+		return err
+	}
 	switch q.Kind {
 	case ReadIntroduced:
 		return q.validateIntroduced()
@@ -1731,8 +1739,6 @@ func (q ReadQuery) validate() error {
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
-	case q.Inbox != nil && q.Kind != ReadInbox:
-		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
 		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
@@ -1799,8 +1805,6 @@ func (q ReadQuery) validate() error {
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
 		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
-	case q.Commit != "" && q.Kind != ReadCommit:
-		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1868,6 +1872,19 @@ func (q ReadQuery) validate() error {
 	case q.Limit > bound:
 		return fmt.Errorf("%w: limit: %d is past the %d one page of %s carries", ErrInvalid,
 			q.Limit, bound, q.Kind)
+	}
+	return nil
+}
+
+// kindOwnedField refuses a field that one kind a principal reads alone reads
+// — a commit, an inbox — on a read of any other kind, the engine's own reads
+// included ([ReadQuery.validate]).
+func (q ReadQuery) kindOwnedField() error {
+	switch {
+	case q.Commit != "" && q.Kind != ReadCommit:
+		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
+	case q.Inbox != nil && q.Kind != ReadInbox:
+		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	}
 	return nil
 }
@@ -2278,7 +2295,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"branch_changes", q.BranchChanges != nil},
-		{"scanned_before", !q.ScannedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 	} {
 		if f.set {
 			return refused(f.field, "a mirror_push read answers one repository's push mirror and green rows, "+
@@ -2378,7 +2395,6 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
-		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers its repositories' branches' live changes "+

@@ -394,6 +394,51 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 	}
 }
 
+// A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
+// included: a read of each kind this build reads, as everyReadAsked asks it,
+// that also names a commit or an inbox — fields only a `commit` and an
+// `inbox` read read — is refused naming the field, never answered with it
+// ignored. The engine's own reads validate against lists of their own, and a
+// field added after a list was written passed it unseen.
+//
+// Mutation: check the kind-owned fields after the engine's own reads'
+// validators instead of before (ReadQuery.validate) — an imports_due read
+// naming an inbox is answered, red.
+func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := n.ensure("web", suiteSettings(), t1).RepoID
+	asks := everyReadAsked(id)
+	for _, field := range []struct {
+		name  string
+		owner code.ReadKind
+		set   func(q *code.ReadQuery)
+	}{
+		{"commit", code.ReadCommit, func(q *code.ReadQuery) { q.Commit = strings.Repeat("6", 40) }},
+		{"inbox", code.ReadInbox, func(q *code.ReadQuery) {
+			q.Inbox = &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}
+		}},
+	} {
+		for _, kind := range code.ReadKinds() {
+			q, named := asks[kind]
+			switch {
+			case kind == field.owner:
+				continue
+			case !named:
+				t.Errorf("a %s read is never asked here: name it in everyReadAsked, so its refusals are held",
+					kind)
+				continue
+			}
+			q.Kind = kind
+			field.set(&q)
+			if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+				!strings.Contains(err.Error(), field.name) {
+				t.Errorf("a %s read naming %s = %v, want ErrInvalid naming %s", kind, field.name, err, field.name)
+			}
+		}
+	}
+}
+
 // THE LARGEST SETTINGS FIT WHERE THEY TRAVEL. A create, a settings change and
 // a restore each carry a repository's settings whole, and every record this
 // build forms is held to MaxRecordBytes — an eighth of the node's appends in
