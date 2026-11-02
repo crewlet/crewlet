@@ -1595,6 +1595,68 @@
         "null"
       ]
     },
+    "MCPOAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "description": "How the engine registers at the authorization server for a person's sign-in (grant authorization_code): cimd (its published client metadata document), dcr (registers when a sign-in starts) or own (a client registered at the vendor beforehand).",
+          "enum": [
+            "cimd",
+            "dcr",
+            "own",
+            "",
+            null
+          ]
+        },
+        "client_id": {
+          "description": "The client id of the company's own client (client: own, or grant: client_credentials).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The secret of the company's own client: required for grant client_credentials, and for client own where the client has one; ${VAR} supported.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "grant": {
+          "description": "How the engine is granted access: authorization_code (default: a person signs the company in once) or client_credentials (a service identity: the company's own client, with client_id and client_secret, and no person).",
+          "enum": [
+            "authorization_code",
+            "client_credentials",
+            "",
+            null
+          ]
+        },
+        "scopes": {
+          "description": "Scopes the sign-in asks for; absent, a person's sign-in asks for the ones the server lists and a service identity for its client's default.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPRegistry": {
       "additionalProperties": false,
       "properties": {
@@ -1712,6 +1774,10 @@
             "boolean",
             "null"
           ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/MCPOAuth",
+          "description": "Sign the company in to this remote server with OAuth (http, shared): the grant (a person's sign-in, or a service identity's client credentials), how the engine registers, and the scopes it asks for."
         },
         "optional_keys": {
           "description": "Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back.",

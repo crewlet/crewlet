@@ -386,6 +386,13 @@ func resolveServer(
 	out := serverValues{url: env.Value(server.URL)}
 	gap := refGap{env: env, mint: mint}
 	gap.pin(env.Missing(server.URL))
+	// THE COMPANY'S OWN OAUTH CLIENT'S SECRET is read at every renewal of
+	// the server's sign-in, so a server whose secret resolves to nothing is
+	// held back as one whose url does not: nothing it is started with could
+	// be renewed. Never optional, and never a value the server is sent.
+	if server.OAuth != nil {
+		gap.pin(env.Missing(server.OAuth.ClientSecret))
+	}
 	where := "mcp_servers." + server.Name + ".optional_keys"
 	for _, id := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[id]

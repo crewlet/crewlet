@@ -354,3 +354,39 @@ test("an edit writes the entry back, every field it does not draw kept", async (
   expect(createEntity).not.toHaveBeenCalled();
   expect(storeValue).not.toHaveBeenCalled();
 });
+
+// AN OAUTH SERVER'S EDIT keeps its sign-in: the wizard does not set one up,
+// so it offers no choice that would replace it, and writes the `oauth` block
+// and the other headers back untouched. Mutation: draw the choices, or write
+// the headers from rows it has none of, and this is red.
+test("an edit of a server signed in to with OAuth keeps its sign-in as it is", async () => {
+  const entity = {
+    name: "linear",
+    transport: "http",
+    url: "https://mcp.linear.app/mcp",
+    oauth: { scopes: ["read"] },
+    headers: { "X-Team": "${LINEAR_TEAM}" },
+  };
+  mount(
+    {
+      server: mcpData("admin").server("linear")!,
+      entity,
+      values: [],
+      entry: LINEAR,
+      signIn: "oauth",
+    },
+    "signin",
+  );
+  await settle();
+  expect(screen.getByText("Linear signs in with OAuth")).toBeDefined();
+  expect(screen.queryByRole("radiogroup", { name: "Sign-in" })).toBeNull();
+  await press("Review changes");
+  expect(dryRunEntity).toHaveBeenCalledWith(
+    "mcp-servers",
+    "linear",
+    entity,
+    '"entry-r2"',
+    expect.anything(),
+  );
+  expect(storeValue).not.toHaveBeenCalled();
+});

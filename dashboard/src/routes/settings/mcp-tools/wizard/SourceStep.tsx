@@ -73,14 +73,15 @@ const FORMAT_WORDS: Record<PastedFormat, string> = {
 };
 
 /**
- * Why a catalogue entry cannot be added from this build: it signs in with
- * OAuth alone, which this build's add flow does not offer. Null where it can.
+ * Why a catalogue entry cannot be added here: it signs in with OAuth alone,
+ * which this wizard does not set up (its `oauth` block is written in the
+ * configuration). Null where it can.
  */
 export function unavailableReason(entry: McpCatalogueEntry): string | null {
   const usable = entry.auth.some((a) => a !== "oauth") || entry.auth.length === 0;
   return usable
     ? null
-    : `${entry.title} signs in with OAuth alone, which this build does not offer.`;
+    : `${entry.title} signs in with OAuth alone, which this wizard does not set up.`;
 }
 
 /** The sign-ins an entry offers, in a few words. */

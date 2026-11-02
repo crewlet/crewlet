@@ -127,6 +127,12 @@ type classedFailure struct {
 func (c *classedFailure) Error() string { return c.err.Error() }
 func (c *classedFailure) Unwrap() error { return c.err }
 
+// Classed is err with class, for a layer outside this package that decided it
+// where the facts were: the engine issuing a server's access token, whose
+// failure to is the server's failure, classed by what the vendor said. An
+// empty class leaves err to [ClassOf]'s fallback.
+func Classed(class FailureClass, err error) error { return classify(class, err) }
+
 // classify wraps err with class, unless class is empty, which leaves err to
 // [ClassOf]'s fallback.
 func classify(class FailureClass, err error) error {
@@ -164,6 +170,8 @@ func classOfCause(err error) FailureClass {
 	switch {
 	case errors.Is(err, httpx.ErrNotPublic):
 		return FailBlockedAddress
+	case errors.Is(err, ErrSignInNeeded):
+		return FailNeedsSignIn
 	case errors.Is(err, exec.ErrNotFound), isMissingCommand(err):
 		return FailCommandNotFound
 	case errors.As(err, &unknownCA), errors.As(err, &hostname), errors.As(err, &invalid),

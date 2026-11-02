@@ -29,6 +29,9 @@ import type { ToolAnnotations, ToolRow } from "./tools.ts";
  * A server's condition across the fleet, decided by the engine. `disabled`:
  * the configuration turns it off (`enabled: false`), so nothing is started for
  * it and no seat is granted it, decided before anything a node reports.
+ * `needs_sign_in`: it is signed in to with OAuth and nobody holds a grant for
+ * it, or its vendor refused to renew the grant or let it run out, so nothing
+ * is started until somebody signs in, decided next.
  * `running`: every instance launched is serving: it started, listed its tools
  * and was up at its node's last beat. `partial`: some are serving and some are
  * not (a node, one seat's credentials or one child being restarted rather
@@ -40,7 +43,14 @@ import type { ToolAnnotations, ToolRow } from "./tools.ts";
  * no live node's latest heartbeat carried the report.
  */
 export type McpServerState =
-  "disabled" | "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
+  | "disabled"
+  | "needs_sign_in"
+  | "running"
+  | "partial"
+  | "failing"
+  | "waiting"
+  | "not_started"
+  | "unreported";
 
 /** One live node, and whether its latest heartbeat carried its MCP servers. */
 interface McpStatusNode {
@@ -151,6 +161,49 @@ export interface McpMemberServerStatus {
   nodes: McpMemberServerNode[];
 }
 
+/**
+ * Where a server's OAuth sign-in is. `connected`: the engine renews it as the
+ * server is used. `needs_sign_in`: nobody has signed in. `expired`: past the
+ * end its vendor stated. `refresh_failed`: its vendor refused to renew it.
+ */
+type McpOAuthStatus = "connected" | "needs_sign_in" | "expired" | "refresh_failed";
+
+/** A renewal a vendor refused for good, in its own words. */
+interface McpOAuthFailure {
+  said: string;
+  at: string;
+}
+
+/**
+ * A server's OAuth sign-in as an administrator reads it: never a token, never
+ * the client's secret, and never on a member's reading.
+ */
+interface McpOAuthView {
+  /**
+   * `authorization_code`: a person signs the company in. `client_credentials`:
+   * the engine signs in as the company's service identity, nobody signs in,
+   * and `status` is always `connected` (a credential the vendor refuses is the
+   * server's failure).
+   */
+  grant: string;
+  status: McpOAuthStatus;
+  /** How the engine registers for a person's sign-in: `cimd`, `dcr` or `own`; "" for a service identity. */
+  client: string;
+  /** The client id the grant was made as, else the one the configuration names; "". */
+  client_id: string;
+  /** The authorization server the grant is from; "" with none. */
+  issuer: string;
+  /** The server address the grant was issued for, the one its tokens go to; "" with none. */
+  resource: string;
+  /** What the grant was granted, else what the configuration asks for. */
+  scopes: string[];
+  connected_by: string | null;
+  connected_at: string | null;
+  /** When the grant runs out where its vendor said, else null. */
+  expires_at: string | null;
+  failure: McpOAuthFailure | null;
+}
+
 /** One server, as an administrator reads it: its launch and every node's sentence. */
 export interface McpServerStatus extends McpMemberServerStatus {
   command: string;
@@ -158,6 +211,8 @@ export interface McpServerStatus extends McpMemberServerStatus {
   /** The address, any credential it carries (a query parameter, a path
    *  segment, the fragment) withheld by the engine. */
   url: string;
+  /** Its OAuth sign-in, or null for a server not signed in to with OAuth. */
+  oauth: McpOAuthView | null;
   /**
    * The entry's `tool_annotations` keys that no instance started on a
    * reporting node lists a tool for, sorted: each overrides nothing anywhere.
@@ -215,18 +270,27 @@ interface McpShadowedTool {
  * been down that long. `mcp_server_waiting_long`: an agent's instance has been
  * held back past a provisioning pass for a credential that pass mints.
  * `mcp_tools_refused`: a tool cannot be offered under its name.
+ * `mcp_oauth_needs_sign_in`: nobody is signed in to a server signed in to
+ * with OAuth, or its vendor refused to renew the sign-in (in its words).
+ * `mcp_oauth_expiring`: a sign-in runs out within seven days.
  */
 export type McpAlarmKind =
-  "mcp_server_failing" | "mcp_server_partial" | "mcp_server_waiting_long" | "mcp_tools_refused";
+  | "mcp_server_failing"
+  | "mcp_server_partial"
+  | "mcp_server_waiting_long"
+  | "mcp_tools_refused"
+  | "mcp_oauth_needs_sign_in"
+  | "mcp_oauth_expiring";
 
 /**
  * The one gesture that fixes a server's alarm. `restart`: restart its
  * instances now (`POST /mcp-servers/{name}/retry`), only the named agent's
  * where `seat` names one. `integration`: the integration that mints the named
  * agent's credential, which the server's binding names. `edit`: the server's
- * configuration, its `tool_prefix`.
+ * configuration, its `tool_prefix`. `sign_in`: sign the company in to the
+ * server again (`POST /mcp-servers/{name}/oauth`).
  */
-export type McpFixKind = "restart" | "integration" | "edit";
+export type McpFixKind = "restart" | "integration" | "edit" | "sign_in";
 
 /** The gesture that fixes one server's alarm, and what it acts on. */
 interface McpFix {
@@ -284,6 +348,12 @@ export interface McpServersStatusAnswer {
    * node that runs no state log, which evaluates no alarm.
    */
   alarms: McpAlarm[];
+  /** Where a vendor sends a person back after a sign-in, for a vendor that
+   *  allowlists it; "" where the engine has no public address. */
+  callback_url: string;
+  /** The engine's client metadata document, the client id a `cimd` sign-in
+   *  is made as; "" where the engine has no public address. */
+  client_metadata_url: string;
 }
 
 /**
@@ -309,8 +379,10 @@ export type McpInstanceState = "running" | "failed" | "waiting";
  * credential. `headers`: values the configuration sets, as HTTP headers to a
  * remote server and as environment variables to a local one. `integration`:
  * each agent's own credential from one of the company's integrations.
+ * `oauth`: an OAuth access token, issued under a person's sign-in or to the
+ * company's service identity (`oauth.grant` on the administrator's reading).
  */
-export type McpAuth = "none" | "headers" | "integration";
+export type McpAuth = "none" | "headers" | "integration" | "oauth";
 
 /**
  * Why the engine expects a placement to fail. `private_address_in_cloud_box`:
@@ -578,6 +650,8 @@ export interface McpDependants {
   sandbox: McpSandboxDependant[];
   /** Names only, never a value. */
   secrets: string[];
+  /** Whether somebody holds an OAuth grant for it, which the removal revokes. */
+  oauth: boolean;
 }
 
 /** `GET /mcp-servers/{name}` as an administrator reads it: one server, whole. */
@@ -610,7 +684,7 @@ export interface McpServerAnswer {
   calls: McpServerCalls;
   /** The server's latest test, whoever asked through whichever node; null where never tested. */
   last_check: McpCheckView | null;
-  /** Every header or variable the server is sent, by name and never by value. */
+  /** Every header or variable the server is sent, and its OAuth client's secret, by name and never by value. */
   values: McpValueState[];
   /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
   reaches: McpReach[];
@@ -631,8 +705,12 @@ interface McpReach {
   via: string | null;
 }
 
-/** Where a server is sent a value: a remote server's header, a local one's variable. */
-type McpValueAs = "header" | "env";
+/**
+ * Where a value goes: a remote server's header, a local one's variable, or
+ * (`oauth`, key `oauth.client_secret`) the company's own OAuth client's
+ * secret, sent to the server's authorization server alone.
+ */
+type McpValueAs = "header" | "env" | "oauth";
 
 /**
  * One header or variable a server is sent, by name: the variable it reads and
@@ -760,6 +838,18 @@ export interface McpRemovalWritten {
   removed: string;
   cleared: McpCleared;
   secrets: McpSecretDeletion[];
+  /** What became of its OAuth grant, null where nobody held one. */
+  oauth: McpGrantRevocation | null;
+}
+
+/**
+ * What a removal did with the server's OAuth grant: what its vendor was asked
+ * (`revoked`, `not_offered` where it publishes no revocation endpoint,
+ * `failed`) and, where it refused, its words. Forgotten here whatever it said.
+ */
+interface McpGrantRevocation {
+  revocation: "revoked" | "not_offered" | "failed";
+  said: string;
 }
 
 /**

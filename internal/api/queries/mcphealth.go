@@ -90,10 +90,15 @@ const (
 	// credential from one of the company's integrations
 	// ([config.MCPServer.SeatBindings]).
 	MCPAuthIntegration MCPAuth = "integration"
+	// MCPAuthOAuth is a remote server the company signs in to with OAuth
+	// ([config.MCPOAuth]): the engine sends an access token, issued under a
+	// person's grant or to the company's service identity, which the
+	// server's `oauth.grant` tells apart.
+	MCPAuthOAuth MCPAuth = "oauth"
 )
 
 // MCPAuths is every value, for a reader's copy.
-var MCPAuths = []MCPAuth{MCPAuthNone, MCPAuthHeaders, MCPAuthIntegration}
+var MCPAuths = []MCPAuth{MCPAuthNone, MCPAuthHeaders, MCPAuthIntegration, MCPAuthOAuth}
 
 // MCPRunsOnEngineHost is where a local server runs: on the engine's host, each
 // node that runs an instance of it starting its command. A remote server runs
@@ -265,6 +270,8 @@ func privateAddress(raw string) bool {
 // authOf is how the engine proves who it is to server.
 func authOf(server *config.MCPServer) MCPAuth {
 	switch {
+	case server.OAuth != nil:
+		return MCPAuthOAuth
 	case len(server.SeatBindings()) > 0:
 		return MCPAuthIntegration
 	case server.Kind() == config.TransportHTTP && len(server.Headers) > 0,

@@ -385,6 +385,17 @@ export function SignInStep({
       </Text>
     );
   }
+  // A SERVER ALREADY SIGNED IN WITH OAUTH keeps its sign-in as it is: this
+  // wizard does not set OAuth up, and writes its `oauth` block back untouched.
+  if (draft.signIn === "oauth") {
+    return (
+      <Callout variant="info" title={`${entry?.title ?? draft.name} signs in with OAuth`}>
+        Its sign-in is kept as it is, set in the server's configuration rather than here. A test
+        here runs without the sign-in, which is used only for the saved server, so it may stop
+        there; test the saved server from its page.
+      </Callout>
+    );
+  }
   const supported = draft.supported;
   const offers = (m: McpAuthMethod) => !supported || supported.includes(m);
   const vendor = draft.detected?.title ?? entry?.title ?? "The server";
@@ -441,15 +452,15 @@ export function SignInStep({
       ) : null}
       {draft.detected?.auth === "oauth" ? (
         <Callout variant="warning" title={`${vendor} asks for an OAuth sign-in`}>
-          This build does not offer one. Give it a header it accepts, or its test stops at the
-          sign-in.
+          This wizard does not set one up. Give it a header it accepts, or its test stops at the
+          sign-in; an OAuth sign-in is set in the server's configuration.
         </Callout>
       ) : null}
       <ChoiceCards
         label="Sign-in"
         minCardWidth="sm"
         density="compact"
-        value={draft.signIn === "oauth" ? null : draft.signIn}
+        value={draft.signIn}
         onChange={(v) => choose(v as McpAuthMethod)}
         options={methods}
       />

@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -180,6 +181,17 @@ func (r engineRuntime) MCPValues() mcpapi.ValueStore {
 	}
 	return fleetsecrets.New(backends.Fleet, r.engine.Cipher())
 }
+
+// MCPSignIns is the engine's OAuth sign-in of an MCP server, its refusals
+// mapped onto the routes' ([mcpSignIns]).
+func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engine} }
+
+// MCPGrants is the engine's read of each MCP server's OAuth grant.
+func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
+
+// MCPLanding is the engine finishing a sign-in where the vendor sends the
+// person back, its refusals mapped onto the page's ([mcpLanding]).
+func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
 
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.

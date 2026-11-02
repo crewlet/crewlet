@@ -363,7 +363,11 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			listings = append(listings, l)
 		}
 	}
-	status := s.mcpStatusOf(leases)
+	grants, err := s.mcpGrants(ctx)
+	if err != nil {
+		return MCPServerAnswer{}, err
+	}
+	status := s.mcpStatusOf(leases, grants)
 	at := slices.IndexFunc(status.Servers, func(r MCPServerRow) bool { return r.Name == name })
 	if at < 0 && len(listings) == 0 {
 		return MCPServerAnswer{}, fmt.Errorf("%w: no MCP server %q is configured, reported or listed", ErrNotFound, name)

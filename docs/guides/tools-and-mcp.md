@@ -699,8 +699,10 @@ A configuration another system manages refuses both. A name the configuration
 already carries is refused on add; a name only a node still runs, from a
 revision it has not applied past yet, is free. The name, the prefix, the keys
 and the address are held to [the naming rules](#naming-a-server-and-its-tools).
-Signing in with OAuth is not offered here: a server that asks for it is said
-to, and its test stops at the sign-in until it is given a header it accepts.
+The wizard does not set up an OAuth sign-in: a server that asks for one is
+said to, and is added with a header it accepts, or with its `oauth` block in
+the configuration ([Signing in with OAuth](#signing-in-with-oauth)). Editing a
+server that signs in with OAuth keeps its sign-in as it is.
 
 ### Choosing which agents get a server
 
@@ -876,6 +878,11 @@ reads is refused, since deleting it would sign that reader out. Deleting a
 value also takes `secrets.write`, so Ask Crewlet can remove a server for you
 and leaves its values to you. The whole request and its answers are in
 [the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
+
+A server the company is [signed in to with OAuth](#signing-in-with-oauth) gives
+its sign-in up with it: once the removal is written, the grant is revoked at
+the vendor where it offers that and forgotten, as a sign-out does, and the dry
+run says so (`dependants.oauth`).
 
 ### Saying what a server is for
 
@@ -1560,11 +1567,149 @@ that seat's `mcp_env` block, and tested as that agent), and only for an agent
 the server is already granted to. A key an integration fills for each agent
 (GitHub's token, for one) is never stored here.
 
+The secret of the OAuth client a server signs in with is stored the same way,
+under the key `oauth.client_secret` (its own variable, else
+`MCP_<SERVER>_OAUTH_CLIENT_SECRET`), and listed on the Connection tab beside
+the headers with `as: oauth`: it is sent to the server's authorization server,
+never to the server. A [service identity's](#signing-in-as-a-service-identity)
+is tested by signing in with it. The company's own client of a person's
+[sign-in](#signing-in-with-oauth) is first sent when the grant next renews,
+which a test does not do, so it is stored with `test=false`. A server whose
+sign-in has no secret (`client: cimd` or `dcr`) refuses the key.
+
 Storing a value is an administrator's, at a recent step-up, and Ask Crewlet
 never does it: a value it typed would sit in its conversation. A configuration
 another system manages refuses it; set the credential where that system
 reads it. Each store is recorded in the runtime audit as `mcp_server_acted`
 with the action `store_value`, naming the key and the variable.
+
+### Signing in with OAuth
+
+Many remote MCP servers (Linear, Notion, Sentry, Atlassian, Cloudflare, Stripe)
+sign you in with OAuth rather than a key in a header. Crewlet signs **the
+company** in once, as a person who can approve the server's access at its
+vendor, and keeps that one grant for every agent the server reaches:
+
+```yaml
+mcp_servers:
+  - name: linear
+    transport: http
+    url: https://mcp.linear.app/mcp
+    oauth:
+      client: cimd
+```
+
+`oauth.client` says how the engine registers at the server's authorization
+server, which [checking the address](#testing-a-server) tells you:
+
+| `client` | How |
+|---|---|
+| `cimd` | The engine's published client metadata document: its client id is the address `/webhooks/mcp-oauth/client-metadata.json` on your engine's public address, which the vendor reads. Nothing is registered and nothing is kept. Needs `api.external_url` on https |
+| `dcr` | The engine registers a client at the vendor when the sign-in starts (dynamic registration) and keeps what it is issued with the grant |
+| `own` | A client you registered at the vendor beforehand: its `client_id`, and its `client_secret` (a `${VAR}`) where it has one |
+
+`scopes` lists what to ask for; absent, the engine asks for the ones the server
+lists. A sign-in is the company's, so `oauth` is refused on a per-agent server
+(`shared: false`), on a local server, beside an `Authorization` header (the
+sign-in sends it), and in a seat's `sandbox.mcp.servers`: a box is handed a
+server's values once, at its launch, and an access token runs out within the
+hour, so a box reaches the server through the bridge instead.
+
+**Signing in.** Until somebody signs in, the server is not started and its
+state is `needs_sign_in`. **Sign in** on its page
+([`POST /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#post-mcp-serversnameoauth))
+takes an administrator who stepped up recently, never Ask Crewlet. The engine
+reads the server's sign-in metadata, refuses an authorization server that does
+not offer PKCE with S256, and sends your browser to the vendor's consent page.
+When you approve, the vendor sends the browser back to
+`/webhooks/mcp-oauth` on your engine's public address, the engine exchanges the
+code, keeps the grant, and every node starts the server. A vendor that only
+sends people back to addresses it allowlists (Atlassian, for one) is given the
+two addresses the Servers answer names: `callback_url` and
+`client_metadata_url`.
+
+**What is kept, and where.** The refresh token, and the client a registration
+issued, are sealed in the company's secret store under a name of the engine's
+own that no `${VAR}` reaches and no person can list, reveal or delete through
+Settings, Secrets. Who signed in and when, the authorization server, the scopes
+and when the grant runs out are on the server's page. The access token is
+issued as the server is used and kept in each node's memory alone, never
+stored, logged or answered; each node renews its own as it runs out, one node
+at a time across the fleet, so a vendor that retires a refresh token at every
+renewal never sees a retired one again. A server that refuses a token is sent
+one renewed token once, and its refusal stands after that. A grant is sent only
+to the address it was issued for: change the server's `url` to another address
+and the server waits for a sign-in there, rather than taking the company's
+token with it.
+
+**When a sign-in stops working.** A vendor that refuses a renewal for good (the
+grant was revoked, or the person's access ended) is asked no more: the server
+is stopped, its state is `needs_sign_in`, and the alarm
+`mcp_oauth_needs_sign_in` quotes the vendor's words. A grant whose vendor
+states when it runs out raises `mcp_oauth_expiring` seven days before. Either
+way, signing in again replaces the grant, and the agents keep the server from
+then on.
+
+**Signing out.** **Sign out** on the server's page
+([`DELETE /mcp-servers/{name}/oauth`](../reference/api-endpoints.md#delete-mcp-serversnameoauth))
+revokes the grant at the vendor where it offers revocation, forgets it here,
+and stops the server on every node. The page says whether the vendor revoked
+it; where the vendor offers no revocation, revoke the app's access in the
+vendor's own settings too.
+
+### Signing in as a service identity
+
+Some vendors offer a **service identity**: an OAuth client you register at the
+vendor that signs in as itself, with its client id and secret and no person
+behind it (OAuth's client credentials grant). The engine signs in as that
+client whenever the server needs a token:
+
+```yaml
+mcp_servers:
+  - name: vendor
+    transport: http
+    url: https://mcp.vendor.example.com/mcp
+    oauth:
+      grant: client_credentials
+      client_id: crewlet-agents
+      client_secret: ${VENDOR_CLIENT_SECRET}
+      scopes: [read]
+```
+
+`grant: client_credentials` needs `client_id` and `client_secret` (a `${VAR}`),
+and refuses `client`: a service identity is always your own client, so nothing
+is registered. `scopes` are what each token asks for; absent, the vendor issues
+the client's default. Every rule of a [sign-in](#signing-in-with-oauth) holds
+too: a remote, shared server, no `Authorization` header beside it, and never in
+a seat's `sandbox.mcp.servers`. `grant` left out is `authorization_code`, a
+person's sign-in.
+
+**Nobody signs in.** The server starts as soon as it is configured. Its `oauth`
+view on the Servers answer says `grant: client_credentials` and is always
+`connected`, and **Sign in** answers `409`. Each node reads the server's
+sign-in metadata the first time it needs a token, refuses an authorization
+server that lists the grants it issues without `client_credentials` or takes a
+client's secret by no method the engine sends one by, and asks the token
+endpoint for a token for this server. The secret goes by HTTP basic
+authentication, or in the request body where that is all the vendor takes,
+and only to a token endpoint on the server's own address or a public https
+address.
+
+**What is kept.** Nothing but your configuration. Each node holds the access
+token it is issued in its memory alone, never stored, logged or answered, asks
+for a new one shortly before it runs out, and once more when the server
+refuses it. There is no refresh token, grant record or sealed row, so a
+sign-out or a removal has nothing of a service identity's to revoke.
+
+**When the vendor refuses.** A refusal (a revoked or rotated secret, a client
+not allowed the grant, a scope it will not issue) fails the server's instances
+in the vendor's own words, classed `credential_rejected` or
+`missing_permission`, and raises `mcp_server_failing` as any failure does. The
+refusal is held for the restart schedule's wait, so the vendor is asked again
+at most once a wait rather than at every request; a new client id, secret or
+scopes is asked about at once. Store a new secret from the server's page
+([Storing a header or variable](#storing-a-header-or-variable)), which tests it
+by signing in with it first.
 
 ---
 

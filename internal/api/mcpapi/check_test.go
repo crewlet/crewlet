@@ -120,7 +120,7 @@ func checkSurface(t *testing.T, checker mcpapi.Checker, drafts mcpapi.DraftCheck
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
 		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: checker,
-		Drafts: drafts, Values: valueStore(t), Audit: audit})
+		Drafts: drafts, Values: valueStore(t), SignIns: &fakeSignIns{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}

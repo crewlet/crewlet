@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -81,6 +82,7 @@ func newHTTPTransport(spec Spec, log *slog.Logger, d dialing) (sdk.Transport, *h
 	ident := &httpIdentity{
 		base:    base,
 		headers: maps.Clone(spec.Headers),
+		bearer:  spec.Bearer,
 		origin:  originOf(spec.URL),
 		server:  spec.Name,
 		log:     log,
@@ -168,6 +170,14 @@ func originOfURL(u *url.URL) origin {
 	return origin{scheme: strings.ToLower(u.Scheme), host: strings.ToLower(u.Hostname()), port: port}
 }
 
+// SameOrigin reports whether two addresses are on one origin: the same scheme,
+// host and port, the port read from the scheme where an address leaves it
+// out. False for an address that does not parse.
+func SameOrigin(a, b string) bool {
+	u, err := url.Parse(a)
+	return err == nil && u.Host != "" && sameOrigin(u, originOf(b))
+}
+
 // sameOrigin reports whether u is at o: the same scheme, host and port.
 func sameOrigin(u *url.URL, o origin) bool {
 	return o != (origin{}) && originOfURL(u) == o
@@ -179,6 +189,10 @@ func sameOrigin(u *url.URL, o origin) bool {
 type httpIdentity struct {
 	base    http.RoundTripper
 	headers map[string]string
+	// bearer answers the access token of a server signed in to with OAuth
+	// ([Spec.Bearer]), nil for any other: set per request, on a request to
+	// the configured origin alone, as the headers are.
+	bearer BearerSource
 	// origin is the configured address's: the one origin a request is sent
 	// the configured headers to.
 	origin origin
@@ -244,7 +258,8 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// policy refuses every other origin before a request to it is made; this
 	// is the same rule where the headers are set, so no path that reaches
 	// this tripper can carry them elsewhere.
-	if sameOrigin(req.URL, h.origin) {
+	configured := sameOrigin(req.URL, h.origin)
+	if configured {
 		for k, v := range h.headers {
 			req.Header.Set(k, v)
 		}
@@ -254,8 +269,7 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 			req.Header.Set(protocolVersionHeader, *v)
 		}
 	}
-
-	resp, err := h.base.RoundTrip(req)
+	resp, sent, err := h.send(ctx, req, configured)
 	if err != nil {
 		if cancel != nil {
 			cancel()
@@ -306,9 +320,11 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
 			"method", req.Method, "url", redact.URL(req.URL.String()), "body_error", readErr.Error())
 	} else {
+		// AN ACCESS TOKEN THE SERVER ECHOED IS WITHHELD from the line: the
+		// engine renews it on its own, and no log is a place to keep one.
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
 			"method", req.Method, "url", redact.URL(req.URL.String()),
-			"response_body", boundedBody(body))
+			"response_body", withholdToken(boundedBody(body), sent))
 	}
 	challenge := resp.Header.Get("WWW-Authenticate")
 	h.failed.Store(&answerFailure{status: resp.StatusCode, class: classOfStatus(resp.StatusCode,
@@ -333,6 +349,75 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// complete.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
+}
+
+// send carries one request to the server, with the access token of a server
+// signed in to with OAuth where it goes to the configured origin, and answers
+// the response and the token it carried ("" for none).
+//
+// A 401 TO A TOKEN IS ONE RENEWAL AND ONE RETRY. The token may have been
+// revoked or expired before its stated life ran out, so the source is told it
+// was refused ([BearerSource.Rejected]) and the request is sent once more with
+// what it answers; a second refusal is the server's answer, classed as any
+// 401 is. A token the source cannot give classes the server
+// [FailNeedsSignIn] (or what its error says) and sends nothing.
+func (h *httpIdentity) send(ctx context.Context, req *http.Request, configured bool) (
+	*http.Response, string, error) {
+
+	if h.bearer == nil || !configured {
+		resp, err := h.base.RoundTrip(req)
+		return resp, "", err
+	}
+	token, err := h.bearer.Token(ctx)
+	if err != nil {
+		h.failed.Store(&answerFailure{class: cmp.Or(ClassOf(err), FailNeedsSignIn)})
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := h.base.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized ||
+		!bearerChallenge(resp.Header.Get("WWW-Authenticate")) {
+		return resp, token, err
+	}
+	// THE REFUSAL STANDS where no renewed token came back, read and classed
+	// below; why it could not be renewed is the source's to have said.
+	renewed, renewErr := h.bearer.Rejected(ctx, token)
+	retry, ok := replay(ctx, req)
+	if renewErr == nil && ok && renewed != token {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBufferedErrorBody))
+		_ = resp.Body.Close()
+		retry.Header.Set("Authorization", "Bearer "+renewed)
+		resp, err = h.base.RoundTrip(retry)
+		return resp, renewed, err
+	}
+	return resp, token, nil
+}
+
+// replay is req again, with its body read afresh: false for a request whose
+// body cannot be (the SDK sends every POST from a byte slice, which can).
+func replay(ctx context.Context, req *http.Request) (*http.Request, bool) {
+	again := req.Clone(ctx)
+	if req.Body == nil || req.Body == http.NoBody {
+		return again, true
+	}
+	if req.GetBody == nil {
+		return nil, false
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, false
+	}
+	again.Body = body
+	return again, true
+}
+
+// withholdToken is text with every occurrence of token replaced, for a line
+// that quotes what a server answered a request that carried it.
+func withholdToken(text, token string) string {
+	if token == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, token, "[withheld]")
 }
 
 // answerFailure is one answer a remote server gave that was not a success:

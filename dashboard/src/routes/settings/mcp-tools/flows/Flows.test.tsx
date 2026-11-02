@@ -104,6 +104,7 @@ vi.mock("../api.ts", async (actual) => ({
               ],
               sandbox: [],
               secrets: ["LINEAR_TOKEN"],
+              oauth: true,
             },
           },
           written: null,
@@ -154,9 +155,9 @@ afterEach(() => {
 });
 
 // A REMOVAL IS CHECKED BEFORE IT CAN BE MADE: the dry run lists what still
-// names the server, Remove waits until the reader clears those in the same
-// change, and the removal states the revision of the entry it read and the
-// values ticked to go with it.
+// names the server and says its sign-in goes with it, Remove waits until the
+// reader clears those in the same change, and the removal states the revision
+// of the entry it read and the values ticked to go with it.
 test("a removal waits on its dry run, asks to clear what names the server, and states its revision", async () => {
   mountAt("#/settings/mcp-tools?flow=remove&server=linear");
   await settle();
@@ -168,6 +169,7 @@ test("a removal waits on its dry run, asks to clear what names the server, and s
   );
   expect(screen.getByText("Still named in 1 place")).toBeDefined();
   expect(screen.getByText(/Product Manager: its own/)).toBeDefined();
+  expect(screen.getByText(/its sign-in is revoked at the vendor/)).toBeDefined();
   const remove = screen.getByRole("button", { name: "Remove server" });
   expect(remove.hasAttribute("disabled") || remove.getAttribute("aria-disabled") === "true").toBe(
     true,

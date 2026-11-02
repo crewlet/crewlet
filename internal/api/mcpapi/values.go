@@ -22,7 +22,11 @@ import (
 // `PUT /mcp-servers/{name}/values/{key}` stores `{"value": "..."}` for a key
 // (`seat` for one seat's, `test=false` untested): admitted, slotted, tested,
 // sealed write-only, then pointed or re-activated (ADR-0070). Nothing answered,
-// logged or audited carries the value.
+// logged or audited carries the value. The key is a header or variable name,
+// or `oauth.client_secret` ([config.MCPValueClientSecret]) for the secret of
+// the company's own OAuth client: a service identity's is tested by signing in
+// with it; a person's grant's is stored untested, since it is first sent at the
+// grant's next renewal.
 
 // ValueStore seals a value write-only and lists the rows by name.
 type ValueStore interface {
@@ -123,6 +127,17 @@ func (s *Service) serveValue(w http.ResponseWriter, r *http.Request, rec *types.
 
 	answer := ValueAnswer{Server: name, Key: slot.Key, Seat: seat, Variable: slot.Variable, Tested: test,
 		Values: []queries.MCPValueState{}}
+	if test && slot.As == config.MCPValueOAuth && !serviceIdentity(company, name) {
+		// A PERSON'S GRANT SENDS ITS CLIENT'S SECRET ONLY WHEN IT RENEWS,
+		// under the fleet's renewal lease, which a test does not take: a
+		// test would pass on the grant's token and say nothing of the
+		// secret.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			httpjson.Detail{"detail": "the secret of the client a person signed MCP server " + quoted(name) +
+				" in with is first sent at the grant's next renewal, which a test does not make: store " +
+				"it with test=false"})
+		return
+	}
 	if test {
 		check, ok := s.testValue(w, r, company, slot, value, by)
 		if !ok {
@@ -238,6 +253,17 @@ func activeEntry(company *config.Company, name string) *config.MCPServer {
 		}
 	}
 	return nil
+}
+
+// serviceIdentity reports whether the server called name signs in as a
+// service identity (oauth.grant: client_credentials).
+func serviceIdentity(company *config.Company, name string) bool {
+	for i := range company.MCPServers {
+		if company.MCPServers[i].Name == name {
+			return company.MCPServers[i].OAuth.ServiceIdentity()
+		}
+	}
+	return false
 }
 
 // sharedServer reports whether the server called name runs one instance.
@@ -399,6 +425,11 @@ func refuseSlot(w http.ResponseWriter, name, seat, key string, err error) {
 	case errors.Is(err, config.ErrMCPValueKey):
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": quoted(key) + " is not a header or variable name"})
+	case errors.Is(err, config.ErrMCPValueNoSecret):
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
+			httpjson.Detail{"detail": "MCP server " + quoted(name) + " signs in with no client secret: " +
+				config.MCPValueClientSecret + " is the secret of the company's own OAuth client " +
+				"(oauth.grant: client_credentials, or oauth.client: own), and its oauth block names neither"})
 	case errors.As(err, &shared):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
 			httpjson.Detail{"detail": "this value would be stored as " + shared.Variable + ", which " +

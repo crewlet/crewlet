@@ -95,6 +95,16 @@ function Fix({
           {FIX.edit}
         </ButtonLink>
       );
+    case "sign_in":
+      return (
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={href(["settings", "mcp-tools", "servers", server], { tab: "connection" })}
+        >
+          {FIX.sign_in}
+        </ButtonLink>
+      );
   }
 }
 
@@ -153,6 +163,16 @@ function itemFor(
       details = refused.map((t) => t.message);
       break;
     }
+    case "mcp_oauth_needs_sign_in":
+      meta = <>No agent can call its tools{since ? <>, {since}</> : null}</>;
+      body =
+        "An administrator signs the company in to it again from its Connection tab, and the engine renews the sign-in from then on.";
+      break;
+    case "mcp_oauth_expiring":
+      meta = <>Its vendor set when the sign-in runs out</>;
+      body =
+        "Sign in again before then. A new sign-in replaces the old one, and the agents keep the server throughout.";
+      break;
   }
   return {
     key: `${alarm.kind}:${entry.key}:${entry.seat}`,

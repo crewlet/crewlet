@@ -766,3 +766,83 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 	}
 	return created, nil
 }
+
+// Held is one of the engine's own rows as [Estate.Held] opens it: its value,
+// and the store's version of the row it was read at, which [Estate.Swap]
+// writes over.
+type Held struct {
+	Value   string
+	Version uint64
+}
+
+// Held opens one of the engine's own rows with the version it was read at,
+// reporting false, and no error, where no row is stored under name.
+//
+// FOR A ROW THE ENGINE REPLACES, which a key is not: an MCP server's OAuth
+// grant is renewed at its vendor and rewritten each time, and the rewrite is
+// only safe at the version the renewal began from ([Estate.Swap]).
+func (e *Estate) Held(ctx context.Context, name string) (Held, bool, error) {
+	if e == nil || e.store.cipher == nil {
+		return Held{}, false, secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return Held{}, false, err
+	}
+	rec, found, err := e.store.fleet.Secret(ctx, name)
+	if err != nil {
+		return Held{}, false, fmt.Errorf("fleetsecrets: read %s: %w", displayName(name), err)
+	}
+	if !found {
+		return Held{}, false, nil
+	}
+	value, err := e.store.cipher.Decrypt(rec.Value, secrets.AADForVar(name))
+	if err != nil {
+		return Held{}, false, fmt.Errorf("fleetsecrets: open %s: %w", displayName(name), err)
+	}
+	return Held{Value: value, Version: rec.Version}, true, nil
+}
+
+// Swap seals value over one of the engine's own rows only while the row is
+// still at version, reporting whether it wrote. False is a LOST RACE (the row
+// moved or went away since the caller read it, [Estate.Held]), never a
+// failure, and the caller re-reads before deciding anything again.
+//
+// THE ONE REWRITE OF A ROW THE ENGINE REPLACES. A plain put of a renewed
+// grant over one another node renewed meanwhile would keep the token the
+// vendor has already retired and lose the one it issued.
+func (e *Estate) Swap(ctx context.Context, name, value string, version uint64, by secrets.Author,
+	source secrets.Source, now time.Time) (bool, error) {
+
+	if e == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, source); err != nil {
+		return false, err
+	}
+	rec, err := e.store.seal(provenance(name, by, source, now), value)
+	if err != nil {
+		return false, err
+	}
+	wrote, err := e.store.fleet.UpdateSecret(ctx, rec, version)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: re-seal %s: %w", displayName(name), err)
+	}
+	return wrote, nil
+}
+
+// Delete removes one of the engine's own rows, reporting whether one was
+// there. Only the engine's view deletes an engine row: the operator's
+// [Store.Unset] refuses every reserved name.
+func (e *Estate) Delete(ctx context.Context, name string) (bool, error) {
+	if e == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return false, err
+	}
+	removed, err := e.store.fleet.DeleteSecret(ctx, name)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: delete %s: %w", displayName(name), err)
+	}
+	return removed, nil
+}

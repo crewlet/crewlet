@@ -1,13 +1,15 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
 // [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
 // server is added from, `GET /mcp-servers/{name}`, one server whole,
-// `POST /mcp-servers/{name}/retry`, a restart of it now, and the tests:
+// `POST /mcp-servers/{name}/retry`, a restart of it now, the tests:
 // `POST /mcp-servers/{name}/check` of a saved server, `POST /mcp-checks` of a
 // draft and `POST /mcp-probe` of an address before a server is added at it
 // (check.go), `PUT /mcp-servers/{name}/values/{key}`, a header or variable
-// stored write-only, tested first (values.go), and
+// stored write-only, tested first (values.go),
 // `PUT /mcp-servers/{name}/tools`, the level each of its tools runs at
-// (tools.go).
+// (tools.go), and the OAuth sign-in: `POST` and
+// `DELETE /mcp-servers/{name}/oauth` and `GET /mcp-sign-ins/{id}`
+// (oauth.go).
 //
 // # Routes, not registry questions
 //
@@ -114,6 +116,10 @@ type Options struct {
 	// Now stamps a stored value; nil is the wall clock.
 	Now func() time.Time
 
+	// SignIns starts, reads and ends a server's OAuth sign-in (oauth.go):
+	// required, since only the engine holds the grant.
+	SignIns SignIns
+
 	// Audit is where each gesture's `mcp_server_acted` is published: this
 	// node's queue, whose publish listener writes the event store.
 	// Required: a restart leaves no record anywhere else.
@@ -137,6 +143,7 @@ type Service struct {
 	tools     ToolDocuments
 	values    ValueStore
 	now       func() time.Time
+	signIns   SignIns
 	audit     operator.AuditPublisher
 	guard     authz.Guard
 }
@@ -159,6 +166,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Checker is required: a test is asked of the nodes " +
 			"that run the server through the engine")
 	}
+	if opts.SignIns == nil {
+		return nil, errors.New("mcpapi: Options.SignIns is required: a server's OAuth grant is the " +
+			"engine's")
+	}
 	if opts.Audit == nil {
 		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
 	}
@@ -180,7 +191,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		tools: opts.Tools, values: opts.Values, now: now, audit: opts.Audit, guard: guard}, nil
+		tools: opts.Tools, values: opts.Values, now: now, signIns: opts.SignIns, audit: opts.Audit,
+		guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -240,9 +252,31 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// Letting a tool through is a write like blocking one, at the
 	// configuration verb's own step-up.
 	tools := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSetTools))
-	return tools.Handle("PUT /mcp-servers/{name}/tools",
+	if err := tools.Handle("PUT /mcp-servers/{name}/tools",
 		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
-		s.audited(types.MCPServerSetTools, s.serveTools))
+		s.audited(types.MCPServerSetTools, s.serveTools)); err != nil {
+		return err
+	}
+	// A SIGN-IN MAKES THE CREDENTIAL every agent reaches the server with,
+	// and a sign-out ends it: `secrets.write` both, the step-up and the
+	// human-only list with it (oauth.go). A start adds a sign-in of its own
+	// (authz.Effect).
+	signIns := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSignIn))
+	if err := signIns.Handle("POST /mcp-servers/{name}/oauth",
+		authz.Policy{Action: authz.ActionSecretWrite}.Creating(),
+		s.audited(types.MCPServerSignIn, s.serveStartSignIn)); err != nil {
+		return err
+	}
+	signOuts := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSignOut))
+	if err := signOuts.Handle("DELETE /mcp-servers/{name}/oauth",
+		authz.Policy{Action: authz.ActionSecretWrite},
+		s.audited(types.MCPServerSignOut, s.serveSignOut)); err != nil {
+		return err
+	}
+	// OUTSIDE /mcp-servers/, for the catalogue's reason: the id is a
+	// sign-in's, not a server's.
+	return router.Handle("GET /mcp-sign-ins/{id}", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveSignIn))
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a

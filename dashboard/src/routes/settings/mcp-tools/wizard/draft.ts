@@ -288,6 +288,9 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   for (const k of d.bound) {
     if (k in written) block[k] = written[k];
   }
+  // AN OAUTH SERVER'S HEADERS are no row here, since this wizard does not set
+  // its sign-in up, so they stay as the entry wrote them.
+  if (d.signIn === "oauth") Object.assign(block, written);
   if (sendsRows(d)) {
     for (const r of rowsOf(d)) {
       const key = r.key.trim();

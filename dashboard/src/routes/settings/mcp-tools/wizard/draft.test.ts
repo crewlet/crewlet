@@ -229,6 +229,21 @@ describe("an edit", () => {
     expect(entityOf(d, saved)).toEqual(saved);
   });
 
+  // Mutation: write an OAuth server's headers from its rows, which it has
+  // none of, and its other headers and its sign-in are lost.
+  test("of a server signed in to with OAuth keeps its sign-in and its headers", () => {
+    const saved = {
+      name: "notion",
+      transport: "http",
+      url: "https://mcp.example.com/mcp",
+      oauth: { scopes: ["read"] },
+      headers: { "X-Workspace": "${NOTION_WORKSPACE}" },
+    };
+    const d = fromServer(saved, [], null, "oauth");
+    expect(entityOf(d, saved)).toEqual(saved);
+    expect(valuesOf(d)).toEqual({});
+  });
+
   test("keeps a stored key as spelled when a new value replaces it", () => {
     const d = typed(fromServer(base, values, null, "headers"), "Authorization", "Bearer new");
     expect(entityOf(d, base).headers).toEqual(base.headers);

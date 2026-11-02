@@ -183,6 +183,9 @@ type mcpCheckAsk struct {
 	// Entry is the entry to test (a draft, or an entry under a value test),
 	// its JSON sealed for the fleet; "" for the one each node runs.
 	Entry string `json:"entry,omitempty"`
+	// Draft is whether Entry is not written yet: somebody's typing, which is
+	// never tested under a saved server's OAuth grant.
+	Draft bool `json:"draft,omitempty"`
 	// Values are the values under test, each sealed for the fleet.
 	Values []mcpValueAsk `json:"values,omitempty"`
 }
@@ -287,7 +290,8 @@ func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCh
 	if err != nil {
 		return MCPCheckResult{}, err
 	}
-	ask := mcpCheckAsk{Version: mcpCheckWire, ID: signedask.NewID(), Asker: e.selfNode(), Server: server.Name}
+	ask := mcpCheckAsk{Version: mcpCheckWire, ID: signedask.NewID(), Asker: e.selfNode(), Server: server.Name,
+		Draft: req.Draft}
 	if (req.Entry != nil || len(req.Values) > 0) && e.cipher == nil {
 		return MCPCheckResult{}, errNoValueKeyring
 	}
@@ -556,8 +560,15 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 	case server == nil:
 		report = mcp.Unstarted(mcp.Spec{Name: ask.Server},
 			"this node runs no company that declares the server; it may not have applied the latest revision yet")
+	case ask.Seat == uuid.Nil && !ask.Draft && server.PersonSignIn():
+		// A SAVED SERVER SIGNED IN TO WITH OAUTH is tested under its grant,
+		// as it runs, a value under test included (its entry sent as the
+		// fleet's active revision states it). A draft never is, whatever its
+		// name: the grant's token goes to the address it was issued for, and
+		// a draft's address is somebody's typing.
+		report = e.testServer(ctx, server, nil, nil, nil, tried, e.testBearer(ctx, server.Name))
 	case ask.Seat == uuid.Nil:
-		report = e.testServer(ctx, server, nil, nil, nil, tried)
+		report = e.testServer(ctx, server, nil, nil, nil, tried, nil)
 	default:
 		role := c.Org.AgentSeatByID(ask.Seat)
 		if role == nil {
@@ -565,7 +576,7 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 		}
 		env, token := e.seatResolver(ctx, c, role, github.ToolTokenLife)
 		report = e.testServer(ctx, server, role, env, &seatMint{kinds: e.mintedFor(c, role.Handle()), token: token},
-			tried)
+			tried, nil)
 	}
 	report = boundedReport(report, e.epochTools())
 	return &report
@@ -635,9 +646,12 @@ func testedEntry(c *Company, ask mcpCheckAsk, sent *config.MCPServer) *config.MC
 // values a start of it would be given: the same resolution
 // ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
 // and the same launch ([mcp.Test]); with tried, each of its keys reads its
-// value.
+// value. bearer is the grant's token source of a saved server a person signed
+// in to with OAuth, nil for any other, and is sent only where the test dials
+// the origin the saved server is dialled at. A service identity signs in for
+// the test itself.
 func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
-	env *config.Resolver, mint *seatMint, tried []MCPValueTry) mcp.TestReport {
+	env *config.Resolver, mint *seatMint, tried []MCPValueTry, bearer mcp.BearerSource) mcp.TestReport {
 
 	instance, handle := server.Name, ""
 	var block map[string]string
@@ -665,37 +679,81 @@ func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat 
 	if err != nil {
 		return mcp.Unstarted(unstarted, err.Error())
 	}
+	// THE GRANT'S TOKEN GOES WHERE THE SERVER RUNS AND NOWHERE ELSE: the
+	// origin of the entry this node runs, which the grant was checked against
+	// ([Engine.grantMoved]). A value under test that moves the server's
+	// address, or an entry sent with the test (the fleet's active revision's,
+	// ahead of this node's apply) that names another, takes it to an origin
+	// the grant was not issued for, which is tested without it.
+	if bearer != nil && mcp.SameOrigin(values.url, e.grantedAddress(server.Name)) {
+		spec.Bearer = bearer
+	}
+	// A SERVICE IDENTITY SIGNS IN FOR ITS TEST, saved or a draft, with what
+	// the test resolves, a value under test included: its own client, for
+	// the address under test, so no token goes anywhere it was not issued
+	// for. A source of its own, which asks the vendor now rather than
+	// answering with a token this node already holds, and holds nothing the
+	// running server reads.
+	if server.OAuth.ServiceIdentity() {
+		spec.Bearer = &oauthSource{engine: e, server: instance, service: e.newServiceIdentity(server, env)}
+	}
 	ctx, cancel := context.WithTimeout(ctx, mcpCheckBudget(server))
 	defer cancel()
 	return mcp.Test(ctx, spec, nil)
 }
 
-// withTried points each tried key at its variable in copies: the seat's block
-// for a seat's test, the server's own map otherwise. A key spelled another way
-// in the map (`authorization` for `Authorization`) gives way to it.
+// grantedAddress is the address of the entry called name this node runs, the
+// one its OAuth grant is checked against, resolved; "" where it runs none.
+func (e *Engine) grantedAddress(name string) string {
+	entry, err := e.oauthServer(name)
+	if err != nil {
+		return ""
+	}
+	return e.resolver().Value(entry.URL)
+}
+
+// withTried points each tried key at its variable in copies: the OAuth
+// client's secret for [config.MCPValueClientSecret], the seat's block for a
+// seat's test, the server's own map otherwise. A key spelled another way in
+// the map (`authorization` for `Authorization`) gives way to it.
 func withTried(server *config.MCPServer, block map[string]string, forSeat bool,
 	tried []MCPValueTry) (*config.MCPServer, map[string]string) {
 
+	copied := *server
+	keyed := make([]MCPValueTry, 0, len(tried))
+	for _, t := range tried {
+		// THE OAUTH CLIENT'S SECRET is the server's own, whichever seat asks,
+		// and is sent to its authorization server alone.
+		if t.Key == config.MCPValueClientSecret && copied.OAuth != nil {
+			signIn := *copied.OAuth
+			signIn.ClientSecret = "${" + t.Variable + "}"
+			copied.OAuth = &signIn
+			continue
+		}
+		keyed = append(keyed, t)
+	}
+	if len(keyed) == 0 {
+		return &copied, block
+	}
 	point := func(values map[string]string) map[string]string {
-		under := make(map[string]bool, len(tried))
-		for _, t := range tried {
+		under := make(map[string]bool, len(keyed))
+		for _, t := range keyed {
 			under[server.ValueKey(t.Key)] = true
 		}
-		out := make(map[string]string, len(values)+len(tried))
+		out := make(map[string]string, len(values)+len(keyed))
 		for key, value := range values {
 			if !under[server.ValueKey(key)] {
 				out[key] = value
 			}
 		}
-		for _, t := range tried {
+		for _, t := range keyed {
 			out[t.Key] = "${" + t.Variable + "}"
 		}
 		return out
 	}
 	if forSeat {
-		return server, point(block)
+		return &copied, point(block)
 	}
-	copied := *server
 	if copied.Kind() == config.TransportHTTP {
 		copied.Headers = point(server.Headers)
 	} else {

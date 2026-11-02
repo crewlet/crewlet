@@ -135,6 +135,11 @@ var publishedRoutes = []string{
 	"POST /webhooks/forge",
 	"GET /webhooks/slack-oauth",
 	"GET /webhooks/github-app",
+	// AN MCP SERVER'S SIGN-IN: the page a vendor sends the person back to,
+	// which trusts nothing but the state's signature, and the engine's
+	// client metadata document a vendor reads its client id from.
+	"GET /webhooks/mcp-oauth",
+	"GET /webhooks/mcp-oauth/client-metadata.json",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
 	mcpbridge.ServerPattern,

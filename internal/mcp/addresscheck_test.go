@@ -187,3 +187,64 @@ func TestAChallengesParametersAreRead(t *testing.T) {
 		}
 	}
 }
+
+// A SIGN-IN'S ENDPOINTS ARE READ BY THE SAME CHECK, as published: the
+// addresses a sign-in is made at, which no answer carries, beside the
+// redacted words one does.
+func TestAnAddressCheckReadsTheEndpointsASignInIsMadeAt(t *testing.T) {
+	t.Parallel()
+	s := newSignInServer(t)
+	s.asm = func(base string) string {
+		return `{"issuer":"` + base + `","authorization_endpoint":"` + base + `/authorize",` +
+			`"token_endpoint":"` + base + `/token","revocation_endpoint":"` + base + `/revoke",` +
+			`"client_id_metadata_document_supported":true,"code_challenge_methods_supported":["S256"],` +
+			`"authorization_response_iss_parameter_supported":true,"scopes_supported":["read","offline_access"]}`
+	}
+	check := CheckAddress(t.Context(), s.srv.URL+"/mcp", discardLogger())
+	ep := check.OAuth.Endpoints
+	if check.OAuth.Failure != nil || ep == nil {
+		t.Fatalf("discovery = %+v", check.OAuth)
+	}
+	base := s.srv.URL
+	if ep.Server != base+"/mcp" || ep.Resource != base+"/mcp" || ep.Issuer != base ||
+		ep.Authorization != base+"/authorize" || ep.Token != base+"/token" ||
+		ep.Revocation != base+"/revoke" || !ep.ClientIDMetadataDocument || !ep.IssuerInResponse ||
+		!ep.OfflineAccess || !ep.ResourceScopes || strings.Join(ep.Scopes, ",") != "read,write" {
+		t.Errorf("endpoints = %+v", ep)
+	}
+}
+
+// THE RESOURCE IS THE SERVER'S OWN: metadata naming another origin, or a path
+// that is not the server's or one above it, is refused before anything in it
+// is used, so no token is asked for, or bound to, somebody else's server.
+func TestAResourceIsTheServersOwn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		resource, server string
+		want             bool
+	}{
+		{"https://mcp.example.com/mcp", "https://mcp.example.com/mcp", true},
+		{"https://mcp.example.com", "https://mcp.example.com/mcp", true},
+		{"https://mcp.example.com/", "https://mcp.example.com/v1/mcp", true},
+		{"https://MCP.example.com:443/mcp/", "https://mcp.example.com/mcp", true},
+		{"https://mcp.example.com/other", "https://mcp.example.com/mcp", false},
+		{"https://mcp.example.com/mc", "https://mcp.example.com/mcp", false},
+		{"https://evil.example.com/mcp", "https://mcp.example.com/mcp", false},
+		{"http://mcp.example.com/mcp", "https://mcp.example.com/mcp", false},
+		{"https://mcp.example.com/mcp?tenant=x", "https://mcp.example.com/mcp", false},
+		{"", "https://mcp.example.com/mcp", false},
+	} {
+		if got := ResourceServes(tc.resource, tc.server); got != tc.want {
+			t.Errorf("ResourceServes(%q, %q) = %t, want %t", tc.resource, tc.server, got, tc.want)
+		}
+	}
+	s := newSignInServer(t)
+	s.prm = func(base string) string {
+		return `{"resource":"https://evil.example.com/mcp","authorization_servers":["` + base + `"]}`
+	}
+	check := CheckAddress(t.Context(), s.srv.URL+"/mcp", discardLogger())
+	if check.OAuth == nil || check.OAuth.Failure == nil || check.OAuth.Endpoints != nil ||
+		!strings.Contains(check.OAuth.Failure.Said, "not the server") {
+		t.Fatalf("metadata naming another resource = %+v", check.OAuth)
+	}
+}
