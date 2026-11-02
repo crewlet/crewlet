@@ -281,7 +281,7 @@ func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCh
 		if role == nil {
 			return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrNoAgentSeat, seat)
 		}
-		if !granted(server, role) {
+		if _, reached := server.Reach(role); !reached {
 			return MCPCheckResult{}, fmt.Errorf("%w: %q is not granted %q", ErrMCPSeatNotGranted, seat, server.Name)
 		}
 		id, ok := c.Org.AgentIDFor(role)
@@ -340,14 +340,6 @@ func checkedEntry(c *Company, req MCPCheckRequest) (*config.MCPServer, error) {
 		return nil, fmt.Errorf("%w: %q", ErrMCPServerOff, req.Server)
 	}
 	return server, nil
-}
-
-// granted is [config.MCPServer.Grants] for a test: a draft is tested turned
-// on, so whether it is turned off decides nothing.
-func granted(server *config.MCPServer, seat *org.Role) bool {
-	on := *server
-	on.Enabled = config.Toggle{}
-	return on.Grants(seat)
 }
 
 // askMCPCheck asks the nodes ask names (or, for a seat's test, the seat's

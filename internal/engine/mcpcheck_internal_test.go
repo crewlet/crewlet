@@ -84,6 +84,7 @@ mcp_servers:
   - name: tracker
     shared: false
     command: tracker-server
+    access: {seats: [ceo]}
 roles:
   - name: CEO
     handle: ceo

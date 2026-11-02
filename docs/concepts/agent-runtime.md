@@ -321,7 +321,7 @@ The phases on this host that discover their MCP tools walk the discover-then-act
 
 Both meta-tools are available to the onboarding pass. A worker gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach; a pair from anywhere else never reaches it (`activate_tool` and `list_mcp_server_tools` are on the worker denylist by name, because a pair bound to another surface would activate tools onto that one).
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the executor run's own work in its box, with its own checkout, shell and git ([code sandbox](code-sandbox.md)). See [GitHub Integration](../integrations/github.md).
+Agent seats on at the GitHub integration get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the executor run's own work in its box, with its own checkout, shell and git ([code sandbox](code-sandbox.md)). See [GitHub Integration](../integrations/github.md).
 
 ---
 

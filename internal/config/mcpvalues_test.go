@@ -23,7 +23,7 @@ mcp_servers:
     url: "https://mcp.sentry.dev/mcp"
     headers: {authorization: "Bearer ${SHARED_TOKEN}", X-Org: "${SHARED_TOKEN}"}
   - {name: notes, command: notes-mcp, env: {NOTES_TOKEN: "plain-not-a-secret"}}
-  - {name: tracker, command: tracker-mcp, shared: false}
+  - {name: tracker, command: tracker-mcp, shared: false, access: {units: [eng]}}
   - {name: my-x, transport: http, url: "https://x.example.com/mcp"}
   - {name: my, transport: http, url: "https://y.example.com/mcp", headers: {X-Api-Key: "${MCP_MY_X_API_KEY}"}}
 roles:

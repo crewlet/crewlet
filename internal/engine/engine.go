@@ -249,8 +249,9 @@ func (c *Company) Seats() []placement.Seat {
 // because the seat's own surface is a fact about this node's leases and not
 // about the configuration: only the node that claimed the seat has its
 // per-role children. Pass [Engine.seatRegistry]; nil falls back to the
-// epoch's shared surface, which is the correct answer for a seat that
-// declares no per-role server and for any caller that holds no lease.
+// epoch's shared surface as the seat holds it ([grantedSurface]), which is the
+// correct answer for a seat granted no per-role server and for any caller that
+// holds no lease.
 func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
@@ -265,7 +266,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
-		reg = c.Tools
+		reg = grantedSurface(c, role)
 	}
 	// REFUSED HERE TOO, for the reason [turn.Run] refuses it: this field
 	// arms submit_work's own citation check, and a caller that omits it

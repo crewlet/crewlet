@@ -288,9 +288,11 @@ mcp_servers:
   - name: atlassian
     shared: false
     command: "/nonexistent/definitely-not-an-atlassian-server"
+    access: {seats: [ceo]}
   - name: tracker
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
+    access: {seats: [cto]}
 roles:
   - name: CEO
     handle: ceo
@@ -405,6 +407,8 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 func TestAHarnessIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
 	t.Parallel()
 	company := heldBackCompany(t)
+	// Granted to every agent, so the CEO's box may hold it.
+	configured(t, company, "tracker").Access = nil
 	seat := company.Org.AgentSeatByHandle("ceo")
 	seat.MCPEnv["tracker"] = map[string]string{"SEAT_TOKEN": "${CEO_TRACKER_TOKEN}"}
 	env := config.NewResolver(config.MapSource{"CEO_TRACKER_TOKEN": "tracker-ceo"})

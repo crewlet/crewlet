@@ -115,8 +115,8 @@ type MCPResolved struct {
 	// reads, null for a server that reads none.
 	Binding *MCPBinding `json:"binding"`
 	// BoxSeats are the seats whose executor box is given the server
-	// (`sandbox.mcp.servers`), each with the cell its box runs in. ALWAYS A
-	// LIST.
+	// (`sandbox.mcp.servers`, for a seat the server is granted to), each with
+	// the cell its box runs in. ALWAYS A LIST.
 	BoxSeats []MCPBoxSeat `json:"box_seats"`
 	// Warnings are placements the engine expects to fail, each naming the
 	// seat and why. ALWAYS A LIST.
@@ -190,8 +190,8 @@ type MCPPlacementWarning struct {
 }
 
 // resolvedOf is what the engine decides about server from the company
-// document it is declared in.
-func resolvedOf(company *config.Company, server *config.MCPServer) MCPResolved {
+// document it is declared in and the chart roster built from it.
+func resolvedOf(company *config.Company, roster *org.Organization, server *config.MCPServer) MCPResolved {
 	out := MCPResolved{
 		Auth:     authOf(server),
 		Timeouts: timeoutsOf(server),
@@ -212,6 +212,12 @@ func resolvedOf(company *config.Company, server *config.MCPServer) MCPResolved {
 			continue
 		}
 		handle := box.Seat.Seat().Handle()
+		if roster == nil || !server.Grants(roster.AgentSeatByHandle(handle)) {
+			// A BOX IS GIVEN ONLY A SERVER ITS SEAT IS GRANTED
+			// ([config.MCPServer.Grants]), so a listing the grant does not
+			// back gives it nothing.
+			continue
+		}
 		out.BoxSeats = append(out.BoxSeats, MCPBoxSeat{Seat: handle, Cell: string(box.Cell)})
 		if w, ok := placementWarning(server, handle, box.Cell); ok {
 			out.Warnings = append(out.Warnings, w)

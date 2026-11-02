@@ -2218,7 +2218,7 @@ Everything else Chatlet could be told is either the operator's — how big the l
 
 ## MCP Servers
 
-**All** MCP tool servers are declared here — including the Jira/Confluence (`atlassian`), Slack, and GitHub servers. A `shared: true` server runs once for everyone; a `shared: false` server is a per-role template, and each agent supplies its own credentials via `role.mcp_env[name]` (env vars for `stdio`, HTTP headers for `http`).
+**All** MCP tool servers are declared here — including the Jira/Confluence (`atlassian`), Slack, and GitHub servers. A `shared: true` server runs once for the agents it is granted to; a `shared: false` server is a per-role template, started for each agent it is granted to with that agent's own values from `role.mcp_env[name]` (env vars for `stdio`, HTTP headers for `http`). Who gets a server is its `access` (absent, every agent seat), or, for one that reads each agent's own vendor credential, the integration's lane; an `mcp_env` block grants nothing (see [Tools & MCP](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
 
 ```yaml
 mcp_servers:
@@ -2229,6 +2229,10 @@ mcp_servers:
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    access:                             # optional, absent = every agent seat
+      units: [research]                 # every agent seat in this unit and the units beneath it
+      seats: [pm]                       # and this agent seat
+      except: [research-intern]         # but not this one, though its unit is named
     tool_annotations:                   # it advertises none; every tool only reads the web
       tavily_search:   { read_only: true, open_world: true }
       tavily_extract:  { read_only: true, open_world: true }
@@ -2238,7 +2242,7 @@ mcp_servers:
 
   # per-role stdio server — Jira + Confluence share one mcp-atlassian
   - name: atlassian
-    shared: false                       # per-role: token from role.mcp_env.atlassian
+    shared: false                       # per-role, for each agent on at Jira or Confluence; token from role.mcp_env.atlassian
     command: uvx
     args: ["mcp-atlassian==0.23.1"]
     env:                                # each product the company runs; every ${VAR} must resolve
@@ -2257,7 +2261,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required; lowercase letters, digits and hyphens, at most 32 characters, see [Tools & MCP](../guides/tools-and-mcp.md#naming-a-server-and-its-tools); `crewlet` is reserved — it is the name every harness sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `enabled` (default `true`; `false` turns the server off and keeps the entry and every `mcp_env` block and box listing that names it, see [Tools & MCP](../guides/tools-and-mcp.md#turning-a-server-off)), `description` (what the server is for, one line of at most 200 characters with no line breaks, listed beside its name in each agent's prompt, see [Tools & MCP](../guides/tools-and-mcp.md#saying-what-a-server-is-for)), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio; each key an environment variable name), `url`/`headers` (http; `https`, or plain `http` to this host or a private network, never with a user name or password in it, and each key a header name), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix` (letters, digits, `_` and `-`, at most 49 characters, put in front of every tool the server serves; a tool whose prefixed name is longer than 50 characters is not offered, see [Tools & MCP](../guides/tools-and-mcp.md#a-tools-name)), `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
+Full field reference: `name` (required; lowercase letters, digits and hyphens, at most 32 characters, see [Tools & MCP](../guides/tools-and-mcp.md#naming-a-server-and-its-tools); `crewlet` is reserved — it is the name every harness sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `enabled` (default `true`; `false` turns the server off and keeps the entry and every `mcp_env` block and box listing that names it, see [Tools & MCP](../guides/tools-and-mcp.md#turning-a-server-off)), `description` (what the server is for, one line of at most 200 characters with no line breaks, listed beside its name in each agent's prompt, see [Tools & MCP](../guides/tools-and-mcp.md#saying-what-a-server-is-for)), `transport` (`stdio`/`http`), `shared` (default `true`), `access` (which agent seats get the server: `units`, each reaching every agent seat beneath it, `seats` and `except`, by unit key and seat handle; absent, every agent seat; refused on a server that reads each agent's own vendor credential, which the integration's lane grants, see [Tools & MCP](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)), `command`/`args`/`env` (stdio; each key an environment variable name), `url`/`headers` (http; `https`, or plain `http` to this host or a private network, never with a user name or password in it, and each key a header name), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix` (letters, digits, `_` and `-`, at most 49 characters, put in front of every tool the server serves; a tool whose prefixed name is longer than 50 characters is not offered, see [Tools & MCP](../guides/tools-and-mcp.md#a-tools-name)), `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
 
 ### Timeouts
 

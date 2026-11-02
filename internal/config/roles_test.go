@@ -130,6 +130,7 @@ roles:
     project: ENGP
     integrations:
       mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot}
+      gitlab: {enabled: true}
     sandbox:
       max_turns: 40
       pause_ttl_seconds: 0

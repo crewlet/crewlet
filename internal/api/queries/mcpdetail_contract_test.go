@@ -79,6 +79,7 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 	holdShape(t, "McpCheckFailure", one(checked[0]["failure"]), false)
 	holdShape(t, "McpServerInfo", one(checked[0]["server_info"]), false)
 	holdShape(t, "McpValueState", rowsOf(t, admin["values"]), false)
+	holdShape(t, "McpReach", rowsOf(t, admin["reaches"]), false)
 
 	member := asMap(t, queries.MemberMCPServer(detail))
 	holdShape(t, "McpMemberServerAnswer", []map[string]any{member}, false)
@@ -103,6 +104,7 @@ func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {
 		"McpTestStage":            stringsOf(mcp.TestStages),
 		"McpStepState":            stringsOf(mcp.StepStates),
 		"McpValueAs":              stringsOf(config.MCPValueAses),
+		"McpReachReason":          stringsOf(config.MCPReachReasons()),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), union)
 		if err != nil {

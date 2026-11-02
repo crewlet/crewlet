@@ -600,6 +600,23 @@ export interface McpServerAnswer {
   last_check: McpCheckView | null;
   /** Every header or variable the server is sent, by name and never by value. */
   values: McpValueState[];
+  /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
+  reaches: McpReach[];
+}
+
+/**
+ * Why a server reaches an agent: no `access` (every agent), a unit or the seat
+ * it names, or the integration lane a vendor-bound server's agents are on at.
+ */
+type McpReachReason = "every_agent" | "unit" | "seat" | "integration";
+
+/** One agent seat a server reaches. */
+interface McpReach {
+  /** The seat's handle. */
+  seat: string;
+  reason: McpReachReason;
+  /** The granting unit's key for `unit`, the lane for `integration`, null otherwise. */
+  via: string | null;
 }
 
 /** Where a server is sent a value: a remote server's header, a local one's variable. */

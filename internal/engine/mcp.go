@@ -538,10 +538,10 @@ func (e *Engine) ToolsFor(handle string) *tools.Registry {
 // pair rather than two reads an apply can land between.
 //
 // The seat's own registry when this node has claimed it and started its
-// per-role children, and the epoch's shared one otherwise. Never nil for a
-// live epoch: a seat with no per-role children still has the builtins, and
-// answering nil would fail the turn rather than run it with the tools it
-// does have.
+// per-role children, and the epoch's shared one as the seat holds it otherwise
+// ([grantedSurface]). Never nil for a live epoch: a seat with no per-role
+// children still has the builtins, and answering nil would fail the turn
+// rather than run it with the tools it does have.
 func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	e.mcpMu.Lock()
 	reg := e.seatTools[handle]
@@ -552,7 +552,29 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	if c == nil {
 		return nil
 	}
-	return c.Tools
+	return grantedSurface(c, c.Org.AgentSeatByHandle(handle))
+}
+
+// grantedSurface is the epoch's surface as seat holds it: a clone of it without
+// the tools of each shared server the seat is not granted
+// ([config.MCPServer.Grants]).
+//
+// ONE INSTANCE, FILED ONCE, HELD BY SOME: a shared server runs one instance for
+// the company and files its tools into the epoch's registry, and a seat's
+// surface is cut from that registry, so a server granted to chosen seats is cut
+// out here for every other one. Every surface a seat's turn is built against
+// comes through this: a held seat's ([seatSurface]) and the fallback for a seat
+// this node holds no children for. A seat the epoch does not have (nil) holds no
+// shared server.
+func grantedSurface(c *Company, seat *org.Role) *tools.Registry {
+	reg := c.Tools.Clone()
+	for i := range c.Config.MCPServers {
+		server := &c.Config.MCPServers[i]
+		if server.IsShared() && !server.Grants(seat) {
+			reg.UnregisterOrigin(tools.Origin(server.Name))
+		}
+	}
+	return reg
 }
 
 // startAll brings a set of servers up CONCURRENTLY and files what they
@@ -659,9 +681,9 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // seatSpecs is every per-role child this seat needs.
 //
 // Keyed off [config.MCPServer.Grants], the rule the org projection publishes
-// too: a `shared: false` server the seat declares no credentials for gets no
-// child, because a template with nobody's identity in it is a server nobody
-// can act through, and a server turned off gets none for anybody.
+// too: a `shared: false` server gets a child for each agent seat its grant
+// reaches and for no other, whatever `mcp_env` blocks the seat holds, and a
+// server turned off gets none for anybody.
 //
 // A child one of whose values references a variable that resolves to nothing
 // — the seat's block or the template's own, under a key not declared optional
@@ -678,8 +700,8 @@ func seatSpecs(
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
 		// The epoch runs the shared ones; a template this seat is not
-		// granted has nobody's identity to run as, and one turned off is
-		// granted to nobody.
+		// granted is not this seat's to run, and one turned off is granted
+		// to nobody.
 		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}

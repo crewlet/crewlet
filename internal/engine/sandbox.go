@@ -1848,9 +1848,11 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // with no per-tool control left, so what it is given is the decision, and it
 // is made here rather than inherited. And never one the company has turned off
 // ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
-// day it is turned back on, and gives the box nothing until then. Nor one whose
-// address, resolved, is one the engine would not dial its own child of the
-// server at ([config.MCPAddressProblem]).
+// day it is turned back on, and gives the box nothing until then. Nor one the
+// seat is not granted ([config.MCPServer.Grants]): a box reaches a server's
+// tools as surely as the seat's surface does, so it is held to the one grant
+// the surface is. Nor one whose address, resolved, is one the engine would not
+// dial its own child of the server at ([config.MCPAddressProblem]).
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1912,6 +1914,16 @@ func sandboxMCP(
 				"detail", "the executor is not given this server: the company has "+
 					"turned it off, and an executor launched once it is turned back on "+
 					"is given it")
+			continue
+		}
+		if !server.Grants(seat) {
+			// OUT OF THE SCOPE, as one turned off is: declared, and not
+			// this seat's. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_not_granted", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is not granted to "+
+					"this seat (mcp_servers[].access, or the integration lane for a server "+
+					"reading each agent's own credential)")
 			continue
 		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
