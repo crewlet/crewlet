@@ -422,7 +422,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)
 	}
-	if err := n.host.Start(ctx); err != nil {
+	if err = n.host.Start(ctx); err != nil {
 		t.Fatalf("codetest: start %s's host: %v", n.id, err)
 	}
 	// THE QUERY SERVER, as the engine builds it: over the node's cache and
