@@ -620,10 +620,14 @@ catalogue the `op_id` the call was answered — so the same call made again,
 after an answer that said the outcome is unknown, is the same push, and its
 commit the same commit. A seat's write names its turn, the work item it is
 charged to and the model the call was made on, on its push. A refusal is
-answered in the class every write surface renders: a rule of the repository
-`forbidden`, a change to make another way `invalid` — a conflict among them,
-its marked text fenced as `repo_file` — a head that moved `stale_version`, and
-what waiting clears `unavailable`.
+answered in the class every write surface renders, by the one rule every
+domain's are: a rule refusing the caller (its grant, a protection, its pushes
+for the day) `forbidden`; the repository in a state that refuses the push
+until somebody changes it (archived, or a pull mirror) `conflict`; the
+repository at a limit on what it keeps (its bytes, its refs) `quota_exceeded`;
+a change to make another way `invalid` — a conflict among them, its marked
+text fenced as `repo_file` — and a ref whose path another ref holds `exists`;
+a head that moved `stale_version`; and what waiting clears `unavailable`.
 
 **A change's writes are each one write, decided where the change is.** A
 change's lifecycle — an open, an edit, a draft's state, a retarget, a close, a
@@ -648,8 +652,12 @@ on a line, is anchored where its lines were read — the revision's head on the
 where those lines went, its blob read in one read of the revision's diff, on
 a file the revision changes. A refusal is answered in the class every write
 surface renders: a rule of the change `forbidden`, a change that moved
-`stale_version`, a branch already heading a live change `exists`, a write only
-a live change takes `conflict`, and what is gone `not_found`.
+`stale_version`, a branch already heading a live change `exists`, the change or
+its repository in a state that refuses the write until somebody changes it (a
+change closed or merged, a repository archived or a pull mirror) `conflict`,
+and what is gone `not_found`. A merge follows the same rule: a draft, or a
+change no longer open, is `conflict` too, and a merge that would take its
+repository past the most it may keep `quota_exceeded`.
 
 **A scratch repository a turn names stays while the turn does.** Every call
 that names a scratch repository — a read or a write — first holds it from the
