@@ -1219,6 +1219,79 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 	}
 }
 
+// A RELAUNCH DOES NOT CONTINUE IN A BOX A WEEK OLD. A box's checkouts are as
+// old as the box, and every job continued in it is a fresh launch with a fresh
+// credential, so send-backs and answered parks could keep one checkout pushing
+// for as long as the turn lasts — past the two weeks the code host keeps a
+// deleted seat branch's engine commits, after which such a push is refused as
+// a forgery ([KeptBoxMaxAge]). Past the bound the box is reclaimed and the job
+// starts in a fresh one, from the pushed branch, dated anew.
+func TestARelaunchOfABoxPastItsKeptAgeStartsFresh(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.now = rig.now.Add(KeptBoxMaxAge)
+	var relaunch LaunchResult
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		res, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID))
+		if err != nil {
+			t.Errorf("a relaunch whose box is too old must still run: %v", err)
+		}
+		relaunch = res
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if relaunch.Reused || relaunch.SandboxID == "" || relaunch.SandboxID == run.SandboxID {
+		t.Fatalf("relaunch = %+v, want a fresh box in place of the week-old %q", relaunch, run.SandboxID)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the week-old box %q reclaimed before it was replaced",
+			killed, run.SandboxID)
+	}
+	got := rig.get("t1")
+	if got.SandboxID != relaunch.SandboxID || !got.BoxSince.Equal(rig.now) {
+		t.Fatalf("row names %q dated %v, want the fresh box %q dated %v",
+			got.SandboxID, got.BoxSince, relaunch.SandboxID, rig.now)
+	}
+}
+
+// A KEPT BOX IS DATED FROM ITS FIRST ATTACH, NOT ITS LATEST. A job continued
+// in the turn's box attaches it again, and a box re-dated by each of those
+// would never reach [KeptBoxMaxAge]: one a second short of it is continued
+// in, and its date stays the one its first job's attach wrote.
+func TestAKeptBoxIsDatedFromItsFirstAttach(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	first := rig.now
+	rig.now = first.Add(KeptBoxMaxAge - time.Second)
+	var relaunch LaunchResult
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		res, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID))
+		if err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		relaunch = res
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
+		t.Fatalf("relaunch = %+v, want it continued in the turn's box %q, short of a week old",
+			relaunch, run.SandboxID)
+	}
+	if got := rig.get("t1"); !got.BoxSince.Equal(first) {
+		t.Fatalf("the continued box is dated %v, want its first attach's %v", got.BoxSince, first)
+	}
+}
+
 // A RELAUNCH ON ANOTHER CLI RECLAIMS THE BOX IT LEAVES. Launch-time fallback
 // picks a member at every launch, so a turn's next job can run another CLI
 // than its last — which the box was installed for and no other CLI can run in.

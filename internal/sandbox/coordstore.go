@@ -247,7 +247,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			CodingAgent: existing.CodingAgent, Status: existing.Status,
-			LaunchNode: existing.LaunchNode,
+			LaunchNode: existing.LaunchNode, Since: existing.BoxSince,
 		}
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
@@ -1022,7 +1022,7 @@ func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, erro
 		// state a reader can see, in which a reseeded run still names
 		// the box an arriving answer would be told to continue in.
 		run.SandboxID, run.CommandID = "", ""
-		run.PausedAt = time.Time{}
+		run.PausedAt, run.BoxSince = time.Time{}, time.Time{}
 		return true
 	})
 	return won, err
@@ -1077,6 +1077,13 @@ func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss J
 // the ending, or as no record at all, rather than as a newer lease.
 func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
 	_, attached, err := s.mutateFenced(ctx, turnID, fence, func(run *PendingRun) bool {
+		// A BOX THE ROW DID NOT NAME IS DATED HERE, and one it already
+		// names keeps its date — see [PendingRun.BoxSince]: a job continued
+		// in its turn's kept box attaches that box again, twice, and a
+		// re-dated box would never age past [KeptBoxMaxAge].
+		if run.SandboxID != box.SandboxID {
+			run.BoxSince = s.clock()
+		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
 		// A COMMAND IS A JOB THAT STARTED, recorded on the job's own record
@@ -1132,8 +1139,10 @@ func (s *CoordStore) MarkBoxPaused(ctx context.Context, turnID string, at time.T
 func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		// Both together — a paused_at pointing at no box is a snapshot
-		// the reaper looks for every tick and never finds.
+		// the reaper looks for every tick and never finds. And the box's
+		// date with it, which is the box's and no later one's.
 		run.SandboxID, run.CommandID, run.PausedAt = "", "", time.Time{}
+		run.BoxSince = time.Time{}
 		return true
 	})
 	return err

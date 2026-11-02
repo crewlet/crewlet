@@ -230,6 +230,8 @@ func TestAJobContinuedInItsKeptBoxStartsOnRefreshedFiles(t *testing.T) {
 		c, err := NewCoordinator(CoordinatorOptions{
 			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
+			// The rig's clock, which dated the kept box ([KeptBoxMaxAge]).
+			Now: func() time.Time { return rig.now },
 			Refresh: func(_ context.Context, m *Manager, run PendingRun, box Sandbox) {
 				if m != rig.manager {
 					t.Error("the refresh was handed a manager other than the launch's")

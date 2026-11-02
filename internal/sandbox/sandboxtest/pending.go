@@ -403,6 +403,14 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
+	// AND WHEN IT WAS FIRST ATTACHED, which is how old its checkouts can be:
+	// a relaunch continues in it only while it is young enough
+	// ([sandbox.KeptBoxMaxAge]), so a box the attach left undated, or a reset
+	// that handed the launch no date, would never be continued in.
+	dated := mustGet(t, s, "t1").BoxSince
+	if dated.IsZero() {
+		t.Fatal("attaching a box to a run that named none left it undated")
+	}
 	next := run("t1")
 	next.LaunchNode = "node-b"
 	opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
@@ -421,8 +429,15 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	}
 	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
 		CodingAgent: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
-	if opened.Prior != want {
-		t.Errorf("the relaunch was handed %+v as the box it found, want %+v", opened.Prior, want)
+	prior := opened.Prior
+	since := prior.Since
+	prior.Since = time.Time{}
+	if prior != want || !since.Equal(dated) {
+		t.Errorf("the relaunch was handed %+v, dated %v, as the box it found, want %+v dated %v",
+			prior, since, want, dated)
+	}
+	if !got.BoxSince.Equal(dated) {
+		t.Errorf("the relaunch's row dates its box %v, want the attach's %v", got.BoxSince, dated)
 	}
 	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
 	if err := s.AttachSandbox(t.Context(), "t1",
@@ -2204,8 +2219,10 @@ func testReleasingABoxClearsBothHalves(t *testing.T, s sandbox.PendingStore) {
 	if err := s.ReleaseBox(t.Context(), "t1"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
+	// And the box's date goes with the box: a row naming no box has no age
+	// for a relaunch to read ([sandbox.PendingRun.BoxSince]).
 	got := mustGet(t, s, "t1")
-	if got.Paused() || got.HasBox() || got.CommandID != "" {
+	if got.Paused() || got.HasBox() || got.CommandID != "" || !got.BoxSince.IsZero() {
 		t.Errorf("release left %+v", got)
 	}
 }

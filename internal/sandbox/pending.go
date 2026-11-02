@@ -739,6 +739,22 @@ type PendingRun struct {
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
 
+	// BoxSince is when the box this row names was first attached to it, by
+	// the store's own clock: the age a relaunch reads off the box before it
+	// continues in it ([KeptBoxMaxAge], [PriorBox.ContinuesIn]). Zero where
+	// the row names no box.
+	//
+	// WRITTEN BY THE ATTACH OF A BOX THE ROW DOES NOT ALREADY NAME, and kept
+	// by every other one: a job continued in the turn's kept box attaches the
+	// same box again, and a box re-dated at each of those would never age —
+	// one checkout working for as long as the turn lasts, which is what the
+	// bound exists to stop. Dated in the attach's own write, rather than
+	// handed in by the launch, so no attach can name a box and leave it
+	// undated. The attach comes after the box is made and set up, and before
+	// its first job starts, so every checkout a job makes in it is younger.
+	// Cleared with the box, wherever the row stops naming one.
+	BoxSince time.Time `json:"box_since,omitzero"`
+
 	// Placement is which configured backend holds this run's box.
 	//
 	// PERSISTED, not re-derived from the config, and that is the whole
@@ -2548,10 +2564,41 @@ type PriorBox struct {
 	// whose host a local box is on ([PendingRun.LaunchNode]), and so the one
 	// node a box in a local cell may be continued in or reclaimed by.
 	LaunchNode string
+	// Since is when the box was first attached to the run
+	// ([PendingRun.BoxSince]): how old its checkouts can be.
+	Since time.Time
 }
 
-// ContinuesIn reports whether a launch of spec may continue in this box
-// rather than in a fresh one.
+// KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
+// first named it on the run's row ([PendingRun.BoxSince]), for a relaunch to
+// still continue in it ([PriorBox.ContinuesIn]). An older box is reclaimed and
+// the job starts in a fresh one, from the pushed branch, as a job whose box
+// was lost does.
+//
+// A BOX'S CHECKOUTS ARE AS OLD AS THE BOX, and no one job bounds that: every
+// job continued in a kept box is a fresh launch with a fresh credential, and
+// a reviewer's send-backs, and a person's answers to a job parked for as long
+// as the seat's pause_ttl_seconds (which has no ceiling), would otherwise keep
+// one checkout working for as long as the turn lasts. The engine's code host
+// keeps a deleted seat branch's engine commits code.PruneGrace (fourteen
+// days) after the deletion, and refuses a box's push carrying one it no
+// longer holds as a forgery (forged_committer); a job's credential is valid
+// code/host's RunTokenTTL (seven days) from its launch. So SEVEN DAYS — the
+// grace less the credential: a job launched into a box younger than that
+// pushes, at the latest, before fourteen days from the box's first attach,
+// and so from the deletion of any branch a job in it checked out, which came
+// after. code/host holds the three to that sum at compile time.
+//
+// EVERY KEPT BOX IS HELD TO IT, a run given no repository on the code host
+// included: whether a job may push there is its own launch's grant, which a
+// later job in the same box can hold where the one that checked out had none.
+// What a fresh box costs is the provisioning and the clone again, once a week
+// of one turn's work, and a parked job's CLI session, which the fresh job is
+// told the question and the answer in place of ([LaunchRequest.Continue]).
+const KeptBoxMaxAge = 7 * 24 * time.Hour
+
+// ContinuesIn reports whether a launch of spec, at now, may continue in this
+// box rather than in a fresh one.
 //
 // ONLY THE SAME CLI IN THE SAME CELL, and only once the job that used it is
 // over. A box is installed for one CLI and lives in one cell's backend, so a
@@ -2559,9 +2606,13 @@ type PriorBox struct {
 // reach it. And a box whose job may still be running — a row reset from any
 // status but the claim of the resumed turn that relaunches — is reclaimed, not
 // shared: two jobs in one checkout would each overwrite the other's work.
-func (p PriorBox) ContinuesIn(spec Spec) bool {
+//
+// AND ONLY A BOX YOUNGER THAN [KeptBoxMaxAge]. A box the row never dated has
+// no age a launch can hold to the bound, so it is not continued either.
+func (p PriorBox) ContinuesIn(spec Spec, now time.Time) bool {
 	return p.SandboxID != "" && p.Status == StatusResumed &&
-		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent
+		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent &&
+		!p.Since.IsZero() && now.Sub(p.Since) < KeptBoxMaxAge
 }
 
 // Fence is the ownership token a mutation carries.
