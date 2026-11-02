@@ -432,7 +432,8 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 // that left no capture of its own — an earlier job's holding none of what it
 // was told — a newest capture that was not kept, a log row naming another
 // capture, and a turn that kept none: not, each saying why — the answer the
-// launch acts on and every reader states.
+// launch acts on and every reader states. A run whose ending is decided is
+// ending from the decision on, before its end is owed: every launch refuses it.
 //
 // Mutation: drop any one condition and its row goes red.
 func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
@@ -452,6 +453,8 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	owing.OwedEnd = []byte(`{"outcome":"completed"}`)
 	recorded := *run
 	recorded.EndRecorded = true
+	stopping := *run
+	stopping.Ending = &RecordedEnding{ID: "ending-1"}
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
 	for name, tc := range map[string]struct {
@@ -469,7 +472,9 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 		"a turn whose run is over":     {row: live, follows: 2, restorer: fakeRestorer{}, why: "has ended"},
 		"a turn whose end is owed":     {row: live, run: &owing, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
 		"a turn whose end is recorded": {row: live, run: &recorded, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
-		"no runner restores it":        {row: live, run: run, follows: 2, why: "no runner of this build restores"},
+		"a run whose ending is decided, its end not yet owed": {row: live, run: &stopping, follows: 2,
+			restorer: fakeRestorer{}, why: "is ending"},
+		"no runner restores it": {row: live, run: run, follows: 2, why: "no runner of this build restores"},
 		"its runner refuses it": {row: live, run: run, follows: 2,
 			restorer: fakeRestorer{why: "older than 2.1.300"}, why: "older than 2.1.300"},
 		"the job it follows left none": {row: live, run: run, follows: 3, restorer: fakeRestorer{},

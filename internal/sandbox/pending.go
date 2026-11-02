@@ -495,13 +495,17 @@ func (r PendingRun) lost() bool {
 	return r.Ending != nil && r.Ending.Reason != "" && r.Stop == nil
 }
 
-// endDecided reports whether the turn's end is decided: owed on the row
-// ([PendingRun.OwedEnd]), or already on the executor log
+// endDecided reports whether the turn's end is decided: its run's ending
+// decided ([PendingRun.Ending]), which owes the turn's end next, or that end
+// owed on the row ([PendingRun.OwedEnd]), or already on the executor log
 // ([PendingRun.EndRecorded]). Such a turn is ending, and no relaunch of it
 // follows, whatever its row still holds: every path that ends a turn writes its
-// end before it lets the row go, and a launch refuses a row whose ending is
-// decided ([PendingStore.BeginLaunch]).
-func (r PendingRun) endDecided() bool { return len(r.OwedEnd) > 0 || r.EndRecorded }
+// end before it lets the row go, and EVERY LAUNCH REFUSES A ROW WHOSE ENDING IS
+// DECIDED ([ErrRunEnding]) — from the decision on, before the end is owed, for
+// as long as a stop's read, its announcement or a store's bad moment keeps the
+// ending for its retry. So the decision itself is what ends the turn here,
+// never the owing that follows it.
+func (r PendingRun) endDecided() bool { return r.Ending != nil || len(r.OwedEnd) > 0 || r.EndRecorded }
 
 // answerOwed reports whether a run whose ending is decided still holds a
 // person's answer that has to go back to the seat before its record is deleted:

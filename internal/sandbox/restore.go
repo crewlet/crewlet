@@ -139,10 +139,12 @@ type SessionContinuity struct {
 // the row's harness's sessions.
 //
 // A TURN WHOSE END IS DECIDED IS ENDED HERE, whatever its row on the log says
-// yet ([PendingRun.endDecided]): its end is owed on its run's record, or
-// recorded already and its record not yet gone, and no relaunch of it follows.
-// Read as live, a reader would say its session continues for the moments
-// between the end's decision and the log's taking it.
+// yet ([PendingRun.endDecided]): its run's ending is decided, which every
+// launch refuses, or its end is owed on its run's record, or recorded already
+// and its record not yet gone, and no relaunch of it follows. Read as live, a
+// reader would say its session continues for the moments between the ending's
+// decision and the log's taking the end — moments a stop's read or a store's
+// bad moment can stretch to minutes.
 //
 // What the box a launch gets says of its harness's own release, and what the
 // seat's budget says of the session's context, are the launch's to ask, and
@@ -155,8 +157,8 @@ func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
 		return SessionContinuity{Why: "the turn has ended, and no later turn continues its session yet, " +
 			"since a session is continued only by a relaunch of the turn that kept it"}
 	case run.endDecided():
-		return SessionContinuity{Why: "the turn is ending: its end is decided, and no relaunch of it " +
-			"follows to continue its session"}
+		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no relaunch " +
+			"of it follows to continue its session"}
 	}
 	kept, why := followedCapture(*run, follows)
 	if why != "" {
