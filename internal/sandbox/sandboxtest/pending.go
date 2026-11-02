@@ -46,7 +46,13 @@ var base = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 // flip does to a key this build does not know. A case that could reach the
 // row only through the store would be asking the codec under test to describe
 // its own output.
-func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.SandboxRuns)) {
+//
+// over builds the store under test on the records it is handed, for the cases
+// whose subject is the gap between two of the store's own writes
+// ([stagedLogCases]): they hand it records that stage that gap.
+func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.SandboxRuns),
+	over func(coord.SandboxRuns) sandbox.PendingStore,
+) {
 	t.Helper()
 	cases := []struct {
 		name string
@@ -160,6 +166,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ABridgedCallOutlivingItsJobIsNotTheNextJobs", testABridgedCallOutlivingItsJobIsNotTheNextJobs},
 		{"ABridgedCallNamingNoJobIsNotRecorded", testABridgedCallNamingNoJobIsNotRecorded},
 		{"ABridgedCallAfterItsJobsClaimStaysOnItsJob", testABridgedCallAfterItsJobsClaimStaysOnItsJob},
+		{"ARowALaterJobMovedOnReadsNoneOfItsCalls", testARowALaterJobMovedOnReadsNoneOfItsCalls},
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 		{"BeginLaunchUnionsCodeHolds", testBeginLaunchUnionsCodeHolds},
 		{"AddCodeHoldsAddsToALiveRowOnly", testAddCodeHoldsAddsToALiveRowOnly},
@@ -190,6 +197,14 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			t.Parallel()
 			store, runs := newStore(t)
 			tc.fn(t, store, runs)
+		})
+	}
+	for _, tc := range stagedLogCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, runs := newStore(t)
+			staged := &stagedRuns{records: runs}
+			tc.fn(t, staged, over(staged))
 		})
 	}
 }
@@ -2990,6 +3005,35 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 					got.Log.Calls, got.Launch.Bridged)
 			}
 		})
+	}
+}
+
+// A ROW A LATER JOB MOVED ON READS NONE OF ITS CALLS. A reader holds the row it
+// read — a resume's claim, a board's listing — and reads the log after it, by
+// which time a relaunch may have opened the log to the next job and that job
+// may have called. The log is the next job's, and the earlier row reads it as
+// none ([sandbox.PendingStore.BridgeLog]), its own job named: replayed as the
+// earlier job's, the next job's calls would be judged as work it did.
+//
+// Mutation: drop BridgeLog's job filter, and the earlier row reads the next
+// job's call.
+func testARowALaterJobMovedOnReadsNoneOfItsCalls(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-log-moved-on"
+	mustLaunched(t, s, run(turn))
+	earlier := mustGet(t, s, turn)
+	next := mustBeginLaunch(t, s, run(turn))
+	if ok, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: next,
+		Call: sandbox.BridgeCall{Name: "read_file", Seq: 1, At: base}}); err != nil || !ok {
+		t.Fatalf("the next job's call = %v, %v", ok, err)
+	}
+	got, err := s.BridgeLog(ctx, earlier)
+	if err != nil {
+		t.Fatalf("BridgeLog: %v", err)
+	}
+	if len(got.Calls) != 0 || got.Launch != earlier.LaunchID {
+		t.Errorf("the earlier row read %d calls under %q, want none under its own job %q",
+			len(got.Calls), got.Launch, earlier.LaunchID)
 	}
 }
 

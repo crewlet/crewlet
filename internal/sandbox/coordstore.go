@@ -97,7 +97,10 @@ func (s *CoordStore) clock() time.Time {
 // A round repeats only when the row VANISHED between the create that found it
 // and the reset that read it — the turn's previous run finishing in that
 // window — and the next create then wins, unless another launch of the same
-// turn created the row first, which the next reset takes. So an ordinary
+// turn created the row first, which the next reset takes. A row that vanishes
+// once the launch's own create or reset has landed never repeats one: that
+// row names this launch, and only its own ending removes it ([ErrRunEnding]).
+// So an ordinary
 // launch takes one round, a launch that met a finishing run two, and one that
 // also met a racing launch three; a fourth needs the row to vanish again
 // inside the next create-to-reset window, which nothing in this engine does
@@ -112,6 +115,14 @@ const launchRounds = 3
 // of, so the create is tried again: the turn's previous run finishing as this
 // one opens ends the row underneath the reset, and a reset that found nothing
 // used to report the launch open on a row that did not exist.
+//
+// A ROW THAT VANISHES ONCE THE LAUNCH'S OWN WRITE LANDED is a different thing,
+// and never created again: that row names this launch, its reset refused any
+// decided ending, so what removed it is an ending decided for this launch's
+// own job — a person's stop — and its finish. The launch is refused
+// [ErrRunEnding], as a reset the ending refused is. Created again, the row
+// would carry no ending, and the launch would start a box for a turn that
+// was stopped.
 func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error) {
 	if run.TurnID == "" {
 		return PendingRun{}, fmt.Errorf("sandbox: a pending run needs a turn id")
@@ -157,6 +168,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// [PendingStore.BeginLaunch]. Nothing else of the caller's: a record made
 	// here holds no note it was not handed.
 	created := run
+	// A CREATED ROW OPENS A ROUND, named by its first job, which no answer
+	// has cut yet ([PendingRun.Round]).
+	created.Round, created.AnsweredJob = run.LaunchID, ""
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
 	raw, err := encodeRun(created)
@@ -171,14 +185,13 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if made {
 			// AND THE JOB'S LOG, a new run's: whatever a key of that
 			// name held is no call of this run's.
-			last, opened, err := s.openLog(ctx, run.TurnID, run.LaunchID, logOpening{})
+			last, opened, err := s.openLog(ctx, run.TurnID, run.LaunchID,
+				logOpening{round: created.Round})
 			if err != nil {
 				return PendingRun{}, err
 			}
 			if !opened {
-				// The run ended under its own launch: as a row that went
-				// between the create and the reset.
-				continue
+				return PendingRun{}, endedUnderLaunch(run.TurnID)
 			}
 			created.OpenedAfter = last
 			return created, nil
@@ -246,14 +259,19 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			return false
 		}
 		existing.CodeHolds = holds
-		// And whether the job it replaces asked, which the reset clears
-		// below and the round's cut is decided by, and which job that is:
-		// what the write that opens the new job's log keeps of the round.
-		opening = logOpening{
-			replaced:  existing.LaunchID,
-			continues: run.Continues,
-			answered:  run.Continues && existing.asked(),
+		// THE ROUND THE JOB BELONGS TO, and the answer its log is still to
+		// be cut for — decided here, in the reset's own write, so the
+		// opening that follows, or the next relaunch's where that opening
+		// never lands, keeps what the round made ([PendingRun.Round]).
+		// Whether the replaced job asked is read before the reset clears
+		// its question below.
+		switch {
+		case !run.Continues:
+			existing.Round, existing.AnsweredJob = run.LaunchID, ""
+		case existing.asked():
+			existing.AnsweredJob = existing.LaunchID
 		}
+		opening = logOpening{round: existing.Round, answered: existing.AnsweredJob}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
@@ -362,25 +380,29 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	case err != nil:
 		return PendingRun{}, false, err
 	case !logged:
-		// The row went under the opening: as a reset that found none.
-		return PendingRun{}, false, nil
+		return PendingRun{}, false, endedUnderLaunch(run.TurnID)
 	}
 	opened.OpenedAfter = last
 	return opened, true, nil
 }
 
-// logOpening is what the write that opens a job's log keeps of the round
-// before it — see [CoordStore.openLog].
-type logOpening struct {
-	// replaced is the job the row held before this one; empty for a run
-	// the launch created, whose log starts afresh.
-	replaced string
+// endedUnderLaunch is [CoordStore.BeginLaunch]'s refusal of a launch whose
+// own row was removed before its log was opened to it.
+func endedUnderLaunch(turnID string) error {
+	return fmt.Errorf("sandbox: begin launch %s: the run ended under its launch: %w",
+		turnID, ErrRunEnding)
+}
 
-	// continues is whether the job carries the replaced job's round on
-	// ([PendingRun.Continues]), and answered whether it does so on a
-	// person's answer to that job's question, which cuts the round
-	// ([BridgeLog.AnsweredThrough]).
-	continues, answered bool
+// logOpening is what the write that opens a job's log keeps of the round
+// before it, as the row's create or reset decided it — see
+// [CoordStore.openLog].
+type logOpening struct {
+	// round is the round the job belongs to ([PendingRun.Round]).
+	round string
+
+	// answered is the job whose answered question the round is cut for
+	// ([PendingRun.AnsweredJob]); empty for a round no answer carried on.
+	answered string
 }
 
 // openLog opens turnID's log to job launch, answering the place of the last
@@ -399,23 +421,27 @@ type logOpening struct {
 // satisfy this round's delivery check. A job that CONTINUES the round keeps its
 // calls ([PendingRun.Continues]) and, carried on by a person's answer, cuts it
 // after the last of them; one carried on after a loss keeps the cut it had.
-// And it keeps only a log that is the replaced job's: one a launch never
-// opened to that job — its node stopped between the row's reset and the
-// opening — may hold an earlier round's calls, and is started afresh.
+//
+// BY THE ROUND, NEVER BY THE JOB BEFORE: what the log keeps is decided by the
+// round the row's own write named ([PendingRun.Round]) and the answer it is
+// cut for ([PendingRun.AnsweredJob]). An opening that failed, or that its node
+// stopped before, leaves the log on an earlier job of the round; the next
+// relaunch that carries the round on still keeps its calls, and still takes
+// the cut that opening owed. A log of another round is started afresh.
 func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, bool, error) {
 	last := 0
 	_, opened, err := s.runs.MutateSandboxRunLog(ctx, turnID, func(current coord.Record, found bool) ([]byte, error) {
-		next := BridgeLog{Launch: launch}
-		if found && o.continues {
+		next := BridgeLog{Launch: launch, Round: o.round}
+		if found {
 			var held BridgeLog
 			if err := json.Unmarshal(current.Value, &held); err != nil {
 				return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 			}
-			if held.Launch == o.replaced {
+			if held.Round == o.round {
 				next = held
 				next.Launch = launch
-				if o.answered {
-					next.AnsweredThrough = held.LastSeq()
+				if o.answered != "" && held.CutFor != o.answered {
+					next.AnsweredThrough, next.CutFor = held.LastSeq(), o.answered
 				}
 			}
 		}
@@ -1182,7 +1208,7 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 // BridgeLog reads the bridged tool log of run's job. See the contract on
 // [PendingStore].
 func (s *CoordStore) BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error) {
-	none := BridgeLog{Launch: run.LaunchID}
+	none := BridgeLog{Launch: run.LaunchID, Round: run.Round}
 	record, found, err := s.runs.SandboxRunLog(ctx, run.TurnID)
 	switch {
 	case err != nil:

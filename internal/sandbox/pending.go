@@ -1275,6 +1275,31 @@ type PendingRun struct {
 	// What bounds how often one round is started again ([MaxRoundLosses]).
 	RoundLosses int `json:"round_losses,omitempty"`
 
+	// Round names the executor round the row's job belongs to: the job that
+	// opened it. Set to the new job by a launch that starts a round — the
+	// create, and every relaunch that does not continue one — and carried by
+	// one that does ([PendingRun.Continues]). The log beside the record keeps
+	// the round's calls under the same name ([BridgeLog.Round]), and a launch
+	// keeps a log of its own round, whichever of the round's jobs the log was
+	// last opened to.
+	//
+	// ON THE RECORD, in the reset's own write, because the log's opening is a
+	// second write that can fail, or never come when the launching node
+	// stops: a relaunch that judged what to keep by the job the row held just
+	// before it found the log still on the job before THAT one, and started a
+	// carried-on round afresh — dropping the calls made before its question,
+	// and with them the submission its delivery check reads.
+	Round string `json:"round,omitempty"`
+
+	// AnsweredJob names the last job of the round whose question a person's
+	// answer carried the round on from: set by a relaunch that continues a
+	// job that asked, carried by one that continues any other, and cleared by
+	// a new round. The log's cut ([BridgeLog.AnsweredThrough]) is taken for it
+	// once, by the first opening that finds the log not yet cut for it
+	// ([BridgeLog.CutFor]) — so an answer whose opening failed is still cut by
+	// the relaunch after it, and a cut already taken is never moved by one.
+	AnsweredJob string `json:"answered_job,omitempty"`
+
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
 	// token budget its review or its relaunch was refused under, today — and
@@ -1427,6 +1452,15 @@ type BridgeLog struct {
 	// ([PendingStore.BridgeLog]).
 	Launch string `json:"launch"`
 
+	// Round is the executor round the log holds the calls of
+	// ([PendingRun.Round]): a launch that opens the log to a job of the same
+	// round keeps them, and one of another round starts the log afresh.
+	Round string `json:"round"`
+
+	// CutFor names the job whose answered question the log's cut was taken
+	// for ([PendingRun.AnsweredJob]); empty for a round no answer has cut.
+	CutFor string `json:"cut_for,omitempty"`
+
 	// Calls are the round's calls, in the order they finished. Bounded:
 	// see [MaxBridgeCalls]. Empty on a round that has called nothing yet.
 	Calls []BridgeCall `json:"calls,omitempty"`
@@ -1441,11 +1475,13 @@ type BridgeLog struct {
 	// round made before a person's answer carried it on, and zero for a
 	// round no answer has carried on: every call up to it was made by a job
 	// that asked, or by one before it, before the run knew the answer.
-	// Written by the launch that continues an asking job
-	// ([PendingRun.Continues]), off the same write that keeps those calls
-	// and opens the log to the new job — so no call of the asking job can
-	// land after the cut was taken; kept by a relaunch that carries the
-	// round on after a loss, and zeroed by a new round.
+	// Written by the first opening of the log after an answer
+	// ([PendingRun.AnsweredJob], [BridgeLog.CutFor]) — the launch that
+	// continues the asking job, or the one after it where that launch's
+	// opening never landed — off the same write that keeps those calls and
+	// opens the log to the new job, so no call of the asking job can land
+	// after the cut was taken; kept by a relaunch that carries the round on
+	// after a loss, and zeroed by a new round.
 	//
 	// A PLACE, NOT A SEARCH. The collection that closes the round reports
 	// only a submission made after it, because one made before the answer
@@ -1582,7 +1618,9 @@ type PendingStore interface {
 	// ([Coordinator.RecoverSeat]). A launch told nothing went on to
 	// start a job on a row that never named it, in a box nothing would
 	// reclaim. A row that went between the create and the reset is created
-	// again.
+	// again; one removed after the launch's own create or reset landed is
+	// this launch's ending, decided and finished, and refuses it
+	// [ErrRunEnding] — created again, it would carry no ending.
 	//
 	// THE TURN'S CODE HOLDS ARE UNIONED, NEVER RESET: a create writes the
 	// run's [PendingRun.CodeHolds], and a reset writes the union of what the

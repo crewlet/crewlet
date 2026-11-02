@@ -48,7 +48,7 @@ func TestPendingStoreContract(t *testing.T) {
 	sandboxtest.Run(t, func(*testing.T) (sandbox.PendingStore, coord.SandboxRuns) {
 		runs := memory.NewFleet()
 		return sandbox.NewCoordStore(runs), runs
-	})
+	}, func(runs coord.SandboxRuns) sandbox.PendingStore { return sandbox.NewCoordStore(runs) })
 }
 
 // NOTHING EMPTY EVER ANSWERS ANYTHING, and that is a rule of the value rather

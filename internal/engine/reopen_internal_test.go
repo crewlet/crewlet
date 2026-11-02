@@ -22,18 +22,26 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // probeTool answers every call and remembers the value each one carried, and
-// the model it was made on ([toolloop.CallModel]).
+// the model it was made on ([toolloop.CallModel]). Named "probe" unless name
+// says otherwise.
 type probeTool struct {
+	name   string
 	mu     sync.Mutex
 	seen   []string
 	models []string
 }
 
-func (p *probeTool) Name() string        { return "probe" }
+func (p *probeTool) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "probe"
+}
 func (p *probeTool) Description() string { return "probes" }
 func (p *probeTool) Parameters() map[string]any {
 	return map[string]any{"type": "object",
@@ -79,15 +87,21 @@ func connect(t *testing.T, endpoint string) (*mcp.ClientSession, error) {
 
 func callProbe(t *testing.T, session *mcp.ClientSession, value string) {
 	t.Helper()
+	callTool(t, session, "probe", value)
+}
+
+// callTool calls the tool named over a run's bridge, failing on a refusal.
+func callTool(t *testing.T, session *mcp.ClientSession, name, value string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: "probe", Arguments: map[string]any{"value": value}})
+		Name: name, Arguments: map[string]any{"value": value}})
 	if err != nil {
-		t.Fatalf("probe(%s): %v", value, err)
+		t.Fatalf("%s(%s): %v", name, value, err)
 	}
 	if res.IsError {
-		t.Fatalf("probe(%s) was refused: %+v", value, res.Content)
+		t.Fatalf("%s(%s) was refused: %+v", name, value, res.Content)
 	}
 }
 
@@ -98,6 +112,9 @@ type recoverableRun struct {
 	e        *Engine
 	endpoint string
 	tool     *probeTool
+	// later is a tool of the seat's catalogue the run's launch did not make
+	// active: the run reaches it only by activating it.
+	later *probeTool
 	// restart puts a fresh process's bridge at the address the box dials,
 	// over the fleet's keyring, holding no session yet.
 	restart func()
@@ -128,8 +145,11 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	// object is named ([Company.withheldFrom]) — which a builtin with no row,
 	// as the probe would be, always is. The recovery rebuilds the surface
 	// the seat is offered, so the probe has to be a tool it is offered.
-	if err := c.Tools.Register(tool, tools.Origin("probe")); err != nil {
-		t.Fatalf("Register: %v", err)
+	later := &probeTool{name: "later"}
+	for _, each := range []*probeTool{tool, later} {
+		if err := c.Tools.Register(each, tools.Origin("probe")); err != nil {
+			t.Fatalf("Register(%s): %v", each.Name(), err)
+		}
 	}
 	e, jobs := launchRig(t, c, launched)
 	e = withSessions(t, e)
@@ -160,7 +180,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 		t.Fatalf("%d jobs started, want 1", len(started))
 	}
 	return recoverableRun{
-		e: e, endpoint: started[0].MCPServers[config.ToolServerName].URL, tool: tool,
+		e: e, endpoint: started[0].MCPServers[config.ToolServerName].URL, tool: tool, later: later,
 		restart: func() {
 			e.bridge = bridgeFor(t, mcpbridge.Options{Material: material, BaseURL: server.URL})
 			serve(e.bridge)
@@ -233,6 +253,42 @@ func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	last := logged.Calls[1]
 	if last.Name != "probe" || last.Seq != 2 {
 		t.Errorf("the call after the recovery is recorded as %+v, want probe as the run's second", last)
+	}
+}
+
+// A RECOVERED RUN'S SURFACE IS THE ONE ITS CALLS LEFT IT. The run's launch made
+// the probe active and left the rest of the seat's catalogue to be activated;
+// the run activated another of its tools over the bridge before its node
+// restarted. The node that recovers the run rebuilds the surface from the
+// run's row AND the calls in the log beside it, so the tool the run activated
+// is still the run's to call.
+//
+// Mutation: reopen the run without its log's calls, and the tool it activated
+// is refused after the recovery.
+func TestARecoveredRunsSurfaceKeepsWhatItsCallsActivated(t *testing.T) {
+	t.Parallel()
+	run := launchRecoverable(t)
+	row := run.row(t)
+	// THE ACTIVATION THE RUN MADE before its node restarted, as the bridge
+	// logs a call under the run's job.
+	if ok, err := run.e.sandbox.Load().pending.AppendBridgeCall(t.Context(), row.TurnID,
+		sandbox.BridgeAppend{Launch: row.LaunchID, Call: sandbox.BridgeCall{
+			Name: toolname.Activate, Args: `{"name":"later"}`,
+			Output: "later is active: you can call it from your next round.",
+			Seq:    1, At: time.Now().UTC(),
+		}}); err != nil || !ok {
+		t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+	}
+
+	run.restart()
+	run.e.reopenAgentRun(t.Context(), run.row(t))
+	after, err := connect(t, run.endpoint)
+	if err != nil {
+		t.Fatalf("the box's own endpoint does not reach the recovered run: %v", err)
+	}
+	callTool(t, after, "later", "after")
+	if got := run.later.values(); len(got) != 1 || got[0] != "after" {
+		t.Errorf("the activated tool saw %v, want the call after the recovery", got)
 	}
 }
 
