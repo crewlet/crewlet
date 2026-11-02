@@ -494,11 +494,17 @@ written a logarithmic number of times. Every search a git node is answering
 reads, together, at most all but one of the units of its share of git work for
 seats' reads, which each read's search takes — one where the node has only
 one — so a seat's read of a file, a log or a diff always finds a unit no
-search can hold, however many company-wide searches are running. A search costs its node a lookup of a
-few lists and a read of the candidates' lines, never a walk of the tree: the
-repositories it names are divided among the git nodes that hold their
-indexes, each searching its own share at once, so adding git nodes divides a
-company-wide search rather than repeating it.
+search can hold, however many company-wide searches are running. A search
+costs its node a lookup of a few lists and a read of the candidates' lines,
+never a walk of the tree: the repositories it names are divided among the git
+nodes that hold their indexes, each searching its own share at once, so adding
+git nodes divides a company-wide search's reading rather than repeating it.
+Its REQUEST is not divided: it is one signed question every git node hears,
+carrying the whole table of which node answers for which repository, so each
+git node receives, verifies and reads the whole table — a line for every
+repository the search names — before it finds its own part, nodes assigned
+nothing included. What a search costs the broker and the nodes' reading of
+requests grows with the git nodes times the repositories it names.
 
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A seat's push of one commit
