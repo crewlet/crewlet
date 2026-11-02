@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,9 @@ type oauthVendor struct {
 	reuses     int
 	revoked    []string
 	accessLife int
+	// presented is the Authorization each request to the server's own
+	// address carried, which it refuses whatever it is.
+	presented []string
 }
 
 func newOAuthVendor(t *testing.T) *oauthVendor {
@@ -53,6 +57,9 @@ func newOAuthVendor(t *testing.T) *oauthVendor {
 		accessLife: 3600}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		v.mu.Lock()
+		v.presented = append(v.presented, r.Header.Get("Authorization"))
+		v.mu.Unlock()
 		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+
 			`/.well-known/oauth-protected-resource/mcp"`)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -610,4 +617,47 @@ func mustGrant(t *testing.T, e *Engine) coord.MCPGrant {
 		t.Fatalf("the grant record: %v, %v", found, err)
 	}
 	return g
+}
+
+// A VALUE TEST SENDS THE GRANT ONLY TO THE ADDRESS THIS NODE RUNS: a value is
+// tested with its entry as the fleet's active revision states it, sent with the
+// test ahead of this node's apply, and where that entry names another address
+// than the one the grant was checked against, it is tested without the
+// company's token; at the address this node runs, under it.
+//
+// Mutation: compare the address under test with the sent entry's own, and the
+// token is handed to the new address.
+func TestAValueTestSendsTheGrantOnlyToTheAddressThisNodeRuns(t *testing.T) {
+	t.Parallel()
+	v := newOAuthVendor(t)
+	a, b := oauthNodes(t, v, "dcr")
+	signIn(t, v, a, b)
+	var sent atomic.Value
+	var reached atomic.Int32
+	sent.Store("")
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		sent.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(elsewhere.Close)
+
+	moved := a.Company().Config.MCPServers[0]
+	moved.URL = elsewhere.URL + "/mcp"
+	report := a.testServer(t.Context(), &moved, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
+	if report.Serving() || reached.Load() == 0 || sent.Load() != "" {
+		t.Fatalf("an entry moved ahead of the apply was tested with %q; want no token at the new address",
+			sent.Load())
+	}
+
+	// THE ADDRESS THIS NODE RUNS is sent the grant's token: the vendor's own
+	// server, which refuses every request, says what it was presented.
+	here := a.Company().Config.MCPServers[0]
+	a.testServer(t.Context(), &here, nil, nil, nil, nil, a.testBearer(t.Context(), "vendor"))
+	v.mu.Lock()
+	presented := slices.Clone(v.presented)
+	v.mu.Unlock()
+	if !slices.ContainsFunc(presented, func(h string) bool { return strings.HasPrefix(h, "Bearer ") }) {
+		t.Fatalf("the address this node runs was presented %q, want the grant's token", presented)
+	}
 }

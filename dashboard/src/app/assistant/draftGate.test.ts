@@ -95,6 +95,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
     why: "one step of the model wizard, whose draft the wizard declares",
   },
+  "routes/settings/mcp-tools/wizard/steps.tsx": {
+    screen: ["routes/settings/mcp-tools/wizard/ServerWizard.tsx"],
+    why: "the MCP server wizard's steps, whose draft the wizard declares",
+  },
   "routes/doclet/page/LinkPicker.tsx": {
     screen: ["routes/doclet/page/Editor.tsx"],
     why: "the editor's link popover; what it inserts lands in the body the editor declares",
@@ -139,6 +143,10 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",
   "routes/settings/mcp-tools/flows/RemoveDialog.tsx":
     "modal: which stored values go with a server being removed, in its dialog",
+  "routes/settings/mcp-tools/flows/TestDialog.tsx":
+    "modal: which agent a per-agent server is tested as, in its dialog",
+  "routes/settings/mcp-tools/flows/ValueDialog.tsx":
+    "modal: a header or variable's new value, write-only, in its dialog",
   "components/ConfigField.tsx":
     "not an editor: one configuration field; every host is a modal or the create-company form, which declares",
   "routes/artifacts/DashboardView.tsx":

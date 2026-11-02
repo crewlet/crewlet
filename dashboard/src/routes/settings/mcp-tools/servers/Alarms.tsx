@@ -87,7 +87,10 @@ function Fix({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
+          href={href(["settings", "mcp-tools", "servers", server], {
+            flow: "edit",
+            step: "connection",
+          })}
         >
           {FIX.edit}
         </ButtonLink>

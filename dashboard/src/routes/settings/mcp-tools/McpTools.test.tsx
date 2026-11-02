@@ -4,7 +4,7 @@
  * in an administrator's reading and a member's.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -40,11 +40,27 @@ vi.mock("./api.ts", async (actual) => {
     restartServer: vi.fn(pending),
     setEnabled: vi.fn(pending),
     removeServer: vi.fn(pending),
+    testServer: vi.fn(pending),
+    testDraft: vi.fn(pending),
+    probeAddress: vi.fn(pending),
+    storeValue: vi.fn(pending),
+    readCatalogue: vi.fn(async () => ({
+      reading: "admin",
+      curated: [],
+      community: [],
+      registry: "",
+      reason: "",
+      left_out: 0,
+    })),
   };
 });
 vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   ...(await actual<typeof import("~/protocol/configWrite.ts")>()),
-  getEntity: vi.fn(() => new Promise(() => {})),
+  getEntity: vi.fn(async () => ({
+    kind: "entity",
+    entity: { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp" },
+    etag: '"entry-r1"',
+  })),
 }));
 
 /** Every address a flow opens at, on the list and on a server's page. */
@@ -52,6 +68,9 @@ const ADDRESSES: { hash: string; server?: string }[] = [
   { hash: "#/settings/mcp-tools" },
   { hash: "#/settings/mcp-tools?view=builtin" },
   { hash: "#/settings/mcp-tools?flow=add" },
+  { hash: "#/settings/mcp-tools?flow=edit&server=linear&step=connection" },
+  { hash: "#/settings/mcp-tools?flow=test&server=linear" },
+  { hash: "#/settings/mcp-tools?flow=value&server=linear&key=Authorization" },
   { hash: "#/settings/mcp-tools?flow=restart&server=linear" },
   { hash: "#/settings/mcp-tools?flow=disable&server=linear" },
   { hash: "#/settings/mcp-tools?flow=remove&server=linear" },
@@ -61,6 +80,8 @@ const ADDRESSES: { hash: string; server?: string }[] = [
   { hash: "#/settings/mcp-tools/servers/linear?tab=activity", server: "linear" },
   { hash: "#/settings/mcp-tools/servers/linear?flow=restart", server: "linear" },
   { hash: "#/settings/mcp-tools/servers/linear?flow=remove", server: "linear" },
+  { hash: "#/settings/mcp-tools/servers/linear?flow=test", server: "linear" },
+  { hash: "#/settings/mcp-tools/servers/linear?flow=edit&step=signin", server: "linear" },
 ];
 
 /** What only an administrator may meet: a flow's surface, or a control that opens one. */
@@ -69,8 +90,12 @@ function writeControls(): string[] {
   for (const dialog of screen.queryAllByRole("dialog")) {
     found.push(`dialog "${dialog.getAttribute("aria-label") ?? dialog.textContent?.slice(0, 30)}"`);
   }
-  for (const name of [/^Add server$/, /^Restart$/, /^Actions for /]) {
+  for (const name of [/^Add server$/, /^Restart$/, /^Actions for /, /^Edit/, /^Test now$/]) {
     if (screen.queryAllByRole("button", { name }).length > 0) found.push(`button ${name}`);
+  }
+  // THE WIZARD is a page of its own, in the list's place.
+  for (const name of [/^Add an MCP server$/, /^Edit /]) {
+    if (screen.queryAllByRole("heading", { name }).length > 0) found.push(`wizard ${name}`);
   }
   return found;
 }
@@ -112,11 +137,15 @@ test("a member meets no write control at any address, a flow's included", () => 
 
 // THE OTHER SIDE, so the reading above cannot pass by finding nothing at all:
 // the same addresses draw an administrator's controls.
-test("an administrator meets the controls and the flows at the same addresses", () => {
+test("an administrator meets the controls and the flows at the same addresses", async () => {
   current = mcpData("admin");
   detail = LINEAR_DETAIL;
   for (const address of ADDRESSES) {
     mountAt(address);
+    // An edit opens once the entry it edits is read.
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
     expect(writeControls().length, address.hash).toBeGreaterThan(0);
     cleanup();
   }
@@ -144,7 +173,7 @@ test("the list names the page, its views and, for a member, why it is read only"
 });
 
 // THE ENGINE'S ALARMS, a row each with the fix the engine names: a restart is
-// carried out here, an edit is a link to the tools a name refused.
+// carried out here, an edit opens the wizard where the prefix is.
 test("each alarm's row carries the fix the engine names for it", () => {
   current = mcpData("admin");
   mountAt({ hash: "#/settings/mcp-tools" });
@@ -153,8 +182,10 @@ test("each alarm's row carries the fix the engine names for it", () => {
   fireEvent.click(screen.getByRole("button", { name: "Restart" }));
   expect(location.hash).toContain("flow=restart");
   expect(location.hash).toContain("server=linear");
-  const edit = screen.getByRole("link", { name: "See which tools" });
-  expect(edit.getAttribute("href")).toBe("#/settings/mcp-tools/servers/search?tab=tools");
+  const edit = screen.getByRole("link", { name: "Change its prefix" });
+  expect(edit.getAttribute("href")).toBe(
+    "#/settings/mcp-tools/servers/search?flow=edit&step=connection",
+  );
 });
 
 // THE TABLE draws the engine's words: the state, where a remote server is,

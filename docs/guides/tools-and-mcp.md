@@ -618,29 +618,33 @@ an alarm's fix are the engine's.
 - **Servers.** For an administrator, **Needs attention** lists each server an
   [alarm](#a-servers-alarms) stands on, with the one fix the engine names:
   **Restart** (every instance, or the named agent's), **See its sign-in** (the
-  server's Connection tab, which links its integration's Agents tab) or **See
-  which tools** (the names no agent is offered, on its Tools tab). Four figures
+  server's Connection tab, which links its integration's Agents tab) or
+  **Change its prefix** (the server's tool prefix, in the edit wizard, for
+  names no agent is offered). Four figures
   follow (servers, running, MCP tools, and alarms standing), then a row per
   server with how it connects, its state, its tool count, the agents the
   engine grants it, and what last went wrong.
 - **A server's page** (`#/settings/mcp-tools/servers/{name}`). **Overview** is
-  each instance and its condition, when the server last answered, what it
-  reported itself as, and for an administrator the instructions it reports in
-  its handshake (shown to read, not handed to the agents: a seat's harness
-  reads the entry's [description](#saying-what-a-server-is-for)).
-  **Connection**, read only, is the address (any credential in it withheld) or
-  the command, its timeouts and tool prefix, how the engine signs in, and every
-  header or variable by name with the `${VAR}` it reads, never a value.
+  each instance and its condition, when the server last answered, its latest
+  [test](#testing-a-server) with **Test now**, what it reported itself as, and
+  for an administrator the instructions it reports in its handshake (shown to
+  read, not handed to the agents: a seat's harness reads the entry's
+  [description](#saying-what-a-server-is-for)). **Connection** is the address
+  (any credential in it withheld) or the command, its timeouts and tool
+  prefix, how the engine signs in, and every header or variable by name with
+  the `${VAR}` it reads and whether it is stored, never a value, each with
+  **Replace** ([Storing a header or variable](#storing-a-header-or-variable)).
   **Tools** is every tool the fleet lists with the engine's
   [risk](#what-a-tool-can-do) and its calls this week, and the names not
   offered with the engine's reason. **Activity** is the week's calls per tool,
   and for an administrator the newest calls.
-- **Changes.** A server's menu offers [**Restart**](#restarting-a-server-now),
-  **Disable** or **Enable** ([Turning a server off](#turning-a-server-off)) and
-  **Remove** ([Removing a server](#removing-a-server)), which first shows what
-  a dry run says names the server and the stored values only it reads, and
-  holds the removal until you clear those in the same change. **Add server**
-  opens the form below.
+- **Changes.** A server's menu offers [**Test**](#testing-a-server), **Edit**,
+  [**Restart**](#restarting-a-server-now), **Disable** or **Enable**
+  ([Turning a server off](#turning-a-server-off)) and **Remove**
+  ([Removing a server](#removing-a-server)), which first shows what a dry run
+  says names the server and the stored values only it reads, and holds the
+  removal until you clear those in the same change. **Add server** and **Edit**
+  open the wizard below.
 - **Built-in tools.** The engine's own tools by
   [group](#groups-and-who-may-call-each-one), each with what it can do and who
   may call it; a tool opens in the drawer with its arguments. A tool's own
@@ -649,19 +653,58 @@ an alarm's fix are the engine's.
 
 ### Adding a server from the dashboard
 
-**Add server** on Settings › MCP & tools (`admin`) writes
-the same `mcp_servers` entry you would write in YAML: a name, a command and its
-arguments (stdio) or an address (http), `shared` or one per seat, and the
-environment or headers — values as `${NAME}` pointers into the secret store,
-which the form offers as you type `$`. It checks the whole company with the
-server in it before storing, and adds it after every server already declared.
-A name the configuration already carries is refused; a name only a node still
-runs, from a revision it has not applied past yet, is free: the create is
-judged against the configuration alone. The name, the prefix, the keys and the
-address are held to [the naming rules](#naming-a-server-and-its-tools).
-Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [configure via the API](configure-via-api.md). Which agents get it is the
-entry's own `access`: see [Choosing which agents get a server](#choosing-which-agents-get-a-server).
+**Add server** on Settings › MCP & tools (`admin`) is a wizard that writes the
+same `mcp_servers` entry you would write in YAML, and stores the values it is
+sent write-only. Its steps:
+
+1. **Source.** A server from the [curated catalogue](#the-curated-catalogue-and-a-community-registry)
+   (what the company already runs is listed apart as added, never offered
+   twice); an **address**, which the engine checks before anything is added
+   ([`POST /mcp-probe`](../reference/api-endpoints.md#post-mcp-probe)) and
+   says what answers there, the sign-in it asks for and how many tools it lists
+   to nobody; a **pasted** `mcpServers` block (Claude, Cursor), VS Code
+   `servers` block or registry `server.json`, which is read for its servers
+   and their header or variable names and never run, the values in it left
+   out for you to type where they are stored; or a **community** listing from
+   the registry the company names, marked *Not reviewed*.
+2. **Name**, and what the server is for.
+3. **Connection.** The address, or the command, its arguments and its
+   variables, and the tool prefix.
+4. **Sign-in.** The vendor's integration where the catalogue names one (each
+   agent gets its own instance, signed in as itself, and which agents get it
+   is set on that integration's Agents tab), a header, or none. What the
+   address check or the catalogue found is chosen already and said.
+5. **Test.** The entry as it would be written, with the values you typed,
+   tested before anything is stored ([Before you save](#testing-a-server)). A
+   per-agent server is tested as the agent you choose.
+6. **Review.** The engine's dry run of the entry: a problem is placed on the
+   field it names, the step that holds it marked, and nothing is saved.
+
+Saving writes the entry (`PUT /config/mcp-servers/{name}` with
+`If-None-Match: *` for a new name, see
+[configure via the API](configure-via-api.md)), then stores each value you
+typed through [the values route](#storing-a-header-or-variable): tested, sealed
+write-only, and the key pointed at the variable the engine chooses. So no value
+is ever written into the entry, and a value the server refuses stores nothing:
+the entry stays saved and the wizard open on what is left, and saving again
+sends only that. A per-agent server's own value is stored untested, since the
+engine tests it as each agent. A server added here has no `access`, so it
+reaches every agent seat (an integration's server, the agents on at its lane):
+see [Choosing which agents get a server](#choosing-which-agents-get-a-server).
+
+**Edit** opens the same wizard on a saved server, at the step its action is
+about. The name stays, a stored value shows as stored and is replaced only if
+you type a new one, and every field of the entry the wizard does not draw
+(timeouts, annotations, `optional_keys`, `enabled`, `access`) is written back
+as it was.
+A configuration another system manages refuses both. A name the configuration
+already carries is refused on add; a name only a node still runs, from a
+revision it has not applied past yet, is free. The name, the prefix, the keys
+and the address are held to [the naming rules](#naming-a-server-and-its-tools).
+The wizard does not set up an OAuth sign-in: a server that asks for one is
+said to, and is added with a header it accepts, or with its `oauth` block in
+the configuration ([Signing in with OAuth](#signing-in-with-oauth)). Editing a
+server that signs in with OAuth keeps its sign-in as it is.
 
 ### Choosing which agents get a server
 
@@ -1635,11 +1678,14 @@ it. Each test is recorded in the runtime audit as `mcp_server_acted`.
 
 **Before you save.** The add and edit flows test the entry you are writing
 ([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as the
-configuration would run it once saved. Since a draft runs a command on the
-engine host or dials an address with your stored values, it asks for the same
-rights a write does (`config.write` and `secrets.write`, with a recent
-step-up), and it is held to the configuration's own checks first. A draft's
-test is not kept.
+configuration would run it once saved, with the values you typed for it and
+not stored yet: each is read through the variable it will be stored under. The
+entry and every value cross the fleet sealed under its keyring, bound to the
+one test. Since a draft
+runs a command on the engine host or dials an address with your values, it asks
+for the same rights a write does (`config.write` and `secrets.write`, with a
+recent step-up), and it is held to the configuration's own checks first. A
+draft's test is not kept, and neither is any value typed for it.
 
 **Checking an address.** When you type a remote server's address, the add
 flow checks it ([`POST /mcp-probe`](../reference/api-endpoints.md#post-mcp-probe))
@@ -1665,14 +1711,17 @@ configured are only ever sent to that origin.
 
 A server's **Connection** tab lists every header (a remote server) or variable
 (a local one) it is sent, by name: the variable each reads, whether the secret
-store holds it and who stored it last, never its value. **Replace value**
-stores a new one
+store holds it and who stored it last, never its value. **Replace** (or
+**Set**, for a key the store holds nothing for) stores a new one
 ([`PUT /mcp-servers/{name}/values/{key}`](../reference/api-endpoints.md#put-mcp-serversnamevalueskey)):
 what the server is sent under the key, whole, as the curated catalogue's format
 says (`Bearer <API key>`, for one).
 
 1. **Tested first.** The server is tested as it would run with the new value,
    where it runs, before anything is stored ([Testing a server](#testing-a-server)).
+   The test is sent the server's entry as the fleet's active configuration
+   states it, so a value stored straight after its entry is written is tested
+   before any node has applied that write.
    A value the server refuses stores nothing, and you are told the stage and
    the reason. You can store a value untested, for a server you cannot reach
    yet.
