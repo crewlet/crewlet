@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
@@ -19,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"golang.org/x/sync/errgroup"
 )
 
 // share is whose transfer an attempt's fetch is in the transfer lane: the
@@ -126,7 +127,7 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 	if l.kind == kindImport {
 		bring = max(limits.RepoMaxBytes-s.Repo.LiveBytes, 0)
 	}
-	if res, err := m.o.Git.Run(ctx, gitproc.Cmd{
+	if res, err := m.o.Git.Run(ctx, gitproc.Cmd{ //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassTransfer, Share: share, Remote: &remote,
 		Args: []string{"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-auto-gc",
 			"--no-auto-maintenance", remote.URL(), "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"},
@@ -134,7 +135,7 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 	}); err != nil {
 		return fmt.Errorf("mirror: fetch %s from %s: %w\n%s", repoID, remote, err, res.Stderr)
 	}
-	if loose, err := looseIn(sc.Dir); err != nil {
+	if loose, err := looseIn(sc.Dir); err != nil { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		return err
 	} else if loose {
 		return m.end(ctx, repoID, l, s, sc, &errPermanent{why: "the source answered over git's dumb HTTP " +
@@ -166,7 +167,7 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 		return err
 	}
 	for _, st := range steps(outs, cmds) {
-		applied, err := m.land(ctx, repoID, l, s, sc, st, l.seq+1, limits)
+		applied, err := m.land(ctx, repoID, l, s, sc, st, l.seq+1)
 		var perm *errPermanent
 		if errors.As(err, &perm) {
 			// Ended at the chunks landed so far, this attempt's among them:
@@ -417,7 +418,7 @@ func (m *Mirrors) largestBlob(ctx context.Context, sc *cache.Scratch, outs []str
 			return "", err
 		}
 		var found string
-		lines := gitproc.NewLines(func(line []byte) error {
+		lines := gitproc.NewLines(func(line []byte) (err error) {
 			f := bytes.Fields(line)
 			if len(f) != 3 || string(f[1]) != "blob" {
 				return nil
@@ -501,7 +502,7 @@ func (m *Mirrors) afterPropose(ctx context.Context, k kind) error {
 // is an *errPermanent; any other refusal, and a record not seen applied, is
 // the attempt's error, after which the next attempt reads the rows again.
 func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Synced, sc *cache.Scratch, st step,
-	seq int64, limits code.Limits) (landed bool, err error) {
+	seq int64) (landed bool, err error) {
 
 	id := statelog.NewOpID(m.now(), "")
 	refs := make([]code.PackRef, len(st.outs))
@@ -512,6 +513,7 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 	g, gctx := errgroup.WithContext(ctx)
 	for n, cs := range st.outs {
 		path := filepath.Join(sc.Dir, "objects", "pack", "pack-"+cs+".pack")
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		ref, err := code.LayBundle(code.DeriveOutputPackID(id, n), path, cs)
 		if err != nil {
 			return false, fmt.Errorf("mirror: lay out output %d: %w", n, err)
@@ -524,10 +526,10 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return false, err
 	}
-	if err := m.afterUpload(ctx, l.kind); err != nil {
+	if err = m.afterUpload(ctx, l.kind); err != nil {
 		return false, err
 	}
 	var res code.SyncResult
