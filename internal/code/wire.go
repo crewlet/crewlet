@@ -2367,7 +2367,7 @@ type CheckQuery struct {
 	// a page read: a page is full wherever the narrowing holds as many rows
 	// after its place, so what it costs follows what it answers rather than
 	// the history around it. A repository's listing and the window SEEK an
-	// index that leads with the narrowing (replicated 0136): the state, or the
+	// index that leads with the narrowing (replicated 0139): the state, or the
 	// check's name and then the state — a name alone is one seek a state,
 	// merged ([narrowedPlaces]). Their writes are what any index on
 	// code_checks costs: the two over a repository's attempts hold every
