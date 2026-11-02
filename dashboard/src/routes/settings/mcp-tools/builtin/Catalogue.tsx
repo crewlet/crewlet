@@ -193,26 +193,28 @@ export function BuiltinCatalogue({
               />
             </span>
             {picker}
-            <FilterChipGroup
-              label="Capability"
-              hideLabel
-              semantics="radio"
-              value={cap}
-              onValueChange={(v) => setCap((v ?? "all") as Cap)}
-            >
-              {(
-                [
-                  ["all", "All"],
-                  ["read_only", RISK.read_only.label],
-                  ["additive", RISK.additive.label],
-                  ["destructive", RISK.destructive.label],
-                ] as const
-              ).map(([value, label]) => (
-                <FilterChip key={value} value={value} count={capCount(value)}>
-                  {label}
-                </FilterChip>
-              ))}
-            </FilterChipGroup>
+            <span className="mcp-toolbar__end">
+              <FilterChipGroup
+                label="Capability"
+                hideLabel
+                semantics="radio"
+                value={cap}
+                onValueChange={(v) => setCap((v ?? "all") as Cap)}
+              >
+                {(
+                  [
+                    ["all", "All"],
+                    ["read_only", RISK.read_only.label],
+                    ["additive", RISK.additive.label],
+                    ["destructive", RISK.destructive.label],
+                  ] as const
+                ).map(([value, label]) => (
+                  <FilterChip key={value} value={value} count={capCount(value)}>
+                    {label}
+                  </FilterChip>
+                ))}
+              </FilterChipGroup>
+            </span>
           </>
         )}
       >

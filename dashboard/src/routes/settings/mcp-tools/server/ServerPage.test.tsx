@@ -94,7 +94,7 @@ test("the connection names the address and the headers to an administrator alone
   expect(await screen.findByText("Authorization")).toBeDefined();
   expect(screen.getByText("Reads ${LINEAR_TOKEN}")).toBeDefined();
   expect(screen.getByText("X-Team")).toBeDefined();
-  expect(screen.getByText("Written in the configuration")).toBeDefined();
+  expect(screen.getByText("Set in the configuration")).toBeDefined();
   expect(document.body.textContent).not.toContain("__redacted__");
   expect(screen.getByText("120 s (the default)")).toBeDefined();
   cleanup();

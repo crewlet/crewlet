@@ -20,7 +20,7 @@ import {
   Text,
   Tooltip,
 } from "@crewlethq/ui";
-import { ActivityGlyph, FileTextGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, FileTextGlyph, ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ServerDetail } from "../api.ts";
@@ -147,7 +147,7 @@ export function OverviewTab({
           </Card.Body>
         </Card>
         <Card padding="none">
-          <Card.Header icon={<ServerGlyph size="sm" />}>
+          <Card.Header icon={<ShieldCheckGlyph size="sm" />}>
             <Card.Title>Answers</Card.Title>
           </Card.Header>
           <Card.Body>

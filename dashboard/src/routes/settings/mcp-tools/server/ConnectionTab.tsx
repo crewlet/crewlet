@@ -211,7 +211,7 @@ export function ConnectionTab({
                     <TableTwoLineCell
                       value={v.name}
                       mono={v.secret ? "both" : "value"}
-                      detail={v.secret ? `Reads \${${v.secret}}` : "Written in the configuration"}
+                      detail={v.secret ? `Reads \${${v.secret}}` : "Set in the configuration"}
                     />
                   ),
                 },

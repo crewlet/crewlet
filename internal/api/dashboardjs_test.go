@@ -1502,13 +1502,13 @@ const (
 	// figures and table, a server's page with four tabs, the restart, disable
 	// and remove flows, the built-in catalogue and its drawer, and the page's
 	// words for every engine value), replacing the shipped Tools screen, took
-	// it from 5290.7 KiB to 5327.9 KiB (+37.2 KiB): the settings chunk
-	// +30.8 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
+	// it from 5290.7 KiB to 5328.2 KiB (+37.5 KiB): the settings chunk
+	// +31.0 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
 	// shared settings code Rollup moved into it, and +1.0 KiB in the kit's
 	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
 	// page is all in the settings chunk, so the initial load only lost that
-	// 0.4 KiB. 5328 KiB.
-	treeBudget = 5<<20 + 208<<10
+	// 0.4 KiB. 5329 KiB.
+	treeBudget = 5<<20 + 209<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

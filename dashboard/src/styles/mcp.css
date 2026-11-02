@@ -198,6 +198,13 @@
   max-inline-size: 16rem;
 }
 
+/* The bar's last control stands at its far end, past the search: in the
+   kit's bar (the catalogue's) it is the chips, wrapped to say so. */
+.mcp-toolbar > :last-child,
+.mcp-toolbar__end {
+  margin-inline-start: auto;
+}
+
 /* A line under a card's rows: why a list is short, or what it leaves out. */
 .mcp-note {
   margin: 0;
