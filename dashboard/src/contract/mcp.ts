@@ -178,8 +178,15 @@ interface McpOAuthFailure {
  * the client's secret, and never on a member's reading.
  */
 interface McpOAuthView {
+  /**
+   * `authorization_code`: a person signs the company in. `client_credentials`:
+   * the engine signs in as the company's service identity, nobody signs in,
+   * and `status` is always `connected` (a credential the vendor refuses is the
+   * server's failure).
+   */
+  grant: string;
   status: McpOAuthStatus;
-  /** How the engine registers: `cimd`, `dcr` or `own`. */
+  /** How the engine registers for a person's sign-in: `cimd`, `dcr` or `own`; "" for a service identity. */
   client: string;
   /** The client id the grant was made as, else the one the configuration names; "". */
   client_id: string;
@@ -371,7 +378,8 @@ export type McpInstanceState = "running" | "failed" | "waiting";
  * credential. `headers`: values the configuration sets, as HTTP headers to a
  * remote server and as environment variables to a local one. `integration`:
  * each agent's own credential from one of the company's integrations.
- * `oauth`: the access token of the company's OAuth sign-in.
+ * `oauth`: an OAuth access token, issued under a person's sign-in or to the
+ * company's service identity (`oauth.grant` on the administrator's reading).
  */
 export type McpAuth = "none" | "headers" | "integration" | "oauth";
 
@@ -675,7 +683,7 @@ export interface McpServerAnswer {
   calls: McpServerCalls;
   /** The server's latest test, whoever asked through whichever node; null where never tested. */
   last_check: McpCheckView | null;
-  /** Every header or variable the server is sent, by name and never by value. */
+  /** Every header or variable the server is sent, and its OAuth client's secret, by name and never by value. */
   values: McpValueState[];
   /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
   reaches: McpReach[];
@@ -696,8 +704,12 @@ interface McpReach {
   via: string | null;
 }
 
-/** Where a server is sent a value: a remote server's header, a local one's variable. */
-type McpValueAs = "header" | "env";
+/**
+ * Where a value goes: a remote server's header, a local one's variable, or
+ * (`oauth`, key `oauth.client_secret`) the company's own OAuth client's
+ * secret, sent to the server's authorization server alone.
+ */
+type McpValueAs = "header" | "env" | "oauth";
 
 /**
  * One header or variable a server is sent, by name: the variable it reads and

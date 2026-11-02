@@ -91,7 +91,9 @@ const (
 	// ([config.MCPServer.SeatBindings]).
 	MCPAuthIntegration MCPAuth = "integration"
 	// MCPAuthOAuth is a remote server the company signs in to with OAuth
-	// ([config.MCPOAuth]): the engine sends the grant's access token.
+	// ([config.MCPOAuth]): the engine sends an access token, issued under a
+	// person's grant or to the company's service identity, which the
+	// server's `oauth.grant` tells apart.
 	MCPAuthOAuth MCPAuth = "oauth"
 )
 

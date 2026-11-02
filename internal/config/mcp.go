@@ -125,10 +125,11 @@ type MCPServer struct {
 	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
 	// OAuth signs the company in to a remote server with OAuth, one grant
-	// for the company that a person makes from the server's page and the
-	// engine renews ([MCPOAuth]); absent for a server that takes its
-	// credentials in headers, or none.
-	OAuth *MCPOAuth `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"Sign the company in to this remote server with OAuth (http, shared): how the engine registers, and the scopes it asks for."`
+	// for the company: a person's sign-in made from the server's page and
+	// renewed by the engine, or a service identity the engine signs in as
+	// with the company's own client's credentials ([MCPOAuth]); absent for a
+	// server that takes its credentials in headers, or none.
+	OAuth *MCPOAuth `yaml:"oauth,omitempty" json:"oauth,omitempty" desc:"Sign the company in to this remote server with OAuth (http, shared): the grant (a person's sign-in, or a service identity's client credentials), how the engine registers, and the scopes it asks for."`
 
 	// SeatCredentials declares which integration's per-seat credential a
 	// per-seat server reads, and under which key, so the engine binds each
