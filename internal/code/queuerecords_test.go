@@ -222,9 +222,9 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 			AND actor = 'pat:ada' AND actor_seat = 'founder' AND introduced = ?`, push, oidOf("M")); pushes != 1 {
 		t.Fatalf("%d push rows record the landing as ada's push via queue introducing M, want one", pushes)
 	}
-	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedPreLand) ||
+	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedQueue) ||
 		got[0].entry != entryID || got[0].base != oidOf("A") || got[0].commit != oidOf("M") || !got[0].green {
-		t.Fatalf("main's landings read %+v, want one green pre_land landing of the entry from A to M", got)
+		t.Fatalf("main's landings read %+v, want one green queue landing of the entry from A to M", got)
 	}
 	if green, _ := n.greenOf(repo, mainRef); green != oidOf("M") {
 		t.Fatalf("main's green row is at %q, want the landing's tip", green)

@@ -16,7 +16,7 @@ import (
 )
 
 // THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's git node is
-// home to codetest.RepoName, whose main is a pre_land queue target, and the
+// home to codetest.RepoName, whose main is a queue target, and the
 // home's three workers — its change work, its check work and its queue — are
 // turned one at a time over the fleet's own estate, its cache and its pool,
 // the train built by the git node's own chain builder: every record but a

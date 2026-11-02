@@ -6191,7 +6191,7 @@ change as whoever enqueued it.
 | `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
-merge's (`kind: direct`), a queue's (`pre_land`) and a person's
+merge's (`kind: direct`), a queue's (`kind: queue`) and a person's
 own push under `direct_push: persons` (`kind: push`, naming their human seat)
 — green, and the branch's green row moved with it, where the branch's gate
 requires no check. The push's decide stamps its landings from the rules its
