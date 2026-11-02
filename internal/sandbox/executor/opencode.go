@@ -617,9 +617,12 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 			", and starts a new session, "+session.Fresh+", instead: "),
 		q(paths.FreshBrief()), q(paths.FreshBrief()))
 	if rewired {
+		// A RUN WHOSE CONFIGURATION NAMES NO VALUE has neither set to swap,
+		// and starts on the configuration as it is; every other has both,
+		// file for file ([OpenCode.WriteConfig]).
 		values, fresh := q(paths.OpenCodeValues()), q(paths.OpenCodeValuesFresh())
-		line(`if [ -n "$w" ]; then rm -rf %s && mv %s %s || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }; else rm -rf %s; fi`,
-			values, fresh, values, fresh)
+		line(`if [ -n "$w" ]; then rm -rf %s && { [ ! -e %s ] || mv %s %s; } || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }; else rm -rf %s; fi`,
+			values, fresh, fresh, values, fresh)
 	}
 	return b.String()
 }

@@ -193,6 +193,24 @@ func TestAnOpenCodeRunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
 	})
 }
 
+// AN OPENCODE RUN WHOSE CONFIGURATION NAMES NO VALUE STARTS ON IT AS IT IS,
+// whichever session its box started: with neither set of values written, a fall
+// back has nothing to swap, and finding nothing is no reason to end the run.
+//
+// Mutation: move the other set over the first whether or not there is one, and
+// the fall back ends the run before its server starts.
+func TestAnOpenCodeRunWithNoValuesStartsOnItsConfigurationAsItIs(t *testing.T) {
+	t.Parallel()
+	run := runScript(t, scriptOpts{session: &continuingOpenCode, freshBrief: "the task, from the top",
+		req: sandbox.RunRequest{Resume: carriedOpenCode, FreshWiring: &sandbox.Wiring{}}})
+	if run.code != 0 {
+		t.Fatalf("a fall back with no values exited %d:\n%s", run.code, run.stderr)
+	}
+	if got := readIn(t, run.dir, "brief"); got != "the task, from the top" {
+		t.Errorf("`opencode run` read %q, want the fresh brief", got)
+	}
+}
+
 // A SESSION ITS HARNESS WAS CUT OFF IN IS RESTORED OVER THE BOX'S OWN COPY. The
 // capture of a job that did not exit cleanly was packed by the engine, and the
 // box's copy may hold what its harness never finished — or what it went on to
