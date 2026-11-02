@@ -162,10 +162,10 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 		if !found {
 			continue
 		}
-		routed, err := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
+		routed, routeErr := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
 			dequeued: true, conflicted: x.Reason == EjectConflict, enqueuer: entry.EnqueuedBy.reviewer()})
-		if err != nil {
-			return queueDecision{}, err
+		if routeErr != nil {
+			return queueDecision{}, routeErr
 		}
 		if routed != nil {
 			routings = append(routings, *routed)
