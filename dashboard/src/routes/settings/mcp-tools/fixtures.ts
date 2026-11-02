@@ -16,6 +16,7 @@ import type {
   McpMemberServerAnswer,
   McpMemberServerStatus,
   McpMemberServersStatusAnswer,
+  McpOAuthView,
   McpServerAnswer,
   McpServerStatus,
   McpServersStatusAnswer,
@@ -505,5 +506,46 @@ export function mcpData(reading: "admin" | "member", reload: () => void = () => 
     loading: false,
     failure: null,
     reload,
+  };
+}
+
+/** Linear's sign-in, made by jane.doe through a client registered automatically. */
+export const LINEAR_OAUTH: McpOAuthView = {
+  grant: "authorization_code",
+  status: "connected",
+  client: "dcr",
+  client_id: "registered-client",
+  issuer: "https://auth.linear.app",
+  resource: "https://mcp.linear.app/mcp",
+  scopes: ["read", "write"],
+  connected_by: "jane.doe",
+  connected_at: "2026-11-01T09:00:00Z",
+  expires_at: "2026-11-01T13:00:00Z",
+  failure: null,
+};
+
+/** A service identity's view, as the engine answers it: always connected, nobody behind it. */
+export const SERVICE_OAUTH: McpOAuthView = {
+  grant: "client_credentials",
+  status: "connected",
+  client: "",
+  client_id: "crewlet-agents",
+  issuer: "",
+  resource: "",
+  scopes: ["read"],
+  connected_by: null,
+  connected_at: null,
+  expires_at: null,
+  failure: null,
+};
+
+/** The page's data with one server signed in to with OAuth, as `oauth` says. */
+export function withOAuth(data: McpData, name: string, oauth: McpOAuthView): McpData {
+  return {
+    ...data,
+    adminRow: (n) => {
+      const row = data.adminRow(n);
+      return row && n === name ? { ...row, oauth } : row;
+    },
   };
 }

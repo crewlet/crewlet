@@ -26,11 +26,23 @@ import { failureWords, RISK, STATE } from "./words.ts";
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
  * wizard (`step` names where an edit opens); `test` the Test dialog; `value`
- * the dialog that stores one header or variable (`key`).
+ * the dialog that stores one header or variable (`key`); `signin` and
+ * `revoke` a server's OAuth sign-in, made and given up.
  */
-export type Flow = "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart";
+export type Flow =
+  "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart" | "signin" | "revoke";
 
-const FLOWS: readonly Flow[] = ["add", "edit", "test", "value", "disable", "remove", "restart"];
+const FLOWS: readonly Flow[] = [
+  "add",
+  "edit",
+  "test",
+  "value",
+  "disable",
+  "remove",
+  "restart",
+  "signin",
+  "revoke",
+];
 
 /** The open flow and its arguments, and the ways to open and close one. */
 export function useFlow() {

@@ -212,6 +212,13 @@
   border-block-start: 1px solid var(--color-border-default);
 }
 
+/* A stored value's state beside its Replace, on one line of a card's facts. */
+.mcp-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
 /* ---- the dialogs ------------------------------------------------------------- */
 
 .mcp-testing {

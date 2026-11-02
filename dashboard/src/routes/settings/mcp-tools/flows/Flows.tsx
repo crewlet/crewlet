@@ -15,6 +15,7 @@ import { useServerDetail, type McpData } from "../data.ts";
 import type { useFlow } from "../parts.tsx";
 import { writeRefusalWords } from "../words.ts";
 import { RemoveDialog } from "./RemoveDialog.tsx";
+import { RevokeDialog, SignInDialog } from "./SignInDialog.tsx";
 import { TestDialog } from "./TestDialog.tsx";
 import { ValueDialog } from "./ValueDialog.tsx";
 
@@ -51,7 +52,31 @@ export function Flows({
       );
     case "value":
       return flow.key ? (
-        <StoredValue server={server} valueKey={flow.key} onClose={flow.close} onDone={done} />
+        <StoredValue
+          server={server}
+          valueKey={flow.key}
+          grant={data.adminRow(name)?.oauth?.grant ?? ""}
+          onClose={flow.close}
+          onDone={done}
+        />
+      ) : null;
+    case "signin": {
+      // A PERSON'S SIGN-IN ALONE: a service identity signs itself in, and a
+      // server with no oauth block has nothing to sign in to.
+      const oauth = data.adminRow(name)?.oauth;
+      return oauth && oauth.grant !== "client_credentials" ? (
+        <SignInDialog
+          server={server}
+          oauth={oauth}
+          callbackUrl={data.answer && "callback_url" in data.answer ? data.answer.callback_url : ""}
+          onClose={flow.close}
+          onDone={done}
+        />
+      ) : null;
+    }
+    case "revoke":
+      return data.adminRow(name)?.oauth?.status === "connected" ? (
+        <RevokeDialog server={server} onClose={flow.close} onDone={done} />
       ) : null;
     case "restart":
       return (
@@ -206,11 +231,14 @@ function RestartDialog({
 function StoredValue({
   server,
   valueKey,
+  grant,
   onClose,
   onDone,
 }: {
   server: McpMemberServerStatus;
   valueKey: string;
+  /** The server's OAuth grant, "" with none. */
+  grant: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -220,6 +248,7 @@ function StoredValue({
     <ValueDialog
       server={server}
       valueKey={valueKey}
+      grant={grant}
       value={values.find((v) => v.key === valueKey) ?? null}
       onClose={onClose}
       onDone={() => {

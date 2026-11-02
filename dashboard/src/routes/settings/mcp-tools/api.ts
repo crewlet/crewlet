@@ -6,8 +6,10 @@
  * entity route, `enabled`), and its removal (`DELETE /config/mcp-servers/{name}`);
  * and for the add and edit wizard, the catalogue (`GET /mcp-catalogue`), an
  * address checked before it is added (`POST /mcp-probe`) and a draft's test
- * (`POST /mcp-checks`). The list is the `mcp_servers_status` question, which
- * `data.ts` asks.
+ * (`POST /mcp-checks`); and a server's OAuth sign-in, started
+ * (`POST /mcp-servers/{name}/oauth`), read while it is going
+ * (`GET /mcp-sign-ins/{id}`) and given up (`DELETE /mcp-servers/{name}/oauth`).
+ * The list is the `mcp_servers_status` question, which `data.ts` asks.
  *
  * EVERY ANSWER IS A VALUE. A refusal comes back as one, with the engine's code
  * and sentence, so a flow branches on what came back rather than catching.
@@ -29,6 +31,8 @@ import type {
   McpRemovalWritten,
   McpRestartAnswer,
   McpServerAnswer,
+  McpSignIn,
+  McpSignOut,
   McpValueAnswer,
 } from "~/contract/mcp.ts";
 import { answerOf, getEntity, outcomeOf, putEntity } from "~/protocol/configWrite.ts";
@@ -261,4 +265,26 @@ export async function storeValue(
       },
     }),
   );
+}
+
+/**
+ * `POST /mcp-servers/{name}/oauth`: a sign-in started, answered with the
+ * address the person's browser consents at, once. `conflict` for a server
+ * the engine signs in to as a service identity, which nobody signs in to.
+ */
+export async function startSignIn(name: string): Promise<McpAnswer<McpSignIn>> {
+  return settle(rest.request("POST", `/mcp-servers/${pathSegment(name)}/oauth`, { body: {} }));
+}
+
+/** `GET /mcp-sign-ins/{id}`: where a sign-in is, without its address. */
+export async function readSignIn(id: string, signal: AbortSignal): Promise<McpAnswer<McpSignIn>> {
+  return settle(rest.request("GET", `/mcp-sign-ins/${pathSegment(id)}`, { signal }));
+}
+
+/**
+ * `DELETE /mcp-servers/{name}/oauth`: the grant given up, revoked at the
+ * vendor where it offers that and forgotten here whatever it said.
+ */
+export async function signOut(name: string): Promise<McpAnswer<McpSignOut>> {
+  return settle(rest.request("DELETE", `/mcp-servers/${pathSegment(name)}/oauth`));
 }

@@ -18,6 +18,8 @@ import type {
   McpFailureClass,
   McpFixKind,
   McpInstanceState,
+  McpOAuthClient,
+  McpOAuthStatus,
   McpRisk,
   McpServerState,
   McpStepState,
@@ -91,13 +93,87 @@ export const STAGE_STATE: Record<McpStepState, StepState> = {
   not_reached: "pending",
 };
 
+/**
+ * A way a server is signed in to, as the wizard offers it: the catalogue's
+ * methods, and a service identity, which the engine reads as `oauth` with
+ * `grant: client_credentials`.
+ */
+export type SignInChoice = McpAuthMethod | "client_credentials";
+
 /** A sign-in method in a few words, for a card, a fact or a sentence. */
-export const SIGN_IN: Record<McpAuthMethod, { label: string; noun: string }> = {
+export const SIGN_IN: Record<SignInChoice, { label: string; noun: string }> = {
   integration: { label: "Integration", noun: "an integration" },
   oauth: { label: "OAuth", noun: "OAuth" },
   headers: { label: "Header", noun: "a header" },
+  client_credentials: { label: "Client credentials", noun: "client credentials" },
   none: { label: "None", noun: "no sign-in" },
 };
+
+/** Where a server's OAuth sign-in is, in a word, the tone its tag wears. */
+export const OAUTH_STATUS: Record<McpOAuthStatus, { label: string; tone: Tone }> = {
+  connected: { label: "Connected", tone: "success" },
+  needs_sign_in: { label: "Needs sign-in", tone: "warning" },
+  expired: { label: "Expired", tone: "warning" },
+  refresh_failed: { label: "Renewal refused", tone: "danger" },
+};
+
+/**
+ * How the engine registers for a person's sign-in: as a choice (`label`, its
+ * `detail`), and inside a sentence (`noun`).
+ */
+export const OAUTH_CLIENT: Record<McpOAuthClient, { label: string; detail: string; noun: string }> =
+  {
+    cimd: {
+      label: "Published identity",
+      detail: "No registration at the vendor",
+      noun: "Crewlet's published identity",
+    },
+    dcr: {
+      label: "Register automatically",
+      detail: "A client is created on the first sign-in",
+      noun: "a client registered automatically",
+    },
+    own: {
+      label: "Your own client",
+      detail: "An app you registered there",
+      noun: "the company's own client",
+    },
+  };
+
+/** The client a sign-in registers as, in a sentence; "" for one this build does not name. */
+export function clientNoun(client: string): string {
+  return client in OAUTH_CLIENT ? OAUTH_CLIENT[client as McpOAuthClient].noun : "";
+}
+
+/**
+ * What giving a sign-in up did at the vendor, as its toast. The engine has
+ * forgotten the grant whatever the vendor said, so each is a sign-out.
+ */
+export function signOutWords(
+  title: string,
+  out: { revocation: "revoked" | "not_offered" | "failed"; said: string },
+): { variant: "success" | "warning"; title: string; message: string } {
+  switch (out.revocation) {
+    case "revoked":
+      return {
+        variant: "success",
+        title: `${title}'s sign-in revoked`,
+        message: "Its tools stop answering until somebody signs in again.",
+      };
+    case "not_offered":
+      return {
+        variant: "success",
+        title: `Signed out of ${title}`,
+        message: `${title} offers no way to revoke a grant, so it lapses there on its own. The engine has forgotten it.`,
+      };
+    case "failed":
+      return {
+        variant: "warning",
+        title: `Signed out of ${title}, not revoked there`,
+        message: `${out.said ? `${title} said: ${out.said} ` : ""}The engine has forgotten the grant; revoke it at ${title} as well.`,
+      };
+  }
+}
 
 /** How a call ended. */
 export const OUTCOME: Record<McpCallOutcome, { label: string; tone: Tone }> = {
@@ -349,7 +425,7 @@ export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",
   edit: "Change its prefix",
-  sign_in: "See its sign-in",
+  sign_in: "Sign in",
   approve: "Open the Inbox",
   review: "Review the changes",
 };

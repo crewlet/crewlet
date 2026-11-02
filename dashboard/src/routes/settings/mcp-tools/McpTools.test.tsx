@@ -13,7 +13,14 @@ import type { RestResult } from "~/lib/useRest.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import type { ServerDetail } from "./api.ts";
 import type { McpData } from "./data.ts";
-import { LINEAR_DETAIL, LINEAR_MEMBER_DETAIL, MCP_NOW, mcpData } from "./fixtures.ts";
+import {
+  LINEAR_DETAIL,
+  LINEAR_MEMBER_DETAIL,
+  LINEAR_OAUTH,
+  MCP_NOW,
+  mcpData,
+  withOAuth,
+} from "./fixtures.ts";
 import { McpTools } from "./McpTools.tsx";
 
 let current: McpData;
@@ -74,6 +81,8 @@ const ADDRESSES: { hash: string; server?: string }[] = [
   { hash: "#/settings/mcp-tools?flow=restart&server=linear" },
   { hash: "#/settings/mcp-tools?flow=disable&server=linear" },
   { hash: "#/settings/mcp-tools?flow=remove&server=linear" },
+  { hash: "#/settings/mcp-tools?flow=signin&server=linear" },
+  { hash: "#/settings/mcp-tools?flow=revoke&server=linear" },
   { hash: "#/settings/mcp-tools/servers/linear", server: "linear" },
   { hash: "#/settings/mcp-tools/servers/linear?tab=connection", server: "linear" },
   { hash: "#/settings/mcp-tools/servers/linear?tab=tools", server: "linear" },
@@ -138,7 +147,8 @@ test("a member meets no write control at any address, a flow's included", () => 
 // THE OTHER SIDE, so the reading above cannot pass by finding nothing at all:
 // the same addresses draw an administrator's controls.
 test("an administrator meets the controls and the flows at the same addresses", async () => {
-  current = mcpData("admin");
+  // Linear signed in to with OAuth, so its sign-in and its revocation open.
+  current = withOAuth(mcpData("admin"), "linear", LINEAR_OAUTH);
   detail = LINEAR_DETAIL;
   for (const address of ADDRESSES) {
     mountAt(address);
@@ -186,6 +196,35 @@ test("each alarm's row carries the fix the engine names for it", () => {
   expect(edit.getAttribute("href")).toBe(
     "#/settings/mcp-tools/servers/search?flow=edit&step=connection",
   );
+});
+
+// A SIGN-IN ALARM'S FIX IS THE SIGN-IN, opened in place rather than a link to
+// the tab it is made from. Mutation: link the Connection tab again, and this
+// is red.
+test("an alarm a sign-in fixes opens the Sign in dialog", () => {
+  current = {
+    ...mcpData("admin"),
+    alarms: [
+      {
+        kind: "mcp_oauth_needs_sign_in",
+        detail: "linear needs a sign-in",
+        remedy: "",
+        entries: [
+          {
+            key: "linear",
+            detail: "nobody has signed in",
+            since: null,
+            seat: "",
+            fix: { kind: "sign_in", server: "linear", seat: "" },
+          },
+        ],
+      },
+    ],
+  };
+  mountAt({ hash: "#/settings/mcp-tools" });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  expect(location.hash).toContain("flow=signin");
+  expect(location.hash).toContain("server=linear");
 });
 
 // THE TABLE draws the engine's words: the state, where a remote server is,
