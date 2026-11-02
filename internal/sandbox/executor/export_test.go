@@ -105,7 +105,13 @@ const (
 // bound run at one they can fill — a page of three entries, a read budget of a
 // few kibibytes — and leave the engine's own to
 // [TestTheTranscriptBoundsAreTheEnginesOwn].
-func ReadTranscriptWithin(ctx context.Context, harness string, format int, archive io.Reader, from int,
+func ReadTranscriptWithin(ctx context.Context, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int,
 	bounds TranscriptBounds) (Transcript, error) {
-	return readTranscript(ctx, harness, format, archive, from, bounds)
+	return readTranscript(ctx, harness, format, open, from, bounds)
 }
+
+// TranscriptReadsHeld is how many of the process's [TranscriptReadsAtOnce]
+// slots reads hold now: what a case reads to see a slot taken before an
+// archive opens and given back only once it is closed.
+func TranscriptReadsHeld() int { return len(transcriptReads) }

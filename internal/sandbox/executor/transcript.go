@@ -82,15 +82,23 @@ import (
 // text, which would be scanned only to be dropped. And a read stops when its
 // caller's context is done, checked a line or a message at a time.
 //
+// HOW MANY READS RUN AT ONCE is bounded too, for the whole process: at most
+// [TranscriptReadsAtOnce], whichever socket or REST caller asks. A read takes
+// one of those slots before it opens the session's object — so it is handed
+// what opens the archive rather than an archive already open — and gives it
+// back once it has closed the object again; a read past them waits, nothing
+// opened, for as long as its caller does.
+//
 // # What is the archive's fault, and what is its source's
 //
-// A failure of the reader the archive came through — an object the store no
-// longer holds, bytes that do not open — is returned as it came, wrapped, for
-// the caller to tell apart ([sourceReader]). An archive that read whole and is
-// not one its format describes is a [MalformedArchiveError], which says which
-// way in this package's words alone: a box's own agent can rewrite what its run
-// packs before a collection takes it, and a decoder's own message quotes what
-// it read.
+// A failure of the source the archive came through — an object the store no
+// longer holds, bytes that do not open, as the object is opened or as it is
+// read — is returned as it came, wrapped, for the caller to tell apart
+// ([sourceReader]). An archive that read whole and is not one its format
+// describes is a [MalformedArchiveError], which says which way in this
+// package's words alone: a box's own agent can rewrite what its run packs
+// before a collection takes it, and a decoder's own message quotes what it
+// read.
 
 // EntryKind is who one entry of a session's transcript is from: the words a
 // read surface groups and labels a transcript by.
@@ -298,6 +306,46 @@ func TranscriptReadBounds() TranscriptBounds {
 	}
 }
 
+// TranscriptReadsAtOnce is the most transcripts this process decodes at once,
+// whichever socket or REST caller asks for them ([ReadTranscript]).
+//
+// TWO, BY WHAT ONE READ CAN HOLD: a line of the harness's record — or about
+// one message of an export — read whole at the 32 MiB a line may run to
+// ([TranscriptBounds.LineBytes]), the growth of the slice that gathers it, and
+// the copy decoding it makes, on the order of 100 MiB; so the worst case for
+// two reads is about 200 MiB. Nothing else bounds how many run at once: a
+// socket has at most four queries in flight (stream.MaxInFlightQueries), but
+// a node serves every tab open on it, and REST bounds none. One slot would
+// queue every reader behind the longest archive; two let a second reader
+// through while one is read.
+//
+// A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
+// no decoder while it does — and no opened object, whose store connection it
+// would hold — and a slot frees within one bounded read: every read is held
+// to [TranscriptReadBounds], and stops when its caller leaves.
+const TranscriptReadsAtOnce = 2
+
+// transcriptReads holds a slot for each transcript this process is reading,
+// at most [TranscriptReadsAtOnce]: taken before a read opens the session's
+// object, and given back once the read has closed it ([readTranscript]).
+var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
+
+// takeTranscriptRead takes a slot for one read, waiting for one for as long as
+// ctx lasts, and returns what gives it back. A read whose ctx is already done
+// takes none, a slot free or not: its caller has left, and an object opened
+// now would be read for nobody.
+func takeTranscriptRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case transcriptReads <- struct{}{}:
+		return func() { <-transcriptReads }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // transcriptNameMaxBytes bounds a thread's or a tool's name. A tool's name is
 // at most sixty-four characters to every vendor's model API and a sidecar's a
 // harness's own short id, so a longer one is not a name, and is cut.
@@ -429,20 +477,30 @@ func carried(harness string, format int) (carrier, string) {
 
 // ReadTranscript reads the transcript of one session archive harness wrote in
 // format — the bytes a run packed when its harness exited, as a collection
-// keeps them — from its entry from on, held to [TranscriptReadBounds]: every
-// entry's text redacted and then cut, the read's page and its cut said
-// ([Transcript.Cut]). It stops where ctx is done, with ctx's error.
+// keeps them, which open opens — from its entry from on, held to
+// [TranscriptReadBounds]: every entry's text redacted and then cut, the read's
+// page and its cut said ([Transcript.Cut]). It stops where ctx is done, with
+// ctx's error.
 //
-// A failure of archive itself is returned wrapped, as it came; an archive this
-// build does not read is [ErrUnsupportedArchive]; one that is not what its
-// format describes is a [MalformedArchiveError].
-func ReadTranscript(ctx context.Context, harness string, format int, archive io.Reader,
-	from int) (Transcript, error) {
-	return readTranscript(ctx, harness, format, archive, from, TranscriptReadBounds())
+// THE READ OPENS THE ARCHIVE AND CLOSES IT, inside one of the process's
+// [TranscriptReadsAtOnce] slots: open is called only once a slot is held — an
+// object opened before then would hold its store's connection while the read
+// waited — and the slot is given back only once the archive is closed, so no
+// read leaves an archive open past its slot. A read whose ctx ends while it
+// waits for one returns ctx's error, having opened nothing.
+//
+// A failure of open, or of the archive as it is read, is returned wrapped, as
+// it came; an archive this build does not read is [ErrUnsupportedArchive],
+// refused before a slot is taken; one that is not what its format describes is
+// a [MalformedArchiveError].
+func ReadTranscript(ctx context.Context, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int) (Transcript, error) {
+	return readTranscript(ctx, harness, format, open, from, TranscriptReadBounds())
 }
 
 // readTranscript is [ReadTranscript] held to bounds.
-func readTranscript(ctx context.Context, harness string, format int, archive io.Reader, from int,
+func readTranscript(ctx context.Context, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int,
 	bounds TranscriptBounds) (Transcript, error) {
 
 	c, why := carried(harness, format)
@@ -453,6 +511,32 @@ func readTranscript(ctx context.Context, harness string, format int, archive io.
 		return Transcript{}, fmt.Errorf("executor: a transcript is read from its entry 0 on, "+
 			"or a later one, not from %d", from)
 	}
+	release, err := takeTranscriptRead(ctx)
+	if err != nil {
+		return Transcript{}, err
+	}
+	// DEFERRED BEFORE THE ARCHIVE IS OPENED, SO IT RUNS AFTER IT IS CLOSED:
+	// deferred calls run last first, and a slot given back while its archive
+	// is still open is one more archive open than the slots allow.
+	defer release()
+	archive, err := open(ctx)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// A READ ITS CALLER ABANDONED stops as abandoned, whatever the store
+		// made of the open stopping under it.
+		return Transcript{}, ctx.Err()
+	case err != nil:
+		return Transcript{}, fmt.Errorf("executor: opening the session's archive: %w", err)
+	}
+	defer func() { _ = archive.Close() }()
+	return decodeTranscript(ctx, c, archive, from, bounds)
+}
+
+// decodeTranscript is one read of archive, which c's harness packed: its
+// transcript from the entry from on, held to bounds.
+func decodeTranscript(ctx context.Context, c carrier, archive io.Reader, from int,
+	bounds TranscriptBounds) (Transcript, error) {
+
 	src := &sourceReader{r: archive}
 	b := &transcriptBuilder{from: from, bounds: bounds, entries: []TranscriptEntry{},
 		calls: map[string]string{}, inflated: budgetReader{left: bounds.ReadBytes},

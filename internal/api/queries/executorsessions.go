@@ -65,6 +65,12 @@ import (
 // page ends where it does. Every entry's text, the ask's excerpt and the
 // ending's prose are passed through [redact.Secrets] here, whatever the capture
 // did: a session is everything a run read and printed.
+//
+// And a node decodes at most [executor.TranscriptReadsAtOnce] transcripts at
+// once, whichever socket or REST caller asks, since one read can hold on the
+// order of a hundred mebibytes: a read past them waits for a slot, its object
+// not yet opened, for as long as its caller waits, and ends with the caller's
+// own error where the caller leaves first.
 
 // ExecutorSessions is the seats' executor sessions as this surface reads them:
 // the two reads of the domain's reader a person asks, answered through the
@@ -289,12 +295,12 @@ func (s Sources) readTranscript(ctx context.Context, row executordomain.Session,
 		out.State, out.Why = TranscriptUnsupported, why
 		return out, nil
 	}
-	body, err := s.SessionObjects.Open(ctx, row)
-	if err != nil {
-		return transcriptUnread(out, row, err)
-	}
-	defer func() { _ = body.Close() }()
-	page, err := executor.ReadTranscript(ctx, row.Harness, row.ArchiveFormat, body, out.From)
+	// THE READ OPENS THE OBJECT, once it holds one of the node's transcript
+	// slots ([executor.TranscriptReadsAtOnce]), and closes it before it gives
+	// the slot back: an object opened here would hold its store's connection
+	// for as long as the read waited for one.
+	open := func(ctx context.Context) (io.ReadCloser, error) { return s.SessionObjects.Open(ctx, row) }
+	page, err := executor.ReadTranscript(ctx, row.Harness, row.ArchiveFormat, open, out.From)
 	if err != nil {
 		return transcriptUnread(out, row, err)
 	}

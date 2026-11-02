@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,12 +144,26 @@ func openCodeCaptureOf(t *testing.T, export string) []byte {
 	return raw
 }
 
+// opener opens an archive whose bytes r hands out, as the object store opens a
+// session's object: what a read is handed in its place.
+func opener(r io.Reader) func(context.Context) (io.ReadCloser, error) {
+	return func(context.Context) (io.ReadCloser, error) { return io.NopCloser(r), nil }
+}
+
+// neverOpened is an opener a read must not call: the case fails if it does.
+func neverOpened(t *testing.T, why string) func(context.Context) (io.ReadCloser, error) {
+	return func(context.Context) (io.ReadCloser, error) {
+		t.Errorf("the archive was opened: %s", why)
+		return nil, errors.New("this archive is not to be opened")
+	}
+}
+
 // readOpenCode is an OpenCode archive's transcript from its first entry, held
 // to bounds.
 func readOpenCode(t *testing.T, raw []byte, bounds executor.TranscriptBounds) executor.Transcript {
 	t.Helper()
 	got, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
-		executor.OpenCodeArchiveFormat, bytes.NewReader(raw), 0, bounds)
+		executor.OpenCodeArchiveFormat, opener(bytes.NewReader(raw)), 0, bounds)
 	if err != nil {
 		t.Fatalf("ReadTranscriptWithin: %v", err)
 	}
@@ -160,7 +175,7 @@ func readOpenCode(t *testing.T, raw []byte, bounds executor.TranscriptBounds) ex
 func readClaude(t *testing.T, raw []byte, bounds executor.TranscriptBounds) executor.Transcript {
 	t.Helper()
 	got, err := executor.ReadTranscriptWithin(t.Context(), executor.ClaudeCodeName,
-		executor.ClaudeArchiveFormat, bytes.NewReader(raw), 0, bounds)
+		executor.ClaudeArchiveFormat, opener(bytes.NewReader(raw)), 0, bounds)
 	if err != nil {
 		t.Fatalf("ReadTranscriptWithin: %v", err)
 	}
@@ -223,7 +238,7 @@ func TestAClaudeCodeSessionReadsAsTheTranscriptItsHarnessRecorded(t *testing.T) 
 	}
 	described, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
 	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
-		bytes.NewReader(raw), 0)
+		opener(bytes.NewReader(raw)), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -379,7 +394,7 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 	}
 	described, raw := claudeCaptureOf(t, record, nil)
 	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
-		bytes.NewReader(raw), 0)
+		opener(bytes.NewReader(raw)), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -432,7 +447,7 @@ func TestARecordOfNoShapeThisReadKnowsIsSaid(t *testing.T) {
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"still read"}]},"timestamp":5}`,
 	}, nil)
 	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
-		bytes.NewReader(raw), 0)
+		opener(bytes.NewReader(raw)), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -488,7 +503,7 @@ func pageAll(t *testing.T, raw []byte, bounds executor.TranscriptBounds) []execu
 	var pages []executor.Transcript
 	for from := 0; ; {
 		page, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
-			executor.OpenCodeArchiveFormat, bytes.NewReader(raw), from, bounds)
+			executor.OpenCodeArchiveFormat, opener(bytes.NewReader(raw)), from, bounds)
 		if err != nil {
 			t.Fatalf("reading from %d: %v", from, err)
 		}
@@ -628,7 +643,7 @@ func TestAReadStopsAtItsBudgetAndSaysSo(t *testing.T) {
 			len(first.Entries), first.Cut, first.More())
 	}
 	again, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
-		executor.OpenCodeArchiveFormat, bytes.NewReader(raw), first.Next, bounds)
+		executor.OpenCodeArchiveFormat, opener(bytes.NewReader(raw)), first.Next, bounds)
 	if err != nil {
 		t.Fatalf("ReadTranscriptWithin from %d: %v", first.Next, err)
 	}
@@ -786,7 +801,7 @@ TRANSCRIPT
 ln -s ../../outside.jsonl "$p/$s.jsonl"
 `+standInEnd)
 	got, err := executor.ReadTranscript(t.Context(), described.Harness, described.Format,
-		bytes.NewReader(raw), 0)
+		opener(bytes.NewReader(raw)), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -799,7 +814,7 @@ TRANSCRIPT
 ln "$p/$s.jsonl" "$p/$s/subagents/agent-a1.jsonl"
 `+standInEnd)
 	got, err = executor.ReadTranscript(t.Context(), described.Harness, described.Format,
-		bytes.NewReader(raw), 0)
+		opener(bytes.NewReader(raw)), 0)
 	if err != nil {
 		t.Fatalf("ReadTranscript: %v", err)
 	}
@@ -863,29 +878,38 @@ func (f *failingReader) Read(p []byte) (int, error) {
 }
 
 // AN ARCHIVE IS BLAMED ONLY FOR ITS OWN FAULTS. A harness or a format this
-// build does not pack is refused as unsupported before a byte is read; an
+// build does not pack is refused as unsupported before anything is opened; an
 // archive that is not what its format describes is a malformed one; and a
-// source that fails part way — an object the store stopped answering for, a
-// seal that no longer opens — is that failure, wrapped, never a malformed
-// archive, whatever the decompression made of the stream stopping.
+// source that fails — an object the store no longer holds as it is opened, one
+// it stopped answering for part way, a seal that no longer opens — is that
+// failure, wrapped, never a malformed archive, whatever the decompression made
+// of the stream stopping.
 //
-// Mutation: report the source's failure as a malformed archive, or read an
-// unknown format as one this build packs, and a row goes red.
+// Mutation: report the source's failure as a malformed archive, open the
+// archive before its format is known to be read, or read an unknown format as
+// one this build packs, and a row goes red.
 func TestAnArchiveIsBlamedOnlyForItsOwnFaults(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		harness string
 		format  int
 	}{{"codex", 1}, {executor.ClaudeCodeName, executor.ClaudeArchiveFormat + 1}} {
-		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format, strings.NewReader(""), 0)
+		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format,
+			neverOpened(t, "an archive of a format this build does not read"), 0)
 		if !errors.Is(err, executor.ErrUnsupportedArchive) {
 			t.Errorf("%s's format %d: %v, want ErrUnsupportedArchive", c.harness, c.format, err)
 		}
 	}
+	gone := errors.New("the store no longer holds the object")
+	_, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		func(context.Context) (io.ReadCloser, error) { return nil, gone }, 0)
+	if !errors.Is(err, gone) || errors.Is(err, executor.ErrMalformedArchive) {
+		t.Errorf("a source that did not open: %v, want its own failure and no malformed archive", err)
+	}
 	stopped := errors.New("the store stopped answering")
 	packed := gzipped(t, briefs(20))
-	_, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
-		&failingReader{data: packed[:len(packed)/2], err: stopped}, 0)
+	_, err = executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		opener(&failingReader{data: packed[:len(packed)/2], err: stopped}), 0)
 	if !errors.Is(err, stopped) || errors.Is(err, executor.ErrMalformedArchive) {
 		t.Errorf("a source that failed part way: %v, want its own failure and no malformed archive", err)
 	}
@@ -931,7 +955,8 @@ func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 		{"an export cut short", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
 			gzipped(t, `{"info":{},"messages":[`), executor.WhyCutShort},
 	} {
-		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format, bytes.NewReader(c.raw), 0)
+		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format,
+			opener(bytes.NewReader(c.raw)), 0)
 		var malformed *executor.MalformedArchiveError
 		if !errors.As(err, &malformed) || !errors.Is(err, executor.ErrMalformedArchive) {
 			t.Errorf("%s: %v, want a malformed archive", c.name, err)
@@ -946,18 +971,23 @@ func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 	}
 }
 
-// A READ STOPS WHEN ITS CALLER IS GONE. A read whose context is done stops at
-// the next line or message it would read, with the context's own error — never
-// a transcript, and never a malformed archive.
+// A READ STOPS WHEN ITS CALLER IS GONE. A read whose caller leaves as its
+// archive opens stops at the next line or message it would read, with the
+// context's own error — never a transcript, and never a malformed archive; one
+// whose open fails as its caller leaves is answered as left, whatever the store
+// made of the open stopping under it; and a read whose caller had left before
+// it began opens nothing at all, a slot free or not.
 //
 // Mutation: drop the check between lines, and the read answers the whole
-// transcript to a caller that left.
+// transcript to a caller that left; answer a failed open as it failed whether
+// or not the caller is still there, and the store's words reach a caller that
+// left; take a slot for a caller already gone, and the read opens its archive
+// for nobody — at random, as a select between a free slot and a done context
+// picks, which is why that half asks thirty-two times.
 func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
 	t.Parallel()
 	_, claude := claudeCaptureOf(t, claudeSessionRecord, nil)
 	open := openCodeCaptureOf(t, briefs(3))
-	gone, cancel := context.WithCancel(t.Context())
-	cancel()
 	for name, c := range map[string]struct {
 		harness string
 		format  int
@@ -966,23 +996,55 @@ func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
 		"claude-code": {executor.ClaudeCodeName, executor.ClaudeArchiveFormat, claude},
 		"opencode":    {executor.OpenCodeName, executor.OpenCodeArchiveFormat, open},
 	} {
-		got, err := executor.ReadTranscript(gone, c.harness, c.format, bytes.NewReader(c.raw), 0)
+		// THE CALLER LEAVES AS THE ARCHIVE OPENS: a caller gone before the
+		// read began would have it open nothing (below), so only one who
+		// leaves once the read is under way reaches the check between lines.
+		gone, leave := context.WithCancel(t.Context())
+		got, err := executor.ReadTranscript(gone, c.harness, c.format,
+			func(context.Context) (io.ReadCloser, error) {
+				leave()
+				return io.NopCloser(bytes.NewReader(c.raw)), nil
+			}, 0)
 		if !errors.Is(err, context.Canceled) || errors.Is(err, executor.ErrMalformedArchive) {
 			t.Errorf("%s read for a caller that left: (%d entries, %v), want the context's error",
 				name, len(got.Entries), err)
+		}
+	}
+
+	gone, leave := context.WithCancel(t.Context())
+	broke := errors.New("the store's connection closed under the open")
+	_, err := executor.ReadTranscript(gone, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		func(context.Context) (io.ReadCloser, error) {
+			leave()
+			return nil, broke
+		}, 0)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, broke) {
+		t.Errorf("an open that failed as its caller left: %v, want the caller's own error", err)
+	}
+
+	left, cancel := context.WithCancel(t.Context())
+	cancel()
+	for i := 0; i < 32 && !t.Failed(); i++ {
+		_, err := executor.ReadTranscript(left, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			neverOpened(t, "its caller had left before the read began"), 0)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("a read whose caller had left before it began: %v, want the context's error", err)
 		}
 	}
 }
 
 // THE TRANSCRIPT'S BOUNDS ARE THE ENGINE'S OWN, and hold to what their values
 // argue: a page holds sixty-four entries at the entry's bound, a line is read to
-// the bound every read of a run's record takes, and the read budget is eight
-// times the most an archive is stored as — gzip's ratio over text — so an
-// ordinary session at its bound reads whole.
+// the bound every read of a run's record takes, the read budget is eight times
+// the most an archive is stored as — gzip's ratio over text — so an ordinary
+// session at its bound reads whole, and the reads a process runs at once are at
+// least two, which at their worst — each a line at its bound, as much again
+// while the slice gathering it grows, and its decoded copy — come to about
+// 200 MiB.
 //
 // Mutation: raise the entry's bound past a sixty-fourth of the page's, read
-// lines to a bound of their own, or shrink the budget under eight archives, and
-// a row goes red.
+// lines to a bound of their own, shrink the budget under eight archives, or let
+// one read at a time, or a third, run at once, and a row goes red.
 func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	bounds := executor.TranscriptReadBounds()
@@ -1002,6 +1064,10 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	if bounds.ReadBytes < 8*executordomain.SessionMaxBytes {
 		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
 			executordomain.SessionMaxBytes)
+	}
+	if n := executor.TranscriptReadsAtOnce; n < 2 || n*3*bounds.LineBytes > 200<<20 {
+		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",
+			n, n*3*bounds.LineBytes>>20)
 	}
 }
 
@@ -1026,5 +1092,221 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 		if carried, why := executor.Carries(name, format); !carried {
 			t.Errorf("%s's sessions are not read: %s", name, why)
 		}
+	}
+}
+
+// ---- how many transcripts a process reads at once ----------------------- //
+//
+// NONE OF THESE CASES IS PARALLEL, and each lets go of every read it holds and
+// waits for it before it ends: the slots are the process's own
+// ([executor.TranscriptReadsAtOnce]), shared by every read in this binary, so a
+// parallel case reading beside one of these would hold a slot it counts on.
+// Every case that is not parallel runs before the parallel ones are let go.
+
+// slotWaitBound is how long a case here waits for what it is about to see
+// before it fails: a bound on a hang, far past what any of these waits takes,
+// and never a time a case depends on.
+const slotWaitBound = time.Minute
+
+// awaited waits for c, failing the case if it has not come within
+// slotWaitBound.
+func awaited(t *testing.T, c <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(slotWaitBound):
+		t.Fatalf("%s: not within %s", what, slotWaitBound)
+	}
+}
+
+// heldRead is a read of an archive held inside its opener — its slot taken, its
+// archive not yet opened — until it is let go, and how it ended.
+type heldRead struct {
+	let  func()
+	done chan struct{}
+	err  error
+}
+
+// holdSlot starts a read of raw that is held inside its opener until let, and
+// returns once it is held there, with one of the process's slots. However the
+// case ends, the read is let go and waited for, so no slot outlives the case.
+func holdSlot(t *testing.T, raw []byte) *heldRead {
+	t.Helper()
+	ctx := t.Context()
+	opened, gate := make(chan struct{}), make(chan struct{})
+	h := &heldRead{let: sync.OnceFunc(func() { close(gate) }), done: make(chan struct{})}
+	go func() {
+		defer close(h.done)
+		_, h.err = executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			func(context.Context) (io.ReadCloser, error) {
+				close(opened)
+				<-gate
+				return io.NopCloser(bytes.NewReader(raw)), nil
+			}, 0)
+	}()
+	t.Cleanup(func() {
+		h.let()
+		<-h.done
+	})
+	awaited(t, opened, "a read given a free slot opens its archive")
+	return h
+}
+
+// waitedContext is a read's context that says when the read first asks for its
+// Done channel, which a read waiting for a slot does to leave with its caller:
+// so a case ends the context of a read it knows is waiting, rather than of one
+// that has yet to ask for a slot at all.
+type waitedContext struct {
+	context.Context
+	asked chan struct{}
+	once  sync.Once
+}
+
+// waitingOn is a waitedContext under parent, and what ends it.
+func waitingOn(parent context.Context) (*waitedContext, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	return &waitedContext{Context: ctx, asked: make(chan struct{})}, cancel
+}
+
+// Done says the read asked for it, and is the context's own.
+func (c *waitedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.asked) })
+	return c.Context.Done()
+}
+
+// readPastTheSlots starts a read of raw under ctx, with every slot held, and
+// returns once it is waiting for one; opened is closed if it ever opens its
+// archive, and done once it has ended, the transcript and the error it ended
+// with in *got and *err.
+func readPastTheSlots(t *testing.T, ctx *waitedContext, raw []byte, got *executor.Transcript,
+	err *error) (opened, done chan struct{}) {
+	t.Helper()
+	opened, done = make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		*got, *err = executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			func(context.Context) (io.ReadCloser, error) {
+				close(opened)
+				return io.NopCloser(bytes.NewReader(raw)), nil
+			}, 0)
+	}()
+	select {
+	case <-ctx.asked:
+	case <-opened:
+		t.Fatal("a read past every slot opened its archive")
+	case <-time.After(slotWaitBound):
+		t.Fatalf("a read past every slot neither waited for one nor opened its archive within %s",
+			slotWaitBound)
+	}
+	return opened, done
+}
+
+// A READ PAST THE SLOTS OPENS NOTHING, AND LEAVES WITH ITS CALLER. With every
+// slot held by a read whose archive is still opening, another read waits for
+// one without opening its own — an opened object would hold its store's
+// connection for as long as it waited — and once its caller leaves it returns
+// the caller's own error, having opened nothing.
+//
+// Mutation: take no slot, or take it only once the archive is open, and the
+// read past the slots opens its archive; stop waiting on the caller's context,
+// and the read never ends.
+func TestAReadPastTheSlotsOpensNothingAndLeavesWithItsCaller(t *testing.T) {
+	raw := gzipped(t, briefs(1))
+	for range executor.TranscriptReadsAtOnce {
+		holdSlot(t, raw)
+	}
+	ctx, leave := waitingOn(t.Context())
+	defer leave()
+	var (
+		got executor.Transcript
+		err error
+	)
+	opened, done := readPastTheSlots(t, ctx, raw, &got, &err)
+	leave()
+	awaited(t, done, "a read waiting for a slot ends once its caller leaves")
+	if !errors.Is(err, context.Canceled) || len(got.Entries) != 0 {
+		t.Errorf("a read whose caller left while it waited: (%d entries, %v), want the caller's "+
+			"own error", len(got.Entries), err)
+	}
+	select {
+	case <-opened:
+		t.Error("a read whose caller left while it waited for a slot opened its archive")
+	default:
+	}
+}
+
+// A WAITING READ TAKES A SLOT ONCE ONE IS GIVEN BACK. With every slot held,
+// another read waits; once one of the reads holding them has read its archive
+// and closed it, the waiting read opens its own and reads it whole.
+//
+// Mutation: never give a slot back, or give it back only from a read that
+// failed, and the waiting read never opens its archive.
+func TestAWaitingReadTakesASlotOnceOneIsGivenBack(t *testing.T) {
+	raw := gzipped(t, briefs(1))
+	held := make([]*heldRead, executor.TranscriptReadsAtOnce)
+	for i := range held {
+		held[i] = holdSlot(t, raw)
+	}
+	ctx, leave := waitingOn(t.Context())
+	defer leave()
+	var (
+		got executor.Transcript
+		err error
+	)
+	_, done := readPastTheSlots(t, ctx, raw, &got, &err)
+	held[0].let()
+	awaited(t, held[0].done, "a read holding a slot ends once its archive opens")
+	if held[0].err != nil {
+		t.Fatalf("the read that held a slot: %v", held[0].err)
+	}
+	awaited(t, done, "a read waiting for a slot ends once one is given back")
+	if err != nil || len(got.Entries) != 1 {
+		t.Errorf("the read that waited, once a slot was given back: (%d entries, %v), want the "+
+			"archive's one brief", len(got.Entries), err)
+	}
+}
+
+// closeSeen is an archive whose Close calls seen.
+type closeSeen struct {
+	io.Reader
+	seen func()
+}
+
+func (c closeSeen) Close() error {
+	c.seen()
+	return nil
+}
+
+// A READ HOLDS ITS SLOT FROM BEFORE ITS ARCHIVE OPENS UNTIL AFTER IT IS CLOSED.
+// Taken only once the object is open, a slot would leave an object open while
+// its read waited for one, holding its store's connection; given back before
+// the close, it would let another read open an archive beside one still open.
+// And the read closes what it opened.
+//
+// Mutation: take the slot after the open, give it back before the close, or
+// leave the archive open, and the read is seen opening or closing without its
+// slot, or never closing.
+func TestAReadHoldsItsSlotFromBeforeItOpensUntilAfterItCloses(t *testing.T) {
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Fatalf("%d slots are held before the case reads anything", held)
+	}
+	raw := gzipped(t, briefs(1))
+	atOpen, atClose := -1, -1
+	_, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		func(context.Context) (io.ReadCloser, error) {
+			atOpen = executor.TranscriptReadsHeld()
+			return closeSeen{Reader: bytes.NewReader(raw), seen: func() {
+				atClose = executor.TranscriptReadsHeld()
+			}}, nil
+		}, 0)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	if atOpen != 1 || atClose != 1 {
+		t.Errorf("the read held %d slots as its archive opened and %d as it closed (-1: never), "+
+			"want its own throughout", atOpen, atClose)
+	}
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Errorf("%d slots are held once the read has ended, want none", held)
 	}
 }

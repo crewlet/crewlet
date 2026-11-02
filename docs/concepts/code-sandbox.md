@@ -1229,6 +1229,18 @@ keyring, an archive that is not one its format describes and one this build
 does not read are each said as such, in the engine's own words, beside the
 turn's ending, which the row still holds.
 
+**A node decodes two transcripts at a time.** One read can hold a line of the
+harness's record at its 32 MiB bound, as much again while the buffer gathering
+it grows, and the copy decoding it makes — on the order of 100 MiB — and a node
+answers every dashboard tab open on it and every REST caller, each with a read
+of its own. So each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), about 200 MiB at their worst, whichever socket or
+route asks. A read past them waits for a slot before the session's object is
+opened — an opened object would hold its store's connection while it waited —
+for as long as its caller waits, holding no decoder meanwhile, and a slot frees
+within one bounded read; a caller that leaves first is answered nothing, and
+nothing was opened for it.
+
 **It is the seat's trail, and it holds more than the run's live output
 showed.** It is read by exactly who reads that output — the seat, whoever leads
 it, and an administrator, `audit.seat.read`
