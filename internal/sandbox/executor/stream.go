@@ -253,7 +253,8 @@ func settledEnd(text string, ctx, keep int) (string, int) {
 	if start == len(part) {
 		return "", from + start
 	}
-	if !(start == 0 && opensLine || start > 0 && part[start-1] == '\n') {
+	onLine := start == 0 && opensLine || start > 0 && part[start-1] == '\n'
+	if !onLine {
 		i := strings.IndexByte(part[start:], '\n')
 		if i < 0 || start+i+1 == len(part) {
 			// THE END OF ONE LINE, which began before what is settled: kept
