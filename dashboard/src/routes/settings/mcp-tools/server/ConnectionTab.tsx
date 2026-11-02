@@ -1,56 +1,46 @@
 /**
- * A server's Connection, read only: where it is and how it starts, how the
- * engine signs in to it, the bounds it is held to, and every header or
- * variable it is sent, by name.
+ * A server's Connection: where it is and how it starts, how the engine signs
+ * in to it, the bounds it is held to, and every header or variable it is
+ * sent, by name.
  *
  * NAMES, NEVER VALUES. The address is the engine's, any credential in it
- * withheld (`url` on the row); the headers and variables are the entry as the
- * configuration writes it (`GET /config/mcp-servers/{name}`), whose values
- * the engine masks, and this card reads their names and the variable each one
- * reads, never what any of them holds. A member reads how the server connects
- * and signs in, and none of the launch line or its names.
+ * withheld (`url` on the row). The headers and variables are the server's
+ * answer (`values`): each key, the variable it reads, whether the store holds
+ * it and who stored it last, never what it holds. A value stored from here is
+ * write-only (`PUT /mcp-servers/{name}/values/{key}`): Replace takes a new
+ * one, tested before it is sealed, and nothing shows the old one. A key an
+ * integration hands each agent is that integration's, and has no Replace.
+ * The tool prefix is the entry as the configuration writes it
+ * (`GET /config/mcp-servers/{name}`), which no answer carries.
+ *
+ * A member reads how the server connects and signs in, and none of the
+ * launch line or its names.
  */
 
 import {
+  Button,
   ButtonLink,
   Card,
   Copyable,
   DescriptionList,
-  Skeleton,
   TableTwoLineCell,
+  Tag,
   Text,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import { KeyGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
-import type { McpMemberServerStatus } from "~/contract/mcp.ts";
+import type { McpMemberServerStatus, McpValueState } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
+import { fmtDate } from "~/lib/format.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
 import type { ServerDetail } from "../api.ts";
 import type { McpData } from "../data.ts";
+import type { OnFlow } from "../parts.tsx";
 import { AUTH } from "../words.ts";
 
-/** One header or variable the entry sends, by name, and the variable it reads, if any. */
-interface Sent {
-  name: string;
-  /** The variable a whole `${VAR}` value reads; "" for a value written in the entry. */
-  secret: string;
-}
-
-const REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
-
-/** A map of the entry's names to what each is written as, read for its names alone. */
-function sentOf(value: unknown): Sent[] {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-  return Object.entries(value as Record<string, unknown>)
-    .map(([name, v]) => ({
-      name,
-      secret: typeof v === "string" ? (REFERENCE.exec(v)?.[1] ?? "") : "",
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** The entry as written, for an administrator: its headers or variables, and its tool prefix. */
+/** The entry as written, for an administrator: its tool prefix. */
 function useEntry(name: string, enabled: boolean) {
   return useRest(
     enabled ? `mcp-entity:${name}` : null,
@@ -69,26 +59,37 @@ export function ConnectionTab({
   server,
   detail,
   data,
+  onFlow,
 }: {
   server: McpMemberServerStatus;
   detail: ServerDetail;
   data: McpData;
+  onFlow: OnFlow;
 }) {
   const row = data.adminRow(server.name);
   const admin = detail.reading === "admin" && row !== null;
   const entry = useEntry(server.name, admin && server.configured);
   const written = entry.data;
   const http = server.transport === "http";
-  const sentWord = http ? "Header" : "Variable";
-  const sent = sentOf(http ? written?.headers : written?.env);
+  const values = detail.reading === "admin" ? detail.values : [];
   const prefix = typeof written?.tool_prefix === "string" ? written.tool_prefix : "";
+  const edit = (step: string) => onFlow("edit", server.name, { step });
   const resolved = detail.resolved;
   const binding = resolved?.binding ?? null;
   const command = row?.command ? [row.command, ...row.args].join(" ") : "";
   return (
     <div className="mcp-stack">
       <Card padding="none">
-        <Card.Header icon={<ServerGlyph size="sm" />}>
+        <Card.Header
+          icon={<ServerGlyph size="sm" />}
+          actions={
+            admin && server.configured ? (
+              <Button size="small" variant="secondary" onClick={() => edit("connection")}>
+                Edit
+              </Button>
+            ) : undefined
+          }
+        >
           {/* Named for what it leads with: a member is not shown the address
               or the command, and the card is then its connection's facts. */}
           <Card.Title>
@@ -188,43 +189,123 @@ export function ConnectionTab({
         </Card>
       ) : null}
 
-      {admin && server.configured && resolved?.auth !== "integration" ? (
+      {admin && server.configured && (values.length > 0 || resolved?.auth !== "integration") ? (
         <Card padding="none">
-          <Card.Header icon={<KeyGlyph size="sm" />} count={sent.length || undefined}>
+          <Card.Header
+            icon={<KeyGlyph size="sm" />}
+            count={values.length || undefined}
+            actions={
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={() => edit(http ? "signin" : "connection")}
+              >
+                Edit
+              </Button>
+            }
+          >
             <Card.Title>{http ? "Request headers" : "Environment"}</Card.Title>
           </Card.Header>
-          {written === null && entry.loading ? (
-            <Card.Body>
-              <Skeleton variant="text" rows={2} label="Loading its configuration" />
-            </Card.Body>
-          ) : (
-            <DataGrid<Sent>
-              name="sent"
-              rows={sent}
-              rowKey={(v) => v.name}
-              columns={[
-                {
-                  key: "name",
-                  header: sentWord,
-                  label: sentWord,
-                  cell: (v) => (
-                    <TableTwoLineCell
-                      value={v.name}
-                      mono={v.secret ? "both" : "value"}
-                      detail={v.secret ? `Reads \${${v.secret}}` : "Set in the configuration"}
-                    />
-                  ),
-                },
-              ]}
-              empty={{
-                title: http ? "No header" : "No variable",
-                hint: "The engine sends the server no value of its own.",
-                icon: "key",
-              }}
-            />
-          )}
+          <DataGrid<McpValueState>
+            name="values"
+            rows={values}
+            rowKey={(v) => v.key}
+            columns={valueColumns(server, http, values, onFlow)}
+            empty={{
+              title: http ? "No header" : "No variable",
+              hint: "The engine sends the server no value of its own.",
+              icon: "key",
+            }}
+          />
         </Card>
       ) : null}
     </div>
   );
+}
+
+/** The headers' or variables' columns: the key and what it reads, its state, who stored it, and Replace. */
+function valueColumns(
+  server: McpMemberServerStatus,
+  http: boolean,
+  values: readonly McpValueState[],
+  onFlow: OnFlow,
+) {
+  const word = http ? "Header" : "Variable";
+  return [
+    {
+      key: "key",
+      header: word,
+      label: word,
+      cell: (v: McpValueState) => (
+        <TableTwoLineCell
+          value={v.key}
+          mono={v.variable ? "both" : "value"}
+          detail={
+            v.bound_by
+              ? `Each agent's own, from ${v.bound_by}`
+              : v.variable
+                ? `Reads \${${v.variable}}`
+                : "Set in the configuration"
+          }
+        />
+      ),
+    },
+    {
+      key: "state",
+      header: "Value",
+      shrink: true,
+      cell: (v: McpValueState) =>
+        v.bound_by ? (
+          <Text as="span" variant="caption" tone="secondary">
+            Issued for each agent
+          </Text>
+        ) : v.set ? (
+          <Tag size="xs" variant="success" appearance="soft">
+            Set
+          </Tag>
+        ) : (
+          <Tag size="xs" variant={v.optional ? "neutral" : "danger"} appearance="soft">
+            {v.optional ? "Not set, optional" : "Not set"}
+          </Tag>
+        ),
+    },
+    {
+      key: "stored",
+      header: "Stored",
+      shrink: true,
+      cell: (v: McpValueState) => (
+        <Text as="span" variant="caption" tone="secondary">
+          {v.stored_at
+            ? `${fmtDate(v.stored_at)}${v.stored_by ? ` by ${v.stored_by}` : ""}`
+            : v.bound_by
+              ? "When the agent starts"
+              : "Never"}
+        </Text>
+      ),
+    },
+    // AN ACTIONS COLUMN ONLY WHERE A ROW HAS AN ACTION: a value an
+    // integration binds for each agent is replaced nowhere here, and an empty
+    // column of no buttons held a track at the row's end.
+    ...(values.some((v) => !v.bound_by)
+      ? [
+          {
+            key: "actions",
+            header: <VisuallyHidden>Actions</VisuallyHidden>,
+            action: true,
+            shrink: true,
+            cell: (v: McpValueState) =>
+              v.bound_by ? null : (
+                <Button
+                  size="small"
+                  variant="ghost"
+                  aria-label={`${v.set ? "Replace" : "Set"} ${v.key}`}
+                  onClick={() => onFlow("value", server.name, { key: v.key })}
+                >
+                  {v.set ? "Replace" : "Set"}
+                </Button>
+              ),
+          },
+        ]
+      : []),
+  ];
 }

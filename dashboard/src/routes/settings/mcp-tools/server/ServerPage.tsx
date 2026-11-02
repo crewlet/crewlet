@@ -5,7 +5,8 @@
  * row so the page draws at once.
  */
 
-import { Skeleton, Tabs } from "@crewlethq/ui";
+import { Button, Skeleton, Tabs } from "@crewlethq/ui";
+import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -47,6 +48,20 @@ export function ServerPage({
           ...(server.enabled
             ? [
                 {
+                  key: "test",
+                  label: `Test ${server.title}`,
+                  onSelect: () => onFlow("test"),
+                },
+              ]
+            : []),
+          {
+            key: "edit",
+            label: `Edit ${server.title}`,
+            onSelect: () => onFlow("edit", undefined, { step: "connection" }),
+          },
+          ...(server.enabled
+            ? [
+                {
                   key: "restart",
                   label: `Restart ${server.title}`,
                   onSelect: () => onFlow("restart"),
@@ -68,7 +83,9 @@ export function ServerPage({
   );
   const facts: Fact[] = [
     { label: "Status", value: <StateLine server={server} /> },
-    { label: "Connection", value: `${w.where}, ${w.scope.toLowerCase()}` },
+    // ONE LINE, as a token is: "Remote, company-shared" broken at its hyphen
+    // read as two facts.
+    { label: "Connection", value: `${w.where}, ${w.scope.toLowerCase()}`, token: true },
     { label: "Tools", value: toolCount > 0 ? String(toolCount) : "None listed" },
     ...(reach
       ? [{ label: "Reaches", value: reach.length > 0 ? plural(reach.length, "agent") : "No agent" }]
@@ -79,7 +96,18 @@ export function ServerPage({
     <div className="mcp-page">
       {gestures ? (
         <PageActions>
-          <ServerMenu server={server} onFlow={onFlow} />
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PencilGlyph size="sm" />}
+            onClick={() => onFlow("edit", undefined, { step: "connection" })}
+          >
+            Edit
+          </Button>
+          {/* On a phone the menu folds into the bar's "More", which carries the same actions. */}
+          <span className="page-action-folds">
+            <ServerMenu server={server} onFlow={onFlow} />
+          </span>
         </PageActions>
       ) : null}
       <ObjectHeader
@@ -137,7 +165,7 @@ export function ServerPage({
               <OverviewTab server={server} detail={answer} data={data} onFlow={onFlow} />
             ) : null}
             {tab === "connection" ? (
-              <ConnectionTab server={server} detail={answer} data={data} />
+              <ConnectionTab server={server} detail={answer} data={data} onFlow={onFlow} />
             ) : null}
             {tab === "tools" ? <ToolsTab server={server} detail={answer} /> : null}
             {tab === "activity" ? <ActivityTab detail={answer} data={data} /> : null}

@@ -79,23 +79,39 @@ test("the overview draws each instance and, for an administrator, the server's i
   expect(screen.getByText("linear-mcp 2.1.0")).toBeDefined();
 });
 
-// THE CONNECTION, READ ONLY: an administrator reads the address the engine
-// answers (its credentials withheld) and every header by name, never a
-// value; a member reads how it connects and signs in, and no name.
+// THE CONNECTION: an administrator reads the address the engine answers (its
+// credentials withheld) and every header by name from the engine's `values`,
+// whether it is stored and a way to replace it, never a value; a key an
+// integration fills has no Replace; a member reads how it connects and
+// signs in, and no name. Mutation: read the headers off the entry again, or
+// offer Replace on a bound key, and this is red.
 test("the connection names the address and the headers to an administrator alone, never a value", async () => {
-  detail = LINEAR_DETAIL;
-  entry = {
-    name: "linear",
-    url: "https://mcp.linear.app/mcp",
-    headers: { Authorization: "${LINEAR_TOKEN}", "X-Team": "__redacted__" },
+  const value = {
+    as: "header" as const,
+    stored_at: null,
+    stored_by: null,
+    optional: false,
   };
+  detail = {
+    ...LINEAR_DETAIL,
+    values: [
+      { ...value, key: "Authorization", variable: "LINEAR_TOKEN", set: true, bound_by: null },
+      { ...value, key: "X-Team", variable: "", set: true, bound_by: null },
+      { ...value, key: "X-Agent", variable: "", set: true, bound_by: "github" },
+      { ...value, key: "X-Region", variable: "MCP_LINEAR_X_REGION", set: false, bound_by: null },
+    ],
+  };
+  entry = { name: "linear", url: "https://mcp.linear.app/mcp", tool_prefix: "lin_" };
   mountAt("connection", mcpData("admin"));
   expect(screen.getByText("https://mcp.linear.app/mcp")).toBeDefined();
-  expect(await screen.findByText("Authorization")).toBeDefined();
+  expect(await screen.findByText("lin_")).toBeDefined();
+  expect(screen.getByText("Authorization")).toBeDefined();
   expect(screen.getByText("Reads ${LINEAR_TOKEN}")).toBeDefined();
-  expect(screen.getByText("X-Team")).toBeDefined();
   expect(screen.getByText("Set in the configuration")).toBeDefined();
-  expect(document.body.textContent).not.toContain("__redacted__");
+  expect(screen.getByText("Each agent's own, from github")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Replace Authorization" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Set X-Region" })).toBeDefined();
+  expect(screen.queryByRole("button", { name: /X-Agent/ })).toBeNull();
   expect(screen.getByText("120 s (the default)")).toBeDefined();
   cleanup();
 

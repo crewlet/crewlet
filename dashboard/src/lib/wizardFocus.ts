@@ -1,8 +1,9 @@
 /**
- * Where focus goes around the model wizard (design QA M6): to the step's
+ * Where focus goes around a setup wizard that stands in its page's place (the
+ * model wizard and the MCP server wizard; design QA M6): to the step's
  * heading as it opens, to the first field a blocked Continue is about, to the
- * model's own heading after a save, and back to the control that opened the
- * wizard after a Cancel.
+ * saved thing's own heading after a save, and back to the control that opened
+ * the wizard after a Cancel.
  *
  * THE WIZARD REPLACES THE PAGE THAT OPENED IT, so the control a person pressed
  * is gone by the time the wizard closes and a new one stands in its place.
