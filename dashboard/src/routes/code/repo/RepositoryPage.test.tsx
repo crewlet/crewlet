@@ -404,6 +404,31 @@ test("a file's picked lines are its address, and its Permalink names the commit"
   expect(location.hash).not.toContain("lines=1-");
 });
 
+// A FILE'S TEXT IS SPLIT INTO LINES ONCE A PAGE, never on a render that
+// brought no page: a press on a line writes the address and draws the screen
+// again, and a file read to its end is a mebibyte split on every such press.
+// Mutation: build the file's pages afresh on every render, or split them
+// without keeping the lines, and this fails.
+test("a press on a line does not split the file's text again", async () => {
+  stubEngine();
+  mount("#/code/repos/web?tab=files&path=src%2Fapp.go");
+
+  const line1 = await screen.findByRole("button", { name: "Line 1" });
+  const split = vi.spyOn(String.prototype, "split");
+  try {
+    fireEvent.click(line1);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Line 1" }).getAttribute("aria-pressed")).toBe(
+        "true",
+      ),
+    );
+    const file = "package app\n\nfunc Run() {}\n";
+    expect(split.mock.contexts.filter((self) => String(self) === file)).toHaveLength(0);
+  } finally {
+    split.mockRestore();
+  }
+});
+
 // THE BLAME IS READ AT THE COMMIT THE FILE WAS, and each run of lines one
 // commit changed last is headed by that commit and its author once.
 // Mutation: blame the branch, or head every line, and this fails.
