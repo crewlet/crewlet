@@ -210,12 +210,14 @@ func Test(ctx context.Context, spec Spec, log *slog.Logger) TestReport {
 	return w.report
 }
 
-// AddressRefused is the report of a test that stopped at the address stage
-// for a reason the caller decided (an address the configuration's rule
-// refuses), worded by sentence. Nothing is dialled.
-func AddressRefused(spec Spec, sentence string) TestReport {
+// Unstarted is the report of a test that stopped at its first stage (the
+// address, or a local server's launch) for a reason the caller decided before
+// anything was dialled or launched: an address the configuration's rule
+// refuses, or a value it is started with that does not resolve, worded by
+// sentence.
+func Unstarted(spec Spec, sentence string) TestReport {
 	w := newWalk(spec)
-	w.fail(StageAddress, 0, "", errors.New(sentence))
+	w.fail(w.report.Steps[0].Stage, 0, "", errors.New(sentence))
 	return w.report
 }
 
@@ -480,6 +482,9 @@ func (w *walk) list(ctx context.Context, c *client) {
 			continue
 		}
 		t := testedTool(def, w.spec)
+		// THE SERVER'S WORDS CARRY NO VALUE EITHER: a server can repeat the
+		// credential it was started with in a tool's text.
+		t.Title, t.Description = withheld(t.Title, w.spec), withheld(t.Description, w.spec)
 		if t.Refused != "" {
 			refused++
 		} else {

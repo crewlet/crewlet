@@ -976,6 +976,14 @@ type Engine struct {
 	stopBoxReadServe queue.Unsubscribe
 	stopNudgeListen  queue.Unsubscribe
 
+	// mcpChecks asks the fleet to test an MCP server and answers the tests
+	// of the servers this node runs. Nil on a node with no broker, which is
+	// the whole fleet and tests everything itself. See mcpcheck.go.
+	mcpChecks *mcpChecks
+	// mcpTesting is the tests running on this node, by [mcpTestKey]: one
+	// at a time per entry and seat.
+	mcpTesting sync.Map
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -1594,6 +1602,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			}
 			return nil, err
 		}
+		// AND A TEST OF AN MCP SERVER WHERE IT RUNS, which the node asked
+		// carries out (it starts a process or dials as the company), so it
+		// is signed too (mcpcheck.go).
+		if e.mcpChecks, err = newMCPChecks(recordKeyring(opts.Bootstrap)); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
 	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
@@ -2125,6 +2142,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
 	e.startMCPInstances(ctx)
 	e.startMCPRestarts(ctx)
+	// AND THE TESTS PEOPLE ASK FOR, of the servers this node runs.
+	e.startMCPChecks(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2780,6 +2799,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// and its instances no longer answered.
 	e.stopMCPListings(ctx)
 	e.stopMCPInstances(ctx)
+	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.

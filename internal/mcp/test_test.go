@@ -250,15 +250,23 @@ func TestATestsWordsCarryNoValue(t *testing.T) {
 	}
 }
 
-// AN ADDRESS REFUSED BEFORE ANYTHING IS DIALLED stops at the address stage
-// with the caller's sentence.
-func TestAnAddressRefusedStopsAtTheAddressStage(t *testing.T) {
+// A TEST STOPPED BEFORE ANYTHING STARTED stops at its first stage, the
+// address or the launch, with the caller's sentence.
+func TestATestStoppedBeforeAnythingStartedStopsAtItsFirstStage(t *testing.T) {
 	t.Parallel()
-	report := AddressRefused(httpSpec("plain", "http://mcp.example.com/mcp"), "is plain http to a public host")
-	if failedAt(report) != StageAddress || report.Failure.Said != "is plain http to a public host" {
-		t.Fatalf("report = %+v", report)
-	}
-	if report.Serving() {
-		t.Fatal("a refused address tests as serving")
+	for _, tc := range []struct {
+		spec  Spec
+		stage TestStage
+	}{
+		{httpSpec("plain", "http://mcp.example.com/mcp"), StageAddress},
+		{Spec{Name: "local", Command: "tracker-mcp"}, StageLaunch},
+	} {
+		report := Unstarted(tc.spec, "is plain http to a public host")
+		if failedAt(report) != tc.stage || report.Failure.Said != "is plain http to a public host" {
+			t.Fatalf("report = %+v, want a failure at %s", report, tc.stage)
+		}
+		if report.Serving() {
+			t.Fatal("a test that started nothing tests as serving")
+		}
 	}
 }
