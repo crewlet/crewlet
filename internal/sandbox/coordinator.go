@@ -4519,7 +4519,10 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // Running jobs re-mark this seat held; the waiter then drives them to
 // completion. Clarification and reseed runs are left for their answer — the
 // run untouched, but COUNTED, because the seat's new owner is the one that
-// will be handed that answer and has to recognise it as one.
+// will be handed that answer and has to recognise it as one. Each is fenced to
+// this node's lease and taken over as the fence found it, not as listed
+// ([Coordinator.fenceRun]): an ending the seat's last holder decided between
+// the listing and the fence is this node's to finish.
 //
 // A RESUMED row means the engine that owned this seat died between claiming a
 // run's tail and settling it. Nothing will ever pick it up — the at-most-once
@@ -4585,12 +4588,13 @@ const (
 
 // recoverRun takes over one run of a seat this node has just acquired.
 //
-// again is whether a run that turns out to have moved under the reap's fence
-// is taken over once more as what it moved to: the reap reads the row again
-// after fencing it, and the one write a process that lost the seat can still
-// have landed before the fence is the release that hands its claim back — a
-// row that is then owed its resume, not reaped. Once, because the fence is in
-// place by then and nothing else can move the row.
+// again is whether a run that turns out to have moved under this recovery's
+// fence is taken over once more as what it moved to: the fence reads the row
+// again ([Coordinator.fenceClaim], [Coordinator.fenceRun]), and a process that
+// lost the seat without noticing can still have written before it — the
+// release that hands its claim back, a run it parked, an ending it decided.
+// Once, because the fence is in place by then and nothing else can move the
+// row; an ending found decided is finished whichever pass finds it.
 func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner string, epoch int64,
 	tally *recovery, again bool,
 ) {
@@ -4631,20 +4635,29 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 			// retries with the seat's mail held behind it.
 		}
 		return
+	}
+	// FENCED FIRST, AND TAKEN OVER AS THE FENCE FOUND IT ([Coordinator.fenceRun]):
+	// an ending the last holder decided after the listing is finished here,
+	// and a run that moved meanwhile is taken over as what it moved to.
+	latest, served, gone := c.fenceRun(ctx, run, owner, epoch)
+	switch {
+	case gone:
+		return
+	case latest.Ending != nil || (again && latest.Status != run.Status):
+		c.recoverRun(ctx, latest, owner, epoch, tally, false)
+		return
+	}
+	run = latest
+	switch run.Status {
 	case StatusRunning:
-		won, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch)
-		if err != nil {
-			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
-				"turn_id", run.TurnID, "error", err.Error())
-		}
 		c.countRun(run.AgentHandle, run.Status)
 		tally.running++
 		// WHAT THE BOX CALLS IS SERVED HERE NOW — see
 		// [CoordinatorOptions.Recovered] — unless a newer lease already
-		// owns the run. A claim the store could not answer is no such
+		// owns the run. A fence the store could not answer is no such
 		// evidence, and what is served acts only while this node holds
 		// the seat, which it has just been granted.
-		if c.recovered != nil && (won || err != nil) {
+		if c.recovered != nil && served {
 			c.recovered(ctx, run)
 		}
 	case StatusAnswered:
@@ -4655,10 +4668,6 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// it again — and the seat's mail waits behind it here exactly
 		// as it did there. Scheduled rather than run, because this is
 		// the seat's preparation and the mailbox is not open yet.
-		if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
-			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
-				"turn_id", run.TurnID, "error", err.Error())
-		}
 		c.countRun(run.AgentHandle, run.Status)
 		c.queueOwed(ctx, run)
 		tally.parked++
@@ -4671,8 +4680,8 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// gets it.
 		//
 		// AND IT IS FENCED TO THIS NODE'S LEASE, like every other run
-		// the seat holds, and that covers both ways an old holder can
-		// still reach it. One that has NOT noticed it lost the seat
+		// the seat holds (above), and that covers both ways an old holder
+		// can still reach it. One that has NOT noticed it lost the seat
 		// writes under its old lease, which this fence outranks: its
 		// record of an answer and its claim are refused in the store
 		// ([PendingStore.RecordAnswer], [PendingStore.ClaimForResume]).
@@ -4683,10 +4692,6 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// at the old holder's, the run could be answered and claimed by
 		// a node with no seat, and a run parked under no lease stayed
 		// at the zero epoch across every seat move.
-		if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
-			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
-				"turn_id", run.TurnID, "error", err.Error())
-		}
 		c.countRun(run.AgentHandle, run.Status)
 		tally.parked++
 	}
@@ -4703,6 +4708,54 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {
 		c.queueOwed(ctx, run)
 	}
+}
+
+// fenceRun moves a run this recovery takes over — running, or parked on a
+// question — to this node's lease and reads it again, for
+// [Coordinator.recoverRun]. It reports the run as the fence found it, whether
+// what its box calls may be served here (false for a run a newer lease owns),
+// and whether it is gone.
+//
+// READ AGAIN, BECAUSE THE LISTING IS NOT THE ROW THE FENCE FENCED. The seat's
+// last holder may not have noticed its lease lapsed, and an ending it decides
+// between this recovery's listing and its fence — a person's stop, from its
+// pause watch — lands under its own lease, the row's until the fence moves it.
+// From the fence on, that holder's retry is outranked and gives the ending up
+// ([PendingStore.DecideEnding]), so the row as fenced is the one place left
+// that tells it: taken over as listed, as a run still running, it was counted,
+// served and never read again — the stopped job ran on in its box, its turn's
+// end never reached the log, and the seat was held until it moved.
+//
+// A FENCE OR A READ THAT FAILS LEAVES THE RUN AS LISTED, as the claim's reap
+// does ([Coordinator.fenceClaim]): an ending decided in that window waits for
+// the seat's next holder, whose own recovery finds it decided.
+func (c *Coordinator) fenceRun(ctx context.Context, run PendingRun, owner string, epoch int64,
+) (latest PendingRun, served, gone bool) {
+	won, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_ownership_claim_failed",
+			"turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the run could not be fenced to this node's lease; it is taken over as listed")
+		return run, true, false
+	case !won:
+		// A NEWER LEASE than this node's owns the run, or it is gone: taken
+		// over as listed, its box's calls not served here.
+		return run, false, false
+	}
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_recovery_read_failed",
+			"turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the fenced run could not be read again; it is taken over as listed")
+		run.Owner, run.OwnerEpoch = owner, epoch
+		return run, true, false
+	case !found:
+		// FINISHED SINCE THE LISTING, by whoever ended it.
+		return PendingRun{}, false, true
+	}
+	return latest, true, false
 }
 
 // reapTail ends a tail the seat's last holder abandoned — a launching row, or a
