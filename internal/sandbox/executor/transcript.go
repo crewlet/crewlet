@@ -1098,14 +1098,44 @@ type openCodePart struct {
 // step of the walk, so a message past it is said, and the read stops there: a
 // JSON decoder cannot find where the next value begins without reading the
 // one it is in.
+//
+// A DOCUMENT THAT ENDS BEFORE IT CLOSES ENDS PART WAY THROUGH, whatever the
+// decoder calls it. Asked whether a list goes on at the input's end, the
+// decoder this module builds with answers that it does and keeps the end as a
+// syntax error — "unexpected end of JSON input", not the io.ErrUnexpectedEOF a
+// value cut short reports — which the next read returns; read as any other
+// syntax error, an export cut between two of its messages was said to hold no
+// export document at all. So a syntax error met once the archive's bytes have
+// all been read, with nothing the decoder has not parsed but separators, is the
+// document's end coming too soon.
 func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reader) error {
 	held := &heldValue{r: archive, max: b.bounds.LineBytes}
-	err := b.pastHeld(held, b.openCodeDocument(ctx, json.NewDecoder(held), held))
+	dec := json.NewDecoder(held)
+	err := b.pastHeld(held, b.openCodeDocument(ctx, dec, held))
 	var syntax *json.SyntaxError
-	if errors.As(err, &syntax) {
-		return fmt.Errorf("%w: %w", errNotExport, err)
+	switch {
+	case !errors.As(err, &syntax):
+		return err
+	case held.ended && onlySeparators(dec.Buffered()):
+		return fmt.Errorf("%w: %w", io.ErrUnexpectedEOF, err)
 	}
-	return err
+	return fmt.Errorf("%w: %w", errNotExport, err)
+}
+
+// onlySeparators reports whether r holds nothing but what JSON puts between
+// two tokens — whitespace, and the comma or colon a value awaits its next
+// after.
+func onlySeparators(r io.Reader) bool {
+	var chunk [512]byte
+	for {
+		n, err := r.Read(chunk[:])
+		if len(bytes.Trim(chunk[:n], " \t\r\n,:")) > 0 {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+	}
 }
 
 // openCodeDocument walks the document, its messages handed to
@@ -1346,12 +1376,15 @@ func (b *budgetReader) Read(p []byte) (int, error) {
 
 // heldValue bounds what a JSON decoder pulls into its buffer between two
 // resets — one value of an export, about — so a message too large to hold is
-// refused as it is read rather than once the decoder has held all of it.
+// refused as it is read rather than once the decoder has held all of it; and
+// says whether what it reads came to its end, which tells a document cut short
+// from one that holds something else ([transcriptBuilder.openCodeExport]).
 type heldValue struct {
-	r    io.Reader
-	max  int
-	n    int
-	over bool
+	r     io.Reader
+	max   int
+	n     int
+	over  bool
+	ended bool
 }
 
 // reset starts the count over, for the next value.
@@ -1367,5 +1400,8 @@ func (h *heldValue) Read(p []byte) (int, error) {
 	}
 	n, err := h.r.Read(p)
 	h.n += n
+	if errors.Is(err, io.EOF) {
+		h.ended = true
+	}
 	return n, err
 }

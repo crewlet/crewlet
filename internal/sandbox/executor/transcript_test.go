@@ -922,11 +922,14 @@ func TestAnArchiveIsBlamedOnlyForItsOwnFaults(t *testing.T) {
 // this package writes for that way, and nothing the archive holds reaches the
 // reason or the error: an export whose document is a string planted with a
 // token and a mebibyte of a box's words is said as no export document, and
-// carries neither.
+// carries neither. An export that ends before it closes ends part way through
+// wherever it was cut — in its list's opening, after a whole message, after
+// the comma before the next — whatever the JSON decoder calls the end it met.
 //
 // Mutation: say a malformed archive in the decoder's words, or name the token
 // the export held where an object belonged, and the token, or the mebibyte,
-// reaches the reason.
+// reaches the reason; read every syntax error an export's walk meets as no
+// export document, and an export cut between its messages is said as one.
 func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 	t.Parallel()
 	_, capture := claudeCaptureOf(t, claudeSessionRecord, nil)
@@ -954,6 +957,15 @@ func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 			gzipped(t, `{"info":{},"messages":`+jsonText(t, planted)+`}`), executor.WhyNotExport},
 		{"an export cut short", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
 			gzipped(t, `{"info":{},"messages":[`), executor.WhyCutShort},
+		{"an export cut after a whole message", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":[{"info":{"role":"user"},"parts":[]}`+"\n"), executor.WhyCutShort},
+		{"an export cut after the comma before a message", executor.OpenCodeName,
+			executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":[{"info":{"role":"user"},"parts":[]},`), executor.WhyCutShort},
+		{"an export cut inside a message", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":[{"info":{"role":"us`), executor.WhyCutShort},
+		{"an export whose list closes on a brace", executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+			gzipped(t, `{"info":{},"messages":[}`), executor.WhyNotExport},
 	} {
 		_, err := executor.ReadTranscript(t.Context(), c.harness, c.format,
 			opener(bytes.NewReader(c.raw)), 0)
