@@ -1250,14 +1250,12 @@ func (c *Compactor) due(ctx context.Context, cand code.ExpungeCandidate, s cache
 		c.log.Warn("code_expunge_refused", "repo", cand.Name, "reason", reasonMemory, "error", err)
 		return nil, OutcomeRefused, err
 	case err != nil:
-		out, err := c.expungeFailed(cand, "admit", err)
-		return nil, out, err
+		return nil, c.expungeFailedOnly(cand, "admit", err), err
 	}
 	freed, err := c.unreachableIn(ctx, adm, s, eligible, drops)
 	adm.Release()
 	if err != nil {
-		out, err := c.expungeFailed(cand, "scan", err)
-		return nil, out, err
+		return nil, c.expungeFailedOnly(cand, "scan", err), err
 	}
 	seen := map[string]bool{}
 	var liveBytes, unreachable int64

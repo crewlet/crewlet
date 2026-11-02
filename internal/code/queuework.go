@@ -435,9 +435,9 @@ func descriptionsOf(ctx context.Context, tx *sql.Tx, entries []QueueWorkEntry) e
 	authors := make(map[string][]string, len(entries))
 	rows, err := tx.QueryContext(ctx, changeBodiesNamedSQL, list)
 	if err == nil {
-		err = eachRow(rows, func(row scanner) error {
+		err = eachRow(rows, func(row scanner) (err error) {
 			var id, body string
-			if err := row.Scan(&id, &body); err != nil {
+			if err = row.Scan(&id, &body); err != nil {
 				return err
 			}
 			bodies[id] = body
@@ -449,9 +449,9 @@ func descriptionsOf(ctx context.Context, tx *sql.Tx, entries []QueueWorkEntry) e
 	}
 	rows, err = tx.QueryContext(ctx, changeAuthorsNamedSQL, list)
 	if err == nil {
-		err = eachRow(rows, func(row scanner) error {
+		err = eachRow(rows, func(row scanner) (err error) {
 			var id, author string
-			if err := row.Scan(&id, &author); err != nil {
+			if err = row.Scan(&id, &author); err != nil {
 				return err
 			}
 			authors[id] = append(authors[id], author)

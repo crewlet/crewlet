@@ -618,8 +618,8 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 	// end. The first failure cancels the rest, whose objects no row will name.
 	g, gctx := errgroup.WithContext(ctx)
 	for n := range outs {
-		g.Go(func() error {
-			if err := code.StoreBundle(gctx, m.o.Objects, paths[n], &refs[n], nil); err != nil {
+		g.Go(func() (err error) {
+			if err = code.StoreBundle(gctx, m.o.Objects, paths[n], &refs[n], nil); err != nil {
 				return fmt.Errorf("mirror: store output %d of %s: %w", n, repoID, err)
 			}
 			return nil
