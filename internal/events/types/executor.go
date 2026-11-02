@@ -278,6 +278,21 @@ type ExecutorCollected struct {
 	// `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
+	// Brief is which of the three briefs the launch handed its run:
+	// `continued` (the turn's session, in the box it was last worked in),
+	// `continued_new_box` (the turn's session, restored into a box that
+	// replaced that one) or `fresh` (a session of its own). Absent where the
+	// launch recorded none.
+	//
+	// HarnessSessionContinued says the run did continue the session it was
+	// asked to — its box held it, or restored the archive carried in — and
+	// HarnessSessionFellBack why a run asked to continue one started a
+	// session of its own in its place, as its script said it: such a run is
+	// handed the fresh brief by its script, so a `continued` brief beside
+	// HarnessSessionContinued false is a run that read the fresh one.
+	Brief                   string `json:"brief,omitempty"`
+	HarnessSessionContinued bool   `json:"harness_session_continued,omitempty"`
+	HarnessSessionFellBack  string `json:"harness_session_fell_back,omitempty"`
 }
 
 // EventType is the "executor_collected" wire type.

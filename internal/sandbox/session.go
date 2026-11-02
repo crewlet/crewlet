@@ -246,6 +246,23 @@ type SessionCapture struct {
 	BridgeSeq  int `json:"bridge_seq,omitempty"`
 	NoteCursor int `json:"note_cursor,omitempty"`
 
+	// Interrupted says the archive was packed by the engine rather than by
+	// the run's script at its harness's clean exit ([SessionTake.Pack]): a
+	// job still working, cut off at its turn's cap, lost with its engine, or
+	// one that died before its script could pack — so its transcript may end
+	// mid-record, its last tool call with no result. A launch that continues
+	// it restores the archive over the copy in its box ([CarriedSession.Replace])
+	// and tells the run its transcript may end mid-call.
+	Interrupted bool `json:"interrupted,omitempty"`
+
+	// ContextTokens is the whole input of the last request the session's
+	// harness sent its model, cache included, as its own transcript recorded
+	// it ([TakenSession.Context]): what a launch that continues the session
+	// sends again before it reads a word of its brief, and so what that
+	// launch's budget floor is made of. Zero where the transcript recorded
+	// none this build reads.
+	ContextTokens int64 `json:"context_tokens,omitempty"`
+
 	// At is when it was taken, on this node's clock.
 	At time.Time `json:"at"`
 
@@ -504,7 +521,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	defer func() { _ = taken.Body.Close() }()
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
-		State: CaptureBegun, Final: at.final,
+		State: CaptureBegun, Final: at.final, Interrupted: at.pack,
 		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC(),
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
@@ -526,6 +543,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	spooled, err := c.spool(ctx, run, stamp, taken)
 	if err != nil {
 		return nil, c.finishCapture(ctx, run, stamp, CaptureRefused, takeRefusal(ctx, err))
+	}
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it was
+	// spooled, for the floor of the launch that continues it: stamped with the
+	// capture's outcome, which is the stamp that launch reads.
+	if taken.Context != nil {
+		spooled.stamp.ContextTokens = taken.Context()
 	}
 	digestCtx, digestCancel := detached(ctx)
 	keepErr := taken.Keep(digestCtx)

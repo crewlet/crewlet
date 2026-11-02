@@ -201,22 +201,31 @@ type LaunchRequest struct {
 	SignInID string
 
 	// Continue is set when this job CONTINUES the job before it, which
-	// parked on a person's question that has now been answered, or was lost
-	// with its host ([PendingRun.Lost]) — and so is the same round of the
-	// turn, carried on rather than begun again. Nil for every other launch.
+	// parked on a person's question that has now been answered, was lost
+	// with its host ([PendingRun.Lost]) or was refused on a sign-in replaced
+	// while it ran — and so is the same round of the turn, carried on rather
+	// than begun again. Nil for every other launch. The row keeps the round's
+	// bridged calls: the ones made before the question, or the loss, are this
+	// round's too ([PendingRun.Continues]).
 	//
-	// The job continues the asking job's own harness session where it runs in
-	// that job's box — the session lives there — with Continue.Brief, the
-	// answer, as its next prompt ([RunRequest.Resume]). Where it
-	// does not — the box was reclaimed while the question waited, or this
-	// launch runs another harness or cell, or the job before it was lost, whose
-	// session names none — it starts fresh with Brief, which then carries
-	// the question and the answer, or how the job before it was cut off, and
-	// where its work is; the decision is the launch's, made once it knows
-	// which box it has ([Coordinator.acquire]). And either way the row keeps
-	// the round's bridged calls: the ones made before the question, or the
-	// loss, are this round's too ([PendingRun.Continues]).
+	// Where the turn kept no capture of its session to continue (Session),
+	// the job continues the job before's own harness session where it runs
+	// in that job's box — the session lives there — with Continue.Brief as
+	// its next prompt ([RunRequest.Resume]); anywhere else it starts fresh
+	// with Brief, which then carries the question and the answer, or how the
+	// job before it was cut off, and where its work is.
 	Continue *Continuation
+
+	// Session is the turn's kept session this job continues, in whatever box
+	// it gets — the turn's newest kept capture, as the launch's caller chose
+	// it before it built the run's surface and briefs
+	// ([Coordinator.ContinuedCapture]) — with the briefs that continue it in
+	// the box it was last worked in and in any other. Set on every relaunch of
+	// a turn whose session can be continued: a reviewer's send-back as much as
+	// a round carried on. Nil starts a session of its own, or continues one
+	// in place (Continue). The launch takes it up, or says why not and starts
+	// fresh with Brief: see restore.go.
+	Session *SessionContinuation
 
 	// Fence is the launching turn's own seat fence — its seat still held
 	// under the grant the turn was admitted on, and no person's pause asking
@@ -344,6 +353,13 @@ type LaunchResult struct {
 	// Reused is whether the job continues in the box the turn's previous
 	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
 	Reused bool
+
+	// Continues is the harness session the launch asked its run to continue,
+	// "" where it started one of its own; Brief is which of the three briefs
+	// it handed the run (restore.go). Whether the run did continue it is its
+	// box's to say, on its collection ([Result.Continued]).
+	Continues string
+	Brief     BriefKind
 }
 
 // Launch provisions a box, starts the harness detached, and persists the
@@ -555,21 +571,23 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		c.refresh(ctx, m, opened, box)
 	}
 
-	// THE ASKING JOB'S SESSION, CONTINUED, only where this job runs in the
-	// box that session lives in; anywhere else the job starts fresh, told
-	// the question and the answer in its brief ([LaunchRequest.Continue]).
-	brief, session := req.Brief, ""
-	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
-		brief, session = continued.Brief, continued.SessionID
-	}
+	// THE TURN'S SESSION, CONTINUED in whatever box this job got — its kept
+	// capture restored where the box does not hold it — or the job before's
+	// own session in the box it lives in, or none: see restore.go. The run
+	// carries the brief its session needs, and the one a session of its own
+	// does, for its script to hand over the one its restore's outcome chose.
+	continued := c.continueSession(ctx, req, opened, box, runner, reused)
+	defer continued.release()
 	// THE ENVIRONMENT THE JOB IS STARTED WITH, read once: it is what the job
 	// is handed, and what its session's capture scrubs out ([HandedSecrets]).
 	env := withTelemetry(m, req, box)
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System: buildSystem(req),
-		Brief:  brief,
-		Resume: session,
-		Env:    env,
+		System:     buildSystem(req),
+		Brief:      continued.brief,
+		FreshBrief: continued.fresh,
+		Resume:     continued.session,
+		Carried:    continued.carried,
+		Env:        env,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -606,6 +624,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		PauseTTLSec: req.Spec.PauseTTLSec,
 		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub.
 		Handed: c.sealHanded(ctx, req, env),
+		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
+		// publishes beside whether its run did continue the session.
+		Brief: continued.kind,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
@@ -658,11 +679,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
 		"harness", req.Spec.Harness, "provider_key", req.ProviderKey,
-		"reused", reused, "continues_session", session != "")
+		"reused", reused, "continues_session", continued.session != "",
+		"restores_session", continued.carried != nil, "brief", string(continued.kind))
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
 		Harness: req.Spec.Harness, Reused: reused,
+		Continues: continued.session, Brief: continued.kind,
 	}, nil
 }
 

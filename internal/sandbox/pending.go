@@ -759,6 +759,18 @@ type PendingRun struct {
 	// nothing could order it.
 	LaunchSeq int64 `json:"launch_seq,omitempty"`
 
+	// RoundLaunch is the LaunchSeq of the job that began the round the row's
+	// job is in: minted by the write that opens a launch beginning a round —
+	// the turn's first, a reviewer's send-back — and kept by one that carries
+	// the round on ([PendingRun.Continues]: a person's answer, a loss, a
+	// replaced sign-in). It tells a capture the round took from one an
+	// earlier round took: a relaunch that carries a round on continues only a
+	// session of that round, which holds the brief the round began with and
+	// whose calls are numbered in the round's own order
+	// ([Coordinator.ContinuedCapture]). A row an older build wrote reads 0,
+	// which no capture's launch is below.
+	RoundLaunch int64 `json:"round_launch,omitempty"`
+
 	// Capture is the newest capture of the turn's harness session the row
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the
@@ -2366,6 +2378,10 @@ type BoxRef struct {
 	// ([PendingRun.Handed]): written by the attach that names the job's
 	// command, the one write that says the job exists.
 	Handed string
+
+	// Brief is which brief the launch handed the job's run
+	// ([LaunchRecord.Brief]), written with the job's command as Handed is.
+	Brief BriefKind
 }
 
 // PriorBox is the box a relaunch found on its run's row — see
@@ -2500,6 +2516,16 @@ type LaunchRecord struct {
 	// before it in the same round, where that is a reason the collection
 	// acts on ([FollowUpReason]); empty for every other launch.
 	FollowUp FollowUpReason `json:"follow_up,omitempty"`
+
+	// Brief is which of the three briefs the launch handed the job's run —
+	// one continuing the turn's session in the box it was last worked in, one
+	// continuing it in a box that replaced that one, or one for a session of
+	// its own (restore.go) — written by the attach that names the job's
+	// command ([PendingStore.AttachSandbox]), for the record its collection
+	// publishes beside whether the run did continue the session, which only
+	// its box can say ([Result.Continued]). A peer that does not know it drops
+	// it, and the record then names no brief.
+	Brief BriefKind `json:"brief,omitempty"`
 
 	// Iteration is the turn iteration the launching executor suspended in,
 	// written by [PendingStore.MarkSuspended].

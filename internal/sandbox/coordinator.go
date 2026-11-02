@@ -722,6 +722,13 @@ type CoordinatorOptions struct {
 	Sessions SessionWrites
 	Keep     SessionKeep
 
+	// Restore is what a relaunch continues its turn's kept session from — the
+	// executor log's read of the turn's row, through THE ESTATE ROUTER'S reads
+	// for the reason Sessions writes through its writes, and the session's
+	// sealed object — see restore.go. Nil continues no kept session: every
+	// relaunch then continues at most the session its own box holds.
+	Restore SessionRestore
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -804,7 +811,9 @@ type Coordinator struct {
 	sessionRetry time.Duration
 	recordBudget time.Duration
 	captureTick  time.Duration
-	now          func() time.Time
+	// restore is [CoordinatorOptions.Restore].
+	restore SessionRestore
+	now     func() time.Time
 
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
@@ -968,6 +977,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		refresh:       opts.Refresh,
 		sessions:      opts.Sessions,
 		keep:          opts.Keep,
+		restore:       opts.Restore,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
 		captureTick:   captureWaitTick,
@@ -2008,6 +2018,14 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// and the log's: they are made off the read.
 		HarnessSession: result.SessionID,
 		HarnessVersion: result.HarnessVersion,
+		// AND WHICH BRIEF THE LAUNCH HANDED IT, beside whether the run did
+		// continue the session it was asked to and, where it did not, why
+		// its script started one of its own and handed it the fresh brief:
+		// the started phase record carries the fresh brief, which a run that
+		// continued its session never read.
+		Brief:                   string(facts.Brief),
+		HarnessSessionContinued: result.Continued,
+		HarnessSessionFellBack:  redact.Secrets(result.FellBack),
 	}
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes

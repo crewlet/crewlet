@@ -504,6 +504,17 @@ type FakeRunner struct {
 	// takes is every capture asked of this runner, in order.
 	takes []SessionTake
 
+	// Carries makes this fake restore a session carried from another box
+	// ([SessionRestorer]): one its own harness wrote, in [FakeArchiveFormat],
+	// which every box it is asked about can take up unless CarryWhy says why
+	// its harness cannot — what a runner of a harness that packs and restores
+	// answers. Unset, it restores none. Set both before the first launch.
+	Carries  bool
+	CarryWhy string
+	// carried is every archive a job was started with, read whole as a
+	// runner writes it into its box.
+	carried []FakeCarried
+
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
 	account string
@@ -592,6 +603,15 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 		return RunHandle{}, r.StartErr
 	}
 	req.Env = maps.Clone(req.Env)
+	// THE CARRIED ARCHIVE IS READ AS THE RUN STARTS, as a runner writes it
+	// into its box: the launch releases what it spooled once Start returns.
+	if c := req.Carried; c != nil {
+		body, err := io.ReadAll(c.Body)
+		if err != nil {
+			return RunHandle{}, fmt.Errorf("fake: reading the carried session: %w", err)
+		}
+		r.carried = append(r.carried, FakeCarried{Archive: c.Archive, Body: body, Replace: c.Replace})
+	}
 	r.started = append(r.started, req)
 	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
 	if r.Player != nil {
@@ -863,6 +883,59 @@ func (r *FakeRunner) Takes() []SessionTake {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.takes)
+}
+
+// FakeArchiveFormat is the one archive format a [FakeRunner] that carries
+// sessions restores.
+const FakeArchiveFormat = 1
+
+// FakeCarried is an archive a job of a [FakeRunner] was started with
+// ([RunRequest.Carried]), as its box was handed it.
+type FakeCarried struct {
+	Archive SessionArchive
+	Body    []byte
+	Replace bool
+}
+
+// Carried is every archive a job was started with, in order.
+func (r *FakeRunner) Carried() []FakeCarried {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.carried)
+}
+
+var _ SessionRestorer = (*FakeRunner)(nil)
+
+// Restores answers as a runner of a harness that packs and restores does where
+// [FakeRunner.Carries] is set — a session its own harness wrote, in
+// [FakeArchiveFormat] — and restores nothing otherwise.
+func (r *FakeRunner) Restores(archive SessionArchive) (bool, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case !r.Carries:
+		return false, "fake: this runner carries no session between boxes"
+	case archive.Harness != r.name:
+		return false, fmt.Sprintf("fake: the session was written by %q, and this runner drives %q",
+			archive.Harness, r.name)
+	case archive.Format != FakeArchiveFormat:
+		return false, fmt.Sprintf("fake: the session's archive is format %d", archive.Format)
+	}
+	return true, ""
+}
+
+// CheckCarry answers [FakeRunner.Restores], and then [FakeRunner.CarryWhy] for
+// the box's own harness.
+func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
+	if ok, why := r.Restores(archive); !ok {
+		return CarryCheck{Why: why}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.CarryWhy != "" {
+		return CarryCheck{Why: r.CarryWhy}, nil
+	}
+	return CarryCheck{Continues: true}, nil
 }
 
 // Installed reports whether the agent was installed in this box.

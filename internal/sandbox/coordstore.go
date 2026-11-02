@@ -131,6 +131,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// NOR ITS ORDINAL: the first launch of a turn is 1, and the reset below
 	// numbers each later one past the row's ([PendingRun.LaunchSeq]).
 	run.LaunchSeq = 1
+	// AND THE ROUND IT BEGINS: a turn's first launch begins its first round
+	// ([PendingRun.RoundLaunch]).
+	run.RoundLaunch = 1
 	run.UpdatedAt = now
 	// And the job's own record starts here: the instant the launch exists
 	// is the instant it began, and a previous job's record — its start, its
@@ -234,9 +237,13 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// itself was the previous job's: a relaunch that continues the round
 		// adds that job to the round's losses where it was lost, and a new
 		// round has lost nothing ([PendingRun.RoundLosses]).
+		//
+		// AND A NEW ROUND BEGINS AT THIS LAUNCH, where a launch that carries
+		// the round on keeps the launch it began at ([PendingRun.RoundLaunch]).
 		switch {
 		case !run.Continues:
 			existing.RoundLosses = 0
+			existing.RoundLaunch = existing.LaunchSeq
 		case existing.Lost != nil:
 			existing.RoundLosses++
 		}
@@ -990,8 +997,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		if box.CommandID != "" {
 			run.Launch.Started = true
 			// AND WHAT THE JOB WAS HANDED, with the job: what a capture
-			// of its box scrubs out ([PendingRun.Handed]).
+			// of its box scrubs out ([PendingRun.Handed]); and which brief
+			// ([LaunchRecord.Brief]).
 			run.Handed = box.Handed
+			run.Launch.Brief = box.Brief
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).

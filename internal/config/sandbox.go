@@ -245,7 +245,9 @@ func (e *E2BSandbox) validate(path Path) error {
 }
 
 // Sandbox defaults. The TTL is the orphan-reclaim grace and the pause TTL
-// trades a bounded snapshot bill against exact conversational resume.
+// trades a bounded snapshot bill against a quick answer finding the run's
+// working tree as it left it — what a paused box keeps; the run's harness
+// session is continued from the turn's kept capture either way.
 const (
 	defaultSandboxTimeoutSeconds  = 900.0
 	defaultSandboxPauseTTLSeconds = 1800.0
