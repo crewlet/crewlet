@@ -2,6 +2,8 @@ package code_test
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -364,6 +366,98 @@ func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
 		listed[1].SyncedAt.IsZero() {
 		t.Fatalf("after a sync of nothing mirrors_due listed %+v; want %s never synced, then %s synced", listed,
 			other, head)
+	}
+}
+
+// THE MIRRORS LISTING PAGES BOTH ARMS IN ITS ORDER: read two rows a page to
+// its end, `mirrors_due` names every push mirror and every pull mirror exactly
+// once — the push mirrors first, by id, handing over to the pull mirrors in
+// the middle of a page — and the pull mirrors LEAST RECENTLY SYNCED FIRST, the
+// two never synced (a tie at zero, which a page boundary splits) by id ahead
+// of the two synced, the one synced first ahead of the one synced after it
+// though its id is the greater: the order a home's stop at the first mirror
+// synced within MirrorInterval relies on.
+//
+// Mutation: order the pull mirrors newest first, and the never-synced come
+// last; drop the id from the pull keyset's tie, and the second never-synced
+// mirror is skipped; restart the push arm's cursor from its first row, and
+// page two reads page one again for ever; end a page at its push arm's end,
+// and no page hands over.
+func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	ctx := t.Context()
+	code.SetPageLimits(n.reader, 2, 1<<20)
+	to, from := suiteSettings(), suiteSettings()
+	to.MirrorTo, from.MirrorFrom = mirrorTarget, mirrorSource
+	// Every repository made at one activation before any is made a mirror at
+	// a later one: activations only move forward.
+	var pushes, pulls []string
+	for i := range 3 {
+		pushes = append(pushes, repoOn(t, n, fmt.Sprintf("out-%d", i)))
+	}
+	for i := range 4 {
+		pulls = append(pulls, repoOn(t, n, fmt.Sprintf("in-%d", i)))
+	}
+	for i := range 3 {
+		n.ensure(fmt.Sprintf("out-%d", i), to, t2)
+	}
+	for i := range 4 {
+		n.ensure(fmt.Sprintf("in-%d", i), from, t2)
+	}
+	slices.Sort(pushes)
+	slices.Sort(pulls)
+	// The greater id synced first, so the order by instant is not the
+	// order by id.
+	c, _ := committerOn(t, n, n.pub)
+	for _, repo := range []string{pulls[3], pulls[2]} {
+		sync := syncOf(n, repo, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
+		res, err := c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})
+		requireSynced(t, "the sync of "+repo, res, err)
+	}
+
+	var listed []code.MirrorCandidate
+	handedOver := false
+	cursor := ""
+	for page := 0; ; page++ {
+		if page == 2*(len(pushes)+len(pulls)) {
+			t.Fatalf("mirrors_due is still paging after %d pages, %d rows: %v", page, len(listed), listed)
+		}
+		a, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadMirrorsDue, Cursor: cursor,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil || len(a.Mirrors) > 2 {
+			t.Fatalf("mirrors_due at %q answered %d rows, %v; want at most two", cursor, len(a.Mirrors), err)
+		}
+		if len(a.Mirrors) == 2 && a.Mirrors[0].To != nil && a.Mirrors[1].From != nil {
+			handedOver = true
+		}
+		listed = append(listed, a.Mirrors...)
+		if a.Next == "" {
+			break
+		}
+		cursor = a.Next
+	}
+	var gotPushes, gotPulls []string
+	for i, m := range listed {
+		switch {
+		case m.To != nil && m.From == nil && len(gotPulls) == 0:
+			gotPushes = append(gotPushes, m.ID)
+		case m.From != nil && m.To == nil:
+			gotPulls = append(gotPulls, m.ID)
+		default:
+			t.Fatalf("row %d of mirrors_due is %+v: want the push mirrors, then the pull mirrors, each naming "+
+				"its own remote alone", i, m)
+		}
+	}
+	if !slices.Equal(gotPushes, pushes) {
+		t.Errorf("mirrors_due listed the push mirrors %v, want each once by id: %v", gotPushes, pushes)
+	}
+	if want := []string{pulls[0], pulls[1], pulls[3], pulls[2]}; !slices.Equal(gotPulls, want) {
+		t.Errorf("mirrors_due listed the pull mirrors %v, want each once, least recently synced first: %v",
+			gotPulls, want)
+	}
+	if !handedOver {
+		t.Errorf("no page of mirrors_due went on from the push mirrors into the pull mirrors")
 	}
 }
 
