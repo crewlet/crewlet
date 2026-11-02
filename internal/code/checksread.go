@@ -183,7 +183,9 @@ func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 	if q.Repo == "" {
 		return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 	}
-	return fresh.Resolved(checksResolver(q.Repo), true)
+	// A listing that resolves its repository is a point read of it, as a
+	// `repo` read is ([ReadQuery.Resolve]).
+	return fresh.Resolved(checksResolver(q.Repo), !q.Resolve)
 }
 
 // validateChecks is [ReadQuery.validate]'s rules for a `checks` and a `check`
@@ -593,8 +595,10 @@ func (r *Reader) checkBox(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 
 // checks serves one page of a `checks` read: of the repository it names —
 // one change's attempts, one commit's, or all of them newest ended first — or
-// of the window, every repository the asker reads.
-func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
+// of the window, every repository the asker reads — the repository, where the
+// read resolves it, answered beside the page ([resolvingIn]).
+func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer) error {
 	c := CheckQuery{}
 	if q.Checks != nil {
 		c = *q.Checks
@@ -607,7 +611,7 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if q.Repo == "" {
 		return r.checksWindow(ctx, tx, q, c, chart, limit, out)
 	}
-	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
+	repo, err := resolvingIn(ctx, tx, q, chart, cp, out)
 	if err != nil {
 		return err
 	}

@@ -76,12 +76,16 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s needs `expected_head`: the change's head as %s answered it, a whole commit "+
 			"id — the rebase replays the commits you read, and no later ones.", tool, CodeGetChangeTool)), nil
 	}
-	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
 	}
+	// INVALID, NEVER CONFLICT: a closed or merged change never reopens by
+	// itself, so the same call shortly after is refused the same way — only
+	// another call (a reopen, another change) clears it (M5.md §2.10's
+	// change_not_open).
 	if !cv.change.State.Live() {
-		return refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
+		return refusedBy(tools.RefusalInvalid, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
 			fmt.Sprintf("%s: %s is %s, and only a live change is rebased.", tool, cv.g.ref(),
 				cv.change.State)), nil
 	}

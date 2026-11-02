@@ -526,8 +526,9 @@ code_queue_ejected         # a merge queue put an entry OUT: repository
                            # by id and name, the entry, its change and
                            # number, the branch, why (check_failed,
                            # conflict, gate_unmet, head_moved,
-                           # not_fast_forward), the failed checks or the
-                           # conflicted paths, who enqueued it, and the
+                           # not_fast_forward, repo_mirrored), the failed
+                           # checks or the conflicted paths, who enqueued
+                           # it, and the
                            # change's owner with `owner_agent_id`, whose
                            # seat day counts it once by its entry as
                            # `ejections`. Published ONCE an entry, by the data node whose

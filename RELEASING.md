@@ -479,11 +479,15 @@ doing the thing, or starts doing more — so read the file when you touch it:
   job that holds the token and not only the one that builds) stops a run a person
   triggered reaching it. The `build` job runs a dependency's install scripts, so
   it must keep `contents: read`, no secrets and no persisted checkout credential.
-  The `push` job's allowlist of file names stays an allowlist:
-  `static/dashboard` is inside the Go module, so a `.go` file in it would run on
-  every contributor's machine. The token stays fine-grained, for this
-  repository alone, at Contents: read and write — Workflows would let it rewrite
-  workflows, a classic token reaches every repository its account can, Pull
+  The `push` job's allowlist of file names stays an allowlist: every tree it
+  writes is inside the Go module, so a `.go` file in one would run on every
+  contributor's machine. Where it writes stays its own reading of the
+  Makefile's `UI_OUT`, as text from its own checkout, held to directories
+  directly under `static/` and refusing a file outside them; never a list the
+  `build` job hands over, and never `make`, which would run the checkout beside
+  the token. The token stays fine-grained, for this repository alone, at
+  Contents: read and write — Workflows would let it rewrite workflows, a
+  classic token reaches every repository its account can, Pull
   requests would let it approve them — and `v*` needs a tag ruleset its account
   cannot bypass. It expires, so the date wants a calendar entry. While `main`'s
   ruleset keeps approvals across pushes, anything pushed onto an open Dependabot

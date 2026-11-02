@@ -1329,7 +1329,11 @@ time it dials. A blob past `code.limits.max_blob_bytes` or a history past
 `code.limits.repo_max_bytes` ends the import early: the repository turns
 `active` holding what landed, and the import is not tried again. A **pull mirror**
 (`-mirror`) is imported the same way and then moves only by its home's syncs
-from the source, so every push to it is refused. Your own assistant does the
+from the source, so every push to it is refused. So is a repository that
+exists already when it is made a pull mirror — its `code.repos` entry's
+`mirror_from`, or its Settings tab — or moved to another source: it reads
+`importing` until the source has landed, every branch and tag it holds but a
+seat's own made the source's and one the source does not have deleted. Your own assistant does the
 same with `code_import_repo`, and so does **Import a repository** on the
 dashboard's Code › Repositories, where the repository's Overview then says
 how far the import went; no seat is offered it. Every flag is in

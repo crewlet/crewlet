@@ -840,7 +840,7 @@ type CodeRepo struct {
 	// mirror sends the company's code to one. Each credential is a ${VAR}
 	// reference and nothing else, recorded as the reference and resolved
 	// only when the remote is dialed.
-	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there when it is created, then moves only by the code host's syncs from it, and takes no push and no change of its own."`
+	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by the code host's syncs from it, and takes no push and no change of its own."`
 	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."`
 	Import     *CodeImportSource `yaml:"import,omitempty" json:"import,omitempty" desc:"Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."`
 }

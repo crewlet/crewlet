@@ -46,8 +46,13 @@
 //
 // THE RECORDS, PACKS FIRST: an import lands its outputs before any ref that
 // needs them — chunks of packs alone while more than code.MaxImportPacks are
-// left, then the refs, code.MaxImportRefs a chunk, the first of them riding
-// with the last packs — each chunk at the next Seq, so a chunk asked twice or
+// left, then the refs, the first of them riding with the last packs — each
+// chunk taking the most refs its record carries, at most code.MaxImportRefs
+// and within the bytes one record may hold (code.ImportProposal.Fitted, since
+// refs whose names JSON spells long reach those bytes first), cut and checked
+// as its committer will check it before a byte of its packs is uploaded, so a
+// step no committer would take costs no PUT — each chunk at the next Seq, so
+// a chunk asked twice or
 // out of turn is refused stale by its committer; then its end, naming the
 // source's HEAD branch where the branch the repository declares did not
 // arrive (`ls-remote --symref`). A sync lands the same steps as syncs, each
@@ -105,10 +110,11 @@
 // from a SCRATCH over the copy's incarnation, never from the copy, which only
 // a sync writes; at most pushBatch refspecs a push. It carries the seat's
 // OWN identity at the other host — the token the mirror's credential names,
-// sent by the one outbound dial (M6-D18) — never a bot's, and a commit's box
-// trailers (Crewlet-Seat, Crewlet-Run, Crewlet-Work-Item) travel with it as
-// they are: the mirror inherits what the box's hook wrote and decides nothing
-// about them (U25 a).
+// sent by the one outbound dial (M6-D18) — never a bot's, and the trailers
+// a commit's box wrote (its seat, run and work item, by the sandbox
+// package's TrailerHook) travel with it as they are: the mirror inherits
+// what the box's hook wrote and decides nothing about them (U25 a). Their
+// keys are not spelled here, since only the hook may spell one.
 //
 // A FAILED PUSH IS THE HOME'S STATE, in memory alone: a push to another host
 // is no record, and the node that pushes is the one that knows whether it
@@ -128,11 +134,25 @@
 // Each of its steps is bounded on its own — the fetch by
 // gitproc.RemoteDeadline over what it may bring, the cut and the scan by
 // gitproc.PackWorkDeadline, each upload by code.UploadDeadline — and every
-// attempt ends with [Mirrors.Stop]. At most [MaxAttempts] run at once on a
-// node. A pull mirror is synced once every code.MirrorInterval: listed by the
-// `mirrors_due` read until its last sync is within it, and, where its source
-// moved nothing and so no record moved its row, held back by this node's
-// memory of its last attempt.
+// attempt ends with [Mirrors.Stop]. THE CUT WAITS FOR ITS SLOT: the
+// maintenance lane refuses a process at once when it is full, and the cut
+// comes after a fetch of up to the repository's whole size, so the attempt
+// polls the lane for a slot it then holds (gitproc.Pool.Reserve) and keeps
+// its scratch meanwhile, rather than ending and fetching everything again.
+//
+// At most [MaxAttempts] run at once on a node, and one due while they run is
+// QUEUED on the worker and started as soon as one ends — the one this node
+// attempted longest ago first — so a node brings its mirrors level at
+// MaxAttempts over an attempt's length, never at MaxAttempts a pass. A pull
+// mirror is synced once every code.MirrorInterval: listed by the
+// `mirrors_due` read until its last sync is within it — a sync that found its
+// source moved nothing landing a record of nothing (code.MirrorSync.Current),
+// which moves that instant all the same, and a pull mirror's import that
+// landed whole moving it to its end — so the listing stops at the first
+// mirror synced within the interval on every node, this one after a restart
+// included; this node's memory of its last attempts holds a mirror whose
+// last attempt failed back for RetryAfter. What a whole listing does not
+// name, the worker forgets ([Mirrors.Due]).
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
 // internal/code/home, internal/code/checkrun and this package never import

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -64,7 +65,11 @@ func (e *errPermanent) Error() string { return e.why }
 // attempt is one import or sync of repoID: synced, fetched into a scratch, cut,
 // checked, stored and landed step by step, the scratch removed however it
 // ends. A nil error is an attempt that landed what it fetched, or found
-// nothing to land. A sync that reached its source is counted
+// nothing to land — a sync then landing a record of nothing, which moves the
+// mirror's last sync (code.MirrorSync.Current), so the listing holds it back
+// an interval on every node, this one after a restart included, rather than
+// only where this worker remembers the attempt. A sync that reached its source
+// is counted
 // (crewlet.code.mirror.runs{dir=pull}) by what it came to.
 func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	what := map[kind]string{kindImport: "import", kindSync: "sync"}[l.kind]
@@ -166,8 +171,16 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 	if err := m.afterBuild(ctx, l.kind); err != nil {
 		return err
 	}
-	for _, st := range steps(outs, cmds) {
-		applied, err := m.land(ctx, repoID, l, s, sc, st, l.seq+1)
+	todo := &steps{outs: outs, cmds: cmds}
+	if l.kind == kindSync && todo.done() {
+		// LEVEL WITH ITS SOURCE: one record of nothing, which moves only the
+		// mirror's last sync.
+		_, _, err := m.land(ctx, repoID, l, s, sc, nil, nil, 0)
+		return err
+	}
+	for !todo.done() {
+		outs, offered := todo.next()
+		applied, took, err := m.land(ctx, repoID, l, s, sc, outs, offered, l.seq+1)
 		var perm *errPermanent
 		if errors.As(err, &perm) {
 			// Ended at the chunks landed so far, this attempt's among them:
@@ -177,6 +190,7 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 		if err != nil || !applied {
 			return err
 		}
+		todo.landed(len(outs), took)
 		l.seq++
 		landed++
 	}
@@ -235,36 +249,36 @@ func fileSize(path string) int64 {
 	return fi.Size()
 }
 
-// step is one record an attempt lands: the outputs it stores and the commands
-// it carries.
-type step struct {
+// steps is what an attempt has left to land, PACKS FIRST: every output in
+// records of at most code.MaxImportPacks before any command, then the commands,
+// the first of them riding with the last outputs. HOW MANY COMMANDS A RECORD
+// TAKES IS ITS RECORD'S TO SAY, never a count's alone: each is offered every
+// command left, takes the most that fit it (code.ImportProposal.Fitted, at
+// most code.MaxImportRefs and within the bytes one record may carry), and
+// [steps.landed] moves past what it took — so refs whose names JSON spells
+// long (`&`, `<`, `>`, six bytes each) land in more records rather than in one
+// the committer refuses at every attempt.
+type steps struct {
 	outs []string
 	cmds []code.Command
 }
 
-// steps orders what an attempt lands PACKS FIRST: every output in records of at
-// most code.MaxImportPacks before any command, then the commands in records of
-// at most code.MaxImportRefs, the first of them riding with the last outputs.
-// None for an attempt that brought nothing.
-func steps(outs []string, cmds []code.Command) []step {
-	var out []step
-	for len(outs) > code.MaxImportPacks {
-		out = append(out, step{outs: outs[:code.MaxImportPacks]})
-		outs = outs[code.MaxImportPacks:]
+// done reports whether nothing is left to land.
+func (s *steps) done() bool { return len(s.outs) == 0 && len(s.cmds) == 0 }
+
+// next is the next record's outputs and the commands offered to it: outputs
+// alone while more than one record's are left, then the last of them with
+// every command left, then the commands left alone.
+func (s *steps) next() ([]string, []code.Command) {
+	if len(s.outs) > code.MaxImportPacks {
+		return s.outs[:code.MaxImportPacks], nil
 	}
-	first := step{outs: outs}
-	n := min(len(cmds), code.MaxImportRefs)
-	first.cmds, cmds = cmds[:n], cmds[n:]
-	if len(first.outs) > 0 || len(first.cmds) > 0 {
-		out = append(out, first)
-	}
-	for len(cmds) > 0 {
-		n := min(len(cmds), code.MaxImportRefs)
-		out = append(out, step{cmds: cmds[:n]})
-		cmds = cmds[n:]
-	}
-	return out
+	return s.outs, s.cmds
 }
+
+// landed moves past a record that landed outs outputs and the first cmds of
+// the commands offered to it.
+func (s *steps) landed(outs, cmds int) { s.outs, s.cmds = s.outs[outs:], s.cmds[cmds:] }
 
 // commands is every ref the source moved against the copy: each of the
 // scratch's refs — what the fetch wrote, the source's branches and tags —
@@ -369,7 +383,9 @@ func (m *Mirrors) forced(ctx context.Context, sc *cache.Scratch, old, new string
 // git writes and names a pack of no objects, which no record may carry
 // (code.PackRef.Check), so the attempt would fail on it every time: the
 // restart after a chunk of packs alone, whose fetch brings again only what
-// those packs hold, would never land its refs.
+// those packs hold, would never land its refs. It runs in a slot of the
+// node's maintenance lane the attempt WAITS FOR ([Mirrors.maintenanceSlot]),
+// the fetch kept meanwhile.
 func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fetched []cache.ScratchPack,
 	fetchedBytes int64, limits code.Limits) ([]string, error) {
 
@@ -383,7 +399,12 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 	for _, p := range m.o.Cache.Packs(s) {
 		list.WriteString("^pack-" + p.GitChecksum + ".pack\n")
 	}
-	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
+	slot, err := m.maintenanceSlot(ctx, s.Repo.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer slot.Release()
+	res, err := slot.Run(ctx, gitproc.Cmd{
 		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
 		Args: []string{"pack-objects", "--stdin-packs", "--non-empty",
 			"--max-pack-size=" + strconv.FormatInt(code.CompactPackBytes, 10), "--delta-base-offset", "--quiet",
@@ -404,6 +425,56 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 		outs = append(outs, cs)
 	}
 	return outs, lines.Err()
+}
+
+// The cut's wait for a maintenance slot polls the lane, which never queues a
+// caller (gitproc's Reserved: it refuses at once when full): first after
+// slotPollFirst, a QUARTER OF A SECOND, doubling to slotPollMax, FIVE
+// SECONDS. A poll is one lock of the lane and nothing more, so its cost is
+// nothing; what the cap bounds is how long a freed slot can sit before the
+// cut asks for it — five seconds at most, against a maintenance process's
+// seconds to minutes and against the home's passes, which ask the same lane
+// for compactions and merges once a minute.
+const (
+	slotPollFirst = 250 * time.Millisecond
+	slotPollMax   = 5 * time.Second
+)
+
+// maintenanceSlot is a slot of the node's maintenance lane for repoID's cut,
+// WAITED FOR under ctx alone: the lane refuses a process at once when every
+// slot is held — by a compaction's or a publication's build, a home's merge,
+// a commit-graph write — and the cut comes after the attempt's fetch, up to
+// the repository's whole repo_max_bytes for an import. Refused there, the
+// attempt would end, its scratch removed with everything the fetch wrote, and
+// the next attempt download it all again for as long as the lane stayed
+// busy — gitproc's Reserved names the hazard, work done for a process the
+// lane then refuses. NO DEADLINE OF ITS OWN: giving up is that same refetch,
+// and every process holding the lane ends by its own deadline; Stop ends the
+// wait with the attempt.
+func (m *Mirrors) maintenanceSlot(ctx context.Context, repoID string) (*gitproc.Reserved, error) {
+	wait := slotPollFirst
+	for logged := false; ; {
+		slot, err := m.o.Git.Reserve()
+		switch {
+		case err == nil:
+			return slot, nil
+		case !errors.Is(err, gitproc.ErrBusy):
+			return nil, fmt.Errorf("mirror: a maintenance slot for the cut of %s: %w", repoID, err)
+		case !logged:
+			logged = true
+			m.log.Info("code_mirror_cut_waiting", "repo", repoID, "error", err,
+				"detail", "the fetch is kept; the cut starts once a maintenance slot frees")
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, fmt.Errorf("mirror: waiting for a maintenance slot for the cut of %s: %w", repoID,
+				context.Cause(ctx))
+		case <-t.C:
+		}
+		wait = min(2*wait, slotPollMax)
+	}
 }
 
 // largestBlob is why an output may not be stored — its first blob past limit,
@@ -494,55 +565,83 @@ func (m *Mirrors) afterPropose(ctx context.Context, k kind) error {
 	return m.fault(ctx, codefault.MirrorAfterPropose)
 }
 
-// land stores one step's outputs, each laid out under the id its record
-// derives, all at once, and proposes its record: an import's chunk at seq, or a
-// sync at the copy's drop epoch. landed is that it applied — and its outputs
-// then adopted into this node's copy; false with a nil error is a repository
-// deleted meanwhile, owed nothing more. A chunk refused a limit ([permanent])
-// is an *errPermanent; any other refusal, and a record not seen applied, is
-// the attempt's error, after which the next attempt reads the rows again.
-func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Synced, sc *cache.Scratch, st step,
-	seq int64) (landed bool, err error) {
+// land lands one record: outs, each laid out under the id the record derives,
+// and the most of offered, from the first, that the record carries beside
+// them — cut and checked as the committer will check it
+// (code.ImportProposal.Fitted, code.MirrorSyncProposal.Fitted) BEFORE ANY
+// UPLOAD, so a step no committer would take costs no PUT to the object store —
+// then the outputs stored, all at once, and the record proposed: an import's
+// chunk at seq, or a sync at the copy's drop epoch. landed is that it applied
+// — and its outputs then adopted into this node's copy — and took how many of
+// offered it carried; false with a nil error is a repository deleted
+// meanwhile, owed nothing more. A chunk refused a limit ([permanent]) is an
+// *errPermanent; any other refusal, and a record not seen applied, is the
+// attempt's error, after which the next attempt reads the rows again.
+func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Synced, sc *cache.Scratch,
+	outs []string, offered []code.Command, seq int64) (landed bool, took int, err error) {
 
 	id := statelog.NewOpID(m.now(), "")
-	refs := make([]code.PackRef, len(st.outs))
+	refs := make([]code.PackRef, len(outs))
+	paths := make([]string, len(outs))
+	for n, cs := range outs {
+		paths[n] = filepath.Join(sc.Dir, "objects", "pack", "pack-"+cs+".pack")
+		ref, layErr := code.LayBundle(code.DeriveOutputPackID(id, n), paths[n], cs)
+		if layErr != nil {
+			return false, 0, fmt.Errorf("mirror: lay out output %d: %w", n, layErr)
+		}
+		refs[n] = *ref
+	}
+	var (
+		chunk *code.ImportChunk
+		sync  *code.MirrorSync
+	)
+	if l.kind == kindImport {
+		var p code.ImportProposal
+		p, err = code.ImportProposal{Chunk: &code.ImportChunk{RepoID: repoID, ChunkID: id, Node: m.o.NodeID,
+			Seq: seq, Packs: refs, Commands: offered}}.Fitted()
+		if err != nil {
+			return false, 0, fmt.Errorf("mirror: cut a step of %s: %w", repoID, err)
+		}
+		chunk, took = p.Chunk, len(p.Chunk.Commands)
+	} else {
+		var p code.MirrorSyncProposal
+		p, err = code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: repoID, SyncID: id, Node: m.o.NodeID,
+			DropEpoch: s.DropEpoch, Packs: refs, Commands: offered, FetchedAt: m.now()}}.Fitted()
+		if err != nil {
+			return false, 0, fmt.Errorf("mirror: cut a step of %s: %w", repoID, err)
+		}
+		sync, took = &p.Sync, len(p.Sync.Commands)
+	}
 	// Every output uploads AT ONCE, as a compaction's do (internal/code/compact's
 	// uploadAll gives the arithmetic): one after another, a step of
 	// code.MaxImportPacks outputs would take that many paced uploads end to
 	// end. The first failure cancels the rest, whose objects no row will name.
 	g, gctx := errgroup.WithContext(ctx)
-	for n, cs := range st.outs {
-		path := filepath.Join(sc.Dir, "objects", "pack", "pack-"+cs+".pack")
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		ref, err := code.LayBundle(code.DeriveOutputPackID(id, n), path, cs)
-		if err != nil {
-			return false, fmt.Errorf("mirror: lay out output %d: %w", n, err)
-		}
-		refs[n] = *ref
+	for n := range outs {
 		g.Go(func() error {
-			if err := code.StoreBundle(gctx, m.o.Objects, path, &refs[n], nil); err != nil {
+			if err := code.StoreBundle(gctx, m.o.Objects, paths[n], &refs[n], nil); err != nil {
 				return fmt.Errorf("mirror: store output %d of %s: %w", n, repoID, err)
 			}
 			return nil
 		})
 	}
 	if err = g.Wait(); err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if err = m.afterUpload(ctx, l.kind); err != nil {
-		return false, err
+		return false, 0, err
 	}
+	// THE RECORD NAMES THE STORED OBJECTS, which only the uploads minted.
 	var res code.SyncResult
-	if l.kind == kindImport {
-		res, err = m.o.Estate.Import(ctx, code.ImportProposal{Chunk: &code.ImportChunk{RepoID: repoID, ChunkID: id,
-			Node: m.o.NodeID, Seq: seq, Packs: refs, Commands: st.cmds}})
+	if chunk != nil {
+		chunk.Packs = refs
+		res, err = m.o.Estate.Import(ctx, code.ImportProposal{Chunk: chunk})
 	} else {
-		res, err = m.o.Estate.MirrorSync(ctx, code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: repoID,
-			SyncID: id, Node: m.o.NodeID, DropEpoch: s.DropEpoch, Packs: refs, Commands: st.cmds,
-			FetchedAt: m.now()}})
+		sync.Packs = refs
+		res, err = m.o.Estate.MirrorSync(ctx, code.MirrorSyncProposal{Sync: *sync})
 	}
 	if err != nil {
-		return false, fmt.Errorf("mirror: land a step of %s: %w", repoID, err)
+		return false, 0, fmt.Errorf("mirror: land a step of %s: %w", repoID, err)
 	}
 	if l.kind == kindImport {
 		outcome := "failed"
@@ -555,21 +654,21 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 		m.count(metrics.CodeImportChunks, metrics.Attrs{"outcome": outcome})
 	}
 	if ferr := m.afterPropose(ctx, l.kind); ferr != nil {
-		return false, ferr
+		return false, 0, ferr
 	}
 	switch {
 	case res.Refusal == code.RefusalRepoDeleted:
 		// Nothing is owed a repository deleted meanwhile.
-		return false, nil
+		return false, 0, nil
 	case l.kind == kindImport && permanent(res.Refusal):
-		return false, &errPermanent{why: res.Detail}
+		return false, 0, &errPermanent{why: res.Detail}
 	case res.Refusal != "":
-		return false, fmt.Errorf("mirror: a step of %s refused %s: %s", repoID, res.Refusal, res.Detail)
+		return false, 0, fmt.Errorf("mirror: a step of %s refused %s: %s", repoID, res.Refusal, res.Detail)
 	case res.Outcome != statelog.OutcomeApplied:
 		// Appended, and not seen applied within the wait: a failure, so the
 		// next attempt reads the rows at RetryAfter's first minute rather
 		// than a sync's interval later.
-		return false, fmt.Errorf("mirror: a step of %s is %s, not seen applied", repoID, res.Outcome)
+		return false, 0, fmt.Errorf("mirror: a step of %s is %s, not seen applied", repoID, res.Outcome)
 	}
 	if len(refs) > 0 {
 		if err := m.o.Cache.Adopt(ctx, repoID, sc, refs...); err != nil {
@@ -577,7 +676,7 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 				"detail", "the packs are on their rows; the next sync downloads them")
 		}
 	}
-	return true, nil
+	return true, took, nil
 }
 
 // end ends an import at l.seq — with why as its import_error where why is set

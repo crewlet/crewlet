@@ -64,7 +64,9 @@ import (
 // BuildChain builds b in one scratch on this node: see this file's head. It
 // answers the chain — every entry's commit or why it was skipped, its tip and
 // its stored pack, with its Settle — or the chain refused whole
-// (code.ChainResult.Refusal), nothing stored; or an error about this node or
+// (code.ChainResult.Refusal), nothing stored, or refused by its repository's
+// row before anything is built (code.ChainResult.Status,
+// [Server.mergeStatusRefusal]); or an error about this node or
 // its store: code.ErrNotServing for a host that is stopping,
 // code.ErrGitUnready for a copy it could not sync or a share it could not
 // take, code.ErrRepoNotFound for a repository the rows hold no live row of,
@@ -93,6 +95,15 @@ func (s *Server) BuildChain(ctx context.Context, b code.ChainBuild) (code.ChainR
 	case gone:
 		return code.ChainResult{}, fmt.Errorf("%w: chain %s: repository %s has no live row at %v",
 			code.ErrRepoNotFound, b.ChainID, b.RepoID, b.Seen)
+	}
+	// THE REPOSITORY'S STATUS, BEFORE ANYTHING IS BUILT: a chain is a run of
+	// merges, which a repository being imported, a pull mirror, an archived
+	// one and one being deleted take none of — its candidate is refused from
+	// the same row — so it is refused here, as a merge is, with no scratch, no
+	// share unit and no stored pack.
+	if refusal, words := s.mergeStatusRefusal(wr.synced.Repo); refusal != "" {
+		return code.ChainResult{Status: refusal, Detail: words,
+			Settle: func(context.Context, bool) error { return nil }}, nil
 	}
 	sc, err := s.o.Cache.NewScratch(ctx, wr.synced, b.ChainID)
 	if err != nil {

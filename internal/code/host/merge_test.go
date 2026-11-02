@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GIT NODE (merge.go): a
@@ -295,6 +296,55 @@ func TestAnUnreadyMergeBuildsNothing(t *testing.T) {
 	}
 }
 
+// A MERGE INTO A PULL MIRROR BUILDS NOTHING, and neither does one into a
+// repository being imported: a ready change's merge — its gate met — on a
+// repository made a pull mirror is refused repo_importing while the mirror's
+// import runs, and repo_mirrored once it is done, each in the domain's one
+// sentence for the state (code.ImportingDetail, code.MirroredDetail), by the
+// git node from the row it synced, BEFORE anything is built: no object is
+// stored, and the change stays open. The decide refuses either from the same
+// row, but only once a scratch, a share unit and a stored pack were spent on
+// a merge it could never take.
+//
+// Mutation: drop the importing arm, or the mirror arm, of the git node's
+// status mapping — that merge is built and its pack stored before its decide
+// refuses it, red.
+func TestAMergeIntoAPullMirrorBuildsNothing(t *testing.T) {
+	t.Parallel()
+	c := newMergeCase(t, codetest.SoloOptions{}, codetest.Settings(), map[string]string{"README.md": "one\n"})
+	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Into a mirror")
+	c.meetGate(n, lead())
+	head := c.change(n).Head
+	mirrored := codetest.Settings()
+	mirrored.MirrorFrom = &code.MirrorSource{URL: "https://forge.example.com/acme/web.git"}
+	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: mirrored})
+	before := len(c.objects())
+	refused := func(state string, want code.MergeRefusal, words string) {
+		t.Helper()
+		res, err := c.write(merge(c.repo, alice(), n, head, code.MergeMethodMerge))
+		if err != nil || res.Merge == nil || res.Merge.Refusal != want || res.Merge.Detail != words ||
+			res.Outcome != "" || res.Commit != "" {
+			t.Fatalf("a merge into a repository %s answered %+v %v (%+v), want %s saying %q", state, res, err,
+				res.Merge, want, words)
+		}
+		if after := len(c.objects()); after != before {
+			t.Errorf("a merge into a repository %s stored %d objects: its row refuses it before anything is "+
+				"built", state, after-before)
+		}
+	}
+	refused("being imported", code.MergeRefusalRepoImporting, code.ImportingDetail(codetest.RepoName))
+	done := code.ImportDone{RepoID: c.repo, Node: c.Fleet.Nodes()[0].ID()}
+	if res, err := c.solo().Code(t).Import(c.Ctx, code.ImportProposal{Done: &done}); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("end the pull mirror's import: %+v, %v", res, err)
+	}
+	refused("that is a pull mirror", code.MergeRefusalRepoMirrored,
+		code.MirroredDetail(codetest.RepoName, code.ManagedConfig))
+	if ch := c.change(n); ch.State != code.ChangeStateOpen {
+		t.Errorf("change %d is %s after merges a pull mirror refused", n, ch.State)
+	}
+}
+
 // A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
 // judges it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who may
 // merge into main, merges a ready change for the unit's lead, who may too,
@@ -568,10 +618,13 @@ func (m *movingMain) Merge(ctx context.Context, p code.MergeProposal) (code.Merg
 // third build, answering its two recomputes, its commit on the tip the last
 // push left; moved under its first build and under every one of
 // code.MergeRecomputes rebuilds after it, it is answered target_moving after
-// five records asked, and the change stays open.
+// five records asked, and the change stays open. Each merge's rebuilds are
+// observed once as it ends, on crewlet.code.merge.recomputes under how it
+// ended: 2 merged, 4 target_moving.
 //
 // Mutation: rebuild only three times → four records asked, red; answer the
-// first target_moved → nothing merges after two moves, red.
+// first target_moved → nothing merges after two moves, red; drop
+// recordRecomputes' observation → no merge observed, red.
 func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -598,6 +651,28 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 			w := merge(c.repo, pat(), n, head, code.MergeMethodMerge)
 			w.Override = "chasing a moving main"
 			res, err := c.write(w)
+			// THE REBUILDS ARE OBSERVED ONCE, as the merge ends, on the git
+			// node that built it: the count its answer carries, under how it
+			// ended — never once a round, nor left unrecorded. (A node that
+			// answered unready and handed the walk on records its own, which
+			// is no merge built.)
+			outcome, rebuilt := "merged", tc.moves
+			if !tc.merged {
+				outcome, rebuilt = string(code.MergeRefusalTargetMoving), code.MergeRecomputes
+			}
+			var merges, under uint64
+			var sum float64
+			for _, node := range c.Fleet.Nodes() {
+				n, _ := observed(node.Metrics(), metrics.CodeMergeRecomputes, nil)
+				handed, _ := observed(node.Metrics(), metrics.CodeMergeRecomputes,
+					map[string]string{"outcome": "unready"})
+				u, s := observed(node.Metrics(), metrics.CodeMergeRecomputes, map[string]string{"outcome": outcome})
+				merges, under, sum = merges+n-handed, under+u, sum+s
+			}
+			if merges != 1 || under != 1 || sum != float64(rebuilt) {
+				t.Errorf("crewlet.code.merge.recomputes observed %d merges, %d of them %s summing %v; want one "+
+					"%s merge of %d rebuilds", merges, under, outcome, sum, outcome, rebuilt)
+			}
 			if !tc.merged {
 				if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalTargetMoving ||
 					res.Merge.Recomputes != code.MergeRecomputes || m.asked != code.MergeRecomputes+1 {

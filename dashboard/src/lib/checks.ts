@@ -97,6 +97,7 @@ const EJECT_WORDS: Readonly<Record<string, string>> = {
   gate_unmet: "it no longer met the branch's gate",
   head_moved: "its head moved",
   not_fast_forward: "the branch moved under the queue",
+  repo_mirrored: "the repository became a pull mirror",
 };
 
 /** Why an entry was ejected, in words — a reason a newer engine names, as it sent it. */

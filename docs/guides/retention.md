@@ -2036,9 +2036,9 @@ them.
 **Every log can be re-anchored, by its own domain.** What a reanchor writes
 beside the checkpoint is the domain's to say: a log that claims identity
 (Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact
-datastore's, Ask Crewlet's and Chatlet's) appends its own generation
-record, which is the audit row above and the first-writer-wins between two
-operators, while the vectors and the usage days declare that they keep none. A
+datastore's, Ask Crewlet's, Chatlet's and the code log's) appends its own
+generation record, which is the audit row above and the first-writer-wins
+between two operators, while the vectors and the usage days declare that they keep none. A
 domain that cannot say is refused when the node boots, never when an operator
 first names its log.
 

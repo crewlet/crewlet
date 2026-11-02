@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -215,11 +216,11 @@ func (q ReadQuery) fixing() ReadQuery {
 // the one that ends the first may be short. A change of both is listed by the
 // first half alone.
 func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
-	out *ReadAnswer) error {
+	cp statelog.Position, out *ReadAnswer) error {
 
 	half, fixes := q.halfOfMe()
 	if fixes {
-		if err := r.listChanges(ctx, tx, half, chart, out, q.waitedOn()); err != nil {
+		if err := r.listChanges(ctx, tx, half, chart, cp, out, q.waitedOn()); err != nil {
 			return err
 		}
 		if out.Next != "" {
@@ -227,7 +228,7 @@ func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery
 		}
 		return nil
 	}
-	if err := r.listChanges(ctx, tx, half, chart, out, ""); err != nil {
+	if err := r.listChanges(ctx, tx, half, chart, cp, out, ""); err != nil {
 		return err
 	}
 	if out.Next == "" {

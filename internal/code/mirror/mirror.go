@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -26,12 +27,21 @@ const Name = "mirrors"
 
 // MaxAttempts is how many attempts — imports, syncs and pushes — one node
 // runs at once: TWO. An import or a sync spends most of its time on its fetch
-// — one slot of the node's transfer lane, paced by the other host — and then
-// one pack-objects in its maintenance lane, and a push on its push, one
-// transfer slot; so two keep one large import from holding back every mirror
-// the node is home to while holding at most one maintenance slot each, the
-// share a home's merge takes (internal/code/home's Concurrency). A
-// repository listed while two run waits for the next pass, a minute.
+// — one slot of the node's transfer lane, paced by the other host, and every
+// attempt's fetch one share of that lane between them (share, attempt.go) —
+// and then one pack-objects in a maintenance slot it waits for, and a push on
+// its push, one transfer slot; so two keep one large import from holding back
+// every mirror the node is home to, without more of them queueing on the one
+// share they take turns of. A repository due while two run WAITS here, not for
+// the next pass: each attempt that ends starts the waiting one this node
+// attempted longest ago ([Mirrors.Work]), so the node brings mirrors level at
+// two over an attempt's length, whatever the passes' pace. JUDGMENT, NOT A
+// MEASUREMENT: an idle source's attempt — a sync that finds nothing, a push
+// with nothing to send — is one negotiation with the other host, about a
+// second, so the code.MirrorInterval promise holds for some 1 800 mirrors a
+// node is home to while their sources are idle, fewer in proportion while
+// attempts move bytes or a long import holds one of the two; past it,
+// code_mirror_failing names the mirror that has waited longest.
 const MaxAttempts = 2
 
 // RetryAfter is how long after a failed attempt this node lists the
@@ -75,10 +85,13 @@ type Cache interface {
 }
 
 // Pool is the node's git pool: the fetch and the listing of the source's HEAD
-// in its transfer lane, the cut in its maintenance lane and the reads of the
-// scratch in its read lane.
+// in its transfer lane, the reads of the scratch in its read lane, and the
+// cut in a slot of its maintenance lane the attempt waits for and holds
+// (Reserve), since that lane refuses a process at once when it is full and
+// the cut comes after a fetch no attempt should make twice.
 type Pool interface {
 	Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
+	Reserve() (*gitproc.Reserved, error)
 }
 
 // Dial is the one outbound dial, as the engine builds it: the source's URL
@@ -196,13 +209,22 @@ type mirrorKey struct {
 
 // health is THE HOME'S FAILURE STATE of one mirror (M6-D16): when it was
 // last brought level — or when this node first tried it, where it never has
-// been here — when this node last started an attempt of it, and the name of
-// its repository. In memory alone: a push to another host is no record, and
-// the node that pushes is the one that knows whether it can.
+// been here — when a turn of this node last asked for it, starting an attempt
+// of it or queueing one ([Mirrors.claim]), and the name of its repository. In
+// memory alone: a push to another host is no record, and the node that pushes
+// is the one that knows whether it can.
 type health struct {
 	name    string
 	level   time.Time
 	started time.Time
+}
+
+// queuedAttempt is an attempt due while [MaxAttempts] ran: the furthest floor
+// a turn asked it at, and its place in arrival order, which breaks a tie
+// between two never attempted here or ended at one instant.
+type queuedAttempt struct {
+	floor   statelog.Position
+	arrived uint64
 }
 
 // pace is how long after its last attempt ended a repository's attempt of
@@ -234,6 +256,14 @@ type Mirrors struct {
 	running map[mirrorKey]bool
 	memory  map[mirrorKey]memory
 	health  map[mirrorKey]health
+	// queued is every attempt due while [MaxAttempts] ran, started as one
+	// ends ([Mirrors.startQueued]); arrivals numbers them.
+	queued   map[mirrorKey]queuedAttempt
+	arrivals uint64
+	// seen is every mirror the listing in progress has named so far — nil
+	// between listings — which its last page keeps and drops the rest of
+	// ([Mirrors.prune]).
+	seen    map[mirrorKey]bool
 	stopped bool
 	wg      sync.WaitGroup
 }
@@ -254,7 +284,7 @@ func New(o Options) (*Mirrors, error) {
 		return nil, fmt.Errorf("%w: missing %s", ErrOptions, strings.Join(slices.Sorted(slices.Values(missing)), ", "))
 	}
 	m := &Mirrors{o: o, log: o.Logger, now: o.Now, known: map[mirrorKey]listed{}, running: map[mirrorKey]bool{},
-		memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{}}
+		memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{}, queued: map[mirrorKey]queuedAttempt{}}
 	if m.log == nil {
 		m.log = logging.Get("code.mirror")
 	}
@@ -281,12 +311,14 @@ const (
 // first, by id — whose last push here is a code.MirrorInterval old, or that
 // was never pushed here; then every pull mirror whose last sync is a
 // code.MirrorInterval old — listed least recently synced first, so the
-// listing stops at the first synced within it — less the ones this node
-// attempted within that interval with nothing to land, or failed within
-// [RetryAfter]. Read at floor where it is set, stale where it is zero. What it
-// lists it remembers, for the turn that works it — every push mirror among
-// them, due or not, so a nudge of its repository (a green row moved) finds
-// it.
+// listing stops at the first synced within it, a sync that found its source
+// level moving that instant too (code.MirrorSync.Current) — less the ones
+// this node attempted within that interval with nothing to land, or failed
+// within [RetryAfter]. Read at floor where it is set, stale where it is zero.
+// What it lists it remembers, for the turn that works it — every push mirror
+// among them, due or not, so a nudge of its repository (a green row moved)
+// finds it — and the listing's last page forgets every mirror the listing did
+// not name ([Mirrors.prune]).
 func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
 	if !floor.IsZero() {
@@ -302,9 +334,12 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 		now := m.now()
 		var out []string
 		m.mu.Lock()
+		if cursor == "" {
+			m.seen = map[mirrorKey]bool{}
+		}
 		for _, c := range ans.Imports {
 			key := mirrorKey{repo: c.ID}
-			m.known[key] = listed{kind: kindImport, name: c.Name, source: c.Source, seq: c.Seq, at: c.Version}
+			m.remember(key, listed{kind: kindImport, name: c.Name, source: c.Source, seq: c.Seq, at: c.Version})
 			if m.waiting(key, now, 0) {
 				continue
 			}
@@ -332,7 +367,7 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 				// this listing answered at, so the snapshot it pushes from
 				// holds every record the listing saw.
 				key := mirrorKey{repo: c.ID, out: true}
-				m.known[key] = listed{kind: kindPush, name: c.Name, at: ans.Position}
+				m.remember(key, listed{kind: kindPush, name: c.Name, at: ans.Position})
 				if !m.waiting(key, now, code.MirrorInterval) {
 					out = append(out, c.ID)
 				}
@@ -344,10 +379,11 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 			if !c.SyncedAt.IsZero() && now.Sub(c.SyncedAt) < code.MirrorInterval {
 				// The first synced within its interval: every one after
 				// it was synced later still.
+				m.prune()
 				return out, "", nil
 			}
 			key := mirrorKey{repo: c.ID}
-			m.known[key] = listed{kind: kindSync, name: c.Name, source: code.ImportSource(*c.From), at: c.Version}
+			m.remember(key, listed{kind: kindSync, name: c.Name, source: code.ImportSource(*c.From), at: c.Version})
 			if m.waiting(key, now, code.MirrorInterval) {
 				continue
 			}
@@ -356,9 +392,44 @@ func (m *Mirrors) Due(ctx context.Context, floor statelog.Position, cursor strin
 		if ans.Next != "" {
 			return out, mirrorsArm + ans.Next, nil
 		}
+		m.prune()
 		return out, "", nil
 	}
 	return nil, "", fmt.Errorf("mirror: %q is no cursor of this worker's listing", cursor)
+}
+
+// remember keeps what the listing in progress says of key, for the turn that
+// works it, and marks key seen by that listing. Called with mu held.
+func (m *Mirrors) remember(key mirrorKey, l listed) {
+	m.known[key] = l
+	if m.seen != nil {
+		m.seen[key] = true
+	}
+}
+
+// prune ends a listing that ran from its first page to its last: everything
+// this node remembers of a mirror the listing did not name and that is not
+// running — what a listing said of it, its attempts' memory, its health and
+// its queued attempt — is dropped. So the worker holds what its last whole
+// listing named — the company's imports and mirrors, as every git node lists
+// them before its placement says which are its own — never every repository
+// any listing ever named: one deleted, one whose mirror went, an import that
+// ended. A pull mirror past the listing's stop, synced within its interval, is
+// dropped with them — brought level within it, so its health says nothing —
+// and listed again once its interval has passed. A listing that failed part
+// way prunes nothing: the next one begins at its first page. Called with mu
+// held.
+func (m *Mirrors) prune() {
+	seen := m.seen
+	m.seen = nil
+	if seen == nil {
+		return
+	}
+	gone := func(key mirrorKey) bool { return !seen[key] && !m.running[key] }
+	maps.DeleteFunc(m.known, func(key mirrorKey, _ listed) bool { return gone(key) })
+	maps.DeleteFunc(m.memory, func(key mirrorKey, _ memory) bool { return gone(key) })
+	maps.DeleteFunc(m.health, func(key mirrorKey, _ health) bool { return gone(key) })
+	maps.DeleteFunc(m.queued, func(key mirrorKey, _ queuedAttempt) bool { return gone(key) })
 }
 
 // waiting reports whether key's last attempt on this node ended too recently
@@ -378,11 +449,15 @@ func (m *Mirrors) waiting(key mirrorKey, now time.Time, after time.Duration) boo
 // Work STARTS repoID's attempts where its listings named them and none is
 // running — its import or its pull mirror's sync, and its push mirror's push
 // — each on a goroutine of the worker's own, and returns: an attempt dials
-// another host, which a turn's one backstop does not bound. An attempt no
-// listing named — a nudge for a repository this worker owes nothing — or one
-// running, or one within its pace of the last ([pace], [RetryAfter]), or one
-// past [MaxAttempts] running, is left to the next pass. ErrStopped once Stop
-// has begun.
+// another host, which a turn's one backstop does not bound. One due while
+// [MaxAttempts] run is QUEUED instead, and started as soon as one of them ends
+// ([Mirrors.startQueued]) — never dropped for the next pass to find, which
+// would start at most MaxAttempts a pass however short the attempts, and leave
+// every mirror past what a pass's slots reach unsynced for as long as the
+// ones ahead of it in the listing stay due. An attempt no listing named — a
+// nudge for a repository this worker owes nothing — or one running, or one
+// within its pace of the last ([pace], [RetryAfter]), is left to the next
+// pass. ErrStopped once Stop has begun.
 func (m *Mirrors) Work(_ context.Context, repoID string, floor statelog.Position) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -393,29 +468,106 @@ func (m *Mirrors) Work(_ context.Context, repoID string, floor statelog.Position
 	for _, out := range []bool{false, true} {
 		key := mirrorKey{repo: repoID, out: out}
 		l, ok := m.known[key]
-		if !ok || m.running[key] || len(m.running) >= MaxAttempts || m.waiting(key, now, pace(l.kind)) {
+		if !ok || m.running[key] || m.waiting(key, now, pace(l.kind)) {
 			continue
 		}
-		m.start(key, l, floor, now)
+		if len(m.running) < MaxAttempts {
+			delete(m.queued, key)
+			m.start(key, l, floor, now)
+			continue
+		}
+		m.claim(key, l, now)
+		q, held := m.queued[key]
+		if !held {
+			m.arrivals++
+			q.arrived = m.arrivals
+		}
+		q.floor = further(q.floor, floor)
+		m.queued[key] = q
 	}
 	return nil
 }
 
-// start runs key's attempt on a goroutine of the worker's own. Called with mu
-// held.
+// further is the later of two floors: a queued attempt asked again is synced
+// at the furthest record that asked for it.
+func further(a, b statelog.Position) statelog.Position {
+	if before, err := a.Before(b); err == nil && before {
+		return b
+	}
+	return a
+}
+
+// claim records that a turn of this node asked for key's mirror now — started
+// or queued — in its health: so a mirror queued here behind attempts that
+// hold every slot is still this node's to raise code_mirror_failing for
+// ([Mirrors.AlarmReading]). An import has no health. Called with mu held.
+func (m *Mirrors) claim(key mirrorKey, l listed, now time.Time) {
+	if l.kind == kindImport {
+		return
+	}
+	h, ok := m.health[key]
+	if !ok {
+		// NEVER BROUGHT LEVEL HERE: counted from the first time this node
+		// is asked for it, so a home that has just taken a mirror over
+		// gives it the whole promise before it is failing.
+		h.level = now
+	}
+	h.name, h.started = l.name, now
+	m.health[key] = h
+}
+
+// startQueued starts queued attempts while fewer than [MaxAttempts] run: each
+// time, the one THIS NODE ATTEMPTED LONGEST AGO — one it never attempted
+// first — and, between two alike, the one queued first. Never in the order
+// they were listed: a mirror whose attempt failed keeps its row's instant,
+// and so its place at the front of `mirrors_due`, until one lands, and an
+// order by listing would start it ahead of every mirror behind it each time
+// its RetryAfter passed. One whose listing was spent or pruned meanwhile, that is running,
+// or that is within its pace again is dropped: the next pass lists it again
+// if it is still owed. Called with mu held, as an attempt ends.
+func (m *Mirrors) startQueued(now time.Time) {
+	for len(m.running) < MaxAttempts && !m.stopped {
+		key, q, ok := m.nextQueued()
+		if !ok {
+			return
+		}
+		delete(m.queued, key)
+		l, known := m.known[key]
+		if !known || m.running[key] || m.waiting(key, now, pace(l.kind)) {
+			continue
+		}
+		m.start(key, l, q.floor, now)
+	}
+}
+
+// nextQueued is the queued attempt [Mirrors.startQueued] starts next, false
+// for none. A walk of the queue: it holds at most the mirrors this node is
+// home to, and is walked once an attempt, against an attempt's dial of
+// another host. Called with mu held.
+func (m *Mirrors) nextQueued() (mirrorKey, queuedAttempt, bool) {
+	var (
+		best  mirrorKey
+		bestQ queuedAttempt
+		found bool
+	)
+	for key, q := range m.queued {
+		if found {
+			a, b := m.memory[key].ended, m.memory[best].ended
+			if a.After(b) || (a.Equal(b) && q.arrived > bestQ.arrived) {
+				continue
+			}
+		}
+		best, bestQ, found = key, q, true
+	}
+	return best, bestQ, found
+}
+
+// start runs key's attempt on a goroutine of the worker's own, and as it
+// ends starts the queued attempts its slot frees ([Mirrors.startQueued]).
+// Called with mu held.
 func (m *Mirrors) start(key mirrorKey, l listed, floor statelog.Position, now time.Time) {
 	m.running[key] = true
-	if l.kind != kindImport {
-		h, ok := m.health[key]
-		if !ok {
-			// NEVER BROUGHT LEVEL HERE: counted from the first attempt
-			// this node makes, so a home that has just taken a mirror
-			// over gives it the whole promise before it is failing.
-			h.level = now
-		}
-		h.name, h.started = l.name, now
-		m.health[key] = h
-	}
+	m.claim(key, l, now)
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -450,6 +602,7 @@ func (m *Mirrors) start(key mirrorKey, l listed, floor statelog.Position, now ti
 			}
 		}
 		m.memory[key] = mem
+		m.startQueued(mem.ended)
 	}()
 }
 
@@ -467,10 +620,13 @@ func (m *Mirrors) forget(key mirrorKey) {
 // home to have not been brought level for longer than their own refresh
 // promise, code.MirrorInterval plus [AttemptDeadline] (ADR-0015), and the one
 // failing longest, by its repository's name — what raises
-// code_mirror_failing. A mirror this node has not started an attempt of
-// within that promise is no longer this node's — its repository's home moved,
-// or its mirror went — and is left out: the home tries a mirror at least once
-// an interval, a failing one sooner ([RetryAfter]). So is one whose attempt
+// code_mirror_failing. A mirror no turn of this node has asked for within
+// that promise — neither started nor queued — is no longer this node's — its
+// repository's home moved, or its mirror went — and is left out: the home
+// asks for a mirror at least once an interval, a failing one sooner
+// ([RetryAfter]), and one queued behind attempts holding every slot is asked
+// for again each pass, so a node home to more mirrors than it brings level is
+// counted. So is one whose attempt
 // has run longer than the promise — a first push of a large repository —
 // until that attempt ends: an attempt is bounded by what it moves
 // (gitproc.RemoteDeadline), never by this alarm, and a failed one's retry, a

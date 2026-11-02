@@ -5,12 +5,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,11 @@ type source struct {
 	wt   string
 	bare string
 	url  string
+	// reads counts the git processes that read the served repository: each
+	// fetch or ls-remote opens with exactly one advertisement request,
+	// `GET info/refs?service=git-upload-pack`, whatever the protocol does
+	// after it.
+	reads *atomic.Int64
 }
 
 func newSource(t *testing.T) *source {
@@ -46,7 +53,15 @@ func newSource(t *testing.T) *source {
 	root := t.TempDir()
 	bare := filepath.Join(root, "src.git")
 	c.Run(t, "", "init", "-q", "--bare", bare)
-	srv := httptest.NewTLSServer(c.HTTPBackend(root))
+	reads := &atomic.Int64{}
+	backend := c.HTTPBackend(root)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs") &&
+			r.URL.Query().Get("service") == "git-upload-pack" {
+			reads.Add(1)
+		}
+		backend.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	ca := filepath.Join(t.TempDir(), "ca.pem")
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}
@@ -54,7 +69,7 @@ func newSource(t *testing.T) *source {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", ca)
-	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git"}
+	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git", reads: reads}
 }
 
 // commit commits files in the source's work tree.
@@ -142,6 +157,8 @@ type harness struct {
 	// dial is what the workers dial a URL with: nil for the source's own
 	// dial, as Tier A's git.import_allow_private lets a node dial loopback.
 	dial mirror.Dial
+	// git is the git pool the workers run in: nil for the git node's own.
+	git mirror.Pool
 
 	mu  sync.Mutex
 	now time.Time
@@ -192,7 +209,11 @@ func (h *harness) mirrors() *mirror.Mirrors {
 			return gitproc.ResolveRemote(ctx, url, true)
 		}
 	}
-	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: n.Pool(), Objects: objects,
+	var git mirror.Pool = n.Pool()
+	if h.git != nil {
+		git = h.git
+	}
+	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: git, Objects: objects,
 		Dial: dial, NodeID: n.ID(), Limits: func() code.Limits { return h.limits },
 		Roster: codetest.FixtureRoster, Events: &h.events, Faults: h.faults, Now: h.clock})
 	if err != nil {
@@ -206,6 +227,15 @@ func (h *harness) mirrors() *mirror.Mirrors {
 // each repository it names worked, and every attempt that started waited
 // for. It answers the repositories listed.
 func (h *harness) pass(m *mirror.Mirrors) []string {
+	h.t.Helper()
+	listed := h.listAndWork(m)
+	m.Wait()
+	return listed
+}
+
+// listAndWork is a pass's listing and its turns, each repository the listing
+// names worked, without waiting for the attempts they started.
+func (h *harness) listAndWork(m *mirror.Mirrors) []string {
 	h.t.Helper()
 	ctx := h.t.Context()
 	var listed []string
@@ -225,7 +255,6 @@ func (h *harness) pass(m *mirror.Mirrors) []string {
 		}
 		cursor = next
 	}
-	m.Wait()
 	return listed
 }
 
@@ -395,6 +424,121 @@ func TestAPullMirrorFollowsAForcePush(t *testing.T) {
 	}
 }
 
+// A REPOSITORY MADE A PULL MIRROR LATER IS IMPORTED FIRST (M6-D16): an active
+// repository a person pushed a branch of their own to, then declared a pull
+// mirror of a source with more refs than one chunk carries, is brought onto
+// its source by an IMPORT — chunk 1, then chunk 2 from the rows, then its end
+// — never by a sync, whose fetch is given one push's deadline; and once it is
+// done it is the active pull mirror of exactly the source's refs, the branch
+// the source never had deleted.
+//
+// Mutation: drop the settings apply's start of the import (mirrorImportSQL) —
+// the repository stays active and its home syncs it, no chunk proposed, red.
+func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	a := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	var tags strings.Builder
+	for i := range code.MaxImportRefs {
+		fmt.Fprintf(&tags, "create refs/tags/v%04d %s\n", i, a)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(tags.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("tagging the source: %v\n%s", err, stderr)
+	}
+	s := codetest.Settings()
+	s.Protections = nil
+	h.f.Declare(t, code.Declared{Name: "later", Settings: s})
+	p := codetest.NewPerson(t, h.f, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"local": "local\n"}, "local")
+	if res := p.Push(t.Context(), work, h.f.Nodes()[0].URL()+"/git/later", "HEAD:refs/heads/local"); res.Err != nil {
+		t.Fatalf("push local: %s", res)
+	}
+
+	s.MirrorFrom = &code.MirrorSource{URL: h.src.url}
+	h.f.Declare(t, code.Declared{Name: "later", Settings: s})
+	if rows := h.rows("later"); rows.Repo.Status != code.RepoStatusImporting || !rows.Repo.Mirrored {
+		t.Fatalf("later made a pull mirror is %s (mirrored %t), want importing from its source",
+			rows.Repo.Status, rows.Repo.Mirrored)
+	}
+	h.pass(h.mirrors())
+
+	rows := h.rows("later")
+	if rows.Repo.Status != code.RepoStatusActive || !rows.Repo.Mirrored {
+		t.Fatalf("after its import later is %s (mirrored %t), want an active pull mirror", rows.Repo.Status,
+			rows.Repo.Mirrored)
+	}
+	if got, ok := rows.Refs["refs/heads/local"]; ok {
+		t.Errorf("local is still at %s, which the source never had", got)
+	}
+	if got := rows.Refs["refs/heads/main"]; got != a || len(rows.Refs) != code.MaxImportRefs+1 {
+		t.Errorf("later holds %d refs, main at %s; want the source's %d, main at %s", len(rows.Refs), got,
+			code.MaxImportRefs+1, a)
+	}
+	chunks, dones := h.est.chunks()
+	h.est.mu.Lock()
+	syncs := len(h.est.syncs)
+	h.est.mu.Unlock()
+	if len(chunks) != 2 || chunks[0].Seq != 1 || chunks[1].Seq != 2 || len(dones) != 1 || dones[0].Seq != 2 ||
+		syncs != 0 {
+		t.Fatalf("later was brought onto its source by chunks %v, %d ends and %d syncs; want an import of "+
+			"chunks 1 and 2 and its end, and no sync", seqs(chunks), len(dones), syncs)
+	}
+}
+
+// A QUIET PULL MIRROR IS NOT FETCHED AGAIN BY A FRESH HOME: the rows, never a
+// worker's memory, hold a quiet source's mirror back an interval — its import
+// that landed whole is its last sync, so a worker that knows nothing of it (a
+// restart, or a node newly home to it) does not list it within the interval;
+// and once the interval has passed, a sync that finds the source moved nothing
+// lands a sync of nothing, which moves the mirror's last sync on.
+//
+// Mutation: leave a mirror's import end off its last sync, and the fresh
+// worker lists it at once; land nothing where the source moved nothing, and
+// its last sync stays the import's.
+func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	s := codetest.Settings()
+	s.Protections = nil
+	s.MirrorFrom = &code.MirrorSource{URL: h.src.url}
+	h.f.Declare(t, code.Declared{Name: "quiet", Settings: s})
+	h.pass(h.mirrors())
+	synced := func() code.MirrorCandidate {
+		t.Helper()
+		a, err := h.est.Read(t.Context(), code.ReadQuery{Kind: code.ReadMirrorsDue, Fresh: codetest.Linearizable})
+		if err != nil || len(a.Mirrors) != 1 {
+			t.Fatalf("mirrors_due answered %+v, %v; want the one pull mirror", a.Mirrors, err)
+		}
+		return a.Mirrors[0]
+	}
+	imported := synced()
+	if rows := h.rows("quiet"); rows.Repo.Status != code.RepoStatusActive || imported.SyncedAt.IsZero() {
+		t.Fatalf("after its import the mirror is %s, last synced %v; want it active, synced at its import's end",
+			rows.Repo.Status, imported.SyncedAt)
+	}
+	if listed := h.pass(h.mirrors()); len(listed) != 0 {
+		t.Fatalf("a fresh worker listed %v within the interval of the mirror's import", listed)
+	}
+
+	h.advance(code.MirrorInterval + time.Minute)
+	if listed := h.pass(h.mirrors()); !slices.Contains(listed, imported.ID) {
+		t.Fatalf("the mirror was not listed %v once its interval had passed", listed)
+	}
+	h.est.mu.Lock()
+	syncs := slices.Clone(h.est.syncs)
+	h.est.mu.Unlock()
+	if len(syncs) != 1 || !syncs[0].Sync.Current() {
+		t.Fatalf("the quiet mirror proposed %+v; want one sync of nothing", syncs)
+	}
+	if got := synced(); !got.SyncedAt.After(imported.SyncedAt) {
+		t.Fatalf("after a sync of nothing the mirror's last sync is %v, want it past its import's %v",
+			got.SyncedAt, imported.SyncedAt)
+	}
+}
+
 // AN IMPORT PAST THE BLOB LIMIT ENDS WITH ITS ERROR: a source holding a blob
 // past code.limits.max_blob_bytes is not landed in part and retried for ever
 // — the attempt that finds the blob ends the import, the repository active
@@ -429,12 +573,14 @@ func TestAnImportPastTheBlobLimitEndsWithItsError(t *testing.T) {
 
 // AN ATTEMPT LANDS ITS PACKS BEFORE ITS REFS: no record carries a ref before
 // every pack an attempt cut is in a record before it or beside it, and no
-// record carries more than code.MaxImportPacks packs or code.MaxImportRefs
-// refs — the records a chunk or a sync is held to.
+// record carries more than code.MaxImportPacks packs or the refs its record
+// takes of those offered to it — here code.MaxImportRefs, the records a chunk
+// or a sync is held to — and every ref lands once, in order.
 //
 // Mutation: put the commands in the first record, and a ref rides ahead of
 // the packs it needs; drop the cap on a record's packs, and one record
-// carries them all.
+// carries them all; move past every ref offered rather than those taken, and
+// refs are lost.
 func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	t.Parallel()
 	outs := make([]string, 2*code.MaxImportPacks+1)
@@ -445,7 +591,9 @@ func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	for i := range cmds {
 		cmds[i] = code.Command{Ref: fmt.Sprintf("refs/tags/v%04d", i), Old: code.ZeroOID, New: outs[0]}
 	}
-	packs, refs := mirror.Steps(outs, cmds)
+	packs, refs := mirror.Steps(outs, cmds, func(_ []string, offered []code.Command) int {
+		return min(len(offered), code.MaxImportRefs)
+	})
 	var gotOuts []string
 	var gotCmds []code.Command
 	for i := range packs {
@@ -459,13 +607,52 @@ func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 		}
 		gotOuts, gotCmds = append(gotOuts, packs[i]...), append(gotCmds, refs[i]...)
 	}
-	if !slices.Equal(gotOuts, outs) || len(gotCmds) != len(cmds) {
+	if !slices.Equal(gotOuts, outs) || !slices.Equal(gotCmds, cmds) {
 		t.Fatalf("the records carry %d packs and %d refs, want every one of the %d and %d once, in order",
 			len(gotOuts), len(gotCmds), len(outs), len(cmds))
 	}
 	if len(packs) != 4 {
 		t.Errorf("the attempt lands %d records, want 4: two of packs alone, the last packs with the first "+
 			"refs, and the rest of the refs", len(packs))
+	}
+}
+
+// AN IMPORT OF LONG REFS LANDS IN THE CHUNKS ITS RECORDS HOLD: a source of
+// code.MaxImportRefs tags whose names JSON spells long — `&`, six bytes each,
+// at the longest name a ref may have — and its main branch is past what one
+// chunk's record carries by its bytes long before its count, so the attempt
+// cuts each chunk to what its record holds: the import lands in more chunks
+// than the count alone would cut, each one applied, and ends active with
+// every ref of the source.
+//
+// Mutation: cut each chunk by code.MaxImportRefs alone, and its first chunk is
+// refused invalid at every attempt, the repository importing for ever with
+// nothing landed.
+func TestAnImportOfLongRefsLandsInTheChunksItsRecordsHold(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	first := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	var tags strings.Builder
+	for i := range code.MaxImportRefs {
+		fmt.Fprintf(&tags, "create refs/tags/%s%05d %s\n", strings.Repeat("&", code.MaxRefNameBytes-15), i, first)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(tags.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("tagging the source: %v\n%s", err, stderr)
+	}
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+
+	h.pass(h.mirrors())
+	rows := h.rows("imported")
+	if rows.Repo.Status != code.RepoStatusActive || len(rows.Refs) != code.MaxImportRefs+1 {
+		t.Fatalf("after its import the repository is %s with %d refs; want it active with the source's %d",
+			rows.Repo.Status, len(rows.Refs), code.MaxImportRefs+1)
+	}
+	chunks, dones := h.est.chunks()
+	if len(chunks) < 2 || len(dones) != 1 || dones[0].Error != "" || dones[0].Seq != int64(len(chunks)) {
+		t.Fatalf("the import proposed %d chunks and ended %+v; want more than the one its count alone cuts, "+
+			"then one end after the last, with no error", len(chunks), dones)
 	}
 }
 
@@ -592,5 +779,213 @@ func TestAPushMirrorWaitsForGreen(t *testing.T) {
 	}
 	if got := held["refs/tags/v2"]; got != c {
 		t.Errorf("the other host's v2 is %q, want the tag's %s", got, c)
+	}
+}
+
+// busyLane is the git node's pool with every refusal of a maintenance slot
+// told on refused: the moment an attempt's cut finds the lane full.
+type busyLane struct {
+	*gitproc.Pool
+	refused chan struct{}
+}
+
+func (b busyLane) Reserve() (*gitproc.Reserved, error) {
+	slot, err := b.Pool.Reserve()
+	if errors.Is(err, gitproc.ErrBusy) {
+		select {
+		case b.refused <- struct{}{}:
+		default:
+		}
+	}
+	return slot, err
+}
+
+// A CUT WAITS FOR A MAINTENANCE SLOT AND KEEPS ITS FETCH: an import whose
+// fetch has landed in its scratch while every slot of the node's maintenance
+// lane is held — a compaction's build, a merge — waits for one, and once a
+// slot frees cuts and lands what it fetched, the source read ONCE: never an
+// attempt ended on the lane's refusal, its scratch removed with everything it
+// downloaded, and the next attempt downloading it all again.
+//
+// Mutation: ask the lane once and end the attempt on its refusal, as a
+// maintenance Run does, and the repository is still importing once the slots
+// are free.
+func TestACutWaitsForAMaintenanceSlotAndKeepsItsFetch(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	head := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+
+	pool := h.f.Nodes()[0].Pool()
+	var held []*gitproc.Reserved
+	for {
+		slot, err := pool.Reserve()
+		if errors.Is(err, gitproc.ErrBusy) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("holding the maintenance lane: %v", err)
+		}
+		held = append(held, slot)
+	}
+	refused := make(chan struct{}, 1)
+	h.git = busyLane{Pool: pool, refused: refused}
+	m := h.mirrors()
+	h.listAndWork(m)
+	select {
+	case <-refused:
+	case <-time.After(time.Minute):
+		t.Fatal("the import never asked the full maintenance lane for its cut's slot")
+	}
+	if got := h.src.reads.Load(); got != 1 {
+		t.Fatalf("the source was read %d times before the cut; want the fetch's once", got)
+	}
+	for _, slot := range held {
+		slot.Release()
+	}
+	m.Wait()
+
+	rows := h.rows("imported")
+	if rows.Repo.Status != code.RepoStatusActive || rows.Refs["refs/heads/main"] != head {
+		t.Fatalf("once a slot freed the repository is %s with main at %q; want it active at the source's %s",
+			rows.Repo.Status, rows.Refs["refs/heads/main"], head)
+	}
+	if got := h.src.reads.Load(); got != 1 {
+		t.Errorf("the source was read %d times; want once, the fetch the cut waited with", got)
+	}
+}
+
+// EVERY DUE MIRROR IS ATTEMPTED WITHIN ITS INTERVAL: a node home to more due
+// repositories than MaxAttempts at once, a pass a minute, could start in a
+// code.MirrorInterval — here imports from a source that answers at once,
+// refusing — attempts every one of them within that interval: a repository
+// listed while MaxAttempts run waits on the worker and starts as one ends,
+// rather than waiting for a pass that hands every slot to the ones listed
+// first again.
+//
+// Mutation: drop a repository listed while MaxAttempts run, as a full worker
+// did, and the passes of a whole interval attempt MaxAttempts of them.
+func TestEveryDueMirrorIsAttemptedWithinItsInterval(t *testing.T) {
+	const backstop = time.Minute // internal/code/home's Backstop: a pass a minute
+	passes := int(code.MirrorInterval / backstop)
+	n := mirror.MaxAttempts*passes + 1
+	h := newHarness(t, code.Limits{})
+	var (
+		mu     sync.Mutex
+		gate   chan struct{}
+		dialed = map[string]bool{}
+	)
+	// THE GATE holds every attempt that dials while a pass's turns run, so
+	// each turn after the first MaxAttempts finds them running however fast
+	// the source answers; once the turns are done, the source refuses at
+	// once.
+	h.dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
+		mu.Lock()
+		dialed[url] = true
+		g := gate
+		mu.Unlock()
+		select {
+		case <-g:
+		case <-ctx.Done():
+		}
+		return gitproc.Remote{}, errors.New("the source refuses every fetch")
+	}
+	repos := make([]code.Declared, n)
+	for i := range repos {
+		repos[i] = code.Declared{Name: fmt.Sprintf("imported-%02d", i), Settings: codetest.Settings(),
+			Import: &code.ImportSource{URL: fmt.Sprintf("https://source.example.com/r%02d.git", i)}}
+	}
+	h.f.Declare(t, repos...)
+	attempted := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(dialed)
+	}
+
+	m := h.mirrors()
+	for pass := 0; pass < passes && attempted() < n; pass++ {
+		g := make(chan struct{})
+		mu.Lock()
+		gate = g
+		mu.Unlock()
+		h.listAndWork(m)
+		close(g)
+		m.Wait()
+		h.advance(backstop)
+	}
+	if got := attempted(); got != n {
+		t.Fatalf("%d passes, a %v interval's, attempted %d of the %d due repositories; want every one",
+			passes, code.MirrorInterval, got, n)
+	}
+}
+
+// A QUEUED ATTEMPT STARTS LONGEST UNATTEMPTED FIRST: of the attempts waiting
+// for a slot, the one this node never attempted starts first, then the one
+// it attempted longest ago, and of two that ended at one instant the one
+// queued first — never the order the listing named them in, which keeps an
+// idle pull mirror, whose row no sync moves, at its front.
+//
+// Mutation: start them in the order they were queued, and the repository
+// attempted last starts first; break a tie by the later arrival, and d
+// starts ahead of c.
+func TestAQueuedAttemptStartsLongestUnattemptedFirst(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	got := mirror.StartOrder([]string{"a", "b", "c", "d"}, map[string]time.Time{
+		"a": at.Add(2 * time.Minute), "c": at.Add(time.Minute), "d": at.Add(time.Minute)})
+	if want := []string{"b", "c", "d", "a"}; !slices.Equal(got, want) {
+		t.Fatalf("the queued attempts start %v; want %v", got, want)
+	}
+}
+
+// A MIRROR THE LISTING NO LONGER NAMES IS FORGOTTEN: once an import has
+// ended, the next whole listing — which no longer names it — leaves the
+// worker remembering nothing of it, so a node holds the imports and mirrors
+// its last listing named rather than every repository any listing ever
+// named.
+//
+// Mutation: keep what a listing does not name, and the ended import's memory
+// stays.
+func TestAMirrorTheListingNoLongerNamesIsForgotten(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+	m := h.mirrors()
+	h.pass(m)
+	if rows := h.rows("imported"); rows.Repo.Status != code.RepoStatusActive {
+		t.Fatalf("after its import the repository is %s, want active", rows.Repo.Status)
+	}
+	if got := m.Remembered(); got == 0 {
+		t.Fatal("the worker remembers nothing of the import it has just run; the case proves nothing")
+	}
+
+	h.pass(m)
+	if got := m.Remembered(); got != 0 {
+		t.Errorf("after a listing that no longer names the ended import the worker remembers %d entries of "+
+			"it; want none", got)
+	}
+}
+
+// A MIRROR QUEUED PAST ITS PROMISE IS FAILING: a pull mirror that every pass
+// lists and queues behind attempts holding every slot, and that so is never
+// brought level, raises code_mirror_failing once its promise has passed —
+// queued is asked for, and a node home to more mirrors than its attempts
+// bring level is told so rather than taking the mirror for no longer its own.
+//
+// Mutation: record nothing of a mirror a turn queues, and the alarm counts
+// none.
+func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	var turns []time.Time
+	for d := time.Duration(0); d <= code.MirrorInterval+mirror.AttemptDeadline; d += time.Minute {
+		turns = append(turns, at.Add(d))
+	}
+	if got := mirror.FailingWhileQueued(turns); got != 1 {
+		t.Fatalf("a mirror queued at every pass for %v counts %d failing; want 1", turns[len(turns)-1].Sub(at),
+			got)
 	}
 }

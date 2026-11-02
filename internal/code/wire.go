@@ -1017,7 +1017,9 @@ const (
 	// ReadMirrorsDue is the repositories with a mirror ([MirrorCandidate]):
 	// every push mirror, by id, then the active pull mirrors LEAST RECENTLY
 	// SYNCED FIRST — so a home that syncs every MirrorInterval reads pages
-	// until one is synced within it, and no further — the listing a
+	// until one is synced within it, and no further, every sync moving its
+	// mirror's instant, one that found its source level among them
+	// ([MirrorSync.Current]) — the listing a
 	// repository's home polls for the mirrors it keeps. The engine's own
 	// read, as `compaction_due` is.
 	ReadMirrorsDue ReadKind = "mirrors_due"
@@ -1228,12 +1230,29 @@ type ReadQuery struct {
 	// import's or a mirror's push of up to MaxCommandsPerPush refs, with its
 	// introduced ids, is 140 to 460 kilobytes of row a listing never shows,
 	// sent again on every poll of the page; [ReadQuery.Push] reads one push
-	// whole. Pushes only, refused on every other kind.
+	// whole.
+	//
+	// It asks a `change` read's first page for its change IN BRIEF too: the
+	// change's own row ([ReadAnswer.ChangeBrief]) beside the page of its
+	// revisions, and none of what its detail reads besides — no description
+	// (up to [MaxChangeBodyBytes], on rows of its own), no authors, no
+	// conversation, no mergeability and its conflicting paths, and no
+	// readiness, whose judgement is six statements and a chart. A read that
+	// needs a change's state, its revision, its head and its branches — a
+	// seat's read of a revision's files, a patch or the findings, a write of
+	// its conversation — sets it; a read that presents the change, or acts on
+	// its readiness, does not. Refused beside a part, a cursor or DetailOnly,
+	// which read no first page of revisions; refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row: a build that predates it decodes and ignores it,
-	// and answers the rows whole — a heavier answer, never a wrong one: a
-	// whole row's commands are every one it carried, and it omits none.
+	// and answers a push history's rows whole — a heavier answer, never a
+	// wrong one: a whole row's commands are every one it carried, and it
+	// omits none. On a change read, AS A STATED CONDITION, as
+	// [ReadQuery.Push]'s: no build that carries the code domain has run
+	// without a change read in brief — none of the domain is on main — and a
+	// build that refused it would refuse the read as invalid, never answer a
+	// change around it.
 	Brief bool `json:"brief,omitempty"`
 	// Push narrows a push history to ONE push, by its id, read whole: every
 	// command it carried and every commit it introduced. A push the
@@ -1368,6 +1387,26 @@ type ReadQuery struct {
 	// decodes and ignores it, answers the detail with a first page of
 	// revisions beside it: a heavier answer, never a wrong one.
 	DetailOnly bool `json:"detail_only,omitempty"`
+	// Resolve asks a read that names its repository BY NAME and judges the
+	// asker's grant on it — a `change` read, a `changes` or a `checks`
+	// listing naming one repository — for the repository the name RESOLVED
+	// to as well ([ReadAnswer.Resolved]): its row as a `repo` read resolves
+	// it, read in the same snapshot as the answer, and the read a POINT read
+	// of the repository, which a record this node deferred on it refuses, as
+	// a `repo` read is refused. A seat's or a person's assistant's call that
+	// has not yet resolved the repository it names sets it on its first read,
+	// so that read is the resolution too — ONE linearizable read, one barrier
+	// on the code log, where a `repo` read and then the call's own were two
+	// serial barriers, on every call the operator surface makes. Refused on
+	// every other read, and on a listing naming no repository.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without it — none of the
+	// domain is on main — and a build that predates it, which decodes and
+	// ignores it, answers no resolution, which its asker refuses as a fault
+	// rather than act on a repository nothing resolved.
+	Resolve bool `json:"resolve,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1489,22 +1528,39 @@ type ReadQuery struct {
 }
 
 // ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
-// Change a `change` read's detail, on the first page of its revisions alone;
-// Revisions a page of that change's revisions, newest first, on every page of
-// them; Reviewers, Comments, Reviews and Findings a page of the part of its
-// conversation a `change` read names ([ReadQuery.Part]) — Reviews a `reviews`
-// listing's page too, each naming its change; and Routed a `change_routing`
-// read's page.
+// Change a `change` read's detail, on the first page of its revisions alone,
+// and ChangeBrief its row in its place, for a first page read in brief
+// ([ReadQuery.Brief]); Revisions a page of that change's revisions, newest
+// first, on every page of them; Reviewers, Comments, Reviews and Findings a
+// page of the part of its conversation a `change` read names
+// ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
+// change; and Routed a `change_routing` read's page.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
 	// Pushes is a page of a repository's history, newest first, or of one
 	// coding run's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
-	Pushes     []PushRow              `json:"pushes,omitempty"`
-	Refs       []RefRow               `json:"refs,omitempty"`
-	Changes    []ChangeSummary        `json:"changes,omitempty"`
-	Change     *ChangeDetail          `json:"change,omitempty"`
+	Pushes  []PushRow       `json:"pushes,omitempty"`
+	Refs    []RefRow        `json:"refs,omitempty"`
+	Changes []ChangeSummary `json:"changes,omitempty"`
+	Change  *ChangeDetail   `json:"change,omitempty"`
+	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]):
+	// its row, its repository's name and the asker's access, with no
+	// readiness judged — never "no longer live", which a nil readiness says
+	// on a listing's row and a detail.
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row, under [ReadQuery.Brief]'s stated condition.
+	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
+	// Resolved is the repository the read's name resolved to, on a read that
+	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
+	// it, at the answer's checkpoint, naming the name it redirects from where
+	// the name is one it was renamed from ([RepoRef.Redirect]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row, under [ReadQuery.Resolve]'s stated condition.
+	Resolved   *RepoRef               `json:"resolved,omitempty"`
 	Revisions  []RevisionRow          `json:"revisions,omitempty"`
 	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
 	Comments   []CommentRow           `json:"comments,omitempty"`
@@ -1819,7 +1875,9 @@ type SyncResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
 	// appended, and empty for one refused with none. A chunk's and a sync's
 	// applied is answered only from the rows the record applied — its push
-	// row — never from the decision.
+	// row — never from the decision; a sync that moves nothing
+	// ([MirrorSync.Current]) writes no push row, and is answered at its
+	// record's position, as an end is.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale (a sync of a
 	// repository that follows no source among its causes), repo_deleted,
@@ -2546,7 +2604,8 @@ type ChangeSummary struct {
 	// transaction against its one chart ([ReadinessOf]) — every row of a
 	// listing and one change's detail alike, never the answer its last
 	// mergeability stored ([MergeabilityRow.Ready]) — and nil for a change
-	// that is no longer live, which merges nothing.
+	// that is no longer live, which merges nothing. A change read in brief
+	// judges none ([ReadAnswer.ChangeBrief]), and its row carries none.
 	Readiness *Readiness `json:"readiness,omitempty"`
 }
 

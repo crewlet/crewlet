@@ -25,10 +25,12 @@ import (
 // is.
 //
 //   - A PULL MIRROR ([RepoSettings.MirrorFrom]) is imported from its source
-//     when it is created — it is [RepoStatusImporting] until its import is
-//     done — and then moves only by the syncs its home makes from the source:
-//     every push and every write of a change's lifecycle is refused
-//     [RefusalRepoMirrored] ([ChangeRefusalRepoMirrored]).
+//     FIRST, whenever it becomes one — when it is created, and when a
+//     settings record names a source an existing repository does not follow
+//     yet ([repoRemotes.startsImport]) — it is [RepoStatusImporting] until its
+//     import is done — and then moves only by the syncs its home makes from
+//     the source: every push and every write of a change's lifecycle is
+//     refused [RefusalRepoMirrored] ([ChangeRefusalRepoMirrored]).
 //   - A PUSH MIRROR ([RepoSettings.MirrorTo]) pushes the refs it names to a
 //     repository at another host, as one seat's own identity there — a seat
 //     that reads the repository ([MirrorSeatRefusal]), never a bot — and never
@@ -59,7 +61,7 @@ import (
 // import, and the rows it wrote would read as none on that node for ever.
 
 // MirrorSource is the repository a PULL MIRROR follows ([RepoSettings.MirrorFrom]):
-// the one it is imported from when it is created, and synced from after.
+// the one it is imported from when it becomes a mirror, and synced from after.
 type MirrorSource struct {
 	// URL is the repository at the other host: an https URL the dial reads
 	// ([gitref.ParseRemoteURL]), at most [MaxRemoteURLBytes].
@@ -234,6 +236,34 @@ func (r repoRemotes) restoredStatus(s RepoSettings) RepoStatus {
 		return RepoStatusImporting
 	}
 	return s.status()
+}
+
+// startsImport is the import a settings record carrying s starts on a
+// repository whose mirrors are r: from s's PULL MIRROR'S SOURCE where the
+// repository follows none yet, or another URL — and nil where s names no pull
+// mirror, or the one the repository follows already (a credential changed
+// alone is the same source). The apply starts it only on an ACTIVE repository
+// (mirrorImportSQL); an archived one becomes no pull mirror, and one being
+// imported keeps the source its import fetches.
+//
+// M6-D16: A PULL MIRROR IS IMPORTED FIRST, whenever it becomes one, never only
+// when it is created. An import brings a source's whole history in CHUNKS —
+// packs cut at CompactPackBytes before the refs that need them, MaxImportRefs
+// refs a chunk, each at the next import_seq, so an attempt that dies resumes
+// from the rows — behind the importing fence that keeps every write, the
+// compactor and an expunge off what is half landed. A sync is sized for what
+// a source moved since the last: its fetch is given the deadline of one
+// push's bytes (code.limits.max_push_bytes, gitproc.RemoteDeadline), so an
+// established upstream made the source of an existing repository, with a
+// history past that, could never be brought in by syncs alone.
+func (r repoRemotes) startsImport(s RepoSettings) *ImportSource {
+	switch {
+	case s.MirrorFrom == nil:
+		return nil
+	case r.from != nil && r.from.URL == s.MirrorFrom.URL:
+		return nil
+	}
+	return &ImportSource{URL: s.MirrorFrom.URL, Credential: s.MirrorFrom.Credential}
 }
 
 // mirrorFrom is the pull mirror as a record carries it: a copy.

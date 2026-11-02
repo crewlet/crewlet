@@ -119,12 +119,22 @@ func decideCandidate(ctx context.Context, tx *sql.Tx, c Candidate, repo pushRepo
 	return d, nil
 }
 
-// decideEject is an eject's rules over the rows tx holds: every entry live in
+// decideEject is an eject's rules over the rows tx holds: an ejection naming
+// its repository a pull mirror on one that is not (stale), every entry live in
 // its queue, and all of them one target's, whose train it abandons
 // (not_queued).
 func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queueDecision) (queueDecision,
 	error) {
 
+	// A REPOSITORY THAT IS A PULL MIRROR NO LONGER — its mirror_from removed
+	// between the home's read and this decide — takes its queue's work again,
+	// so its entries are not put out for a reason the rows no longer hold.
+	if !repo.mirrored && slices.ContainsFunc(e.Entries, func(x Ejection) bool {
+		return x.Reason == EjectRepoMirrored
+	}) {
+		return d.refuse(MergeRefusalStale, fmt.Sprintf("%s follows no source now: its queues' entries are put "+
+			"out %s only while it is a pull mirror; read its queue again", repo.name, EjectRepoMirrored))
+	}
 	named := make([]string, len(e.Entries))
 	for i, x := range e.Entries {
 		named[i] = x.EntryID

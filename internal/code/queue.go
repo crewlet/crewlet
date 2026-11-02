@@ -364,9 +364,9 @@ const (
 	// MergeRefusalRepoMirrored is a merge, an enqueue, a candidate or a
 	// landing on a PULL MIRROR ([RepoRef.Mirrored]): it moves only by its
 	// syncs from its source, so nothing merges into it ([MirroredDetail]). A
-	// dequeue and an eject still land — neither moves a ref — so a
-	// repository that became a mirror with entries queued sheds them, as a
-	// close sheds its live changes.
+	// dequeue and an eject still land — neither moves a ref — and its home
+	// ejects every entry its queues still hold ([EjectRepoMirrored]), so a
+	// repository that became a mirror with entries queued sheds them.
 	MergeRefusalRepoMirrored MergeRefusal = "repo_mirrored"
 	// MergeRefusalExpunging is a merge, a candidate or a landing built
 	// against the repository at another drop epoch than the repository's
@@ -385,7 +385,8 @@ const (
 	// MergeRefusalChangeDraft is a draft, which merges nowhere.
 	MergeRefusalChangeDraft MergeRefusal = "change_draft"
 	// MergeRefusalStale is a write formed against a target the change no
-	// longer has: the asker reads the change again.
+	// longer has, or an eject naming its repository a pull mirror it no
+	// longer is: the asker reads the change, or the queue, again.
 	MergeRefusalStale MergeRefusal = "stale"
 	// MergeRefusalHeadMoved is a write formed against a head the change has
 	// moved from.
@@ -858,7 +859,8 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case repo.mirrored && (p.Enqueue != nil || p.Candidate != nil || p.Land != nil):
 		// AN ENQUEUE, A CANDIDATE AND A LANDING ARE A MERGE'S STEPS, which a
 		// pull mirror never takes: it moves only by its syncs. A DEQUEUE and
-		// an EJECT move no ref, so they still land, and a repository that
+		// an EJECT move no ref, so they still land — its home ejects every
+		// live entry repo_mirrored ([EjectRepoMirrored]), so a repository that
 		// became a mirror sheds its queue; a GREEN and a BROKEN record what a
 		// landing's tip checks said of a landing made before it was one.
 		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))

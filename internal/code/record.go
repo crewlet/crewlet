@@ -217,7 +217,8 @@ const (
 
 	// OpMirrorSync moves a pull mirror onto its source as its home fetched
 	// it, as a push row `via mirror` ([MirrorSync]), on the repository's own
-	// subject, decided by its committer alone.
+	// subject, decided by its committer alone — or, carrying no pack and no
+	// command, records only that its home found the source level with it.
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
 	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
@@ -709,9 +710,10 @@ type Actor struct {
 	ID   string
 	Kind ActorKind
 	// OperatorID is the credential the record was made through: REQUIRED of
-	// an operator's record, which [Actor.validate] holds, and carried beside
-	// a seat's or the engine's only where the reanchor that wrote it names
-	// one ([generationActor]).
+	// an operator's record this domain decides, which [Actor.validate] holds.
+	// A generation record is the reanchor's, not a decision of this domain's,
+	// and carries exactly the credential the reanchor's facts name, beside
+	// any kind ([generationActor]).
 	OperatorID string
 }
 

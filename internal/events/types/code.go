@@ -585,7 +585,8 @@ type CodeQueueEjected struct {
 	Target   string `json:"target"`
 
 	// Reason is why (internal/code's EjectReasons: check_failed, conflict,
-	// gate_unmet, head_moved, not_fast_forward); Checks the required checks
+	// gate_unmet, head_moved, not_fast_forward, repo_mirrored); Checks the
+	// required checks
 	// that failed, for check_failed, and Paths the conflicted paths, for
 	// conflict.
 	Reason string   `json:"reason"`

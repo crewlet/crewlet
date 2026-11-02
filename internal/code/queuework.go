@@ -40,6 +40,12 @@ type QueueDue struct {
 	// Repo is the repository's name, as an operator knows it: what the
 	// merge-rate alarm names the target by.
 	Repo string `json:"repo,omitempty"`
+	// Mirrored is the repository a PULL MIRROR ([RepoRef.Mirrored]), which
+	// nothing merges into — a candidate and a landing on it are refused
+	// repo_mirrored — so its home builds no train and puts every live entry
+	// out ([EjectRepoMirrored]): an answer between nodes, so an older
+	// reader drops it and reads the queue as it did.
+	Mirrored bool `json:"mirrored,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
 	// Depth, Batch and Required are the target's gate as its queue lands
@@ -168,7 +174,7 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 	case err != nil:
 		return err
 	case ok:
-		due.DropEpoch, due.Repo = repo.dropEpoch, repo.name
+		due.DropEpoch, due.Repo, due.Mirrored = repo.dropEpoch, repo.name, repo.mirrored
 	}
 	if !since.IsZero() && len(gate.Checks) > 0 {
 		if due.Enqueued, err = enqueuedSince(ctx, tx, repoID, target, since); err != nil {

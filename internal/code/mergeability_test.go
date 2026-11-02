@@ -502,3 +502,134 @@ func TestAReEvaluationThatKeepsTheOutcomeRecordsWhatItMoved(t *testing.T) {
 		t.Fatalf("the changed conflict left the row's paths %v, want upload/store.go", m.conflicts)
 	}
 }
+
+// A KEPT JUDGEMENT TAKES A CHECKS POSITION THE HISTORY LOWERED: the position a
+// readiness is judged at of its head's checks is the highest over the head's
+// check rows, and an ending's horizon removes the rows that ended more than
+// CheckHistory before it — so a change still open that long after its head's
+// checks ended is judged at zero, below the position its row holds. A refresh
+// after an ask then, and a recheck of a moved target after another ask, each
+// keep the row's outcome and are recorded as a mergeability_kept that APPLIES:
+// the row takes the later versions, the recheck's tip and instant and the zero
+// position, and the change leaves its home's due listing — rather than apply
+// as nothing, its writer answering unknown, and stay due a refresh at every
+// pass of its home, for ever.
+//
+// Mutation: hold the kept apply's checks position forward
+// (checks_position <= ?8 in its guard) → the refresh after the history
+// applies as nothing — red.
+func TestAKeptJudgementTakesAChecksPositionTheHistoryLowered(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	// ended queues and ends one attempt of check name at commit oid for the
+	// change's target, the drain handing the applier the broker instant at
+	// from then on: an ending's horizon is its own instant less the history.
+	ended := func(oid, name string, at time.Time) {
+		t.Helper()
+		n.storedAt = func(uint64, time.Time) time.Time { return at }
+		key := code.CheckKey{RepoID: repo, OID: oid, Target: mainRef, Name: name, Attempt: 1}
+		exit := 0
+		if _, err := n.publishCheck(repo, code.OpCheckQueued, code.CheckQueued{CheckKey: key,
+			Purpose: code.PurposeTip, Reason: code.QueueDispatch,
+			Def: &code.CheckDef{Name: name, Run: "make test", TimeoutSeconds: 600}, QueuedAt: at}); err != nil {
+			t.Fatalf("queue %s: %v", name, err)
+		}
+		if _, err := n.publishCheck(repo, code.OpCheckFinished, code.CheckFinished{CheckKey: key,
+			State: code.CheckStatePassed, Reason: code.CheckReasonExit, ExitCode: &exit,
+			FinishedAt: at}); err != nil {
+			t.Fatalf("end %s: %v", name, err)
+		}
+	}
+	headChecks := func() int {
+		t.Helper()
+		return n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ? AND commit_oid = ?`, repo, oidOf("B"))
+	}
+	// dueNow reports whether the home's listing at at asks the change's
+	// readiness refreshed or its merge rechecked — the work a kept record
+	// applied as nothing would leave it owing at every pass. Its facts are
+	// another matter: no push here records them.
+	dueNow := func(at time.Time) bool {
+		t.Helper()
+		due, again := n.dueAt(repo, at, 64)
+		return slices.ContainsFunc(due, func(d code.ChangeDue) bool { return d.ID == change && d.RefreshDue }) ||
+			slices.ContainsFunc(again, func(d code.ChangeDue) bool { return d.ID == change })
+	}
+	refresh := func() code.ConversationWrite {
+		return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""),
+			Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+				TargetRef: mainRef, Refresh: true, Node: n.id}}
+	}
+	// kept holds the record at p to a mergeability_kept.
+	kept := func(what string, p statelog.Position) {
+		t.Helper()
+		if rec := n.recordAt(p); rec.Op != code.OpMergeabilityKept {
+			t.Fatalf("the premise: %s recorded %s %s; want a mergeability_kept", what, rec.Op, rec.Mutation)
+		}
+	}
+
+	// THE FIRST MERGE, judged at the head's one ended check.
+	ended(oidOf("B"), "unit", harnessAt)
+	converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	judged := n.storedReadiness(change)
+	if judged.checksPosition == 0 {
+		t.Fatalf("the premise: the first merge stored %+v; want it judged at the head's ended check", judged)
+	}
+
+	// THE HISTORY PASSES: another commit's check ends a history and an hour
+	// later, and its horizon removes the head's.
+	swept := harnessAt.Add(code.CheckHistory + time.Hour)
+	ended(oidOf("X"), "unit", swept)
+	if held := headChecks(); held != 0 {
+		t.Fatalf("the premise: the head keeps %d check rows past the history", held)
+	}
+
+	// A REFRESH AFTER AN ASK: kept, at a checks position of zero, below the
+	// row's — and applied.
+	converse(t, w, asking(repo, change, dev, "plat-lead"))
+	if !dueNow(swept) {
+		t.Fatalf("the premise: the ask left the change due no refresh")
+	}
+	res := converse(t, w, refresh())
+	kept("the refresh after the history", res.Position)
+	refreshed := n.storedReadiness(change)
+	if refreshed.readinessVersion <= judged.readinessVersion || refreshed.checksPosition != 0 {
+		t.Fatalf("the refresh after the history stored %+v after %+v; want a later readiness version at a "+
+			"checks position of zero", refreshed, judged)
+	}
+	if dueNow(swept) {
+		t.Fatalf("the refreshed change is still due a refresh")
+	}
+
+	// A RECHECK AFTER ANOTHER ENDING AND ITS HISTORY, AND ANOTHER ASK: kept, by
+	// its tip, its versions and a checks position of zero again — and applied,
+	// its instant moving.
+	ended(oidOf("B"), "lint", swept)
+	converse(t, w, refresh())
+	if again := n.storedReadiness(change); again.checksPosition == 0 {
+		t.Fatalf("the premise: the refresh after the head's second check stored %+v; want it judged at it",
+			again)
+	}
+	later := swept.Add(code.CheckHistory + time.Hour)
+	ended(oidOf("Y"), "unit", later)
+	if held := headChecks(); held != 0 {
+		t.Fatalf("the premise: the head keeps %d check rows past the second history", held)
+	}
+	converse(t, w, asking(repo, change, dev, "cto"))
+	before := n.mergeability(change)
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("A2"))))
+	res = converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	kept("the recheck after the history", res.Position)
+	tip, _ := n.tip(repo, mainRef)
+	rechecked, stored := n.mergeability(change), n.storedReadiness(change)
+	if rechecked.tip != tip || rechecked.at <= before.at || stored.readinessVersion <= refreshed.readinessVersion ||
+		stored.checksPosition != 0 {
+		t.Fatalf("the recheck after the history left the merge %+v and stored %+v; want the tip %s, a later "+
+			"instant and readiness version, at a checks position of zero", rechecked, stored, tip)
+	}
+	if dueNow(later) {
+		t.Fatalf("the rechecked change is still due")
+	}
+}

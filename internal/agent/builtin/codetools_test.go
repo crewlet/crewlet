@@ -209,11 +209,26 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 		return out, nil
 	case code.ReadChanges, code.ReadChange:
 		if h.changes != nil {
-			return h.changes(q)
+			answer, err := h.changes(q)
+			if err != nil || !q.Resolve {
+				return answer, err
+			}
+			// A RESOLVING READ answers the repository its name names, as
+			// the reader's does (code.ReadQuery.Resolve).
+			ref, err := h.named(q.Repo)
+			if err != nil {
+				return code.ReadAnswer{}, err
+			}
+			answer.Resolved = &ref
+			return answer, nil
 		}
 	case code.ReadChecks, code.ReadCheck:
-		if _, err := h.named(q.Repo); err != nil {
+		ref, err := h.named(q.Repo)
+		if err != nil {
 			return code.ReadAnswer{}, err
+		}
+		if q.Resolve {
+			out.Resolved = &ref
 		}
 		c := q.Checks
 		for i := range h.checks {

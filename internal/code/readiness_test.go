@@ -546,6 +546,7 @@ func TestAReviewIsFollowedByARefresh(t *testing.T) {
 type heldReadiness struct {
 	ready, waitsPerson              bool
 	changeVersion, readinessVersion int64
+	checksPosition, chartEpoch      int64
 }
 
 // storedReadiness is change's stored readiness as n's rows hold it.
@@ -553,9 +554,9 @@ func (n *node) storedReadiness(change string) heldReadiness {
 	n.t.Helper()
 	var s heldReadiness
 	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(n.t.Context(), `SELECT ready, waits_person, change_version, readiness_version
-			FROM code_mergeability WHERE change_id = ?`, change).Scan(&s.ready, &s.waitsPerson, &s.changeVersion,
-			&s.readinessVersion)
+		return tx.QueryRowContext(n.t.Context(), `SELECT ready, waits_person, change_version, readiness_version,
+			checks_position, chart_epoch FROM code_mergeability WHERE change_id = ?`, change).Scan(&s.ready,
+			&s.waitsPerson, &s.changeVersion, &s.readinessVersion, &s.checksPosition, &s.chartEpoch)
 	}); err != nil {
 		n.t.Fatalf("read %s's stored readiness: %v", change, err)
 	}
@@ -937,9 +938,9 @@ func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
 // the change due at every pass, and one that carried the chart alone would
 // name no judgement the apply could move.
 //
-// Mutations: stamp no chart on the kept record → its apply refuses the
-// record, and the change stays due at e2; leave chart_epoch out of the kept
-// apply → the change stays due at e2.
+// Mutations: stamp no chart on the kept record → its apply writes the row's
+// chart as none, and the change stays due at e2; leave chart_epoch out of the
+// kept apply → the change stays due at e2.
 func TestAChartChangeThatKeepsTheAnswerMovesTheStoredChart(t *testing.T) {
 	t.Parallel()
 	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
@@ -990,5 +991,83 @@ func TestAChartChangeThatKeepsTheAnswerMovesTheStoredChart(t *testing.T) {
 	}
 	if changes := due(e2); len(changes) != 0 {
 		t.Fatalf("a change whose kept refresh judged it at e2 is still due %+v at e2", changes)
+	}
+}
+
+// A KEPT JUDGEMENT ON A CHART BEHIND THE ROW'S STILL APPLIES: web!1, approved
+// and merged ready on the chart of activation e1, refreshed and kept on e2,
+// is asked of cto. A writer still on e1 — a node that has not taken the
+// activation yet — refreshes it: its versions moved, so the decide judges it,
+// and the answer is the row's, so it records a mergeability_kept naming the
+// later versions and e1. Its apply writes both, as a refresh's full record
+// writes an earlier chart beside moved versions: the change is due no
+// refresh at e1, and due one at e2 again, whose writer moves the chart
+// forward. A guard holding the chart forward would apply the record as
+// nothing, leaving the versions behind and the change due a refresh at every
+// chart and every pass, until the writer's node took e2.
+//
+// Mutation: hold the kept apply's chart forward (chart_epoch <= ?11 in its
+// guard) → the refresh on e1 applies as nothing — red.
+func TestAKeptJudgementOnAChartBehindTheRowsStillApplies(t *testing.T) {
+	t.Parallel()
+	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	on := func(epoch int64) func(*code.ChangeWriterOptions) {
+		return func(o *code.ChangeWriterOptions) {
+			o.SeatRules = func() (code.SeatRules, bool) {
+				return code.SeatRules{Roster: testChart(), Zone: time.UTC, Epoch: epoch}, true
+			}
+		}
+	}
+	due := func(epoch int64) []code.ChangeDue {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of web at %d: %v", epoch, err)
+		}
+		return a.DueChanges
+	}
+	refresh := func(w *code.ChangeWriter) code.ConversationResult {
+		t.Helper()
+		res := converse(t, w, code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""),
+			Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+				TargetRef: mainRef, Refresh: true, Node: n.id}})
+		if rec := n.recordAt(res.Position); rec.Op != code.OpMergeabilityKept {
+			t.Fatalf("the premise: the refresh recorded %s %s, want a mergeability_kept", rec.Op, rec.Mutation)
+		}
+		return res
+	}
+
+	w1, _ := writerOn(t, n, n.pub, on(e1))
+	w2, _ := writerOn(t, n, n.pub, on(e2))
+	converse(t, w1, asking(repo, change, dev, "plat-lead"))
+	converse(t, w1, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+	converse(t, w1, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	converse(t, w1, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	refresh(w2)
+	ahead := n.storedReadiness(change)
+	if !ahead.ready || ahead.chartEpoch != e2 {
+		t.Fatalf("the premise: the refresh on e2 stored %+v, want ready at chart %d", ahead, e2)
+	}
+
+	converse(t, w1, asking(repo, change, dev, "cto"))
+	refresh(w1)
+	behind := n.storedReadiness(change)
+	if behind.readinessVersion <= ahead.readinessVersion || behind.chartEpoch != e1 || !behind.ready {
+		t.Fatalf("the refresh on e1 after the ask stored %+v after %+v; want the later readiness version at "+
+			"chart %d, ready as before", behind, ahead, e1)
+	}
+	if changes := due(e1); len(changes) != 0 {
+		t.Fatalf("a change the writer on e1 judged is still due %+v at e1", changes)
+	}
+	if changes := due(e2); len(changes) != 1 || !changes[0].RefreshDue {
+		t.Fatalf("a home on e2 finds %+v due, want web!1 owing a refresh at the later chart", changes)
+	}
+	refresh(w2)
+	if changes := due(e2); len(changes) != 0 {
+		t.Fatalf("a change the writer on e2 judged again is still due %+v at e2", changes)
 	}
 }

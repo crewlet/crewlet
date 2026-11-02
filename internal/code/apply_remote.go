@@ -76,7 +76,12 @@ func (a *Applier) applyImportChunk(ctx context.Context, tx *sql.Tx, at applyCont
 
 // applyImportDone ends an import: the repository active, imported_at the
 // record's instant, import_error its Error and, where it names one, its
-// default branch moved — one write of the repository's row.
+// default branch moved — one write of the repository's row. A PULL MIRROR'S
+// import that landed whole also moves mirror_synced_at to that instant: its
+// first fill is its import's, so it is level with its source from there, and
+// `mirrors_due` lists it once that is MirrorInterval old rather than at once,
+// as never synced. One that ended short keeps zero, so its first sync comes
+// at the next pass.
 func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyContext, d ImportDone) (int, error) {
 	s, err := remoteStateIn(ctx, tx, at, d.RepoID)
 	if err != nil {
@@ -89,8 +94,8 @@ func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyConte
 		return remoteNotApplied(ctx, at, d.RepoID, fmt.Sprintf("its import has landed %d chunks, and its "+
 			"end names %d", s.importSeq, d.Seq))
 	}
-	if _, err := tx.ExecContext(ctx, importDoneSQL, at.at(), d.Error, d.DefaultBranch, d.DefaultBranch, at.packed,
-		d.RepoID); err != nil {
+	if _, err := tx.ExecContext(ctx, importDoneSQL, at.at(), d.Error, d.DefaultBranch, d.DefaultBranch, d.Error,
+		at.at(), at.packed, d.RepoID); err != nil {
 		return 0, fmt.Errorf("code: end %s's import at %s: %w", d.RepoID, at.position, err)
 	}
 	return 1, nil
@@ -98,7 +103,10 @@ func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyConte
 
 // applyMirrorSync lands one sync of a pull mirror: the repository's
 // mirror_synced_at moved to the record's instant first, then ITS PUSH, as a
-// chunk's — its packs kind mirror, its push row `via mirror`.
+// chunk's — its packs kind mirror, its push row `via mirror`. A sync that
+// moves nothing ([MirrorSync.Current]) writes that one row and no push: no
+// push row of nothing, which every listing of the repository's pushes would
+// show four times an hour.
 func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyContext, m MirrorSync) (int, error) {
 	s, err := remoteStateIn(ctx, tx, at, m.RepoID)
 	if err != nil {
@@ -107,8 +115,11 @@ func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyConte
 	if !s.found || s.status != RepoStatusActive || !s.mirrored {
 		return remoteNotApplied(ctx, at, m.RepoID, "the repository is not an active pull mirror")
 	}
-	if _, err = tx.ExecContext(ctx, mirrorSyncedSQL, at.at(), m.RepoID); err != nil {
+	if _, err = tx.ExecContext(ctx, mirrorSyncedSQL, at.at(), at.packed, m.RepoID); err != nil {
 		return 0, fmt.Errorf("code: record %s's sync at %s: %w", m.RepoID, at.position, err)
+	}
+	if m.Current() {
+		return 1, nil
 	}
 	entry := PushEntry{PushID: m.SyncID, Principal: Principal{Kind: PrincipalSystem}, Via: ViaMirror,
 		Node: m.Node, Commands: m.Commands, ReceivedAt: m.FetchedAt}
@@ -134,8 +145,12 @@ func remoteNotApplied(ctx context.Context, at applyContext, repoID, why string) 
 const (
 	remoteStateSQL = `SELECT status, import_seq, mirror_from != '' FROM code_repos WHERE id = ?`
 	importSeqSQL   = `UPDATE code_repos SET import_seq = ? WHERE id = ?`
-	// importDoneSQL keeps the default branch an end names none of.
+	// importDoneSQL keeps the default branch an end names none of, and
+	// moves a pull mirror's last sync to the end of an import that landed
+	// whole.
 	importDoneSQL = `UPDATE code_repos SET status = 'active', imported_at = ?, import_error = ?,
-		default_branch = CASE WHEN ? = '' THEN default_branch ELSE ? END, version = ? WHERE id = ?`
-	mirrorSyncedSQL = `UPDATE code_repos SET mirror_synced_at = ? WHERE id = ?`
+		default_branch = CASE WHEN ? = '' THEN default_branch ELSE ? END,
+		mirror_synced_at = CASE WHEN mirror_from != '' AND ? = '' THEN ? ELSE mirror_synced_at END,
+		version = ? WHERE id = ?`
+	mirrorSyncedSQL = `UPDATE code_repos SET mirror_synced_at = ?, version = ? WHERE id = ?`
 )

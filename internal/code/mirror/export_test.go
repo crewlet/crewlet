@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -14,11 +15,23 @@ import (
 // the rows an attempt left once it has ended.
 func (m *Mirrors) Wait() { m.wg.Wait() }
 
-// Steps is what [steps] lands of outs and cmds: each record's outputs and
-// commands, in its order.
-func Steps(outs []string, cmds []code.Command) (packs [][]string, refs [][]code.Command) {
-	for _, st := range steps(outs, cmds) {
-		packs, refs = append(packs, st.outs), append(refs, st.cmds)
+// Steps is what [steps] lands of outs and cmds where each record takes take of
+// the commands offered to it, as an attempt's land takes what its record
+// carries: each record's outputs and commands, in its order. A record that
+// would take nothing and land no output ends the walk, as land's refusal
+// ends an attempt.
+func Steps(outs []string, cmds []code.Command, take func(outs []string, offered []code.Command) int) (
+	packs [][]string, refs [][]code.Command) {
+
+	s := &steps{outs: outs, cmds: cmds}
+	for !s.done() {
+		o, offered := s.next()
+		n := take(o, offered)
+		if n == 0 && len(o) == 0 {
+			return packs, refs
+		}
+		packs, refs = append(packs, o), append(refs, offered[:n])
+		s.landed(len(o), n)
 	}
 	return packs, refs
 }
@@ -63,4 +76,64 @@ func (m *Mirrors) CutOfWhatTheCopyHolds(ctx context.Context, repoID string, fres
 		bytes += fileSize(p.Path)
 	}
 	return m.cut(ctx, s, sc, fetched, bytes, m.o.Limits())
+}
+
+// StartOrder is the order [Mirrors.startQueued] starts the attempts queued
+// while MaxAttempts ran: one import of each repository in queued, queued in
+// that order, the last attempt of each in ended having ended then (none
+// attempted, where it names none).
+func StartOrder(queued []string, ended map[string]time.Time) []string {
+	m := &Mirrors{memory: map[mirrorKey]memory{}, queued: map[mirrorKey]queuedAttempt{}}
+	for _, repo := range queued {
+		key := mirrorKey{repo: repo}
+		if at, ok := ended[repo]; ok {
+			m.memory[key] = memory{ended: at}
+		}
+		m.arrivals++
+		m.queued[key] = queuedAttempt{arrived: m.arrivals}
+	}
+	var out []string
+	for {
+		key, _, ok := m.nextQueued()
+		if !ok {
+			return out
+		}
+		delete(m.queued, key)
+		out = append(out, key.repo)
+	}
+}
+
+// Remembered is how many entries the worker holds of the repositories its
+// listings named: what they said, its attempts' memory, its health and its
+// queued attempts, together.
+func (m *Mirrors) Remembered() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.known) + len(m.memory) + len(m.health) + len(m.queued)
+}
+
+// FailingWhileQueued is what [Mirrors.AlarmReading] counts a second after the
+// last of turns, where a pull mirror is listed and worked at each of them
+// while MaxAttempts other attempts hold every slot, so that it is queued at
+// every one.
+func FailingWhileQueued(turns []time.Time) int {
+	var now time.Time
+	m := &Mirrors{now: func() time.Time { return now }, known: map[mirrorKey]listed{},
+		running: map[mirrorKey]bool{}, memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{},
+		queued: map[mirrorKey]queuedAttempt{}}
+	for i := range MaxAttempts {
+		m.running[mirrorKey{repo: fmt.Sprintf("busy-%d", i)}] = true
+	}
+	key := mirrorKey{repo: "late"}
+	for _, at := range turns {
+		now = at
+		m.known[key] = listed{kind: kindSync, name: "late"}
+		if err := m.Work(context.Background(), key.repo, statelog.Position{}); err != nil {
+			panic(err)
+		}
+	}
+	now = now.Add(time.Second)
+	var r statelog.Reading
+	m.AlarmReading(&r)
+	return r.CodeMirrorFailing
 }

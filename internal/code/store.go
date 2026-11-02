@@ -1011,7 +1011,13 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 					return statelog.Decision{}, nil
 				}
 				out.Changed = true
-				if row.Status != RepoStatusImporting {
+				switch {
+				case row.Status == RepoStatusImporting:
+				case row.Remotes.startsImport(settings) != nil:
+					// MADE A PULL MIRROR OF A SOURCE IT DOES NOT FOLLOW
+					// YET: imported from it first, as its apply makes it.
+					out.Status = RepoStatusImporting
+				default:
 					out.Status = settings.status()
 				}
 				return recordFor(stamp, subject, OpSettings, scope, opID,

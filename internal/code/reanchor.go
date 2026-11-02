@@ -3,7 +3,6 @@ package code
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -75,40 +74,33 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // generationActor is who a generation record names as its author, in this
 // domain's actor kinds.
 //
-// THE FACTS' THREE COLUMNS, as the knowledge base's and the tracker's
-// generation records read them, and as this log's own eviction gate names its
-// operator: the name BARE, the kind in a column of its own, the credential
-// beside them. It took the name alone and recorded `"operator:" + name` with
-// the NAME in the credential column, so the one record that says who moved
-// this log named a party nothing else in the audit feed calls by that name,
-// read a person's reanchor as an API token named after them, and lost the
-// credential that actually ran it — the one a revocation would be about.
+// [statelog.GenerationFacts.Author]'s party, which every domain's generation
+// record names alike, in this package's words: the name bare, the kind in a
+// column of its own, and the credential the rule names beside them. It took
+// the name alone and recorded `"operator:" + name` with the NAME in the
+// credential column, so the one record that says who moved this log named a
+// party nothing else in the audit feed calls by that name, read a person's
+// reanchor as an API token named after them, and lost the credential that
+// actually ran it — the one a revocation would be about.
 //
-// THE KIND IS READ IN EITHER VOCABULARY the facts may carry: the one
-// [iam.ActorFor] records a party under, or the principal's (a seat, a person, a
-// machine, the engine). This domain has no word for a person: a person is an
-// OPERATOR here, named by the human seat they hold with their credential
-// beside it — the eviction gate's spelling — so a person, a machine, an
-// operator and a kind nobody stated are each an operator. An operator's
-// record always names a credential ([Actor.validate]), and one the facts name
-// with none is a credential acting under its own login — the one party whose
-// name [iam.ActorFor] also records as its credential — so the name stands in
-// for it there and nowhere else. A SEAT is an agent and the ENGINE the
-// system, each keeping the credential the facts name, if any. And NOBODY NAMED
-// IS THE NODE, recorded as the node's own work is: its id, as the system.
+// A PERSON IS AN OPERATOR HERE, because this domain has no word for a person
+// ([ActorOperator] is a person or a credential acting on the company's
+// behalf, as the code log's eviction gate names one), kept beside exactly the
+// credential the rule names: the token or the session they acted through. A
+// person's handle never stands in for one — the rule lends the name to the
+// credential column only for a credential acting under its own login — so
+// facts that name a person and no credential, which [iam.ActorFor] never
+// produces, carry none here either. A seat is an agent, the engine the system
+// and an operator an operator, each as the rule reads it. And NOBODY NAMED IS
+// THE NODE, recorded as the node's own work is: its id, as the system.
 func generationActor(f statelog.GenerationFacts) Actor {
-	if strings.TrimSpace(f.By) == "" {
+	party, named := f.Author()
+	if !named {
 		return Actor{ID: f.Writer, Kind: ActorSystem}
 	}
-	switch {
-	case iam.Kind(f.ByKind) == iam.KindSeat, iam.ActorKind(f.ByKind) == iam.ActorAgent:
-		return Actor{ID: f.By, Kind: ActorAgent, OperatorID: f.OperatorID}
-	case iam.Kind(f.ByKind) == iam.KindEngine, iam.ActorKind(f.ByKind) == iam.ActorSystem:
-		return Actor{ID: f.By, Kind: ActorSystem, OperatorID: f.OperatorID}
+	kind := ActorKind(party.Kind)
+	if party.Kind == iam.ActorHuman {
+		kind = ActorOperator
 	}
-	operator := f.OperatorID
-	if strings.TrimSpace(operator) == "" {
-		operator = f.By
-	}
-	return Actor{ID: f.By, Kind: ActorOperator, OperatorID: operator}
+	return Actor{ID: party.Name, Kind: kind, OperatorID: party.OperatorID}
 }

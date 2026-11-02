@@ -2162,7 +2162,12 @@ var table = []rule{
 			"refused before any push: name another in the repository's " +
 			"mirror_to. A mirror is tried a minute after a failure, longer " +
 			"after each one in a row, and at least once an interval, and the " +
-			"alarm clears once it is brought level. See docs/concepts/code-host.md, " +
+			"alarm clears once it is brought level. A mirror with no such " +
+			"line has waited behind the node's other attempts: a node runs " +
+			"two at once and queues the rest, so one home to more mirrors " +
+			"than two attempts at a time bring level within the interval " +
+			"falls behind, and more git nodes spread the repositories' homes. " +
+			"See docs/concepts/code-host.md, " +
 			"\"Mirrors and imports\".",
 	},
 }

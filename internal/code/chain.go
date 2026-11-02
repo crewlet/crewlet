@@ -152,7 +152,12 @@ type ChainCommit struct {
 // where it made none (every entry a fast-forward, or skipped). Or Refusal,
 // with nothing stored: the chain whole refused — too_large past
 // [MaxChainPackBytes], rejected_object where git's own check refuses an
-// object it made.
+// object it made. Or Status, nothing built and nothing stored: the
+// repository's row, as the copy the chain was to be built over holds it,
+// refuses every merge — repo_deleted, repo_archived, repo_importing or
+// repo_mirrored, in the domain's one sentence for the state (Detail) — which
+// the candidate's decide would refuse from the same row once its scratch, its
+// share unit and its pack were spent.
 //
 // Settle ends the chain's hold on its scratch, once: applied — the record
 // naming the pack has applied, as its caller read it — adopts the pack into
@@ -171,6 +176,7 @@ type ChainResult struct {
 	Tip       string
 	DropEpoch int64
 	Refusal   WriteRefusal
+	Status    MergeRefusal
 	Detail    string
 	Settle    func(ctx context.Context, applied bool) error
 }

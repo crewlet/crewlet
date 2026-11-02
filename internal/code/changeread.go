@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -346,32 +347,64 @@ func readableIn(ctx context.Context, tx *sql.Tx, name string, asker Principal, c
 	return listedRepo{ref: ref, access: g.Access}, nil
 }
 
+// resolvingIn is the repository q names as a read of its changes or its checks
+// serves it ([readableIn]) — and, where q resolves it ([ReadQuery.Resolve]),
+// read as a `repo` read resolves a name ([namedIn]): its row whole at the
+// checkpoint cp, judged on it, and answered as out.Resolved. Three statements
+// in place of readableIn's two, so a call's first read is its resolution too
+// and pays the code log one barrier where a `repo` read before it paid a
+// second.
+func resolvingIn(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer) (listedRepo, error) {
+
+	if !q.Resolve {
+		return readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
+	}
+	v, found, err := namedIn(ctx, tx, q.Repo, cp)
+	if err != nil {
+		return listedRepo{}, err
+	}
+	if !found {
+		return listedRepo{}, fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
+	}
+	g, err := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart)
+	if err != nil {
+		return listedRepo{}, err
+	}
+	resolved := v.ref
+	out.Resolved = &resolved
+	return listedRepo{ref: v.ref, access: g.Access}, nil
+}
+
 // changes serves one page of a listing of changes: the walk q's filters
 // choose ([walkOf]), the rows it read tested against the filters its index
 // does not seek and held to the grant — see the file's doc — and a listing of
 // what waits on the asker a page of one of its two halves
-// ([Reader.changesWaitingOnMe]).
-func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
+// ([Reader.changesWaitingOnMe]). A listing that resolves the repository it
+// names answers it beside the page ([resolvingIn]), at the checkpoint cp.
+func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer) error {
+
 	switch q.Needs {
 	case NeedMe:
-		return r.changesWaitingOnMe(ctx, tx, q, chart, out)
+		return r.changesWaitingOnMe(ctx, tx, q, chart, cp, out)
 	case NeedFix:
 		q = q.fixing()
 	}
-	return r.listChanges(ctx, tx, q, chart, out, "")
+	return r.listChanges(ctx, tx, q, chart, cp, out, "")
 }
 
 // listChanges is [Reader.changes] over one walk, leaving out — of a walk of
 // the changes awaiting a fix — those whose ask of asked stands, where asked
 // names a reviewer: the first half of a listing of what waits on asked lists
 // those.
-func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer,
-	asked string) error {
+func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer, asked string) error {
 
 	repos := map[string]listedRepo{}
 	var repoID string
 	if q.Repo != "" {
-		named, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
+		named, err := resolvingIn(ctx, tx, q, chart, cp, out)
 		if err != nil {
 			return err
 		}
@@ -528,9 +561,13 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 // revision the page before served, its revisions alone; its detail with no
 // revision for a read asking it alone ([ReadQuery.DetailOnly]); and a page of
 // the part of its conversation the read names ([ReadQuery.Part]) — every page
-// judged against the grant from the repository's row ([readableIn]).
-func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
-	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
+// judged against the grant from the repository's row ([resolvingIn]), which a
+// read that resolves the repository answers beside it, at the checkpoint cp.
+// A first page read in brief ([ReadQuery.Brief]) answers the change's row in
+// place of its detail, and reads nothing else of it.
+func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
+	out *ReadAnswer) error {
+	repo, err := resolvingIn(ctx, tx, q, chart, cp, out)
 	if err != nil {
 		return err
 	}
@@ -553,7 +590,15 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
-	if q.Cursor == "" {
+	switch {
+	case q.Brief:
+		// IN BRIEF: the change's own row, read above by its number, and
+		// nothing its detail reads besides — no body on rows of its own, no
+		// authors, conversation or mergeability, no readiness judged.
+		brief := repo.summary(row)
+		out.ChangeBrief = &brief
+		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
+	case q.Cursor == "":
 		body, bodyErr := bodyOf(ctx, tx, row.id)
 		if bodyErr != nil {
 			return bodyErr
@@ -584,7 +629,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return nil
 		}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
-	} else {
+	default:
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)
 		if parseErr != nil || n < 1 {
 			return fmt.Errorf("%w: %q is not a revision's number", ErrBadCursor, q.Cursor)

@@ -138,29 +138,23 @@ type changeWritten struct {
 	at     statelog.Position
 }
 
-// changeOf reads the change number names on repo, at the seat's level — ONE
-// read a call, of its detail alone (code.ReadQuery.DetailOnly: no write reads
-// a revision), held to the caller's grant on the repository where it is
-// answered — for the id a write names it by and the position the write is
-// decided at or past. A detail naming another repository than the one the turn
-// resolved the name to is refused as a name taken again between the two reads.
-func (d CodeDeps) changeOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	repo code.RepoRef, number int64) (changeWritten, *tools.Result) {
-
-	answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChange, Repo: repo.Name, Change: number,
-		DetailOnly: true, Fresh: seatRead})
-	if err != nil {
-		r := d.failed(ctx, turn, tool, c.asker, repo, err)
-		return changeWritten{}, &r
+// changeOf reads the change g names, at the seat's level — ONE read a call, of
+// its detail alone (code.ReadQuery.DetailOnly: no write reads a revision),
+// held to the caller's grant on the repository where it is answered, and the
+// call's resolution of the repository too where the turn has none
+// ([changeRead.ask]) — for the id a write names it by and the position the
+// write is decided at or past. A detail naming another repository than the
+// one the turn resolved the name to is refused as a name taken again between
+// the two reads ([changeRead.read]).
+func (d CodeDeps) changeOf(ctx context.Context, g *changeRead) (changeWritten, *tools.Result) {
+	answer, refusal := g.read(ctx, code.ReadQuery{DetailOnly: true}, statelog.Position{})
+	if refusal != nil {
+		return changeWritten{}, refusal
 	}
 	if answer.Change == nil {
-		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered %s with no detail",
-			code.ChangeRef(repo.Name, number)), fmt.Sprintf("%s could not read %s: %s.", tool,
-			code.ChangeRef(repo.Name, number), faultSaid))
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s with no detail", g.ref()),
+			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
 		return changeWritten{}, &r
-	}
-	if r := d.sameRepo(turn, tool, c.asker, repo, code.RepoRef{ID: answer.Change.RepoID}); r != nil {
-		return changeWritten{}, r
 	}
 	return changeWritten{detail: answer.Change, at: answer.Position}, nil
 }
@@ -687,8 +681,9 @@ func (t *codeCloseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // steer makes a write of an existing change — p, an edit, a draft's state, a
 // retarget, a close or a reopen, with every field but its ids — named by its
 // number on repository name, held to the version its caller read: the
-// repository resolved and the change read, ONE read at the seat's level for
-// its id, then the write decided at or past that read, and its answer.
+// change read, ONE read at the seat's level for its id — the repository's
+// resolution too where the turn has none ([CodeDeps.changeOf]) — then the
+// write decided at or past that read, and its answer.
 func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	args map[string]any, name string, number, version int64, p code.ChangeProposal) (tools.Result, error) {
 
@@ -697,14 +692,12 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 		return failed(bound), nil
 	}
 	c.actor = actor
-	repo, refusal := d.repo(ctx, turn, tool, c, name)
+	g := &changeRead{deps: d, turn: turn, tool: tool, c: c, name: name, number: number}
+	change, refusal := d.changeOf(ctx, g)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	change, refusal := d.changeOf(ctx, turn, tool, c, repo, number)
-	if refusal != nil {
-		return *refusal, nil
-	}
+	repo := g.repo
 	// A RETARGET OR A REOPEN DEPENDS ON A BRANCH — the target it moves the
 	// change onto, the source whose head it reopens at — so where that is a
 	// seat's branch it is held before the proposal is sent, as a read is

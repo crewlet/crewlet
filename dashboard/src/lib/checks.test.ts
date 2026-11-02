@@ -260,5 +260,6 @@ test("states and reasons are the engine's words, and an unknown one is drawn as 
   expect(checkStateTone("failed")).toBe("danger");
   expect(checkStateTone("errored")).toBe("neutral");
   expect(ejectReasonWord("check_failed")).toBe("a required check failed");
+  expect(ejectReasonWord("repo_mirrored")).toBe("the repository became a pull mirror");
   expect(ejectReasonWord("tide_turned")).toBe("tide_turned");
 });

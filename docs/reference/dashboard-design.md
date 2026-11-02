@@ -9887,21 +9887,26 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
+static/artifacts/           the third build target's output — the page runtime and
+                            the artifact kit — committed and embedded beside it
+static/protocol/            the second's, the wire protocol alone — committed, and
+                            embedded nowhere (see below)
 ```
 
 **The build output is committed**, and that is deliberate: `go build ./...` and
 `go install …@latest` must work on a clean checkout with no Node on the machine,
 and an embed directive cannot run a bundler. A stale bundle would compile,
 embed, serve and pass every Go test while running code nobody wrote — so CI
-rebuilds it and fails on any difference from the commit (`make dashboard-check`),
-the same idiom as `go mod tidy -diff` and the generated `schema/`. A difference
+rebuilds all three trees, the Makefile's `UI_OUT`, and fails on any difference
+from the commit (`make dashboard-check`), the same idiom as `go mod tidy -diff`
+and the generated `schema/`. A difference
 includes a file the rebuild wrote that the commit does not carry at all: every
 emitted name is content-hashed, so a changed chunk is a new path, which
 `git diff` cannot see and `git commit -a` never stages.
 
 | To | Run |
 |---|---|
-| change the dashboard | `make dashboard && git add -A -- static/dashboard` — then commit it with your source change |
+| change the dashboard | `make dashboard && git add -A -- static/dashboard static/artifacts static/protocol` — then commit it with your source change |
 | develop against a running engine | `make dashboard-dev` (proxies to `localhost:8000`) |
 | run its suites | `make dashboard-test` |
 | check the committed bundle is current | `make dashboard-check` |
@@ -11190,9 +11195,10 @@ to.
     `--color-text-tertiary` (6.1–6.6:1). What is left on the faint rung is ten marks —
     two tree characters, a breadcrumb slash, four icons and three icon-only
     controls — each named in `styles/rungs.test.ts` with the reason it is one.
-17. **Run `make dashboard` and commit `static/dashboard` with the change —
-    `git add -A -- static/dashboard`, not `git add -u`.** CI rebuilds and
-    fails on a diff AND on an untracked file there (`make dashboard-check`),
+17. **Run `make dashboard` and commit every tree it writes with the change —
+    `git add -A -- static/dashboard static/artifacts static/protocol`, not
+    `git add -u`.** CI rebuilds and fails on a diff AND on an untracked file
+    in any of them (`make dashboard-check`),
     because a lazy chunk is a NEW hashed file every time its source changes:
     `git add -u` stages the entry that imports it and leaves the chunk behind,
     and a binary built from that commit serves a screen whose code is not in

@@ -100,11 +100,24 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 // refresh's full record does, so a review never postpones a moved target's
 // recheck.
 //
-// It writes the row only while it is of the record's revision and the record
-// moves it FORWARD — a tip no earlier than the row's, versions, a checks
-// position and a chart no lower — the guard the merge's own record is decided
-// by, which the arbitration on the change's subject keeps true since no other
-// record writes the row; and applies as nothing otherwise.
+// It writes the row only while it is of the record's revision and holds no
+// later tip than a recheck's — the guard the merge's own record is decided by
+// — nor a later change or readiness version than a judgement's, all of which
+// the arbitration on the change's subject keeps true since no other record
+// writes the row; and applies as nothing otherwise. THE CHECKS POSITION AND THE
+// CHART ARE WRITTEN AS THE DECIDE STAMPED THEM, LOWER THAN THE ROW'S OR NOT,
+// as a refresh's full record writes them: the checks position is the highest
+// over the head's check rows, which the history removes ([CheckHistory]: an
+// ending's horizon, a checks_sweep), so a change still open a month after
+// its head's checks ended is judged at zero; and the chart is the deciding
+// node's, which may be an activation behind the row's. A guard holding
+// either forward would apply such a judgement as nothing, its versions with
+// it, and leave the change due a refresh — a record every data node applies
+// as nothing — at every pass of its home: for ever where the head's checks
+// are gone, until the node takes the activation where its chart is behind.
+// The full record's apply holds neither forward either. The versions are
+// held forward because they only grow: the change's row's version and its
+// conversation's readiness version.
 //
 // PURE IN THE RECORD, its position, its broker instant and the prior row.
 func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k MergeabilityKept) (int, error) {
@@ -158,7 +171,8 @@ func clearReadiness(ctx context.Context, tx store.Execer, ids []string) (int, er
 // A mergeability's writes: the row by the change's key, replaced whole by
 // every merge the decide took; a refresh's readiness, written by the same key
 // only while the row is the merge the record names; a kept re-evaluation's
-// moves, by the same key only while they move the row forward; and the
+// moves, by the same key only while the row holds no later tip or version
+// than they do; and the
 // readiness of a list of ended changes cleared, each by its key, only where
 // the row holds an answer — a write naming waits_person rewrites the row's
 // entry in code_mergeability_waits_idx whatever the value, so a row with
@@ -187,8 +201,7 @@ const (
 			checks_position = CASE WHEN ?5 THEN ?8 ELSE checks_position END,
 			chart_epoch = CASE WHEN ?5 THEN ?11 ELSE chart_epoch END
 		WHERE change_id = ?9 AND revision = ?10 AND (NOT ?1 OR target_position <= ?3)
-			AND (NOT ?5 OR (change_version <= ?6 AND readiness_version <= ?7 AND checks_position <= ?8
-				AND chart_epoch <= ?11))`
+			AND (NOT ?5 OR (change_version <= ?6 AND readiness_version <= ?7))`
 	clearReadinessSQL = `UPDATE code_mergeability SET ready = 0, waits_person = 0 WHERE rowid IN (SELECT g.rowid
 		FROM json_each(?) AS j CROSS JOIN code_mergeability AS g
 		WHERE g.change_id = CAST(j.value AS TEXT) AND (g.ready = 1 OR g.waits_person = 1))`

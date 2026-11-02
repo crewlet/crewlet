@@ -303,7 +303,8 @@ const (
 	// fast-forward updates fit one record's row budget, one of forced updates
 	// or of deletions, and two of either its byte budget (about 410 KiB each
 	// with plain refs at MaxRefNameBytes); an import chunks its refs at this
-	// size.
+	// count at most, and fewer where their bytes reach EntryRoom first
+	// (ImportProposal.Fitted).
 	// Refs JSON spells long — `&`, `<` and `>` take six bytes each — reach
 	// EntryRoom first, at some six hundred of the longest, and such a push
 	// is refused by its receiver before its work (Proposal.ValidateCommands).
@@ -1564,7 +1565,10 @@ const (
 	// may carry, at most three rows each ([commandRows]) — so with
 	// MaxImportPacks packs and the record's own rows a chunk stays under
 	// MaxRecordRows, and an import of a repository holding a hundred thousand
-	// refs is a hundred chunks.
+	// refs is a hundred chunks or more. It bounds the ROWS: the bytes are bounded
+	// apart, since refs JSON spells long reach EntryRoom first, at some six
+	// hundred of the longest — a home cuts each record by both
+	// (ImportProposal.Fitted, MirrorSyncProposal.Fitted).
 	MaxImportRefs = MaxCommandsPerPush
 
 	// MaxImportPacks is the most packs one import chunk or mirror sync lands:
@@ -1581,7 +1585,13 @@ const (
 	// retention's interval, which answers another question. A source asked
 	// four times an hour keeps a mirror a quarter of an hour behind at the
 	// most, for one negotiation that brings nothing where nothing moved;
-	// `mirrors_due` lists a mirror once its last sync is this old.
+	// `mirrors_due` lists a mirror once its last sync is this old. A sync
+	// that finds its source level is a record too ([MirrorSync.Current]),
+	// so the cost of a quiet mirror is one record of under a kilobyte on
+	// the code log, and one write of its repository's row, every interval —
+	// ninety-six a day — which is what lets the listing stop at the first
+	// mirror synced within the interval and keeps a home that lost its
+	// memory of an attempt from fetching every quiet mirror again at once.
 	MirrorInterval = 15 * time.Minute
 )
 

@@ -67,9 +67,9 @@ func TestAnAgentCannotSetAMirror(t *testing.T) {
 
 	// A PERSON SETS EACH, and a seat may not REMOVE what a person set.
 	n.lands(lcSettings(lcPerson, id, code.RepoChange{MirrorFrom: mirrorSource, MirrorTo: mirrorTarget}))
-	if row := n.resolved("shared"); !row.Mirrored || row.Status != code.RepoStatusActive {
-		t.Fatalf("shared after a person's mirror_from is %s mirrored=%v, want an active pull mirror", row.Status,
-			row.Mirrored)
+	if row := n.resolved("shared"); !row.Mirrored || row.Status != code.RepoStatusImporting {
+		t.Fatalf("shared after a person's mirror_from is %s mirrored=%v, want a pull mirror importing from its "+
+			"source", row.Status, row.Mirrored)
 	}
 	for _, change := range []code.RepoChange{
 		{MirrorFrom: &code.MirrorSource{}}, {MirrorTo: &code.MirrorTarget{}},
@@ -233,6 +233,7 @@ func TestAPullMirrorTakesNoChange(t *testing.T) {
 	s := suiteSettings()
 	s.Owner, s.MirrorFrom = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}, mirrorSource
 	n.ensure("web", s, t2)
+	endImport(t, n, c, repo, 0)
 	want := code.MirroredDetail("web", code.ManagedConfig)
 	for _, p := range []code.ChangeProposal{
 		opening(repo, releaseRef, mainRef, ada),
@@ -327,21 +328,156 @@ func TestAnImportAndAPullMirrorKeepWhatTheyFollow(t *testing.T) {
 	}
 }
 
+// A PULL MIRROR IS IMPORTED FIRST, WHENEVER IT BECOMES ONE (M6-D16): an
+// ACTIVE repository a settings change makes a pull mirror — a declaration's,
+// or a person's through a tool — is importing from the mirror's own source,
+// its import begun afresh (no chunk landed, no end, no error), so the
+// source's history arrives in an import's resumable chunks rather than in one
+// sync; and so is a pull mirror moved to ANOTHER source, its import counted
+// from the first chunk again, which the next chunk 1 proves by landing. A
+// credential changed alone is the same source, and the mirror stays active;
+// a repository already being imported keeps the source its import fetches.
+// Each status a settle or a tool answers is the one its apply wrote.
+//
+// Mutation: drop mirrorImportSQL's statement from applySettings — every
+// repository stays active, red; start the import on any settings record that
+// names a pull mirror (compare no URL) — the credential change imports, red;
+// leave import_seq as the last import left it — the new import's chunk 1 is
+// refused stale, red; answer the settle's status from the settings alone —
+// Ensured says active, red.
+func TestAPullMirrorIsImportedFirstWheneverItBecomesOne(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	ctx := t.Context()
+	c, _ := committerOn(t, n, n.pub)
+	main := "refs/heads/main"
+	detail := func(name string) code.RepoDetail {
+		t.Helper()
+		a, err := n.reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name})
+		if err != nil || a.Repo == nil {
+			t.Fatalf("read %s's detail: %+v, %v", name, a.Repo, err)
+		}
+		return *a.Repo
+	}
+	importing := func(name string, from *code.MirrorSource) {
+		t.Helper()
+		d := detail(name)
+		want := code.ImportSource{URL: from.URL, Credential: from.Credential}
+		if got := d.Remotes.Import; d.Status != code.RepoStatusImporting || !d.Mirrored || got == nil ||
+			got.Source != want || got.Chunks != 0 || !got.DoneAt.IsZero() || got.Error != "" {
+			t.Fatalf("%s is %s (mirrored %v) importing %+v, want a pull mirror importing from %+v afresh: no "+
+				"chunk, no end, no error", name, d.Status, d.Mirrored, got, want)
+		}
+	}
+	active := func(name string) {
+		t.Helper()
+		if d := detail(name); d.Status != code.RepoStatusActive || !d.Mirrored {
+			t.Fatalf("%s is %s (mirrored %v), want an active pull mirror", name, d.Status, d.Mirrored)
+		}
+	}
+
+	// A DECLARED REPOSITORY, active with main pushed, made a pull mirror; and
+	// one being imported, made one at the same activation, which keeps the
+	// source its import fetches.
+	api := repoOn(t, n, "api")
+	if _, err := n.store.EnsureRepo(ctx, n.activate(t1), code.Declared{Name: "imported",
+		Settings: suiteSettings(), Import: importSource}); err != nil {
+		t.Fatalf("ensure imported: %v", err)
+	}
+	n.drain()
+	s := suiteSettings()
+	s.MirrorFrom = mirrorSource
+	if got := n.ensure("api", s, t2); got.Status != code.RepoStatusImporting {
+		t.Fatalf("the settle making api a pull mirror answered %s, want importing", got.Status)
+	}
+	importing("api", mirrorSource)
+	first := chunkOf(n, api, 1, 3, update(main, oidOf("A"), oidOf("B")))
+	res, err := c.ProposeImport(ctx, code.ImportProposal{Chunk: &first})
+	requireSynced(t, "the source's first chunk", res, err)
+	endImport(t, n, c, api, 1)
+	active("api")
+	n.ensure("imported", s, t2)
+	if d := detail("imported"); d.Status != code.RepoStatusImporting || !d.Mirrored || d.Remotes.Import == nil ||
+		d.Remotes.Import.Source != *importSource {
+		t.Fatalf("imported made a pull mirror while importing is %s (mirrored %v) importing %+v, want "+
+			"importing from its own source %+v", d.Status, d.Mirrored, d.Remotes.Import, *importSource)
+	}
+
+	// THE SAME SOURCE, ITS CREDENTIAL CHANGED: no import.
+	same := suiteSettings()
+	same.MirrorFrom = &code.MirrorSource{URL: mirrorSource.URL, Credential: "${OTHER_FORGE_TOKEN}"}
+	if got := n.ensure("api", same, t3); got.Status != code.RepoStatusActive {
+		t.Fatalf("the settle of api's new credential answered %s, want active", got.Status)
+	}
+	active("api")
+
+	// ANOTHER SOURCE: imported again, from its first chunk — which an active
+	// pull mirror, importing nothing, refuses, and which the last import's
+	// chunk count would have refused too.
+	moved := &code.MirrorSource{URL: "https://forge.example.com/acme/web-moved.git", Credential: "${FORGE_TOKEN}"}
+	first = chunkOf(n, api, 1, 3, update(main, oidOf("B"), oidOf("C")))
+	before := n.end()
+	res, err = c.ProposeImport(ctx, code.ImportProposal{Chunk: &first})
+	requireStale(t, n, "a chunk of an active pull mirror", before, res, err, code.RefusalStale)
+	s.MirrorFrom = moved
+	if got := n.ensure("api", s, harnessAt); got.Status != code.RepoStatusImporting {
+		t.Fatalf("the settle moving api to another source answered %s, want importing", got.Status)
+	}
+	importing("api", moved)
+	first = chunkOf(n, api, 1, 3, update(main, oidOf("B"), oidOf("C")))
+	res, err = c.ProposeImport(ctx, code.ImportProposal{Chunk: &first})
+	requireSynced(t, "the new source's first chunk", res, err)
+	endImport(t, n, c, api, 1)
+	active("api")
+
+	// A PERSON'S, on a repository a tool made.
+	web := n.made(lcPerson, "web", unitOwned("eng"))
+	if got := n.lands(lcSettings(lcPerson, web, code.RepoChange{MirrorFrom: mirrorSource})); got.Repo.Status !=
+		code.RepoStatusImporting {
+		t.Fatalf("a person making web a pull mirror was answered %s, want importing", got.Repo.Status)
+	}
+	importing("web", mirrorSource)
+}
+
+// endImport lands the end of repo's import at its seq-th chunk through c, as
+// its home does once the source's refs have landed: repo is ACTIVE after it.
+func endImport(t *testing.T, n *node, c *code.Committer, repo string, seq int64) {
+	t.Helper()
+	done := code.ImportDone{RepoID: repo, Node: n.id, Seq: seq}
+	res, err := c.ProposeImport(t.Context(), code.ImportProposal{Done: &done})
+	requireSynced(t, "the import's end", res, err)
+}
+
+// endImportShort lands the end of repo's import at its seq-th chunk through
+// c with why it ended short: repo is ACTIVE after it and, being a pull
+// mirror, never synced, which an import that landed whole would not leave it.
+func endImportShort(t *testing.T, n *node, c *code.Committer, repo string, seq int64, why string) {
+	t.Helper()
+	done := code.ImportDone{RepoID: repo, Node: n.id, Seq: seq, Error: why}
+	res, err := c.ProposeImport(t.Context(), code.ImportProposal{Done: &done})
+	requireSynced(t, "the import's end short", res, err)
+}
+
 // NOTHING MERGES INTO A PULL MIRROR OR A REPOSITORY BEING IMPORTED: a merge
 // moves its target, and a pull mirror moves only by its syncs from its
 // source, so a merge of a change that meets its gate is refused repo_mirrored,
 // and so is each of a queue's steps toward one — an enqueue, a train's
 // candidate, a landing of a train built before the repository became a mirror
 // — in the domain's one sentence for a pull mirror, nothing appended; an EJECT
-// still lands, moving no ref, so a repository that became a mirror sheds its
-// queue. A repository being imported takes no write at all: the same merge and
-// enqueue are refused repo_importing.
+// repo_mirrored still lands, moving no ref, so a repository that became a
+// mirror sheds its queue — and is refused stale, nothing appended, on one that
+// follows no source; its queue work says which it is (QueueDue.Mirrored), what
+// its home sheds the queue by. A repository being imported takes no write at
+// all: the same merge and enqueue are refused repo_importing.
 //
 // Mutation: drop the mirror arm from decideMerge — the merge lands, red; drop
 // the enqueue, the candidate or the landing from decideQueue's — that record
 // lands or is refused for another reason, red; refuse every queue record on a
-// mirror — the queue can never be shed, red; drop either importing arm, red at
-// its write.
+// mirror — the queue can never be shed, red; drop decideEject's guard on the
+// reason — the eject of a repository that is no mirror lands, red; answer the
+// queue work's Mirrored false, or true, red at its read; drop either
+// importing arm, red at its write.
 func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -366,6 +502,19 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	n.passed(api, oidOf("M"), mainRef, "unit")
 	other, err := c.ProposeChange(ctx, opening(api, releaseRef, mainRef, dev))
 	requireChanged(t, other, err)
+	// AN ENTRY IS EJECTED repo_mirrored ONLY FROM A PULL MIRROR: api follows
+	// no source yet, so the reason is stale.
+	before := n.end()
+	early, err := c.ProposeQueue(ctx, queueRecord(func(p *code.QueueProposal) {
+		p.Eject = &code.Eject{RepoID: api,
+			Entries: []code.Ejection{{EntryID: entryID, Reason: code.EjectRepoMirrored}}}
+	}))
+	requireQueueRefused(t, n, before, early, err, code.MergeRefusalStale, "api follows no source now")
+	if due, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadQueueDue, Fresh: stale,
+		QueueDue: &code.QueueDueQuery{RepoID: api}}); err != nil || due.DueQueue == nil || due.DueQueue.Mirrored {
+		t.Fatalf("api's queue work before its mirror_from is %+v, %v; want it read as no pull mirror's",
+			due.DueQueue, err)
+	}
 
 	for _, name := range []string{"web", "api"} {
 		s := suiteSettings()
@@ -375,10 +524,10 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 		} else {
 			s.Protections[0].Gate = queueGate()
 		}
-		n.ensure(name, s, t2)
+		endImport(t, n, c, n.ensure(name, s, t2).RepoID, 0)
 	}
 
-	before := n.end()
+	before = n.end()
 	res, err := c.ProposeMerge(ctx, merging(web, change, ada, code.MergeMethodSquash, oidOf("A"), oidOf("B"),
 		oidOf("S")))
 	requireMergeRefused(t, n, before, res, err, code.MergeRefusalRepoMirrored,
@@ -396,8 +545,17 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	if main := n.target(api, mainRef); main != oidOf("A") {
 		t.Fatalf("the pull mirror's main is at %q, want A: nothing but a sync moves it", main)
 	}
+	// ITS HOME READS IT A PULL MIRROR off its queue work, which is what has
+	// it shed the queue rather than build a train.
+	due, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadQueueDue, Fresh: stale,
+		QueueDue: &code.QueueDueQuery{RepoID: api}})
+	if err != nil || due.DueQueue == nil || !due.DueQueue.Mirrored || len(due.DueQueue.Entries) != 1 {
+		t.Fatalf("api's queue work is %+v, %v; want its one live entry, read as a pull mirror's", due.DueQueue,
+			err)
+	}
 	shed, err := c.ProposeQueue(ctx, queueRecord(func(p *code.QueueProposal) {
-		p.Eject = &code.Eject{RepoID: api, Entries: []code.Ejection{{EntryID: entryID, Reason: code.EjectConflict}}}
+		p.Eject = &code.Eject{RepoID: api,
+			Entries: []code.Ejection{{EntryID: entryID, Reason: code.EjectRepoMirrored}}}
 	}))
 	requireRecorded(t, shed, err)
 

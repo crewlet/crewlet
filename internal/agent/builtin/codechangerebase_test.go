@@ -66,3 +66,25 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 		t.Errorf("a rebase at no whole head answered %q, sending %d writes", got.Output, len(writes))
 	}
 }
+
+// A REBASE OF AN ENDED CHANGE IS INVALID, never conflict: a closed or merged
+// change never reopens by itself, so a caller told to retry shortly would ask
+// for ever (M5.md §2.10's change_not_open); nothing is written.
+//
+// Mutation: refuse it as conflict again → red.
+func TestARebaseOfAnEndedChangeIsInvalid(t *testing.T) {
+	t.Parallel()
+	args := map[string]any{"change": "site!7", "expected_head": revHead(3)}
+	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
+		ended := siteChange()
+		ended.detail.State = state
+		none := &codeWrites{}
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(ended), none)), writerTurn(t),
+			builtin.CodeRebaseChangeTool, args)
+		if writes, _ := none.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+			len(writes) != 0 {
+			t.Errorf("a rebase of a %s change answered %q as %s, sending %d writes; want invalid and none",
+				state, got.Output, tools.RefusalOf(got), len(writes))
+		}
+	}
+}

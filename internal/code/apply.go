@@ -760,7 +760,10 @@ func repoVersion(ctx context.Context, tx *sql.Tx, id string) (versionRow, error)
 
 // applySettings replaces a repository's settings whole, and moves its idle
 // clock. A repository that is deleted or purging keeps its status: settings
-// never resurrect one, a restore does.
+// never resurrect one, a restore does. An ACTIVE repository the record makes a
+// pull mirror of a source it does not follow yet becomes IMPORTING from that
+// source, its import begun afresh (mirrorImportSQL) — a function of the row the
+// record found and the record, as every apply is.
 //
 // A RECORD OF ANOTHER MANAGER THAN THE REPOSITORY'S APPLIES AS NOTHING
 // ([managerRefuses]), as a record below the activation fence does: a tool's
@@ -776,7 +779,14 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
-	from, to, _, err := remoteColumns(s, nil)
+	// THE IMPORT A PULL MIRROR STARTS, read off the mirrors the row holds
+	// BEFORE the record: a source the repository does not follow yet is
+	// imported first (M6-D16, [repoRemotes.startsImport]).
+	prior, err := remotesIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
+	from, to, imports, err := remoteColumns(s, prior.startsImport(s))
 	if err != nil {
 		return 0, fmt.Errorf("code: the settings at %s: %w", at.position, err)
 	}
@@ -789,6 +799,13 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
+	if imports != "" {
+		// The same row the statement above wrote, so no row of its own.
+		if _, err = tx.ExecContext(ctx, mirrorImportSQL, imports, p.RepoID); err != nil {
+			return 0, fmt.Errorf("code: start %s's import from its pull mirror's source at %s: %w", p.RepoID,
+				at.position, err)
+		}
+	}
 	replaced, err := replaceProtections(ctx, tx, at, p.RepoID, s.Protections)
 	if err != nil {
 		return 0, err
@@ -942,6 +959,16 @@ const (
 			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
+	// mirrorImportSQL starts the import a settings record's pull mirror owes
+	// ([repoRemotes.startsImport]) on a repository settingsSQL left ACTIVE:
+	// importing from the mirror's source, from its first chunk, with no end
+	// and no error — the row as a create that imports leaves it. An archived
+	// repository is never a pull mirror (the settings refuse one), a deleted
+	// or purging one stays as it is, and one being imported keeps the source
+	// its import fetches: what moved meanwhile is its first sync's.
+	mirrorImportSQL = `UPDATE code_repos SET
+			status = 'importing', import_source = ?, import_seq = 0, imported_at = 0, import_error = ''
+		WHERE id = ? AND status = 'active'`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET

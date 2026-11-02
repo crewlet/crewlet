@@ -570,12 +570,15 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c c
 
 // repoRead is [CodeDeps.repo] whose read, on a turn's first call naming the
 // repository, may be the call's OWN: first, where it is not nil, is a read
-// whose answer carries the repository in detail — code_get_repo's first page
-// of refs, held by the reader to carry it — made in place of the read of kind
-// `repo` and answered back for the call to use, so that call is ONE
-// linearizable read rather than the resolution's and then its own. Its asker,
-// repository and level are this method's to set, never the call's. A hit
-// answers no read: the call makes its own.
+// whose answer carries the repository — in detail, as code_get_repo's first
+// page of refs is held by the reader to carry it, or as the repository its
+// name resolved to, as a change read, a listing of a repository's changes and
+// one of its checks answer it when asked ([code.ReadQuery.Resolve]) — made in
+// place of the read of kind `repo` and answered back for the call to use, so
+// that call is ONE linearizable read rather than the resolution's and then
+// its own: one barrier on the code log, where two were two serial quorum
+// round trips. Its asker, repository and level are this method's to set,
+// never the call's. A hit answers no read: the call makes its own.
 //
 // THE ONE RESOLUTION OF A `repo` ARGUMENT, so whatever has to happen before a
 // turn's first request about a repository happens in one place; every tool
@@ -612,12 +615,18 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 		r := codeFailure(ctx, tool, name, err)
 		return code.RepoRef{}, nil, &r
 	}
-	if answer.Repo == nil {
+	var ref code.RepoRef
+	switch {
+	case answer.Repo != nil:
+		ref = answer.Repo.RepoRef
+	case answer.Resolved != nil:
+		ref = *answer.Resolved
+	default:
 		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered repository %s's %s read with "+
-			"no detail", name, q.Kind), fmt.Sprintf("%s could not read repository %q: %s.", tool, name, faultSaid))
+			"neither its detail nor its resolution", name, q.Kind), fmt.Sprintf("%s could not read repository "+
+			"%q: %s.", tool, name, faultSaid))
 		return code.RepoRef{}, nil, &r
 	}
-	ref := answer.Repo.RepoRef
 	if err := HoldRepo(ctx, turn, d.Holder, c.actor, ref, d.Now); err != nil {
 		r := holdFailure(ctx, tool, ref, err)
 		return code.RepoRef{}, nil, &r

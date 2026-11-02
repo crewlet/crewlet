@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -126,12 +127,77 @@ type mergeVerdict struct {
 	ours    bool
 }
 
-// runMerge is a merge_change's steps from its sync on: judged, built, landed —
-// and built again onto a target that moved under it, or from a copy an
-// expunge's begin overtook, at most code.MergeRecomputes times, every round
-// drawing on the merge's ONE budget of git and started only where it fits
-// what is left of that budget and of the write's attempt (roomToRebuild).
+// runMerge is a merge_change's steps from its sync on ([writing.mergeRounds]),
+// and its rebuilds recorded once, as it ended ([writing.recordRecomputes]).
 func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error) {
+	res, err := wr.mergeRounds(ctx)
+	wr.recordRecomputes(res, err)
+	return res, err
+}
+
+// The outcomes crewlet.code.merge.recomputes records a merge under beside a
+// refusal's own code, which is its outcome where it was refused.
+const (
+	// mergeMerged is a merge whose record applied or is pending — or one
+	// found already landed.
+	mergeMerged = "merged"
+	// mergeQueued is a change its target's queue took rather than merged.
+	mergeQueued = "queued"
+)
+
+// recordRecomputes observes how many times one merge_change was built again
+// onto a target that moved under it (code.MergeAnswer.Recomputes) on
+// crewlet.code.merge.recomputes, by how it ended: merged, queued, a refusal's
+// own code — target_moving where code.MergeRecomputes rebuilds, or the merge's
+// one budget, ran out — unknown, unready (another git node is asked, and
+// records its own), refused (an argument the build found invalid, or an
+// object it named missing) or failed. ONCE A MERGE, from the count its answer
+// carries, so the distribution is merges rather than rounds: a branch moving
+// under its merges is the mean a merge took (the sum over the count, exact
+// where the count boundaries put 0 and 1 in one bucket) climbing towards
+// code.MergeRecomputes, which target_moving at the cap names, where
+// crewlet.code.merge.outcomes' committer counts only target_moved records and
+// cannot tell four rebuilds that landed from four merges that each rebuilt
+// once.
+func (wr *writing) recordRecomputes(res code.EngineWriteResult, err error) {
+	if wr.s.o.Metrics == nil {
+		return
+	}
+	recomputes := 0
+	if res.Merge != nil {
+		recomputes = res.Merge.Recomputes
+	}
+	wr.s.o.Metrics.ObserveValue(metrics.CodeMergeRecomputes, float64(recomputes),
+		metrics.Attrs{"outcome": mergeOutcome(res, err)})
+}
+
+// mergeOutcome is how crewlet.code.merge.recomputes names a merge that ended
+// so.
+func mergeOutcome(res code.EngineWriteResult, err error) string {
+	switch {
+	case err != nil:
+		return writeOutcome(res, err)
+	case res.Merge != nil && res.Merge.Refusal != "":
+		return string(res.Merge.Refusal)
+	case res.Refusal != "":
+		return string(res.Refusal)
+	case res.Merge != nil && res.Merge.Queued:
+		return mergeQueued
+	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
+		return mergeMerged
+	case res.Outcome == statelog.OutcomeUnknown:
+		return writeUnknown
+	}
+	return writeRefused
+}
+
+// mergeRounds is a merge_change's steps from its sync on: judged, built,
+// landed — and built again onto a target that moved under it, or from a copy
+// an expunge's begin overtook, at most code.MergeRecomputes times, every
+// round drawing on the merge's ONE budget of git and started only where it
+// fits what is left of that budget and of the write's attempt
+// (roomToRebuild).
+func (wr *writing) mergeRounds(ctx context.Context) (code.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
 	// ONE BUDGET FOR EVERY ROUND (code.MergeBuildDeadline): charged by each
@@ -271,6 +337,29 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 	}
 }
 
+// mergeStatusRefusal is the refusal a repository's row gives a merge and each
+// of a queue's steps toward one — the push refusal its status reads
+// ([Server.statusRefusal]) as the merge's code: repo_deleted, repo_archived,
+// repo_importing or repo_mirrored, in the domain's one sentence for the state
+// — or "" for a repository that takes one. THE ONE MAPPING the merge's verdict
+// and a queue's chain ([Server.BuildChain]) both read BEFORE they build: the
+// decide refuses each from the same row, but only once a scratch, a share unit
+// of the seat git-work and a stored pack were spent on a merge it could never
+// take.
+func (s *Server) mergeStatusRefusal(repo code.RepoRef) (code.MergeRefusal, string) {
+	switch reason, words := s.statusRefusal(repo); reason {
+	case code.RefusalRepoDeleted:
+		return code.MergeRefusalRepoDeleted, words
+	case code.RefusalRepoArchived:
+		return code.MergeRefusalRepoArchived, words
+	case code.RefusalRepoImporting:
+		return code.MergeRefusalRepoImporting, words
+	case code.RefusalRepoMirrored:
+		return code.MergeRefusalRepoMirrored, words
+	}
+	return "", ""
+}
+
 // mergeVerdict judges the merge on the synced copy, in the order its record's
 // decide reads its rules: the repository's status, the change as the caller
 // read it, a seat's override, the target's tip, and — for a merge its gate
@@ -286,15 +375,8 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoDeleted,
 			detail: code.RepoGone{ID: w.RepoID, Retention: s.o.DeletedRetention()}.Detail()}, nil
 	}
-	switch reason, words := s.statusRefusal(repo); reason {
-	case code.RefusalRepoDeleted:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoDeleted, detail: words}, nil
-	case code.RefusalRepoArchived:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoArchived, detail: words}, nil
-	case code.RefusalRepoImporting:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoImporting, detail: words}, nil
-	case code.RefusalRepoMirrored:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoMirrored, detail: words}, nil
+	if refusal, words := s.mergeStatusRefusal(repo); refusal != "" {
+		return mergeJudgement{}, mergeVerdict{refusal: refusal, detail: words}, nil
 	}
 	floor := statelog.FloorAt(statelog.ReadSession, wr.synced.Position)
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,
@@ -627,10 +709,10 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 
 // buildMergeShared is a merge's build under one unit of the node's seat
 // git-work share and what is left of its budget of git run time
-// (code.MergeBuildDeadline, every round's together: runMerge gives it once):
+// (code.MergeBuildDeadline, every round's together: mergeRounds gives it once):
 // a fast-forward's ancestry, or a merge's or a squash's merge, commit and
 // pack. Past code.GitShareWait the share is unready, about this node; a build
-// that runs out the budget is errBuildSpent, which runMerge answers.
+// that runs out the budget is errBuildSpent, which mergeRounds answers.
 func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	code.EngineWriteResult, bool, error) {
 

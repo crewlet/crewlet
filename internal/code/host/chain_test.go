@@ -241,6 +241,54 @@ func TestAChainWritesNoCache(t *testing.T) {
 	}
 }
 
+// NO CHAIN IS BUILT FOR A PULL MIRROR, nor for a repository being imported: a
+// queue's chain on a repository made a pull mirror is refused by its row
+// before anything is built — repo_importing while the mirror's import runs and
+// repo_mirrored once it is done, each in the domain's one sentence for the
+// state (code.ChainResult.Status, Detail) — with no commit, no scratch left
+// and no pack stored, where the candidate naming it would be refused from the
+// same row after a scratch, a share unit and a stored pack.
+//
+// Mutation: drop BuildChain's status check — the chain is built and its pack
+// stored, red; drop either arm of the status mapping — that chain likewise,
+// red.
+func TestNoChainIsBuiltForAPullMirror(t *testing.T) {
+	t.Parallel()
+	c := newChainCase(t)
+	head := c.branch("work", map[string]string{"work.md": "work\n"})
+	work := c.entry("work", head, code.MergeMethodMerge, time.Now())
+	mirrored := codetest.Settings()
+	mirrored.MirrorFrom = &code.MirrorSource{URL: "https://forge.example.com/acme/web.git"}
+	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: mirrored})
+	stored := len(c.objects())
+	refused := func(state string, want code.MergeRefusal, words string) {
+		t.Helper()
+		b := code.ChainBuild{RepoID: c.repo, ChainID: opNow(), TargetRef: "refs/heads/main", Base: c.head,
+			Seen: c.Rows().Position, Entries: []code.ChainEntry{work}}
+		res, err := c.server().BuildChain(c.Ctx, b)
+		if err != nil || res.Status != want || res.Detail != words || res.Refusal != "" || res.Pack != nil ||
+			len(res.Commits) != 0 || res.Settle == nil {
+			t.Fatalf("a chain on a repository %s answered %+v %v, want refused %s saying %q, nothing built",
+				state, res, err, want, words)
+		}
+		if _, err := os.Stat(c.scratch(b.ChainID)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a chain on a repository %s left a scratch: %v", state, err)
+		}
+		if got := len(c.objects()); got != stored {
+			t.Errorf("a chain on a repository %s stored %d objects: its row refuses it before anything is "+
+				"built", state, got-stored)
+		}
+	}
+	refused("being imported", code.MergeRefusalRepoImporting, code.ImportingDetail(codetest.RepoName))
+	done := code.ImportDone{RepoID: c.repo, Node: c.Fleet.Nodes()[0].ID()}
+	if res, err := c.Fleet.(*codetest.SoloFleet).Code(t).Import(c.Ctx, code.ImportProposal{Done: &done}); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("end the pull mirror's import: %+v, %v", res, err)
+	}
+	refused("that is a pull mirror", code.MergeRefusalRepoMirrored,
+		code.MirroredDetail(codetest.RepoName, code.ManagedConfig))
+}
+
 // A CHAIN IS HELD TO ITS SHAPE before anything is built: an id that cannot
 // name its scratch, no entries or more than one record lands, an entry twice,
 // an entry with no instant, and a squash with no owner are refused invalid,

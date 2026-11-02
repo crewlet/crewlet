@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -34,7 +36,7 @@ import (
 // leaves an object (M6-D2: what an expunge's grace keeps), whatever live
 // change its commands move, and the horizons. Its packs are the record's, kind
 // import or mirror, several to a record where a push carries one, so its push
-// row names no single pack.
+// row names no single pack. A sync that moves nothing lands no push at all.
 //
 // # What the decide holds each to
 //
@@ -85,6 +87,17 @@ import (
 //
 // and then the chunk's push rules, whole.
 //
+// A SYNC THAT MOVES NOTHING — no command and no pack ([MirrorSync.Current]):
+// its home fetched the source and found the mirror level with it — is held to
+// rule 1 alone, since it names no object an expunge could leave dropping and
+// no ref that could have moved, and records only its instant
+// (mirror_synced_at). Without it a quiet source's mirror would keep the
+// instant of its last move for good, and sit at the head of `mirrors_due`,
+// least recently synced first, for ever: the listing's stop at the first
+// mirror synced within MirrorInterval would never bound it, and every git
+// node would page every quiet mirror on every backstop, fetching each from
+// its source again wherever its memory of the last attempt was lost.
+//
 // THE RECORD'S ROWS are counted as a push entry's ([entryRows]) with the
 // record's packs and the changes its commands move ([changeBook]); a record
 // past MaxRecordRows is the builder's bug — MaxImportRefs and MaxImportPacks
@@ -124,8 +137,10 @@ func (p ImportProposal) Validate() error {
 }
 
 // Validate refuses a sync no committer could decide ([ErrInvalidProposal]):
-// a chunk's rules over its repository, id, node, packs and commands, a drop
-// epoch below zero and a zero FetchedAt.
+// a chunk's rules over its repository, id, node, packs and commands — but a
+// sync carrying neither a pack nor a command is one ([MirrorSync.Current]),
+// and one carrying packs and no command is not — a drop epoch below zero and
+// a zero FetchedAt.
 func (p MirrorSyncProposal) Validate() error {
 	_, err := p.write().measure()
 	return err
@@ -207,12 +222,12 @@ func (w remoteWrite) moves() ([]PackRef, []Command) {
 
 // decidedRows is the most rows w's record makes its apply touch before the
 // changes its commands move, which the decide counts from the rows: an end's
-// one, the repository's row; a chunk's or a sync's its push entry's
-// ([entryRows] of every command ok), its packs, the repository's row, and
-// [recordRows]' share of the horizons.
+// and a sync's that moves nothing one, the repository's row; a chunk's or a
+// sync's its push entry's ([entryRows] of every command ok), its packs, the
+// repository's row, and [recordRows]' share of the horizons.
 func (w remoteWrite) decidedRows() int {
 	packs, cmds := w.moves()
-	if w.done != nil {
+	if w.done != nil || w.mirror != nil && w.mirror.Current() {
 		return 1
 	}
 	entry := PushEntry{Commands: slices.Clone(cmds)}
@@ -229,6 +244,22 @@ func (w remoteWrite) measure() (int, error) {
 	if err := w.validFields(); err != nil {
 		return 0, err
 	}
+	n, err := w.encoded()
+	if err != nil {
+		return 0, err
+	}
+	if n > EntryRoom {
+		op, _, _ := w.record()
+		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+			ErrInvalidProposal, op, n, EntryRoom)
+	}
+	return n, nil
+}
+
+// encoded is the bytes of the payload w's record carries, every command
+// decided ok — the one measure [EntryRoom] holds a proposal to, which
+// [remoteWrite.fitted] cuts a record's commands by.
+func (w remoteWrite) encoded() (int, error) {
 	op, _, payload := w.record()
 	switch p := payload.(type) {
 	case ImportChunk:
@@ -242,11 +273,121 @@ func (w remoteWrite) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
-	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
-			ErrInvalidProposal, op, len(encoded), EntryRoom)
-	}
 	return len(encoded), nil
+}
+
+// Fitted is p's chunk as ONE record carries it — its packs, and its commands
+// cut to the most of them, from the first, that fit beside the packs —
+// held to every rule of [ImportProposal.Validate], each pack measured and
+// checked AS STORED though it may only be laid out ([LayBundle]), so a home
+// cuts and checks a step before it uploads a byte of it, and the committer's
+// own Validate, after the upload, measures the same record. An end, or a
+// proposal carrying no chunk, is p as Validate judges it.
+func (p ImportProposal) Fitted() (ImportProposal, error) {
+	if p.Chunk == nil || p.Done != nil {
+		return p, p.Validate()
+	}
+	n, err := p.write().fitted()
+	if err != nil {
+		return ImportProposal{}, err
+	}
+	c := *p.Chunk
+	c.Commands = c.Commands[:n]
+	return ImportProposal{Chunk: &c}, nil
+}
+
+// Fitted is p's sync as ONE record carries it, on [ImportProposal.Fitted]'s
+// terms.
+func (p MirrorSyncProposal) Fitted() (MirrorSyncProposal, error) {
+	n, err := p.write().fitted()
+	if err != nil {
+		return MirrorSyncProposal{}, err
+	}
+	p.Sync.Commands = p.Sync.Commands[:n]
+	return p, nil
+}
+
+// fitted is how many of w's commands, from the first, its record carries: at
+// most MaxImportRefs, and the most whose encoding ([remoteWrite.encoded])
+// stays within EntryRoom beside every pack w carries — with w cut to them
+// valid by every rule of [remoteWrite.measure], its packs as stored.
+//
+// THE COUNT ALONE IS NO BOUND ON THE BYTES: JSON spells `&`, `<` and `>` in
+// six bytes each, so some six hundred refs at MaxRefNameBytes pass EntryRoom
+// where MaxImportRefs allows a thousand, and a chunk cut by its count alone
+// would be refused ErrInvalidProposal at every attempt — after its packs were
+// uploaded — for as long as the source held such refs. The encoding grows
+// with every command, so the first count past EntryRoom is found by halving:
+// about ten encodings of a record of at most EntryRoom bytes.
+//
+// A record whose first command will not fit beside no pack is an error, never
+// a record of none: a home cutting by this would otherwise land nothing for
+// ever.
+func (w remoteWrite) fitted() (int, error) {
+	w = w.asStored()
+	packs, cmds := w.moves()
+	hi := min(len(cmds), MaxImportRefs)
+	past := sort.Search(hi+1, func(n int) bool {
+		size, err := w.first(n).encoded()
+		return err != nil || size > EntryRoom
+	})
+	n := max(past-1, 0)
+	if n == 0 && len(cmds) > 0 && len(packs) == 0 {
+		op, _, _ := w.record()
+		return 0, fmt.Errorf("%w: %s: its first command, %q, alone is past the %d bytes one proposal may take "+
+			"of its record", ErrInvalidProposal, op, cmds[0].Ref, EntryRoom)
+	}
+	if _, err := w.first(n).measure(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// first is w with only its first n commands.
+func (w remoteWrite) first(n int) remoteWrite {
+	switch {
+	case w.chunk != nil:
+		c := *w.chunk
+		c.Commands = c.Commands[:n]
+		w.chunk = &c
+	case w.mirror != nil:
+		m := *w.mirror
+		m.Commands = m.Commands[:n]
+		w.mirror = &m
+	}
+	return w
+}
+
+// storedStandIn is the object a pack not yet stored is measured and checked
+// as: a key and a digest at the widths every stored one has — a version 7
+// key's canonical 36 characters, a SHA-256's 64 hex digits — which are the
+// only fields [StoreBundle] fills in, so a record carrying it encodes to
+// exactly the bytes the record carrying the stored pack will.
+var storedStandIn = objstore.Object{Key: objstore.KeyAt(time.UnixMilli(0)), Hash: objstore.HashOf(nil)}
+
+// asStored is w with every pack that names no object yet given
+// [storedStandIn]'s.
+func (w remoteWrite) asStored() remoteWrite {
+	stored := func(packs []PackRef) []PackRef {
+		out := slices.Clone(packs)
+		for i := range out {
+			if out[i].Object.IsZero() {
+				out[i].Object, out[i].Hash = storedStandIn.Key, storedStandIn.Hash
+			}
+		}
+		return out
+	}
+	switch {
+	case w.chunk != nil:
+		c := *w.chunk
+		c.Packs = stored(c.Packs)
+		w.chunk = &c
+	case w.mirror != nil:
+		m := *w.mirror
+		m.Packs = stored(m.Packs)
+		w.mirror = &m
+	}
+	return w
 }
 
 // decidedOK is cmds each decided ok, as a record that lands carries them.
@@ -310,7 +451,7 @@ func (w remoteWrite) validFields() error {
 // by idField: a repository id, the id a bare UUIDv7, a node config admits,
 // packs derived from the id that a bundle check admits, and commands a
 // receiver could send, undecided, in a namespace an import may set — a sync
-// moving a ref at the least, a chunk landing a pack or setting a ref.
+// landing no pack without a ref, a chunk landing a pack or setting a ref.
 func validMoves(what, repoID, idField, id, node string, packs []PackRef, cmds []Command) error {
 	if err := validRepoID(what+".repo_id", repoID); err != nil {
 		return err
@@ -324,9 +465,12 @@ func validMoves(what, repoID, idField, id, node string, packs []PackRef, cmds []
 	case len(packs) > MaxImportPacks:
 		return badField(what+".packs", "%d packs, past the %d one record lands (MaxImportPacks)", len(packs),
 			MaxImportPacks)
-	case len(cmds) == 0 && what == "sync":
-		return badField(what+".commands", "a sync moves a ref at the least: one that moves none is no record")
-	case len(cmds) == 0 && len(packs) == 0:
+	case len(cmds) == 0 && len(packs) > 0 && what == "sync":
+		// A SYNC'S PACKS RIDE WITH THE REFS THAT REACH THEM: one that
+		// moves no ref found its source level, and carries nothing at all
+		// ([MirrorSync.Current]).
+		return badField(what+".packs", "a sync that moves no ref lands no pack")
+	case len(cmds) == 0 && len(packs) == 0 && what == "chunk":
 		// A CHUNK OF PACKS ALONE lands what the refs of a later chunk
 		// need, but one that lands nothing and sets nothing would only
 		// write a push row of nothing: an import with no refs at all is
@@ -467,6 +611,11 @@ func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time
 		return d, nil
 	case !repo.mirrored:
 		return stale("%s follows no source: a settings change took its pull mirror away", repo.name)
+	case m.Current():
+		// LEVEL WITH ITS SOURCE: no object for an epoch to judge and no
+		// ref to be stale — see this file's head.
+		d.payload = m
+		return d, nil
 	case m.DropEpoch != repo.dropEpoch:
 		// M6-D4: CHECKED AGAINST AN EPOCH ITS PACKS NO LONGER MEAN, and
 		// recorded nowhere — its home builds again over a copy at the new
@@ -675,13 +824,14 @@ func (c *Committer) remoteAnswer(ctx context.Context, w remoteWrite, opID string
 // apply writes or — met where the repository was no longer as its decide
 // read it, which no correct log carries — does not: a record that applied and
 // wrote no push row is logged at ERROR and answered unknown, never applied,
-// which would tell its home the refs moved. An END is answered at its
-// record's position: its apply writes the repository's row, which a chunk's
-// may move on from.
+// which would tell its home the refs moved. An END, and a SYNC THAT MOVES
+// NOTHING, are answered at their record's position: each writes the
+// repository's row alone and no push row, and that row a later record may
+// move on from.
 func (c *Committer) appliedRemote(ctx context.Context, w remoteWrite, opID string,
 	at statelog.Position) (SyncResult, error) {
 
-	if w.done != nil {
+	if w.done != nil || w.mirror != nil && w.mirror.Current() {
 		return SyncResult{Outcome: statelog.OutcomeApplied, Position: at}, nil
 	}
 	var landed map[string]bool

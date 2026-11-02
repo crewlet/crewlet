@@ -567,13 +567,18 @@ type codeChangeChecks struct {
 }
 
 // checks answers a page of the change's head's checks, checked for its
-// target: each attempt in a line, its summary fenced.
-func (g changeRead) checks(ctx context.Context, cursor string) (tools.Result, error) {
-	q := code.ReadQuery{Kind: code.ReadChecks, Repo: g.repo.Name, Fresh: seatRead,
+// target: each attempt in a line, its summary fenced — the one read of the
+// call, its resolution of the repository too where the turn has none
+// ([changeRead.ask]).
+func (g *changeRead) checks(ctx context.Context, cursor string) (tools.Result, error) {
+	// BY THE NAME THE CALL GAVE, which the walk its cursors are spelled by
+	// reads as one repository's ([code.ReadQuery.ChecksCursor]); ask reads by
+	// the name it resolved to once it has.
+	q := code.ReadQuery{Kind: code.ReadChecks, Repo: g.name, Fresh: seatRead,
 		Checks: &code.CheckQuery{Change: g.number}, Cursor: cursor, Limit: changeChecksPage}
-	answer, err := g.deps.read(ctx, g.c, q)
-	if err != nil {
-		return g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err), nil
+	answer, refusal := g.ask(ctx, q)
+	if refusal != nil {
+		return *refusal, nil
 	}
 	rows := answer.Checks
 	build := func(k int) (*foreignRead, any) {
@@ -978,13 +983,14 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			}
 		}
 	case change != 0:
-		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once.
-		cv := changeRead{deps: t.deps, turn: turn, tool: tool, c: c, repo: repo, number: change}
-		detail, _, at, refusal := cv.head(ctx, seen)
+		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once, in
+		// brief.
+		cv := changeRead{deps: t.deps, turn: turn, tool: tool, c: c, name: repo.Name, repo: repo, number: change}
+		brief, _, at, refusal := cv.head(ctx, seen)
 		if refusal != nil {
 			return *refusal, nil
 		}
-		key.OID, key.Target, seen = detail.Head, detail.TargetRef, at
+		key.OID, key.Target, seen = brief.Head, brief.TargetRef, at
 	}
 	report.CheckKey = key
 	op := opIDFor(c.actor, tool, checksVerb, repo.ID, args)

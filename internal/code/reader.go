@@ -144,7 +144,15 @@ func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 // which the chart judges: a listing of changes, and a change's first page of
 // its revisions, which carries its detail.
 func (q ReadQuery) judgesReadiness() bool {
-	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed()
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed() && !q.Brief
+}
+
+// resolves reports a read that may resolve the repository it names
+// ([ReadQuery.Resolve]): one that names it by name and judges the asker's
+// grant on it — a `change` read, and a `changes` or a `checks` listing naming
+// one repository.
+func (q ReadQuery) resolves() bool {
+	return q.Kind == ReadChange || (q.Kind == ReadChanges || q.Kind == ReadChecks) && q.Repo != ""
 }
 
 // inTx is one open transaction as a statelog.ReadEstate, so the checkpoint is
@@ -1442,21 +1450,25 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// a push history is, or of the domain, as a listing of
 		// repositories is — a change a deferred record holds back is
 		// listed as its rows stand.
+		// One that resolves its repository is a point read of it, as a
+		// `repo` read is ([ReadQuery.Resolve]).
 		if q.Repo != "" {
-			query = fresh.Resolved(resolver(q.Repo), true)
+			query = fresh.Resolved(resolver(q.Repo), !q.Resolve)
 		} else {
 			query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		}
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changes(ctx, tx, q, chart, &out) }
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.changes(ctx, tx, q, chart, cp, &out) }
 	case ReadChange:
 		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES, a point read of the
 		// repository whose records write the change, as a first page of
 		// refs is; a later page is a page of revisions, a set, and so is
 		// every page of a part of its conversation — whose records name the
 		// repository's path in their scope too, so the repository's
-		// deferrals order them.
-		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "" || !q.Part.detailed())
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.change(ctx, tx, q, chart, &out) }
+		// deferrals order them — unless it resolves the repository, a point
+		// read of it whatever its page, as a `repo` read is
+		// ([ReadQuery.Resolve]).
+		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.Part.detailed()))
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.change(ctx, tx, q, chart, cp, &out) }
 	case ReadChangeRouting:
 		// A SET READ of the repository whose records write the change, as a
 		// page of a part of its conversation is: every record about a change
@@ -1529,7 +1541,7 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// A SET READ, of the repository it names or of the domain for the
 		// window (checksread.go).
 		query = q.checksQuery(fresh)
-		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.checks(ctx, tx, q, chart, &out) }
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.checks(ctx, tx, q, chart, cp, &out) }
 	case ReadCheck:
 		// A POINT READ of the repository's checks, as a change's detail is
 		// one of the repository's rows.
@@ -1625,7 +1637,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // principal can be, a repository that cannot be one, a limit past its bound —
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, a brief or one push outside a push history, a change's number
+// refs listing, one push outside a push history, a brief outside a push
+// history and a change's first page, a resolution outside a read that judges
+// a repository it names by name, a change's number
 // or a part of it outside a change read, a state, an owner, a work item, a
 // reviewer or a need outside a listing of changes, a range outside an
 // `introduced` read, a run outside a `run_pushes` read, a floor of live packs
@@ -1633,6 +1647,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(ReadKinds()))
+	}
+	// A RESOLUTION ONLY WHERE A NAME IS JUDGED, before any kind's own
+	// rules, so no kind's list of what it refuses has to spell it.
+	if q.Resolve && !q.resolves() {
+		return fmt.Errorf("%w: resolve: only a change read, or a listing of one repository's changes or "+
+			"checks, resolves the repository it names", ErrInvalid)
 	}
 	switch q.Kind {
 	case ReadIntroduced:
@@ -1727,8 +1747,12 @@ func (q ReadQuery) validate() error {
 	case q.Prefix != "" && !validRefPrefix(q.Prefix):
 		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
-	case q.Brief && q.Kind != ReadPushes:
-		return fmt.Errorf("%w: brief: only a push history is read in brief", ErrInvalid)
+	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
+		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
+			ErrInvalid)
+	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != "" || q.DetailOnly):
+		return fmt.Errorf("%w: brief: only a change's first page of its revisions is read in brief — named "+
+			"by no part, cursor or detail_only", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:

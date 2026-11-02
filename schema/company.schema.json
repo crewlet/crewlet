@@ -919,7 +919,7 @@
         },
         "mirror_from": {
           "$ref": "#/$defs/CodeMirrorSource",
-          "description": "Makes it a pull mirror of a repository at another host: it is imported from there when it is created, then moves only by the code host's syncs from it, and takes no push and no change of its own."
+          "description": "Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by the code host's syncs from it, and takes no push and no change of its own."
         },
         "mirror_to": {
           "$ref": "#/$defs/CodeMirrorTarget",

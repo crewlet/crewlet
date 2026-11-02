@@ -171,10 +171,15 @@ code:
   glob once and each owner in one entry, and at most 256 KiB in all as the code
   log records them ([Path owners](#path-owners)).
 - **`mirror_from`** `{url, credential}` — makes it a **pull mirror** of a
-  repository at another host: it is imported from there when it is created,
-  and then moves only by the code host's syncs from it, so it takes no push
-  and no change of its own — each refused `repo_mirrored` ([What git
-  prints](#what-git-prints-and-what-it-means)). Its `protect` list is warned
+  repository at another host: it is imported from there first — when it is
+  created, and when a repository that exists is given a `mirror_from`, or
+  moved to another `url`, later — and then moves only by the code host's
+  syncs from it, so it takes no push and no change of its own — each refused
+  `repo_mirrored` ([What git prints](#what-git-prints-and-what-it-means)).
+  Made a mirror later, it reads `importing` until the source has landed:
+  every branch and tag it holds but a seat's own (`refs/heads/seats/`) is
+  made the source's, and one the source does not have is deleted. A new
+  `credential` alone changes no source, and imports nothing. Its `protect` list is warned
   about, since no push reaches a rule, and an archived one is refused: an
   archived repository takes no sync.
 - **`mirror_to`** `{url, credential, as, refs}` — makes it a **push mirror**:
@@ -220,17 +225,30 @@ fetches the source's branches and tags (`refs/heads/*` and `refs/tags/*`) over
 smart HTTP, every object checked as a push's objects are, cuts what arrived
 into packs of at most 1 GiB and lands them as records of the repository's
 own: an import's chunks — packs before the refs that need them, at most 1 000
-refs a chunk — then its end; a pull mirror's syncs, every 15 minutes, each
+refs a chunk, fewer where their names are long and spelled long in the code
+log (`&`, `<` and `>` take six bytes each there), so each fits one record —
+then its end; a pull mirror's syncs, every 15 minutes, each
 moving the repository onto its source as the source is, a force-push and a
 deleted branch included. Each lands as a push `via import` or `via mirror` on
-the engine's own account. An import stopped in the middle resumes from what
+the engine's own account. A sync that finds its source moved nothing still
+lands a record — a small one, with no pack and no push — that moves the
+mirror's last sync, so the home asks a quiet source again 15 minutes later
+rather than at its next minute's pass, whichever node is home by then: one
+such record per quiet mirror every 15 minutes is the cost. An import stopped in the middle resumes from what
 landed, on whichever git node is home by then, fetching only what the landed
 refs do not reach. One that cannot finish — a blob past
 `code.limits.max_blob_bytes`, the repository past one of its limits, a source
 that answers only over the dumb HTTP protocol — ends: the repository is active
 with what landed, and its import's error says why. A source that cannot be
 reached, or that refuses the credential, is asked again a minute after the
-first failure, the wait doubling to once every 15 minutes. The credential's
+first failure, the wait doubling to once every 15 minutes. A home runs two
+attempts at once, imports, syncs and pushes together; one due while two run
+waits on the home and starts as soon as one of them ends, the mirror the home
+attempted longest ago first, so a node brings its mirrors level as fast as its
+attempts end, two at a time. An attempt whose fetch has arrived while every
+maintenance process the node allows is running keeps what it fetched and
+waits for one to end (logged `code_mirror_cut_waiting`), rather than ending
+and fetching it all again. The credential's
 value is sent as HTTP Basic: a value holding a colon is `user:password` as
 written, and any other a token, sent as the password beside the user
 `x-access-token`, which GitHub, GitLab, Gitea and Forgejo accept; a forge that
@@ -4873,7 +4891,11 @@ A turn reads each repository it names once, and resolves the refs a call
 names in one read — a comparison's two branches cost one barrier — so a seat
 that resolves a branch once and reads by the commit it answers pays one
 barrier for the repository and one for the branch, however many files it
-reads. A file's lines — a blame's among them — and a patch reach the model
+reads. A change tool's call — `code_list_changes` naming a repository,
+`code_get_change` and a write of an existing change — reads the repository
+in the same read as the change, so a turn's first call naming it, and every
+call a person's assistant makes, pays one barrier rather than two. A file's
+lines — a blame's among them — and a patch reach the model
 [fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`, and
 so does every commit's subject a history or a blame names: a read by commit id
 knows the bytes and not whose they are.
@@ -5949,11 +5971,15 @@ it names no asker.
   the checks position and the chart a refresh judged the readiness at (a
   chart alone included, since a configuration apply alone makes a change due
   a refresh, and only the row's chart moving ends that). Its apply moves
-  those columns, and a recheck's instant, under the guard the full record's
-  is decided by, and nothing else, so a conflicted change is not carried
-  again, paths and all, every ten minutes its target moves. Whatever turns
-  — a new revision or target, a state, a conflict list, a readiness — is the
-  whole `mergeability` record, since it is what somebody may be told of.
+  those columns, and a recheck's instant, while the row is of its revision
+  and holds no later tip or version, and nothing else, so a conflicted change
+  is not carried again, paths and all, every ten minutes its target moves.
+  The checks position and the chart are written as judged, below the row's
+  or not, as a full refresh writes them: a head whose checks ended more than
+  [30 days](#how-long-a-check-is-kept) ago holds none, and is judged at
+  zero. Whatever turns — a new revision or target, a state, a conflict
+  list, a readiness — is the whole `mergeability` record, since it is what
+  somebody may be told of.
 
 | Table | A row for | What it holds |
 |---|---|---|
@@ -6192,7 +6218,7 @@ hands it to the repository's next committer.
 
 | Refusal | Why |
 |---|---|
-| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, or is a pull mirror, which nothing merges into: a dequeue of a pull mirror's entry still lands, so a repository that became a mirror sheds its queue. |
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, or is a pull mirror, which nothing merges into: a dequeue of a pull mirror's entry still lands, and its home ejects every entry its queues still hold `repo_mirrored`, building no train for them, so a repository that became a mirror sheds its queue. |
 | `gate_unmet` | The change does not meet its target's gate: the answer names every precondition not met and whom each waits on. |
 | `change_not_open`, `change_draft` | The change is closed or merged, or a draft, which merges nowhere. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its asker read it: read it again. |
@@ -6232,7 +6258,10 @@ change as whoever enqueued it.
   whose candidates are removed and whose entries wait again.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
   the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
-  `head_moved` or `not_fast_forward` — and abandons the train they were in.
+  `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
+  [pull mirror](#mirrors-and-imports), which nothing merges into: its home
+  ejects every live entry rather than build a train) — and abandons the train
+  they were in.
   The node whose committer landed it announces a `code_queue_ejected` event
   for each, fed to the activity feed. A push that moves a queued change's
   head ejects its entry `head_moved` in the push's own record, and the node
@@ -6265,11 +6294,11 @@ change as whoever enqueued it.
 
 | Refusal | Why |
 |---|---|
-| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, so a repository that became one sheds its queue. |
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, and its home ejects every live entry `repo_mirrored` rather than build a train, so a repository that became one — once its import is done — sheds its queue. |
 | `expunging` | The train was built from a copy of the repository taken before an expunge of its unreachable objects began, or the landing decided from a read taken before one: the home builds the train again, or reads it again to land it. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
-| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train. |
+| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, an eject `repo_mirrored` of a repository that follows no source. |
 | `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
 | `not_green` | A landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
 | `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |
@@ -7235,7 +7264,11 @@ person — an override's reason, at most 1 KiB.
    that ends `unready` and sends the next git node to merge it from scratch,
    or a landing refused `busy`. A merge built from a copy taken before an
    expunge of the repository began is refused `expunging` and built again the
-   same way, from a copy synced past it.
+   same way, from a copy synced past it. How many times each merge was built
+   again is observed once, as it ends, on `crewlet.code.merge.recomputes`
+   under how it ended (`merged`, `queued`, `target_moving` and the rest), so
+   a branch moving under its merges shows as that count climbing towards
+   four before any merge is refused.
 
 A router gives a merge **102 seconds** on one git node — an engine write's 82
 with its ten seconds of build replaced by the merge's thirty, which its
