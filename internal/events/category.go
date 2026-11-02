@@ -230,6 +230,9 @@ var categories = map[string]placement{
 	// gone — and of who gave it.
 	"executor_answered":    {"task", RateAuthenticated},
 	"scheduled_task_fired": {"task", RateEngine},
+	// A fire that waited in its seat's inbox and was not run, because a
+	// later fire of the same schedule ran in its place.
+	"scheduled_fire_superseded": {"task", RateEngine},
 
 	"a2a_channel_opened": {"a2a", RateEngine},
 	"a2a_message_sent":   {"a2a", RateEngine},

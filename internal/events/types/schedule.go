@@ -4,6 +4,7 @@ import "github.com/crewlet/crewlet/internal/events"
 
 func init() {
 	events.Register[ScheduledTaskFired]()
+	events.Register[ScheduledFireSuperseded]()
 }
 
 // ScheduleScope is what a recurring schedule is attached to.
@@ -80,4 +81,47 @@ func (e ScheduledTaskFired) Summary() string {
 		who = e.ScopeID
 	}
 	return "Scheduled '" + e.ScheduleName + "' fired for " + who
+}
+
+// ScheduledFireSuperseded records a fire that reached its seat and was not
+// run, because a later fire of the same schedule reached it at the same time
+// and ran in its place.
+//
+// Fires wait in a seat's inbox while the seat cannot work (a provider limit,
+// a budget, an executor holding it), and a schedule keeps firing meanwhile.
+// Run one by one when the seat came back, three health checks queued behind
+// one limit ran within four minutes and reported the same thing three times.
+// The dispatcher now runs only the latest and records each earlier one with
+// this event, under THAT fire's own trace, so the schedule's history shows the
+// fire as skipped rather than as a dispatch with no turn behind it.
+type ScheduledFireSuperseded struct {
+	ScheduleName string `json:"schedule_name"`
+	TargetHandle string `json:"target_handle"`
+
+	// TaskID and ScheduledAt name the fire that was not run.
+	TaskID      string `json:"task_id"`
+	ScheduledAt string `json:"scheduled_at,omitempty"`
+
+	// SupersededBy is the run id of the fire that ran in its place.
+	SupersededBy string `json:"superseded_by"`
+}
+
+// ScheduleOutcomeSuperseded is the outcome a schedule's history reports for a
+// fire with a [ScheduledFireSuperseded] record: dispatched, reached its seat,
+// and not run because a later fire ran in its place.
+//
+// NOT A DISPATCH LEDGER OUTCOME. The ledger records what the scheduler did,
+// and the scheduler did fire it; the seat's node is what decided not to run
+// it, and it records that on the event log, where the history's derivation
+// reads it beside the turn a fire's trace ran.
+const ScheduleOutcomeSuperseded = "skipped_superseded"
+
+// EventType is the "scheduled_fire_superseded" wire type.
+func (ScheduledFireSuperseded) EventType() string { return "scheduled_fire_superseded" }
+
+// Summary names the schedule and the seat, which is what tells two skipped
+// fires of a unit schedule apart.
+func (e ScheduledFireSuperseded) Summary() string {
+	return "Scheduled '" + e.ScheduleName + "' skipped a missed fire for " +
+		e.TargetHandle + ": a later fire ran in its place"
 }

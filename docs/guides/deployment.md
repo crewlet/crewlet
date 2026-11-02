@@ -1985,7 +1985,7 @@ from that map — a guard test fails if the two drift.
 | `lifecycle` | `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `model_acted`, `operator_acted`, `org_started`, `org_stopped`, `seat_access_drift_restored`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
 | `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
-| `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_task_fired`, `task_assigned` |
+| `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_fire_superseded`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
 **The map is also the admission list.** A type that is not in it is not written
