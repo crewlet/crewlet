@@ -293,8 +293,8 @@ test("the access tab lists who the server reaches and writes who gets it on its 
   detail = {
     ...LINEAR_DETAIL,
     reaches: [
-      { seat: "backend-engineer", reason: "seat", via: null },
-      { seat: "pm", reason: "unit", via: "product" },
+      { seat: "backend-engineer", reason: "seat", via: null, limited: null },
+      { seat: "pm", reason: "unit", via: "product", limited: null },
     ],
   };
   entry = {
