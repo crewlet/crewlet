@@ -589,11 +589,26 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 			e.mu.Unlock()
 		}
 	}
+	// The refs as the copy holds them now, read BEFORE the tip: refs that
+	// move while it is read are another digest, which the next look reads
+	// the tip under again.
+	e.mu.Lock()
+	refs := indexRefs{rec: rec, digest: inc.refsDigest, branch: s.Repo.DefaultBranch}
+	unmoved := rec != nil && refs.digest != "" && inc.codeIndexRefs == refs
+	e.mu.Unlock()
+	if unmoved {
+		return IndexCurrent, nil
+	}
 	tip, err := c.indexTip(ctx, s)
 	if err != nil || tip == "" {
 		return IndexNone, err
 	}
 	if rec != nil && rec.Tip == tip {
+		e.mu.Lock()
+		if inc.codeIndexRecord() == rec {
+			inc.codeIndexRefs = refs
+		}
+		e.mu.Unlock()
 		return IndexCurrent, nil
 	}
 	files, err := c.listTip(ctx, s, tip)
@@ -621,7 +636,7 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := b.durable(); err != nil {
 		return "", err
 	}
-	if !b.commit(tip) {
+	if !b.commit(tip, refs) {
 		return IndexCurrent, nil
 	}
 	if err := c.persist(ctx, e, inc, false); err != nil {
@@ -630,9 +645,27 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	return IndexBuilt, nil
 }
 
+// indexRefs is the refs a code index's tip was read under: the record it
+// answers for, the copy's packed-refs as its digest names it, and the
+// default branch the tip was read of.
+//
+// THE INDEXER'S LOOK READS NO TIP WHILE THEY STAND (Index): it looks at every
+// repository it keeps an index of every IndexPoll, and reading the tip is a
+// git process — two thousand held repositories were some 33 a second around
+// the clock on a quiet company — while what moves the tip is a round that
+// writes the copy's refs, which moves the digest and nudges the indexer.
+type indexRefs struct {
+	rec    *codeIndexState
+	digest string
+	branch string
+}
+
 // indexTip is the commit s's default branch names, or "" where it names
 // none.
 func (c *Cache) indexTip(ctx context.Context, s Synced) (string, error) {
+	if k := c.knobs; k != nil && k.indexTipReading != nil {
+		k.indexTipReading(s.Dir)
+	}
 	res, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: s.Dir, Repairer: s.Repairer, Config: c.ServeConfig(),
 		Args:  []string{"rev-parse", "--verify", "--quiet", "--end-of-options", "refs/heads/" + s.Repo.DefaultBranch + "^{commit}"},
@@ -1085,8 +1118,9 @@ func (b *indexBuild) tipMap(tip string, files []treeFile) error {
 // commit stores the record the build made, where the copy is still the
 // entry's, no swap is leaving it, and its index is still the one the build
 // read — and answers whether it did. Every file the build wrote is vouched
-// for as this process's own.
-func (b *indexBuild) commit(tip string) bool {
+// for as this process's own, and the record is noted as read under refs,
+// those the tip was read under.
+func (b *indexBuild) commit(tip string, refs indexRefs) bool {
 	b.c.vouchFiles(b.e, b.inc, b.wrote...)
 	rec := &codeIndexState{Tip: tip, Map: b.tipPart, Next: b.next}
 	for _, g := range b.segs {
@@ -1099,6 +1133,8 @@ func (b *indexBuild) commit(tip string) bool {
 		return false
 	}
 	b.c.setCodeIndex(inc, rec)
+	refs.rec = rec
+	inc.codeIndexRefs = refs
 	b.stored = true
 	return true
 }

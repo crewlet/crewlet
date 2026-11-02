@@ -481,3 +481,47 @@ func TestASearchNeverHashesACodeIndex(t *testing.T) {
 		t.Errorf("the searches after the verification hashed %v, want nothing more than %v", got, want)
 	}
 }
+
+// A LOOK AT UNMOVED REFS READS NO TIP. The indexer looks at every repository
+// it keeps an index of every minute, and reading a tip is a git process; only
+// a round that writes the copy's refs can move the tip, so a look that finds
+// the refs the index's tip was read under reads nothing — and one after any
+// ref moved, the default branch's or another, reads the tip again.
+//
+// Mutation: read the tip whatever the refs (Index's unmoved answer skipped)
+// — the looks at unmoved refs read it.
+func TestALookAtUnmovedRefsReadsNoTip(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	var (
+		mu    sync.Mutex
+		reads int
+	)
+	c := w.open(t, cache.IndexTipReadingWith(func(string) {
+		mu.Lock()
+		defer mu.Unlock()
+		reads++
+	}))
+	read := func(want int, after string) {
+		t.Helper()
+		mu.Lock()
+		defer mu.Unlock()
+		if reads != want {
+			t.Errorf("the indexer read the tip %d times after %s, want %d", reads, after, want)
+		}
+	}
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	read(1, "its first build")
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	read(1, "two looks at refs nothing moved")
+	w.push(t, repo, "refs/heads/topic", map[string]string{"b.go": "package b\n"})
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	read(2, "a push to another branch and a look after it")
+	w.push(t, repo, "refs/heads/main", map[string]string{"c.go": "package c\n"})
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	read(3, "a push to the default branch")
+}

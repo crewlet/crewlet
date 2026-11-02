@@ -174,6 +174,9 @@ type knobs struct {
 	// writes and the bytes it reads it back through, as it opens it: a case
 	// holds them to a mapping of that file.
 	indexMapped func(path string, data []byte)
+	// indexTipReading is told the directory of each copy the indexer reads a
+	// default branch's tip in, with git, before it starts the process.
+	indexTipReading func(dir string)
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer, and firing as one: once that clock reaches the

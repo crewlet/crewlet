@@ -434,6 +434,10 @@ type incarnation struct {
 	// rather than map the same files again (Cache.codeIndex).
 	codeIndex        *openedCodeIndex
 	codeIndexOpening chan struct{}
+	// codeIndexRefs is the refs the record's tip was last read under
+	// (Cache.Index): an indexer's look that finds them still the copy's
+	// reads no tip.
+	codeIndexRefs indexRefs
 	// THE MEMO'S IN-MEMORY HALF (memo.go), whose record — its cohorts and
 	// their bytes — is derived[DerivedMemo]; nothing of it is an entry's.
 	// memoMu is the memo's own lock, under which an answer is placed into its
