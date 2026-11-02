@@ -5,8 +5,8 @@
 // [schedule.SharedClaimer]); what this table is for is the record. The usage
 // domain derives every schedule's history from it (store.DB.UsageForDay), so a
 // fire this node sent reaches every data node, joined with what became of it.
-// Nothing reads the table through this package: a claim and a purge are the
-// whole of what it does.
+// Nothing reads the table's history through this package: a claim, a purge
+// and the one yes or no the catchup pass asks are the whole of what it does.
 //
 // It sits beside the scheduler rather than in internal/store because the SQL
 // is what the LEDGER means, not what the store does — and because keeping it
@@ -26,14 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// DB is the database surface this ledger needs: two statements, no
-// transaction management, no schema.
+// DB is the database surface this ledger needs: two statements and one read,
+// no transaction management, no schema.
 //
 // Narrow and consumer-defined so the ledger can be handed a *sql.DB, a
 // *sql.Tx or a *sql.Conn without any of them having to know about it, and so
 // nothing here can reach past the one table it owns.
 type DB interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Ledger is the `scheduled_runs` dispatch ledger.
@@ -96,6 +97,32 @@ func (l *Ledger) Claim(ctx context.Context, run schedule.Run) (bool, error) {
 			run.ScopeID, run.ScheduleName, run.FireLabel, err)
 	}
 	return n > 0, nil
+}
+
+// minuteClaimedSQL asks for any row of one minute, whatever its runner.
+//
+// The four columns are the leading columns of the table's primary key, so the
+// read is one probe of that index rather than a scan of the ledger.
+const minuteClaimedSQL = `
+SELECT EXISTS (
+	SELECT 1 FROM scheduled_runs
+	WHERE scope_type = ? AND scope_id = ? AND schedule_name = ? AND fire_label = ?
+)`
+
+// MinuteClaimed reports whether any row holds the minute, for any runner or
+// for none.
+func (l *Ledger) MinuteClaimed(ctx context.Context, minute schedule.FireMinute) (bool, error) {
+	if l == nil || l.db == nil {
+		return false, ErrNoDB
+	}
+	var held bool
+	if err := l.db.QueryRowContext(ctx, minuteClaimedSQL,
+		string(minute.Scope), minute.ScopeID, minute.ScheduleName, minute.FireLabel,
+	).Scan(&held); err != nil {
+		return false, fmt.Errorf("sqlledger: read %s/%s/%s: %w",
+			minute.ScopeID, minute.ScheduleName, minute.FireLabel, err)
+	}
+	return held, nil
 }
 
 const purgeSQL = `DELETE FROM scheduled_runs WHERE fired_at < ?`

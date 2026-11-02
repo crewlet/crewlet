@@ -21,21 +21,27 @@ import (
 // symptom rather than the cause.
 //
 // The split is the one migration 0011 made for the token counter: what the
-// FLEET has to agree on is "may I start", and nothing more. The node's own
-// ledger stays as its audit record of what it dispatched, which the usage
-// domain derives the schedules' history from and the retention sweep purges.
+// FLEET has to agree on is "may I start", and, for the catchup pass after a
+// restart, whether anybody started a given minute. The node's own ledger stays
+// as its audit record of what it dispatched, which the usage domain derives
+// the schedules' history from and the retention sweep purges.
 
 // FireClaims is the fleet-shared half of the guard, satisfied by
 // coord.Fires.
 //
 // Declared here rather than imported as coord's own interface for the reason
-// every consumer interface in this tree is: this package needs one method, and
-// a scheduler that could reach the whole coordination store is a scheduler
-// whose blast radius nobody can see from its type.
+// every consumer interface in this tree is: this package needs these two
+// methods, and a scheduler that could reach the whole coordination store is a
+// scheduler whose blast radius nobody can see from its type.
 type FireClaims interface {
-	// ClaimFire records one fire identity, reporting whether THIS caller
-	// wrote it. An error is UNKNOWN and the caller fails closed.
-	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
+	// ClaimFire records one runner's claim on a minute, reporting whether
+	// THIS caller wrote it. The runner is empty for a catchup skip. An
+	// error is UNKNOWN and the caller fails closed.
+	ClaimFire(ctx context.Context, minute, runner string, at time.Time) (bool, error)
+
+	// FireMinuteClaimed reports whether any claim on the minute is held,
+	// for any runner or for none. An error is UNKNOWN.
+	FireMinuteClaimed(ctx context.Context, minute string) (bool, error)
 }
 
 // ErrNoFireClaims is a SharedClaimer built without the shared half.
@@ -86,10 +92,11 @@ func (c *SharedClaimer) Claim(ctx context.Context, run Run) (bool, error) {
 	if at.IsZero() {
 		at = run.FiredAt
 	}
-	won, err := c.fires.ClaimFire(ctx, FireClaimKey(run.FireKey), at)
+	minute := FireMinuteKey(run.FireMinute)
+	won, err := c.fires.ClaimFire(ctx, minute, run.TargetHandle, at)
 	if err != nil {
-		return false, fmt.Errorf("schedule: claim %s on the fleet: %w",
-			FireClaimKey(run.FireKey), err)
+		return false, fmt.Errorf("schedule: claim %s for runner %q on the fleet: %w",
+			minute, run.TargetHandle, err)
 	}
 	if !won {
 		return false, nil
@@ -105,23 +112,44 @@ func (c *SharedClaimer) Claim(ctx context.Context, run Run) (bool, error) {
 	return true, nil
 }
 
-// FireClaimKey renders a fire identity as one key, injectively.
+// MinuteClaimed asks the FLEET whether any claim holds the minute, and never
+// this node's ledger.
 //
-// [FireKey] is deliberately a struct because a delimiter-joined identity
+// The scheduler is a singleton duty, so it MOVES: a lease lapse, a drain, a
+// rolling upgrade. The node holding it after a move has none of its
+// predecessor's audit rows, and a read of its own ledger would call a minute
+// the last holder fired a missed one, so the first tick would record a skip
+// beside the fire. The fleet holds every claim the scheduler made, whichever
+// node made it, which is why it answers [Claimer.Claim] too.
+func (c *SharedClaimer) MinuteClaimed(ctx context.Context, minute FireMinute) (bool, error) {
+	key := FireMinuteKey(minute)
+	held, err := c.fires.FireMinuteClaimed(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("schedule: read %s on the fleet: %w", key, err)
+	}
+	return held, nil
+}
+
+// FireMinuteKey renders a fire's minute as one key, injectively.
+//
+// [FireMinute] is deliberately a struct because a delimiter-joined identity
 // COLLIDES the moment a delimiter appears in a name: a unit "Q3|Launch" with a
 // schedule "Launch" would join to the same string as a unit "Q3" with a
 // schedule "|Launch", and one of the two fires would then be silently
 // suppressed by the other. A coordination store has only keys, so the join has
-// to happen somewhere — it happens here, once, with each component escaped so
+// to happen somewhere. It happens here, once, with each component escaped so
 // the mapping stays injective. Same reasoning, and same reason, as the
 // resource-name escaping in internal/coord/kv.
-func FireClaimKey(k FireKey) string {
+//
+// THE RUNNER IS NOT PART OF IT. The store keeps a minute's claims together,
+// one per runner, so that [FireClaims.FireMinuteClaimed] is one question about
+// one minute rather than a scan of every claim the fleet holds.
+func FireMinuteKey(m FireMinute) string {
 	return strings.Join([]string{
-		escapeFireComponent(string(k.Scope)),
-		escapeFireComponent(k.ScopeID),
-		escapeFireComponent(k.ScheduleName),
-		escapeFireComponent(k.FireLabel),
-		escapeFireComponent(k.TargetHandle),
+		escapeFireComponent(string(m.Scope)),
+		escapeFireComponent(m.ScopeID),
+		escapeFireComponent(m.ScheduleName),
+		escapeFireComponent(m.FireLabel),
 	}, "|")
 }
 

@@ -233,7 +233,10 @@ let its catchup pass re-fire everything the previous holder claimed.
 DST-correct (see [DST & cron edge cases](#dst--cron-edge-cases)). The
 identity is five separate components, and the key they are rendered into
 escapes each one, so a delimiter inside a unit or schedule name cannot
-make two different fires claim one key.
+make two different fires claim one key. The first four name the **minute**
+and lead the key, with the runner after them, so every claim on one minute
+sits under one prefix: that is how the catchup pass asks whether anybody
+holds a minute at all ([Missed-tick catchup](#missed-tick-catchup)).
 
 `scope_id` is the scope's **identity**, not the name you wrote: a seat's
 agent id for a role schedule, a unit's key for a unit one. Neither moves
@@ -255,7 +258,8 @@ record** of what it dispatched, which the retention sweep purges after a
 week. The node derives every fire in it into the replicated usage history
 ([Observability](#observability)), which is what the dashboard reads. It is the same split the token counter made
 when it moved to the shared `budgets` slot:
-what the fleet has to agree on is "may I start", and nothing more. Its
+what the fleet has to agree on is "may I start", and whether anybody started a
+given minute. Its
 `outcome` is `fired`, `skipped_catchup` or `skipped_paused`, and the schedule's
 history reports a fired run its seat did not run as `skipped_superseded`
 (see *Fires that wait in a seat's inbox* below); the downstream turn result
@@ -278,6 +282,23 @@ period, clamped to `[catchup_min_seconds, catchup_max_seconds]`* (default
 120s–7200s). Older misses are never backfilled; a missed fire outside the
 window is recorded as `skipped_catchup` for audit. Set `catchup: false` on
 a schedule to opt out entirely.
+
+The most recent fire is usually one the engine ran before it went down, so
+it is recorded as missed only when **nobody holds its minute** in the
+coordination store's `fires` slot:
+
+- A fire claimed for any runner, as `fired` or as `skipped_paused`, ran or was
+  held back on purpose, and the restart records nothing for it.
+- A minute an earlier restart already recorded as `skipped_catchup` is not
+  recorded, or logged, a second time.
+- A fire older than the `fires` slot's retention (a week) is neither run nor
+  recorded: the fleet no longer remembers whether it ran, so a monthly
+  schedule restarted a fortnight after its fire says nothing about that fire.
+
+The skip names no runner, so it never takes the claim a runner's fire for the
+same minute needs. The question is asked of the fleet rather than of the
+node's own `scheduled_runs`, because the node holding the scheduler duty after
+it moves has none of its predecessor's rows.
 
 ### Fires that wait in a seat's inbox
 
