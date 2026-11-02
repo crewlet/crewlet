@@ -28,7 +28,9 @@ import (
 //   - edit: its owner's code_update_change rewriting that description
 //     whole, the largest gesture on a change at the reference text;
 //   - reviewers: its ask of one reviewer, with a short note;
-//   - revise: its home's facts of a revision touching five paths;
+//   - revise: its home's facts of a revision touching five paths, none of
+//     which a path owner owns or a human path of its target holds, beside
+//     the digests of the owners and the human paths it was matched against;
 //   - mergeability: its home's merge of a revision into its target, clean —
 //     not ready, so it concerns nobody and carries no routing;
 //   - mergeability_recheck: its home's recheck of a moved target that merges
@@ -100,7 +102,7 @@ var changeRecordBytes = map[string]int64{
 	"open":                   3_100,
 	"edit":                   2_770,
 	"reviewers":              1_190,
-	"revise":                 1_330,
+	"revise":                 1_420,
 	"mergeability":           1_030,
 	"mergeability_recheck":   880,
 	"mergeability_refresh":   860,

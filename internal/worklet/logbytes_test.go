@@ -130,7 +130,7 @@ const (
 	codeChangeOpenBytes           = 3_100
 	codeChangeEditBytes           = 2_770
 	codeReviewersBytes            = 1_190
-	codeReviseBytes               = 1_330
+	codeReviseBytes               = 1_420
 	codeMergeabilityBytes         = 1_030
 	codeMergeabilityRecheckBytes  = 880
 	codeMergeabilityRefreshBytes  = 860
@@ -303,8 +303,8 @@ func codeLogDay() []codeLogTerm {
 		{code.OpThreadResolve, "a thread resolved, one a change", changes, codeThreadResolveBytes, false},
 		{code.OpMerge, "a merge of the change deleting its source, one a change — and at the most beside " +
 			"a queued change's train and landing, which it does not take", changes, codeMergeBytes, false},
-		{code.OpRevise, "a revision's facts asking nobody, one a push, carrying no routing", revisions,
-			codeReviseBytes, false},
+		{code.OpRevise, "a revision's facts asking nobody and held to no human path, one a push, carrying " +
+			"no routing", revisions, codeReviseBytes, false},
 		{code.OpMergeability, "a revision's merge into its target, one a push, not ready and so carrying " +
 			"no routing", revisions, codeMergeabilityBytes, false},
 		{code.OpMergeability, "the refresh that turns a change ready, routed to whoever may merge it, " +
@@ -426,7 +426,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.1 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.3 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -893,7 +893,7 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.Revise](),
 		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
 			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
-			"owners_digest"},
+			"owners_digest", "human_paths_digest"},
 		absent: absent(
 			map[string]string{
 				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +
@@ -908,6 +908,11 @@ var codeLogFields = map[code.OpKind]struct {
 					"repositories declare none",
 				"asked":          "the reviewers a revision's owners ask, likewise",
 				"skipped_owners": "the path owners a revision could not ask, likewise",
+				"human_paths": "which of its target's human paths hold a revision to a person and which " +
+					"their unless waives, a place each, and the reference revision touches none: its " +
+					"target's gate names none at the least, and at the most only code.ChecksDirGlob, " +
+					"which the checks it requires hold it to, and none of its five paths — the upload " +
+					"package's code and its docs page — is under it",
 			}),
 	},
 	code.OpMergeability: {
