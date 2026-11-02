@@ -117,6 +117,20 @@ describe("under a person's message", () => {
     expect(screen.getByText("pm answered")).toBeTruthy();
   });
 
+  // A MESSAGE STORED BEFORE MESSAGES RECORDED THEIR REACH says nothing, rather
+  // than claim it reached no agent. Mutation: read a missing reach as an
+  // empty one in showsReceipt and this draws "Reached no agent".
+  test("draws no receipt where the reach was never recorded", async () => {
+    mount({
+      message: said(),
+      channel_seq: 1,
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      delivery: "unknown",
+    });
+    expect(await screen.findByText("where are we on the release?")).toBeTruthy();
+    expect(document.querySelector(".crewlet-delivery-receipt")).toBeNull();
+  });
+
   test("says when it reached no agent", async () => {
     mount({
       message: said({ reach: {} }),

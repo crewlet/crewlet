@@ -1,6 +1,7 @@
 package chatlet_test
 
 import (
+	"database/sql"
 	"errors"
 	"slices"
 	"testing"
@@ -83,6 +84,59 @@ func TestAPostThatReachedNoAgentSaysSo(t *testing.T) {
 	}
 	if view.Delivery != chatlet.DeliveryNoAgent {
 		t.Errorf("the message reads %q, want %q", view.Delivery, chatlet.DeliveryNoAgent)
+	}
+}
+
+// A PERSON'S POST WHOSE REACH NOBODY RECORDED IS UNKNOWN, NEVER "NO AGENT".
+//
+// A message stored before posts recorded their reach carries none, and saying
+// it reached no agent would be a claim about a post nobody can make: it may
+// well have woken a seat. So it reads [chatlet.DeliveryUnknown], which a
+// reader draws no receipt for, while a recorded empty reach stays
+// [chatlet.DeliveryNoAgent]. An agent's post and a room event read neither.
+//
+// Mutation: read a missing reach as an empty one in deliveryOf and the old
+// message reads no_agent.
+func TestAPostWithNoRecordedReachIsUnknownNotNoAgent(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane", "bob").withRank("cto"))
+	room := r.room(person("jane"), "people", "bob").Channel.ID
+	said := r.say(person("jane"), room, "anyone around?", "k-1")
+	agent := r.say(seat("cto", "run-1"), room, "here", "k-2")
+
+	// THE ROW AS A BUILD BEFORE RECEIPTS STORED IT: the same message, its
+	// document with no reach.
+	err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		var document []byte
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT document FROM chat_messages WHERE id = ?`, said.Message.ID).
+			Scan(&document); err != nil {
+			return err
+		}
+		message, err := chatlet.DecodeMessage(document)
+		if err != nil {
+			return err
+		}
+		message.Reach = nil
+		stripped, err := chatlet.EncodeMessage(message)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(t.Context(),
+			`UPDATE chat_messages SET document = ? WHERE id = ?`, stripped, said.Message.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("store the message as an earlier build did: %v", err)
+	}
+	if view := readOne(t, r, room, said.Message.ID); view.Delivery != chatlet.DeliveryUnknown ||
+		view.Message.Reach != nil {
+		t.Errorf("a person's post with no recorded reach reads %q (reach %+v), want %q",
+			view.Delivery, view.Message.Reach, chatlet.DeliveryUnknown)
+	}
+	if view := readOne(t, r, room, agent.Message.ID); view.Delivery != "" {
+		t.Errorf("an agent's post reads delivery %q, want none: a receipt is a person's",
+			view.Delivery)
 	}
 }
 

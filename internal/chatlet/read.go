@@ -1610,10 +1610,11 @@ type MessageView struct {
 	// LATER messages and the document is the post's own.
 	Answered []Answer `json:"answered,omitempty"`
 
-	// Delivery is where a person's post stands with the agents it reached,
-	// read from its reach and its answers; empty on every message with no
-	// reach. One word a reader can filter or badge on, beside the two lists
-	// it is read from.
+	// Delivery is where a PERSON'S post stands with the agents it reached,
+	// read from its reach and its answers: [DeliveryUnknown] for one whose
+	// reach was never recorded, and empty on everything that is not a
+	// person's post (an agent's message, a room event). One word a reader
+	// can filter or badge on, beside the two lists it is read from.
 	Delivery Delivery `json:"delivery,omitempty"`
 }
 
@@ -1621,6 +1622,12 @@ type MessageView struct {
 type Delivery string
 
 const (
+	// DeliveryUnknown is a person's post whose reach nobody recorded: one
+	// stored before posts recorded it. NOT [DeliveryNoAgent], which is a
+	// recorded fact that nobody was asked; a reader shows no receipt for
+	// this one rather than claim the post reached nobody.
+	DeliveryUnknown Delivery = "unknown"
+
 	// DeliveryNoAgent is a post that reached no agent: nobody was asked.
 	DeliveryNoAgent Delivery = "no_agent"
 
@@ -1636,11 +1643,15 @@ const (
 	DeliveryAnswered Delivery = "answered"
 )
 
-// deliveryOf is the state of a post with this reach and these answers.
-func deliveryOf(r *Reach, answered []Answer) Delivery {
+// deliveryOf is the state of a message with these answers: a person's post
+// by its reach, and nothing for any other message.
+func deliveryOf(m Message, answered []Answer) Delivery {
+	r := m.Reach
 	switch {
-	case r == nil:
+	case m.AuthorKind != AuthorHuman || m.Event != nil:
 		return ""
+	case r == nil:
+		return DeliveryUnknown
 	case len(r.Recipients) == 0:
 		return DeliveryNoAgent
 	case len(answered) == 0:
@@ -2134,7 +2145,7 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 		return messagePage{}, err
 	}
 	for i := range out.views {
-		out.views[i].Delivery = deliveryOf(out.views[i].Message.Reach, out.views[i].Answered)
+		out.views[i].Delivery = deliveryOf(out.views[i].Message, out.views[i].Answered)
 	}
 	return out, attachThreads(ctx, tx, out.views)
 }

@@ -3966,8 +3966,11 @@ export interface ChatAnswer {
   at: string;
 }
 
-/** Where a person's message stands with the agents it reached. OPEN. */
-export type ChatDelivery = "no_agent" | "waiting" | "partly_answered" | "answered" | (string & {});
+/** Where a person's message stands with the agents it reached. `unknown` is
+ *  a message whose reach was never recorded (stored before messages recorded
+ *  it), which shows no receipt: it is not `no_agent`. OPEN. */
+export type ChatDelivery =
+  "unknown" | "no_agent" | "waiting" | "partly_answered" | "answered" | (string & {});
 
 /** Why a draft would reach no agent: the room has none to answer it, or the
  *  words name only people. OPEN. */
@@ -4009,7 +4012,8 @@ export interface ChatMessageView {
   /** Which of the agents a person's message reached have answered it, in the
    *  order they answered. */
   answered?: ChatAnswer[];
-  /** Where a person's message stands with them; absent with no reach. */
+  /** Where a person's message stands with them; absent on anything that is
+   *  not a person's message. */
   delivery?: ChatDelivery;
 }
 
