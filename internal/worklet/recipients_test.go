@@ -147,6 +147,8 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 		Kind: worklet.ChangeStatus,
 		Snapshot: worklet.Snapshot{
 			Assignee:        "ana",
+			PrevStatusGroup: worklet.GroupActive,
+			StatusGroup:     worklet.GroupDone,
 			RoutingUnitLead: "backend-lead",
 			ProjectLead:     "vp-engineering",
 		},
@@ -155,6 +157,23 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 	if got := handles(routed); len(got) != 1 || got[0] != "ana" {
 		t.Fatalf("routed to %v; a fallback survives only when nothing ordinary "+
 			"did", got)
+	}
+
+	// AND A WATCHER WHO IS NOT WOKEN STILL COUNTS AS AN AUDIENCE. The
+	// fallback asks whether the change reached anybody, and another agent's
+	// comment on a watched task did: it is in the watcher's inbox. Deciding
+	// the fallback after dropping the watcher would page the lead instead.
+	quiet := worklet.Route(worklet.Candidates(&worklet.Notify{
+		Kind: worklet.ChangeComment,
+		Snapshot: worklet.Snapshot{
+			Watchers:          []string{"cy"},
+			RoutingUnitLead:   "backend-lead",
+			CommentAuthorKind: worklet.AuthorAgent,
+		},
+	}), everyone, "bo")
+	if len(quiet) != 0 {
+		t.Fatalf("an agent's comment on a watched, unowned task woke %v; the "+
+			"watcher is its audience and it asks nobody anything", handles(quiet))
 	}
 }
 
@@ -252,7 +271,7 @@ func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 	t.Parallel()
 	cands := worklet.Candidates(&worklet.Notify{
 		Kind:     worklet.ChangeComment,
-		Snapshot: worklet.Snapshot{Watchers: []string{"ana", "gone"}},
+		Mentions: []string{"ana", "gone"},
 	})
 	if reasonOf(cands, "gone") == "" {
 		t.Fatal("a departed handle is missing from the record of who the change " +
@@ -260,8 +279,9 @@ func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 	}
 	routed := worklet.Route(cands, func(h string) bool { return h != "gone" },
 		"bo")
-	if slices.Contains(handles(routed), "gone") {
-		t.Fatalf("a departed handle was woken: %v", handles(routed))
+	if got := handles(routed); len(got) != 1 || got[0] != "ana" {
+		t.Fatalf("routed to %v; the departed handle loses its wake and the "+
+			"employed one keeps it", got)
 	}
 }
 

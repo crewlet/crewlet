@@ -114,7 +114,12 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		return
 	}
 	s, err := schedule.New(schedule.Options{
-		Publisher: e.backends.Queue,
+		// Through the node's wake queue ([Engine.wakes]): a fire to a seat
+		// whose mailbox is not complete is refused, not discarded.
+		Publisher: e.wakes(),
+		// AND CONFIRMED BEFORE IT IS CLAIMED, so a refused fire is one the
+		// next tick retries rather than a claim spent on nothing.
+		Mailboxes: e.mailboxConfirmer(),
 		// A FUNCTION, not the value: the org is swapped wholesale on every
 		// apply, so a captured pointer would pin the scheduler to the
 		// company that existed when it was built and fire deleted seats'

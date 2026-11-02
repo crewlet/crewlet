@@ -1338,6 +1338,27 @@ func (s *suite) runContractPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("a_priority_partition_dispatches_before_an_older_one", func(t *testing.T) {
+		t.Parallel()
+		// A drain that took a laned topic's priority mail and filled in
+		// behind it with older background mail dispatches the priority
+		// partition first: the lane is taken first so a person waiting is
+		// answered first, and aging alone would hand that back.
+		t0 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+		older := newConvEvent("a", "background")
+		older.Timestamp = t0
+		person := newConvEvent("b", "direct")
+		person.Timestamp = t0.Add(time.Hour)
+		queue.Prioritize(person)
+		newer := newConvEvent("c", "news")
+		newer.Timestamp = t0.Add(2 * time.Hour)
+
+		got := orderedKeys([]*events.Event{older, newer, person})
+		if !equalStrings(got, []string{"direct", "background", "news"}) {
+			t.Fatalf("dispatch order = %v, want [direct background news]", got)
+		}
+	})
+
 	t.Run("order_partitions_tie_keeps_arrival_order", func(t *testing.T) {
 		t.Parallel()
 		t0 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)

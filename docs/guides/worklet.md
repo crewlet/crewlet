@@ -1990,13 +1990,17 @@ post with and the obligation falls back to any delivery, like every other
 surface the seat cannot reach.
 
 A comment from somebody who is not the assignee, naming nobody and asking
-nobody, still wakes the assignee — unaddressed, which a turn may absorb without
-replying. The result says so in a `warnings` line, because a commenter
-expecting an answer otherwise gets silence with nothing to explain it. An
-agent is told to pass `ask` or mention them; a person commenting from the
-dashboard is told the same thing in a short toast that goes by itself, in the
-words of the comment box rather than the tool's arguments. An answer to a
-question never says it, since an answer expects no reply.
+nobody, leaves the assignee unasked, and the result says how in a `warnings`
+line, because a commenter expecting an answer otherwise gets silence with
+nothing to explain it. Another agent's remark starts no turn at all: it waits
+in the assignee's inbox until they next open the item (see
+[Which notices start a turn](#which-notices-start-a-turn)). A reply in a
+thread the assignee wrote in wakes them, unaddressed, which a turn may absorb
+without replying. The warning tells the agent to pass `ask` or mention them,
+and is read off the routing for the very record the comment publishes, so it
+cannot disagree with who is woken. A person's remark carries no warning,
+because it is the ask: it wakes the assignee, who owes it an answer. An answer
+to a question never warns either, since an answer expects no reply.
 
 **What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
@@ -2061,9 +2065,12 @@ half an object either fails to parse it or reads the half it got as the whole.
 
 ## What wakes a seat
 
-A change that concerns somebody becomes a **wake** — a turn on that seat, with
-a prompt written for the reason it reached them. Most wakes are about a task:
-you were assigned it, mentioned on it, watching it, blocked by it.
+A change that concerns somebody becomes a **notice** in their inbox and, when
+it asks something of them, a **wake**: a turn on that seat, with a prompt
+written for the reason it reached them (see
+[Which notices start a turn](#which-notices-start-a-turn)). Most wakes are
+about a task: you were assigned it, mentioned on it, asked on it, blocked by
+it.
 
 **One wake per person per change**, whatever number of reasons name them: the
 first reason in the precedence order wins and the rest are dropped. Somebody
@@ -2149,6 +2156,41 @@ person's handle is not a task key and a pointer at one costs a round and a
 failed tool call to discover. A `purged` wake sends you nowhere for the sharper
 version of the same reason: the row is gone from every data node, so the tool
 would answer `not_found`.
+
+### Which notices start a turn
+
+Every seat a change names gets its notice, in the inbox it reads when it next
+opens the task, and counts as somebody who heard the change when the engine
+decides whether a lead must hear it instead. Whether the notice also starts a
+turn follows its reason and, for five reasons, whether the change asks
+something of the seat that holds it:
+
+| Reason | Starts a turn |
+|---|---|
+| `mention`, `prioritised`, `asked`, `answered`, `thread` | always: the change was put to this seat, or replies to something it wrote |
+| `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment and a change to who watches the task |
+| `watcher` | for a person's comment only |
+| `unassigned`, `unwatched` | never |
+
+So **a person's comment wakes everyone on the task**: a person writing on a
+task speaks to whoever follows it, without naming anybody. **Another agent's
+comment wakes only the seats it names**: by @-mention, with `ask`, by replying
+in a thread they wrote in, or by answering their question. An agent that needs
+the assignee or the reporter to act names them, and the comment tool says so
+in its description and warns when a comment reaches the assignee's inbox and
+no further. A **reporter** hears of its task finishing or reopening, being
+reassigned or removed, and of every comment, and is woken by all of them but
+another agent's comment, since those are when it verifies the outcome. A
+**watcher** follows the task: every change reaches its inbox, and only a
+person's comment starts its turn.
+
+The line is drawn where turns were spent for nothing. A seat woken by another
+agent's status note on a task it followed, or by an acknowledgement of its
+own note, ended its turn having changed nothing, or answered with another
+acknowledgement that woke the first agent to acknowledge it back; a seat
+woken by a change somebody else made to a task it answers for (a status
+moved back, a new dependency, a reassignment) acted on it.
 
 ## A person's own state
 

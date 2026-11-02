@@ -276,6 +276,20 @@ func AgentInboxGroup(seat uuid.UUID) string {
 	return AgentGroupPrefix + seat.String()
 }
 
+// AgentInboxLaneSuffix is appended to a seat's inbox to name its priority
+// lane ([AgentInboxLane]).
+//
+// `.lane` RATHER THAN `.priority`, because the hand-built subject guard reads
+// every constant here as a marker, and `.priority` ends ordinary names
+// elsewhere (a task's priority field) that are nobody's subject.
+const AgentInboxLaneSuffix = ".lane"
+
+// AgentInboxLane names a seat inbox's priority lane: the inbox's second
+// mailbox, where a person's message waits ahead of the seat's background work
+// (queue.LaneOf). It is not itself an inbox, so [SeatFromInbox] does not read
+// it as one.
+func AgentInboxLane(inbox string) string { return inbox + AgentInboxLaneSuffix }
+
 // AgentControl returns the seat's sandbox-control subject.
 //
 // Separate from the inbox because a seat a detached run holds fetches nothing
