@@ -3517,7 +3517,13 @@ in the trash, and a menu with **Open on the board**.
 code, the page asks the engine for one change naming the task as its work
 item (`code_changes?work=native:<id>&limit=1`, every state, since a listing by
 work item needs none), and only once it finds one does the column open with a
-**Task | Changes** strip (`tab=changes`); a task no change names carries no
+**Task | Changes** strip (`tab=changes`). A page is the rows the engine read,
+not the rows it kept: a change of a repository the reader may not read, one
+deleted and not yet purged among them, is dropped after the read, so an empty
+page can still carry `next`. The probe follows `next` until it keeps one
+change, for at most four pages, and a probe that stops there with `next` still
+set opens the strip too, since a change may lie behind it and the tab's own
+listing pages to it. A task no change names carries no
 strip, so a company that proposes its code elsewhere never sees a tab that
 always says nothing, and an address naming the tab before the answer lands on
 the task. Changes lists every change of the task, merged and closed as well as
