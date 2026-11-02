@@ -1,140 +1,14 @@
 /**
- * MCP servers: what a server's condition MEANS to the person reading it, which
- * seats it reaches, and what an added one is written as.
+ * The shipped Add dialog's form: what a person types into it, what is refused
+ * before a round trip, and the entity an add sends. PURE, so every rule is a
+ * value a suite can pin without a socket.
  *
- * PURE, like `lib/ceilings.ts`: the screen and the add dialog read these, and
- * every rule is a value a suite can pin without a socket.
- *
- * NOTHING HERE DECIDES A STATE OR A GRANT. The state is the engine's
- * (`mcp_servers_status`, from every node's heartbeat) and the grant is the
- * engine's too — each agent seat's `tool_sources` on the pushed org, resolved
- * by `config.MCPServer.Grants`, the ONE rule the engine starts children by.
- * This module only puts both into words, and builds the entity an add sends.
+ * NOTHING HERE DECIDES A STATE OR A GRANT: the engine's dry run judges the
+ * entity this builds, and its problems land on the fields they name.
  */
 
-import type { McpServerState, McpServerStatus } from "~/contract/mcp.ts";
+import { carriesReference } from "~/lib/references.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
-import { carriesReference } from "./references.ts";
-import type { Seat } from "./seats.ts";
-
-/**
- * Each state in words, with the tone its pill wears and what to do about it.
- *
- * EXHAUSTIVE OVER THE CONTRACT'S UNION, so a state the engine adds fails the
- * typecheck here rather than drawing as nothing.
- */
-export const SERVER_STATE_WORDS: Record<
-  McpServerState,
-  { label: string; tone: "success" | "warning" | "danger" | "neutral"; hint: string }
-> = {
-  disabled: {
-    label: "Disabled",
-    tone: "neutral",
-    hint: "Turned off. Nothing starts it and no agent gets its tools until it is turned back on.",
-  },
-  running: {
-    label: "Running",
-    tone: "success",
-    hint: "All instances started",
-  },
-  partial: {
-    label: "Partly failing",
-    tone: "warning",
-    hint: "Some instances failed. See the node or seat named beside it.",
-  },
-  failing: {
-    label: "Failing",
-    tone: "danger",
-    hint: "Every instance failed. Check the command, address or credentials.",
-  },
-  waiting: {
-    label: "Waiting for credentials",
-    tone: "neutral",
-    hint: "An integration is minting a seat's credential. The server starts once it is sealed.",
-  },
-  not_started: {
-    label: "Not started",
-    tone: "neutral",
-    hint: "No node has started it yet.",
-  },
-  unreported: {
-    label: "Not reported",
-    tone: "neutral",
-    hint: "No node has reported its status.",
-  },
-};
-
-/** The registry's origin for a server's tools: `mcp:<name>`. */
-export function serverOrigin(server: string): string {
-  return `mcp:${server}`;
-}
-
-/**
- * The agent seats the engine GRANTS a server, from each seat's own
- * `tool_sources` — which the engine puts on every agent seat it pushes,
- * resolved by `config.MCPServer.Grants`. A human seat runs no tools and is
- * never counted.
- */
-export function grantedSeats(seats: readonly Seat[], server: string): Seat[] {
-  const origin = serverOrigin(server);
-  return seats.filter((s) => s.kind === "agent" && (s.raw.tool_sources ?? []).includes(origin));
-}
-
-/**
- * Who a server reaches, in words. ONE COPY for the servers' grid and a
- * server's own page.
- */
-export function reachOf(server: { name: string }, seats: readonly Seat[]): string {
-  const granted = grantedSeats(seats, server.name);
-  const agents = seats.filter((s) => s.kind === "agent").length;
-  if (granted.length === 0) return "No seat";
-  if (granted.length === agents) return "Every agent seat";
-  return `${granted.length} ${granted.length === 1 ? "seat" : "seats"}`;
-}
-
-/**
- * The servers line under the catalogue's MCP tile: how many of the servers the
- * engine reports have an instance up somewhere.
- *
- * FROM THE STATUS ANSWER, never from the tools' origins. Counted off the
- * registry, a company with four configured servers all failing read "0 server(s)"
- * directly above a table listing the four — two answers to one question on one
- * screen. A server is up where at least one instance STARTED, which is what
- * `running` and `partial` both mean. A server turned off is not counted at all:
- * nobody expects it to run, and counted it read as one that should and does not.
- */
-export function serversUpLine(servers: readonly { started: number; enabled: boolean }[]): string {
-  const on = servers.filter((s) => s.enabled);
-  const up = on.filter((s) => s.started > 0).length;
-  const total = on.length;
-  return `${up} of ${total} ${total === 1 ? "server" : "servers"} running`;
-}
-
-// ---------------------------------------------------------------------------
-// Adding one
-// ---------------------------------------------------------------------------
-
-/**
- * The names an add would collide with: the servers the CONFIGURATION carries.
- *
- * NOT EVERY ROW OF THE STATUS ANSWER. A `configured: false` row is a server
- * only a node reports — one running from an earlier revision that node has not
- * left yet — and the engine's create accepts that name, since the create is
- * judged against the configuration alone. Refusing it here would refuse what
- * the engine allows, with a sentence ("already exists") that is false.
- */
-export function takenNames(servers: readonly McpServerStatus[] | null | undefined): Set<string> {
-  return new Set((servers ?? []).filter((s) => s.configured).map((s) => s.name));
-}
-
-/**
- * The names only a node still reports ([takenNames]'s complement in the
- * answer): free to add, and worth a word beside the field, so a reader who
- * saw the name in the list is not left wondering why it was accepted.
- */
-export function nodeOnlyNames(servers: readonly McpServerStatus[] | null | undefined): Set<string> {
-  return new Set((servers ?? []).filter((s) => !s.configured).map((s) => s.name));
-}
 
 /**
  * The example in the add form's Name field.

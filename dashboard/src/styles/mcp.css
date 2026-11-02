@@ -1,0 +1,266 @@
+/*
+ * Settings › MCP & tools: placement only. Every surface, colour and type is a
+ * kit component's or a design token; nothing here draws a value of its own.
+ * The rows keep the Models table's height: two lines a cell, the mark centred
+ * beside them.
+ */
+
+.mcp-page,
+.mcp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.mcp-alarm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.mcp-list,
+.mcp-instances,
+.mcp-args {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * A list in a callout: no space after it, so the box it is in keeps equal
+ * insets, and a long name wraps at any character rather than running out past
+ * the box's edge.
+ */
+.mcp-list {
+  gap: var(--spacing-1);
+}
+
+.mcp-list > li {
+  overflow-wrap: anywhere;
+}
+
+/* ---- the table's cells ---------------------------------------------------- */
+
+/* A server's mark in the primary ink wherever it stands, as Models draws a
+   harness's: a monochrome vendor mark in a kit slot's tertiary ink read as a
+   server switched off. */
+.mcp-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-primary);
+}
+
+/* A value over a quieter line, outside a table's cell. */
+.mcp-two {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A cell's hover target the row's own link already covers: hidden from
+   assistive technology and the tab order, drawn as the words it holds. */
+.mcp-row-reveal {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.mcp-state {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mcp-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-tools-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  white-space: nowrap;
+}
+
+.mcp-reach {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+
+.mcp-reach__line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.mcp-reach__more {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.mcp-tip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* One line of chips, so every row of a tools table is one height. */
+.mcp-risk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  white-space: nowrap;
+}
+
+/* A tooltip's trigger round a tag is the tag's own box, so the tag stands on
+   the row's centre rather than a line box's baseline. */
+.mcp-risk > span {
+  display: inline-flex;
+  flex: none;
+}
+
+/* ---- the server page ------------------------------------------------------- */
+
+/* Each card its own height, as Models' entry grid: stretched, a short card
+   stood beside a long one with its lower half empty. */
+.mcp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  align-items: start;
+  gap: var(--spacing-3);
+}
+
+.mcp-instances > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* The list's words in the cell's size, as the same agents are in every table. */
+.mcp-instances {
+  font-size: var(--font-size-compact);
+}
+
+.mcp-instances__who,
+.mcp-instances__state {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Who it is never breaks; what is wrong gives way, clamped, its sentence on hover. */
+.mcp-instances__who {
+  flex: none;
+  white-space: nowrap;
+}
+
+.mcp-instances__state {
+  align-items: flex-end;
+  text-align: end;
+}
+
+.mcp-instances__state > * {
+  max-inline-size: 100%;
+}
+
+.mcp-quote {
+  padding-inline-start: var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
+.mcp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* The search takes a basis, not the line: at a desktop width the field and
+   the chips stand on one row, and on a phone the chips wrap under the field
+   rather than squeezing it. */
+.mcp-toolbar__search {
+  flex: 1 1 12rem;
+  min-inline-size: 10rem;
+  max-inline-size: 16rem;
+}
+
+/* A line under a card's rows: why a list is short, or what it leaves out. */
+.mcp-note {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+/* ---- the dialogs ------------------------------------------------------------- */
+
+.mcp-testing {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.mcp-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* ---- a tool, opened ---------------------------------------------------------- */
+
+/* Its words, its facts, then each argument a row of its own. */
+.mcp-tool-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.mcp-tool-detail > p {
+  margin: 0;
+}
+
+.mcp-tool-detail__args {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.mcp-tool-detail__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+
+.mcp-args {
+  gap: 0;
+}
+
+.mcp-args > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-block: var(--spacing-2);
+  border-block-start: 1px solid var(--color-border-default);
+  overflow-wrap: anywhere;
+}
+
+.mcp-args__head {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
