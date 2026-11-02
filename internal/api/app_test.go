@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -92,6 +93,8 @@ type fakeRuntime struct {
 	// takes a restart, nil until a case sets one.
 	instances queries.MCPInstanceReader
 	restarter mcpapi.Restarter
+	// alarms is the node's latest alarm evaluation, nil for none run.
+	alarms []statelog.Alarm
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -128,6 +131,9 @@ func (f *fakeRuntime) MCPRestarter() mcpapi.Restarter {
 	}
 	return f.restarter
 }
+
+// LatestAlarms is the evaluation a case set, nil (none has run) otherwise.
+func (f *fakeRuntime) LatestAlarms() []statelog.Alarm { return f.alarms }
 
 // acceptingRestarter takes every restart it is asked for.
 type acceptingRestarter struct{}

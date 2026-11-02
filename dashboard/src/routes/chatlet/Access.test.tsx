@@ -130,6 +130,29 @@ test.each(READERS)("a room's Join is drawn for $who, held with why", async (read
   expect(presses).toHaveLength(0);
 });
 
+test.each(READERS)("a team room's star is drawn for $who, held with why", async (reader) => {
+  // A TEAM'S ROOM SOMEBODY OUTSIDE THE TEAM IS READING takes no join (its
+  // members are the org chart's), so its bar offers a star in the join's
+  // place, held as every write here is.
+  const cursors = new ReadCursors({ flush: async () => undefined });
+  mountChat(
+    <LoneRoom channelID={ROOM} viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    {
+      viewer: reader.viewer,
+      answers: {
+        chat_channel: {
+          ...detail,
+          channel: { ...channel, kind: "unit", unit: "core" },
+          member: false,
+        },
+        chat_messages: { ...served, channel_id: ROOM, messages: [said] },
+      },
+    },
+  );
+  const star = await screen.findByRole("button", { name: /^add to starred$/i });
+  await saysHeld(star, reader.reason);
+});
+
 /** A message's More menu item, its menu left open to press it. */
 function moreItem(row: HTMLElement, name: RegExp): HTMLElement {
   fireEvent.click(within(row).getByRole("button", { name: "More actions" }));

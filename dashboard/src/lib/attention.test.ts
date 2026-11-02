@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
+import type { McpAlarm } from "~/contract/mcp.ts";
 import {
   attentionQueue,
   conditionsToDecide,
@@ -38,8 +39,26 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     authRejected: false,
     now,
     nameOf: (key) => key,
+    mcpAlarms: [],
     ...over,
   };
+}
+
+/** One MCP alarm as `mcp_servers_status` carries it, on one server. */
+function mcpAlarm(
+  kind: McpAlarm["kind"],
+  key: string,
+  over: Partial<McpAlarm["entries"][number]> = {},
+): McpAlarm {
+  const entry = {
+    key,
+    detail: `the engine's measurement of ${key}`,
+    since: "2026-01-01T11:50:00Z",
+    seat: "",
+    fix: { kind: "restart" as const, server: key, seat: "" },
+    ...over,
+  };
+  return { kind, detail: entry.detail, remedy: "What to do.", entries: [entry] };
 }
 
 /** One capped window of a live meter, on 1 January's day. */
@@ -343,6 +362,7 @@ describe("what it surfaces", () => {
   test("every subject the quiet band draws is one a condition can raise", () => {
     const items = attentionQueue(
       input({
+        mcpAlarms: [mcpAlarm("mcp_server_failing", "github")],
         engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
@@ -389,6 +409,15 @@ describe("what it surfaces", () => {
       }),
     );
     expect(new Set(items.map((i) => i.subject))).toEqual(new Set(Object.keys(SUBJECTS)));
+  });
+
+  // AND A SUBJECT THIS READER IS NOT SHOWN IS NOT CLAIMED: a reader the MCP
+  // section does not open for is never asked its alarms.
+  test("a subject the reader is not shown is left out of the clause", () => {
+    expect(watchedIn("seat")).toContain(SUBJECTS.tools);
+    const clause = watchedIn("seat", ["tools"]);
+    expect(clause).not.toContain(SUBJECTS.tools);
+    expect(clause).toContain(SUBJECTS.seat);
   });
 
   // AND EACH PLACE'S CLAUSE CARRIES ITS OWN SUBJECTS AND NO OTHER. A quiet
@@ -658,5 +687,57 @@ describe("a model at its usage limit", () => {
     );
     expect(stopped.map((i) => i.id)).toEqual(["seat-state-a"]);
     expect(failedTurn.map((i) => i.id)).toEqual(["seat-state-a"]);
+  });
+});
+
+// AN MCP ALARM IS A ROW AN ADMINISTRATOR DECIDES, one per server it stands on,
+// in the engine's own judgement: the span, the server and the agent are the
+// engine's, and the row only words them, links the server's page and keeps the
+// measurement behind the disclosure. Not running is critical for whoever it
+// stops; a wait and a refused name cost their tools and nothing more.
+describe("an MCP server's alarms", () => {
+  test("each server an alarm stands on is a row in Needs you", () => {
+    const items = attentionQueue(
+      input({
+        mcpAlarms: [
+          mcpAlarm("mcp_server_failing", "github"),
+          mcpAlarm("mcp_server_partial", "jira", { seat: "backend-dev" }),
+          mcpAlarm("mcp_server_waiting_long", "atlassian", { seat: "pm" }),
+          mcpAlarm("mcp_tools_refused", "linear", { since: null }),
+        ],
+      }),
+    );
+    const decided = conditionsToDecide(items);
+    expect(decided.map((i) => i.id).sort()).toEqual(
+      [
+        "mcp-mcp_server_failing-github",
+        "mcp-mcp_server_partial-jira",
+        "mcp-mcp_server_waiting_long-atlassian",
+        "mcp-mcp_tools_refused-linear",
+      ].sort(),
+    );
+    const byKey = new Map(decided.map((i) => [i.id, i]));
+    const failing = byKey.get("mcp-mcp_server_failing-github");
+    expect(failing?.severity).toBe("critical");
+    expect(failing?.title).toBe("github is not running");
+    expect(failing?.path).toEqual(["settings", "mcp-tools", "servers", "github"]);
+    expect(failing?.technical).toBe("the engine's measurement of github");
+    expect(failing?.at).toBe("2026-01-01T11:50:00Z");
+    const partial = byKey.get("mcp-mcp_server_partial-jira");
+    expect(partial?.severity).toBe("critical");
+    expect(partial?.title).toBe("jira is not running for backend-dev");
+    expect(partial?.who).toBe("backend-dev");
+    const waiting = byKey.get("mcp-mcp_server_waiting_long-atlassian");
+    expect(waiting?.severity).toBe("caution");
+    expect(waiting?.title).toBe("atlassian is still waiting for pm's credential");
+    const refused = byKey.get("mcp-mcp_tools_refused-linear");
+    expect(refused?.severity).toBe("caution");
+    expect(refused?.at).toBeUndefined();
+  });
+
+  test("a partial shared server names the nodes, not an agent", () => {
+    const [row] = attentionQueue(input({ mcpAlarms: [mcpAlarm("mcp_server_partial", "docs")] }));
+    expect(row?.title).toBe("docs is not running on every node");
+    expect(row?.who).toBeUndefined();
   });
 });

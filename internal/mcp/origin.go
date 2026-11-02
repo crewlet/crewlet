@@ -1,5 +1,7 @@
 package mcp
 
+import "strings"
+
 // THE tool-origin grammar — who put a tool in front of the agents.
 //
 // It is recorded AT REGISTRATION because it cannot be recovered afterwards. A
@@ -43,6 +45,20 @@ const (
 // bare server name; ServerName turns an instance name into one.
 func Origin(server string) string {
 	return OriginMCPPrefix + server
+}
+
+// OriginServer is the bare MCP server an origin names, and false for one that
+// names none: a builtin, or no origin at all.
+//
+// THE EMPTY NAME ON A MISS IS THE CONTRACT: [strings.CutPrefix] hands back its
+// whole input when the prefix is absent, and a reader that took that unchecked
+// would file every builtin under a server called `builtin`.
+func OriginServer(origin string) (string, bool) {
+	server, ok := strings.CutPrefix(origin, OriginMCPPrefix)
+	if !ok || server == "" {
+		return "", false
+	}
+	return server, true
 }
 
 // Registration is a tool together with WHO put it in front of the agents.

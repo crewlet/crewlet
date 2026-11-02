@@ -183,8 +183,71 @@ interface McpShadowedTool {
   message: string;
 }
 
-/** The whole answer. */
+/**
+ * The MCP alarms (statelog's per-server kinds). `mcp_server_failing`: no
+ * instance serves, and one has been down past the restart schedule's ceiling
+ * plus a heartbeat. `mcp_server_partial`: some serve, and one that does not has
+ * been down that long. `mcp_server_waiting_long`: an agent's instance has been
+ * held back past a provisioning pass for a credential that pass mints.
+ * `mcp_tools_refused`: a tool cannot be offered under its name.
+ */
+export type McpAlarmKind =
+  "mcp_server_failing" | "mcp_server_partial" | "mcp_server_waiting_long" | "mcp_tools_refused";
+
+/**
+ * The one gesture that fixes a server's alarm. `restart`: restart its
+ * instances now (`POST /mcp-servers/{name}/retry`), only the named agent's
+ * where `seat` names one. `integration`: the integration that mints the named
+ * agent's credential, which the server's binding names. `edit`: the server's
+ * configuration, its `tool_prefix`.
+ */
+type McpFixKind = "restart" | "integration" | "edit";
+
+/** The gesture that fixes one server's alarm, and what it acts on. */
+interface McpFix {
+  kind: McpFixKind;
+  server: string;
+  /** The one agent's instance it acts on, by handle; "" acts on every instance. */
+  seat: string;
+}
+
+/** One server an MCP alarm stands on. */
+export interface McpAlarmEntry {
+  /** The server's name. */
+  key: string;
+  /** The engine's measurement for this server, shown as written. */
+  detail: string;
+  /** When the condition began for this server, or null where it carries no
+   *  instant (a refused name). */
+  since: string | null;
+  /** The agent whose instance the measurement names, by handle, or "". */
+  seat: string;
+  fix: McpFix;
+}
+
+/**
+ * One MCP alarm of the answering node's latest evaluation: the same one the
+ * health count and the log lines were told.
+ */
+export interface McpAlarm {
+  kind: McpAlarmKind;
+  /** The longest-standing server's measurement. */
+  detail: string;
+  /** What to do about the kind, in the engine's words. */
+  remedy: string;
+  /** The servers it stands on, in name order. */
+  entries: McpAlarmEntry[];
+}
+
+/**
+ * The whole answer, as an administrator reads it (`reading: "admin"`), which
+ * is the only reading the page asks for while the section is admin's. A
+ * member's reading is a narrower answer, with no launch line, failure sentence
+ * or wait, declared with the screen that draws it.
+ */
 export interface McpServersStatusAnswer {
+  /** Which of the answer's two readings this is. */
+  reading: "admin";
   /** In name order. */
   servers: McpServerStatus[];
   /** The live nodes in id order: the columns every server is drawn against. */
@@ -195,4 +258,10 @@ export interface McpServersStatusAnswer {
    * left out.
    */
   builtin: BuiltinGroup[];
+  /**
+   * The MCP alarms standing on the answering node's latest evaluation, each
+   * server with the gesture that fixes it. Empty where none stands, and on a
+   * node that runs no state log, which evaluates no alarm.
+   */
+  alarms: McpAlarm[];
 }

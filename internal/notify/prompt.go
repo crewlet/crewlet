@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -232,6 +233,13 @@ type Inbound struct {
 	Body string
 
 	Metadata map[string]string
+
+	// Origin is what this notification is about and why it reaches its
+	// recipient ([types.TriggerOrigin]), SET BY A FIRST-PARTY PARSER PER
+	// RECIPIENT: the reason is the recipient's own. The delivery carries it
+	// onto the notification it publishes, so the turn it wakes is filed
+	// under the object a person holds. Zero on every vendor edge.
+	Origin types.TriggerOrigin
 
 	// Fence is the token a prompt fences the foreign text it weaves into the
 	// trigger under ([provenance.Fence]): minted by the delivery for this

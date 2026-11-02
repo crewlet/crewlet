@@ -231,7 +231,6 @@
    so the faces stand on the edge the search field above starts at. */
 .chat-member-list,
 .chat-pick-list,
-.chat-browse-list,
 .chat-shared,
 .chat-suggest__list {
   margin: 0;
@@ -861,83 +860,4 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-}
-
-/* Browse rooms: a row per room, Join or Open at its end. */
-.chat-browse-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-1) 0;
-  border-bottom: 1px solid var(--color-border-default);
-}
-
-.chat-browse-row:last-child {
-  border-bottom: 0;
-}
-
-/* The room's glyph stands on the view's side line, under the search field:
-   the link pads itself by the first step for its hover fill, so it starts
-   that step before the line and the fill bleeds past it, as a member row's
-   does. Inset by its own pad as well, the glyph stood 8px inside the line. */
-.chat-browse-row__main {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  margin-inline-start: calc(var(--spacing-2) * -1);
-  padding: var(--spacing-2);
-  border-radius: var(--radius-md);
-  color: inherit;
-  text-decoration: none;
-}
-
-.chat-browse-row__main:hover {
-  background: var(--color-surface-hover);
-}
-
-.chat-browse-row__main:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* A room's name wraps rather than pushing past the row: one unbroken name
-   (a slug with no hyphen) ran over its own tag and into Join or Open. */
-.chat-browse-row__name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: var(--spacing-5);
-  overflow-wrap: anywhere;
-  font-size: var(--crewlet-chat-text);
-  font-weight: var(--font-weight-medium);
-}
-
-.chat-browse-row__name > svg {
-  flex: none;
-  color: var(--color-text-secondary);
-}
-
-.chat-browse-row__topic {
-  overflow: hidden;
-  color: var(--color-text-secondary);
-  font-size: var(--crewlet-chat-text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-browse-row__meta {
-  color: var(--color-text-secondary);
-  font-size: var(--crewlet-chat-meta);
-}
-
-.chat-browse-row__note {
-  flex-basis: 100%;
-  padding: 0 var(--spacing-2) var(--spacing-2);
-}
-
-.chat-browse-row > :not(.chat-browse-row__main, .chat-browse-row__note) {
-  flex: none;
 }

@@ -1126,9 +1126,9 @@ stream:
                                     #   takes a flat 1 GiB. SIZED BY A CENSUS,
                                     #   not a rate: one message per (node, day,
                                     #   seat, schedule or person) for 181 days,
-                                    #   about 217 MB for three nodes of forty
+                                    #   about 320 MB for three nodes of forty
                                     #   seats and twenty schedules, and about
-                                    #   12 MB for one node of ten seats — set
+                                    #   18 MB for one node of ten seats; set
                                     #   it toward the 64 MiB floor for a small
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names

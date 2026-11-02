@@ -13,8 +13,8 @@ import (
 )
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
-// `usage_turns`, `usage_tokens`, `usage_reads`, `usage_schedule_runs` and
-// `usage_person_tokens`, on every data node.
+// `usage_turns`, `usage_tokens`, `usage_reads`, `usage_tool_calls`,
+// `usage_schedule_runs` and `usage_person_tokens`, on every data node.
 //
 // # An apply REPLACES
 //
@@ -62,6 +62,8 @@ const (
 		DELETE FROM usage_tokens WHERE day = ? AND node = ? AND agent_id = ?`
 	applyClearSeatReadsSQL = `
 		DELETE FROM usage_reads WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatToolsSQL = `
+		DELETE FROM usage_tool_calls WHERE day = ? AND node = ? AND agent_id = ?`
 	applyScheduleNewestSQL = `
 		SELECT MAX(version) FROM usage_schedule_runs
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
@@ -120,8 +122,8 @@ func (a Applier) expire(ctx context.Context, tx *sql.Tx, day string) (int, error
 	}
 	cutoff := w.Shift(-HorizonDays).Label
 	var n int
-	for _, table := range []string{"usage_tokens", "usage_reads", "usage_turns",
-		"usage_schedule_runs", "usage_person_tokens"} {
+	for _, table := range []string{"usage_tokens", "usage_reads", "usage_tool_calls",
+		"usage_turns", "usage_schedule_runs", "usage_person_tokens"} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE day < ?`, cutoff)
 		if err != nil {
 			return 0, fmt.Errorf("usage: expire %s below %s: %w", table, cutoff, err)
@@ -152,6 +154,7 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 
 	for _, clear := range []struct{ table, query string }{
 		{"usage_tokens", applyClearSeatTokensSQL}, {"usage_reads", applyClearSeatReadsSQL},
+		{"usage_tool_calls", applyClearSeatToolsSQL},
 	} {
 		if _, err := tx.ExecContext(ctx, clear.query, s.Day, s.Node, s.Seat); err != nil {
 			return 0, fmt.Errorf("usage: clear %s for %s: %w", clear.table, s, err)
@@ -170,8 +173,8 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 		INSERT INTO usage_turns
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
-			 version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tools_elided, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
 			handle        = excluded.handle,
 			role          = excluded.role,
@@ -183,10 +186,11 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			duration_hist = excluded.duration_hist,
 			last_ended_at = excluded.last_ended_at,
 			reads_elided  = excluded.reads_elided,
+			tools_elided  = excluded.tools_elided,
 			version       = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
-		lastEnded, r.ReadsElided, version); err != nil {
+		lastEnded, r.ReadsElided, r.ToolsElided, version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1
@@ -223,6 +227,25 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 		})
 	if err != nil {
 		return 0, fmt.Errorf("usage: write the reads of %s: %w", s, err)
+	}
+	rows += n
+
+	n, err = store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_tool_calls
+			(day, node, agent_id, server, tool, calls, failed, unavailable,
+			 refused, total_ms, last_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Tools),
+		func(i int) []any {
+			t := r.Tools[i]
+			var last int64
+			if !t.LastAt.IsZero() {
+				last = store.EncodeTime(t.LastAt)
+			}
+			return []any{s.Day, s.Node, s.Seat, t.Server, t.Tool, t.Calls, t.Failed,
+				t.Unavailable, t.Refused, t.TotalMS, last}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the tool calls of %s: %w", s, err)
 	}
 	return rows + n, nil
 }

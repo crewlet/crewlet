@@ -46,7 +46,10 @@ func parked() execstate.State {
 		Written:     []types.WorkItem{{Backend: types.WorkWorklet, ID: "T-1"}},
 		WrittenMany: true,
 		Uncharged:   &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
-		SoFar:       &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
+		SoFar: &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1,
+			Tools: []types.ToolTally{{Server: "github", Tool: "github_get_issue", Calls: 3,
+				Failed: 1, Unavailable: 1, TotalMS: 900,
+				LastAt: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}}},
 		Context: execstate.Frozen{
 			ThreadContext:       "- **Ana (ana)**: the login test flakes on main",
 			PersonalMemory:      "- always run the suite twice",
@@ -112,8 +115,9 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 		t.Fatalf("the uncharged spend did not survive: %+v", got.Uncharged)
 	}
 	// AND WHAT THE TURN MEASURED SO FAR, which the record that ends it states
-	// whole: lost, the turn's earlier spans and reviews count nowhere.
-	if got.SoFar == nil || *got.SoFar != *want.SoFar {
+	// whole: lost, the turn's earlier spans, reviews and tool calls count
+	// nowhere.
+	if got.SoFar == nil || !reflect.DeepEqual(*got.SoFar, *want.SoFar) {
 		t.Fatalf("the turn's measurement so far did not survive: %+v", got.SoFar)
 	}
 	// AND THE CONTEXT THE TURN STARTED WITH, every block of it: the turn's

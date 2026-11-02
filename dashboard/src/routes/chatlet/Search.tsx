@@ -44,6 +44,7 @@ import {
   EmptyState,
   Highlight,
   Input,
+  List,
   SegmentedControl,
   Select,
   TabPanel,
@@ -292,11 +293,11 @@ export function SearchView() {
               ))}
             </ul>
           ) : (
-            <ul className="chat-browse-list">
+            <List variant="divided" aria-label="Rooms">
               {roomHits.map((found) => (
                 <BrowseRow key={found.channel.id} room={found} />
               ))}
-            </ul>
+            </List>
           )}
         </div>
       </TabPanel>

@@ -321,7 +321,7 @@ func instancesOf(read coord.MCPInstanceRead, organization *org.Organization) (
 	var lastAnswer *time.Time
 	var lastFailure *MCPFailureView
 	for _, in := range read.Instances {
-		seat := instanceSeat(organization, in.Seat)
+		seat := organization.AgentHandleByID(in.Seat)
 		view := MCPInstanceView{
 			Seat: seat, Node: in.Node, State: in.State, Since: instantOrNull(in.Since),
 			Restarts: max(in.Restarts, 0), Tools: max(in.Tools, 0), Wait: in.Wait,
