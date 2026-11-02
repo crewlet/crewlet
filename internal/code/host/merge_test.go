@@ -391,12 +391,11 @@ func TestAnUnsaidSourceDeletionIsTheTargetGates(t *testing.T) {
 	}
 }
 
-// changeReads counts the reads of each change a git node's estate is asked,
-// by the change's number.
+// changeReads records every change read the host asks of its estate.
 type changeReads struct {
 	host.Estate
-	mu sync.Mutex
-	n  map[int64]int
+	mu    sync.Mutex
+	asked []code.ReadQuery
 }
 
 func (r *changeReads) wrap(inner host.Estate) host.Estate {
@@ -407,10 +406,7 @@ func (r *changeReads) wrap(inner host.Estate) host.Estate {
 func (r *changeReads) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	if q.Kind == code.ReadChange {
 		r.mu.Lock()
-		if r.n == nil {
-			r.n = map[int64]int{}
-		}
-		r.n[q.Change]++
+		r.asked = append(r.asked, q)
 		r.mu.Unlock()
 	}
 	return r.Estate.Read(ctx, q)
@@ -420,7 +416,21 @@ func (r *changeReads) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnsw
 func (r *changeReads) of(n int64) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.n[n]
+	read := 0
+	for _, q := range r.asked {
+		if q.Change == n {
+			read++
+		}
+	}
+	return read
+}
+
+// since is every change read r recorded from the from-th on, and the count to
+// read the next from.
+func (r *changeReads) since(from int) ([]code.ReadQuery, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.asked[from:]), len(r.asked)
 }
 
 // A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for
@@ -449,6 +459,79 @@ func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
 	if read != 1 {
 		t.Errorf("the git node read change %d %d times to merge it for the lead, want once: the lead's merge "+
 			"authority is judged from what the node holds", n, read)
+	}
+}
+
+// A CHANGE'S WRITES READ NO REVISION THEY DROP: a change rebased by pat onto
+// a main that moved, merged by the seat alice for the unit's lead — its change
+// read as alice alone, the lead's merge authority judged from what the git
+// node holds (TestAColleagueSteeredMergeReadsItsChangeOnce) — and reverted
+// by pat. The
+// rebase and the merge read the change as its detail alone
+// (code.ReadQuery.DetailOnly), never with a page of its revisions beside it:
+// neither reads a revision, a merge reads its change again at the log's head
+// before a refusal and on every rebuild, and a first page of revisions is up
+// to 200 of them, each carrying its facts' touched paths, shipped from a data
+// node to the git node to be dropped. The revert reads its detail and its
+// HEAD REVISION alone — a first page one revision long — whose facts place a
+// fast-forward's range.
+//
+// Mutations: read the merge's change or the rebase's with its
+// revisions → that read asks for them, red; read the revert's with a whole
+// page → red.
+func TestAChangesWritesReadNoRevisionTheyDrop(t *testing.T) {
+	t.Parallel()
+	r := &changeReads{}
+	c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: r.wrap}}, codetest.Settings(),
+		map[string]string{"README.md": "one\n"})
+	c.branchOff("feature")
+	c.pat.Commit(c.patWork, map[string]string{"x.md": "x\n"}, "Add x")
+	head := strings.TrimSpace(c.pat.Git().Run(c.T, c.patWork, "rev-parse", "HEAD"))
+	n := c.openPushed(featureRef, "Read alone")
+	c.moveMain("main.md", "moved\n")
+	_, from := r.since(0)
+	rebased, err := c.write(rebase(c.repo, pat(), n, featureRef, head))
+	if err != nil || rebased.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the rebase did not land: %+v %v", rebased, err)
+	}
+	rebaseReads, from := r.since(from)
+	c.meetGate(n, lead())
+	w := merge(c.repo, alice(), n, c.change(n).Head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	c.requireMerged(n, res, err)
+	mergeReads, from := r.since(from)
+	if got, err := c.write(revertChange(c.repo, pat(), n, "refs/heads/revert-read-alone")); err != nil ||
+		got.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the revert did not land: %+v %v", got, err)
+	}
+	revertReads, _ := r.since(from)
+
+	for _, tc := range []struct {
+		write  string
+		reads  []code.ReadQuery
+		askers []string
+		limit  int
+		alone  bool
+	}{
+		{"rebase", rebaseReads, []string{codetest.FixturePat}, 0, true},
+		{"merge", mergeReads, []string{codetest.FixtureAlice}, 0, true},
+		{"revert", revertReads, []string{codetest.FixturePat}, 1, false},
+	} {
+		askers := map[string]bool{}
+		for _, q := range tc.reads {
+			askers[q.Asker.Seat] = true
+			if q.DetailOnly != tc.alone || q.Limit != tc.limit || q.Cursor != "" || q.Part != "" {
+				t.Errorf("the %s read change %d as %s as %+v, want detail_only %v and limit %d", tc.write,
+					q.Change, q.Asker.Seat, q, tc.alone, tc.limit)
+			}
+		}
+		// EVERY READ IT MAKES was seen: each write's as its asker.
+		for _, seat := range tc.askers {
+			if !askers[seat] {
+				t.Errorf("the %s asked no change read as %s among its %d", tc.write, seat, len(tc.reads))
+			}
+		}
 	}
 }
 

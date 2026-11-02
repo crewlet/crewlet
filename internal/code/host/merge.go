@@ -196,7 +196,10 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 // decide reads its rules: the repository's status, the change as the caller
 // read it, a seat's override, the target's tip, and — for a merge its gate
 // holds — whether its target is a queue's and whether its readiness, with its
-// asker as the merger, is met but for the merge its build proves.
+// asker as the merger, is met but for the merge its build proves. The change
+// is read as its DETAIL ALONE (code.ReadQuery.DetailOnly): a merge reads no
+// revision, and this read is made again at the log's head before a refusal
+// and on every rebuild, each a page of revisions' facts shipped for nothing.
 func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement, mergeVerdict, error) {
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
@@ -216,7 +219,7 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 	}
 	floor := statelog.FloorAt(statelog.ReadSession, wr.synced.Position)
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,
-		Change: w.Change, Fresh: floor})
+		Change: w.Change, DetailOnly: true, Fresh: floor})
 	switch {
 	case errors.Is(err, code.ErrChangeNotFound):
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalChangeNotFound, detail: fmt.Sprintf(

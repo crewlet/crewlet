@@ -7083,7 +7083,10 @@ change by its number, the head its caller read, the method, and — for a
 person — an override's reason, at most 1 KiB.
 
 1. **Judged before anything is built.** The node's copy is synced to the
-   caller's floor and the change read there, as its caller: a change that is
+   caller's floor and the change read there, as its caller — its detail
+   alone, with none of its revisions, which a merge never reads and whose
+   first page on a change pushed many times is up to 4 MiB of touched paths:
+   a change that is
    gone, closed or merged, a draft, into another branch or at another head is
    refused with the record's own codes (`change_not_found`,
    `change_not_open`, `change_draft`, `stale`, `head_moved`), and a seat's

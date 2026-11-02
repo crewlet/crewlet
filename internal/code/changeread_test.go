@@ -3,6 +3,7 @@ package code_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -159,6 +160,47 @@ func TestAChangeIsFoundByItsNumber(t *testing.T) {
 	}
 	if _, err := readChange(t, n, ada, "", "web", 1, 0, "two"); !errors.Is(err, code.ErrBadCursor) {
 		t.Errorf("a page of revisions after a cursor no read issued = %v, want ErrBadCursor", err)
+	}
+}
+
+// A CHANGE'S DETAIL IS READ ALONE WHEN IT IS ASKED ALONE (ReadQuery.
+// DetailOnly): a change pushed three times, read for its detail alone, answers
+// the very detail its first page of revisions carries — its row, its
+// description, its authors and its readiness, which the chart judges — and
+// not one revision beside it, nor a cursor to them: a merge's and a rebase's
+// build read the change again and again and neither reads a revision, each
+// of which carries its facts' touched paths.
+//
+// Mutation: read the revisions whatever the read asks → the detail comes
+// with three revisions, red.
+func TestAChangesDetailIsReadAloneWhenAskedAlone(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	web := changeRepo(t, n, "web")
+	opened, err := c.ProposeChange(ctx, opening(web, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	pushedBy(t, c, web, dev, update(featureRef, oidOf("B"), oidOf("B2")))
+	pushedBy(t, c, web, cto, update(featureRef, oidOf("B2"), oidOf("B3")))
+
+	page, err := readChange(t, n, ada, "", "web", 1, 0, "")
+	if err != nil || page.Change == nil || len(page.Revisions) != 3 {
+		t.Fatalf("web!1's first page = %+v, %v; want its detail and its three revisions", page, err)
+	}
+	alone, err := n.reader.Read(ctx, code.ReadQuery{Asker: ada, Kind: code.ReadChange, Repo: "web", Change: 1,
+		DetailOnly: true, Fresh: stale})
+	switch {
+	case err != nil || alone.Change == nil:
+		t.Fatalf("web!1's detail alone = %+v, %v; want its detail", alone, err)
+	case len(alone.Revisions) != 0 || alone.Next != "":
+		t.Errorf("web!1's detail alone came with %d revisions and cursor %q, want none", len(alone.Revisions),
+			alone.Next)
+	case alone.Change.Readiness == nil:
+		t.Errorf("web!1's detail alone carries no readiness, which every detail carries")
+	case !reflect.DeepEqual(alone.Change, page.Change):
+		t.Errorf("web!1's detail alone is %+v, want the first page's %+v", alone.Change, page.Change)
 	}
 }
 
@@ -516,6 +558,10 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"a change of no part":           {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Part: "diff"}, "part:"},
 		"a change for a reviewer":       {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Reviewer: "dev"}, "reviewer:"},
 		"a change that needs":           {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Needs: code.NeedReview}, "needs:"},
+		"a listing's detail alone":      {code.ReadQuery{Kind: code.ReadChanges, Repo: "web", DetailOnly: true}, "detail_only:"},
+		"a part's detail alone":         {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, DetailOnly: true, Part: code.PartRevisions}, "detail_only:"},
+		"a later page's detail alone":   {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, DetailOnly: true, Cursor: "2"}, "detail_only:"},
+		"a detail alone of a limit":     {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, DetailOnly: true, Limit: 1}, "detail_only:"},
 		"a history of a part":           {code.ReadQuery{Kind: code.ReadPushes, Repo: "web", Part: code.PartReviewers}, "part:"},
 		"comments past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,
 			Part: code.PartComments, Limit: code.MaxCommentsPerPage + 1}, "limit:"},
