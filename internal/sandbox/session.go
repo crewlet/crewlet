@@ -91,9 +91,14 @@ import (
 // ([ErrEndOwed]): after every capture of the turn has settled, so the end's
 // tombstone never refuses the turn's own last session, and with the turn's
 // NEWEST capture where it was not kept ([executordomain.Unkept]), so the log's
-// row never goes on naming an older session as the turn's last. The seat's mail
-// waits on it as on every ending kept for its retry. A turn with no capture
-// still ends: its row names no object, and holds the account.
+// row never goes on naming an older session as the turn's last. It is recorded
+// by the ending's own retry, at once, or by a seat's retirement, which
+// finishes its endings itself; never on the frame that decided the ending — a
+// completion's resume, a stop, a seat's recovery — since the log's write and a
+// capture still being kept are not that frame's to wait on ([errAskAway]). So
+// the row outlives that frame by the write, and the seat's mail waits on it as
+// on every ending kept for its retry. A turn with no capture still ends: its
+// row names no object, and holds the account.
 //
 // # The switch
 //

@@ -2795,8 +2795,12 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 //
 // After the resumed turn returns: if it relaunched its executor the row is
 // back in running and a new job owns the paused box, so it is left for the
-// next completion. Otherwise the phase is done with the box, so the box
-// is torn down and the run finished.
+// next completion. Otherwise the phase is done with the box, so the run's
+// ending is decided and the box torn down, and the record goes with the
+// ending's last step: here, or — where it owes the turn's end, as every
+// record of a coordinator that records on an executor log does — by this
+// node's retry of the ending, at once and after this returns
+// ([Coordinator.finishEnding]).
 //
 // IT REPORTS WHAT IT LEFT THE DELIVERY, not merely whether it failed, because
 // "the resume did not happen" is three different facts and only one of them is
@@ -3154,9 +3158,16 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		return AnswerConsumed, nil
 	}
 	c.finish(ctx, latest, ending{fence: fenceOf(run)})
-	// RECOUNTED, not assumed free: the store now has no record of this run,
-	// so the recount keeps only the seat's other live runs, and the seat's
-	// inbox hold lifts here, once the resumed turn is over.
+	// RECOUNTED, not assumed free. Where the ending owed nothing more, the
+	// store has no record of this run now, so the recount keeps only the
+	// seat's other live runs and the seat's inbox hold lifts here, once the
+	// resumed turn is over. Where the record OWES THE TURN'S END, the ending
+	// is decided here and finished by this node's retry, at once and off this
+	// frame ([errAskAway]): the log's write, and a capture still being kept,
+	// are not this frame's to wait on. The record outlives the resume by that
+	// write and is still counted here, and the hold lifts once the retry has
+	// deleted it, recounted the seat and settled the ending it kept
+	// ([Coordinator.retryOwed]).
 	c.syncSeat(ctx, run.AgentHandle)
 	// The ordinary ending: the turn came back and the run is finished, so
 	// whatever drove the resume did its whole job.
