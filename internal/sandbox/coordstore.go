@@ -1068,6 +1068,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 			// ([LaunchRecord.Brief]).
 			run.Handed = box.Handed
 			run.Launch.Brief = box.Brief
+			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in a continued
+			// one's place, for which of the two its box said it ran
+			// ([PendingRun.SessionRan]).
+			run.Launch.FreshSessionID = box.FreshSessionID
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).

@@ -861,3 +861,49 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 		})
 	}
 }
+
+// A ROUND IS CARRIED ON IN THE SESSION ITS JOB'S BOX RAN, never the one the
+// job's launch chose. A launch that continues a session names, beside it, the
+// session its script starts of its own where its box cannot take that one up,
+// and its box says which it started by the token its harness dials: a person's
+// answer, or a replaced sign-in, carries the round on in the one the box said —
+// the one of its own where it fell back, which no file in the box overrides —
+// and in the session the row names where the box took the chosen one up, or
+// has not said. A launch that continues no session names no second one.
+//
+// Mutation: carry the round on in the session the launch chose whatever the box
+// said, or leave the launch's second session off the job's record, and a case
+// goes red.
+func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
+	t.Parallel()
+	rig, restore, kept := keptTurn(t)
+	if first := rig.get("t1"); first.Launch.FreshSessionID != "" {
+		t.Fatalf("a launch that continued no session named a second one, %q", first.Launch.FreshSessionID)
+	}
+	if _, err := launchRestoring(t, rig, restore, continuingKept(kept)); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	fresh := rig.get("t1").Launch.FreshSessionID
+	if fresh == "" {
+		t.Fatal("a launch that continues a session named no session its script starts in its place")
+	}
+	run := PendingRun{TurnID: "t1", SessionID: "s-1", SandboxID: "box-1",
+		Launch: LaunchRecord{FreshSessionID: fresh}}
+	for name, tc := range map[string]struct {
+		said SessionStart
+		want string
+	}{
+		"its box took the chosen session up":   {said: SessionStartContinued, want: "s-1"},
+		"its box started a session of its own": {said: SessionStartFresh, want: fresh},
+		"its box has not said":                 {want: "s-1"},
+	} {
+		said := run
+		said.Launch.SessionStart = tc.said
+		if got := said.SessionRan(); got != tc.want {
+			t.Errorf("%s: the job ran %q, want %q", name, got, tc.want)
+		}
+		if asked := askedRun(said, AnswerWords{Text: "use main"}); asked.SessionID != tc.want {
+			t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
+		}
+	}
+}

@@ -282,6 +282,13 @@ type RunHandle struct {
 	// asked to continue a session its box neither held nor could restore
 	// starts a new one instead.
 	SessionID string
+
+	// FreshSessionID is that new one: the session of its own a job asked to
+	// continue SessionID starts in its place, named by the runner before the
+	// harness starts as SessionID is; empty for a job that continues none.
+	// With which of the two its box said it started ([LaunchRecord.SessionStart]),
+	// what names the session the job ran ([PendingRun.SessionRan]).
+	FreshSessionID string
 }
 
 // Result is one launch's outcome.

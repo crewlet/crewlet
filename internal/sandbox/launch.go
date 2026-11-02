@@ -688,7 +688,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
 		Harness: req.Spec.Harness, SessionID: handle.SessionID,
-		PauseTTLSec: req.Spec.PauseTTLSec,
+		FreshSessionID: handle.FreshSessionID,
+		PauseTTLSec:    req.Spec.PauseTTLSec,
 		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub —
 		// with what the jobs before it handed this box, where it continues
 		// in it: the box holds them still, and the session it resumes their

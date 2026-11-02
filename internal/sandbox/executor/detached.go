@@ -690,7 +690,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid,
 		"session", session.ID, "continues", session.Continues, "carried", req.Carried != nil)
-	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID}, nil
+	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID, FreshSessionID: session.Fresh}, nil
 }
 
 // refuseCarried is why req's carried session ([sandbox.RunRequest.Carried])

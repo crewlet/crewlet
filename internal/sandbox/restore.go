@@ -380,7 +380,7 @@ func parkedBoxContinues(run PendingRun, target RelaunchTarget) bool {
 	if run.Status != StatusAwaiting && run.Status != StatusAnswered {
 		return false
 	}
-	if !run.HasBox() || run.SessionID == "" || target.Harness == "" {
+	if !run.HasBox() || run.SessionRan() == "" || target.Harness == "" {
 		return false
 	}
 	parked := PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,

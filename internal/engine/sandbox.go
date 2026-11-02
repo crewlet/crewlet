@@ -4044,5 +4044,8 @@ func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput)
 		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID,
 		"detail", "the run was refused on a sign-in that was replaced while it ran; its round "+
 			"is carried on once, in its box, on the entry's new sign-in")
-	return &runner.Rotated{SessionID: run.SessionID, BoxKept: run.SandboxID != ""}
+	// THE SESSION THE JOB'S BOX RAN, never the one its launch chose: a box
+	// that could not take that one up ran one of its own, and the round is
+	// carried on in that ([sandbox.PendingRun.SessionRan]).
+	return &runner.Rotated{SessionID: run.SessionRan(), BoxKept: run.SandboxID != ""}
 }

@@ -2469,6 +2469,12 @@ type BoxRef struct {
 	SessionID   string
 	PauseTTLSec float64
 
+	// FreshSessionID is the session of its own a continuing job's script
+	// starts in the continued one's place ([RunHandle.FreshSessionID]),
+	// written by the attach that names the job's command, onto the job's
+	// record ([LaunchRecord.FreshSessionID]).
+	FreshSessionID string
+
 	// Handed is the secrets the launch handed the job's box, sealed
 	// ([PendingRun.Handed]): written by the attach that names the job's
 	// command, the one write that says the job exists.
@@ -2625,6 +2631,14 @@ type LaunchRecord struct {
 	// its box can say ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
 
+	// FreshSessionID is the session of its own the job's script starts in the
+	// continued one's place, where its launch continued one and its box
+	// neither held nor restored it ([RunHandle.FreshSessionID]); empty for a
+	// job whose launch continued none. Written with the job's command, as
+	// Brief is: with SessionStart, what names the session the job's box ran
+	// ([PendingRun.SessionRan]).
+	FreshSessionID string `json:"fresh_session_id,omitempty"`
+
 	// SessionStart is which session the job's box said it started, where its
 	// launch chose to continue one: that session, or one of the job's own its
 	// script started in that one's place, its restore having failed — said by
@@ -2645,7 +2659,8 @@ type LaunchRecord struct {
 	// own, holding none of them: the safe direction, since a guard short of a
 	// skill asks the run to load it again, and one holding a skill the
 	// session never read lets a call through that the skill exists to hold
-	// back.
+	// back. And what names the session the job's box ran, for a relaunch
+	// carrying its round on in that box ([PendingRun.SessionRan]).
 	SessionStart SessionStart `json:"session_start,omitempty"`
 
 	// Iteration is the turn iteration the launching executor suspended in,
@@ -2745,6 +2760,27 @@ type LaunchRecord struct {
 	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
 	// record by the relaunch that replaces it whole, since it is the job's.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// SessionRan is the harness session the job the row holds worked in, as its
+// launch and its box say it, for a relaunch that carries the job's round on in
+// the box it ran in — a person's answer, a replaced sign-in — to continue: the
+// session the box said it started of its own in a continued one's place
+// ([SessionStartFresh], [LaunchRecord.FreshSessionID]), which no file in the
+// box the run's model could rewrite overrides; and otherwise the session the
+// row names — the one the job's launch named (the session it continued, or
+// the one it minted for a session of its own), or, for a job parked on a
+// question, the one its collection read off the box.
+//
+// THE BOX'S WORD OVER THE LAUNCH'S CHOICE: a job asked to continue a session
+// whose box could not take it up ran another, and a relaunch continuing the
+// first in place would hand the guard that job's skill loads — made in the
+// second — for a transcript that never read them.
+func (r PendingRun) SessionRan() string {
+	if r.Launch.SessionStart == SessionStartFresh && r.Launch.FreshSessionID != "" {
+		return r.Launch.FreshSessionID
+	}
+	return r.SessionID
 }
 
 // SessionStart is which session a job's box said it started, where its launch

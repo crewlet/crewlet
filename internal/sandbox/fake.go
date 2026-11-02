@@ -614,6 +614,11 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	}
 	r.started = append(r.started, req)
 	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
+	// A CONTINUING RUN NAMES THE SESSION ITS SCRIPT STARTS OF ITS OWN in the
+	// continued one's place, as a runner does before its harness starts.
+	if req.Resume != "" {
+		handle.FreshSessionID = "fresh-" + handle.CommandID
+	}
 	if r.Player != nil {
 		r.plays[handle.CommandID] = &fakePlay{req: req}
 	}

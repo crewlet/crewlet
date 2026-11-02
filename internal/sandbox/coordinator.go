@@ -5218,7 +5218,7 @@ func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	}
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
-		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,
+		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionRan(),
 		BoxKept: run.SandboxID != "",
 		Label:   answer.Label,
 	}
