@@ -254,6 +254,13 @@ const (
 	// person acts is not a wait at all: the node calls that instance failed,
 	// and [MCPOutageGrace] applies. Held to the schedule by the same test.
 	MCPWaitingGrace = 5*time.Minute + coord.ReconcileInterval
+
+	// MCPSignInNotice is how long before an MCP server's OAuth grant runs
+	// out `mcp_oauth_expiring` stands. REASONED: a week is a working week
+	// and a weekend, time for the person who signed in, or another
+	// administrator, to sign in again before the agents lose the server;
+	// and a grant whose vendor states its life at all states months.
+	MCPSignInNotice = 7 * 24 * time.Hour
 )
 
 // ReadModel is what one domain DECLARES about the linearizable reads its log
@@ -396,6 +403,8 @@ const (
 	KindMCPServerPartial     Kind = "mcp_server_partial"
 	KindMCPServerWaitingLong Kind = "mcp_server_waiting_long"
 	KindMCPToolsRefused      Kind = "mcp_tools_refused"
+	KindMCPOAuthNeedsSignIn  Kind = "mcp_oauth_needs_sign_in"
+	KindMCPOAuthExpiring     Kind = "mcp_oauth_expiring"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -802,7 +811,45 @@ type MCPServerCondition struct {
 	// never fewer than Refused lists.
 	Refused      []string
 	RefusedCount int
+
+	// SignIn is the server's OAuth sign-in, nil for a server not signed in
+	// to with OAuth.
+	SignIn *MCPSignInCondition
 }
+
+// MCPSignInCondition is an MCP server's OAuth sign-in, as the fleet's record
+// of its grant holds it ([coord.MCPGrant]): never a token.
+type MCPSignInCondition struct {
+	// Held is whether anybody holds a grant for the server.
+	Held bool
+	// Failure is its vendor's words for the renewal it refused for good,
+	// bounded and redacted, and FailedAt when; "" while the grant renews.
+	Failure  string
+	FailedAt time.Time
+	// Expiry is when the grant runs out where its vendor said, zero where
+	// it did not.
+	Expiry time.Time
+}
+
+// needsSignIn reports whether s is a server nobody is signed in to, whose
+// vendor refused to renew its grant, or whose every instance the nodes hold
+// back for a sign-in (a grant made for an address the server is no longer
+// configured at): what `mcp_oauth_needs_sign_in` stands on, and what the
+// failing and partial kinds leave to it.
+func (s MCPServerCondition) needsSignIn() bool {
+	return s.SignIn != nil && (!s.SignIn.Held || s.SignIn.Failure != "" || s.heldForSignIn())
+}
+
+// heldForSignIn reports whether no instance of s serves and the one down
+// longest is held back for a sign-in, in the nodes' own class.
+func (s MCPServerCondition) heldForSignIn() bool {
+	return s.Started == 0 && s.Failed > 0 && s.Down.Class == MCPNeedsSignInClass
+}
+
+// MCPNeedsSignInClass is the failure class a node reports an instance held
+// back for a sign-in under (internal/mcp's FailNeedsSignIn), spelled here as
+// the outage grace is, and held to the client's by a test.
+const MCPNeedsSignInClass = "needs_sign_in"
 
 // MCPInstanceNote is the one instance a server's condition names: the node it
 // is on, its seat's handle ("" for a shared server's), its failure class ("" for
@@ -1634,9 +1681,13 @@ var table = []rule{
 		// serving instance has just gone down was already in an outage: an
 		// alarm that waited the grace again there would clear
 		// `mcp_server_partial` and say nothing while matters got worse.
+		//
+		// A SERVER NOBODY IS SIGNED IN TO is `mcp_oauth_needs_sign_in`'s:
+		// its instances are held back for a person's sign-in, which no
+		// restart and no fix to its address ends.
 		kind: KindMCPServerFailing,
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
-			if s.Started > 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
+			if s.needsSignIn() || s.Started > 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
 				return AlarmEntry{}, false
 			}
 			return AlarmEntry{Detail: fmt.Sprintf("no instance of %s is serving, and one has been down "+
@@ -1654,7 +1705,7 @@ var table = []rule{
 		// keeps dying, rather than the server.
 		kind: KindMCPServerPartial,
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
-			if s.Started == 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
+			if s.needsSignIn() || s.Started == 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
 				return AlarmEntry{}, false
 			}
 			verb := "are"
@@ -1706,6 +1757,55 @@ var table = []rule{
 			"long for the harnesses fits with a shorter `tool_prefix`, or none; a name a " +
 			"built-in holds needs a prefix; a name with characters a model cannot read is " +
 			"the server's own to change. No agent is offered those tools until then."),
+	},
+	{
+		// A SERVER SIGNED IN TO WITH OAUTH THAT NOBODY IS SIGNED IN TO, or
+		// whose vendor refused to renew its grant (in the vendor's own
+		// words). Raised at once: it is a person's step, and no wait ends
+		// it. No agent is offered the server's tools until somebody signs
+		// in.
+		kind: KindMCPOAuthNeedsSignIn,
+		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
+			if !s.needsSignIn() {
+				return AlarmEntry{}, false
+			}
+			if s.SignIn.Failure != "" {
+				return AlarmEntry{Detail: fmt.Sprintf("%s's sign-in can no longer be renewed: %s",
+					s.Server, s.SignIn.Failure), Since: s.SignIn.FailedAt}, true
+			}
+			if s.SignIn.Held {
+				return AlarmEntry{Detail: fmt.Sprintf("%s is held back for a sign-in%s", s.Server,
+					noted(s.Down)), Since: s.DownSince}, true
+			}
+			return AlarmEntry{Detail: fmt.Sprintf("nobody has signed in to %s, so it is not started",
+				s.Server)}, true
+		},
+		remedy: mcpRemedy("Sign in on the server's page (`POST /mcp-servers/<name>/oauth`), as " +
+			"an administrator who can approve the server's access at its vendor. The engine " +
+			"renews the sign-in from then on."),
+	},
+	{
+		// A GRANT THAT RUNS OUT within [MCPSignInNotice], where its vendor
+		// said when: the sign-in renews the access, and nothing renews the
+		// grant itself but a person signing in again.
+		kind: KindMCPOAuthExpiring,
+		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
+			if s.SignIn == nil || !s.SignIn.Held || s.SignIn.Failure != "" || s.SignIn.Expiry.IsZero() ||
+				s.SignIn.Expiry.Sub(now) > MCPSignInNotice {
+				return AlarmEntry{}, false
+			}
+			left := s.SignIn.Expiry.Sub(now)
+			if left <= 0 {
+				return AlarmEntry{Detail: fmt.Sprintf("%s's sign-in ran out at %s", s.Server,
+					s.SignIn.Expiry.UTC().Format(time.RFC3339)), Since: s.SignIn.Expiry}, true
+			}
+			return AlarmEntry{Detail: fmt.Sprintf("%s's sign-in runs out in %s, at %s", s.Server,
+				spoken(left), s.SignIn.Expiry.UTC().Format(time.RFC3339)),
+				Since: s.SignIn.Expiry.Add(-MCPSignInNotice)}, true
+		},
+		remedy: mcpRemedy("Sign in again on the server's page (`POST /mcp-servers/<name>/oauth`) " +
+			"before then; a new sign-in replaces the grant, and the agents keep the server " +
+			"throughout."),
 	},
 }
 
