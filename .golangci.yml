@@ -96,12 +96,17 @@ linters:
       #              that proves `typing_status: alwyas` is refused rather
       #              than silently degraded. Correcting it would assert the
       #              validator against a value that was never wrong.
+      #   versoin  — the typo'd key beside a checks file's `checks:` that
+      #              proves `crewlet validate` still tells the file apart
+      #              from both config tiers, and so reports the typo at its
+      #              line. Spelled right it is no typo, and tests nothing.
       ignore-rules:
         - noteable
         - requred
         - reasercher
         - enginer
         - alwyas
+        - versoin
     revive:
       rules:
         - name: exported
