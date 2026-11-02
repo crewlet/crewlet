@@ -26,11 +26,19 @@ const modulePath = "github.com/crewlet/crewlet"
 // with. Every seat's executor is such a run (ADR-0066), and so is the
 // Dashboard Assistant's deep work, so a walk over provider requests alone saw
 // no executor at all.
+//
+// AND WHAT A RUN IS HANDED TO REMEMBER: the session a relaunch continues is a
+// model's context before it reads a word of its brief, so the type that names
+// which kept session is restored into a run (sandbox.CarriedSession, the
+// restore carrier) is an input, and so is the continuation that tells it what
+// it lacks (SessionContinuation): the function that chooses either is listed
+// with the tests that hold whose session it is and what it reads.
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
-	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation"},
-	modulePath + "/internal/sandbox":       {"LaunchRequest", "Continuation", "RunRequest"},
-	modulePath + "/internal/assistant":     {"DeepRun"},
+	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation", "SessionContinuation"},
+	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
+		"CarriedSession"},
+	modulePath + "/internal/assistant": {"DeepRun"},
 }
 
 // modelCall says, for one function that builds a model's input (one of
@@ -113,10 +121,21 @@ var modelCalls = map[string]modelCall{
 	// seat's system prompt and the turn's brief, and carried on, after its
 	// question was answered or its job lost, with that brief again and what
 	// became of the run before it. Every foreign word in either arrived
-	// fenced under the turn's token (the trigger the task is described from,
-	// the prefetched blocks, what the run's tools read over the bridge), the
-	// system says what a fence is, and a reply to the run's question is a
-	// chat participant's words, fenced as the trigger labelled them.
+	// fenced under the token of the segment that built it (the trigger the
+	// task is described from, the prefetched blocks, what the run's tools
+	// read over the bridge), the system says what a fence is, and a reply to
+	// the run's question is a chat participant's words, fenced as the trigger
+	// labelled them.
+	//
+	// A RELAUNCH CONTINUES THE TURN'S SESSION (continued.go), whose context
+	// holds what earlier segments read, fenced under THEIR tokens, and what
+	// the run's harness read in its boxes: a model reads mixed tokens, and
+	// what holds them is that no foreign word in any of it carries an
+	// unescaped marker of any token (provenance.Neutralise, ADR-0040), so
+	// nothing an earlier read wrote opens or closes a later fence. What the
+	// continuation adds — the notes the session has not read, the calls made
+	// after it was saved, the engine's record of its box — is fenced or
+	// defused under the relaunching segment's token.
 	//
 	// TWO THINGS RIDE UNFENCED, defused, ON PURPOSE: an answer by turn and a
 	// note a person sends the turn. Each is a person's instruction to this
@@ -155,6 +174,28 @@ var modelCalls = map[string]modelCall{
 	}},
 	"internal/engine/agentrun.go:sandboxContinuation": {tests: []string{
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
+	}},
+	// THE CONTINUATION OF A KEPT SESSION, composed by the runner and carried
+	// by the engine to the launch: the engine's own words and the seat's, the
+	// notes the session has not read as their senders' (each defused, as a
+	// note in any brief is), the calls made after the session was saved
+	// defused under the turn's token, and the engine's record of the session's
+	// box and branch defused.
+	"internal/agent/runner/continued.go:keptSession": {tests: []string{
+		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
+		"internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved",
+		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+	}},
+	"internal/engine/executorrestore.go:sandboxSession": {tests: []string{
+		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
+	}},
+	// THE RESTORE CARRIER: which session object a run is handed to remember.
+	// The turn's own, of the seat whose run it is — read off the turn's own
+	// row and opened against that row's associated data, so no other seat's
+	// or turn's session opens into the run.
+	"internal/sandbox/restore.go:carriedSession": {tests: []string{
+		"internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn",
+		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
 	}},
 	"internal/sandbox/launch.go:Launch": {tests: []string{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
