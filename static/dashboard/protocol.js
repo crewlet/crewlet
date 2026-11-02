@@ -4192,6 +4192,17 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	set_channel_members: {
+		args: [
+			"channel",
+			"members",
+			"expected_members"
+		],
+		domain: "chat",
+		apps: ["chatlet"],
+		refreshes: [],
+		scope: "person"
+	},
 	mark_chat_read: {
 		args: [
 			"cursors",
