@@ -544,7 +544,8 @@ title, what it is for and whether it is on, its state and its counts on each
 node, why an instance failed in [a class](#why-a-server-failed) and since
 when, each instance's seat and state, every tool it lists with its hints,
 risk and arguments, the tools not offered under their names, how it signs in
-(`none`, `headers` or `integration`) and the integration it reads, and the
+(`none`, `headers` or `integration`) and the integration it reads, how often
+each tool was called over the last week and how those calls ended, and the
 curated catalogue.
 
 A member's reading names no launch line, header, variable, account or call:
@@ -552,8 +553,9 @@ no command, arguments or address; no failure's or wait's sentence, which can
 quote what a server said or name the variables an instance waits for; not the
 headers or variables a seat's credential goes in, nor the seats whose boxes
 are given the server; not the server's instructions or what removing it would
-take with it; not how its tools were used (`usage` and `calls`, which name seats, turns
-and outcomes); and no community registry or search. An administrator, whoever
+take with it; not who called a tool (each tool's `seats`) nor any one call
+(`calls`, which names a seat, a turn and an outcome); and no community
+registry or search. An administrator, whoever
 `config.read` admits, reads all of it (`reading: "admin"`), and every change
 is theirs. A member's answer is built from types of its own, copied field by
 field, so a field added to the administrator's answer reaches no member until

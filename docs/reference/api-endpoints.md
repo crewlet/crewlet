@@ -9676,9 +9676,13 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
 - `last_failure` as `{class, at, node, seat}`;
 - `resolved` as `{auth, runs_on, timeouts, binding}`, `binding` as
   `{vendor, by}`, without the `keys` a seat's credential goes in, the
-  `box_seats` or the placement `warnings`.
+  `box_seats` or the placement `warnings`;
+- `usage` as `{since, until, days, tools, elided}`, each tool's row
+  `{tool, calls, failed, unavailable, refused, total_ms, last_at}`, without
+  the `seats` that called it: how often a tool is used tells a member whether
+  it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions` and `dependants`.
+It leaves out `instructions`, `dependants` and `calls`.
 
 ```json
 {
@@ -9709,7 +9713,10 @@ It leaves out `instructions` and `dependants`.
   "resolved": {"auth": "integration", "runs_on": "engine_host",
                "timeouts": {"startup_seconds": 120, "request_seconds": 300,
                             "startup_default": true, "request_default": true},
-               "binding": {"vendor": "github", "by": "recognised"}}
+               "binding": {"vendor": "github", "by": "recognised"}},
+  "usage": {"since": "2026-10-26", "until": "2026-11-01", "days": 7, "elided": 0,
+            "tools": [{"tool": "get_issue", "calls": 18, "failed": 1, "unavailable": 0,
+                       "refused": 0, "total_ms": 7380, "last_at": "2026-11-01T09:02:11Z"}]}
 }
 ```
 
