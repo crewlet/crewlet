@@ -641,8 +641,8 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 	case draft:
 		return code.ChangeProposal{Draft: &code.ChangeDraft{Draft: argBool(args, "draft")}}, nil
 	case retarget:
-		target, refusal := branchArg(tool, "target", args)
-		if refusal != nil {
+		var target string
+		if target, refusal = branchArg(tool, "target", args); refusal != nil {
 			return code.ChangeProposal{}, refusal
 		}
 		return code.ChangeProposal{Retarget: &code.ChangeRetarget{TargetRef: target}}, nil
