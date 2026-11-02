@@ -33,20 +33,13 @@ const (
 	// ([trainRows]), every entry of the new one testing, its candidates'
 	// rows, its pack's row, the repository's and the queue's horizon.
 	candidateDecidedRows = trainRows + MaxCandidateEntries + MaxQueueDepth + 1 + 1 + queueHorizonRows
-	// brokenDecidedRows: the landing's row and the repository's, and the
-	// notices its routing makes.
-	brokenDecidedRows = 2 + routingNoticeRows
-	// greenDecidedRows: the target's green row, the repository's, and the
-	// landings it marks green ([greenLandingRows]).
-	greenDecidedRows = 2 + greenLandingRows
-	// greenLandingRows is the most landings one green record marks green:
-	// half of MaxRecordRows, 2 000 — JUDGMENT: what lies above a target's
-	// green row is the landings no queue tested first, a person's override
-	// merges and pushes, each one landing; two thousand of them is a target
-	// whose tip checks run that far behind its people, and its next green
-	// names an earlier landing first, refused record_full until it does. A
-	// green past it would be a record past MaxRecordRows.
-	greenLandingRows = MaxRecordRows / 2
+	// brokenDecidedRows: the landing's row, the target's row of tip work, the
+	// repository's, and the notices its routing makes.
+	brokenDecidedRows = 3 + routingNoticeRows
+	// greenDecidedRows: the target's green row, its row of tip work and the
+	// repository's — whatever lies beneath the green: a landing is green by
+	// its position, so no green writes one a landing ([Applier.applyGreen]).
+	greenDecidedRows = 3
 )
 
 // ejectDecidedRows is the most rows an eject of n entries makes its apply
@@ -57,9 +50,9 @@ func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 // landDecidedRows is the most rows a land of n entries makes its apply touch
 // of its OWN, beside the pushes it lands: each entry's change merged, its
 // stored readiness cleared ([clearReadiness]), its entry landed and its
-// landing row; the target's green row; its train's landed candidates; and the
-// queue's horizon.
-func landDecidedRows(n int) int { return 4*n + 1 + MaxQueueDepth + queueHorizonRows }
+// landing row; the target's green row and its row of tip work; its train's
+// landed candidates; and the queue's horizon.
+func landDecidedRows(n int) int { return 4*n + 2 + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
 // they move ([entryRows]): each its push row, the target's move and its
@@ -420,8 +413,8 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 // decideGreen is a green's rules over the rows tx holds: a landing record at
 // Through on the target, above its green row, whose last landing's commit is
 // OID (no_landing); every check the target's gate requires passed on OID by
-// its latest attempt checked for the target (not_green); and the landings it
-// marks green within its record (record_full).
+// its latest attempt checked for the target (not_green). Never record_full:
+// it writes [greenDecidedRows] whatever lies beneath it.
 func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (queueDecision,
 	error) {
 
@@ -454,19 +447,6 @@ func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (que
 	if waiting := notPassed(gate.Checks, checks); len(waiting) > 0 {
 		return d.refuse(MergeRefusalNotGreen, fmt.Sprintf("%s's required checks have not all passed on %s: %s — "+
 			"a green row moves only on green", g.TargetRef, short(g.OID), strings.Join(waiting, ", ")))
-	}
-	from := int64(0)
-	if held {
-		from = green.Position.Packed()
-	}
-	var marks int
-	if err := tx.QueryRowContext(ctx, landingsGreenedSQL, g.RepoID, g.TargetRef, from, g.Through.Packed(),
-		greenLandingRows+1).Scan(&marks); err != nil {
-		return queueDecision{}, fmt.Errorf("code: count %s's landings up to %s: %w", g.TargetRef, g.Through, err)
-	}
-	if marks > greenLandingRows {
-		return d.refuse(MergeRefusalRecordFull, fmt.Sprintf("more than %d of %s's landings lie between its green "+
-			"row and %s: a green names an earlier landing first", greenLandingRows, g.TargetRef, g.Through))
 	}
 	d.payload = g
 	return d, nil
@@ -1060,14 +1040,14 @@ func ejectedDetail(x Ejection) (string, error) {
 // entries by their key, driven from the list; a train's candidates at a
 // record's position, over code_candidates_train_idx; a landing record's tip,
 // its last landing by the landings' key; a landing by its key, its commit and
-// whether it is broken, and what a broken one announces; and the landings a
-// green marks, counted over the key's
-// range above the target's green row; and the entries a push record ended by
+// whether it is broken, and what a broken one announces; and the entries a
+// push record ended by
 // moving their changes' heads, driven from the list of the changes, one seek
 // of code_queue_change_idx a change.
 const (
 	entriesNamedSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?1) AS j
-		CROSS JOIN code_queue AS q WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
+		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
+		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
 	pushEjectedSQL = `SELECT q.entry_id FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
 		WHERE q.change_id = CAST(j.value AS TEXT) AND q.ended_position = ? AND q.state = ? AND q.end_reason = ?`
@@ -1081,6 +1061,4 @@ const (
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	landingNamedSQL = `SELECT kind, change_id, merged_by FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
-	landingsGreenedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_landings
-		WHERE repo_id = ? AND target_ref = ? AND position > ? AND position <= ? LIMIT ?)`
 )

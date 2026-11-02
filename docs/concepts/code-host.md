@@ -208,6 +208,16 @@ and every backup. The code log records the reference as written, and the code
 host resolves it — from the [secret store](secret-store.md), then the
 environment — only when it dials ([`${VAR}`
 references](configuration.md#var-references)); unset fetches anonymously.
+**And the variable is one an administrator declared for the URL's host**, in
+[`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials):
+the node sends the value to the remote's host, so a reference nothing bounded
+would let whoever may create a repository have a git node send any value it
+can resolve — its keyring, a Tier A token, the object store's key — to a host
+of their choosing. A declaration naming any other is refused when the revision
+is written, a person's create or settings change naming one is refused
+`not_permitted` by the data node that decides it, naming the host and the
+variables declared for it, and every dial resolves no other, under the table
+its node holds then. A host is matched whole, its port included.
 Only a person or this document sets a mirror or an import: a seat asking to
 create a repository with one, or to set or remove either mirror of one, is
 refused `not_permitted` whatever its grant, since a pull mirror and an import
@@ -781,8 +791,11 @@ certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
 `SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
 A `credential` is always one whole `${VAR}` reference, kept as the reference
 on every data node and in every backup and resolved from the secret store,
-then the node's environment, each time the node dials; it is sent in a header,
-never on git's command line, and redacted from every line the node logs.
+then the node's environment, each time the node dials — and only where the
+node's current `code.remote_credentials` declares the variable for the URL's
+host, or the attempt fails at its dial with nothing resolved; it is sent in a
+header, never on git's command line, and redacted from every line the node
+logs.
 
 **A failure is the home's to know.** A push to another host is no record on
 the code log, so whether a mirror is level is something only its home knows,
@@ -1677,7 +1690,9 @@ answer that holds every record the code log had committed when it was asked.
 
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
-  `<backend>:<id>`, such as `native:<task id>` — a **state**, a **reviewer**
+  `<backend>:<id>`, such as `native:<task id>`, which is what a change's row
+  holds; the code tools also take a Worklet item's key or id, as the change
+  writes do, and ask for the identity it resolves to — a **state**, a **reviewer**
   or **what its changes wait on**, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
@@ -1782,7 +1797,10 @@ rows, resumes after the last it kept, and reads every row after it once.
 
 **A seat reads changes with its code tools**, and a person's assistant with
 the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code)):
-`code_list_changes` is the listing, and `code_get_change` one change a part at
+`code_list_changes` is the listing — its `work` named as `code_open_change`
+names the item a change carries, so a seat woken on `ENG-42` lists that
+item's changes by the key it holds, resolved through Worklet's own read to the
+item's identity before the listing is asked — and `code_get_change` one change a part at
 a time — its summary, its [merge readiness](#merge-readiness), a revision's
 files and a file's patch from the base its facts record or, since an earlier
 revision, what changed between the two ([What changed between two
@@ -5318,10 +5336,12 @@ memory — only each copy's cohorts and what each holds, 16 bytes a cohort, of
 which a copy has some seventeen at the most — so a node's memory does not
 grow with its memo, however large its disk; and it keeps no more than 32
 cohorts, so a read the memo misses looks in at most that many places before
-it runs git. After a restart, what the previous process kept is older than
-anything kept or read since, so it goes first unless it is read again; the
-node lists each copy's cohorts once, behind the serving, and counts any a
-crash left unrecorded. Every read checks the
+it runs git. The node writes down each cohort's number, durably, in its cache
+directory (`memo-cohorts`) before it opens it, and a restart opens past the
+last one written, so what the previous process kept is older than anything
+kept or read since, and goes first unless it is read again; the node lists
+each copy's cohorts once, behind the serving, and counts whole any a crash
+left unrecorded. Every read checks the
 answer against its own header — the key it answers and the SHA-256 of what it
 holds — so one a crash cut short or a disk damaged is computed again rather
 than served, and nothing behind the serving hashes the memo. A rebuild keeps
@@ -6308,7 +6328,7 @@ change as whoever enqueued it.
 | `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
 | `not_green` | A landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
 | `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |
-| `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. A green marking more than 2 000 landings names an earlier one first. |
+| `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. Never a green: it moves one row whatever lies beneath it, every landing at or below the green row green by its place. |
 | `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
@@ -6338,8 +6358,9 @@ queue order with their places, beside the trains testing a named
 repository's branches; `landings`, one protected branch's landings above its
 green row; and `green`, each protected branch's newest commit whose required
 checks passed. The repository's home reads a fourth, `queue_due` — the active
-repositories holding a live entry, and one repository's queue work a branch a
-page — which no person or seat may read.
+repositories holding a live entry or a given-up train's unfinished check, and
+one repository's queue work a branch a page, its first page with those
+checks — which no person or seat may read.
 
 #### What the home does with a queue
 
@@ -6348,10 +6369,10 @@ worker of [the home's loop](#the-homes-change-work), nudged by every record
 of the repository's queue and passing every repository holding a live entry
 on the loop's backstop. Each turn reads one branch's **queue work** in ONE
 snapshot — the branch's tip, the gate its queue lands under, its live entries
-in queue order (as many as a train can take, each with who enqueued it and
-the change its merge is written from) and its live train, each candidate's
-commits with the latest attempt of each required check on each — and takes
-the train's next step from it, as a record the committer decides from its
+in queue order (the first `depth` × `batch`, as many as a train can take,
+each with who enqueued it and its change) and its live train, each
+candidate's commits with the latest attempt of each required check on each —
+and takes the train's next step from it, as a record the committer decides from its
 own snapshot. A step decided from rows the log has moved past is refused
 there and read again on the next turn, so a home that crashes, or hands the
 repository to another git node, leaves nothing behind but rows: **the next
@@ -6363,8 +6384,11 @@ holds.
   the home builds a new one onto the branch's tip: up to `depth` candidates
   of **min(`batch`, ⌈W/`depth`⌉)** of the W waiting entries each, so a queue
   that keeps up tests each change alone and lands it at once, and a queue
-  falling behind takes up to `batch` changes a candidate. The whole train is
-  ONE chain of merges built in one scratch, its objects one pack, recorded by
+  falling behind takes up to `batch` changes a candidate. Only a turn that
+  builds reads the changes' descriptions — the body and the authors each
+  merge's message is written from — so the turns that test, land or bisect,
+  one on every record of the train's checks, read none of them. The whole
+  train is ONE chain of merges built in one scratch, its objects one pack, recorded by
   one `candidate` record that abandons the branch's earlier train. The
   record states the drop epoch of the copy the chain was built from, so a
   train built before an expunge of the repository's unreachable objects
@@ -6398,11 +6422,25 @@ holds.
   finds its culprit in log₂ `batch` more rounds, and while it does nothing
   behind it lands, since every later candidate holds the culprit too. That
   is why `batch` defaults to two: under arrivals as fast as the queue lands
-  at a 5 % failure rate and the default depth, a change waits at most 17
-  rounds at p99 from the moment it was queued, against 23 at a batch of
-  four and 44 at eight, while a queue that never batches falls further
-  behind with every red candidate. A larger batch spends fewer check runs a
-  landed change (0.89 at two, 0.78 at four, 0.63 at eight) for that wait.
+  at a 5 % failure rate and the default depth, a change waits at most 5
+  rounds at p99 from the moment it was queued, against 9 at a batch of four
+  and 12 at eight, while a queue that never batches falls further behind
+  with every red candidate. A larger batch spends a few fewer check runs a
+  landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait.
+- **Cancel what a given-up train still runs.** An eject, a dequeue, a person
+  moving the branch and a new train each give the branch's train up, and
+  its candidates' and probes' checks still queued or running measure commits
+  nothing will land — while holding a git node's `git.max_checks` cells or
+  the company's e2b box time ahead of the live train's, since a runner takes
+  the oldest queued first. The home **cancels** each of them, `dequeued`
+  where a change its candidate merged left the queue and `abandoned`
+  otherwise, and a box running one stops once its row has ended. A check is
+  given up by its COMMIT, not its candidate: a train built again from the
+  same entries is the same commits, and its test of one an earlier train's
+  run is measuring takes that run as its own, so the home cancels nothing in
+  the turn that records a train and, in the next, only what the new train
+  does not test. A commit a later train tests again after its run was
+  cancelled is queued again, up to the check's last attempt.
 - **Close the work item.** Once a landing has applied, every landed entry
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
@@ -6467,13 +6505,19 @@ checks its gate requires, and its landings above the green, oldest first, each
 with the latest attempt of each required check on its commit for the branch —
 and worked by its `checks` worker:
 
-1. **The newest landing is dispatched**, and only the newest: a required
-   check it holds no attempt of is queued there (purpose `tip`). Landings that
-   are no longer the newest are never dispatched, so a burst of pushes costs
-   one round of checks. A fast-forward landing is the very commit its change's
-   head checks measured, and its head's attempts count.
+1. **The newest landing is dispatched**, and only the newest, **one round at
+   a time**: a required check it holds no attempt of is queued there (purpose
+   `tip`) once no tip check on another of the branch's commits is still
+   queued or running. Landings that are no longer the newest are never
+   dispatched, and a round a later landing superseded runs to its end, whose
+   record has the home dispatch whatever is newest then — so the landings that
+   arrive while a round runs are measured together by the next, and a branch
+   landed on faster than its checks run keeps one round in flight, never one
+   a landing. A fast-forward landing is the very commit its change's head
+   checks measured, and its head's attempts count.
 2. **Every required check passed there**: a `green` record moves the branch's
-   green row onto it — and every landing below it green with it. A branch whose
+   green row onto it — and every landing below it is green with it, by its
+   place, in that one record (below). A branch whose
    gate requires no check is green at its newest landing as it stands.
 3. **One failed there**: the failed checks are **bisected over the landing
    rows** — never over git's history, whose merge commits lead into change
@@ -6508,14 +6552,26 @@ broke it is still named.
 branch holding more is read as its oldest 256 and its newest: its newest is
 still dispatched, and a culprit past those 256 is named once a green tip clears
 the landings before it — or a person reverts to the last green; the home logs
-`code_tip_culprit_past_the_window` meanwhile.
+`code_tip_culprit_past_the_window` meanwhile, once for each tip that meets the
+gap rather than on every turn that finds it standing, and once more after the
+home restarts or moves.
 
-**The home finds the work from the rows.** A repository with a landing
-neither green nor broken is listed by the home's `checks_due` read, over an
-index holding exactly those landings, so its backstop pass finds a branch
-whose nudge was lost within a minute, and never reads the thirty days of green
-landings behind it. A branch whose culprit is named stays listed until a tip
-passes; its home's pass reads its window and finds nothing owed.
+**The home finds the work from the rows.** A branch holding a landing above
+its green row that no bisect found broken holds one row of tip work, which
+the landing's record writes and the record that moves the green past it — or
+names the last of them broken — removes. The home's `checks_due` read lists
+the repositories, and one repository's branches, from those rows, so its
+backstop pass finds a branch whose nudge was lost within a minute at the cost
+of a row a branch: never one a landing waiting above a red tip, and never the
+thirty days of green landings behind it. A branch whose culprit is named stays
+listed while landings lie above the culprit, until a tip passes; its home's
+pass reads its window and finds nothing owed.
+
+**A green is one record whatever lies beneath it.** A landing is green by its
+place — at or below its branch's green row — never by a mark of its own, so a
+`green` record moves that one row however many landings lie beneath it, and a
+branch that gathered any number of unproven landings behind a red tip greens
+again on the first tip that passes.
 
 ### How a candidate is built
 
@@ -8157,7 +8213,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_memo_corrupt` | `WARN` | An answer in a repository's memo (`cohort`, `entry`) did not read back whole — cut short, changed, or another answer's — so it was removed and the read computed it again. More than a rare one is the node's disk damaging what it holds. |
 | `code_cache_memo_unremoved` | `WARN` | An answer that did not read back whole could not be removed (`error`): every read of it is answered by git until it is. |
 | `code_cache_memo_unwritten` | `WARN` | A read could not keep the pages it cut (`error`), so it answered without keeping them, and the next read of them runs git again. Once a read. |
-| `code_cache_memo_unlisted` | `WARN` | The node could not list a copy's memo after its boot (`error`), or count a cohort of it no state recorded: it tries again at the janitor's next pass, and meanwhile counts only what the copy's state recorded. |
+| `code_cache_memo_unlisted` | `WARN` | The node could not list a copy's memo after its boot (`error`), or count a cohort of it no state recorded: it tries again at the janitor's next tick, once a minute, and meanwhile counts what the copy's state recorded and what was kept since, never that cohort. So while the line repeats the cache counts less than it holds on the disk — the cohort it could not count — and its budget is held to a total short of the disk by that much. Fix the disk, or the permissions of the copy's `crewlet/memo` directory and the cohorts in it; the next tick then counts what they hold. |
+| `code_cache_memo_unreserved` | `WARN` | The node could not write down the memo's next `cohort` in its cache directory (`error`), so it did not open it: answers go on into the newest, and the node tries again once another sixteenth of the memo's share has been kept. The disk refusing a write or a rename within the cache's own directory. |
+| `code_cache_memo_cohorts_unread` | `WARN` | At its boot the node found no readable record of the memo's cohorts its previous process opened (`path`, `error`) — the file removed or damaged — so it opened past what the copies' states record alone: a cohort a crash left may be counted short until a trim takes it. It writes the record again at once. |
 | `code_cache_memo_foreign` | `WARN` | A copy's memo held something no cohort is — `found` names the first, as a build that kept the memo in one directory left it — so the node moved the whole memo aside unread; its answers are computed again as they are asked. |
 | `code_cache_memo_unstated` | `WARN` | The node could not write a copy's state after its memo moved (`error`): it tries again at its next tick, and a restart before then counts the memo as the last state written does. |
 | `code_cache_memo_carried` | `INFO` | A rebuild, or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)), moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |

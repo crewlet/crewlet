@@ -37,7 +37,8 @@ import (
 // already landed. The source's token is the node's too: -credential names the
 // variable that holds it, in the node's secret store or environment, and is
 // recorded as that reference — the token never crosses this command line, nor
-// any record (M6-D17). `-local` is the other import, this machine's git
+// any record (M6-D17). The variable is one an administrator declared for the
+// source's host in code.remote_credentials, or the node refuses the import. `-local` is the other import, this machine's git
 // pushing into a repository that exists (codeimport.go), for a source only
 // this machine can reach.
 //

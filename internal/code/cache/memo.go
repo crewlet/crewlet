@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -126,17 +127,21 @@ import (
 // again once the memo's record has moved since it was last written — at its
 // TICK, so at most once an EvictInterval a copy however often the memo moves,
 // since a state is two syncs (janitorPass) — so a boot counts the memo within
-// a tick of its writes (Layout.Held) without walking it. A boot opens a
-// cohort past every one a state records, so whatever a previous process left
-// is older than anything placed or read since, and goes first unless a read
-// moves it on. The janitor LISTS each copy's tree once a process, behind the
-// serving and never on a request (listMemos): the names of its cohorts, never
-// its entries. A cohort no state records — placed after the last state a crash
-// kept — is measured then and counted; one recorded and gone is forgotten; and
-// a tree holding anything but cohorts is no memo of this build's and goes
-// whole, unread. What a crash costs the count is what was placed in a cohort a
-// state records after that state was written — a tick's writes at most, given
-// back with the cohort when the trim takes it.
+// a tick of its writes (Layout.Held) without walking it. A cohort's number is
+// RESERVED — written in the cache's root and made durable (reserveCohort) —
+// before the node's newest moves to it, and a boot opens its newest past both
+// the newest reserved and the newest any state records (openMemo), so
+// whatever a previous process left, recorded or not, is older than anything
+// placed or read since, and goes first unless a read moves it on. The janitor
+// LISTS each copy's tree once a process, behind the serving and never on a
+// request (listMemos): the names of its cohorts, never its entries. A cohort
+// no state records — placed after the last state a crash kept — is measured
+// then and counted whole, since nothing placed or read since reaches it; one
+// recorded and gone is forgotten; and a tree holding anything but cohorts is
+// no memo of this build's and goes whole, unread. What a crash costs the
+// count is what was placed in a cohort a state records after that state was
+// written — a tick's writes at most, given back with the cohort when the trim
+// takes it.
 
 // memoFile is this file as the memo's declared write names its writer
 // (Writer.File): every placement, move and removal of an entry is made here.
@@ -794,8 +799,8 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		placed += memoBytesOf(st.size)
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if inc.discarded {
+		e.mu.Unlock()
 		return // its bytes left the total with it
 	}
 	cs := inc.derived[DerivedMemo].Cohorts
@@ -811,6 +816,10 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		cs, _ = withoutCohort(cs, n)
 	}
 	c.setMemo(inc, withCohort(cs, n, placed-prior), true)
+	// Counted with the entry let go: the placement that fills the newest
+	// reserves the next (memoPlaced), two syncs, and every lookup of this
+	// copy takes e.mu.
+	e.mu.Unlock()
 	c.memoPlaced(placed - prior)
 	// PAST ITS SHARE, the memo's trim is due at once rather than at the
 	// janitor's tick: no eviction is for the excess (overBudget), so nothing
@@ -825,29 +834,147 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 // cohort is the answers placed and read over a sixteenth of the share's worth
 // of placements, which is what a trim of it gives back. Only a placement opens
 // a cohort: an entry a read moves on adds nothing to the memo, so a memo read
-// over and over and placed in seldom stays in few cohorts. e.mu may be held;
-// cohortMu is taken after every other lock.
+// over and over and placed in seldom stays in few cohorts. The next cohort is
+// RESERVED before it opens (reserveCohort); one that cannot be is logged
+// (code_cache_memo_unreserved) and the newest stays open for another
+// sixteenth of the share's placements, when the next is tried — a newest
+// larger than its sixteenth costs the trim's granularity, a cohort opened
+// unreserved the count a crash would leave. e.mu is not held; cohortMu is
+// taken after every other lock.
 func (c *Cache) memoPlaced(n int64) {
 	c.cohortMu.Lock()
 	defer c.cohortMu.Unlock()
 	c.memoFill += max(n, 0)
-	if c.memoFill >= c.memoShare()/memoCohortsPerShare {
-		c.memoNewest.Add(1)
-		c.memoFill = 0
+	if c.memoFill < c.memoShare()/memoCohortsPerShare {
+		return
 	}
+	c.memoFill = 0
+	next := c.memoNewest.Load() + 1
+	if err := c.reserveCohort(next); err != nil {
+		c.log.Warn("code_cache_memo_unreserved", "cohort", next, "error", err)
+		return
+	}
+	c.memoNewest.Store(next)
 }
 
 // openCohortPast makes the node's newest cohort one past n, where it is not
-// already: what the trim does before it drops a newest cohort that is also
-// the oldest, and the listing for a cohort a previous process opened past
-// every one its states record.
-func (c *Cache) openCohortPast(n uint64) {
+// already, and reports whether the newest is past n: what the trim does
+// before it drops a newest cohort that is also the oldest, and the listing
+// for a cohort it found at or past the newest — which a reservation leaves
+// none of, but a cache root whose record of it was lost does
+// (code_cache_memo_cohorts_unread). A cohort that cannot be reserved is not
+// opened, and is logged (code_cache_memo_unreserved).
+func (c *Cache) openCohortPast(n uint64) bool {
 	c.cohortMu.Lock()
 	defer c.cohortMu.Unlock()
-	if c.memoNewest.Load() <= n {
-		c.memoNewest.Store(n + 1)
-		c.memoFill = 0
+	if c.memoNewest.Load() > n {
+		return true
 	}
+	if err := c.reserveCohort(n + 1); err != nil {
+		c.log.Warn("code_cache_memo_unreserved", "cohort", n+1, "error", err)
+		return false
+	}
+	c.memoNewest.Store(n + 1)
+	c.memoFill = 0
+	return true
+}
+
+// reserveCohort makes n the newest cohort any process of this cache may place
+// an answer in, DURABLY, before the node's newest moves to it: the number
+// staged in tmp/, synced, renamed over the cache root's cohortsName and the
+// root synced. A number already reserved writes nothing. cohortMu is held.
+//
+// IT IS WHAT MAKES A BOOT'S NEWEST NEW. A cohort is placed in and read into
+// between two of the janitor's ticks, and a state records it only at the
+// next, so a crash leaves cohorts no state records — usually the newest the
+// process had opened. A boot that opened its newest past the states alone
+// could open exactly that crash's cohort, and its first placements and hits
+// would then record it in the copy's record at what they added, which the
+// listing — that counts a cohort no record names, and passes over one a
+// record does — would never measure whole: the crash's answers on the disk,
+// in no count, written into every state from then on. Past the reservation,
+// no placement or hit of a new process reaches a cohort a previous one made.
+//
+// ONE COHORT A RESERVATION: two syncs a cohort opened, which is once per
+// sixteenth of the share's placements — 1.6 GB of answers at a 400 GB
+// budget — and once a boot. A block of numbers reserved at once would sync
+// less, but a boot opens past the whole block, and the tick's bound on the
+// cohorts the node keeps reads the span of their numbers (trimMemo's
+// maxMemoCohorts), so numbers a boot skipped would drop cohorts that are not
+// old.
+func (c *Cache) reserveCohort(n uint64) error {
+	if n <= c.memoReserved {
+		return nil
+	}
+	staged, err := c.stage(hostbox.FileMode, func(f *os.File) error {
+		_, err := f.WriteString(cohortName(n) + "\n")
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if err = c.place(staged, filepath.Join(c.dir, cohortsName)); err != nil {
+		return err
+	}
+	if err = syncDir(c.dir); err != nil {
+		return err
+	}
+	c.memoReserved = n
+	return nil
+}
+
+// openMemo is Open's step 6: the node's newest cohort opened one past both
+// the newest any state records (recorded) and the newest the cache's root
+// says a previous process reserved (cohortsName) — so whatever a previous
+// process left, recorded or not, is older than anything placed or read from
+// here on — and reserved before anything is placed in it. A root holding no
+// reservation is a cache no process has opened, where nothing is to be
+// passed; one that holds copies and no readable reservation — the file
+// removed, or damaged — is logged (code_cache_memo_cohorts_unread), and the
+// boot opens past what the states record, as if the previous process had
+// opened nothing past them. A reservation that cannot be written fails the
+// boot: a cache whose root takes no write keeps no file of its own.
+func (c *Cache) openMemo(recorded uint64) error {
+	reserved, err := readReservedCohort(c.dir)
+	if err != nil && (!errors.Is(err, fs.ErrNotExist) || len(c.entries) > 0) {
+		c.log.Warn("code_cache_memo_cohorts_unread", "path", filepath.Join(c.dir, cohortsName), "error", err)
+	}
+	newest := max(reserved, recorded) + 1
+	c.cohortMu.Lock()
+	defer c.cohortMu.Unlock()
+	if err = c.reserveCohort(newest); err != nil {
+		return fmt.Errorf("cache: reserving the memo's cohort %d in %s — the cache directory must take writes: "+
+			"fix the disk or the directory's permissions: %w", newest, filepath.Join(c.dir, cohortsName), err)
+	}
+	c.memoNewest.Store(newest)
+	return nil
+}
+
+// maxReservationBytes bounds the read of a reservation: a cohort's number and
+// a newline is at most 21 bytes, so anything longer is no reservation of this
+// cache's, and is never read whole.
+const maxReservationBytes = 32
+
+// readReservedCohort is the cohort the reservation in the cache root at dir
+// names (cohortsName): fs.ErrNotExist for none, and an error for one that is
+// not a cohort's number and a newline.
+func readReservedCohort(dir string) (uint64, error) {
+	f, err := os.Open(filepath.Join(dir, cohortsName))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was read is the answer
+	raw, err := io.ReadAll(io.LimitReader(f, maxReservationBytes+1))
+	if err != nil {
+		return 0, err
+	}
+	text, whole := strings.CutSuffix(string(raw), "\n")
+	n, ok := parseCohort(text)
+	if !whole || !ok {
+		return 0, fmt.Errorf("cache: %s holds %q, not a cohort's number and a newline",
+			filepath.Join(dir, cohortsName), raw)
+	}
+	return n, nil
 }
 
 // errMemoShare is a tail the memo's share has no room for (stageMemo): its
@@ -1015,7 +1142,20 @@ func (c *Cache) reopenMemo(e *entry, inc *incarnation) {
 // or a boot gave it; a copy with none is a stateless boot's, whose first full
 // round measures what it holds, and is listed after. A request never lists a
 // tree, and a listing reads a tree's cohorts' names alone.
-func (c *Cache) listMemos(ctx context.Context) {
+//
+// A COPY WHOSE LAST LISTING FAILED IS LISTED AGAIN AT THE TICK ALONE
+// (incarnation.memoUnlisted), once an EvictInterval, never at a kicked pass.
+// Passes follow kicks — every push's scratch removed, every move into trash/,
+// a placement past the share — so on a busy node they run back to back; and a
+// listing holds the copy's memo lock while it measures every cohort no record
+// names, up to a sixteenth of the share each (some 390 000 entries at a 400 GB
+// budget), every placement of the copy waiting on it on its read's own
+// goroutine — and an EIO stat paying the device's error recovery each time.
+// What a fault costs is then one measure and one line a minute however busy
+// the node, where at the kick rate it was the node's reads stalled behind a
+// failing disk; a minute is what the count of a tick's writes already waits
+// (stateMemos), and what an operator watching the line needs to see it repeat.
+func (c *Cache) listMemos(ctx context.Context, ticked bool) {
 	type due struct {
 		e   *entry
 		inc *incarnation
@@ -1024,7 +1164,8 @@ func (c *Cache) listMemos(ctx context.Context) {
 	c.mu.Lock()
 	for _, e := range c.entries {
 		e.mu.Lock()
-		if inc := e.current; inc != nil && inc.state != nil && !inc.memoListed && !inc.discarded {
+		if inc := e.current; inc != nil && inc.state != nil && !inc.memoListed && !inc.discarded &&
+			(ticked || !inc.memoUnlisted) {
 			dues = append(dues, due{e: e, inc: inc})
 		}
 		e.mu.Unlock()
@@ -1041,16 +1182,20 @@ func (c *Cache) listMemos(ctx context.Context) {
 // listMemo lists inc's memo tree — its cohorts' names, never their entries —
 // and makes inc's record what it finds: a cohort recorded and gone is
 // forgotten, and one no record names, placed after the last state a crash
-// kept, is MEASURED and counted, the node's newest opened past it. A tree
-// holding anything but cohorts is no memo of this build's — a build of another
-// layout's, or something outside the engine's — and goes whole into trash/,
-// unread. Under the memo's lock, so nothing is placed, moved or removed in the
-// tree while it is read — but the copy itself can go: a purge retires it, as
-// does the rebuild that replaced it once its last reader lets go, and its
-// directory moves into trash/ whole (Cache.trash), which no memo lock guards.
-// A cohort the listing named and then found gone is therefore nothing to
-// count and no failure. A listing that fails, or that the pass's end cuts
-// short, leaves the copy to the next pass; only the failure is logged.
+// kept, is MEASURED and counted. Recorded cohorts are passed over, which is
+// sound because a boot opens its newest past every cohort a previous process
+// reserved (openMemo): nothing placed or read since reaches a cohort a
+// previous process made, so a cohort in a record was this process's own, or
+// a state's. A tree holding anything but cohorts is no memo of this build's —
+// a build of another layout's, or something outside the engine's — and goes
+// whole into trash/, unread. Under the memo's lock, so nothing is placed,
+// moved or removed in the tree while it is read — but the copy itself can go:
+// a purge retires it, as does the rebuild that replaced it once its last
+// reader lets go, and its directory moves into trash/ whole (Cache.trash),
+// which no memo lock guards. A cohort the listing named and then found gone is
+// therefore nothing to count and no failure. A listing the pass's end cuts
+// short leaves the copy to the next pass, and logs nothing; one that fails is
+// logged and leaves it to the janitor's next tick (unlisted).
 func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
@@ -1067,22 +1212,22 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 		e.mu.Lock()
 		if !inc.discarded {
 			c.setMemo(inc, nil, false)
-			inc.memoListed = true
+			inc.memoListed, inc.memoUnlisted = true, false
 		}
 		e.mu.Unlock()
 		return
 	case err != nil:
-		c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "error", err)
+		c.unlisted(e, inc, "error", err)
 		return
 	case foreign != "":
 		if terr := toTrash(c.dir, tree, newV7()+"-memo"); terr != nil && !errors.Is(terr, fs.ErrNotExist) {
-			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "error", terr)
+			c.unlisted(e, inc, "error", terr)
 			return
 		}
 		e.mu.Lock()
 		if !inc.discarded {
 			c.setMemo(inc, nil, false)
-			inc.memoListed = true
+			inc.memoListed, inc.memoUnlisted = true, false
 		}
 		e.mu.Unlock()
 		c.log.Warn("code_cache_memo_foreign", "repo", e.id, "incarnation", inc.n, "found", foreign)
@@ -1097,7 +1242,10 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			cs = append(cs, ch)
 		}
 	}
-	var measuring, stating func(path string)
+	var (
+		measuring func(dir string)
+		stating   func(path string) error
+	)
 	if c.knobs != nil {
 		measuring, stating = c.knobs.measuring, c.knobs.statingMemo
 	}
@@ -1116,7 +1264,7 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			// directory moved into trash/ while this listing held the memo's
 			// lock, or something outside the engine removed the cohort. It
 			// holds nothing to count. Logged, it would say this copy could
-			// not be listed and is listed again at the next pass — of a copy
+			// not be listed and is listed again at the next tick — of a copy
 			// that is gone, on any node whose boot listing meets a purge. A
 			// discarded copy is let go below; a copy still here is recorded
 			// without the cohort, as a recorded cohort gone is forgotten.
@@ -1131,13 +1279,24 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 		case err != nil:
 			// A COHORT STILL THERE THAT COULD NOT BE COUNTED — its directory, or
 			// an entry of it, unreadable (measureCohort): bytes on the disk no
-			// count holds. The copy stays unlisted, so the next pass measures it
-			// again, and the line repeats until the disk is fixed.
-			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "cohort", n, "error", err)
+			// count holds. The copy stays unlisted, so the janitor's next tick
+			// measures it again, and the line repeats until the disk is fixed.
+			// Meanwhile
+			// no placement or hit reaches the cohort — the boot opened the
+			// newest past every one a previous process reserved (openMemo) —
+			// so no record, and no state written from one, names it: the copy
+			// counts what its state recorded and what was placed since, short
+			// by the cohort, until a listing measures it whole.
+			c.unlisted(e, inc, "cohort", n, "error", err)
 			return
 		}
 		cs = withCohort(cs, n, bytes)
-		c.openCohortPast(n)
+		// Past every cohort a previous process reserved already, unless the
+		// root lost its reservation (openMemo). A newest it cannot move is
+		// openCohortPast's to log, and costs no count: the cohort is
+		// measured whole and recorded here, so a placement in it adds to
+		// what it holds.
+		_ = c.openCohortPast(n)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1148,7 +1307,17 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 	// no record is what a round's measure gives a record to be listed
 	// (foundMemo), which would list it again at every round.
 	c.setMemo(inc, cs, true)
-	inc.memoListed = true
+	inc.memoListed, inc.memoUnlisted = true, false
+}
+
+// unlisted logs a listing of inc's tree that failed (code_cache_memo_unlisted,
+// with what failed in args) and leaves the copy unlisted for the janitor's
+// next tick (listMemos says why not its next pass). The memo's lock is held.
+func (c *Cache) unlisted(e *entry, inc *incarnation, args ...any) {
+	c.log.Warn("code_cache_memo_unlisted", append([]any{"repo", e.id, "incarnation", inc.n}, args...)...)
+	e.mu.Lock()
+	inc.memoUnlisted = true
+	e.mu.Unlock()
 }
 
 // listCohorts is the cohorts the memo tree at dir holds, in order; or the
@@ -1190,7 +1359,8 @@ const memoListBatch = 256
 // it: each regular file at the blocks it takes, read a batch of names at a
 // time. Anything else in it is no entry and counts nothing; it goes with the
 // cohort. stating is nil but in a test (knobs.statingMemo): it is told each
-// entry's path as the measure is about to stat it.
+// entry's path as the measure is about to stat it, and an error it answers is
+// that stat's.
 //
 // AN ENTRY GONE BY ITS STAT IS NOTHING TO COUNT, AND EVERY OTHER ERROR OF THAT
 // STAT IS THE MEASURE'S — the rule every measure of the cache keeps
@@ -1203,10 +1373,11 @@ const memoListBatch = 256
 // total and the total the budget is held to short by them: the budget overrun
 // while every gauge reads within it, and nothing logged. As the measure's
 // error it is listMemo's to log (code_cache_memo_unlisted), the copy left to
-// the next pass, which measures it again: the line repeats until the disk or
-// the permission is fixed, and meanwhile the copy counts what its state
-// recorded.
-func measureCohort(ctx context.Context, dir string, stating func(path string)) (int64, error) {
+// the janitor's next tick, which measures it again: the line repeats, once a
+// tick, until the disk or the permission is fixed, and meanwhile the copy
+// counts what its state recorded and what was placed since, short by the
+// cohort, which nothing placed or read reaches (openMemo).
+func measureCohort(ctx context.Context, dir string, stating func(path string) error) (int64, error) {
 	f, err := os.Open(dir)
 	if err != nil {
 		return 0, err
@@ -1222,10 +1393,14 @@ func measureCohort(ctx context.Context, dir string, stating func(path string)) (
 			if !d.Type().IsRegular() {
 				continue
 			}
+			var fault error
 			if stating != nil {
-				stating(filepath.Join(dir, d.Name()))
+				fault = stating(filepath.Join(dir, d.Name()))
 			}
 			info, ierr := d.Info()
+			if fault != nil {
+				ierr = fault
+			}
 			switch {
 			case errors.Is(ierr, fs.ErrNotExist):
 				continue
@@ -1250,8 +1425,9 @@ func measureCohort(ctx context.Context, dir string, stating func(path string)) (
 // within its share, and reports whether it moved anything into trash/ for the
 // janitor to empty. On a ticked pass it also drops the oldest while the node
 // keeps more than maxMemoCohorts. A newest cohort that is also the oldest has
-// the next opened first, so it can go. Before any repository is evicted
-// (janitorPass).
+// the next opened first, so it can go — and where the next cannot be
+// reserved (reserveCohort), the trim stops there. Before any repository is
+// evicted (janitorPass).
 func (c *Cache) trimMemo(ctx context.Context, ticked bool) bool {
 	if c.memoExcess() == 0 && !ticked {
 		return false
@@ -1266,8 +1442,10 @@ func (c *Cache) trimMemo(ctx context.Context, ticked bool) bool {
 		if c.memoExcess() == 0 && (newest < oldest || newest-oldest < maxMemoCohorts) {
 			break
 		}
-		if oldest >= newest {
-			c.openCohortPast(oldest)
+		if oldest >= newest && !c.openCohortPast(oldest) {
+			// The newest is never dropped while it is the newest, so the trim
+			// stops here, and its next pass tries the reservation again.
+			break
 		}
 		dropped, err := c.trimCohort(ctx, oldest)
 		if err != nil {

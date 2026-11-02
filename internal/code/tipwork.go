@@ -19,8 +19,15 @@ import (
 // — a merge a person's override landed, a person's own push under
 // `direct_push: persons` — lies ABOVE ITS TARGET'S GREEN until a check of a
 // tip proves it, and its home owes the target that work: a `checks_due` read
-// of one repository answers it on its first page ([ReadAnswer.DueTips]), one
-// [TipDue] a target holding a landing neither green nor broken.
+// of one repository answers it on its first pages ([ReadAnswer.DueTips], paged
+// by [ReadAnswer.TipsNext] before its heads), one [TipDue] a target holding
+// a landing neither green nor broken.
+//
+// A LANDING IS GREEN BY ITS POSITION — at or below its target's green row —
+// never by a flag of its own: a green record moves the one row, so it writes
+// the same few rows however many landings lie beneath it, and a target that
+// gathered any backlog of unproven landings behind a red tip greens again on
+// the first tip that passes (replicated 0137).
 //
 // A TipDue is everything the home decides its next step from, in ONE
 // snapshot: the target's green row, the checks its gate requires, and its
@@ -29,8 +36,11 @@ import (
 // attempt's purpose, since a check is a measurement of a commit, and a
 // fast-forward lands the very commit its change's head checks measured. The
 // home then (internal/code/home's tips) dispatches the newest landing's tip
-// where it holds no attempt (coalesced: a landing that is no longer the
-// newest is never dispatched), moves the green row onto it where every
+// where it holds no attempt — coalesced, ONE ROUND AT A TIME: a landing that
+// is no longer the newest is never dispatched, and the newest waits while a
+// tip round on another of the target's commits is still queued or running
+// ([TipDue.InFlight]), so the landings that arrive meanwhile are measured
+// together by the next round — moves the green row onto it where every
 // required check passed, and where one failed BISECTS the failed checks over
 // the landing rows — never over git's history, which a merge's second parent
 // would walk into — down to the first landing they failed on, which it
@@ -42,14 +52,17 @@ import (
 // reaches the tip; a culprit past the window is the one thing it cannot name
 // until a green tip clears the landings before it (see the home's bisect).
 //
-// LISTED BY ITS OWN INDEX: a repository is due tip work where it holds a
-// landing neither green nor broken (code_landings_unjudged_idx, partial on
-// exactly those rows), so the listing reads the landings its tips owe and
-// never the thirty days of green ones each target keeps behind them. A target
-// whose culprit is named keeps the landings above it listed until a tip
-// passes — a home's pass reads its window and finds nothing owed — which costs
-// a broken target's home a few reads a minute and is what lets a fix's
-// landing be dispatched by the backstop as well as by its nudge.
+// LISTED BY ONE ROW A TARGET: a target holding a landing above its green that
+// no bisect found broken holds a row of tip work (code_tips_due), which the
+// landing's record inserts and the record that moves the green past it, or
+// names the last of them broken, removes. The listings walk those rows — the
+// repositories owing tip work, and one repository's targets — so they cost a
+// row a target, never one a landing above a stuck tip, and never the thirty
+// days of green ones each target keeps behind it. A target whose culprit is
+// named stays listed while landings lie above the culprit, until a tip passes
+// — a home's pass reads its window and finds nothing owed — which costs a
+// broken target's home a few reads a minute and is what lets a fix's landing
+// be dispatched by the backstop as well as by its nudge.
 
 // MaxTipLandings is the most landings above its green one target's tip work
 // reads: 256, so a bisect over a whole window takes eight rounds of checks
@@ -78,6 +91,12 @@ type TipDue struct {
 	// those two, which the window does not read.
 	Landings []TipLanding `json:"landings"`
 	More     bool         `json:"more,omitempty"`
+	// InFlight is a commit of the target's other than its newest landing's
+	// that a tip attempt is still queued or running on — the ROUND IN FLIGHT,
+	// which the newest waits for before it is dispatched — read by the index
+	// partial on exactly those attempts (replicated 0138), so it is found
+	// wherever that commit lies, past the window included; "" for none.
+	InFlight string `json:"in_flight,omitempty"`
 }
 
 // Newest is the target's newest landing, the tip its checks are dispatched
@@ -125,42 +144,53 @@ type TipCheck struct {
 	Reason  CheckReason `json:"reason,omitempty"`
 }
 
-// dueTips files the tip work of repository repoID's targets into out, within
-// pg — each target holding a landing neither green nor broken, its window
-// read whole or not at all — with required, its gate's checks by target.
-func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID string, required *requiredChecks, pg *page,
-	out *ReadAnswer) error {
+// dueTips files the tip work of repository repoID's targets after after — ""
+// for the first — into out, within pg: each target owing it, by name, its
+// window read whole, with required, its gate's checks by target. It answers
+// whether the page ended among them, when [ReadAnswer.TipsNext] names the
+// last target it answered — the one that filled the page among them, which a
+// page APPENDS BEFORE IT ASKS whether it is full, as every page here does —
+// and the next page of the same turn goes on after it, before any head. A
+// target past a page is never left to a later pass, which would list the same
+// targets first again and never reach it while they stay owed.
+func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, required *requiredChecks,
+	pg *page, out *ReadAnswer) (bool, error) {
 
-	targets, err := dueTipTargetsIn(ctx, tx, repoID, r.pageRows)
+	targets, err := dueTipTargetsIn(ctx, tx, repoID, after, r.pageRows)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, target := range targets {
 		t, err := tipDueOf(ctx, tx, repoID, target, required, r.tipWindow)
 		switch {
 		case err != nil:
-			return err
+			return false, err
 		case len(t.Landings) == 0:
 			continue
 		}
 		encoded, err := json.Marshal(t)
 		if err != nil {
-			return fmt.Errorf("code: encode %s's tip work: %w", target, err)
-		}
-		if pg.add(len(encoded) + 1) {
-			// A TARGET'S WINDOW IS READ WHOLE OR NOT AT ALL: one past the
-			// page waits for the next pass, which lists it first.
-			return nil
+			return false, fmt.Errorf("code: encode %s's tip work: %w", target, err)
 		}
 		out.DueTips = append(out.DueTips, t)
+		if pg.add(len(encoded) + 1) {
+			out.TipsNext = target
+			return true, nil
+		}
 	}
-	return nil
+	if len(targets) == r.pageRows {
+		// THE LISTING CUT AT ITS BOUND, every target it named answered.
+		out.TipsNext = targets[len(targets)-1]
+		return true, nil
+	}
+	return false, nil
 }
 
-// dueTipTargetsIn is repoID's targets holding a landing neither green nor
-// broken, by name, at most limit.
-func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID string, limit int) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, limit)
+// dueTipTargetsIn is repoID's targets owing tip work after after — each
+// holding a landing above its green that no bisect found broken — by name, at
+// most limit.
+func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID, after string, limit int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("code: list repository %s's targets owing tip work: %w", repoID, err)
 	}
@@ -221,6 +251,14 @@ func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *
 		window[i].Last = window[i].Position != window[i+1].Position
 	}
 	t.Landings = window
+	if len(window) > 0 {
+		switch err := tx.QueryRowContext(ctx, tipInFlightSQL, repoID, target, t.Newest().OID).Scan(
+			&t.InFlight); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return TipDue{}, fmt.Errorf("code: read whether %s's tip round is in flight: %w", target, err)
+		}
+	}
 	return t, tipChecksIn(ctx, tx, repoID, target, t)
 }
 
@@ -313,19 +351,24 @@ func mergeRepoPages(a, b []string, limit int) ([]string, string) {
 }
 
 // The tip work's reads, each registered in plan_test.go: the repositories,
-// and one repository's targets, holding a landing neither green nor broken,
-// by the index partial on exactly those rows; a target's landings above its
-// green by the landings' key, and its newest, the key read backwards.
+// and one repository's targets, owing tip work, by the key of its rows — one a
+// target, each repository tested by its key; a target's landings above its
+// green by the landings' key, and its newest, the key read backwards; and a
+// tip attempt not ended on another of its commits, by the index partial on
+// exactly those attempts, its predicate spelled as the index declares it.
 const (
-	dueTipReposSQL = `SELECT l.repo_id FROM code_landings AS l INDEXED BY code_landings_unjudged_idx
-		WHERE l.repo_id > ?1 AND l.green = 0 AND l.broken = 0
-			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = l.repo_id AND r.status = 'active')
-		GROUP BY l.repo_id ORDER BY l.repo_id LIMIT ?2`
-	dueTipTargetsSQL = `SELECT target_ref FROM code_landings INDEXED BY code_landings_unjudged_idx
-		WHERE repo_id = ?1 AND green = 0 AND broken = 0 GROUP BY target_ref ORDER BY target_ref LIMIT ?2`
+	dueTipReposSQL = `SELECT d.repo_id FROM code_tips_due AS d
+		WHERE d.repo_id > ?1
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = d.repo_id AND r.status = 'active')
+		GROUP BY d.repo_id ORDER BY d.repo_id LIMIT ?2`
+	dueTipTargetsSQL = `SELECT target_ref FROM code_tips_due WHERE repo_id = ?1 AND target_ref > ?2
+		ORDER BY target_ref LIMIT ?3`
 	tipLandingsSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position >= ? AND (position > ? OR ordinal > ?)
 		ORDER BY position, ordinal LIMIT ?`
 	newestLandingSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? ORDER BY position DESC, ordinal DESC LIMIT 1`
+	tipInFlightSQL = `SELECT commit_oid FROM code_checks INDEXED BY code_checks_tip_live_idx
+		WHERE repo_id = ? AND target_ref = ? AND state IN ('queued', 'running') AND purpose = 'tip'
+			AND commit_oid != ? LIMIT 1`
 )

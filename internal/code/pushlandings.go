@@ -89,18 +89,19 @@ func writePushLandings(ctx context.Context, tx *sql.Tx, at applyContext, repoID 
 	if len(out) == 0 {
 		return 0, nil
 	}
-	if err := writeLandings(ctx, tx, at, repoID, out); err != nil {
+	rows, err := writeLandings(ctx, tx, at, repoID, out)
+	if err != nil {
 		return 0, err
 	}
-	rows := len(out)
 	for _, l := range out {
 		if !l.green {
 			continue
 		}
-		if err := advanceGreen(ctx, tx, at, repoID, l.target, l.commit); err != nil {
+		var moved int
+		if moved, err = advanceGreen(ctx, tx, at, repoID, l.target, l.commit); err != nil {
 			return 0, err
 		}
-		rows++
+		rows += moved
 	}
 	return rows, nil
 }

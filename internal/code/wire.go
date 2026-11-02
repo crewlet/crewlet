@@ -673,22 +673,35 @@ type RunPushesQuery struct {
 	After statelog.Position `json:"after"`
 }
 
-// BranchChangesQuery is a `branch_changes` read: one repository by its id and
-// the branches whose live changes the read answers, each a whole ref under
-// refs/heads/, one to [MaxRefsPerQuery] of them, each once — a collected
-// coding run's branches, which the engine names each delivered ref's change
-// by. One seek of code_changes_open_idx a branch, the index partial on the
-// live states that holds at most one change a branch, so the read costs its
-// branches and never the repository's changes.
+// BranchChangesQuery is a `branch_changes` read: the repositories a collected
+// coding run was given to push to, one to [MaxRunRepos] of them, each by its
+// id and once, each with the branches of it whose live changes the read
+// answers — each a whole ref under refs/heads/, once, [MaxRefsPerQuery] in
+// all — which the engine names each delivered ref's change by. One seek of
+// code_changes_open_idx a branch, the index partial on the live states that
+// holds at most one change a branch, so the read costs its branches and never
+// the repositories' changes.
+//
+// EVERY REPOSITORY IN ONE READ: one transaction at one checkpoint, so a
+// collection names every branch the run delivered with one estate read — one
+// round trip from a node without the data role — where a read a repository
+// was one each.
 type BranchChangesQuery struct {
+	Repos []RepoBranches `json:"repos"`
+}
+
+// RepoBranches is one repository of a [BranchChangesQuery]: its id, and the
+// branches of it whose live changes the read answers.
+type RepoBranches struct {
 	RepoID string   `json:"repo_id"`
 	Refs   []string `json:"refs"`
 }
 
 // BranchChange is the live change one branch of a `branch_changes` read heads:
-// the branch as the query named it, the change's id and its number on its
-// repository.
+// the repository and the branch as the query named them, the change's id and
+// its number on its repository.
 type BranchChange struct {
+	RepoID   string `json:"repo_id"`
 	Ref      string `json:"ref"`
 	ChangeID string `json:"change_id"`
 	Number   int64  `json:"number"`
@@ -1032,9 +1045,9 @@ const (
 	// `expunge_tips` is: a push mirror's seat is judged by its home before
 	// each push ([MirrorSeatRefusal]), never as the asker of a read.
 	ReadMirrorPush ReadKind = "mirror_push"
-	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
-	// heads ([BranchChangesQuery]), in the order the query names the
-	// branches, a branch heading none left out. The engine's own read, as
+	// ReadBranchChanges is the LIVE CHANGE each branch of the repositories it
+	// names heads ([BranchChangesQuery]), in the order the query names the
+	// repositories and their branches, a branch heading none left out. The engine's own read, as
 	// `run_pushes` is, which no principal makes and no grant holds: what it
 	// names each ref a collected coding run moved by — the change the run
 	// delivered to — and what tells it whether the change a run asked to
@@ -1110,7 +1123,8 @@ const (
 	ReadQueue ReadKind = "queue"
 	// ReadQueueDue is the queue work a repository's HOME git node owes
 	// ([QueueDueQuery]): with no repository, the active repositories holding
-	// a live entry, by id; with one, its live entries in queue order. The
+	// a live entry or a given-up train's attempt, by id; with one, its queue
+	// work a target a page, and on its first page those attempts. The
 	// engine's own read, as `changes_due` is.
 	ReadQueueDue ReadKind = "queue_due"
 	// ReadLandings is one protected target's landings above its green
@@ -1241,8 +1255,13 @@ type ReadQuery struct {
 	// needs a change's state, its revision, its head and its branches — a
 	// seat's read of a revision's files, a patch or the findings, a write of
 	// its conversation — sets it; a read that presents the change, or acts on
-	// its readiness, does not. Refused beside a part, a cursor or DetailOnly,
-	// which read no first page of revisions; refused on every other kind.
+	// its readiness, does not. Beside DetailOnly it answers the change's row
+	// ALONE, no page of its revisions with it — one seek of
+	// code_changes_number_idx — for a read that needs nothing of the change
+	// but its state, its branches, its id and its number: a coding run's
+	// launch on a change, which looks up the branch it works on. Refused
+	// beside a part or a cursor, which read no first page of revisions;
+	// refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row: a build that predates it decodes and ignores it,
@@ -1377,8 +1396,9 @@ type ReadQuery struct {
 	// first page of them is up to defaultRevisionLimit (200) revisions, each
 	// carrying its facts' touched paths (up to MaxTouchedPaths) — up to
 	// MaxPageBytes of JSON — read, encoded, shipped from a data node and
-	// decoded to be dropped. Refused on every other kind, and beside a part,
-	// a cursor or a limit, which page a list it does not read.
+	// decoded to be dropped. Beside Brief it answers the change's row alone
+	// ([ReadQuery.Brief]). Refused on every other kind, and beside a part, a
+	// cursor or a limit, which page a list it does not read.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:
@@ -1505,7 +1525,7 @@ type ReadQuery struct {
 	// node of a build that predates it would answer the open arm alone,
 	// which delays an expunge on the schedule and drops no object.
 	ScannedBefore time.Time `json:"scanned_before,omitzero"`
-	// BranchChanges is a `branch_changes` read's repository and branches:
+	// BranchChanges is a `branch_changes` read's repositories and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
 	// build that predates the kind refuses the read as a kind it does not
@@ -1611,7 +1631,8 @@ type ReadAnswer struct {
 	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
 	// repository's first page, DueTargets: its target branches due a reading
 	// of their checks file again, and DueTips: its protected targets owing
-	// tip work ([TipDue], tipwork.go).
+	// tip work ([TipDue], tipwork.go), paged on pages of their own before its
+	// heads' ([ReadAnswer.TipsNext]).
 	DueRepos []string `json:"due_repos,omitempty"`
 	// Indexed is an `indexed` listing's page of repositories, by name.
 	Indexed    []IndexedRepo    `json:"indexed,omitempty"`
@@ -1658,12 +1679,18 @@ type ReadAnswer struct {
 	// which its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
-	// change, in the query's order, a branch heading none left out.
+	// change, in the query's order of repositories and branches, a branch
+	// heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
 	// DueQueue is a `queue_due` read's page of one repository: one target's
 	// queue work ([QueueDue]), the target the next page's cursor; nil past
 	// the last.
 	DueQueue *QueueDue `json:"due_queue,omitempty"`
+	// QueueAbandoned is, on a `queue_due` read's first page of one
+	// repository, the attempts its queues queued that have not ended, on
+	// commits no train of their target tests or landed ([AbandonedCheck]):
+	// what its home cancels once its targets have taken their steps.
+	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
 	// its page reaches; Ejected, on a named repository's first page, the
@@ -1678,8 +1705,13 @@ type ReadAnswer struct {
 	// Commit is a `commit` read's changes of its commit, beside Repo.
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
-	Inbox    *InboxPage         `json:"inbox,omitempty"`
-	Next     string             `json:"next,omitempty"`
+	Inbox *InboxPage `json:"inbox,omitempty"`
+	Next  string     `json:"next,omitempty"`
+	// TipsNext is a `checks_due` page of one repository's tip work cut at its
+	// bound: the target it ended at, which the next page goes on after
+	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
+	// targets' windows fill a page has every one answered within one turn.
+	TipsNext string             `json:"tips_next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
 }
@@ -2326,16 +2358,25 @@ type CheckQuery struct {
 	// its own, which such a build refuses as one it does not know.
 	Latest bool `json:"latest,omitempty"`
 	// State narrows a `checks` read to the attempts in one state; refused on
-	// a `check` read, which names its one attempt whatever its state.
+	// a `check` read, which names its one attempt whatever its state, and on
+	// the window where it is not an ending ([CheckState.Ended]): the window
+	// lists the attempts that ENDED in it, so it holds no attempt queued or
+	// running, and a repository's listing is where those are narrowed to.
 	//
-	// A NARROWING TESTED ON THE ROWS A PAGE READ, as Name's is, and never a
-	// seek: every shape of the listing walks the one index its own order
-	// leads (code_checks' key, code_checks_finished_idx,
-	// code_checks_recent_idx), and an index per state or per name would be
-	// one more write on every check's every transition for a filter a person
-	// applies to a page. So a narrowed page is the rows it READ, never the
-	// rows it kept, and may be short — or empty with a cursor — as a window
-	// a reader reads little of is.
+	// THE STATEMENT'S, as Name's narrowing is, and never a filter of the rows
+	// a page read: a page is full wherever the narrowing holds as many rows
+	// after its place, so what it costs follows what it answers rather than
+	// the history around it. A repository's listing and the window SEEK an
+	// index that leads with the narrowing (replicated 0139): the state, or the
+	// check's name and then the state — a name alone is one seek a state,
+	// merged ([narrowedPlaces]). Their writes are what any index on
+	// code_checks costs: the two over a repository's attempts hold every
+	// state, so they move with each of an attempt's three records (queued,
+	// claimed, ended), as code_checks_finished_idx does; the two over the
+	// window's are PARTIAL on the ended rows, as code_checks_recent_idx is,
+	// so each is written once, when an attempt ends, and again only when a
+	// later ending replaces it. A change's and a commit's walks — one
+	// commit's attempts, which their shape bounds — test it inside the walk.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row — and neither does Name's use as a narrowing. AS A
@@ -2369,13 +2410,6 @@ type CheckQuery struct {
 	Until time.Time `json:"until,omitzero"`
 }
 
-// keeps reports whether row is one a `checks` listing narrowed by c keeps:
-// of the check c names, where it names one, and in the state it names, where
-// it names one.
-func (c CheckQuery) keeps(row CheckRow) bool {
-	return (c.Name == "" || row.Name == c.Name) && (c.State == "" || row.State == c.State)
-}
-
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
 // `changes_due` read's is: the instant a target's reading of its checks file
 // is due again by, and — for ONE repository's due check work — the repository
@@ -2388,6 +2422,10 @@ type ChecksDueQuery struct {
 	// pushed to on every landing is read at the home's pace, never at its
 	// own.
 	RefreshBefore time.Time `json:"refresh_before"`
+	// TipsAfter is, for one repository's due check work with no cursor, the
+	// protected target its tip work goes on after: the [ReadAnswer.TipsNext]
+	// of the page before, which ended at it.
+	TipsAfter string `json:"tips_after,omitempty"`
 }
 
 // ChecksRunningQuery is a `checks_running` read's question: the repository

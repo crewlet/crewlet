@@ -103,7 +103,7 @@ func reopening(repo, change string, asker code.Principal, version int64) code.Ch
 
 // requireChanged fails t unless res is a write applied at a position, with a
 // version.
-func requireChanged(t *testing.T, res code.ChangeResult, err error) {
+func requireChanged(t testing.TB, res code.ChangeResult, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("ProposeChange: %v", err)

@@ -37,9 +37,9 @@ import (
 // [DecidedBy] `code.read`, and held to the grant the serving node derives
 // from its chart by the reader — a listing leaves out what the asker may not
 // read, a read of one repository it may not is refused [NotPermitted]. A
-// narrowing is tested on the rows a page READ beside that grant, never in
-// place of it ([code.CheckQuery.State]), so no filter widens what a page
-// may hold.
+// narrowing is the reader's statement's, never a filter of a page it read
+// ([code.CheckQuery.State]), and the grant is tested on what it found, never
+// in place of it, so no narrowing widens what a page may hold.
 //
 // # Where the spec's paths moved
 //

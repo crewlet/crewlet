@@ -253,6 +253,7 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_candidates WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_landings WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_green WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_tips_due WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(notices), 0) FROM
 			(SELECT notices FROM code_changes INDEXED BY ` + changesNumberKey + `
 				WHERE repo_id = ?1 LIMIT ?2)),

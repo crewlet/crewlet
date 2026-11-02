@@ -412,9 +412,12 @@
 // for what the memo holds past that (overBudget), by DROPPING THE OLDEST
 // COHORT whole: a rename of its directory in each copy holding it, a
 // sixteenth of the share at once, so a trim falls due once that much has been
-// placed again, not after every miss. It lists each copy's tree once a
-// process behind the serving, its cohorts' names alone, counting a cohort a
-// crash left unrecorded; and at its tick, once a minute at most, it writes a
+// placed again, not after every miss. A cohort's number is reserved durably
+// in the cache's root before it opens, and a boot opens past the newest
+// reserved, so nothing placed or read after a boot reaches a cohort a
+// previous process made. The janitor lists each copy's tree once a process
+// behind the serving, its cohorts' names alone, counting a cohort a crash
+// left unrecorded whole; and at its tick, once a minute at most, it writes a
 // copy's state again once its memo's record moved. A history gone drops it
 // whole and shuts it until the round that dropped it has swept the replaced
 // history's packs, and no batch begun before the drop places anything after
@@ -915,6 +918,8 @@
 //	<git.cache_dir>/
 //	  CACHEDIR.TAG                  the Cache Directory Tagging standard's tag
 //	  lock                          this process's claim (internal/flock)
+//	  memo-cohorts                  the newest cohort of the memo any process may have placed in,
+//	                                durable before the node's newest moves to it; a boot opens past it
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
 //	    objects-dropping/pack/      the packs an expunge's begin left dropping, which

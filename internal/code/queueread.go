@@ -27,10 +27,12 @@ import (
 //     (code_queue_ended_idx), held to the asker's grant as a listing of
 //     changes is.
 //   - `queue_due` ([ReadQueueDue]) is the home's: the ACTIVE repositories
-//     holding a live entry, by id — an archived or deleted one's queue is
-//     nobody's work until it is active again — or one repository's queue
-//     work, a target a page ([QueueDue], queuework.go): the engine's own
-//     read, which no principal makes.
+//     holding a live entry, then those holding a given-up train's attempt,
+//     by id — an archived or deleted one's queue is nobody's work until it
+//     is active again — or one repository's queue work, a target a page
+//     ([QueueDue], queuework.go), its first page with the given-up trains'
+//     attempts it cancels ([AbandonedCheck]): the engine's own read, which
+//     no principal makes.
 //   - `landings` ([ReadLandings]) is one target's landings ABOVE ITS GREEN, in
 //     the order they landed, beside the green itself: what its tip checks have
 //     not yet judged.
@@ -207,7 +209,9 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 // LandingRow is one landing on a protected target: the record that landed it
 // and its place in that record, what kind of landing it was, what landed —
 // the change and its entry, "" for a push that landed none — the target before
-// and after, who, and what the target's tip checks found of it.
+// and after, who, and whether a bisect of the target's tip checks found it
+// broken. Every landing it lists lies above the green row and so is not green:
+// a landing is green by its position, at or below that row.
 type LandingRow struct {
 	RepoID     string            `json:"repo_id"`
 	TargetRef  string            `json:"target_ref"`
@@ -220,7 +224,6 @@ type LandingRow struct {
 	CommitOID  string            `json:"commit_oid"`
 	EnqueuedBy string            `json:"enqueued_by,omitempty"`
 	MergedBy   string            `json:"merged_by,omitempty"`
-	Green      bool              `json:"green,omitempty"`
 	Broken     bool              `json:"broken,omitempty"`
 	At         time.Time         `json:"at"`
 }
@@ -471,32 +474,63 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 }
 
 // queueDue serves one page of a `queue_due` read: with no repository, the
-// repositories holding a live entry, by id, after the cursor, MaxSnapshotItems
-// a page; with one, its next target's queue work after the cursor, one target
-// a page (queuework.go).
+// active repositories its home owes queue work, by id, MaxSnapshotItems a
+// page — those holding a live entry, then those holding a given-up train's
+// attempt (queuework.go), two walks of their own indexes, the second's cursor
+// marked [abandonedCursor]; with one, its next target's queue work after the
+// cursor, one target a page. A repository in both walks is listed twice, and
+// its home works it once.
 func (r *Reader) queueDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if q.QueueDue.RepoID != "" {
 		return dueQueue(ctx, tx, q.QueueDue.RepoID, q.Cursor, q.QueueDue.EnqueuedSince, out)
 	}
-	rows, err := tx.QueryContext(ctx, queueDueReposSQL, q.Cursor, r.pageRows)
+	after, abandoned := strings.CutPrefix(q.Cursor, abandonedCursor)
+	if !abandoned {
+		ids, err := dueRepoIDs(ctx, tx, queueDueReposSQL, after, r.pageRows)
+		if err != nil {
+			return fmt.Errorf("code: list the repositories holding a queue: %w", err)
+		}
+		out.DueRepos = ids
+		if len(ids) == r.pageRows {
+			out.Next = ids[len(ids)-1]
+			return nil
+		}
+		after = ""
+	}
+	room := r.pageRows - len(out.DueRepos)
+	ids, err := dueRepoIDs(ctx, tx, abandonedReposSQL, after, room)
 	if err != nil {
-		return fmt.Errorf("code: list the repositories holding a queue: %w", err)
+		return fmt.Errorf("code: list the repositories holding a given-up train's checks: %w", err)
+	}
+	out.DueRepos = append(out.DueRepos, ids...)
+	if len(ids) == room {
+		out.Next = abandonedCursor + ids[len(ids)-1]
+	}
+	return nil
+}
+
+// abandonedCursor marks a `queue_due` listing's cursor as one of its second
+// walk, the repositories holding a given-up train's attempt: the id after it
+// is that walk's last. No repository's id — a UUID in its canonical spelling
+// — begins with it.
+const abandonedCursor = "abandoned:"
+
+// dueRepoIDs is the repository ids stmt lists after cursor, at most limit.
+func dueRepoIDs(ctx context.Context, tx *sql.Tx, stmt, cursor string, limit int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, stmt, cursor, limit)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("code: list the repositories holding a queue: %w", err)
+			return nil, err
 		}
-		out.DueRepos = append(out.DueRepos, id)
+		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(out.DueRepos) == r.pageRows {
-		out.Next = out.DueRepos[len(out.DueRepos)-1]
-	}
-	return nil
+	return ids, rows.Err()
 }
 
 // landings serves one page of a `landings` read: the target's green, where it
@@ -540,7 +574,7 @@ func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ro
 			packed, t int64
 		)
 		if err := rows.Scan(&packed, &l.Ordinal, &l.Kind, &l.ChangeID, &l.EntryID, &l.BaseOID, &l.CommitOID,
-			&l.EnqueuedBy, &l.MergedBy, &l.Green, &l.Broken, &t); err != nil {
+			&l.EnqueuedBy, &l.MergedBy, &l.Broken, &t); err != nil {
 			return fmt.Errorf("code: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
 		}
 		l.RepoID, l.TargetRef, l.Position, l.At = named.ref.ID, q.Target, unpacked(packed), store.DecodeTime(t)
@@ -732,7 +766,7 @@ const (
 		FROM code_candidates INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ?
 		ORDER BY train, ordinal`
 	landingsSQL = `SELECT position, ordinal, kind, change_id, entry_id, base_oid, commit_oid, enqueued_by,
-			merged_by, green, broken, at
+			merged_by, broken, at
 		FROM code_landings WHERE repo_id = ? AND target_ref = ? AND position >= ?
 			AND (position > ? OR ordinal > ?)
 		ORDER BY position, ordinal LIMIT ?`

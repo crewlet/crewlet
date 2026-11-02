@@ -445,13 +445,15 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 }
 
 // runChange is the change a request names to work on, read once at the seat's
-// level — LINEARIZABLE ([CodeDeps.changeOf]), held to the caller's grant on
-// the repository — with the position it was read at; nil for a request that
-// names none. A change that is no longer live is refused naming what became
-// of it: a closed one's work is over unless it is reopened, and a merged
-// one's is in its target, which a run starts from by naming it as `base`.
+// level — LINEARIZABLE, held to the caller's grant on the repository — as its
+// row alone ([changeRead.row]): a launch needs its state, its branches, its
+// id and its number, none of what its detail reads besides; with the
+// position it was read at; nil for a request that names none. A change that
+// is no longer live is refused naming what became of it: a closed one's work
+// is over unless it is reopened, and a merged one's is in its target, which a
+// run starts from by naming it as `base`.
 func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
-	repo code.RepoRef) (*code.ChangeDetail, statelog.Position, *tools.Result) {
+	repo code.RepoRef) (*code.ChangeSummary, statelog.Position, *tools.Result) {
 
 	const tool = CodeCheckoutTool
 	if req.Change == "" {
@@ -476,12 +478,11 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 			code.ChangeRef(repo.Name, 42), CodeListChangesTool))
 		return nil, statelog.Position{}, &r
 	}
-	written, refusal := d.changeOf(ctx, &changeRead{deps: d, turn: turn, tool: tool, c: c, name: repo.Name,
-		repo: repo, number: int64(number)})
+	change, at, refusal := (&changeRead{deps: d, turn: turn, tool: tool, c: c, name: repo.Name, repo: repo,
+		number: int64(number)}).row(ctx)
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}
-	change := written.detail
 	switch change.State {
 	case code.ChangeStateClosed:
 		r := refused(tools.RefusalConflict, fmt.Sprintf("%s: %s is closed, so a run delivers "+
@@ -493,7 +494,7 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 			"name that branch as `base` to build on it.", tool, change.Ref, change.TargetRef))
 		return nil, statelog.Position{}, &r
 	}
-	return change, written.at, nil
+	return change, at, nil
 }
 
 // openTarget is the branch, whole, a request's ask to open a change proposes

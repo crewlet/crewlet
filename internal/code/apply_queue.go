@@ -144,12 +144,14 @@ func endEntries(ctx context.Context, tx store.Execer, packed, instant int64, cha
 }
 
 // purgeQueues deletes up to budget of repoID's merge queues' rows — its
-// entries, then its candidates, its landings and its green rows, each table's
-// in its key's order, so every node deletes the same rows — for a purge part
+// entries, then its candidates, its landings, its green rows and its rows of
+// tip work, each table's in its key's order, so every node deletes the same
+// rows — for a purge part
 // ([Applier.applyPurgePart]), and answers how many it deleted.
 func purgeQueues(ctx context.Context, tx *sql.Tx, repoID string, budget int) (int, error) {
 	deleted := 0
-	for _, stmt := range []string{purgeQueueSQL, purgeCandidatesSQL, purgeLandingsSQL, purgeGreenSQL} {
+	for _, stmt := range []string{purgeQueueSQL, purgeCandidatesSQL, purgeLandingsSQL, purgeGreenSQL,
+		purgeTipsDueSQL} {
 		if budget <= 0 {
 			break
 		}
@@ -183,8 +185,8 @@ const (
 			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, entry_id) DO NOTHING`
-	endEntrySQL = `UPDATE code_queue SET state = ?, ended_at = ?, ended_position = ?, end_reason = ?
-		WHERE repo_id = ? AND entry_id = ?`
+	endEntrySQL = `UPDATE code_queue INDEXED BY ` + queueKey + ` SET state = ?, ended_at = ?, ended_position = ?,
+		end_reason = ? WHERE repo_id = ? AND entry_id = ?`
 	endChangeEntrySQL = `UPDATE code_queue SET state = ?, ended_at = ?, ended_position = ?, end_reason = ?
 		WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY code_queue_change_idx
 			WHERE change_id = ? AND state IN ('waiting', 'testing'))`
@@ -195,7 +197,7 @@ const (
 
 	// A purge part's bounded deletes, each table's rows of the repository in
 	// its key's order; and the final purge's, whole.
-	purgeQueueSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue
+	purgeQueueSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY ` + queueKey + `
 		WHERE repo_id = ? ORDER BY entry_id LIMIT ?)`
 	purgeCandidatesSQL = `DELETE FROM code_candidates WHERE rowid IN (SELECT rowid FROM code_candidates
 		WHERE repo_id = ? ORDER BY candidate_id LIMIT ?)`
@@ -203,8 +205,11 @@ const (
 		WHERE repo_id = ? ORDER BY target_ref, position, ordinal LIMIT ?)`
 	purgeGreenSQL = `DELETE FROM code_green WHERE rowid IN (SELECT rowid FROM code_green
 		WHERE repo_id = ? ORDER BY target_ref LIMIT ?)`
+	purgeTipsDueSQL = `DELETE FROM code_tips_due WHERE rowid IN (SELECT rowid FROM code_tips_due
+		WHERE repo_id = ? ORDER BY target_ref LIMIT ?)`
 	purgeAllQueueSQL      = `DELETE FROM code_queue WHERE repo_id = ?`
 	purgeAllCandidatesSQL = `DELETE FROM code_candidates WHERE repo_id = ?`
 	purgeAllLandingsSQL   = `DELETE FROM code_landings WHERE repo_id = ?`
 	purgeAllGreenSQL      = `DELETE FROM code_green WHERE repo_id = ?`
+	purgeAllTipsDueSQL    = `DELETE FROM code_tips_due WHERE repo_id = ?`
 )

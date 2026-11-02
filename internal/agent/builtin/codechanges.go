@@ -306,7 +306,8 @@ func (t *codeListChanges) Parameters() map[string]any {
 			"state": map[string]any{"type": "string", "enum": states},
 			"owner": map[string]any{"type": "string", "description": "Only the changes this seat opened."},
 			"work": map[string]any{"type": "string",
-				"description": "Only the changes carrying this work item: `<backend>:<id>`."},
+				"description": "Only the changes carrying this work item, named as a change write names it: its " +
+					"key (ENG-42) or id — its id where you read it with `key_collision` — or `<backend>:<id>`."},
 			"reviewer": map[string]any{"type": "string", "description": "Only the changes asking this seat's review."},
 			"needs": map[string]any{"type": "string", "enum": needs,
 				"description": "Only the live changes waiting on a `review` or a `fix` — yours, unless `reviewer` " +
@@ -340,8 +341,9 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	q := code.ReadQuery{Kind: code.ReadChanges, Owner: strings.TrimSpace(argString(args, "owner")),
-		Work: strings.TrimSpace(argString(args, "work")), Reviewer: strings.TrimSpace(argString(args, "reviewer")),
-		Cursor: strings.TrimSpace(argString(args, "cursor")), Fresh: seatRead}
+		Reviewer: strings.TrimSpace(argString(args, "reviewer")),
+		Cursor:   strings.TrimSpace(argString(args, "cursor")), Fresh: seatRead}
+	work := strings.TrimSpace(argString(args, "work"))
 	if s := code.ChangeState(strings.TrimSpace(argString(args, "state"))); s != "" {
 		if !s.Valid() {
 			return failed(fmt.Sprintf("%s: `state` is one of %s, not %q.", t.Name(), words.Or(code.ChangeStates()),
@@ -360,22 +362,43 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxCodeChangeList)), nil
 	}
 	named := strings.TrimSpace(argString(args, "repo")) != ""
-	if !named && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" {
+	if !named && work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" {
 		// REFUSED BEFORE ANYTHING IS READ, in the reader's own terms: no
 		// index holds every change the company has, so a listing names what
 		// it walks.
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
 			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(code.Needs()))), nil
 	}
+	if work == noWorkItem {
+		// `none` IS A WRITE'S WORD, carrying no item: the work index holds
+		// only the changes that carry one, so no listing walks the rest.
+		return failed(fmt.Sprintf("%s: `work` names the item whose changes to list — `%s` lists nothing; "+
+			"name a `repo`, an `owner` or a `state` instead.", t.Name(), noWorkItem)), nil
+	}
 	var (
+		name     string
 		repo     code.RepoRef
 		resolved *code.ReadAnswer
 	)
 	if named {
-		name, refusal := repoArg(t.Name(), args)
+		var refusal *tools.Result
+		if name, refusal = repoArg(t.Name(), args); refusal != nil {
+			return *refusal, nil
+		}
+	}
+	if work != "" {
+		// THE ITEM IS RESOLVED AS THE CHANGE WRITES RESOLVE THEIRS
+		// ([CodeDeps.workItemOf]) — a Worklet key or id by the tracker's own
+		// read — once every argument has been judged, and listed by the
+		// identity a change's row holds, which is all the reader takes.
+		item, refusal := t.deps.workItemOf(ctx, t.Name(), "work", work)
 		if refusal != nil {
 			return *refusal, nil
 		}
+		q.Work = item.Ref()
+	}
+	if named {
+		var refusal *tools.Result
 		// THE LISTING IS THE RESOLUTION where the turn has none: one
 		// linearizable read, one barrier, rather than a `repo` read first
 		// ([CodeDeps.repoRead]).
@@ -750,6 +773,26 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.C
 		return nil, code.RevisionRow{}, statelog.Position{}, &r
 	}
 	return answer.ChangeBrief, answer.Revisions[0], answer.Position, nil
+}
+
+// row is the change's ROW ALONE — in brief and with no revision
+// ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on the
+// code host — and the position it was read at, at the seat's level: what a
+// read that needs nothing of the change but its state, its branches, its id
+// and its number asks, which a coding run's launch on a change is
+// ([CodeDeps.runChange]). Its detail would read its description, authors,
+// conversation and mergeability and judge its readiness, all of it dropped.
+func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Position, *tools.Result) {
+	answer, refusal := g.read(ctx, code.ReadQuery{Brief: true, DetailOnly: true}, statelog.Position{})
+	if refusal != nil {
+		return nil, statelog.Position{}, refusal
+	}
+	if answer.ChangeBrief == nil {
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's row with none", g.ref()),
+			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
+		return nil, statelog.Position{}, &r
+	}
+	return answer.ChangeBrief, answer.Position, nil
 }
 
 // detail is the change IN DETAIL and its head revision — its detail beside a

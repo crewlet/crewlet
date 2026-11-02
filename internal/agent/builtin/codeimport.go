@@ -41,7 +41,12 @@ import (
 // secret store and then the environment (M6-D17). A token typed into the call
 // is refused for its shape before anything is sent, so it is never recorded on
 // a repository's settings, which every data node keeps and every backup
-// carries.
+// carries. The variable must be one code.remote_credentials declares for the
+// source's host: the deciding data node refuses any other, and the home's
+// dial resolves no other (config.CodeRemoteCredentials.Refusal), so a person
+// who may create a repository cannot have the code host send a value the
+// administrator did not name for that host — its own keyring, its object
+// store's key — to one they chose.
 //
 // # One create, however often it is asked
 //
@@ -74,9 +79,10 @@ func (t *codeImportRepo) Parameters() map[string]any {
 	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":           map[string]any{"type": "string"},
-			"url":            map[string]any{"type": "string"},
-			"credential":     map[string]any{"type": "string", "description": "A variable's name, never a token."},
+			"name": map[string]any{"type": "string"},
+			"url":  map[string]any{"type": "string"},
+			"credential": map[string]any{"type": "string",
+				"description": "A variable code.remote_credentials declares for the url's host, by name; never a token."},
 			"owner":          map[string]any{"type": "object", "description": ownerShape},
 			"visibility":     map[string]any{"type": "string", "enum": spelled(code.Visibilities())},
 			"default_branch": map[string]any{"type": "string", "description": "`main` when left out."},
@@ -206,8 +212,9 @@ func credentialArg(tool string, args map[string]any) (string, *tools.Result) {
 		return "${" + name + "}", nil
 	}
 	r := failed(fmt.Sprintf("%s: `credential` is the NAME of the variable that holds the source's token, "+
-		"in upper case (such as GITHUB_TOKEN), resolved from the secret store or the environment when the "+
-		"code host dials — never the token itself, which every record of the repository's settings would "+
-		"carry. Store the token with `crewlet secrets set <NAME>` and name it here.", tool))
+		"in upper case (such as GITHUB_TOKEN) — one code.remote_credentials declares for the source's host — "+
+		"resolved from the secret store or the environment when the code host dials, never the token itself, "+
+		"which every record of the repository's settings would carry. An administrator stores the token "+
+		"with `crewlet secrets set <NAME>` and declares the NAME for its host; name it here.", tool))
 	return "", &r
 }

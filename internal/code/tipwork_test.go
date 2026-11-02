@@ -184,3 +184,154 @@ func TestATipWindowKeepsItsNewestAndCallsAGapOnlyAGap(t *testing.T) {
 			commits, more)
 	}
 }
+
+// A GREEN MOVES IN ONE RECORD WHATEVER LIES BENEATH IT (ADR-0091): a landing
+// is green by its place — at or below its target's green row — never by a
+// mark of its own, so a green record moves the one row however many unproven
+// landings a red tip left above it. Four of ada's pushes land on main with
+// nothing proving them, the target owes its home its tip work, and once unit
+// passed on the newest a green record naming it is RECORDED — never refused
+// for the landings beneath it — moves main's green row onto that landing,
+// and leaves the target owing nothing and its repository unlisted.
+//
+// Mutation: refuse a green past a cap on the landings beneath it (the
+// record_full a green once met) — red; or leave the target's row of tip work
+// where a green moves past every landing — the repository still listed, red.
+func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A"))))
+	from := "A"
+	for _, to := range []string{"B", "C", "D", "E"} {
+		got, err := c.Propose(t.Context(), proposal(repo, update(mainRef, oidOf(from), oidOf(to))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push from %s to %s answered %+v (%v), want it landed", from, to, got.Answer, err)
+		}
+		from = to
+	}
+	_, tips := tipsDue(t, n, repo)
+	if len(tips) != 1 || len(tips[0].Landings) != 4 {
+		t.Fatalf("web owes tip work %+v, want main's four landings", tips)
+	}
+	newest := tips[0].Newest()
+	n.checked(repo, newest.OID, mainRef, "unit", 1, code.CheckStatePassed)
+	res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
+		p.Green = &code.Green{RepoID: repo, TargetRef: mainRef, OID: newest.OID, Through: newest.Position}
+	}))
+	requireRecorded(t, res, err)
+	if commit, position := n.greenOf(repo, mainRef); commit != oidOf("E") || position != newest.Position.Packed() {
+		t.Fatalf("main's green row is at %s (%d), want E at its landing's %d", commit, position,
+			newest.Position.Packed())
+	}
+	if repos, tips := tipsDue(t, n, repo); len(tips) != 0 || slices.Contains(repos, repo) {
+		t.Fatalf("a target green past every landing owes tip work %+v (listed: %v), want none", tips, repos)
+	}
+}
+
+// A TIP ROUND IN FLIGHT IS READ WHEREVER IT IS (ADR-0091): the home dispatches
+// a target's newest landing only once no tip round on another of its commits
+// is still queued or running, so a target's tip work names that round's
+// commit — read by its own index, past the window as much as inside it. Three
+// of ada's pushes land on main past a window of one: the work reads B and D
+// with C in the gap. A tip attempt queued on D, the newest, is no round the
+// newest waits for; one running on C, which the window does not read, is.
+//
+// Mutation: read the round without leaving out the newest's own commit — D's
+// attempt named, red; or read no round at all — C's never named, red.
+func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	code.SetTipWindow(n.reader, 1)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A"))))
+	from := "A"
+	for _, to := range []string{"B", "C", "D"} {
+		got, err := c.Propose(t.Context(), proposal(repo, update(mainRef, oidOf(from), oidOf(to))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push from %s to %s answered %+v (%v), want it landed", from, to, got.Answer, err)
+		}
+		from = to
+	}
+	inFlight := func() string {
+		t.Helper()
+		_, tips := tipsDue(t, n, repo)
+		if len(tips) != 1 || !tips[0].More || tips[0].Newest().OID != oidOf("D") {
+			t.Fatalf("web owes tip work %+v, want main's read past a gap to D", tips)
+		}
+		return tips[0].InFlight
+	}
+	n.checked(repo, oidOf("D"), mainRef, "unit", 1, code.CheckStateQueued)
+	if got := inFlight(); got != "" {
+		t.Fatalf("main's round in flight is %s with only its newest's own attempt queued, want none", got)
+	}
+	n.checked(repo, oidOf("C"), mainRef, "unit", 1, code.CheckStateRunning)
+	if got := inFlight(); got != oidOf("C") {
+		t.Fatalf("main's round in flight is %q with C's tip attempt running past the window, want C", got)
+	}
+}
+
+// A TARGET PAST THE PAGE IS ANSWERED ON THE NEXT PAGE (ADR-0091): main and
+// release each owe their tip work, and a page holds one target's. The first
+// page answers main — the target that fills it is answered, never dropped —
+// and names it as where it ended; the next, asked after it, answers release;
+// the one after that answers no tip and names nowhere more, so the home's
+// turn ends with both answered, each once.
+//
+// Mutation: ask whether the page is full before answering the target that
+// fills it — main never answered, red; or go on from the start whatever the
+// page before ended at — main answered again and release never, red.
+func TestATargetPastThePageIsAnsweredOnTheNextPage(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	release := s.Protections[0]
+	release.Pattern = "refs/heads/release"
+	s.Protections = append(s.Protections, release)
+	repo := n.ensure("web", s, t1).RepoID
+	for _, target := range []string{mainRef, "refs/heads/release"} {
+		n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(target, code.ZeroOID, oidOf("A"))))
+		got, err := c.Propose(t.Context(), proposal(repo, update(target, oidOf("A"), oidOf("B"))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push onto %s answered %+v (%v), want it landed", target, got.Answer, err)
+		}
+	}
+	code.SetPageLimits(n.reader, 1, code.MaxPageBytes)
+	var answered []string
+	after := ""
+	for page := 1; ; page++ {
+		if page > 4 {
+			t.Fatalf("web's tip work was still paging after three pages, answered %v", answered)
+		}
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue,
+			ChecksDue: &code.ChecksDueQuery{RepoID: repo, RefreshBefore: harnessAt, TipsAfter: after},
+			Fresh:     statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			t.Fatalf("page %d of web's check work: %v", page, err)
+		}
+		for _, tip := range a.DueTips {
+			answered = append(answered, tip.TargetRef)
+		}
+		if a.TipsNext == "" {
+			break
+		}
+		after = a.TipsNext
+	}
+	if !slices.Equal(answered, []string{mainRef, "refs/heads/release"}) {
+		t.Fatalf("web's pages answered the tip work of %v, want main's and then release's, each once", answered)
+	}
+}

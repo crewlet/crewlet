@@ -2804,13 +2804,13 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 // repository on the code host (runpushes_internal_test.go reads the record).
 type noPushes struct{}
 
-func (noPushes) Pushed(context.Context, sandbox.PendingRun) ([]sandbox.PushedRef, int, error) {
-	return nil, 0, nil
+func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {
+	return sandbox.PushRecord{}, nil
 }
 
-func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, pushed []sandbox.PushedRef,
+func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.PushRecord,
 	_ bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
-	return pushed, nil, nil
+	return record.Refs, nil, nil
 }
 
 // fleetAnswers is the seal these coordinators seal and open answers under

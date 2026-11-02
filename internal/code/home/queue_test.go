@@ -26,8 +26,10 @@ import (
 // code domain's applier applies it — a candidate puts its entries in its train,
 // testing; an eject takes its entries out and abandons the train it ends; a
 // land moves main to its tip, its entries out — every check it queues held as
-// that commit's latest attempt, and the checks file every commit holds; the
-// chains a git node builds (queueChains), each entry's merge a commit derived
+// that commit's latest attempt, and the checks file every commit holds, and
+// every attempt the worker cancels ended cancelled — the read answering, as
+// given up, each attempt the worker queued that has not ended on a commit no
+// train tests or landed; the chains a git node builds (queueChains), each entry's merge a commit derived
 // from the commit it was built onto; and the work items closed (queueTasks).
 
 const queueMain = "refs/heads/main"
@@ -60,12 +62,16 @@ type queueRows struct {
 	since    []time.Time
 	// mirrored is the repository a pull mirror, as the read answers it.
 	mirrored bool
+	// landed is every commit a landing put on main; cancelled every
+	// attempt the worker ended, in order.
+	landed    map[string]bool
+	cancelled []code.CheckFinished
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
 	return &queueRows{tip: tip, depth: depth, batch: batch, required: []string{"unit"},
 		checks: map[string]map[string]code.TipCheck{}, files: map[string]string{}, file: checksFile("unit"),
-		seq: 100}
+		seq: 100, landed: map[string]bool{}}
 }
 
 // enqueue puts n changes at the back of main's queue, every other one asking
@@ -108,6 +114,43 @@ func (r *queueRows) ended(commit, name string, state code.CheckState) {
 	r.checks[commit][name] = code.TipCheck{Name: name, Attempt: max(1, held.Attempt), State: state}
 }
 
+// running records name's latest attempt on commit as claimed by a runner.
+func (r *queueRows) running(commit, name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	held := r.checks[commit][name]
+	held.State = code.CheckStateRunning
+	r.checks[commit][name] = held
+}
+
+// ends is every attempt the worker cancelled, in order.
+func (r *queueRows) ends() []code.CheckFinished {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.cancelled)
+}
+
+// givenUp is every attempt the worker queued that has not ended, on a commit
+// no train tests or landed, as the read answers it. Under mu.
+func (r *queueRows) givenUp() []code.AbandonedCheck {
+	tested := map[string]bool{}
+	for _, c := range r.train {
+		for _, commit := range c.Commits {
+			tested[commit.Commit] = true
+		}
+	}
+	var out []code.AbandonedCheck
+	for _, q := range r.queued {
+		held := r.checks[q.OID][q.Name]
+		if held.Attempt != q.Attempt || held.State.Ended() || tested[q.OID] || r.landed[q.OID] {
+			continue
+		}
+		out = append(out, code.AbandonedCheck{CheckKey: q.CheckKey, CandidateID: q.CandidateID,
+			Reason: code.CheckReasonAbandoned})
+	}
+	return out
+}
+
 // snapshot is the rows' train and live entries, as they stand.
 func (r *queueRows) snapshot() ([]code.QueueWorkCandidate, []code.QueueWorkEntry) {
 	r.mu.Lock()
@@ -136,13 +179,14 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	case q.Kind != code.ReadQueueDue || q.QueueDue == nil:
 		return code.ReadAnswer{}, errors.New("the queue asked a read that is not its listing")
 	case q.QueueDue.RepoID == "":
-		if len(r.entries) == 0 {
+		if len(r.entries) == 0 && len(r.givenUp()) == 0 {
 			return code.ReadAnswer{Position: r.position()}, nil
 		}
 		return code.ReadAnswer{DueRepos: []string{repoA}, Position: r.position()}, nil
 	}
+	abandoned := r.givenUp()
 	if len(r.entries) == 0 {
-		return code.ReadAnswer{Position: r.position()}, nil
+		return code.ReadAnswer{QueueAbandoned: abandoned, Position: r.position()}, nil
 	}
 	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Depth: r.depth,
 		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
@@ -163,7 +207,7 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 		}
 		d.Train = append(d.Train, c)
 	}
-	return code.ReadAnswer{DueQueue: d, Position: r.position()}, nil
+	return code.ReadAnswer{DueQueue: d, QueueAbandoned: abandoned, Position: r.position()}, nil
 }
 
 func (r *queueRows) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -190,8 +234,19 @@ func (r *queueRows) Checks(_ context.Context, req code.ChecksRequest) (code.Chec
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if f := req.Finished; f != nil && f.State == code.CheckStateCancelled {
+		held := r.checks[f.OID][f.Name]
+		if held.Attempt != f.Attempt || held.State.Ended() {
+			return code.ChecksResult{Refusal: code.CheckRefusalNoSuchCheck, Detail: "it ended"}, nil
+		}
+		held.State, held.Reason = f.State, f.Reason
+		r.checks[f.OID][f.Name] = held
+		r.cancelled = append(r.cancelled, *f)
+		r.seq++
+		return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: r.position()}, nil
+	}
 	if req.Queued == nil {
-		return code.ChecksResult{}, errors.New("the queue asked a checks write that queues nothing")
+		return code.ChecksResult{}, errors.New("the queue asked a checks write that neither queues nor cancels")
 	}
 	q := *req.Queued
 	r.queued = append(r.queued, q)
@@ -248,6 +303,7 @@ func (r *queueRows) Queue(_ context.Context, p code.QueueProposal) (code.QueueRe
 		}
 		for _, e := range p.Land.Entries {
 			r.entries = slices.Delete(r.entries, r.entry(e.EntryID), r.entry(e.EntryID)+1)
+			r.landed[e.Commit] = true
 		}
 		r.tip = p.Land.TipOID
 		r.abandon()
@@ -564,8 +620,8 @@ func TestARedBatchIsBisected(t *testing.T) {
 // the train abandons it — the next turn builds a new train onto the new tip.
 //
 // Mutation: build whenever the worker holds no train of its own (a memory of
-// the last build) → the new home builds, red; drop trainStands' base check →
-// the train on the old tip is tested on, red.
+// the last build) → the new home builds, red; drop QueueDue.TrainStands' base
+// check → the train on the old tip is tested on, red.
 func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 	t.Parallel()
 	base := oid("c")
@@ -614,6 +670,114 @@ func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 		train[0].Train == standing[0].Train {
 		t.Fatalf("a train whose target moved is %+v after the turn (%d builds), want a new train onto the new "+
 			"tip", train, next.built()-built)
+	}
+}
+
+// EJECTING A CULPRIT CANCELS ITS TRAIN'S CHECKS: a train of two candidates
+// (depth 2, batch 1) whose first candidate fails its unit check has its
+// culprit ejected, which gives the train up — and the second candidate's
+// attempts, its unit running and its lint still queued, measure a commit
+// nothing will land while they hold a runner's cells. The turn that builds
+// the next train cancels nothing, since a train built again may test a
+// given-up attempt's commit (its snapshot is read before its candidate is
+// recorded); the turn after cancels exactly those two attempts, `abandoned`,
+// and none of the live train's.
+//
+// Mutation: drop the cancel → the given-up attempts run on, red; cancel in a
+// turn that recorded a train → the build turn cancels, red.
+func TestEjectingACulpritCancelsItsTrainsChecks(t *testing.T) {
+	t.Parallel()
+	base := oid("c")
+	rows := newQueueRows(base, 2, 1)
+	rows.required, rows.file = []string{"lint", "unit"}, checksFile("lint", "unit")
+	entries := rows.enqueue(t, 3)
+	l := queueLoop(t, rows, &queueChains{}, &queueTasks{})
+
+	turn(t, l, rows)
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 2 {
+		t.Fatalf("the queue built %+v, want a train of two candidates of one change each", train)
+	}
+	first, second := train[0].Tip().Commit, train[1].Tip().Commit
+	if _, queued := rows.asked(); len(queued) != 4 {
+		t.Fatalf("the train's test queued %+v, want lint and unit on each candidate's tip", queued)
+	}
+	rows.ended(first, "unit", code.CheckStateFailed)
+	rows.ended(first, "lint", code.CheckStatePassed)
+	rows.running(second, "unit")
+
+	turn(t, l, rows)
+	if _, live := rows.snapshot(); len(live) != 2 || slices.ContainsFunc(live, func(e code.QueueWorkEntry) bool {
+		return e.EntryID == entries[0].EntryID
+	}) {
+		t.Fatalf("the red first candidate left %+v live, want its culprit ejected", live)
+	}
+	built := len(rows.ends())
+	turn(t, l, rows)
+	if ends := rows.ends(); len(ends) != built {
+		t.Fatalf("the turn that built the next train cancelled %+v, want nothing: a train built again may "+
+			"test what a given-up attempt measures", ends[built:])
+	}
+	turn(t, l, rows)
+	train, _ = rows.snapshot()
+	var got []string
+	for _, f := range rows.ends() {
+		if f.State != code.CheckStateCancelled || f.Reason != code.CheckReasonAbandoned ||
+			slices.ContainsFunc(train, func(c code.QueueWorkCandidate) bool { return c.Tip().Commit == f.OID }) {
+			t.Fatalf("the queue ended %+v, want a given-up attempt cancelled abandoned", f)
+		}
+		got = append(got, f.OID+" "+f.Name)
+	}
+	slices.Sort(got)
+	if want := []string{second + " lint", second + " unit"}; !slices.Equal(got, want) {
+		t.Fatalf("the queue cancelled %v, want the given-up second candidate's queued lint and running unit, "+
+			"%v", got, want)
+	}
+}
+
+// A GIVEN-UP RUN IS QUEUED AGAIN FOR THE TRAIN THAT TESTS ITS COMMIT: a
+// train built again from the same rows is the same commits, so the live train
+// may test a commit whose latest attempt a given-up train's cancellation
+// ended — `abandoned`, having measured nothing — and its test queues the next
+// attempt as a requeue, as it does one its runner's infrastructure ended;
+// one cancelled for any other reason is left, as stuck.
+//
+// Mutation: drop the given-up arm of the landing states → the cancelled
+// attempt reads stuck and nothing is queued, red; requeue any cancellation →
+// the superseded one is queued again, red.
+func TestAGivenUpRunIsQueuedAgainForTheTrainThatTestsIt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		reason  code.CheckReason
+		requeue bool
+	}{{code.CheckReasonAbandoned, true}, {code.CheckReasonDequeued, true}, {code.CheckReasonSuperseded, false}} {
+		t.Run(string(c.reason), func(t *testing.T) {
+			t.Parallel()
+			rows := newQueueRows(oid("c"), 1, 1)
+			rows.enqueue(t, 1)
+			l := queueLoop(t, rows, &queueChains{}, &queueTasks{})
+			turn(t, l, rows)
+			turn(t, l, rows)
+			train, _ := rows.snapshot()
+			tip := train[0].Tip().Commit
+			rows.mu.Lock()
+			rows.checks[tip]["unit"] = code.TipCheck{Name: "unit", Attempt: 1, State: code.CheckStateCancelled,
+				Reason: c.reason}
+			rows.mu.Unlock()
+			_, before := rows.asked()
+			turn(t, l, rows)
+			_, after := rows.asked()
+			switch queued := after[len(before):]; {
+			case c.requeue && (len(queued) != 1 || queued[0].OID != tip || queued[0].Attempt != 2 ||
+				queued[0].Reason != code.QueueRequeue):
+				t.Fatalf("the train testing a commit whose run was cancelled %s queued %+v, want attempt 2 "+
+					"requeued", c.reason, queued)
+			case !c.requeue && len(queued) != 0:
+				t.Fatalf("the train testing a commit whose run was cancelled %s queued %+v, want nothing",
+					c.reason, queued)
+			}
+		})
 	}
 }
 

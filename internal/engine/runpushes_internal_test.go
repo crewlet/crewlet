@@ -19,13 +19,13 @@ import (
 // with it run no repository on the code host (the cases below read one).
 type noPushes struct{}
 
-func (noPushes) Pushed(context.Context, sandbox.PendingRun) ([]sandbox.PushedRef, int, error) {
-	return nil, 0, nil
+func (noPushes) Pushed(context.Context, sandbox.PendingRun) (sandbox.PushRecord, error) {
+	return sandbox.PushRecord{}, nil
 }
 
-func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, pushed []sandbox.PushedRef,
+func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.PushRecord,
 	_ bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
-	return pushed, nil, nil
+	return record.Refs, nil, nil
 }
 
 // pagedReader is the code host's read answering a scripted page per call, and
@@ -131,8 +131,8 @@ func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 			RepoID: fmt.Sprintf("0190d8f0-0000-7000-8000-0000000001%02x", i), Branch: "seats/swe/ENG-42",
 			Access: sandbox.RepoWrite})
 	}
-	reader := &pagedReader{pages: []code.ReadAnswer{{}}}
-	if _, _, err := readerOf(reader).Pushed(t.Context(), run); err != nil {
+	reader := &pagedReader{pages: []code.ReadAnswer{{Position: firstPageAt}}}
+	if _, err := readerOf(reader).Pushed(t.Context(), run); err != nil {
 		t.Fatalf("read the pushes of a run given %d repositories: %v", len(run.Repos), err)
 	}
 	if len(reader.asked) != 1 || len(reader.asked[0].RunPushes.Repos) != sandbox.MaxRunRepos {
@@ -148,12 +148,14 @@ func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 // repositories are the run's own it may push to, by id in its order, read
 // above its launch; each ref collapses to the old value of its first push and
 // the new value of its last, in the order the run first pushed it; a command
-// the decide refused moved nothing; and a ref is named as the run was given
-// its repository.
+// the decide refused moved nothing; a ref is named as the run was given its
+// repository; and the record is the first page's position's, where its one
+// barrier put it.
 //
 // Mutations: list every push rather than collapse — four web entries, red;
 // read every page linearizable — the second page's level, red; keep refused
-// commands — the ng ref listed, red; name the repository by id — red.
+// commands — the ng ref listed, red; name the repository by id — red; answer
+// the record at its last page's position — red.
 func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
@@ -171,10 +173,13 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 			Pushes: []code.PushRow{
 				pushRow("p4", runAPIID, cmdOK("refs/heads/seats/swe/old", oidOf("4"), code.ZeroOID)),
 			},
-			Position: firstPageAt, Level: statelog.ReadSession,
+			// A later page answered past the first: the record is still
+			// the first page's, where its barrier put it.
+			Position: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 95},
+			Level:    statelog.ReadSession,
 		},
 	}}
-	refs, more, err := readerOf(reader).Pushed(t.Context(), pushedRun())
+	record, err := readerOf(reader).Pushed(t.Context(), pushedRun())
 	if err != nil {
 		t.Fatalf("Pushed: %v", err)
 	}
@@ -183,8 +188,12 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 		{Repo: "web", Ref: "refs/heads/seats/swe/spike", Old: code.ZeroOID, New: oidOf("9"), Pushes: 1},
 		{Repo: "api", Ref: "refs/heads/seats/swe/old", Old: oidOf("4"), New: code.ZeroOID, Pushes: 1},
 	}
-	if !slices.Equal(refs, want) || more != 0 {
-		t.Errorf("read %+v and %d more, want %+v", refs, more, want)
+	if !slices.Equal(record.Refs, want) || record.More != 0 {
+		t.Errorf("read %+v and %d more, want %+v", record.Refs, record.More, want)
+	}
+	if record.At != firstPageAt {
+		t.Errorf("the record was read at %s, want its first page's %s — the barrier every later read of the "+
+			"collection is floored at", record.At, firstPageAt)
 	}
 
 	if len(reader.asked) != 2 {
@@ -214,10 +223,10 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	idle := pushedRun()
 	idle.Repos = idle.Repos[1:2]
 	silent := &pagedReader{err: errors.New("asked")}
-	if refs, more, err := readerOf(silent).Pushed(t.Context(), idle); err != nil || refs != nil || more != 0 ||
-		len(silent.asked) != 0 {
-		t.Errorf("a run given only a repository to read = %v, %d, %v after %d reads; want nothing, unread",
-			refs, more, err, len(silent.asked))
+	if record, err := readerOf(silent).Pushed(t.Context(), idle); err != nil || record.Refs != nil ||
+		record.More != 0 || !record.At.IsZero() || len(silent.asked) != 0 {
+		t.Errorf("a run given only a repository to read = %+v, %v after %d reads; want nothing, unread",
+			record, err, len(silent.asked))
 	}
 }
 
@@ -243,10 +252,11 @@ func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 		},
 		Position: firstPageAt,
 	}}}
-	refs, more, err := readerOf(reader).Pushed(t.Context(), pushedRun())
+	record, err := readerOf(reader).Pushed(t.Context(), pushedRun())
 	if err != nil {
 		t.Fatalf("Pushed: %v", err)
 	}
+	refs, more := record.Refs, record.More
 	if len(refs) != sandbox.MaxPushedRefs || more != 6 {
 		t.Fatalf("held %d refs and counted %d more, want %d held and the 5 past them counted with the "+
 			"second push of one", len(refs), more, sandbox.MaxPushedRefs)
@@ -259,7 +269,12 @@ func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 // A RECORD THE READER CANNOT READ IS AN ERROR, never "nothing pushed": no code
 // host here, a launch position it cannot read or on another log, a read the
 // code host refused, a page that did not move, a first page answered at no
-// position of the code log, and a row of a repository the run was not given.
+// position of the code log — a record of one page among them, since the
+// record's position is what the run's changes are read at — and a row of a
+// repository the run was not given.
+//
+// Mutation: check the first page's position only where a page follows it —
+// the whole record at no position, red.
 func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 	t.Parallel()
 	page := func(a code.ReadAnswer) []code.ReadAnswer { return []code.ReadAnswer{a, a} }
@@ -277,6 +292,10 @@ func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 			Position: firstPageAt})}, want: "again"},
 		"a first page at no position": {reader: &pagedReader{pages: page(code.ReadAnswer{Next: "0/91/p3"})},
 			want: "no position of the code log"},
+		// THE LAST PAGE TOO, where it is the first: its position is the
+		// record's, which the changes are read at.
+		"a whole record at no position": {reader: &pagedReader{pages: page(code.ReadAnswer{})},
+			want: "no position of the code log"},
 		"another repository's row": {reader: &pagedReader{pages: page(code.ReadAnswer{Position: firstPageAt,
 			Pushes: []code.PushRow{pushRow("p1", runDocsID, cmdOK("refs/heads/x", code.ZeroOID, oidOf("1")))}})},
 			want: "not given"},
@@ -287,16 +306,16 @@ func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			refs, _, err := readerOf(tc.reader).Pushed(t.Context(), run)
-			if err == nil || !strings.Contains(err.Error(), tc.want) || refs != nil {
-				t.Fatalf("Pushed = %v, %v; want a refusal saying %q and no refs", refs, err, tc.want)
+			record, err := readerOf(tc.reader).Pushed(t.Context(), run)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || record.Refs != nil {
+				t.Fatalf("Pushed = %+v, %v; want a refusal saying %q and no refs", record, err, tc.want)
 			}
 		})
 	}
 
 	// A node that serves no code host says why.
 	bare := &Engine{}
-	if _, _, err := bare.codeRunPushes().Pushed(t.Context(), pushedRun()); err == nil ||
+	if _, err := bare.codeRunPushes().Pushed(t.Context(), pushedRun()); err == nil ||
 		!strings.Contains(err.Error(), "does not serve the company's code host") {
 		t.Fatalf("a node with no code host = %v, want it said", err)
 	}

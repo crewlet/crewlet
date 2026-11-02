@@ -72,7 +72,7 @@ func requireState(t *testing.T, r code.Readiness, kind code.PreconditionKind, st
 }
 
 // converse fails t unless w's write applied, and answers its result.
-func converse(t *testing.T, w *code.ChangeWriter, cw code.ConversationWrite) code.ConversationResult {
+func converse(t testing.TB, w *code.ChangeWriter, cw code.ConversationWrite) code.ConversationResult {
 	t.Helper()
 	res, err := w.Converse(t.Context(), cw)
 	requireConversed(t, res, err)

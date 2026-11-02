@@ -60,6 +60,11 @@ const (
 	// homeDir is HOME for every git process — gitproc's, which creates it
 	// and keeps it empty.
 	homeDir = "home"
+	// cohortsName is the newest cohort of the memo any process of this cache
+	// may have placed an answer in, which a boot opens its own past: made
+	// durable before the node's newest cohort moves to a number past it
+	// (memo.go's reserveCohort).
+	cohortsName = "memo-cohorts"
 	// lostFound is the directory mkfs makes at the root of every ext
 	// filesystem. Prepare reads it as part of the filesystem rather than as
 	// content, and nothing in the cache ever opens it.

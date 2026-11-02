@@ -202,11 +202,11 @@ type CodeDeps struct {
 	Writer CodeWriter
 
 	// Tasks is Worklet as one task is read, which resolves the Worklet item
-	// a change write names by its key to the item's identity
-	// ([CodeDeps.workItemArg]): set where the company runs Worklet. Nil
-	// resolves none, and a call naming a Worklet item's
-	// key is refused, naming the `<backend>:<id>` form every item takes —
-	// never filed under a key nobody resolved.
+	// a change write's `work_item`, or code_list_changes' `work`, names by
+	// its key or id to the item's identity ([CodeDeps.workItemOf]): set
+	// where the company runs Worklet. Nil resolves none, and a call naming a
+	// Worklet item's key is refused, naming the `<backend>:<id>` form every
+	// item takes — never filed, or listed, under a key nobody resolved.
 	Tasks TaskReader
 
 	// Closer is Worklet's writer FOR ONE ACTOR, which a

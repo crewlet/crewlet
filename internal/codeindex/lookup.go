@@ -3,6 +3,7 @@ package codeindex
 import (
 	"cmp"
 	"math"
+	"math/bits"
 	"slices"
 )
 
@@ -55,13 +56,29 @@ import (
 // other need then narrows what the union holds of the literal, in place: a
 // list of its own read as it is intersected, decoded blobs searched by steps
 // that double (gallop) — so what narrowing by C or a shared list costs a
-// literal is what it holds, never the length of what it shares. A lookup so
-// allocates each clause's C, each list more than one place reads decoded
-// once, and what its literals admit, in the two buffers the union merges
-// them between; and it reads no list twice. Its reading counts the bytes,
-// which the suite holds every lookup to (TestAClauseReadsEachListItNamesOnce,
+// literal is what it holds, never the length of what it shares
+// (TestGallopLooksAtAFewOrdinalsForEachItLooksFor). A lookup so allocates
+// each clause's C, each list more than one place reads decoded once, and
+// what its literals admit, in the two buffers the union merges them between;
+// and it reads no list twice, nor a list it narrows by past the furthest
+// blob a place reading it keeps. Its reading counts the bytes, which the
+// suite holds every lookup to (TestAClauseReadsEachListItNamesOnce,
 // TestAPlanReadsEachListItsClausesNameOnce,
-// TestAClauseAdmitsWhatItsLiteralsLookedUpAloneAdmit).
+// TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps,
+// TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit).
+//
+// WHAT IT COSTS IN TIME (BenchmarkLookup, over a segment of 65 536 blobs,
+// in bounded runs — -benchtime 200x -count 1, no race detector, two E-cores
+// of a Core Ultra 7 265U — each beside the per-literal lookup's own loop):
+// decoding a list of 65 536 ordinals takes 137 µs, against 220 µs for the
+// loop over its bytes the posting reader replaced, and 334 µs while the
+// reader's every step was a call (ordinals); the candidates of
+// handlerequest, one literal, whose lists of every blob it narrows by it
+// reads to their ends — blobs sit in id order, so what it keeps runs to the
+// segment's last — take 2.5 ms and allocate 7 560 bytes, against 3.9 ms and
+// 10.6 MB looked up a literal at a time, and 3.5 ms while a step was a call;
+// and of handle(request|response|record|reply), four literals sharing
+// handle's lists, 2.6 ms and 27 280 bytes, against 9.4 ms and 24.7 MB.
 
 // reading is one lookup's reads of a segment's posting lists — every clause
 // of one plan, in one segment — and the bytes of them it has read, each list
@@ -198,7 +215,7 @@ func (d *decoded) upTo(r *reading, last uint32) error {
 		d.got = make([]uint32, 0, len(d.read.list))
 	}
 	left := len(d.read.list)
-	for d.read.next() {
+	for d.read.delta() || d.read.next() {
 		d.got = append(d.got, d.read.at)
 		if d.read.at >= last {
 			break
@@ -290,7 +307,8 @@ func (r *reading) narrow(dst, set []uint32, n need) ([]uint32, error) {
 	if err := n.held.upTo(r, set[len(set)-1]); err != nil {
 		return nil, err
 	}
-	return gallop(dst, set, n.held.got), nil
+	kept, _ := gallop(dst, set, n.held.got)
+	return kept, nil
 }
 
 // listed appends to dst the ordinals of set, ascending, that list names too.
@@ -301,7 +319,7 @@ func (r *reading) narrow(dst, set []uint32, n need) ([]uint32, error) {
 // never ahead of what is read.
 func (r *reading) listed(dst, set []uint32, list []byte) ([]uint32, error) {
 	o, i := r.s.ordinals(list), 0
-	for i < len(set) && o.next() {
+	for i < len(set) && (o.delta() || o.next()) {
 		for i < len(set) && set[i] < o.at {
 			i++
 		}
@@ -331,7 +349,12 @@ func (r *reading) decode(list []byte, dst []uint32) ([]uint32, error) {
 // narrowing a few blobs by blobs they all share, would otherwise take once
 // a literal. dst may be set[:0], since what is kept is never ahead of what is
 // read.
-func gallop(dst, set, sorted []uint32) []uint32 {
+//
+// probes is the ordinals of sorted it looked at, at most 2(⌊log₂ n⌋+2) for
+// each of set's, n sorted's length. That is gallop's whole point, and what
+// it keeps does not show it, since a walk keeps the same: so the probes are
+// what the suite holds it to (TestGallopLooksAtAFewOrdinalsForEachItLooksFor).
+func gallop(dst, set, sorted []uint32) (kept []uint32, probes int) {
 	lo := 0
 	for _, x := range set {
 		// Every ordinal of sorted before lo is below x; probe ahead of it
@@ -339,8 +362,12 @@ func gallop(dst, set, sorted []uint32) []uint32 {
 		hi, step := lo, 1
 		for hi < len(sorted) && sorted[hi] < x {
 			lo, hi, step = hi+1, hi+step, step<<1
+			probes++
 		}
-		i, found := slices.BinarySearch(sorted[lo:min(hi+1, len(sorted))], x)
+		window := sorted[lo:min(hi+1, len(sorted))]
+		i, found := slices.BinarySearch(window, x)
+		// The probe that stopped the steps, and the search's.
+		probes += 1 + bits.Len(uint(len(window)))
 		lo += i
 		if found {
 			dst = append(dst, x)
@@ -350,5 +377,5 @@ func gallop(dst, set, sorted []uint32) []uint32 {
 			break
 		}
 	}
-	return dst
+	return dst, probes
 }

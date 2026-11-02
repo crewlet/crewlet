@@ -6,8 +6,9 @@
  *
  * `code_checks` answers newest ended first (a repository's and the window's)
  * or by the checks of one commit (a change's), and a narrowing — a state, a
- * check's name — is tested on the rows a page READ, so a page may be short or
- * even empty with a `next`: Load more follows it. The pager is the one every
+ * check's name — is the engine's, sought rather than filtered out of a page.
+ * A page of the window is the rows the reader's grant keeps of those it read,
+ * so it may be short or even empty with a `next`: Load more follows it. The pager is the one every
  * paged list shares (`lib/usePaged.ts`), which joins each page to the one
  * before it, because the cursor was minted from that page's last row.
  *

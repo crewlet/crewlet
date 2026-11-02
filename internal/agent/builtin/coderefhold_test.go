@@ -153,6 +153,8 @@ var notRefArgs = map[string]string{
 	"search":             "a repository's setting",
 	"path_owners":        "a repository's setting",
 	"archived":           "a repository's setting",
+	"mirror_from":        "a repository's pull mirror, another host's url and a credential's variable: no ref of it",
+	"mirror_to":          "a repository's push mirror; the refs patterns it names are a setting no request reads through",
 	"reason":             "a deletion's reason",
 	"pattern":            "a protection's pattern, never a ref",
 	"direct_push":        "a protection's field",

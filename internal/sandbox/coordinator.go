@@ -1783,21 +1783,23 @@ func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 // nothing about the record, and said it would leave the run's phase record —
 // published once — calling its pushes unknown for good.
 //
-// AND THE CHANGES ([RunPushes.Changes]): every ref read is named by the live
-// change its branch heads, and the changes the run asked to open are opened
-// from what it pushed — only for a run that FINISHED its work, succeeded and
-// asked nothing: a run that stopped on a question is resumed by its answer
-// and carried on by another job, which reads the record again (ADR-0068), and
-// one that did not succeed would put half its work in front of reviewers,
-// which the seat decides whether to do itself (code_open_change). Opened is the
-// coordinator's too, cleared with the rest. Its read failing fails nothing,
-// for the push record's reason: each ask says it was not opened, and why.
+// AND THE CHANGES ([RunPushes.Changes]), read at the push record's position
+// ([PushRecord.At]), so a collection pays the record's one barrier and no
+// other: every ref read is named by the live change its branch heads, and the
+// changes the run asked to open are opened from what it pushed — only for a run
+// that FINISHED its work, succeeded and asked nothing: a run that stopped on a
+// question is resumed by its answer and carried on by another job, which reads
+// the record again (ADR-0068), and one that did not succeed would put half its
+// work in front of reviewers, which the seat decides whether to do itself
+// (code_open_change). Opened is the coordinator's too, cleared with the rest.
+// Its read failing fails nothing, for the push record's reason: each ask says
+// it was not opened, and why.
 func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Result) (Result, error) {
 	result.Pushed, result.PushedElided, result.PushedUnread, result.Opened = nil, 0, "", nil
 	if len(Pushable(run.Repos)) == 0 {
 		return result, nil
 	}
-	pushed, more, err := c.pushes.Pushed(ctx, run)
+	record, err := c.pushes.Pushed(ctx, run)
 	switch {
 	case err != nil && errors.Is(ctx.Err(), context.Canceled):
 		return Result{}, fmt.Errorf("sandbox: reading what run %s pushed: %w", run.TurnID, err)
@@ -1813,13 +1815,13 @@ func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Res
 				"saying its pushes are unknown, never that it pushed nothing")
 		return result, nil
 	}
-	result.Pushed, result.PushedElided = pushed, more
+	result.Pushed, result.PushedElided = record.Refs, record.More
 	finished := result.Success && !run.asked()
-	if len(pushed) == 0 && (!finished || len(asked(run, "")) == 0) {
+	if len(record.Refs) == 0 && (!finished || len(asked(run, "")) == 0) {
 		// NOTHING TO NAME AND NOTHING TO OPEN: no read.
 		return withUnopened(run, result, finished), nil
 	}
-	named, opened, err := c.pushes.Changes(ctx, run, pushed, finished)
+	named, opened, err := c.pushes.Changes(ctx, run, record, finished)
 	switch {
 	case err != nil && errors.Is(ctx.Err(), context.Canceled):
 		return Result{}, fmt.Errorf("sandbox: reading the changes run %s delivered to: %w", run.TurnID, err)

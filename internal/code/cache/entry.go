@@ -452,8 +452,11 @@ type incarnation struct {
 	// listing, and never with entry.mu, which it is taken before. memoListed:
 	// every cohort directory on the disk is in the record — this process made
 	// the tree, or the janitor listed it (listMemos); a boot's copy is not,
-	// until its first listing. memoVersion moves with every change to the
-	// record (setMemo) and memoStated is the version the state last written
+	// until its first listing. memoUnlisted: the copy's last listing failed
+	// (code_cache_memo_unlisted), so the janitor lists it again only at its
+	// tick (listMemos); written under entry.mu. memoVersion moves with every
+	// change to the record (setMemo) and memoStated is the version the state
+	// last written
 	// records, which the janitor writes again at its tick once they differ
 	// (Cache.stateMemos). memoGen counts the memo's drops in this process, so
 	// a batch begun before one places nothing after it, and memoShut is a memo
@@ -461,6 +464,7 @@ type incarnation struct {
 	// (dropMemo, reopenMemo), or one carried away (carryMemo).
 	memoMu                  sync.Mutex
 	memoListed              bool
+	memoUnlisted            bool
 	memoVersion, memoStated uint64
 	memoGen                 uint64
 	memoShut                bool

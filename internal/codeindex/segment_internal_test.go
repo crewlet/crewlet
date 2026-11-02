@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"math"
+	"math/bits"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -255,6 +257,69 @@ func TestASegmentThisBuildDidNotWriteIsRefused(t *testing.T) {
 	}
 }
 
+// EVERY READ OF A POSTING LIST REFUSES WHAT IS NOT THE FORMAT, whichever
+// step meets it. A list is read in two steps (ordinals): delta, inline, for a
+// one-byte delta, and next for every other — so a one-byte delta that does
+// not rise, or that rises past the table, is met by delta's check first, and
+// a longer one, a first ordinal or bytes cut short by next's. Each is refused
+// by every read — a decode, a narrowing (reading.listed) and a list kept
+// decoded as far as a lookup needs (decoded.upTo) — and a read refused goes
+// on answering nothing; a list of the format reads whole, by either step.
+func TestEveryReadOfAPostingListRefusesWhatIsNotTheFormat(t *testing.T) {
+	t.Parallel()
+	const count = 200
+	s := &Segment{count: count}
+	every := make([]uint32, count)
+	for i := range every {
+		every[i] = uint32(i)
+	}
+	for _, c := range []struct {
+		name string
+		list []byte
+		// want is the ordinals the list names, nil where it is refused.
+		want []uint32
+	}{
+		{"one-byte deltas", []byte{0, 1, 1, 0x7f, 2}, []uint32{0, 1, 2, 129, 131}},
+		{"a longer delta", []byte{3, 0x80, 0x01, 1}, []uint32{3, 131, 132}},
+		{"a one-byte delta to the table's last", []byte{100, 99}, []uint32{100, 199}},
+		{"a one-byte delta that does not rise", []byte{0, 1, 0, 1}, nil},
+		{"a one-byte delta past the table", []byte{100, 100}, nil},
+		{"a longer delta past the table", []byte{0, 0xc8, 0x01}, nil},
+		{"a first ordinal past the table", []byte{0xc8, 0x01}, nil},
+		{"a delta cut short", []byte{0, 0x80}, nil},
+	} {
+		check := func(read string, got []uint32, err error) {
+			t.Helper()
+			if c.want == nil {
+				if !errors.Is(err, ErrMalformed) {
+					t.Errorf("%s: %s reads %v, refusing nothing (%v)", c.name, read, got, err)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(got, c.want) {
+				t.Errorf("%s: %s reads %v (%v); the list names %v", c.name, read, got, err, c.want)
+			}
+		}
+		got, err := s.decode(c.list, nil)
+		check("a decode", got, err)
+
+		r := reading{s: s}
+		got, err = r.listed(nil, every, c.list)
+		check("narrowing every blob by it", got, err)
+
+		d := decoded{read: s.ordinals(c.list), bytes: len(c.list)}
+		err = d.upTo(&r, math.MaxUint32)
+		check("keeping it decoded", d.got, err)
+
+		o := s.ordinals(c.list)
+		for o.delta() || o.next() {
+		}
+		if refused := o.err; refused != nil && (o.delta() || o.next() || o.err != refused) {
+			t.Errorf("%s: a read refused (%v) reads on, to %d (%v)", c.name, refused, o.at, o.err)
+		}
+	}
+}
+
 // A MERGE ALLOCATES FOR WHAT IT WRITES, HOWEVER MANY SEGMENTS IT MERGES.
 //
 // A trigram's lists, one from each segment holding it, are merged in pairs
@@ -340,6 +405,43 @@ func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
 	if limit := uint64(len(whole)); max(two, five, many) > limit {
 		t.Errorf("merges writing %d bytes (%d postings) allocated %d (2 segments), %d (5) and %d (32): more "+
 			"than they write", len(whole), postings, two, five, many)
+	}
+}
+
+// A UNION KEPT FROM ONE MERGE TO THE NEXT MAKES ITS BUFFERS A LOGARITHMIC
+// NUMBER OF TIMES. A merge keeps one union from trigram to trigram, and the
+// unions it merges grow from one to the next; the spare is made exactly as
+// long as what a round merges, and only once a union outgrows the buffer it
+// is swapped for, which append grew a factor at a time — so unions growing
+// by two ordinals at a time to 4 096 make their buffers a few tens of times,
+// never once a union.
+func TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the union's.
+	const most = 2048
+	evens, odds := make([]uint32, most), make([]uint32, most)
+	for i := range evens {
+		evens[i], odds[i] = uint32(2*i), uint32(2*i+1)
+	}
+	var u union
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for n := 1; n <= most; n++ {
+		u.reset()
+		u.add(evens[:n])
+		u.add(odds[:n])
+		if got := u.merged(); len(got) != 2*n || got[2*n-1] != uint32(2*n-1) {
+			t.Fatalf("the union of %d evens and %d odds holds %d ordinals", n, n, len(got))
+		}
+	}
+	runtime.ReadMemStats(&after)
+	made := after.Mallocs - before.Mallocs
+	bound := uint64(8 * bits.Len(2*most))
+	t.Logf("%d unions growing to %d ordinals made %d allocations, against a bound of %d", most, 2*most, made,
+		bound)
+	if made > bound {
+		t.Errorf("%d unions growing to %d ordinals made %d allocations, past the %d of eight for each doubling: "+
+			"a buffer is made once a union", most, 2*most, made, bound)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -17,21 +18,47 @@ import (
 // everything the home's queue worker (internal/code/home's queue) decides its
 // next step from, in ONE snapshot: the target's tip, the gate its queue lands
 // under (its depth, batch and required checks), its live entries in
-// queue order — as many as one train can take, each with the change its chain
-// commit is written from and who enqueued it — and its live train, each
-// candidate's commits with the latest attempt of each required check on each,
-// for the target — and the repository's drop epoch, which a landing decided
-// from the snapshot carries ([QueueProposal.DropEpoch]).
+// queue order — as many as one train under that gate can take, each with its
+// change and who enqueued it — and its live train, each candidate's commits
+// with the latest attempt of each required check on each, for the target —
+// and the repository's drop epoch, which a landing decided from the snapshot
+// carries ([QueueProposal.DropEpoch]).
 //
-// ONE TARGET A PAGE, its cursor the target: a target's entries carry their
-// changes' descriptions (a squash's commit message is written from one), so a
-// page is at most [MaxCandidateEntries] of them — about two MiB at
-// MaxChangeBodyBytes each — however many targets a repository queues on.
+// ONE TARGET A PAGE, its cursor the target, and A PAGE READS WHAT ITS STEP
+// NEEDS, by batches, never an entry at a time: the target's first depth ×
+// batch live entries and one more for [QueueDue.More] — every entry a train
+// can take, and enough to size its candidates ([QueueDue.Entries]) — their
+// changes in ONE statement over the changes' key ([changeRowsIn]), and the
+// changes' DESCRIPTIONS, a body and the authors each, only where the snapshot
+// owes a build ([QueueDue.Builds]): a squash's commit message is written from
+// them, and no other step reads them. They are two more statements over the
+// bodies' and the authors' keys, driven from the list ([descriptionsOf]). A
+// turn that tests, lands or bisects a standing train — every turn the
+// train's own check records nudge, the busiest a queue sees — reads none of
+// them: at the default gate, 8 entries and one statement of their changes,
+// where it read 64 entries, 192 statements of them and up to two MiB of
+// bodies at MaxChangeBodyBytes (internal/code's package doc has the figures).
 //
 // A fast-forward's commit is its change's head, so its candidate reads the
 // head's checks: a check is a measurement of a commit for its target, whatever
 // purpose queued it (ADR-0091), and a head its gate saw pass needs no run
 // again.
+//
+// A GIVEN-UP TRAIN'S CHECKS, ON THE FIRST PAGE: a repository's first page
+// answers, beside its first target's work, the attempts its queues queued
+// that have not ended, on a commit no train of their target tests or landed
+// ([AbandonedCheck]) — every target's, since an eject or a dequeue of a
+// target's last live entry leaves it no page of its own — which the home
+// cancels once its targets have taken their steps. An eject, a dequeue, a
+// target a person moved and a new candidate record each give a train up in
+// their apply and touch no check row, which is the checks writer's alone: so
+// the queue that gave the train up ends its attempts, as the check work ends a
+// head's its change moved on from. Left running, every one measures a commit
+// nothing will land while it holds a runner's cell ahead of the live train's,
+// since a runner claims oldest first — up to depth times the required checks
+// a red first candidate, an eject, a dequeue or a person's push. The listing
+// of repositories names, after those holding a live entry, those owing such a
+// cancellation, so a turn that failed to cancel is listed again.
 
 // QueueDue is one target's queue work as one snapshot holds it
 // ([ReadAnswer.DueQueue]).
@@ -56,8 +83,13 @@ type QueueDue struct {
 	Batch    int      `json:"batch"`
 	Required []string `json:"required,omitempty"`
 	// Entries are the target's live entries in queue order: the first
-	// [MaxCandidateEntries] — every entry one train can take — and More
-	// where more wait behind them.
+	// Depth × Batch — every entry one train can take, since a candidate
+	// takes at most Batch and a train at most Depth of them, and as many as
+	// sizing its candidates needs ([BatchOf] in internal/code/home takes
+	// min(Batch, ⌈W/Depth⌉), which More answers past Depth × (Batch − 1)) —
+	// and More where more wait behind them. A train its gate's depth or
+	// batch has since narrowed may test an entry past them, and so stands no
+	// more ([QueueDue.TrainStands]): it is built again under the gate.
 	Entries []QueueWorkEntry `json:"entries"`
 	More    bool             `json:"more,omitempty"`
 	// Train is the target's live train's candidates in ordinal order, none
@@ -84,7 +116,9 @@ type QueueDue struct {
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
 // enqueued it — whom its merge commit names and its landing lands it as, and
 // whom its work item is closed as — and its change, as its chain commit is
-// written from.
+// written from. The change's Body and Authors are read only where the
+// snapshot owes a build ([QueueDue.Builds]), the one step that writes a
+// commit message from them; every other snapshot answers them empty.
 type QueueWorkEntry struct {
 	EntryID     string            `json:"entry_id"`
 	Seq         statelog.Position `json:"seq"`
@@ -125,6 +159,36 @@ type QueueWorkCommit struct {
 	Checks  []TipCheck `json:"checks,omitempty"`
 }
 
+// TrainStands reports d's train still the one to test: built onto the
+// target's tip, every entry it tests live in it and among d's entries. A
+// train its target moved under — a person's push or override merge — or that
+// tests an entry no longer live does not stand, and is built again.
+func (d QueueDue) TrainStands() bool {
+	if len(d.Train) == 0 || d.Train[0].BaseOID != d.Tip {
+		return false
+	}
+	train := d.Train[0].Train
+	for _, c := range d.Train {
+		for _, commit := range c.Commits {
+			i := slices.IndexFunc(d.Entries, func(e QueueWorkEntry) bool { return e.EntryID == commit.EntryID })
+			if i < 0 || d.Entries[i].Train != train || d.Entries[i].State != QueueTesting {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Builds reports d a snapshot its home builds a train from: a target of a
+// repository it may merge into, holding live entries, gated on a required
+// check, with a tip to build onto and no train standing on it. The reader
+// answers the entries' descriptions on such a snapshot alone, and the home's
+// queue worker builds on it alone, both by this one predicate, so neither can
+// build from a snapshot the other read without them.
+func (d QueueDue) Builds() bool {
+	return len(d.Entries) > 0 && !d.Mirrored && len(d.Required) > 0 && d.Tip != ZeroOID && !d.TrainStands()
+}
+
 // Check is the latest attempt of name recorded on the commit, and false for
 // none.
 func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
@@ -136,13 +200,104 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 	return TipCheck{}, false
 }
 
+// AbandonedCheck is an attempt a merge queue queued — a candidate's tip's or
+// a bisect probe's — that has not ended, on a commit its target's queue no
+// longer tests: its key, the candidate it was queued for and the reason the
+// home cancels it for — [CheckReasonDequeued] where a change that candidate
+// merged left its queue, [CheckReasonAbandoned] for any other giving up.
+//
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
+// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
+// has run without it — none of the domain is on main — so a build answering a
+// `queue_due` read with none is one nobody ran; were one ever to run first,
+// its home would cancel nothing, which is what such a build knows.
+type AbandonedCheck struct {
+	CheckKey
+	CandidateID string      `json:"candidate_id"`
+	Reason      CheckReason `json:"reason"`
+}
+
+// MaxAbandonedChecks is the most given-up attempts one `queue_due` page
+// answers: a whole train's at the deepest queue and the widest gate,
+// MaxQueueDepth × MaxRequiredChecks — so the attempts one giving up leaves
+// are cancelled in one turn — and the rest on the next, which each
+// cancellation's record nudges.
+const MaxAbandonedChecks = MaxQueueDepth * MaxRequiredChecks
+
+// abandonedChecksIn is repository repoID's given-up attempts, at most
+// [MaxAbandonedChecks] in the order of code_checks_train_idx: one seek of that
+// index, each attempt's commit sought in code_queue_commit_idx and its
+// candidate in code_queue_dequeued_idx (replicated 0135).
+func abandonedChecksIn(ctx context.Context, tx *sql.Tx, repoID string) ([]AbandonedCheck, error) {
+	rows, err := tx.QueryContext(ctx, abandonedChecksSQL, repoID, MaxAbandonedChecks)
+	if err != nil {
+		return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []AbandonedCheck
+	for rows.Next() {
+		x := AbandonedCheck{CheckKey: CheckKey{RepoID: repoID}, Reason: CheckReasonAbandoned}
+		var dequeued bool
+		if err := rows.Scan(&x.Target, &x.CandidateID, &x.OID, &x.Name, &x.Attempt, &dequeued); err != nil {
+			return nil, fmt.Errorf("code: read the checks of %s's given-up trains: %w", repoID, err)
+		}
+		if dequeued {
+			x.Reason = CheckReasonDequeued
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// The given-up trains' reads (registered in plan_test.go): a repository's
+// attempts over code_checks_train_idx, and the repositories holding one,
+// grouped on its leading column — each index's partial predicate spelled as
+// it declares it. An attempt is GIVEN UP where no entry of its target's queue
+// a train tests or landed was built at its commit (code_queue_commit_idx), and
+// NOT where its candidate is gone: a train built again from the same rows is
+// the same commits byte for byte (code/host's BuildChain), and its dispatch of
+// a commit an attempt is already measuring is answered from that attempt's row
+// (decideQueued), which keeps naming the candidate it was first queued for —
+// so the live train's own measurement may name a dropped candidate, and only
+// the commit says whether anything still tests it. A landed commit's checks
+// are its target's tip work's to read.
+const (
+	abandonedChecksSQL = `SELECT k.target_ref, k.candidate_id, k.commit_oid, k.name, k.attempt,
+			EXISTS (SELECT 1 FROM code_queue AS d INDEXED BY code_queue_dequeued_idx
+				WHERE d.repo_id = k.repo_id AND d.candidate_id = k.candidate_id
+					AND d.state = 'dequeued' AND d.candidate_id != '')
+		FROM code_checks AS k INDEXED BY code_checks_train_idx
+		WHERE k.repo_id = ?1 AND k.state IN ('queued', 'running') AND k.candidate_id != ''
+			AND ` + untested + `
+		ORDER BY k.target_ref, k.candidate_id, k.commit_oid, k.name, k.attempt LIMIT ?2`
+	abandonedReposSQL = `SELECT k.repo_id FROM code_checks AS k INDEXED BY code_checks_train_idx
+		WHERE k.repo_id > ?1 AND k.state IN ('queued', 'running') AND k.candidate_id != ''
+			AND ` + untested + `
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id AND r.status = 'active')
+		GROUP BY k.repo_id ORDER BY k.repo_id LIMIT ?2`
+	// untested is an attempt k's commit tested by no train of its target and
+	// landed by none.
+	untested = `NOT EXISTS (SELECT 1 FROM code_queue AS q INDEXED BY code_queue_commit_idx
+				WHERE q.repo_id = k.repo_id AND q.target_ref = k.target_ref AND q.commit_oid = k.commit_oid
+					AND q.state IN ('testing', 'landed') AND q.commit_oid != '')`
+)
+
 // dueQueue files repository repoID's next target's queue work after cursor —
 // "" for its first — into out, with that target as the next page's cursor.
 // The target is the first holding a live entry past cursor: the first page's
 // one row of queueOfRepoSQL, a later page's of queueOfRepoAfterSQL past every
 // seq of the cursor's target. A non-zero since counts the target's enqueues
-// from it ([enqueuedSince]) where its gate requires a check.
+// from it ([enqueuedSince]) where its gate requires a check. The first page
+// answers the repository's given-up attempts too ([abandonedChecksIn]),
+// whether or not a target holds a live entry.
 func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
+	if cursor == "" {
+		abandoned, err := abandonedChecksIn(ctx, tx, repoID)
+		if err != nil {
+			return err
+		}
+		out.QueueAbandoned = abandoned
+	}
 	stmt, args := queueOfRepoSQL, []any{repoID, 1}
 	if cursor != "" {
 		stmt, args = queueOfRepoAfterSQL, []any{repoID, cursor, cursor, cursor, int64(math.MaxInt64), 1}
@@ -152,16 +307,19 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 		return err
 	}
 	target := first[0].TargetRef
-	scanned, err := entriesBy(ctx, tx, queueOfTargetSQL, repoID, target, 0, MaxCandidateEntries+1)
-	if err != nil {
-		return err
-	}
-	due := &QueueDue{TargetRef: target, More: len(scanned) > MaxCandidateEntries}
-	scanned = scanned[:min(len(scanned), MaxCandidateEntries)]
 	gate, err := gateOf(ctx, tx, repoID, target)
 	if err != nil {
 		return err
 	}
+	// AS MANY ENTRIES AS ONE TRAIN UNDER THE GATE TAKES, and one more to
+	// say whether more wait ([QueueDue.Entries]).
+	scan := max(1, gate.QueueDepth*gate.QueueBatch)
+	scanned, err := entriesBy(ctx, tx, queueOfTargetSQL, repoID, target, 0, scan+1)
+	if err != nil {
+		return err
+	}
+	due := &QueueDue{TargetRef: target, More: len(scanned) > scan}
+	scanned = scanned[:min(len(scanned), scan)]
 	due.Depth, due.Batch, due.Required = gate.QueueDepth, gate.QueueBatch, gate.Checks
 	if due.Tip, err = targetTip(ctx, tx, repoID, target); err != nil {
 		return err
@@ -181,13 +339,8 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 			return err
 		}
 	}
-	for _, e := range scanned {
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		w, err := workEntryOf(ctx, tx, e)
-		if err != nil {
-			return err
-		}
-		due.Entries = append(due.Entries, w)
+	if due.Entries, err = workEntriesOf(ctx, tx, scanned); err != nil {
+		return err
 	}
 	trains, err := trainsOf(ctx, tx, repoID, target)
 	if err != nil {
@@ -196,79 +349,138 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 	if due.Train, err = trainChecks(ctx, tx, repoID, target, trains, gate.Checks); err != nil {
 		return err
 	}
+	if due.Builds() {
+		if err = descriptionsOf(ctx, tx, due.Entries); err != nil {
+			return err
+		}
+	}
 	out.DueQueue, out.Next = due, target
 	return nil
 }
 
 // enqueuedSince is how many entries were enqueued on repoID's target at or
-// after since, up to [MergeRateScan] — what a queue was asked to
-// land within its merge rate's window (M5-D28). Two seeks, each counting at
-// most the scan: the live entries over code_queue_live_idx, and the entries
-// ENDED since — an entry enqueued within the window that has ended ended
-// within it — over code_queue_ended_idx, each filtered on its enqueue's
-// instant.
+// after since, up to [MergeRateScan] — what a queue was asked to land within
+// its merge rate's window (M5-D28), live and ended alike. ONE SEEK of
+// code_queue_enqueued_idx, the target's entries by their enqueue's instant,
+// answered from the index and stopped at the scan: the walk is the count,
+// never another target's endings nor a row of the table, so a page costs the
+// same whatever the repository's other queues land. Measured by
+// BenchmarkQueueDuePage (-benchtime 3x -count 1, the runner's two E-cores) on
+// four targets each with an hour of 3 840 landings: 8.6 ms a page with the
+// two seeks this replaced — the target's live entries over
+// code_queue_live_idx and the repository's endings over code_queue_ended_idx,
+// each row fetched to filter — and 2.8 ms with this one, which walks main's
+// own 3 841 entries and nothing of the other targets'.
 func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since time.Time) (int, error) {
-	at := store.EncodeTime(since)
-	var live, ended int
-	if err := tx.QueryRowContext(ctx, enqueuedLiveSQL, repoID, target, at, MergeRateScan).Scan(&live); err != nil {
-		return 0, fmt.Errorf("code: count %s's live entries enqueued since %s: %w", target, since, err)
+	var n int
+	if err := tx.QueryRowContext(ctx, enqueuedSQL, repoID, target, store.EncodeTime(since), MergeRateScan).Scan(
+		&n); err != nil {
+		return 0, fmt.Errorf("code: count %s's entries enqueued since %s: %w", target, since, err)
 	}
-	if err := tx.QueryRowContext(ctx, enqueuedEndedSQL, repoID, at, target, at, MergeRateScan).Scan(
-		&ended); err != nil {
-		return 0, fmt.Errorf("code: count %s's ended entries enqueued since %s: %w", target, since, err)
-	}
-	return min(live+ended, MergeRateScan), nil
+	return n, nil
 }
 
-// The merge rate's two counts (registered in plan_test.go): a target's live
-// entries over code_queue_live_idx, and a repository's entries ended from an
-// instant over code_queue_ended_idx, each index's partial predicate spelled
-// as it declares it, the target and the enqueue's instant filtered from the
-// row.
-const (
-	enqueuedLiveSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_live_idx
-		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND enqueued_at >= ? LIMIT ?)`
-	enqueuedEndedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_ended_idx
-		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at >= ? AND target_ref = ?
-			AND enqueued_at >= ? LIMIT ?)`
-)
+// enqueuedSQL is the merge rate's count (registered in plan_test.go): a
+// target's entries enqueued from an instant over code_queue_enqueued_idx, up
+// to a limit.
+const enqueuedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_enqueued_idx
+	WHERE repo_id = ? AND target_ref = ? AND enqueued_at >= ? LIMIT ?)`
 
-// workEntryOf is e as the home's queue reads it, its change read by its key:
-// its row, its body and its authors.
-func workEntryOf(ctx context.Context, tx *sql.Tx, e queueEntry) (QueueWorkEntry, error) {
-	w := QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
-		Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), Train: e.Train,
-		CandidateID: e.CandidateID}
-	row, found, err := changeRowIn(ctx, tx, e.ChangeID)
-	if err != nil || !found {
-		// A LIVE ENTRY NAMES A CHANGE ITS REPOSITORY HOLDS: every record
-		// that removes a change ends its entry in the same apply.
-		if err == nil {
-			err = fmt.Errorf("code: entry %s of %s's queue names change %s, which the repository does not "+
-				"hold", e.EntryID, e.TargetRef, e.ChangeID)
+// workEntriesOf is entries as the home's queue reads them, their changes read
+// in ONE statement by the changes' key ([changeRowsIn]) — their descriptions
+// left to [descriptionsOf].
+func workEntriesOf(ctx context.Context, tx *sql.Tx, entries []queueEntry) ([]QueueWorkEntry, error) {
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ChangeID
+	}
+	rows, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]QueueWorkEntry, len(entries))
+	for i, e := range entries {
+		row, found := rows[e.ChangeID]
+		if !found {
+			// A LIVE ENTRY NAMES A CHANGE ITS REPOSITORY HOLDS: every record
+			// that removes a change ends its entry in the same apply.
+			return nil, fmt.Errorf("code: entry %s of %s's queue names change %s, which the repository does "+
+				"not hold", e.EntryID, e.TargetRef, e.ChangeID)
 		}
-		return QueueWorkEntry{}, err
+		out[i] = QueueWorkEntry{EntryID: e.EntryID, Seq: unpacked(e.Seq), State: e.State, HeadOID: e.HeadOID,
+			Method: e.Method, CloseTask: e.CloseTask, EnqueuedBy: e.enqueuer(), Train: e.Train,
+			CandidateID: e.CandidateID, Change: ChainChange{ID: row.id, Number: row.number, Title: row.title,
+				SourceRef: row.source, Owner: row.owner}}
+		if row.work.ID != "" {
+			item := row.work
+			out[i].WorkItem = &item
+		}
 	}
-	body, err := bodyOf(ctx, tx, row.id)
-	if err != nil {
-		return QueueWorkEntry{}, err
-	}
-	authors, err := authorsIn(ctx, tx, row.id)
-	if err != nil {
-		return QueueWorkEntry{}, err
-	}
-	names := make([]string, len(authors))
-	for i, a := range authors {
-		names[i] = a.Author
-	}
-	w.Change = ChainChange{ID: row.id, Number: row.number, Title: row.title, Body: body, SourceRef: row.source,
-		Owner: row.owner, Authors: names}
-	if row.work.ID != "" {
-		item := row.work
-		w.WorkItem = &item
-	}
-	return w, nil
+	return out, nil
 }
+
+// descriptionsOf fills in each of entries' change's body and authors, by
+// handle: two statements driven from the list of the changes, one over the
+// bodies' key and one over the authors', whatever the number of entries.
+func descriptionsOf(ctx context.Context, tx *sql.Tx, entries []QueueWorkEntry) error {
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.Change.ID
+	}
+	list, err := jsonList(ids)
+	if err != nil {
+		return err
+	}
+	bodies := make(map[string]string, len(entries))
+	authors := make(map[string][]string, len(entries))
+	rows, err := tx.QueryContext(ctx, changeBodiesNamedSQL, list)
+	if err == nil {
+		err = eachRow(rows, func(row scanner) error {
+			var id, body string
+			if err := row.Scan(&id, &body); err != nil {
+				return err
+			}
+			bodies[id] = body
+			return nil
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("code: read the bodies of %d queued changes: %w", len(ids), err)
+	}
+	rows, err = tx.QueryContext(ctx, changeAuthorsNamedSQL, list)
+	if err == nil {
+		err = eachRow(rows, func(row scanner) error {
+			var id, author string
+			if err := row.Scan(&id, &author); err != nil {
+				return err
+			}
+			authors[id] = append(authors[id], author)
+			return nil
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("code: read the authors of %d queued changes: %w", len(ids), err)
+	}
+	for i := range entries {
+		id := entries[i].Change.ID
+		names := authors[id]
+		// BY HANDLE, as a change's authors are read ([authorsIn]): the key
+		// orders one change's, but nothing orders a join's output.
+		slices.Sort(names)
+		entries[i].Change.Body, entries[i].Change.Authors = bodies[id], names
+	}
+	return nil
+}
+
+// A queue build's descriptions (registered in plan_test.go): its changes'
+// bodies and authors, each list driven from json_each and each change sought
+// by its table's key.
+const (
+	changeBodiesNamedSQL = `SELECT b.change_id, b.body FROM json_each(?) AS j
+		CROSS JOIN code_change_bodies AS b WHERE b.change_id = CAST(j.value AS TEXT)`
+	changeAuthorsNamedSQL = `SELECT a.change_id, a.author FROM json_each(?) AS j
+		CROSS JOIN code_change_authors AS a WHERE a.change_id = CAST(j.value AS TEXT)`
+)
 
 // trainChecks is trains with the latest attempt of each of required recorded
 // on each of their commits for target, read in ONE statement over the checks'

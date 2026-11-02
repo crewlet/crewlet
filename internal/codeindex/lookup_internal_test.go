@@ -1,8 +1,10 @@
 package codeindex
 
 import (
+	"encoding/binary"
 	"fmt"
 	"maps"
+	"math/bits"
 	"math/rand/v2"
 	"regexp"
 	"runtime"
@@ -640,11 +642,240 @@ func TestGallopKeepsWhatAWalkKeeps(t *testing.T) {
 	for range 3000 {
 		set, of := sorted(rng.IntN(48), 1+rng.IntN(600)), sorted(rng.IntN(600), 1+rng.IntN(600))
 		want := intersect(slices.Clone(set), of)
-		if got := gallop(nil, set, of); !slices.Equal(got, want) {
+		if got, _ := gallop(nil, set, of); !slices.Equal(got, want) {
 			t.Fatalf("gallop of %v within %v keeps %v; a walk keeps %v", set, of, got, want)
 		}
-		if got := gallop(set[:0], set, of); !slices.Equal(got, want) {
+		if got, _ := gallop(set[:0], set, of); !slices.Equal(got, want) {
 			t.Fatalf("gallop narrowing in place within %v keeps %v; a walk keeps %v", of, got, want)
 		}
+	}
+}
+
+// GALLOP LOOKS AT A FEW ORDINALS FOR EACH IT LOOKS FOR. What narrowing by
+// blobs several places share costs a literal is what it holds, never the
+// length of what it shares (lookup.go's head): a literal of a clause of 64,
+// narrowing its few blobs by the blobs every literal holds, must not walk
+// them, or the clause walks them 64 times — the k·L that reading each list
+// once saved in bytes, spent again in time. So over sets generated sparse
+// against sorted ones of up to 4 096 ordinals, and dense, gallop looks at no
+// more than 2(⌊log₂ n⌋+2) ordinals of sorted for each of set's, n sorted's
+// length; and of 8 ordinals spread over 4 096, within the 224 that bound,
+// where a walk looks at every ordinal up to the last of them.
+func TestGallopLooksAtAFewOrdinalsForEachItLooksFor(t *testing.T) {
+	t.Parallel()
+	rng := rand.New(rand.NewPCG(20261102, 1))
+	sorted := func(n, span int) []uint32 {
+		seen := map[uint32]bool{}
+		for range n {
+			seen[uint32(rng.IntN(span))] = true
+		}
+		return slices.Sorted(maps.Keys(seen))
+	}
+	bound := func(set, of []uint32) int { return len(set) * 2 * (bits.Len(uint(len(of))) + 1) }
+	for range 2000 {
+		span := 1 + rng.IntN(4096)
+		set, of := sorted(1+rng.IntN(16), span), sorted(rng.IntN(span+1), span)
+		if rng.IntN(4) == 0 {
+			set = sorted(rng.IntN(span+1), span)
+		}
+		if _, probes := gallop(nil, set, of); probes > bound(set, of) {
+			t.Fatalf("gallop of %d ordinals within %d looked at %d of them, past the %d of 2(⌊log₂ %d⌋+2) for "+
+				"each: it walks what it narrows by", len(set), len(of), probes, bound(set, of), len(of))
+		}
+	}
+	set := make([]uint32, 8)
+	for i := range set {
+		set[i] = uint32(i*512 + 441)
+	}
+	of := make([]uint32, 4096)
+	for i := range of {
+		of[i] = uint32(i)
+	}
+	_, probes := gallop(nil, set, of)
+	t.Logf("gallop of 8 ordinals spread over 4 096 looked at %d of them, against a bound of %d", probes,
+		bound(set, of))
+	if probes > bound(set, of) {
+		t.Errorf("gallop of 8 ordinals spread over 4 096 looked at %d of them, past the %d of 2(⌊log₂ 4096⌋+2) "+
+			"for each: it walks what it narrows by", probes, bound(set, of))
+	}
+}
+
+// through is the bytes of list, a well-formed posting list, up to and
+// including its first ordinal past last, or all of them where none is: the
+// most a read that stops once it passes last can read. Counted from the
+// bytes, apart from the reader a lookup reads them with.
+func through(list []byte, last uint32) int {
+	var at uint64
+	for i := 0; i < len(list); {
+		v, n := binary.Uvarint(list[i:])
+		if n <= 0 {
+			return len(list)
+		}
+		if i == 0 {
+			at = v
+		} else {
+			at += v
+		}
+		i += n
+		if at > uint64(last) {
+			return i
+		}
+	}
+	return len(list)
+}
+
+// A LOOKUP READS A LIST ONLY AS FAR AS THE BLOBS IT KEEPS. Blobs sit in a
+// segment in id order, and a place narrowing what it admits by a list of its
+// own reads it only until the list passes the last blob it keeps
+// (reading.listed), as a list decoded for several places is read only as far
+// as the furthest blob one of them needs (decoded.upTo): so a pattern held by
+// a few blobs early in a segment, beside lists naming every blob, reads those
+// lists a few bytes in, never to their ends.
+//
+// Over a segment of 2 048 blobs, each holding abcdefmn and abcdefuv and the
+// first 16 zzabcdefmn and yyabcdefuv, the plan of zzabcdefmn.*yyabcdefuv is
+// two clauses: abcdef's trigrams, in both, are decoded once for the two
+// (Plan.held), and efm, fmn, efu and fuv each read by one alone, every one of
+// those lists naming every blob, zz's and yy's the first 16. The lookup reads
+// of each list no more than its bytes through its first ordinal past the
+// 16th blob.
+func TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps(t *testing.T) {
+	t.Parallel()
+	const blobs, early = 2048, 16
+	texts := make([][]byte, blobs)
+	for i := range texts {
+		texts[i] = []byte("x := abcdefmn abcdefuv\n")
+		if i < early {
+			texts[i] = []byte("x := zzabcdefmn yyabcdefuv\n")
+		}
+	}
+	s := segmentOf(t, texts, 1, 1)
+	plan, err := NewPlan(regexp.MustCompile("zzabcdefmn.*yyabcdefuv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The case is the one it claims: two clauses, lists they both read and
+	// lists one reads alone, each naming every blob.
+	var heldEvery, aloneEvery bool
+	for _, c := range plan.index {
+		refs := slices.Clone(c.shared)
+		for _, a := range c.alts {
+			refs = append(refs, a.rest...)
+		}
+		for _, f := range refs {
+			list, _ := s.lookup(f.t)
+			if got, decodeErr := s.decode(list, nil); decodeErr != nil || len(got) != blobs {
+				continue
+			}
+			if alone(f) {
+				aloneEvery = true
+			} else {
+				heldEvery = true
+			}
+		}
+	}
+	if len(plan.index) != 2 || !heldEvery || !aloneEvery {
+		t.Fatalf("the plan is %d clauses, a list naming every blob read by several %v, by one alone %v: the "+
+			"case is not the one it claims", len(plan.index), heldEvery, aloneEvery)
+	}
+
+	r := reading{s: s}
+	set, err := plan.blobs(&r)
+	if err != nil || len(set) != early || set[early-1] != early-1 {
+		t.Fatalf("the plan admits %v (%v); the first %d blobs hold its pattern", set, err, early)
+	}
+	bound, whole := 0, 0
+	seen := map[Trigram]bool{}
+	for _, c := range plan.index {
+		for _, a := range c.alts {
+			for _, tg := range appendTrigrams(nil, []byte(a.text)) {
+				if seen[tg] {
+					continue
+				}
+				seen[tg] = true
+				list, _ := s.lookup(tg)
+				bound += through(list, set[early-1])
+				whole += len(list)
+			}
+		}
+	}
+	t.Logf("over %d blobs, a lookup admitting the first %d read %d bytes of postings; its lists through their "+
+		"first ordinal past the last it keeps hold %d, whole %d", blobs, early, r.read, bound, whole)
+	if r.read > bound {
+		t.Errorf("a lookup admitting the first %d of %d blobs read %d bytes of postings, past the %d of its lists "+
+			"through their first ordinal past the last it keeps: a list is read past the blobs a lookup keeps",
+			early, blobs, r.read, bound)
+	}
+}
+
+// A CLAUSE'S UNION SPARES WHAT IT MERGES, NOT WHAT ITS BUFFER CAN HOLD. A
+// lookup decodes a literal's least list straight into its clause's union
+// and narrows it there (reading.admitted), so a union can hold a few blobs in
+// the capacity of the longest list one of its literals decoded; the spare it
+// merges them into is made as long as what it merges. Made as long as the
+// buffer can hold, it was that list's decode again for every clause of two
+// or more literals that narrow what they decode.
+//
+// Over a segment of 16 384 blobs, each holding the first halves of three
+// words — abcde, ijklm, qrstu — or their second halves, and one in 1 024 all
+// three whole, each literal of abcdefgh|ijklmnop|qrstuvwx decodes a list of
+// half the blobs and keeps 16. Merging the 48 ordinals they admit allocates
+// within twice them and their 3 lists' ends.
+//
+// It measures the merge alone: what the whole lookup allocates turns on
+// whether the race detector doubles slices.Grow's growth, by as much as a
+// spare too long.
+func TestAClausesUnionSparesWhatItMergesNotWhatItsBufferHolds(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the merge's.
+	const blobs, every = 16384, 1024
+	texts := make([][]byte, blobs)
+	for i := range texts {
+		switch {
+		case i%every == 0:
+			texts[i] = []byte("x := abcdefgh ijklmnop qrstuvwx\n")
+		case i%2 == 0:
+			texts[i] = []byte("x := abcde ijklm qrstu\n")
+		default:
+			texts[i] = []byte("x := defgh lmnop tuvwx\n")
+		}
+	}
+	s := segmentOf(t, texts, 1, 1)
+	plan, err := NewPlan(regexp.MustCompile("abcdefgh|ijklmnop|qrstuvwx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.index) != 1 || len(plan.index[0].alts) != 3 || len(plan.index[0].shared) != 0 {
+		t.Fatalf("the plan is %d clauses: the case is not the one it claims", len(plan.index))
+	}
+	c := plan.index[0]
+	r := reading{s: s}
+	var u union
+	if err := c.literals(&r, &u, r.held(plan.held)); err != nil {
+		t.Fatal(err)
+	}
+	admitted, lists := len(u.buf), len(u.ends)
+	// The case is the one it claims: the union holds what three literals
+	// admit in the capacity of a list one of them decoded.
+	if lists != 3 || admitted != 3*blobs/every || cap(u.buf) < blobs/2 {
+		t.Fatalf("the union holds %d lists, %d ordinals in a capacity of %d: the case is not the one it claims",
+			lists, admitted, cap(u.buf))
+	}
+	capacity := cap(u.buf)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := u.merged()
+	runtime.ReadMemStats(&after)
+	if want := perLiteral(t, c, s); !slices.Equal(got, want) {
+		t.Fatalf("the union of what the literals admit is %v; looked up a literal at a time, %v", got, want)
+	}
+	allocated := after.TotalAlloc - before.TotalAlloc
+	budget := uint64(2 * (4*admitted + 8*lists))
+	t.Logf("merging %d ordinals of %d lists from a buffer of capacity %d allocated %d bytes, against a budget of "+
+		"%d", admitted, lists, capacity, allocated, budget)
+	if allocated > budget {
+		t.Errorf("merging the %d ordinals %d literals admit allocated %d bytes, past the %d of twice them and "+
+			"their ends: the spare is as long as the buffer can hold, not as what it merges", admitted, lists,
+			allocated, budget)
 	}
 }

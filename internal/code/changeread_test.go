@@ -211,11 +211,13 @@ func TestAChangesDetailIsReadAloneWhenAskedAlone(t *testing.T) {
 // description, authors, conversation or mergeability, and no readiness, which
 // a person's read judges against a chart. So a reader that holds no chart,
 // which refuses a person's full first page about itself, answers that
-// person's brief one.
+// person's brief one. Asked in brief AND alone (DetailOnly), it answers the
+// row and reads no revision.
 //
 // Mutations: answer the detail in brief as well → Change is set beside the
 // brief row; judge the readiness in brief → the chartless reader refuses the
-// brief read; put a readiness on the brief row → it carries one.
+// brief read; put a readiness on the brief row → it carries one; read the
+// revisions of a row asked alone → three revisions beside it, red.
 func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -261,6 +263,21 @@ func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 			t.Errorf("%s: web!1's revisions in brief are %+v (next %q), want the full page's %+v (next %q)",
 				name, got.Revisions, got.Next, full.Revisions, full.Next)
 		}
+
+		// IN BRIEF AND ALONE (ReadQuery.DetailOnly beside Brief): the very
+		// row, and no revision read with it — what a coding run's launch on a
+		// change reads.
+		alone, err := r.Read(ctx, code.ReadQuery{Asker: ada, Kind: code.ReadChange, Repo: "web", Change: 1,
+			Brief: true, DetailOnly: true, Fresh: stale})
+		switch {
+		case err != nil || alone.ChangeBrief == nil || alone.Change != nil:
+			t.Errorf("%s: web!1's row alone = %+v, %v; want its row and no detail", name, alone, err)
+		case !reflect.DeepEqual(*alone.ChangeBrief, want):
+			t.Errorf("%s: web!1's row alone is %+v, want %+v", name, *alone.ChangeBrief, want)
+		case len(alone.Revisions) != 0 || alone.Next != "":
+			t.Errorf("%s: web!1's row alone came with %d revisions and cursor %q, want none", name,
+				len(alone.Revisions), alone.Next)
+		}
 	}
 }
 
@@ -290,6 +307,7 @@ func TestAReadThatResolvesItsRepositoryAnswersItsRow(t *testing.T) {
 		"a part of a change":      {Kind: code.ReadChange, Change: 1, Part: code.PartComments},
 		"a change in brief":       {Kind: code.ReadChange, Change: 1, Brief: true},
 		"a change's detail alone": {Kind: code.ReadChange, Change: 1, DetailOnly: true},
+		"a change's row alone":    {Kind: code.ReadChange, Change: 1, Brief: true, DetailOnly: true},
 		"a listing of changes":    {Kind: code.ReadChanges},
 		"a listing of checks":     {Kind: code.ReadChecks, Checks: &code.CheckQuery{Change: 1}},
 	} {
@@ -676,7 +694,6 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"a history of a part":           {code.ReadQuery{Kind: code.ReadPushes, Repo: "web", Part: code.PartReviewers}, "part:"},
 		"a part in brief":               {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, Part: code.PartRevisions}, "brief:"},
 		"a later page in brief":         {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, Cursor: "2"}, "brief:"},
-		"a detail alone in brief":       {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, DetailOnly: true}, "brief:"},
 		"a repository in brief":         {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Brief: true}, "brief:"},
 		"a listing resolving nothing":   {code.ReadQuery{Kind: code.ReadChanges, State: "open", Resolve: true}, "resolve:"},
 		"a repository resolving itself": {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Resolve: true}, "resolve:"},

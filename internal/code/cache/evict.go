@@ -89,7 +89,9 @@ func (c *Cache) janitor(ctx context.Context) {
 
 // janitorPass is one pass, in order: trash/ emptied; scratch/ measured; every
 // copy's memo tree this process has not yet listed listed, its cohorts' names
-// alone (memo.go); the memo trimmed to its share of the budget (MemoShare) a
+// alone (memo.go) — one whose last listing failed only on a ticked pass, for
+// the reason the states are written once a tick (listMemos); the memo
+// trimmed to its share of the budget (MemoShare) a
 // cohort at a time, the oldest first, the pages runs have staged for it
 // counted with those it keeps — and on a ticked pass held to maxMemoCohorts
 // too — BEFORE any repository goes — an answer
@@ -117,7 +119,7 @@ func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	// (AdoptLayer), or a fetch a moved placement held (holdFetched) that
 	// every plan of its copy since has passed by.
 	c.expireStagedLayers()
-	c.listMemos(ctx)
+	c.listMemos(ctx, ticked)
 	trimmed := c.trimCodeIndexes(ctx)
 	trimmed = c.trimMemo(ctx, ticked) || trimmed
 	if c.evictToBudget(ctx) > 0 || trimmed {

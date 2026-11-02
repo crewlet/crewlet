@@ -91,7 +91,8 @@ type node struct {
 	chart code.Roster
 
 	// scratch is the lifecycle policy the store holds a create to — the
-	// defaults a company that sets no code.scratch runs under, unless a case
+	// defaults a company that sets no code.scratch runs under, with the
+	// fixtures' forge credentials declared (forgeCredentials), unless a case
 	// sets another before it asks.
 	scratch code.LifecyclePolicy
 
@@ -272,7 +273,8 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	}
 	n := &node{
 		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(nil), pub: pub,
-		waiter: waiter, authority: authority, scratch: code.ScratchOf(config.Code{}), reserve: reserve,
+		waiter: waiter, authority: authority, reserve: reserve,
+		scratch: code.ScratchOf(config.Code{RemoteCredentials: forgeCredentials}),
 	}
 	// THE LIFECYCLE STORE, deciding a tool's request by this node's chart,
 	// its scratch policy and whether it is behind — each read per request,

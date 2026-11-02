@@ -774,8 +774,9 @@ func (r LifecycleRequest) createInvalid() string {
 	return CreateRepo{Name: r.Name, Settings: s, Import: r.Import}.importInvalid()
 }
 
-// LifecyclePolicy is what a create is held to, and how long a scratch
-// repository may sit idle — the epoch's code.scratch and the repository bound
+// LifecyclePolicy is what a create or a settings change is held to, and how
+// long a scratch repository may sit idle — the epoch's code.scratch, the
+// repository bound and the credentials a remote may be dialed with
 // ([ScratchOf]).
 type LifecyclePolicy struct {
 	// ScratchMaxPerSeat is code.scratch.max_per_seat: 0 lets no seat create
@@ -786,6 +787,10 @@ type LifecyclePolicy struct {
 	// MaxRepos is config.CodeMaxRepos: the project repositories, any status
 	// short of purged, a tool's create may bring the code log to.
 	MaxRepos int
+	// RemoteCredentials is code.remote_credentials: the variables a mirror or
+	// an import a request asks for may name, each for the hosts it declares
+	// ([remoteCredentialRefusal]).
+	RemoteCredentials config.CodeRemoteCredentials
 }
 
 // ScratchOf is the lifecycle policy c states, its defaults applied — THE ONE
@@ -797,6 +802,7 @@ func ScratchOf(c config.Code) LifecyclePolicy {
 		ScratchMaxPerSeat: maxPerSeat,
 		ScratchIdle:       time.Duration(idleDays) * 24 * time.Hour,
 		MaxRepos:          config.CodeMaxRepos,
+		RemoteCredentials: c.RemoteCredentials,
 	}
 }
 
@@ -1260,7 +1266,7 @@ func (s *Store) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleR
 	case LifecycleRename:
 		return s.lifecycleRename(ctx, req, rules.Roster)
 	}
-	return s.lifecycleRepo(ctx, req, rules.Roster)
+	return s.lifecycleRepo(ctx, req, rules.Roster, policy)
 }
 
 // lifecycleCreate decides a tool's create, on the NAME's subject.
@@ -1328,6 +1334,10 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 					d.refuse(LifecycleNotPermitted, "%s", why)
 					return statelog.Decision{}, nil
 				}
+			}
+			if why := remoteCredentialRefusal(req, policy.RemoteCredentials); why != "" {
+				d.refuse(LifecycleNotPermitted, "%s", why)
+				return statelog.Decision{}, nil
 			}
 			if settings.Kind == RepoScratch {
 				if policy.ScratchMaxPerSeat == 0 {
@@ -1481,9 +1491,9 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 
 // lifecycleRepo decides every kind on the repository's own subject: a
 // settings change, an archive or unarchive, a delete, a restore, a protection
-// and a hold.
-func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster Roster) (LifecycleResult,
-	error) {
+// and a hold, under the epoch's lifecycle policy.
+func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster Roster,
+	policy LifecyclePolicy) (LifecycleResult, error) {
 
 	subject := RepoSubject(req.RepoID)
 	scope := []string{RepoPath(req.RepoID)}
@@ -1533,7 +1543,7 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 			if req.Kind == LifecycleHold {
 				payload, op, err = decideHold(ctx, tx, req, v.ref, roster, &d)
 			} else {
-				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, remotes, roster, &d)
+				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, remotes, roster, policy, &d)
 			}
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
@@ -1554,10 +1564,11 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 
 // decideOnRepo is the decide of a kind on the repository's own subject but a
 // hold's ([decideHold]), from its row v, its rules whole, its path owners and
-// its mirrors: the record's payload and op, or nil where the request is
-// refused (d says why) or writes nothing. An error is the request's own fault.
+// its mirrors, under the epoch's lifecycle policy: the record's payload and op,
+// or nil where the request is refused (d says why) or writes nothing. An error
+// is the request's own fault.
 func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection, owners []PathOwner,
-	remotes repoRemotes, roster Roster, d *lifecycleDecision) (any, OpKind, error) {
+	remotes repoRemotes, roster Roster, policy LifecyclePolicy, d *lifecycleDecision) (any, OpKind, error) {
 
 	// A DELETED REPOSITORY IS A DELETE'S AND A RESTORE'S TO ANSWER: the one
 	// answers it from the row, the other brings it back. Every other kind is
@@ -1683,6 +1694,12 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 			d.refuse(LifecycleNotPermitted, "%s", why)
 			return nil, "", nil
 		}
+	}
+	// A MIRROR'S CREDENTIAL IS ONE DECLARED FOR ITS HOST, judged on the
+	// mirrors the change sets ([remoteCredentialRefusal]).
+	if why := remoteCredentialRefusal(req, policy.RemoteCredentials); why != "" {
+		d.refuse(LifecycleNotPermitted, "%s", why)
+		return nil, "", nil
 	}
 	switch req.Kind {
 	case LifecycleDelete:

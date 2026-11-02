@@ -308,9 +308,11 @@ func (c *Company) ValidateRunnable() error {
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages. And the code host's two policy
-// bounds: at most [CodeMaxRepos] repositories, and a retention of at most
-// [CodeMaxDeletedRetentionDays] (see [Code.validateAdmission]).
+// and writes no credential the engine manages. And the code host's policy
+// bounds: at most [CodeMaxRepos] repositories, a retention of at most
+// [CodeMaxDeletedRetentionDays], and at most [CodeMaxRemoteCredentials]
+// declared remote credentials of at most [CodeMaxRemoteCredentialHosts] hosts
+// each (see [Code.validateAdmission]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))

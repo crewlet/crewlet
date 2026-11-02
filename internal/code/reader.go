@@ -1614,12 +1614,16 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.MirrorPush.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorPush(ctx, tx, q, &out) }
 	case ReadBranchChanges:
-		// A POINT READ OF THE REPOSITORY, as a `run_pushes` read is: a
-		// record this node deferred on it may open or close a change on one
-		// of the branches, and an answer past it would name a delivered ref
-		// by a change it no longer heads — or by none — so such a read
-		// refuses, and the engine asks another node.
-		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.BranchChanges.RepoID)}}, false)
+		// A POINT READ OF EVERY REPOSITORY IT NAMES, as a `run_pushes` read
+		// is: a record this node deferred on one of them may open or close a
+		// change on one of the branches, and an answer past it would name a
+		// delivered ref by a change it no longer heads — or by none — so such
+		// a read refuses, and the engine asks another node.
+		paths := make([]string, len(q.BranchChanges.Repos))
+		for i, repo := range q.BranchChanges.Repos {
+			paths[i] = RepoPath(repo.RepoID)
+		}
+		query = fresh.Query(statelog.ScopeSet{Paths: paths}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.branchChanges(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
@@ -1750,9 +1754,9 @@ func (q ReadQuery) validate() error {
 	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
 		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
 			ErrInvalid)
-	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != "" || q.DetailOnly):
-		return fmt.Errorf("%w: brief: only a change's first page of its revisions is read in brief — named "+
-			"by no part, cursor or detail_only", ErrInvalid)
+	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != ""):
+		return fmt.Errorf("%w: brief: only a change's first page of its revisions, or its row alone with "+
+			"detail_only, is read in brief — named by no part or cursor", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:
@@ -2309,11 +2313,12 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 
 // validateBranchChanges is [ReadQuery.validate] for a `branch_changes` read:
 // the engine's own — what it names a collected coding run's delivered refs by
-// — so it names NO asker, for a `run_pushes` read's reason; it names its
-// repository by id and one to [MaxRefsPerQuery] branches, each a whole ref
-// under refs/heads/ and each once, and nothing else: no filter, no cursor and
-// no limit, since one page answers every branch it names, each one change at
-// most.
+// — so it names NO asker, for a `run_pushes` read's reason; it names one to
+// [MaxRunRepos] repositories — a run's, which it is given no more of — each
+// by id and once, each with at least one branch, each a whole ref under
+// refs/heads/ and once, [MaxRefsPerQuery] in all, and nothing else: no
+// filter, no cursor and no limit, since one page answers every branch it
+// names, each one change at most.
 func (q ReadQuery) validateBranchChanges() error {
 	in := q.BranchChanges
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -2321,23 +2326,40 @@ func (q ReadQuery) validateBranchChanges() error {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a branch_changes read is the engine's own, which no principal makes")
 	case in == nil:
-		return refused("branch_changes", "a branch_changes read names its repository and its branches")
-	case !canonicalUUID(in.RepoID):
-		return refused("branch_changes.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
-			"lowercase spelling", in.RepoID))
-	case len(in.Refs) == 0 || len(in.Refs) > MaxRefsPerQuery:
-		return refused("branch_changes.refs", fmt.Sprintf("%d branches; a branch_changes read names one to %d "+
-			"(MaxRefsPerQuery)", len(in.Refs), MaxRefsPerQuery))
+		return refused("branch_changes", "a branch_changes read names its repositories and their branches")
+	case len(in.Repos) == 0 || len(in.Repos) > MaxRunRepos:
+		return refused("branch_changes.repos", fmt.Sprintf("%d repositories; a branch_changes read names one "+
+			"to %d (MaxRunRepos)", len(in.Repos), MaxRunRepos))
 	}
-	named := make(map[string]bool, len(in.Refs))
-	for i, ref := range in.Refs {
-		if why := branchProblem(ref); why != "" {
-			return refused(fmt.Sprintf("branch_changes.refs[%d]", i), why)
+	repos := make(map[string]bool, len(in.Repos))
+	branches := 0
+	for i, repo := range in.Repos {
+		field := fmt.Sprintf("branch_changes.repos[%d]", i)
+		switch {
+		case !canonicalUUID(repo.RepoID):
+			return refused(field+".repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
+				"lowercase spelling", repo.RepoID))
+		case repos[repo.RepoID]:
+			return refused(field+".repo_id", fmt.Sprintf("%s is named twice — a repository's branches are "+
+				"named together", repo.RepoID))
+		case len(repo.Refs) == 0:
+			return refused(field+".refs", "a repository is named with the branches whose changes the read answers")
 		}
-		if named[ref] {
-			return refused(fmt.Sprintf("branch_changes.refs[%d]", i), fmt.Sprintf("%s is named twice", ref))
+		repos[repo.RepoID] = true
+		if branches += len(repo.Refs); branches > MaxRefsPerQuery {
+			return refused(field+".refs", fmt.Sprintf("past %d branches; a branch_changes read names at most %d "+
+				"in all (MaxRefsPerQuery)", MaxRefsPerQuery, MaxRefsPerQuery))
 		}
-		named[ref] = true
+		named := make(map[string]bool, len(repo.Refs))
+		for j, ref := range repo.Refs {
+			if why := branchProblem(ref); why != "" {
+				return refused(fmt.Sprintf("%s.refs[%d]", field, j), why)
+			}
+			if named[ref] {
+				return refused(fmt.Sprintf("%s.refs[%d]", field, j), fmt.Sprintf("%s is named twice", ref))
+			}
+			named[ref] = true
+		}
 	}
 	for _, f := range []struct {
 		field string
@@ -2359,49 +2381,53 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
-			return refused(f.field, "a branch_changes read answers one repository's branches' live changes in "+
-				"one page, and names nothing else")
+			return refused(f.field, "a branch_changes read answers its repositories' branches' live changes "+
+				"in one page, and names nothing else")
 		}
 	}
 	return nil
 }
 
 // branchChanges serves a `branch_changes` read ([ReadBranchChanges]): the live
-// change each branch the query names heads, in the query's order — one seek
-// of code_changes_open_idx a branch, through the statement a push's decide
-// and apply read the changes its branches head by (liveBySourceSQL), driven
-// from the list of the branches a chunk at a time. NOT HELD TO A GRANT, for a
-// `run_pushes` read's reason: the engine names its own run's refs, of a
-// repository the run was given.
+// change each branch the query names heads, in the query's order of
+// repositories and branches — one seek of code_changes_open_idx a branch,
+// through the statement a push's decide and apply read the changes its
+// branches head by (liveBySourceSQL), driven from each repository's list of
+// branches a chunk at a time, every repository in the one transaction. NOT
+// HELD TO A GRANT, for a `run_pushes` read's reason: the engine names its own
+// run's refs, of repositories the run was given.
 func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
-	in := q.BranchChanges
-	order := make(map[string]int, len(in.Refs))
-	for i, ref := range in.Refs {
-		order[ref] = i
-	}
-	if err := inChunks(in.Refs, func(part []string) error {
-		encoded, err := json.Marshal(part)
-		if err != nil {
-			return err
-		}
-		rows, err := tx.QueryContext(ctx, liveBySourceSQL, in.RepoID, string(encoded))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			row, err := scanChange(rows.Scan)
+	for _, repo := range q.BranchChanges.Repos {
+		var heads []BranchChange
+		if err := inChunks(repo.Refs, func(part []string) error {
+			encoded, err := json.Marshal(part)
 			if err != nil {
 				return err
 			}
-			out.BranchChanges = append(out.BranchChanges, BranchChange{Ref: row.source, ChangeID: row.id,
-				Number: row.number})
+			rows, err := tx.QueryContext(ctx, liveBySourceSQL, repo.RepoID, string(encoded))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				row, err := scanChange(rows.Scan)
+				if err != nil {
+					return err
+				}
+				heads = append(heads, BranchChange{RepoID: repo.RepoID, Ref: row.source, ChangeID: row.id,
+					Number: row.number})
+			}
+			return rows.Err()
+		}); err != nil {
+			return fmt.Errorf("code: read the live changes of repository %s's branches: %w", repo.RepoID, err)
 		}
-		return rows.Err()
-	}); err != nil {
-		return fmt.Errorf("code: read the live changes of repository %s's branches: %w", in.RepoID, err)
+		order := make(map[string]int, len(repo.Refs))
+		for i, ref := range repo.Refs {
+			order[ref] = i
+		}
+		slices.SortFunc(heads, func(a, b BranchChange) int { return order[a.Ref] - order[b.Ref] })
+		out.BranchChanges = append(out.BranchChanges, heads...)
 	}
-	slices.SortFunc(out.BranchChanges, func(a, b BranchChange) int { return order[a.Ref] - order[b.Ref] })
 	return nil
 }
 

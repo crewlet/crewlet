@@ -548,8 +548,25 @@ func (s *Segment) lookup(t Trigram) ([]byte, bool) {
 // count — so a list that is not the format's is refused by the read that
 // meets it and never followed past the table. The ONE reader of a list:
 // decoding one, narrowing a set by one and keeping one decoded as far as a
-// lookup has needed it (lookup.go) all read through it. A read that stops
-// part way has neither checked nor answered what lies past where it stopped.
+// lookup has needed it (lookup.go) all read through it, as
+//
+//	for o.delta() || o.next() { ... o.at ... }
+//
+// A read that stops part way has neither checked nor answered what lies
+// past where it stopped.
+//
+// TWO STEPS, because the read is the loop every posting a merge or a lookup
+// reads goes through. next is the whole step, out of line: a list's first
+// ordinal, a delta of any length, the end, and every refusal — whose errors,
+// built where they are met, cost it 412 against the compiler's inlining
+// budget of 80. delta is only the commonest step, taken inline: a delta of
+// one byte, 1 to 127, landing within the table — every step between two of
+// a list's blobs fewer than 128 apart, and so nearly every step of a list
+// naming much of its segment, the longest a lookup reads. With next alone a
+// step was a call, and decoding a list of 65 536 ordinals took half again as
+// long as the loop over its bytes the reader replaced: 334 µs against 220,
+// and 137 with delta inline (BenchmarkLookup, whose bound lookup.go's head
+// names).
 type ordinals struct {
 	list  []byte
 	count uint64
@@ -565,8 +582,26 @@ func (s *Segment) ordinals(list []byte) ordinals {
 	return ordinals{list: list, count: uint64(s.count)}
 }
 
-// next reads the list's next ordinal into at, and reports false at the
-// list's end, or at bytes that are not the format's, which err then names.
+// delta reads the list's next ordinal into at where it is a one-byte delta
+// from the last that stays within the table, and otherwise reports false and
+// reads nothing, for next to read. It takes only a step next would take from
+// the same place, so after next refuses one — leaving at and the list where
+// they were — delta refuses it too, and a read stays refused.
+func (o *ordinals) delta() bool {
+	if len(o.list) == 0 || !o.began {
+		return false
+	}
+	// d-1 wraps a zero delta, which does not rise, past 127.
+	if d := o.list[0]; d-1 < 0x7f && uint64(o.at)+uint64(d) < o.count {
+		o.list, o.at = o.list[1:], o.at+uint32(d)
+		return true
+	}
+	return false
+}
+
+// next reads the list's next ordinal into at, whatever its step, and reports
+// false at the list's end, or at bytes that are not the format's, which err
+// then names; a refusal moves neither at nor the list.
 func (o *ordinals) next() bool {
 	if o.err != nil || len(o.list) == 0 {
 		return false
@@ -576,7 +611,6 @@ func (o *ordinals) next() bool {
 		o.err = fmt.Errorf("%w: a posting list that is not uvarints", ErrMalformed)
 		return false
 	}
-	o.list = o.list[n:]
 	if o.began {
 		if v == 0 || v > o.count {
 			o.err = fmt.Errorf("%w: a posting list that does not rise within its blobs", ErrMalformed)
@@ -588,7 +622,7 @@ func (o *ordinals) next() bool {
 		o.err = fmt.Errorf("%w: a posting names blob %d of %d", ErrMalformed, v, o.count)
 		return false
 	}
-	o.at, o.began = uint32(v), true
+	o.list, o.at, o.began = o.list[n:], uint32(v), true
 	return true
 }
 
@@ -596,7 +630,7 @@ func (o *ordinals) next() bool {
 // each below its count, each above the one before.
 func (s *Segment) decode(list []byte, dst []uint32) ([]uint32, error) {
 	o := s.ordinals(list)
-	for o.next() {
+	for o.delta() || o.next() {
 		dst = append(dst, o.at)
 	}
 	if o.err != nil {
@@ -767,11 +801,20 @@ func (u *union) merged() []uint32 {
 			// Made afresh, never grown: nothing it holds is read again, and
 			// growing it copies what an earlier round merged into it — and,
 			// built with the race detector, which does not elide the append
-			// of a make that slices.Grow is, allocates the growth twice. As
-			// long as buf can hold, which append grows a factor at a time,
-			// so the spare too is made a logarithmic number of times however
-			// the unions it merges grow from one to the next.
-			u.spare = make([]uint32, 0, cap(u.buf))
+			// of a make that slices.Grow is, allocates the growth twice.
+			// As long as what this round merges, never as buf can hold: a
+			// lookup decodes a literal's least list straight into buf and
+			// narrows it there (reading.admitted), so buf can hold a few
+			// blobs in the capacity of the longest list a literal decoded,
+			// and a spare that long was that list's decode again for every
+			// clause merging two literals or more. Exactly that long, and
+			// still made a logarithmic number of times as the unions a merge
+			// keeps it for grow from one trigram to the next: once merged
+			// into, it becomes buf, which append grows a factor at a time,
+			// and the spare it is swapped for is a buf append grew — so it
+			// is made only once a union outgrows what append last made
+			// room for (TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes).
+			u.spare = make([]uint32, 0, len(u.buf))
 		}
 		u.spare, u.spareEnds = u.spare[:0], u.spareEnds[:0]
 		from := 0

@@ -53,8 +53,8 @@ func BenchmarkQueueSweepListing(b *testing.B) {
 			}
 			for _, target := range []string{"refs/heads/main", "refs/heads/release"} {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO code_landings (repo_id, target_ref, position,
-					ordinal, kind, base_oid, commit_oid, merged_by, green, at)
-					VALUES (?, ?, 500, 1, 'push', ?, ?, 'founder', 1, ?)`,
+					ordinal, kind, base_oid, commit_oid, merged_by, at)
+					VALUES (?, ?, 500, 1, 'push', ?, ?, 'founder', ?)`,
 					id, target, oidOf("A"), oidOf("B"), recent); err != nil {
 					return err
 				}

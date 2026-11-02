@@ -372,11 +372,12 @@
 // commit measured, which may have rewritten the file. Every landing a record
 // did not prove lies above its target's green until a tip passes, and the
 // repository's home owes the target its tip work (tipwork.go: a `checks_due`
-// read's [ReadAnswer.DueTips], listed by code_landings_unjudged_idx): the
-// newest landing dispatched, coalesced; the green row moved onto it on pass
-// ([Green]); a red tip's failed checks bisected over the landing rows down to
-// the first landing they failed on, recorded broken ([Broken]) and announced
-// once as code_target_broken.
+// read's [ReadAnswer.DueTips], listed by its row of tip work, code_tips_due):
+// the newest landing dispatched, coalesced, one round at a time; the green
+// row moved onto it on pass ([Green]) — every landing beneath it green by its
+// position, in one record whatever lies there; a red tip's failed checks
+// bisected over the landing rows down to the first landing they failed on,
+// recorded broken ([Broken]) and announced once as code_target_broken.
 //
 // # Group commit
 //
@@ -1669,6 +1670,20 @@
 // sources — under the third of statelog.ApplyTxTimeBudget. Its entries are
 // written back in one upsert and its changes read in one statement, as a push
 // record's changes are ([writeEntries], [changeRowsIn]).
+//
+// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one `queue_due` page over
+// a target of [MaxCandidateEntries] live entries, each change's body at
+// [MaxChangeBodyBytes]; -benchtime 20x and one count on two E-cores of a Core
+// Ultra 7 265U): a page names the gate's depth × batch entries, their changes
+// in ONE statement, and their descriptions — two statements more — only on a
+// snapshot that builds ([QueueDue.Builds]), so about ten statements a page,
+// twelve on a build. At the default gate (4 × 2) a build's page is 2.9 ms and
+// 266 KB encoded, and a test's — the turn every check record of a standing
+// train nudges — 2.7 ms and 6.2 KB; at the widest (8 × 8), 7.1 ms and 2.1 MB
+// to build and 5.6 ms and 42 KB to test. The read it replaced named
+// MaxCandidateEntries entries whatever the gate or the step, three point
+// statements each — some 200 a page — and every body: the widest build's
+// 2.1 MB on every turn, the check records' included (queuework.go).
 //
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm

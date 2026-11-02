@@ -53,6 +53,10 @@ type checks struct {
 	node   string
 	log    *slog.Logger
 	now    func() time.Time
+	// culprits is the tip each target's culprit past its bisect window was
+	// last warned of (tips.go), so the warning is once a tip, never once a
+	// turn.
+	culprits culpritsPastWindow
 }
 
 // Name is [WorkerChecks].
@@ -78,8 +82,9 @@ func (k *checks) Due(ctx context.Context, floor statelog.Position, cursor string
 }
 
 // Work is one repository's check work, every page: on the first, each target
-// due a reading of its checks file read at its tip, and each protected
-// target's tip work worked ([checks.tip], tips.go); then each change owing
+// due a reading of its checks file read at its tip; on the first and as many
+// after it as they fill (code.ReadAnswer.TipsNext), each protected target's
+// tip work worked ([checks.tip], tips.go); then each change owing
 // its checks work, worked in the order the listing names them
 // ([checks.change]) — a failure of one left for the next pass while the
 // others are worked — and then the page's dispatches RECORDED, each head's
@@ -135,10 +140,10 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 			}
 		}
 		failed = append(failed, k.record(ctx, page, a.Position)...)
-		if a.Next == "" {
+		if a.Next == "" && a.TipsNext == "" {
 			return errors.Join(failed...)
 		}
-		q.Cursor = a.Next
+		q.Cursor, q.ChecksDue.TipsAfter = a.Next, a.TipsNext
 	}
 }
 

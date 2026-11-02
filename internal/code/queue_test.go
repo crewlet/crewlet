@@ -29,7 +29,7 @@ func queueGate() *code.MergeGate {
 // main a queue target ([queueGate]) — holding main at A, feature at B and
 // release at R, and dev's change from feature into main on it, as discussed
 // opens one.
-func queueRepo(t *testing.T, n *node, c *code.Committer, name string) (repo, change string) {
+func queueRepo(t testing.TB, n *node, c *code.Committer, name string) (repo, change string) {
 	t.Helper()
 	s := suiteSettings()
 	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
@@ -44,7 +44,7 @@ func queueRepo(t *testing.T, n *node, c *code.Committer, name string) (repo, cha
 
 // ready makes change's revision 1 — head B — meet main's gate: its facts
 // against main recorded, plat-lead's approval, and unit passed on B.
-func ready(t *testing.T, n *node, w *code.ChangeWriter, repo, change string) {
+func ready(t testing.TB, n *node, w *code.ChangeWriter, repo, change string) {
 	t.Helper()
 	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil))
 	converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
@@ -85,7 +85,7 @@ func dequeueing(repo, entry string, asker code.Principal) code.QueueProposal {
 
 // requireQueued fails t unless res is a write applied at a position, leaving
 // its entry in state at place.
-func requireQueued(t *testing.T, res code.QueueResult, err error, state code.QueueState, place int) {
+func requireQueued(t testing.TB, res code.QueueResult, err error, state code.QueueState, place int) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("ProposeQueue: %v", err)

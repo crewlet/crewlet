@@ -390,7 +390,7 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
 	_, answer := changeCall(t, host, codeTurn(t), builtin.CodeListChangesTool, map[string]any{"repo": "site",
-		"state": "open", "owner": "agent-ceo", "work": "native:task-1", "reviewer": "agent-cto", "needs": "review",
+		"state": "open", "owner": "agent-ceo", "work": "jira:10042", "reviewer": "agent-cto", "needs": "review",
 		"limit": 5})
 	reads, _, _ := host.asked()
 	var listing *code.ReadQuery
@@ -403,7 +403,7 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 		t.Fatal("no listing was read")
 	}
 	if listing.Repo != "site" || listing.State != code.ChangeStateOpen || listing.Owner != "agent-ceo" ||
-		listing.Work != "native:task-1" || listing.Reviewer != "agent-cto" || listing.Needs != code.NeedReview ||
+		listing.Work != "jira:10042" || listing.Reviewer != "agent-cto" || listing.Needs != code.NeedReview ||
 		listing.Limit != 5 || listing.Fresh.Level != statelog.ReadLinearizable {
 		t.Errorf("the listing was read as %+v", *listing)
 	}
@@ -434,6 +434,70 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 		if reads, _, _ := host.asked(); len(reads) != 0 {
 			t.Errorf("%s asked the code host %d reads", name, len(reads))
 		}
+	}
+}
+
+// A LISTING NAMES A WORK ITEM AS THE CHANGE WRITES DO: a Worklet item's key
+// — what a seat woken on it holds — its id, and either under Worklet's
+// backend each list the changes carrying the item, asked of the reader by the
+// identity a change's row holds (`native:<task id>`), the very item
+// code_open_change filed under the key; another tracker's item is listed by
+// its identity as named. A key that names no task, a key with no tracker on
+// this surface to resolve it, and `none`, which carries no item and no index
+// holds, are each refused before the code host is asked anything — `none`
+// before the tracker is either.
+//
+// Mutation: the listing passing `work` to the reader as named, unresolved →
+// the key reaches the reader as itself, red.
+func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
+	t.Parallel()
+	book := taskBook{{ID: "t-9", Key: "ENG-9", Project: "ENG"}}
+	for _, c := range []struct {
+		name  string
+		work  string
+		tasks bool   // whether this surface serves Worklet
+		want  string // the work item the reader is asked for, "" for a refusal
+		reads int    // the tracker reads the call makes
+	}{
+		{name: "a Worklet key", work: "ENG-9", tasks: true, want: "native:t-9", reads: 1},
+		{name: "a Worklet id", work: "t-9", tasks: true, want: "native:t-9", reads: 1},
+		{name: "a Worklet key under its backend", work: "native:ENG-9", tasks: true, want: "native:t-9", reads: 1},
+		{name: "another tracker's identity", work: "jira:10042", tasks: true, want: "jira:10042"},
+		{name: "a key no task has", work: "ENG-404", tasks: true, reads: 1},
+		{name: "a key with no tracker to resolve it", work: "ENG-9"},
+		{name: "none", work: "none", tasks: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newChangeHost(siteChange())
+			deps := codeDeps(host)
+			tasks := &countedTasks{book: book}
+			if c.tasks {
+				deps.Tasks = tasks
+			}
+			reg := codeRegistry(t, deps)
+			args := map[string]any{"work": c.work}
+			if c.want == "" {
+				got := refusedCode(t, reg, codeTurn(t), builtin.CodeListChangesTool, args)
+				if tools.RefusalOf(got) != tools.RefusalInvalid {
+					t.Errorf("answered %s %q, want an invalid call", tools.RefusalOf(got), got.Output)
+				}
+				if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
+					t.Errorf("a refused listing asked the code host %+v", reads)
+				}
+			} else {
+				if got, _ := callCode(t, reg, codeTurn(t), builtin.CodeListChangesTool, args); got.Failed {
+					t.Fatalf("the listing answered %q", got.Output)
+				}
+				reads, _, _ := host.asked()
+				if len(reads) != 1 || reads[0].Kind != code.ReadChanges || reads[0].Work != c.want {
+					t.Errorf("the listing read %+v, want the changes of %s", reads, c.want)
+				}
+			}
+			if n := tasks.reads(); n != c.reads {
+				t.Errorf("the call read the tracker %d times, want %d", n, c.reads)
+			}
+		})
 	}
 }
 

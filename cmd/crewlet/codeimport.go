@@ -281,7 +281,8 @@ func readImport(environ config.Source, args []string, stderr io.Writer) (importC
 		dryRun = fs.Bool("dry-run", false, "-local: plan the import and push nothing")
 		owner = fs.String("owner", "", "the new project's owner: unit:<key> or seat:<handle>")
 		credential = fs.String("credential", "", "the NAME of the variable that holds the source's token, "+
-			"in the node's secret store or environment (crewlet secrets set NAME); empty fetches anonymously")
+			"in the node's secret store or environment (crewlet secrets set NAME), which "+
+			"code.remote_credentials declares for the source's host; empty fetches anonymously")
 		mirror = fs.Bool("mirror", false, "keep the repository in step with the source as a pull mirror, "+
 			"rather than import it once")
 		opID = opIDFlag(fs, "retry an `unknown` outcome with the id it printed, so the retry is "+

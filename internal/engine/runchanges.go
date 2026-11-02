@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -17,14 +18,18 @@ import (
 // heads, and opens the changes the run asked to open — see
 // [sandbox.RunPushes.Changes].
 //
-// ONE `branch_changes` READ A REPOSITORY the run was given to push to, of
-// every branch it pushed there and the branch of its ask to open one: the
-// first LINEARIZABLE, as the push record's first page is — a delivered ref
-// named by no change because a node behind answered is the stale "none" a
-// collection must never say — and every later one at session at the first's
-// position, paying no barrier of its own. Its rows are what the repository
-// holds, not who may read them: the engine names its own run's refs, on
-// repositories the run was given.
+// ONE `branch_changes` READ of every branch the run pushed on the
+// repositories it was given to push to and the branch of each ask to open one,
+// every repository in it — a second only for a run that pushed more branches
+// than one read answers ([branchQueries]) — at SESSION FLOORED AT THE PUSH
+// RECORD'S POSITION ([sandbox.PushRecord.At]): a delivered ref named by no
+// change because a node behind answered is the stale "none" a collection must
+// never say, and the record's linearizable first page already put the floor
+// past every push the run made and every change those pushes opened — so the
+// read answers what a linearizable one would, and the collection pays the
+// record's one barrier on the code log and no second. Its rows are what the
+// repositories hold, not who may read them: the engine names its own run's
+// refs, on repositories the run was given.
 //
 // AN ASK OPENS ITS CHANGE ONCE A LAUNCH ([openOpID]): from the branch the
 // run's push record says it delivered, as the seat it ran for, carrying the
@@ -34,9 +39,10 @@ import (
 // retried collection, on this node or another, the open is the same
 // operation: the read finds the change it opened and names it opened, or the
 // operation ledger answers the record that landed.
-func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, pushed []sandbox.PushedRef,
+func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record sandbox.PushRecord,
 	open bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
 
+	pushed := record.Refs
 	repos := sandbox.Pushable(run.Repos)
 	byName := make(map[string]sandbox.RunRepo, len(repos))
 	branches := make(map[string][]string, len(repos))
@@ -60,34 +66,29 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, pushed [
 	if len(branches) == 0 {
 		return pushed, nil, nil
 	}
+	if record.At.IsZero() || record.At.Stream != topics.CodeLogStream {
+		return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: its push record was "+
+			"read at %s, no position of the code log to read them at", run.TurnID, record.At)
+	}
 	reader, err := p.code()
 	if err != nil {
 		return pushed, nil, err
 	}
 	heads := map[pushKey]code.BranchChange{}
-	var at statelog.Position
-	for _, r := range repos {
-		for refs := branches[r.RepoID]; len(refs) > 0; {
-			n := min(len(refs), code.MaxRefsPerQuery)
-			fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
-			if !at.IsZero() {
-				fresh = statelog.FloorAt(statelog.ReadSession, at)
-			}
-			answer, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadBranchChanges,
-				BranchChanges: &code.BranchChangesQuery{RepoID: r.RepoID, Refs: refs[:n]}, Fresh: fresh})
-			switch {
-			case err != nil:
-				return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches of %s head: %w",
-					run.TurnID, r.Repo, err)
-			case answer.Position.IsZero() || answer.Position.Stream != topics.CodeLogStream:
-				return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches of %s head: answered "+
-					"at %s, no position of the code log", run.TurnID, r.Repo, answer.Position)
-			}
-			at = statelog.Later(at, answer.Position)
-			for _, bc := range answer.BranchChanges {
-				heads[pushKey{repo: r.RepoID, ref: bc.Ref}] = bc
-			}
-			refs = refs[n:]
+	at := record.At
+	for _, q := range branchQueries(repos, branches) {
+		answer, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadBranchChanges, BranchChanges: &q,
+			Fresh: statelog.FloorAt(statelog.ReadSession, record.At)})
+		switch {
+		case err != nil:
+			return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: %w", run.TurnID, err)
+		case answer.Position.IsZero() || answer.Position.Stream != topics.CodeLogStream:
+			return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: answered at %s, no "+
+				"position of the code log", run.TurnID, answer.Position)
+		}
+		at = statelog.Later(at, answer.Position)
+		for _, bc := range answer.BranchChanges {
+			heads[pushKey{repo: bc.RepoID, ref: bc.Ref}] = bc
 		}
 	}
 	named := slices.Clone(pushed)
@@ -101,32 +102,87 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, pushed [
 	if !open {
 		return named, nil, nil
 	}
-	var opened []sandbox.OpenedChange
+	// THE ASKS ARE OPENED AT ONCE, one goroutine an ask, each owned and
+	// awaited here and stopped with ctx: each is its own repository's, under
+	// its own operation (openOpID) and decided by that repository's
+	// committer, so none waits on another, and in turn a collection waits for
+	// its slowest open rather than for the sum of them — a title read by
+	// object id and a committer write that may wait up to statelog.StallGrace
+	// for its record to apply, each, while the run's seat is held for its
+	// collection. Bounded by the run's repositories, sandbox.MaxRunRepos (8)
+	// at most, which a run's grant is held to; one ask a repository.
+	type ask struct {
+		repo      sandbox.RunRepo
+		delivered int // the index in named of the branch it is opened from, -1 for none
+	}
+	var asks []ask
 	for _, r := range repos {
 		if r.Open == nil {
 			continue
 		}
 		source := branchRef(r.Branch)
-		var delivered *sandbox.PushedRef
-		if i := slices.IndexFunc(named, func(ref sandbox.PushedRef) bool {
+		asks = append(asks, ask{repo: r, delivered: slices.IndexFunc(named, func(ref sandbox.PushedRef) bool {
 			return ref.Repo == r.Repo && ref.Ref == source
-		}); i >= 0 {
-			delivered = &named[i]
+		})})
+	}
+	if len(asks) == 0 {
+		return named, nil, nil
+	}
+	opened := make([]sandbox.OpenedChange, len(asks))
+	var wg sync.WaitGroup
+	for i, a := range asks {
+		// A COPY OF THE DELIVERED REF, which the open only reads: named is
+		// written below, once every open has answered.
+		var delivered *sandbox.PushedRef
+		if a.delivered >= 0 {
+			ref := named[a.delivered]
+			delivered = &ref
 		}
-		bc, heading := heads[pushKey{repo: r.RepoID, ref: source}]
-		o := p.openOne(ctx, reader, run, r, delivered, bc, heading, at)
-		if delivered != nil && delivered.Change == "" && o.Opened && strings.Contains(o.Change, "!") {
+		bc, heading := heads[pushKey{repo: a.repo.RepoID, ref: branchRef(a.repo.Branch)}]
+		wg.Go(func() { opened[i] = p.openOne(ctx, reader, run, a.repo, delivered, bc, heading, at) })
+	}
+	wg.Wait()
+	for i, a := range asks {
+		if o := opened[i]; a.delivered >= 0 && named[a.delivered].Change == "" && o.Opened &&
+			strings.Contains(o.Change, "!") {
 			// THE CHANGE IT OPENED NAMES THE REF IT WAS OPENED FROM, as
 			// every change a delivered ref heads does.
-			delivered.Change = o.Change
+			named[a.delivered].Change = o.Change
 		}
-		opened = append(opened, o)
 	}
 	return named, opened, nil
 }
 
 // branchRef is branch as a ref names it, under refs/heads/.
 func branchRef(branch string) string { return "refs/heads/" + branch }
+
+// branchQueries packs the branches of each of repos — branches by repository
+// id — into `branch_changes` queries, in repos' order: as few as hold them,
+// each naming up to code.MaxRefsPerQuery branches across every repository it
+// names. ONE for every run but one that pushed more branches than that: a
+// record holds sandbox.MaxPushedRefs (1 024) refs, beside one branch an ask,
+// so a run that pushed past a thousand branches is read in two, its
+// repository's branches split across them. A query names at most len(repos)
+// repositories — a run's, which code.MaxRunRepos bounds as the read does.
+func branchQueries(repos []sandbox.RunRepo, branches map[string][]string) []code.BranchChangesQuery {
+	var out []code.BranchChangesQuery
+	var q code.BranchChangesQuery
+	held := 0
+	for _, r := range repos {
+		for refs := branches[r.RepoID]; len(refs) > 0; {
+			n := min(len(refs), code.MaxRefsPerQuery-held)
+			q.Repos = append(q.Repos, code.RepoBranches{RepoID: r.RepoID, Refs: refs[:n]})
+			held, refs = held+n, refs[n:]
+			if held == code.MaxRefsPerQuery {
+				out, q, held = append(out, q), code.BranchChangesQuery{}, 0
+			}
+		}
+	}
+	if held > 0 {
+		out = append(out, q)
+	}
+	return out
+}
 
 // openOne is what becomes of run's ask to open a change from repository r's
 // branch: delivered is that branch as the push record says the run left it,

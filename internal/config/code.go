@@ -162,19 +162,19 @@ const (
 	// seed 0):
 	//
 	//	batch  p99 rounds from arrival  check runs a landed change
-	//	1      364, growing unbounded   1.29
-	//	2      17                       0.89
-	//	4      23                       0.78
-	//	8      44                       0.63
+	//	1      148, growing unbounded   1.14
+	//	2      5                        0.98
+	//	4      9                        0.95
+	//	8      12                       0.94
 	//
 	// One never catches up: every red candidate costs a round a saturated
 	// queue has no slack for. Past two, a bigger batch is red more often and
-	// a red FIRST candidate stalls the whole train while it is bisected
-	// (every candidate behind it holds the culprit), so the p99 a change
-	// waits grows faster than the checks it saves shrink. Four, the figure
-	// the design estimated, waits a third longer than two for 12 % fewer
-	// check runs; eight, the bound, stays for a company that prices checks
-	// above latency.
+	// a red candidate stalls every candidate behind it while it is bisected
+	// (each of them holds the culprit), so the p99 a change waits grows far
+	// faster than the checks it saves shrink. Four, the figure the design
+	// estimated, waits nearly twice as long as two for 3 % fewer check runs;
+	// eight, the bound, stays for a company that prices checks above
+	// latency.
 	CodeDefaultQueueBatch = 2
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
@@ -442,7 +442,11 @@ type Code struct {
 	// and the merge_by of every rule matching its branch. The EPOCH'S, read at
 	// every decision as the limits are (internal/code.Limits.MergeByFloor).
 	MergeByFloor CodeMergeBy `yaml:"merge_by_floor,omitempty" json:"merge_by_floor,omitempty" js:"enum=writers|maintainers|persons" desc:"The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers."`
-	Repos        []CodeRepo  `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+	// RemoteCredentials are the variables a repository's mirror or import may
+	// name for its credential, each with the hosts its value may be sent to
+	// (coderemotes.go). The EPOCH'S, read at every decide and every dial.
+	RemoteCredentials CodeRemoteCredentials `yaml:"remote_credentials,omitempty" json:"remote_credentials,omitempty" desc:"The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and the code host dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token."`
+	Repos             []CodeRepo            `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
 }
 
 // CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
@@ -855,14 +859,14 @@ func (r CodeRepo) IdentityKey() string { return r.Name }
 // CodeMirrorSource is the repository a pull mirror follows ([CodeRepo.MirrorFrom]).
 type CodeMirrorSource struct {
 	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodeMirrorTarget is the repository a push mirror pushes to
 // ([CodeRepo.MirrorTo]).
 type CodeMirrorTarget struct {
 	URL        string   `yaml:"url" json:"url" js:"required" desc:"The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host, resolved from the secret store and then the environment when it dials, never a literal."`
+	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal."`
 	As         string   `yaml:"as" json:"as" js:"required" desc:"The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot."`
 	Refs       []string `yaml:"refs,omitempty" json:"refs,omitempty" desc:"The refs it pushes, at most 64 patterns of refs/heads/<glob> and refs/tags/<glob>, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/."`
 }
@@ -871,7 +875,7 @@ type CodeMirrorTarget struct {
 // created ([CodeRepo.Import]).
 type CodeImportSource struct {
 	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes."`
-	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodePathOwner is one owner of a repository's paths: exactly one of a unit or
@@ -1373,6 +1377,11 @@ func (c Code) validate(path Path, o *org.Organization) error {
 				"nothing hosts code on this company, so no repository defines a check to run: set "+
 					"code.native, or remove code.checks")
 		}
+		if !c.RemoteCredentials.zero() {
+			p.add(at(path, "remote_credentials"), ErrConflict,
+				"nothing hosts code on this company, so no mirror or import is dialed with these: set "+
+					"code.native, or remove code.remote_credentials")
+		}
 	}
 	switch {
 	case !c.MergeByFloor.Valid():
@@ -1397,17 +1406,20 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	p.wrap(c.Limits.validate(at(path, "limits")))
 	p.wrap(c.Scratch.validate(at(path, "scratch")))
 	p.wrap(c.Checks.validate(at(path, "checks")))
-	p.wrap(validateCodeRepos(at(path, "repos"), c.Repos, o))
+	p.wrap(c.RemoteCredentials.validate(at(path, "remote_credentials")))
+	p.wrap(validateCodeRepos(at(path, "repos"), c.Repos, o, c.RemoteCredentials))
 	return p.err()
 }
 
 // validateAdmission holds the code host's ADMISSION rules at path: at most
-// [CodeMaxRepos] repositories, and a retention of at most
-// [CodeMaxDeletedRetentionDays].
+// [CodeMaxRepos] repositories, a retention of at most
+// [CodeMaxDeletedRetentionDays], and code.remote_credentials' two bounds
+// ([CodeRemoteCredentials.validateAdmission]).
 //
 // POLICY, which a later build is free to change: the reconcile decides any
 // number of declarations and the retention duty purges by any retention a
-// duration holds, so a revision past either still runs — and held to them on
+// duration holds, and a decide and a dial read a declared credential in a
+// table of any size, so a revision past any of them still runs — and held to them on
 // APPLY, a build that raised one would have its revisions refused by this one
 // during a rolling upgrade, splitting the fleet's epoch. A submitted document
 // is refused for them; an applied revision that breaks them is warned about.
@@ -1428,6 +1440,7 @@ func (c Code) validateAdmission(path Path) error {
 				"a list this long is a generated document, so check what wrote it",
 			n, CodeMaxRepos)
 	}
+	p.wrap(c.RemoteCredentials.validateAdmission(at(path, "remote_credentials")))
 	return p.err()
 }
 
@@ -1502,13 +1515,13 @@ func limitNamed(name string, set, resolved int64) string {
 // first's settings to its own at every activation. Only among names that are
 // names: one that is not is already refused, and calling it a duplicate too
 // would report one mistake twice.
-func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
+func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization, remotes CodeRemoteCredentials) error {
 	var p problems
 	owners := newCodeOwners(o)
 	first := make(map[string]int, len(repos))
 	for i, r := range repos {
 		entry := idx(path, i)
-		p.wrap(r.validate(entry, owners))
+		p.wrap(r.validate(entry, owners, remotes))
 		if !gitref.ValidProjectName(r.Name) {
 			continue
 		}
@@ -1531,7 +1544,7 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 // in gitref's grammar, each pattern protected once, no force on a tag, and
 // each one's merge gate ([CodeProtection.validateGate]) — and its path owners
 // ([validatePathOwners]).
-func (r CodeRepo) validate(path Path, owners *codeOwners) error {
+func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCredentials) error {
 	var p problems
 	switch {
 	case r.Name == "":
@@ -1606,15 +1619,16 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 		first[pattern] = k
 	}
 	validatePathOwners(&p, at(path, "path_owners"), r.PathOwners, owners)
-	r.validateRemotes(&p, path, owners)
+	r.validateRemotes(&p, path, owners, remotes)
 	return p.err()
 }
 
 // validateRemotes holds the repository's mirrors and its import at path into
 // p: each URL a remote's, read by the one rule its dial reads it by
 // ([gitref.ParseRemoteURL]) and at most [CodeMaxRemoteURLBytes], and each
-// credential one whole ${VAR} reference ([validateCodeRemote]) — a push
-// mirror's required; a push mirror's seat one of the chart's that reads the
+// credential one whole ${VAR} reference to a variable code.remote_credentials
+// declares for the URL's host ([validateCodeRemote]) — a push mirror's
+// required; a push mirror's seat one of the chart's that reads the
 // repository ([CodeRepo.validateMirrorSeat]) and its refs ([validateMirrorRefs]);
 // and none of the combinations that would do nothing: an import beside a pull
 // mirror, which is imported from its own source when it is created, and either
@@ -1622,12 +1636,13 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 //
 // RUNNABLE, as an owner's rules are: the code domain refuses settings carrying
 // a URL no dial reads or a credential that is not a reference, so the
-// reconcile could not record one, and a push mirror whose seat the chart
+// reconcile could not record one; a dial sends no credential undeclared for
+// its host, so a mirror naming one would never authenticate; and a push mirror whose seat the chart
 // lacks, or that does not read what it would publish, has nobody to push as.
-func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
+func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners, remotes CodeRemoteCredentials) {
 	if m := r.MirrorFrom; m != nil {
 		from := at(path, "mirror_from")
-		validateCodeRemote(p, from, m.URL, m.Credential, false)
+		validateCodeRemote(p, from, m.URL, m.Credential, false, remotes)
 		switch {
 		case r.Import != nil:
 			p.add(at(path, "import"), ErrConflict,
@@ -1640,7 +1655,7 @@ func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
 		}
 	}
 	if i := r.Import; i != nil {
-		validateCodeRemote(p, at(path, "import"), i.URL, i.Credential, false)
+		validateCodeRemote(p, at(path, "import"), i.URL, i.Credential, false, remotes)
 		if r.Archived && r.MirrorFrom == nil {
 			p.add(at(path, "import"), ErrConflict,
 				"an import fills an active repository, and an archived one takes nothing: leave archived "+
@@ -1650,7 +1665,7 @@ func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
 	}
 	if m := r.MirrorTo; m != nil {
 		to := at(path, "mirror_to")
-		validateCodeRemote(p, to, m.URL, m.Credential, true)
+		validateCodeRemote(p, to, m.URL, m.Credential, true, remotes)
 		r.validateMirrorSeat(p, at(to, "as"), m.As, owners)
 		validateMirrorRefs(p, at(to, "refs"), m.Refs)
 	}
@@ -1667,7 +1682,15 @@ func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
 // at rest in the code log, and the reference is resolved only when the remote
 // is dialed, from the secret store and then the environment. The refusal never
 // quotes the value: a literal is a token.
-func validateCodeRemote(p *problems, path Path, url, credential string, needCredential bool) {
+//
+// AND ONE code.remote_credentials DECLARES FOR THE URL'S HOST
+// ([CodeRemoteCredentials.Refusal]), judged once the URL is a remote's and the
+// credential a reference: the dial sends no other, so a declaration naming an
+// undeclared variable, or a declared one toward another host, would be a
+// mirror that never authenticates.
+func validateCodeRemote(p *problems, path Path, url, credential string, needCredential bool,
+	remotes CodeRemoteCredentials) {
+	urlRead := false
 	switch {
 	case strings.TrimSpace(url) == "":
 		p.add(at(path, "url"), ErrMissing, "the repository at the other host: an https URL")
@@ -1677,6 +1700,8 @@ func validateCodeRemote(p *problems, path Path, url, credential string, needCred
 	default:
 		if _, err := gitref.ParseRemoteURL(url); err != nil {
 			p.add(at(path, "url"), ErrShape, "%v", err)
+		} else {
+			urlRead = true
 		}
 	}
 	switch {
@@ -1693,6 +1718,10 @@ func validateCodeRemote(p *problems, path Path, url, credential string, needCred
 			"a credential is one whole ${VAR} reference and nothing else, never the token itself, which "+
 				"every record of the repository's settings would carry: put the token in the secret store "+
 				"(crewlet secrets set NAME) and write ${NAME}")
+	case urlRead:
+		if why := remotes.Refusal(url, credential); why != "" {
+			p.add(at(path, "credential"), ErrConflict, "%s", why)
+		}
 	}
 }
 

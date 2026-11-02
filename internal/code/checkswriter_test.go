@@ -409,6 +409,57 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	}
 }
 
+// A GIVEN-UP TRAIN'S CANCELLED ATTEMPT IS QUEUED AGAIN: an attempt a merge
+// queue's home cancelled giving its train up — `dequeued` or `abandoned` —
+// measured nothing of its commit, and a train built again from the same rows
+// is the same commits, so the home's requeue follows it, past
+// AutoRequeueAttempts (no cell failed it) and to MaxCheckAttempts alone; an
+// attempt cancelled for any other reason — a head its change moved on from —
+// is no requeue's.
+//
+// Mutation: answer GivenUp false → the requeue after a dequeue is refused,
+// red; hold a given-up requeue to AutoRequeueAttempts → the requeue past it
+// is refused, red; count a superseded cancel as given up → its requeue is
+// queued, red.
+func TestAGivenUpTrainsCancelledAttemptIsQueuedAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := changeRepo(t, n, "web")
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	cancelling := func(key code.CheckKey, reason code.CheckReason) code.ChecksRequest {
+		return code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_cancel"),
+			Finished: &code.CheckFinished{CheckKey: key, State: code.CheckStateCancelled, Reason: reason,
+				FinishedAt: harnessAt.Add(time.Minute), Summary: "its merge queue gave its train up"}}
+	}
+
+	res, err := w.Publish(ctx, queueing(checkOn(repo, 1), code.QueueDispatch))
+	requireChecked(t, "the dispatch", res, err)
+	for attempt := 1; attempt <= code.AutoRequeueAttempts+1; attempt++ {
+		reason := code.CheckReasonAbandoned
+		if attempt%2 == 1 {
+			reason = code.CheckReasonDequeued
+		}
+		res, err = w.Publish(ctx, cancelling(checkOn(repo, attempt), reason))
+		requireChecked(t, fmt.Sprintf("attempt %d cancelled %s", attempt, reason), res, err)
+		res, err = w.Publish(ctx, queueing(checkOn(repo, attempt+1), code.QueueRequeue))
+		requireChecked(t, fmt.Sprintf("the requeue after attempt %d cancelled %s", attempt, reason), res, err)
+		if res.Row == nil || res.Row.State != code.CheckStateQueued || res.Row.Attempt != attempt+1 {
+			t.Fatalf("the requeue after attempt %d cancelled %s is %+v, want attempt %d queued", attempt, reason,
+				res.Row, attempt+1)
+		}
+	}
+
+	moved := code.CheckKey{RepoID: repo, OID: oidOf("A"), Target: mainRef, Name: "unit", Attempt: 1}
+	res, err = w.Publish(ctx, queueing(moved, code.QueueDispatch))
+	requireChecked(t, "the other commit's dispatch", res, err)
+	res, err = w.Publish(ctx, cancelling(moved, code.CheckReasonSuperseded))
+	requireChecked(t, "the superseded head's cancel", res, err)
+	moved.Attempt = 2
+	res, err = w.Publish(ctx, queueing(moved, code.QueueRequeue))
+	requireCheckRefused(t, "a requeue after a superseded head's cancel", res, err, code.CheckRefusalRerunGenuine)
+}
+
 // THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and
 // a claim naming a person's CI are a principal's writes, asked only as a
 // rerun and a report (checkasks.go), so through the engine's own arms each is
@@ -1047,7 +1098,8 @@ type checksShape struct {
 // targets — web's feature into main (change 1: main's lint and unit failed a
 // minute apart, its vet running) and a backport branch at the same commit into
 // release (change 2: release's own unit, queued) — with every shape a `checks`
-// read takes of them: the node, the backport's change, and the shapes.
+// read takes of them, narrowed by a state, a check's name or both as well as
+// whole: the node, the backport's change, and the shapes.
 func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]checksShape) {
 	t.Helper()
 	n := newNode(t)
@@ -1112,6 +1164,32 @@ func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]chec
 		"the window ending before the second ending": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada,
 			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{Since: harnessAt,
 				Until: harnessAt.Add(90 * time.Second)}}, []string{"lint"}},
+		"the repository's running": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
+			Fresh: stale, Checks: &code.CheckQuery{State: code.CheckStateRunning}}, []string{"vet"}},
+		"the repository's queued": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
+			Fresh: stale, Checks: &code.CheckQuery{State: code.CheckStateQueued}}, []string{"unit"}},
+		"the repository's failed": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
+			Fresh: stale, Checks: &code.CheckQuery{State: code.CheckStateFailed}}, []string{"unit", "lint"}},
+		"the repository's unit, every state": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{Name: "unit"}}, []string{"unit", "unit"}},
+		"the repository's unit, failed": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{Name: "unit", State: code.CheckStateFailed}},
+			[]string{"unit"}},
+		"the window's failed": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Limit: 1, Fresh: stale,
+			Checks: &code.CheckQuery{Since: harnessAt, State: code.CheckStateFailed}}, []string{"unit", "lint"}},
+		"the window's lint": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Limit: 1, Fresh: stale,
+			Checks: &code.CheckQuery{Since: harnessAt, Name: "lint"}}, []string{"lint"}},
+		"the window's unit, failed": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Limit: 1, Fresh: stale,
+			Checks: &code.CheckQuery{Since: harnessAt, Name: "unit", State: code.CheckStateFailed}},
+			[]string{"unit"}},
+		"a commit's failed, for every target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B"), State: code.CheckStateFailed}},
+			[]string{"lint", "unit"}},
+		"a change's vet": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1, Fresh: stale,
+			Checks: &code.CheckQuery{Change: 1, Name: "vet"}}, []string{"vet"}},
+		"a commit's latest queued, for every target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada,
+			Repo: "web", Limit: 1, Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B"), Latest: true,
+				State: code.CheckStateQueued}}, []string{"unit"}},
 	}
 }
 
@@ -1444,6 +1522,89 @@ func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 	if _, err := list(code.ReadQuery{Asker: ada, Checks: window(code.CheckQuery{State: "green"})}); !errors.Is(err,
 		code.ErrInvalid) {
 		t.Errorf("a window narrowed by a state that is no check's = %v, want code.ErrInvalid", err)
+	}
+}
+
+// A NARROWED CHECKS LISTING ANSWERS ITS ROWS WHATEVER THE HISTORY AROUND
+// THEM: a repository's listing and the window narrowed by a state, a check's
+// name or both seek what they are narrowed to, so their first page holds the
+// attempts the narrowing names — and says there are no more — however many
+// attempts of other checks and states ended after them, and the window, which
+// lists the attempts that ENDED, refuses a state that never ends in it.
+//
+// web ([checksOfEveryShape]) is given eight more passing attempts of eight
+// more checks, ending after main's lint and unit failed, past a page of
+// three: an unnarrowed walk in the listing's order reaches main's running vet
+// and release's queued unit only after all ten endings, and its failures
+// after the eight passes.
+//
+// Mutations: serve a repository's narrowed listing by its unnarrowed walk,
+// filtered after the read (narrowedRepoChecks' places replaced by the
+// finished_idx page kept by the narrowing), and its first pages are empty
+// with a cursor — red; the window's alike — red; admit a window narrowed to
+// `queued` (validateChecks' Ended case dropped) and it answers an empty page
+// rather than the refusal — red.
+func TestANarrowedChecksListingAnswersItsRowsWhateverTheHistory(t *testing.T) {
+	t.Parallel()
+	n, _, _ := checksOfEveryShape(t)
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	repoID := servedChecks(t, n, code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+		Fresh: stale})[0].RepoID
+	for i := range 8 {
+		name := fmt.Sprintf("pass%d", i)
+		key := code.CheckKey{RepoID: repoID, OID: oidOf("B"), Target: mainRef, Name: name, Attempt: 1}
+		end := ending(key, code.CheckStatePassed, code.CheckReasonExit)
+		end.Finished.FinishedAt = harnessAt.Add(time.Duration(10+i) * time.Minute)
+		for _, r := range []code.ChecksRequest{queueing(key, code.QueueDispatch), claiming(key, "git-a", ""), end} {
+			res, err := w.Publish(ctx, r)
+			requireChecked(t, name, res, err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		repo string
+		c    code.CheckQuery
+		want []string
+	}{
+		{"the repository's running", "web", code.CheckQuery{State: code.CheckStateRunning}, []string{"vet"}},
+		{"the repository's queued", "web", code.CheckQuery{State: code.CheckStateQueued}, []string{"unit"}},
+		{"the repository's failed", "web", code.CheckQuery{State: code.CheckStateFailed},
+			[]string{"unit", "lint"}},
+		{"the repository's unit", "web", code.CheckQuery{Name: "unit"}, []string{"unit", "unit"}},
+		{"the repository's vet, running", "web", code.CheckQuery{Name: "vet", State: code.CheckStateRunning},
+			[]string{"vet"}},
+		{"the window's failed", "", code.CheckQuery{Since: harnessAt, State: code.CheckStateFailed},
+			[]string{"unit", "lint"}},
+		{"the window's lint", "", code.CheckQuery{Since: harnessAt, Name: "lint"}, []string{"lint"}},
+		{"the window's unit, failed", "", code.CheckQuery{Since: harnessAt, Name: "unit",
+			State: code.CheckStateFailed}, []string{"unit"}},
+	} {
+		c := tc.c
+		got, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: tc.repo, Limit: 3,
+			Fresh: stale, Checks: &c})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if names := checkNames(got.Checks); !slices.Equal(names, tc.want) || got.Next != "" {
+			t.Errorf("%s's first page of three is %v (next %q), want %v and no next page: a narrowed listing "+
+				"seeks its rows rather than walk the history around them", tc.name, names, got.Next, tc.want)
+		}
+		for _, row := range got.Checks {
+			if row.RepoID != repoID || row.Repo != "web" || (c.State != "" && row.State != c.State) ||
+				(c.Name != "" && row.Name != c.Name) {
+				t.Errorf("%s answered %s/%s in %s, outside its narrowing", tc.name, row.Repo, row.Name, row.State)
+			}
+		}
+	}
+	for _, s := range []code.CheckState{code.CheckStateQueued, code.CheckStateRunning} {
+		_, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Fresh: stale,
+			Checks: &code.CheckQuery{Since: harnessAt, State: s}})
+		if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "checks.state") {
+			t.Errorf("a window narrowed to %s read %v, want code.ErrInvalid naming checks.state: the window "+
+				"lists the attempts that ended", s, err)
+		}
 	}
 }
 
