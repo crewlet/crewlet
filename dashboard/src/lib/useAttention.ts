@@ -17,7 +17,7 @@ import { useNow } from "./clock.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg, useOrgBudget } from "./store-hooks.ts";
 import { indexOrg, nameOfIn } from "./seats.ts";
 import { RUNS_POLL_MS } from "./runs.ts";
-import { MCP_STATUS_POLL_MS } from "./mcpServers.ts";
+import { MCP_STATUS_POLL_MS } from "./mcpStatusPoll.ts";
 import { useViewer } from "./viewer.ts";
 
 /** No MCP alarm: a reader who is not asked them, or an answer not in yet. */

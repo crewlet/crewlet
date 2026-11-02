@@ -48,13 +48,13 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import {
-  MCP_STATUS_POLL_MS,
   grantedSeats,
   nodeOnlyNames,
   serverOrigin,
   serversUpLine,
   takenNames,
 } from "~/lib/mcpServers.ts";
+import { MCP_STATUS_POLL_MS } from "~/lib/mcpStatusPoll.ts";
 import { AddMcpServerDialog } from "./AddMcpServerDialog.tsx";
 import { failureLine, McpServers, ServerHeader } from "./McpServers.tsx";
 import { useOrg, useTools } from "~/lib/store-hooks.ts";

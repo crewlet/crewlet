@@ -18,19 +18,6 @@ import { carriesReference } from "./references.ts";
 import type { Seat } from "./seats.ts";
 
 /**
- * How often `mcp_servers_status` is asked again, in ms, by every screen that
- * reads it: the MCP page and the Inbox's MCP alarms alike.
- *
- * FIFTEEN SECONDS, the Nodes screen's cadence and for its reason: the answer
- * is the lease table, and a poll slower than the presence TTL would show a
- * server running on a node whose lease had already expired. It also bounds
- * how long a server just added reads "not started" after a node applied it,
- * and how long an alarm the engine raised (on its ten-second evaluation)
- * waits to reach the Inbox.
- */
-export const MCP_STATUS_POLL_MS = 15_000;
-
-/**
  * Each state in words, with the tone its pill wears and what to do about it.
  *
  * EXHAUSTIVE OVER THE CONTRACT'S UNION, so a state the engine adds fails the
