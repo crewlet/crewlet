@@ -2,6 +2,7 @@ package compact_test
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -137,7 +138,7 @@ func TestAnObjectYoungerThanTheGraceIsKept(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
 	x.push(96 << 10)
-	old := x.leakBytes("old", 64<<10)
+	old := x.leakBytes("old", 96<<10)
 	time.Sleep(100 * time.Millisecond)
 	mid := time.Now()
 	time.Sleep(100 * time.Millisecond)
@@ -246,5 +247,68 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 	if got := scanned(); got != 2 {
 		t.Fatalf("a pass a week after the not-due scan scanned the repository %d times in all, want twice:\n%s",
 			got, l)
+	}
+}
+
+// A WEEKLY EXPUNGE THAT WOULD DROP NOTHING BEGINS NOTHING: a repository whose
+// unreachable bytes are past a quarter of its live bytes, every one of them in
+// a pack younger than code.PruneGrace — a push in flight's, or a compaction's
+// output that merged an old leak with a later push and arrived when the push
+// did — while every pack old enough to take holds only what its refs reach,
+// is NOT DUE: the scan weighs what the packs a cycle may take would drop, and
+// they would drop nothing. No begin is proposed, every live pack stays where
+// it was, and the young pack's objects are still live.
+//
+// Mutation: weigh the whole repository's unreachable bytes rather than the
+// eligible packs', and the cycle rewrites the old, reachable packs to free
+// nothing — applied.
+func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.push(96 << 10)
+	time.Sleep(100 * time.Millisecond)
+	mid := time.Now()
+	time.Sleep(100 * time.Millisecond)
+	h := x.handmade()
+	b := make([]byte, 96<<10)
+	for i := range b {
+		b[i] = byte(x.rng.Uint32())
+	}
+	young, objects := h.commit("refs/heads/young", map[string]string{"young.bin": string(b)})
+	bare, cs := h.pack(objects)
+	x.proposePack(bare, cs, "refs/heads/anchor", x.p.Head(x.work))
+	live := func() []string {
+		var out []string
+		for _, row := range x.rows().Packs {
+			if row.State == code.PackLive {
+				out = append(out, row.PackID)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	before := live()
+
+	c, _, l := x.compactorOf(func(o *compact.Options) {
+		o.Now = func() time.Time { return mid.Add(code.PruneGrace) }
+	})
+	compact.ExpungeFrom(c, 1)
+	cand, ok := x.weekly(codetest.RepoName, mid.Add(code.PruneGrace-code.ExpungeInterval))
+	if !ok {
+		t.Fatalf("the weekly arm names no %s, never expunged", codetest.RepoName)
+	}
+	if out, err := expungeWhileBusy(t, c, cand); out != compact.OutcomeNotDue {
+		t.Fatalf("a scan whose old packs hold only what a ref reaches answered %s, %v; want not due:\n%s",
+			out, err, l)
+	}
+	if n := l.count("code_expunge_begun"); n != 0 {
+		t.Errorf("a weekly expunge that would drop nothing began %d cycles", n)
+	}
+	if after := live(); !slices.Equal(after, before) {
+		t.Errorf("the live packs moved from %v to %v under a weekly expunge that would drop nothing",
+			before, after)
+	}
+	if !x.liveHold(young) {
+		t.Errorf("the commit %s, in a pack younger than the grace, left the live packs", young)
 	}
 }

@@ -703,7 +703,10 @@ func (c *Compactor) claimExpunge(repoID string) bool {
 //   - RESERVED — from its plan ([Compactor.reserveExpunge]) until its rescue
 //     has synced past its begin: a compaction merges beside it, leaving out
 //     every pack the plan chose as an input, by git checksum, as it leaves
-//     out a publication's reservation ([Compactor.claimCompaction]);
+//     out a publication's reservation ([Compactor.claimCompaction]). On the
+//     schedule, whose plan follows its walk, every pack the cycle may take
+//     is reserved through the walk and the reservation narrowed to the
+//     plan's inputs after;
 //   - BEGUN ([Compactor.beganExpunge]) — from then to its commit, the begin
 //     having retired every input in this node's copy: a compaction builds
 //     beside it as though none ran.
@@ -723,8 +726,11 @@ type expungeClaim struct {
 // reserveExpunge records every input p chose as the reservation of repoID's
 // expunge this node is running ([expungeClaim]'s RESERVED): from then on a
 // compaction of the repository is admitted beside it and leaves those packs
-// out. A later, narrower plan of the same cycle — the bundle rule's rebuild —
-// keeps the first one's reservation, which holds every input it chose.
+// out. Each call REPLACES the reservation: the schedule's cycle reserves
+// every pack it may take for its walk, then narrows to its plan's inputs
+// ([Compactor.cycle]). A later, narrower plan of the same cycle — the bundle
+// rule's rebuild — reserves nothing again and keeps the reservation, which
+// holds every input it chose.
 func (c *Compactor) reserveExpunge(repoID string, p planned) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

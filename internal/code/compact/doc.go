@@ -70,7 +70,8 @@
 // ([Compactor.claimExpunge], expungeClaim): a compaction of its repository
 // answers busy only while the expunge syncs and plans, seconds, then merges
 // beside its walk, its build, its upload and its begin every pack but the
-// inputs it chose, and once its rescue has synced past the begin, which
+// inputs it chose (on the schedule, whose plan follows its walk, every pack
+// the cycle may take until the walk has weighed them), and once its rescue has synced past the begin, which
 // retired them, builds beside it as though none ran — the begin is refused
 // only for an input no longer live, a drop epoch or a chain that moved, and
 // the commit only for its expunge no longer open — so a repository being
@@ -266,14 +267,22 @@
 // code.PruneGrace: every active or archived repository — a scratch one as
 // much as a project, since a push is refused repo_size on live bytes whoever
 // owns them — last expunged code.ExpungeInterval ago or never is listed, least
-// recently expunged first, and its cycle — once its plan has found inputs —
-// judges whether an expunge is DUE: what no ref, no drop the grace keeps and
-// no row in flight reaches —
-// the live pack bytes less ONE `rev-list --objects --disk-usage
-// --use-bitmap-index` from them, each object once as git stores it — is MORE
-// than 1/code.ExpungeShare of the live pack bytes AND at least
+// recently expunged first, and its cycle — once its scan has found a pack it
+// may take — judges whether an expunge is DUE: what no ref, no drop the grace
+// keeps and no row in flight reaches OF THE PACKS A CYCLE MAY TAKE — those
+// whose newest content arrived code.PruneGrace or longer ago (below) — is
+// MORE than 1/code.ExpungeShare of the live pack bytes AND at least
 // code.ExpungeMinBytes, below which the fleet's re-download of the kept packs
-// costs more than it frees. A repository found NOT DUE is left unscanned for
+// costs more than it frees. Weighed over the whole repository instead,
+// garbage in a pack younger than the grace — a compaction's output, which
+// arrives when its newest input did, merging an old leak with a later push —
+// made the repository due while every pack a cycle could take held none of
+// it, and the cycle rewrote the old, garbage-free packs, which every git node
+// then downloaded again, to free nothing, every week. The weighing is ONE
+// `rev-list --objects --no-object-names --use-bitmap-index` from what is
+// kept, each object it prints looked up in each such pack's own version-2
+// index, and what none printed weighed at the bytes it takes in that pack —
+// its offset's distance to the next object's (reach.go). A repository found NOT DUE is left unscanned for
 // code.ExpungeInterval after, by the scan's instant on this node and never by
 // its row's version — a push moves the version, which would rescan a hot
 // repository at every pass, and a drop's grace or a pack's runs out by the
@@ -298,15 +307,20 @@
 // request is no input, so a purge of a busy repository rewrites what it was
 // asked about and nothing pushed since. ON THE SCHEDULE the inputs are the
 // live packs whose newest content ARRIVED code.PruneGrace or longer ago
-// (code.PackRow.Arrived), earliest first under the same caps, so EVERY PACK
-// ADDED WITHIN THE GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects
-// that no ref reaches yet among them — and a pack whose arrival is not known
-// is passed over, the side the grace keeps; a repository whose plan finds
-// no input is remembered not due with no walk at all. Either way the plan
+// (code.PackRow.Arrived) and that the scan found would drop a byte, DENSEST
+// FIRST — the most each frees for every byte it rewrites, which every git
+// node downloads again — under the same caps, so EVERY PACK ADDED WITHIN THE
+// GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects that no ref
+// reaches yet among them — a pack that frees nothing is never rewritten, and
+// a pack whose arrival is not known is passed over, the side the grace keeps;
+// a repository with no such pack is remembered not due with no walk at all.
+// The schedule reserves every pack it may take from its scan through its walk
+// — the walk reads each one's index from the copy the scan pinned — and
+// narrows the reservation to its plan's inputs after. Either way the cycle
 // reads the live packs ONCE, at the scan, and the walk weighs that reading:
-// the repository's merges go on beside the cycle from its plan on, and a
-// merge's round swaps the copy the scan pinned for one that holds its live
-// set.
+// the repository's merges go on beside the cycle from its first reservation
+// on, and a merge's round swaps the copy the scan pinned for one that holds
+// its live set.
 //
 // THE BUILD SORTS, never judges a record: in a scratch whose OWN packs are the
 // inputs and whose one alternate is a store of every other live pack

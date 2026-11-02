@@ -1193,7 +1193,8 @@ after its whole build. An [expunge](#expunge), the third writer of a
 repository's packs, holds back the repository's merges the same way, and no
 longer: they wait only while it syncs and plans,
 then go on beside its walk, its build and its upload with every pack but the
-ones it is rewriting, and once it has begun, beside it as though it were not
+ones it is rewriting (through a weekly expunge's walk, every pack old enough
+to rewrite, since the walk weighs them all), and once it has begun, beside it as though it were not
 running — so a repository being purged is never the one whose pushes are
 refused `compaction_behind`. No publication of the repository builds while
 an expunge of it runs, since the expunge drops the layers over what it
@@ -1233,9 +1234,12 @@ publication, one rewrite of a repository at a time
   week ago or never, least recently expunged first, a seat's
   [scratch repositories](#repositories-made-by-tools) as much as projects —
   and for each it maintains, it **scans**: one walk of the repository's
-  history from what it keeps (below) weighs what nothing reaches. The expunge
+  history from what it keeps (below) weighs what nothing reaches in the packs
+  an expunge may rewrite — those that arrived two weeks or more ago, the
+  grace below — never in a younger pack, which it keeps whole. The expunge
   is **due** once that is more than a quarter of the repository's live pack
-  bytes and at least 64 MiB; below either, rewriting the kept packs, which
+  bytes and at least 64 MiB, and it then rewrites only packs that hold some
+  of it, those freeing the most for their size first; below either, rewriting the kept packs, which
   every git node holding the repository then downloads again, costs more
   than the bytes it frees, and the repository is not scanned again on that
   node for a week, so a clean repository's history is walked at most once a
@@ -1393,12 +1397,14 @@ dropping packs ([metrics reference](../reference/metrics.md)); its log says
 next pass.
 
 **What it costs.** On the schedule, the scan that judges an expunge due is
-one `git rev-list --disk-usage` over the repository's whole history, and every
+one `git rev-list` over the repository's whole history, each object it names
+looked up in the index of every pack old enough to rewrite, and every
 build is a walk of it from every tip kept. Each is admitted in the node's
 maintenance lane at room for that walk, 240 bytes an object of the whole
 repository as a clone without a bitmap takes, and for the delta window beside
 it, six times `code.limits.max_blob_bytes` (300 MiB by default); a build adds
-550 bytes an object of the packs it sorts, as a merge does. A node whose
+550 bytes an object of the packs it sorts, as a merge does, and the scan the
+same of the packs it weighs. A node whose
 budget cannot hold that refuses the expunge and asks again at every pass.
 Nothing is refused at once, but what no ref reaches keeps counting against
 `code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,
