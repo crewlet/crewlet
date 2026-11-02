@@ -345,10 +345,13 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		recorded string
 	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn:        ref,
-		Spec:        spec,
-		Setup:       runEnv.setup,
-		MCPServers:  servers,
+		Turn:       ref,
+		Spec:       spec,
+		Setup:      runEnv.setup,
+		MCPServers: servers,
+		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
+		// tell, for its session's scrub.
+		Secrets:     launchSecrets(agent, runEnv, run.env),
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,

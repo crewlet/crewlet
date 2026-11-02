@@ -343,6 +343,13 @@ type runEnv struct {
 	// body read as the content it is.
 	setup []sandbox.SetupStep
 
+	// secrets is what of env and setup sits in a credential position by
+	// where it came from: every value a reference resolved to — the
+	// engine's own identity facts aside — and every setup file whose body
+	// was one reference whole ([sandbox.LaunchRequest.Secrets],
+	// [launchSecrets]).
+	secrets []string
+
 	// gap is what of either resolved to nothing and is not declared
 	// optional, judged against the integrations minting it — nil when
 	// nothing. keys and files name where it sits, for a log line.
@@ -463,6 +470,9 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		switch {
 		case len(missing) == 0:
 			out.env[key] = resolver.Value(l.value)
+			if !l.fact {
+				out.secrets = append(out.secrets, referencedValues(resolver, l.value)...)
+			}
 		case l.fact:
 			facts.hold(key, missing, false, "", false)
 			out.facted = append(out.facted, l.path)
@@ -489,6 +499,12 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 			}
 			if unresolved == "" {
 				files[path] = content
+				if _, whole := envref.Whole(body); whole {
+					// THE REFERENCE'S VALUE, byte for byte: a deploy key, a
+					// token file. A body written in the document is its
+					// own words, expanded in the box from the environment.
+					out.secrets = append(out.secrets, content)
+				}
 				continue
 			}
 			if gap.hold(path, []string{unresolved}, slices.Contains(step.OptionalKeys, path), where, false) {
@@ -1971,6 +1987,10 @@ func sandboxMCP(
 		}
 		if server.Kind() == config.TransportHTTP {
 			box.Headers = values.values
+			// WHAT ITS URL'S REFERENCES RESOLVED TO, for the scrub of the
+			// box's session: a secret kept in a URL's path is in the box's
+			// MCP configuration as surely as a header is.
+			box.Secrets = referencedValues(env, server.URL)
 		} else {
 			box.Env = values.values
 		}
@@ -3424,6 +3444,42 @@ func newCodingRun(agent *harness.Provider, seatEnv map[string]string) codingRun 
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// launchSecrets is every value a launch's run environment hands its box out of
+// a credential position, for the scrub of its session
+// ([sandbox.LaunchRequest.Secrets]): what its references resolved to and its
+// setup files that are one reference whole (runEnv's secrets), and the value of
+// every variable of env — the run environment the box is handed, the entry's
+// beneath the seat's — whose name says it carries a credential
+// ([harnessprofile.IsCredentialName], the one predicate the backend asks of a
+// name) or that signs the entry's harness in, written or referenced alike.
+//
+// BY WHERE IT CAME FROM AND WHAT IT IS NAMED, never the whole environment: the
+// seat's handle and email, a base URL, a protocol's name are no secrets, and
+// scrubbed by value each was lost from every kept transcript that named it.
+func launchSecrets(agent *harness.Provider, run runEnv, env map[string]string) []string {
+	secrets := slices.Clone(run.secrets)
+	signIn := agent.CredentialEnvNames()
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		if harnessprofile.IsCredentialName(key) || slices.Contains(signIn, key) {
+			secrets = append(secrets, env[key])
+		}
+	}
+	return secrets
+}
+
+// referencedValues is what every reference in value resolved to under env —
+// what the operator kept out of the document, a credential position whatever
+// the variable is named — each non-empty value once.
+func referencedValues(env *config.Resolver, value string) []string {
+	var out []string
+	for _, name := range envref.Names(value) {
+		if v := env.Lookup(name); strings.TrimSpace(v) != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // entryEnv is what an entry contributes to a run's environment, beneath what
