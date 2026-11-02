@@ -4,7 +4,16 @@
  * server reaches, the last thing that went wrong, and a server's menu.
  */
 
-import { Menu, RelativeTime, StatusDot, TableTwoLineCell, Tag, Text, Tooltip } from "@crewlethq/ui";
+import {
+  Menu,
+  RelativeTime,
+  Select,
+  StatusDot,
+  TableTwoLineCell,
+  Tag,
+  Text,
+  Tooltip,
+} from "@crewlethq/ui";
 import { VENDORS, VendorMark, type Vendor } from "@crewlethq/icons";
 import {
   EllipsisGlyph,
@@ -16,21 +25,35 @@ import type {
   McpMemberServerNode,
   McpMemberServerStatus,
   McpServerNode,
+  McpToolLevel,
   McpToolView,
 } from "~/contract/mcp.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "./data.ts";
-import { failureWords, RISK, STATE } from "./words.ts";
+import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
 
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
  * wizard (`step` names where an edit opens); `test` the Test dialog; `value`
- * the dialog that stores one header or variable (`key`).
+ * the dialog that stores one header or variable (`key`); `approve` the calls
+ * a server's tools hold for a person's answer; `drift` the review of the tools
+ * a server changed.
  */
-export type Flow = "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart";
+export type Flow =
+  "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart" | "approve" | "drift";
 
-const FLOWS: readonly Flow[] = ["add", "edit", "test", "value", "disable", "remove", "restart"];
+const FLOWS: readonly Flow[] = [
+  "add",
+  "edit",
+  "test",
+  "value",
+  "disable",
+  "remove",
+  "restart",
+  "approve",
+  "drift",
+];
 
 /** The open flow and its arguments, and the ways to open and close one. */
 export function useFlow() {
@@ -341,6 +364,87 @@ export function ServerMenu({
           onSelect: () => onFlow("remove", server.name),
         },
       ]}
+    />
+  );
+}
+
+/**
+ * A tool's level picker: Always allow, Needs approval or Blocked, and where
+ * the tool has a level of its own, the way back to the server's default.
+ */
+export function LevelSelect({
+  value,
+  onChange,
+  label,
+  disabled,
+  baseline,
+  onDefault,
+  held = false,
+}: {
+  value: McpToolLevel;
+  onChange: (level: McpToolLevel) => void;
+  label: string;
+  disabled?: boolean;
+  /** A change holds the tool at Needs approval until it is reviewed, whatever its level. */
+  held?: boolean;
+  /** The server's default (null: by each tool's hints), offered where the tool has a level of its own. */
+  baseline?: McpToolLevel | null;
+  onDefault?: () => void;
+}) {
+  return (
+    <Select
+      ariaLabel={label}
+      size="sm"
+      width="auto"
+      value={value}
+      disabled={disabled}
+      options={[
+        ...LEVELS.map((l) => ({
+          value: l,
+          label: LEVEL[l].label,
+          ...(held && l === "allow" ? { description: "Once its change is reviewed" } : {}),
+        })),
+        ...(baseline !== undefined && onDefault
+          ? [
+              {
+                value: "default",
+                label: `Server default (${baseline ? LEVEL[baseline].label : BASELINE.hints.label.toLowerCase()})`,
+              },
+            ]
+          : []),
+      ]}
+      onChange={(v) => (v === "default" ? onDefault?.() : onChange(v as McpToolLevel))}
+    />
+  );
+}
+
+/**
+ * A server's default level: one of the three, or none, which starts each
+ * tool the entry does not name at the level its hints give it.
+ */
+export function BaselineSelect({
+  value,
+  onChange,
+  label,
+  disabled,
+}: {
+  value: McpToolLevel | null;
+  onChange: (level: McpToolLevel | null) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Select
+      ariaLabel={label}
+      size="sm"
+      width="auto"
+      value={value ?? "hints"}
+      disabled={disabled}
+      options={[
+        { value: "hints", label: BASELINE.hints.label, description: BASELINE.hints.detail },
+        ...LEVELS.map((l) => ({ value: l, label: LEVEL[l].label })),
+      ]}
+      onChange={(v) => onChange(v === "hints" ? null : (v as McpToolLevel))}
     />
   );
 }

@@ -452,3 +452,105 @@
   align-items: baseline;
   gap: var(--spacing-1) var(--spacing-3);
 }
+
+/* ---- access, levels and agents ------------------------------------------------------ */
+
+/* Save and Discard under a form, once it differs from what is saved. */
+.mcp-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The default level's select takes the per-tool select's track, so one
+   control with one value is one width down the step. */
+.mcp-baseline,
+.mcp-approvals {
+  --mcp-level-select: 11rem;
+}
+
+.mcp-baseline {
+  display: grid;
+  grid-template-columns: var(--mcp-level-select) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* The chosen change, on the inset of the rail's card it sits in: the kit
+   draws a list there flush, for a grid. */
+.mcp-drift {
+  padding: var(--spacing-4);
+}
+
+/* A tool's name and what changed of it, the name clamped and the mark whole. */
+.mcp-tool-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.mcp-tool-name > :last-child:not(:first-child) {
+  flex: none;
+}
+
+/* A tool's level and its Custom mark, side by side in the Level cell. */
+.mcp-level-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* The wizard's tool approvals: the tool, its risk and its level, a row each,
+   in the 13px every tool name takes. */
+.mcp-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-compact);
+}
+
+.mcp-approvals > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto var(--mcp-level-select);
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/*
+ * A head that is a mark stands on the head's line, not on its baseline: the
+ * grid's head holds its words in a block, and an inline mark set on that
+ * block's baseline grew the line and stood 2px above the words and the sort
+ * glyph beside it. Topped, the 16px mark sits inside the 16.5px line.
+ */
+.mcp-col-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  vertical-align: top;
+}
+
+/* A figure's unit, drawn only where the grid has stacked into card rows (a
+   phone, or a width that cannot hold its columns), where no column head says
+   what "34" is. Keyed to the grid's own decision rather than to the window,
+   so the unit and the missing head always go together. */
+.mcp-phone-unit {
+  display: none;
+}
+
+.crewlet-data-grid[data-stacked] .mcp-phone-unit {
+  display: inline;
+  color: var(--color-text-tertiary);
+  white-space: pre;
+}
+
+@media (width < 640px) {
+  .mcp-approvals > li,
+  .mcp-baseline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

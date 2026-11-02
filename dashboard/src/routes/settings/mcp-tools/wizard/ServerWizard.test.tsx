@@ -6,12 +6,13 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import type { McpCatalogueEntry, McpCheckAnswer } from "~/contract/mcp.ts";
+import type { McpCatalogueEntry, McpCheckAnswer, McpCheckedTool } from "~/contract/mcp.ts";
 import { Router } from "~/app/router.tsx";
+import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { createEntity, dryRunCreate, dryRunEntity, putEntity } from "~/protocol/configWrite.ts";
 import { readCatalogue, storeValue, testDraft } from "../api.ts";
-import { mcpData } from "../fixtures.ts";
+import { MCP_ORG, mcpData } from "../fixtures.ts";
 import { ServerWizard, type Saved } from "./ServerWizard.tsx";
 
 const LINEAR: McpCatalogueEntry = {
@@ -142,8 +143,11 @@ function mount(
   saved: Saved | null = null,
   start: Parameters<typeof ServerWizard>[0]["start"] = null,
 ) {
+  // THE CHART the grant picker lists, as the store holds it.
+  const store = new Store();
+  store.applyOrg(MCP_ORG as never);
   render(
-    <TestClient>
+    <TestClient store={store}>
       <ToastProvider>
         <LayerHost>
           <Router>
@@ -186,6 +190,8 @@ async function walkSentry() {
   fireEvent.change(screen.getByLabelText("Value for Authorization"), {
     target: { value: "  Bearer sntrys_not_real " },
   });
+  await press("Continue"); // Who gets it
+  await press("Continue"); // Tool approvals, which lists the tools
   await press("Continue"); // Test
   await press("Continue"); // Review
 }
@@ -389,4 +395,94 @@ test("an edit of a server signed in to with OAuth keeps its sign-in as it is", a
     expect.anything(),
   );
   expect(storeValue).not.toHaveBeenCalled();
+});
+
+/** A tool a test listed, at the level the engine starts it at. */
+const listedTool = (raw: string, over: Partial<McpCheckedTool> = {}): McpCheckedTool => ({
+  name: raw,
+  raw,
+  title: "",
+  description: "",
+  annotations: {
+    read_only: "unknown",
+    destructive: "unknown",
+    idempotent: "unknown",
+    open_world: "unknown",
+  },
+  risk: "destructive",
+  risk_declared: false,
+  external: true,
+  starting_level: "approve",
+  refused: "",
+  ...over,
+});
+
+// WHO GETS IT AND EACH TOOL'S LEVEL are written on the entry: the approvals
+// step is handed every tool the draft's test listed (the test sent without
+// the draft's levels), each at the engine's starting level, and only a level
+// changed from it is written. Mutation: send the levels with the test, or
+// write every tool's starting level, and this is red.
+test("a server is added with the agents chosen for it and the levels set on its tools", async () => {
+  vi.mocked(testDraft).mockResolvedValue({
+    kind: "ok",
+    status: 200,
+    value: {
+      ...PASSED,
+      tools: [
+        listedTool("find_issue", {
+          risk: "read_only",
+          risk_declared: true,
+          starting_level: "allow",
+        }),
+        listedTool("drop_issue"),
+      ],
+    },
+  });
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in
+  fireEvent.change(screen.getByLabelText("Value for Authorization"), {
+    target: { value: "Bearer sntrys_not_real" },
+  });
+  await press("Continue"); // Who gets it
+  fireEvent.click(screen.getByRole("radio", { name: /Chosen teams and agents/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Product Manager" }));
+  await press("Continue"); // Tool approvals: the test lists the tools
+  expect(testDraft).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(testDraft).mock.calls[0]![0]).not.toHaveProperty("tools");
+  expect(screen.getByRole("combobox", { name: "Level for find_issue" }).textContent).toContain(
+    "Always allow",
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for drop_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Blocked" }));
+  await settle();
+  // A level set back to where the engine starts the tool is no level of its own.
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for find_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Needs approval" }));
+  await settle();
+  fireEvent.click(screen.getByRole("combobox", { name: "Level for find_issue" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Always allow" }));
+  await settle();
+  await press("Continue"); // Test
+  // A test asked again, with a level set, is still sent without the levels.
+  await press("Test again");
+  expect(testDraft).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(testDraft).mock.calls[1]![0]).not.toHaveProperty("tools");
+  await press("Continue"); // Review
+  expect(screen.getByText("1 agent")).toBeDefined();
+  expect(screen.getByText("1 always allow and 1 blocked")).toBeDefined();
+  await press("Add server");
+  expect(createEntity).toHaveBeenCalledWith(
+    "mcp-servers",
+    "sentry",
+    expect.objectContaining({
+      access: { seats: ["pm"] },
+      tools: { levels: { drop_issue: "blocked" } },
+    }),
+    "Added the MCP server sentry",
+    expect.anything(),
+  );
 });

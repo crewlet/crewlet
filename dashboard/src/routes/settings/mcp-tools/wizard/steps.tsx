@@ -1,12 +1,14 @@
 /**
  * The wizard's steps after the source, each a plain form over the draft: its
- * name, how it connects, how it signs in, the test and the review. Every
+ * name, how it connects, how it signs in, who gets it, its tools' levels, the
+ * test and the review. Every
  * problem drawn on a field is the engine's (`problemAt`), or a field the
  * step needs before it can go on (`missing`).
  */
 
 import type { ReactNode } from "react";
 import {
+  Button,
   Callout,
   ChoiceCards,
   DescriptionList,
@@ -15,19 +17,32 @@ import {
   Input,
   KeyValueRows,
   Select,
+  TableTwoLineCell,
   Text,
   Textarea,
 } from "@crewlethq/ui";
 import { VENDORS, VendorMark, type Vendor } from "@crewlethq/icons";
-import { CircleDashedGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import {
+  BuildingComplexGlyph,
+  CircleDashedGlyph,
+  InfoGlyph,
+  KeyGlyph,
+  UserGlyph,
+} from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import type { McpAuthMethod, McpCheckAnswer } from "~/contract/mcp.ts";
+import type {
+  McpAuthMethod,
+  McpCheckAnswer,
+  McpCheckedTool,
+  McpToolLevel,
+} from "~/contract/mcp.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { Testing, TestResult } from "../flows/TestDialog.tsx";
-import { ServerMark } from "../parts.tsx";
-import { SIGN_IN } from "../words.ts";
+import { GrantPicker } from "../GrantPicker.tsx";
+import { BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
+import { BASELINE, LEVEL, SIGN_IN } from "../words.ts";
 import {
   argsOf,
   fixedValues,
@@ -280,14 +295,17 @@ export function ConnectionStep({
                 {
                   value: "host",
                   label: "The engine host",
-                  description: "One process the engine supervises, on each node that runs it.",
+                  description:
+                    "One process the engine supervises, on each node that runs it. Every call goes through the tools' levels.",
                 },
                 {
                   value: "box",
                   label: "Each agent's coding box",
-                  description: "Started inside the box beside the code, which calls it directly.",
+                  description:
+                    "Started inside the box beside the code, which calls it directly, so a level cannot hold its calls.",
                   disabled: true,
-                  disabledReason: "Set for each agent in its sandbox settings.",
+                  disabledReason:
+                    "Set for each agent in its sandbox settings, for a server whose every tool is at Always allow.",
                 },
               ]}
             />
@@ -559,6 +577,149 @@ export function TestStep({
   );
 }
 
+// ---- who gets it ---------------------------------------------------------------
+
+export function AccessStep({ draft, set }: { draft: Draft; set: Set }) {
+  const entry = draft.catalogue;
+  if (draft.signIn === "integration") {
+    const title = entry?.title ?? "The integration";
+    return (
+      <Callout variant="info" title={`${title} decides which agents get it`}>
+        Each agent turned on at the {title} integration, with the access it has there, gets its own
+        instance of this server.{" "}
+        {entry?.integration ? (
+          <>
+            Change who has it on the{" "}
+            <a
+              className="t-link prose-link"
+              href={href(["company", "integrations", entry.integration], { open: "agents" })}
+            >
+              integration's Agents tab
+            </a>
+            .
+          </>
+        ) : (
+          "Change who has it on the integration's Agents tab."
+        )}
+      </Callout>
+    );
+  }
+  return (
+    <>
+      <section className="mcp-field-group" aria-labelledby="mcp-scope-label">
+        <Text as="p" variant="label" id="mcp-scope-label">
+          Connection
+        </Text>
+        <ChoiceCards
+          label="Connection"
+          minCardWidth="sm"
+          density="compact"
+          value={draft.shared ? "company" : "per_agent"}
+          onChange={(v) => set({ shared: v === "company" })}
+          options={[
+            {
+              value: "company",
+              label: "Company-shared",
+              media: <BuildingComplexGlyph size="lg" />,
+              description: "One connection, signed in once",
+            },
+            {
+              value: "per_agent",
+              label: "Per agent",
+              media: <UserGlyph size="lg" />,
+              description: "Each agent its own instance",
+              ...(draft.signIn === "oauth"
+                ? { disabled: true, disabledReason: "An OAuth sign-in is the company's." }
+                : {}),
+            },
+          ]}
+        />
+      </section>
+      <section className="mcp-field-group" aria-labelledby="mcp-agents-label">
+        <Text as="p" variant="label" id="mcp-agents-label">
+          Agents
+        </Text>
+        <GrantPicker
+          label="Who gets it"
+          value={draft.access}
+          onChange={(access) => set({ access })}
+        />
+      </section>
+    </>
+  );
+}
+
+// ---- tool approvals ------------------------------------------------------------
+
+/**
+ * Each tool's level before the server is saved: the tools the draft's test
+ * listed, each at the level the engine starts it at (`starting_level`) or the
+ * draft's default, and the draft's own choices over them. Only a level the
+ * person changed is written; every other tool is left to the default.
+ */
+export function ApprovalsStep({
+  draft,
+  set,
+  listing,
+  onList,
+}: {
+  draft: Draft;
+  set: Set;
+  /** The draft's test is running to list the tools. */
+  listing: boolean;
+  onList: () => void;
+}) {
+  const startOf = (t: McpCheckedTool): McpToolLevel => draft.baseline ?? t.starting_level;
+  const levelOf = (t: McpCheckedTool): McpToolLevel => draft.levels[t.raw] ?? startOf(t);
+  return (
+    <>
+      <div className="mcp-baseline">
+        <BaselineSelect
+          label="Default level"
+          value={draft.baseline}
+          onChange={(baseline) => set({ baseline })}
+        />
+        <Text as="p" variant="caption" tone="secondary">
+          For tools without a level of their own, and tools added later.
+        </Text>
+      </div>
+      {draft.listed.length === 0 ? (
+        listing ? (
+          <Testing />
+        ) : (
+          <div>
+            <Button variant="secondary" onClick={onList}>
+              List its tools
+            </Button>
+          </div>
+        )
+      ) : (
+        <ul className="mcp-approvals">
+          {draft.listed.map((t) => (
+            <li key={t.raw}>
+              <TableTwoLineCell
+                value={<span className="mono">{t.name}</span>}
+                detail={t.description || t.title || undefined}
+              />
+              <RiskChips tool={t} compact />
+              <LevelSelect
+                label={`Level for ${t.name}`}
+                value={levelOf(t)}
+                onChange={(l) => {
+                  const levels = { ...draft.levels };
+                  if (l === startOf(t)) delete levels[t.raw];
+                  else levels[t.raw] = l;
+                  set({ levels });
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 // ---- review ------------------------------------------------------------------------
 
 /** Where the review's check of the draft stands. */
@@ -590,6 +751,33 @@ export function ReviewStep({
   const fixed = editing ? [] : Object.entries(fixedValues(draft.catalogue));
   const where =
     draft.transport === "http" ? draft.url : [draft.command, ...argsOf(draft.args)].join(" ");
+  const { units, seats, except } = draft.access;
+  const who =
+    draft.signIn === "integration"
+      ? `The agents turned on at ${draft.catalogue?.title ?? "the integration"}`
+      : draft.access.every
+        ? "Every agent, and any that joins"
+        : units.length + seats.length === 0
+          ? "No agent yet"
+          : `${listed([
+              ...(units.length ? [plural(units.length, "team")] : []),
+              ...(seats.length ? [plural(seats.length, "agent")] : []),
+            ])}${except.length ? `, ${except.length} left out` : ""}`;
+  const levelOf = (t: McpCheckedTool): McpToolLevel =>
+    draft.levels[t.raw] ?? draft.baseline ?? t.starting_level;
+  const counts: Record<McpToolLevel, number> = { allow: 0, approve: 0, blocked: 0 };
+  for (const t of draft.listed) counts[levelOf(t)] += 1;
+  const tools =
+    draft.listed.length > 0
+      ? listed([
+          ...(counts.allow ? [`${counts.allow} ${LEVEL.allow.label.toLowerCase()}`] : []),
+          ...(counts.approve ? [`${counts.approve} ${LEVEL.approve.label.toLowerCase()}`] : []),
+          ...(counts.blocked ? [`${counts.blocked} blocked`] : []),
+        ])
+      : draft.baseline
+        ? `Listed once it runs, each at ${LEVEL[draft.baseline].label}`
+        : `Listed once it runs: ${BASELINE.hints.detail.toLowerCase()}`;
+  const unasked = draft.listed.filter((t) => t.risk === "destructive" && levelOf(t) === "allow");
   const signIn =
     draft.signIn === "integration"
       ? `${draft.catalogue?.title ?? "The integration"}, as each agent`
@@ -634,6 +822,8 @@ export function ReviewStep({
                 ? `One for each agent ${draft.catalogue?.title ?? "the integration"} is turned on for`
                 : "One for each agent it is given to",
           ],
+          ["Who gets it", who],
+          ["Tools", tools],
           ...(fixed.length > 0
             ? ([
                 [
@@ -657,6 +847,20 @@ export function ReviewStep({
       {check.kind === "blocked" ? (
         <Callout variant="danger" title="Nothing can be saved yet">
           {check.message}
+        </Callout>
+      ) : null}
+      {unasked.length > 0 ? (
+        <Callout
+          variant="warning"
+          title={
+            unasked.length === 1
+              ? "A destructive tool runs without asking"
+              : `${unasked.length} destructive tools run without asking`
+          }
+        >
+          {listed(unasked.map((t) => t.name))} {unasked.length === 1 ? "is" : "are"} at Always
+          allow. Check {unasked.length === 1 ? "its level" : "their levels"} on the approvals step
+          before you save.
         </Callout>
       ) : null}
       {partial ? (

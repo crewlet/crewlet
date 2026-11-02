@@ -1,6 +1,7 @@
 /**
  * Every flow a server's action opens, by the address (`?flow=`): test, store
- * a value, restart, disable or enable, and remove. One place mounts them, for
+ * a value, restart, disable or enable, remove, answer the calls its tools
+ * hold for approval, and review the tools it changed. One place mounts them, for
  * the list and the server page alike, so an alarm's fix and a menu item open
  * the same dialog. An administrator's alone: a member is offered none. The
  * add and edit wizard is a page of its own, which `McpTools` draws in the
@@ -8,12 +9,14 @@
  */
 
 import { useState } from "react";
-import { ConfirmModal, useToast } from "@crewlethq/ui";
+import { Button, ConfirmModal, Modal, Text, useToast } from "@crewlethq/ui";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { setEnabled, restartServer } from "../api.ts";
 import { useServerDetail, type McpData } from "../data.ts";
 import type { useFlow } from "../parts.tsx";
 import { writeRefusalWords } from "../words.ts";
+import { HeldCalls } from "../server/OverviewTab.tsx";
+import { DriftDialog } from "./DriftDialog.tsx";
 import { RemoveDialog } from "./RemoveDialog.tsx";
 import { TestDialog } from "./TestDialog.tsx";
 import { ValueDialog } from "./ValueDialog.tsx";
@@ -78,9 +81,49 @@ export function Flows({
           }}
         />
       );
+    case "approve":
+      return <WaitingCalls server={server} data={data} onClose={flow.close} />;
+    case "drift":
+      return <DriftDialog server={server} onClose={flow.close} onDone={done} />;
     default:
       return null;
   }
+}
+
+/**
+ * The calls a server's tools hold for a person's answer, where an alarm's fix
+ * opens them: each answerable in place, as on the server's Overview.
+ */
+function WaitingCalls({
+  server,
+  data,
+  onClose,
+}: {
+  server: McpMemberServerStatus;
+  data: McpData;
+  onClose: () => void;
+}) {
+  const detail = useServerDetail(server.name);
+  const waiting =
+    data.answer?.reading === "admin"
+      ? data.answer.approvals.filter((a) => a.server === server.name && a.status === "waiting")
+      : [];
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={waiting.length === 1 ? "A call is waiting" : "Calls waiting for approval"}
+      size="lg"
+      footer={<Button onClick={onClose}>Close</Button>}
+    >
+      <div className="mcp-stack">
+        {waiting.length === 0 ? (
+          <Text as="p">Nothing on {server.title} is waiting for an answer.</Text>
+        ) : null}
+        {detail.data ? <HeldCalls server={server} detail={detail.data} data={data} /> : null}
+      </div>
+    </Modal>
+  );
 }
 
 /**
