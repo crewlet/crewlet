@@ -119,16 +119,18 @@ func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 	}
 }
 
-// EVERY MERGE REFUSAL IS CLASSED BY WHAT CLEARS IT (M5.md §2.10, read against
-// mcp's definition of each class): conflict only for what clears on its own,
-// so the same call shortly after lands; a change closed, merged or a draft,
-// which waits on another call, invalid; an entry no queue holds, which never
-// becomes live again by itself, not_found. The table names EVERY value of
-// code.MergeRefusals(), so a refusal the domain adds fails here until
-// somebody decides its class, rather than falling into one unexamined; and
-// each is answered in that class.
+// EVERY MERGE REFUSAL IS CLASSED BY WHAT CLEARS IT, by internal/mcp's one rule
+// for every domain: the change or its repository in a state that refuses the
+// merge until somebody changes it (closed, merged, a draft, archived, a pull
+// mirror) conflict, as a race lost is, and never invalid or forbidden, which
+// would tell a caller who asked nothing wrong to send something else or that
+// they may not; a repository past the most it may keep quota_exceeded; an
+// entry no queue holds, which never becomes live again by itself, not_found.
+// The table names EVERY value of code.MergeRefusals(), so a refusal the
+// domain adds fails here until somebody decides its class, rather than
+// falling into one unexamined; and each is answered in that class.
 //
-// Mutation: class change_not_open as conflict again → red.
+// Mutation: class change_not_open as invalid again → red.
 func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 	t.Parallel()
 	want := map[code.MergeRefusal]tools.Refusal{
@@ -138,10 +140,16 @@ func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 		code.MergeRefusalHeadMoved:   tools.RefusalStaleVersion,
 		code.MergeRefusalTargetMoved: tools.RefusalStaleVersion,
 
+		code.MergeRefusalChangeNotOpen:    tools.RefusalConflict,
+		code.MergeRefusalChangeDraft:      tools.RefusalConflict,
+		code.MergeRefusalRepoArchived:     tools.RefusalConflict,
+		code.MergeRefusalRepoMirrored:     tools.RefusalConflict,
 		code.MergeRefusalTargetMoving:     tools.RefusalConflict,
 		code.MergeRefusalBusy:             tools.RefusalConflict,
 		code.MergeRefusalCompactionBehind: tools.RefusalConflict,
 		code.MergeRefusalQueueFull:        tools.RefusalConflict,
+
+		code.MergeRefusalRepoSize: tools.RefusalQuotaExceeded,
 
 		code.MergeRefusalRepoImporting: tools.RefusalUnavailable,
 		code.MergeRefusalExpunging:     tools.RefusalUnavailable,
@@ -151,9 +159,6 @@ func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 
 		code.MergeRefusalNotPerson:    tools.RefusalForbidden,
 		code.MergeRefusalNotPermitted: tools.RefusalForbidden,
-		code.MergeRefusalRepoArchived: tools.RefusalForbidden,
-		code.MergeRefusalRepoMirrored: tools.RefusalForbidden,
-		code.MergeRefusalRepoSize:     tools.RefusalForbidden,
 
 		code.MergeRefusalRepoDeleted:    tools.RefusalNotFound,
 		code.MergeRefusalChangeNotFound: tools.RefusalNotFound,
@@ -161,8 +166,6 @@ func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 
 		code.MergeRefusalAlreadyQueued: tools.RefusalExists,
 
-		code.MergeRefusalChangeNotOpen: tools.RefusalInvalid,
-		code.MergeRefusalChangeDraft:   tools.RefusalInvalid,
 		code.MergeRefusalQueueTarget:   tools.RefusalInvalid,
 		code.MergeRefusalNoQueue:       tools.RefusalInvalid,
 		code.MergeRefusalSourceRefused: tools.RefusalInvalid,
