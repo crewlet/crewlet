@@ -160,8 +160,8 @@ func (k executorKeep) sessionStore() (*executordomain.SessionStore, error) {
 // oweExecutorEnd records how a turn that launched an executor ended: OWED on
 // the turn's run row ([sandbox.Coordinator.OweEnd]), which the run's ending
 // records on the executor log once every capture of the turn has settled and
-// before it deletes the row — so the seat's mail waits on it, and the next turn
-// on the conversation reads it. A turn whose row is gone — its launch abandoned
+// before it deletes the row — so the seat's mail waits on it, and the log holds
+// it beside the turn's session. A turn whose row is gone — its launch abandoned
 // under it — has nothing to owe it on, and its end is recorded now
 // ([sandbox.Coordinator.EndTurn]), best effort and said where the log does not
 // take it.
@@ -295,9 +295,9 @@ func replySurface(reply turn.Reply) string {
 const replyA2A = "a2a"
 
 // stoppedEnding is how a turn a person stopped ended: stopped, by whom and why
-// — the reason in their own words, which the next turn is told fenced as theirs
-// (the ending's field is declared somebody else's) — beside whatever the turn's
-// loop had decided and delivered by then.
+// — the reason in their own words, which every reader of the ending reads
+// fenced as theirs (the ending's field is declared somebody else's) — beside
+// whatever the turn's loop had decided and delivered by then.
 func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colleagueAnswer) executordomain.Ending {
 	ending := endingOf(res, reply, answered)
 	ending.Outcome, ending.Failure = executordomain.OutcomeStopped, ""

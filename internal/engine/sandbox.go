@@ -1521,9 +1521,9 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // how it ended — its decision and breach (never the reviewer's last word, which
 // reads `done` after the loop overrode it), whether its reply reached the party
 // waiting and on what, what the reviewer said landed, what stopped a blocked
-// round, and answered, the engine's own answer to a colleague's ask — which the
-// next turn on the conversation is told beside the session it continues
-// ([endingOf]).
+// round, and answered, the engine's own answer to a colleague's ask — kept on
+// the turn's row of the executor log beside its session ([endingOf]); a later
+// turn on the conversation is not told it yet, and starts a session of its own.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
