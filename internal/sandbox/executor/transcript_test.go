@@ -668,13 +668,15 @@ func TestATranscriptIsReadAPageAtATimeWithNothingLostBetweenPages(t *testing.T) 
 // entry's bound, a token straddling the bound, reads cut to the bound and
 // marked, its whole size stated — and with no part of the token in it: cut
 // first, the token's opening would no longer be a token the redaction knows.
-// And however long the text after it, a private key whose block begins inside
-// the bound and runs past it is read whole, and redacted as one: what is
-// redacted is all that can reach the bound and a key block's length past it.
+// And a private key whose body begins inside the bound and whose END is many
+// KiB past it — a line of prose straight after its BEGIN, so the body inside
+// the bound is reached only by reading back from the END — is read whole and
+// redacted as one: what is redacted reaches a key block's length past the
+// bound.
 //
-// Mutation: cut the text before redacting it, or redact only the bound's own
-// bytes of a long text, and the opening of the token or the key's armour is
-// handed out.
+// Mutation: cut the text before redacting it, redact only the bound's own
+// bytes of a long text, or read a window short of a key block past the bound,
+// and the opening of the token or the key's body is handed out.
 func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 	t.Parallel()
 	small := within(func(b *executor.TranscriptBounds) { b.EntryBytes = 64 })
@@ -700,22 +702,22 @@ func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 		t.Errorf("the cut result is %q, want the output up to the token's redaction", result.Text)
 	}
 
-	// THE KEY'S ARMOUR STRADDLES THE BOUND, and the text runs a key block's
-	// length past what a read redacts beyond it.
-	body := strings.Repeat("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n", 20)
-	key := strings.Repeat("x", 49) + "\n-----BEGIN RSA PRIVATE KEY-----\n" + body +
-		"-----END RSA PRIVATE KEY-----\n" + strings.Repeat("y", executor.RedactContext+(4<<10))
+	// THE KEY'S BODY BEGINS INSIDE THE BOUND, and its END — the one thing
+	// that reaches the body, past the prose that ends the BEGIN's own block
+	// — is two hundred lines past it, about 13 KiB: further than any window
+	// short of a key block reads.
+	body := strings.Repeat("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n", 200)
+	key := "-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + body + "-----END RSA PRIVATE KEY-----\ndone\n"
 	got = readOpenCode(t, openCodeCaptureOf(t, tool(key)), small)
 	if len(got.Entries) != 2 {
 		t.Fatalf("the transcript has %d entries, want the call and its result", len(got.Entries))
 	}
 	result = got.Entries[1]
-	if strings.Contains(result.Text, "-----BEGIN") || strings.Contains(result.Text, "MIIEow") ||
-		!result.Cut || result.Bytes != len(key) {
-		t.Errorf("the key's result reads %q (cut %v, %d bytes), want it cut with the key redacted",
-			result.Text, result.Cut, result.Bytes)
+	if strings.Contains(result.Text, "MIIEow") || !result.Cut || result.Bytes != len(key) {
+		t.Errorf("the key's result reads %q (cut %v, %d bytes), want it cut with the key's body "+
+			"redacted", result.Text, result.Cut, result.Bytes)
 	}
-	if !strings.HasPrefix(result.Text, strings.Repeat("x", 49)+"\n"+redact.Marker) {
+	if !strings.Contains(result.Text, redact.Marker) {
 		t.Errorf("the key's result is %q, want the output up to the key's redaction", result.Text)
 	}
 }

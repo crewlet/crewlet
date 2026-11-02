@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -79,13 +80,14 @@ import (
 // it ends where it does ([TranscriptCut]); the next page is read again from the
 // archive's start, so the work one read costs is bounded by the archive rather
 // than by how deep a reader pages. Every entry's text is passed through
-// [redact.Secrets] BEFORE it is cut, whatever the capture did: all of it that
-// can reach the entry's bound, and [redactContext] past it — a credential that
-// begins inside the bound is read whole, since a key cut in half by a bound is
-// a key the redaction no longer recognises — and none of the rest of a long
-// text, which would be scanned only to be dropped. And a read stops when its
-// caller's context is done, checked a line or a message at a time, and between
-// the notes and the values one line holds.
+// [redact.Secrets] BEFORE it is cut, whatever the capture did, and what an
+// entry hands out is an OPENING OF WHAT ITS WHOLE TEXT REDACTS TO
+// ([redactedWithin]): a credential that begins inside the bound is read whole,
+// since a key cut in half by a bound is a key the redaction no longer
+// recognises, nothing the read could not settle is handed out, and none of the
+// rest of a long text is scanned, which would be scanned only to be dropped.
+// And a read stops when its caller's context is done, checked a line or a
+// message at a time, and between the notes and the values one line holds.
 //
 // HOW MANY READS RUN AT ONCE is bounded too, for the whole process: at most
 // [TranscriptReadsAtOnce], whichever socket or REST caller asks. A read takes
@@ -648,23 +650,60 @@ func (b *transcriptBuilder) shape(e TranscriptEntry, raw string) TranscriptEntry
 }
 
 // redactedWithin is text redacted and then cut to at most bound bytes, marked
-// where it was cut, and whether it was.
+// where it was cut, and whether it was: an OPENING OF WHAT THE WHOLE TEXT
+// REDACTS TO, the bytes it hands out ones the whole text's redaction would.
 //
-// WHAT IS REDACTED IS WHAT CAN REACH THE CUT, and [redactContext] past it: a
-// credential that begins inside the kept bytes ends within that much of them —
-// a private key's block is the longest shape the redaction knows — so it is
-// read whole and redacted as one, where a key cut in half by the bound would be
-// one the redaction no longer recognises. The rest of a long text is never
+// WHAT IS REDACTED IS WHAT CAN REACH THE CUT, and [redactContext] past it —
+// the head: a credential that begins inside the bound ends within that much
+// of it, a private key's block being the longest shape the redaction knows,
+// so it is read whole and redacted as one, where a key cut in half by the
+// bound would be one the redaction no longer recognises. And the head is
+// redacted INSIDE A WINDOW [redactContext] LONGER STILL, which settles it: a
+// credential that begins in the head ends in the window, so the window's
+// redaction of the head is the whole text's. The rest of a long text is never
 // scanned: a line of a record may run to [maxLineBytes], and redacting all of
 // it to hand out its first [TranscriptEntryMaxBytes] was the whole cost of a
 // read many times over.
+//
+// ONLY WHAT THE HEAD REDACTS TO IS HANDED OUT, never the window's own end,
+// which the window cut where it ended — a credential begun there is one the
+// redaction did not see whole. Cut by the output's bytes alone, the end came
+// through whenever the redaction shrank what was before it: a head of private
+// keys, each block a marker of twenty-two bytes, left a window of eighty KiB
+// redacted to less than the bound, and the GitHub token the window had cut
+// was handed out as its first twenty characters. So what is handed out is as
+// much of the window's redaction as the head's own redaction agrees with: all
+// of it up to the head's end where nothing runs across that end, and up to
+// where a credential does — which the head alone cuts, and the window reads
+// whole — where something does. Such a credential is not handed out at all;
+// the entry is cut where it begins.
 func redactedWithin(text string, bound int) (string, bool) {
-	window := textcut.Bytes(text, bound+redactContext)
+	head := textcut.Bytes(text, bound+redactContext)
+	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
+	// start, at most utf8.UTFMax-1 bytes, and the window is never shorter
+	// than the head and the longest credential after it.
+	window := textcut.Bytes(text, len(head)+redactContext+utf8.UTFMax-1)
 	out := redact.Secrets(window)
-	if len(window) == len(text) && len(out) <= bound {
-		return out, false
+	if len(window) == len(text) {
+		// THE WHOLE TEXT WAS READ, and its redaction is the whole text's.
+		if len(out) <= bound {
+			return out, false
+		}
+		return textcut.Within(out, bound), true
 	}
-	return textcut.Within(out, bound), true
+	settled := textcut.Bytes(out, sharedPrefix(out, redact.Secrets(head)))
+	return textcut.Opening(settled, bound), true
+}
+
+// sharedPrefix is how many bytes a and b open with alike.
+func sharedPrefix(a, b string) int {
+	n := min(len(a), len(b))
+	for i := range n {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
 }
 
 // prose adds one entry of words — a brief, the model's, a summary — unless it

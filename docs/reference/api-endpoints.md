@@ -9337,11 +9337,16 @@ its run packs.
 
 **Redacted at this read, whatever the capture did.** Every entry's text is
 passed through the engine's one redaction pass (`redact.Secrets`) **before it is
-cut**: everything that can reach the entry's bound, and the longest a
-credential the redaction knows can run past it (a private key's block), so a
-credential that begins inside the bound is recognised whole — a key cut in half
-by a bound is one the redaction no longer recognises — while the rest of a long
-text is not scanned only to be dropped.
+cut**, and is always **an opening of what its whole text redacts to**.
+Everything that can reach the entry's bound, and the longest a credential the
+redaction knows can run past it (a private key's block), is redacted inside as
+much again, so a credential that begins inside the bound is recognised whole —
+a key cut in half by a bound is one the redaction no longer recognises — and
+nothing the read could not settle is handed out, however much the redaction
+shrinks what comes before it (a key's block becomes one short marker): a
+credential that runs across the end of what can reach the bound is not handed
+out at all, and the entry is cut where it begins. The rest of a long text is not
+scanned only to be dropped.
 
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most

@@ -1,9 +1,12 @@
 package executor
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // A LINE OF MANY NOTE OPENINGS COSTS WHAT ITS BYTES COST, however long the
@@ -102,4 +105,81 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 		}
 	}
 	return false, shortCost, longCost
+}
+
+// keyLine is one line of a private key's body at PEM's width, as a harness's
+// record quotes a key a run read.
+const keyLine = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"
+
+// logLines is lines of a build's log from text's end until it is n bytes long.
+func logLines(text string, n int) string {
+	var b strings.Builder
+	b.WriteString(text)
+	for b.Len() < n {
+		b.WriteString("a line of the build's log\n")
+	}
+	return b.String()
+}
+
+// AN ENTRY'S TEXT IS AN OPENING OF WHAT ITS WHOLE TEXT REDACTS TO, whatever the
+// text holds and wherever the bound falls in it: never a byte the whole text's
+// redaction would not hand out, and cut, marked, within the bound.
+//
+//   - Key blocks ahead of a token the window cuts. Twenty-one private keys,
+//     each a marker once redacted, and a GitHub token straddling where a window
+//     of the bound and a key block past it ends: the window redacted to less
+//     than the bound, and the token it had cut came through as its first
+//     twenty characters, which no rule matches.
+//   - A token across the bound, at every offset: begun inside the bound, it is
+//     read whole and redacted as one, never cut first.
+//   - A key whose body is read back from its END, which is many KiB past the
+//     bound: a line of prose straight after its BEGIN ends what a read forward
+//     from the armour takes, so only the END reaches the body inside the bound.
+//
+// Mutation: cut what the window redacts by its bytes alone, and the token's
+// opening is handed out; cut the text before redacting it, and the token
+// across the bound is; read a window short of a key block past the bound, and
+// the body the END reads back is.
+func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
+	t.Parallel()
+	key := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", 50) +
+		"-----END RSA PRIVATE KEY-----\n"
+	token := "ghp_" + strings.Repeat("Qx7Rb2", 6)
+	type entry struct {
+		text  string
+		bound int
+	}
+	cases := map[string]entry{}
+
+	keys := strings.Repeat(key, 21)
+	at := TranscriptEntryMaxBytes + redactContext - 20
+	before := logLines(keys, at-len("a line of the build's log\n"))
+	before += strings.Repeat(" ", at-len(before))
+	cases["key blocks ahead of a token the window cuts"] = entry{
+		logLines(before+token+"\n", 160<<10), TranscriptEntryMaxBytes}
+
+	for offset := 64 - len(token) + 1; offset < 64; offset += 3 {
+		cases[fmt.Sprintf("a token across the bound at %d", offset)] = entry{
+			logLines(strings.Repeat("x", offset)+token+"\n", 200<<10), 64}
+	}
+
+	cases["a key whose body is read back from its END past the bound"] = entry{
+		logLines("-----BEGIN RSA PRIVATE KEY-----\nsee below\n"+strings.Repeat(keyLine+"\n", 200)+
+			"-----END RSA PRIVATE KEY-----\n", 200<<10), 1 << 10}
+
+	for name, c := range cases {
+		got, cut := redactedWithin(c.text, c.bound)
+		kept := strings.TrimSuffix(got, "…")
+		if whole := redact.Secrets(c.text); !strings.HasPrefix(whole, kept) {
+			t.Errorf("%s: the entry hands out %q, which the whole text does not redact to", name,
+				kept[max(0, len(kept)-80):])
+		}
+		if !cut || len(got) > c.bound || !strings.HasSuffix(got, "…") {
+			t.Errorf("%s: the entry is %d bytes, cut %v, ending %q; want it cut, marked, within %d",
+				name, len(got), cut, got[max(0, len(got)-8):], c.bound)
+		}
+		if strings.Contains(got, "ghp_") || strings.Contains(got, keyLine[:16]) {
+			t.Errorf("%s: the entry hands out a credential's material: …%q", name, got[max(0, len(got)-80):])
+		}
+	}
 }

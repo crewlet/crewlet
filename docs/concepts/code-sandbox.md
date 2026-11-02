@@ -1222,8 +1222,11 @@ read a page at a time and bounded — 200 entries and 1 MiB of text a page,
 of what a tar's members hand out, so an archive a box packed to inflate without
 end, or with a sparse member that declares more than it holds, stops there —
 and every entry's text is **redacted at this read before it is cut**, whatever
-the capture did: all of it that can reach the entry's bound and a private key's
-length past it, so a credential that begins inside the bound is redacted whole.
+the capture did, and is always an opening of what its whole text redacts to:
+all of it that can reach the entry's bound and a private key's length past it
+is redacted inside as much again, so a credential that begins inside the bound
+is redacted whole, and nothing the read could not settle is handed out however
+much the redaction shrinks what comes before it.
 An object the store no longer holds, one that does not open under the fleet's
 keyring, an archive that is not one its format describes and one this build
 does not read are each said as such, in the engine's own words, beside the
