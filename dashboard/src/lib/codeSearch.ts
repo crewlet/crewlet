@@ -111,7 +111,7 @@ export interface CoverageNotes {
   notes: string[];
 }
 
-/** A set of repositories, by name — the first hundred the engine lists, and how many more. */
+/** A set of repositories, by name — the first the engine lists, and how many more. */
 function named(set: RepoSet): string {
   const names = set.names ?? [];
   const more = set.count - names.length;

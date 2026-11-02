@@ -191,8 +191,9 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(answer.Hits) > 0:
 		// A HIT is a path, a line of at most code.MaxSearchLineBytes and a
-		// blob's id, fenced; and the coverage lists at most
-		// codesearch.MaxCoverageNames names a set — together far under one
+		// blob's id, fenced; and the coverage's names and reasons share
+		// codesearch.MaxCoverageText, a sixteenth of an answer, beside an
+		// entry per git node that did not answer — together far under one
 		// answer, so this is a bound broken, never a search.
 		return faulted(ctx, t.Name(), errors.New("builtin: one search hit beside its coverage is past one "+
 			"tool answer"), fmt.Sprintf("%s could not fit one line in one answer: %s.", t.Name(), faultSaid)), nil

@@ -1,7 +1,9 @@
 package codesearch
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Estate is the code host's rows and its keyed git walk as a search reads
@@ -138,14 +141,36 @@ type Coverage struct {
 	Truncated bool `json:"truncated"`
 }
 
-// MaxCoverageNames is the most repository names a [RepoSet] lists: its count
-// is whole. 100 names of at most 64 bytes is under 7 KiB, so all seven sets
-// together stay under an eighth of a seat's tool answer (64 KiB) beside the
-// hits.
-const MaxCoverageNames = 100
+// MaxCoverageText is the most bytes of WORDS a [Coverage] lists, as JSON
+// encodes them: every repository name of every set — NotAnswering's
+// included — and every node's reason, ONE BUDGET across them all. 4 KiB, a
+// sixteenth of a seat's tool answer (internal/agent/builtin's
+// ToolAnswerBytes, 64 KiB), since code_search sends the coverage beside every
+// page of its lines and the lines are the answer. Every count stays whole:
+// past the budget a set lists fewer of its names — the first, in order — and
+// a reason is cut. The reasons are listed first, in the order of their nodes
+// and in at most HALF the budget, so the names keep the other half whatever
+// the fleet; then the names, the sets of repositories left unsearched before
+// those searched another way.
+//
+// WHAT THE BUDGET DOES NOT HOLD is the coverage's shape — its fields' names
+// and counts, under 600 bytes — and one entry for each git node that did not
+// answer, its id (at most 64 bytes) and its count, under 140 bytes: every
+// such node is named, which is the point of the entry. A fleet of sixteen
+// silent git nodes so takes a coverage to under 7 KiB. Its own per-set cap of
+// 100 names was an eighth of an answer by its arithmetic and three quarters
+// of one by the names' real length, with NotAnswering's sets beside it
+// growing with the fleet.
+const MaxCoverageText = 4 << 10
 
-// RepoSet is a set of repositories: how many, and the first
-// [MaxCoverageNames] of their names in order.
+// MaxGapWhyBytes is the most of one node's reason a coverage keeps, as JSON
+// encodes it: two lines, what a node's sentence takes to say what to look
+// at — one carrying an error's own words is cut there — and eight such fill
+// the reasons' half of the budget.
+const MaxGapWhyBytes = 256
+
+// RepoSet is a set of repositories: how many, and the first of their names
+// in order, as many as the coverage's budget lists ([MaxCoverageText]).
 type RepoSet struct {
 	Count int      `json:"count"`
 	Names []string `json:"names"`
@@ -260,6 +285,7 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 		return Answer{}, err
 	}
 	out.Coverage.GrepNotNamed = setOf(grepLeft)
+	fitCoverage(&out.Coverage)
 	s.record(via, s.now().Sub(began), out.Coverage)
 	return out, nil
 }
@@ -488,7 +514,6 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head s
 	if repo.Search == code.SearchIndexed && ans.Via == code.SearchViaGrep {
 		out.Coverage.NotIndexed = setOf([]string{repo.Name})
 	}
-	sortCoverage(&out.Coverage)
 	return out, ans.Via, nil
 }
 
@@ -633,7 +658,6 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, he
 		}
 		out.Tips[h.Repo] = tips[h.Repo]
 	}
-	sortCoverage(&out.Coverage)
 	return out, nil
 }
 
@@ -699,9 +723,9 @@ func gap(c *Coverage, node, why, name string) {
 	c.NotAnswering = append(c.NotAnswering, g)
 }
 
-// add puts name in set, counted whole and listed up to MaxCoverageNames; the
-// names are sorted at the end ([sortCoverage]), so which are listed is the
-// first in order whatever order they were added in.
+// add puts name in set, counted whole; the names are sorted and cut to the
+// coverage's budget once it is whole ([fitCoverage]), so which are listed is
+// the first in order whatever order they were added in.
 func add(set *RepoSet, name string) {
 	set.Count++
 	set.Names = append(set.Names, name)
@@ -713,42 +737,82 @@ func setOf(names []string) RepoSet {
 	for _, n := range names {
 		add(&s, n)
 	}
-	s.cap()
 	return s
 }
 
-// cap sorts a set's names and keeps the first MaxCoverageNames.
-func (s *RepoSet) cap() {
-	slices.Sort(s.Names)
-	if len(s.Names) > MaxCoverageNames {
-		s.Names = s.Names[:MaxCoverageNames]
-	}
-	if s.Names == nil {
-		s.Names = []string{}
-	}
-}
-
-// sortCoverage puts every set and the nodes in order.
-func sortCoverage(c *Coverage) {
-	for _, s := range []*RepoSet{&c.NotIndexed, &c.Building, &c.NotPermitted, &c.GrepNotNamed, &c.Stale, &c.NoRef,
-		&c.PastLimit} {
-		s.cap()
-	}
-	for i := range c.NotAnswering {
-		c.NotAnswering[i].Repos.cap()
-	}
-	slices.SortFunc(c.NotAnswering, func(x, y NodeGap) int {
-		switch {
-		case x.Node < y.Node:
-			return -1
-		case x.Node > y.Node:
-			return 1
-		}
-		return 0
-	})
+// fitCoverage puts every set and the nodes in order and holds the coverage's
+// words to [MaxCoverageText]: each node's reason, in the order of the nodes,
+// cut to MaxGapWhyBytes and to what is left of the reasons' half of the
+// budget; then each set's first names while the budget lasts, the sets of
+// repositories left unsearched — NotAnswering's by node, then Building,
+// Stale, NotPermitted, NoRef and PastLimit — before NotIndexed and
+// GrepNotNamed, which were searched another way or left out by the search's
+// own terms. Every count stays whole.
+func fitCoverage(c *Coverage) {
+	slices.SortFunc(c.NotAnswering, func(x, y NodeGap) int { return cmp.Compare(x.Node, y.Node) })
 	if c.NotAnswering == nil {
 		c.NotAnswering = []NodeGap{}
 	}
+	budget := MaxCoverageText
+	reasons := MaxCoverageText / 2
+	for i := range c.NotAnswering {
+		g := &c.NotAnswering[i]
+		// THE EMPTY REASON IS THE SHAPE'S, not the budget's: its two quotes
+		// are counted with the node's entry.
+		g.Why = fitText(g.Why, min(MaxGapWhyBytes, reasons)+jsonLen(""))
+		spent := jsonLen(g.Why) - jsonLen("")
+		reasons, budget = reasons-spent, budget-spent
+	}
+	sets := make([]*RepoSet, 0, len(c.NotAnswering)+8)
+	for i := range c.NotAnswering {
+		sets = append(sets, &c.NotAnswering[i].Repos)
+	}
+	sets = append(sets, &c.Building, &c.Stale, &c.NotPermitted, &c.NoRef, &c.PastLimit, &c.NotIndexed,
+		&c.GrepNotNamed)
+	for _, s := range sets {
+		slices.Sort(s.Names)
+		kept := 0
+		for _, n := range s.Names {
+			// A name costs its quoted bytes and the comma before it.
+			cost := jsonLen(n) + 1
+			if cost > budget {
+				break
+			}
+			budget -= cost
+			kept++
+		}
+		s.Names = s.Names[:kept:kept]
+		if s.Names == nil {
+			s.Names = []string{}
+		}
+	}
+}
+
+// fitText is s in at most room bytes as JSON encodes it, cut on a rune and
+// marked where cut — or empty, quoted, where room holds no word of it.
+func fitText(s string, room int) string {
+	if jsonLen(s) <= room {
+		return s
+	}
+	for most := room - jsonLen(""); most > len("…"); {
+		cut := textcut.Within(s, most)
+		over := jsonLen(cut) - room
+		if over <= 0 {
+			return cut
+		}
+		most -= over
+	}
+	return ""
+}
+
+// jsonLen is how many bytes JSON encodes s in, its quotes included.
+func jsonLen(s string) int {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// A Go string always encodes: an invalid byte is written as U+FFFD.
+		return len(s) + len(`""`)
+	}
+	return len(b)
 }
 
 // round asks one round's assignment and answers the believed replies by

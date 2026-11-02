@@ -339,7 +339,10 @@ interface CodeSearchCoverage {
   truncated: boolean;
 }
 
-/** A set of repositories: how many, and the first hundred names in order. */
+/**
+ * A set of repositories: how many, and its first names in order — as many as
+ * the coverage's one budget of names lists, so possibly none.
+ */
 interface CodeSearchRepoSet {
   count: number;
   names: string[] | null;

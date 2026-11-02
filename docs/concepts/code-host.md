@@ -5199,7 +5199,12 @@ repository is a scan of the company, which the index is for, so a grep
 repository is searched only when a `repo:` filter names it, eight at most —
 and `not_indexed`, the indexed repositories among those searched that were
 read with git grep, no index answering for their tip yet. Each lists its
-first hundred names, in order, beside its whole count; `skipped_files` and
+first names, in order, beside its whole count: the names of every set and
+the reason of every node under `not_answering` share one budget of 4 KiB —
+the reasons at most half of it, each cut at 256 bytes, then the names, the
+repositories left unsearched first — so the coverage stays a small part of an
+answer however many repositories it names, and one entry naming each git
+node that did not answer is all that grows with the fleet; `skipped_files` and
 `truncated` add up those of every repository searched, and `truncated` is set
 too where the merge cut lines past the limit or past a repository that
 stopped early. A search asked after a line names only the repositories from
