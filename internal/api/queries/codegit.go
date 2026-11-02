@@ -566,6 +566,20 @@ func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 // Immutable only where both are whole ids and the merge was decided: a merge
 // its home could not decide in a read's time answers `unknown`, which a later
 // read may decide.
+//
+// A COMPARISON IN WHICH ONE COMMIT CONTAINS THE OTHER IS ITS OWN PREVIEW, and
+// asks the home nothing: base inside head is a fast-forward, head inside base
+// merges nothing, and the merge a preview runs (`git merge-tree`, the home's
+// mergeIn) answers both `clean`, no path conflicted — so the answer is that
+// merge's, decided here from the merge base the comparison already read.
+// Asked of the home it would cost a call to the home on every view and, until
+// the home's memo held the merge, a scratch, a `cat-file` and a merge-tree
+// under a unit of the node's seat git-work share, which the seats' own reads
+// draw from — for the commonest comparison there is: a branch against the
+// target it was cut from, which has not moved since. Nothing the
+// preview would judge or record is lost: the comparison was judged against
+// the same grant by the same node and, of a `visibility: unit` repository,
+// recorded as its asker's read.
 func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_compare")
 	if err != nil {
@@ -591,10 +605,13 @@ func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	if page.Compare == nil {
 		return nil, fmt.Errorf("queries: the code host answered %s's comparison with no comparison", g.name)
 	}
-	preview, err := g.reads.MergePreview(ctx, code.MergePreviewQuery{RepoID: repo.ID, Asker: g.asker,
-		Base: page.Compare.Base, Head: page.Compare.Head, Fresh: g.floor(repo, base, head)})
-	if err != nil {
-		return nil, codeRefusal(g.name, err)
+	preview := code.MergePreviewAnswer{State: code.MergeClean}
+	if !page.Compare.BaseIsAncestor && !page.Compare.HeadIsAncestor {
+		preview, err = g.reads.MergePreview(ctx, code.MergePreviewQuery{RepoID: repo.ID, Asker: g.asker,
+			Base: page.Compare.Base, Head: page.Compare.Head, Fresh: g.floor(repo, base, head)})
+		if err != nil {
+			return nil, codeRefusal(g.name, err)
+		}
 	}
 	out := CodeComparison{CodePage: page, Preview: CodeMergePreview{State: preview.State,
 		Conflicts: preview.Conflicts, ConflictsOmitted: preview.ConflictsOmitted}}

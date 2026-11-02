@@ -5923,7 +5923,12 @@ asks one beside its answer — the `preview` of `GET
 /code/repos/{name}/compare` ([A repository's
 content](../reference/api-endpoints.md#a-repositorys-content)) — and a
 comparison whose preview is `unknown` is answered without the tag that
-marks it immutable, since the same merge asked again may finish.
+marks it immutable, since the same merge asked again may finish. A
+comparison in which one commit contains the other — a branch against the
+target it was cut from, which has not moved since, or a head its base already
+holds — asks no preview at all: that merge is `clean`, conflicting in no
+path, which the comparison's own merge base already says, so the home spends
+no scratch, no git and no unit of its share on it.
 
 ### Merge readiness
 
