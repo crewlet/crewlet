@@ -29,8 +29,11 @@ have:
   token, changing a second factor, issuing a password or invitation link,
   ending sessions), anything that carries a credential or a secret in clear
   (revealing or writing a secret, entering an integration's credentials, a
-  frame's view ticket), its own approvals, and asking the knowledge base's own
-  model (it searches the pages itself instead). It adds a seat to the org
+  frame's view ticket), its own approvals, asking the knowledge base's own
+  model (it searches the pages itself instead), and reporting a check's result
+  onto a commit, which your CI does with its own token
+  ([External CI](code.md#external-ci)): a report is recorded as your CI's,
+  and Ask Crewlet runs no CI. It adds a seat to the org
   chart, but it does not create a person or invite one: the answer to either
   is a sign-in link, which stays with you, and the drawer says so
   ([ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-every-authority-row-says-what-the-assistant-may-do-with-it.md)).

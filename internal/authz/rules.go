@@ -1980,7 +1980,10 @@ const (
 //     a transcript and a stored proposal;
 //   - the assistant's own decisions, so it can never approve itself;
 //   - a gesture whose effect a grant would falsify or hide: a model spend
-//     outside the turn's own meter, and a render only an open page reports;
+//     outside the turn's own meter, a render only an open page reports, and
+//     a check result only the CI that ran the check reports (its row records
+//     the person whose CI sent it, and a grant is never that CI, whoever
+//     approved it);
 //
 // plus the one seat-only verb, asking a colleague (`a2a_ask`): no person takes
 // it either, so parity alone keeps it from the person's assistant.
