@@ -20,9 +20,12 @@
  * Several of the code host's refusals share one class — a head that moved and
  * a train whose base moved are both `stale_version` — so the controls answer
  * by the host's own word (`hostRefusal`, `contract/merge.ts`), and fall back
- * to the engine's sentence where theirs would say less: the gate's every
- * unmet precondition (`not_ready`), or why this reader may not
- * (`not_permitted`).
+ * to the engine's sentence where theirs would say less: a gate the change
+ * does not meet yet (`not_ready`), or why this reader may not
+ * (`not_permitted`). That sentence is a person's words for the refusal where
+ * the engine has them, and its code's own sentence where nobody has worded
+ * it yet (ADR-0060), which for `not_ready` sends the reader to the change's
+ * readiness: the gate's every unmet condition and who clears it.
  *
  * WHAT THIS IS NOT: a landing-policy choice or an auto-revert consent. A
  * gated target's queue lands each change tested merged on the branch, the
@@ -54,9 +57,11 @@ const METHOD_LABELS: Readonly<Record<MergeMethod, { label: string; title: string
 
 /**
  * What the controls say for each of the code host's refusals, or `null` for
- * the engine's own sentence — which names what this page cannot: the gate's
- * every unmet precondition and who clears it, the rule a reader's merge or
- * a deletion broke, a size it went past. COMPLETE OVER `MERGE_REFUSALS` by
+ * the engine's own sentence: a person's words for the refusal where the
+ * engine has worded it for one, and its code's own sentence otherwise
+ * (ADR-0060) — for a gate the change does not meet yet, one that sends the
+ * reader to the change's readiness, which names every unmet condition and
+ * who clears it. COMPLETE OVER `MERGE_REFUSALS` by
  * the compiler, so a refusal the engine grows is a type error here before
  * it is a sentence in the general words of its class.
  */

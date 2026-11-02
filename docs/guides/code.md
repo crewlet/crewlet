@@ -527,8 +527,9 @@ engine's answer:
 A refusal is said beside the controls in words of its own: a head that moved
 ("somebody pushed to it since you loaded it"), a target that moved under every
 rebuild of the merge, a change that does not merge cleanly onto the target's
-tip, a full queue; and in the engine's own words where those say more — every
-unmet precondition and who clears it (`not_ready`), or why you may not.
+tip, a full queue; and in the engine's own words where those say more — a gate
+the change does not meet yet (`not_ready`), which sends you to the change's
+readiness for every unmet condition and who clears it, or why you may not.
 
 ## Protecting a branch
 
