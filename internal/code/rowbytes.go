@@ -170,6 +170,9 @@ func (r RunProvenance) encodedBytes() int {
 	if r.WorkKey != "" {
 		n += field("work_key", stringBytes(r.WorkKey), false)
 	}
+	if r.WorkProject != "" {
+		n += field("work_project", stringBytes(r.WorkProject), false)
+	}
 	if r.Model != "" {
 		n += field("model", stringBytes(r.Model), false)
 	}

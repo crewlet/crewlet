@@ -200,8 +200,8 @@ const (
 	// this log whether or not the company hosts code, and prices what this
 	// log takes a day at the reference company, each push priced
 	// as a coding box's, the most a seat's push takes: 3 000 pushes at the
-	// MEASURED 1 604 bytes a seat's coding box's push alone in its record
-	// (BenchmarkPushLogBytes), 4.8 MB, the compactions that merge their
+	// MEASURED 1 625 bytes a seat's coding box's push alone in its record
+	// (BenchmarkPushLogBytes), 4.9 MB, the compactions that merge their
 	// packs and the sweeps of what those retired at the MEASURED 108 and 44
 	// bytes a push (internal/code/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git

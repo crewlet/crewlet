@@ -257,7 +257,7 @@ func (a admission) principal() code.Principal {
 	if a.box != nil {
 		run := a.box.Provenance
 		run.WorkBackend, run.WorkKey = code.FitProvenance(run.WorkBackend), code.FitProvenance(run.WorkKey)
-		run.WorkID = code.FitProvenance(run.WorkID)
+		run.WorkID, run.WorkProject = code.FitProvenance(run.WorkID), code.FitProvenance(run.WorkProject)
 		run.Model, run.CodingAgent = code.FitProvenance(run.Model), code.FitProvenance(run.CodingAgent)
 		return code.Principal{Kind: code.PrincipalAgent, Seat: a.box.Seat, Run: run}
 	}

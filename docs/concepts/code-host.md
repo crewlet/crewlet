@@ -1618,8 +1618,8 @@ one](../guides/code.md#open-a-change-from-a-push)).
   that made it, and a push the seat's coding box made the coding run that
   pushed it too, and the change keeps both as the turn and the run that
   opened it. A coding box's push also names the work item its run was charged
-  to, by its identity in its tracker, and the change carries that item, as
-  the seat's own `code_open_change` would ([A run's
+  to, by its identity in its tracker and its project, and the change carries
+  that item whole, as the seat's own `code_open_change` would ([A run's
   changes](code-sandbox.md#a-runs-changes)); a person's push names none.
   Whoever may push the branch may open a change from it, so the push's own
   update is the check.

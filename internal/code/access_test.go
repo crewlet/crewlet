@@ -1038,6 +1038,16 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
 			r.WorkID = long
 		})}, false},
+		// AND ITS PROJECT, a project in that one tracker, a label's length.
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkProject = "ENG"
+		})}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkBackend, r.WorkProject = "", "ENG"
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkProject = long
+		})}, false},
 		// A CODING BOX'S RUN: its launch's id and its coding agent, together.
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(*code.RunProvenance) {})}, true},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {

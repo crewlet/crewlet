@@ -62,7 +62,7 @@ const (
 // a push costs, measured") and what a box's principal — the seat, the run
 // behind it and the coding run that pushed — its way and the company day its
 // quota counted it on take of the log beyond it (its push=box arm). A seat's
-// push the engine builds for a tool takes 74 bytes less (its push=agent arm),
+// push the engine builds for a tool takes 144 bytes less (its push=agent arm),
 // and which of a company's seats push from their boxes and which through
 // their tools is no figure the reference company has, so the day prices every
 // push at the box's, at its least as at its most — as it prices the
@@ -92,11 +92,12 @@ const (
 // repositories a minute where one runs.
 //
 // A push's box names the work item its run was launched for by its identity
-// (code.RunProvenance.WorkID, a native task's UUID), which the push=box arm
-// carries: 224 bytes beside a person's push, 49 of them that identity.
+// and its project (code.RunProvenance.WorkID, a native task's UUID, and
+// .WorkProject, its project's key), which the push=box arm carries: 245 bytes
+// beside a person's push, 49 of them that identity and 21 that project.
 const (
 	referencePushesADay = 3_000
-	codePushRecordBytes = 1_604
+	codePushRecordBytes = 1_625
 	// codeEnginePushRecordBytes is a seat's push the engine builds for a
 	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
 	// no term of the day, which prices every push at the box's, and printed
@@ -630,21 +631,21 @@ var codeLogUnwritten = map[code.OpKind]struct {
 // priced into the day or argued out of it here.
 var codeLogPushVias = map[code.PushVia]string{
 	code.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
-		"coding box's push (1 481 bytes alone in its record against 1 604, BenchmarkPushLogBytes), " +
+		"coding box's push (1 481 bytes alone in its record against 1 625, BenchmarkPushLogBytes), " +
 		"at which the day prices every one of the reference company's 3 000 a day, and a " +
 		"person's takes it less still, naming no run and no day",
 	code.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
 		"(code.Proposal.Validate), naming the coding run that pushed, its coding agent and its work " +
-		"item's identity beside the turn — the push term's records (codeLogDay), at which the day " +
+		"item's identity and project beside the turn — the push term's records (codeLogDay), at which the day " +
 		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
-		"(1 380 bytes alone in its record against a box's 1 604), and none of the reference company's " +
+		"(1 380 bytes alone in its record against a box's 1 625), and none of the reference company's " +
 		"3 000 is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush " +
 		"refs a record, once a repository when a person imports it",
 	code.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past code.RefExpiry, on the " +
 		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +
 		"more, and up to code.MaxCommandsPerPush of them a record with no pack, no run and no day — a " +
 		"deletion command takes its record under a tenth of a seat's push (a ref and two ids against " +
-		"1 604 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
+		"1 625 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
 		"fortnight earlier did, which the push term already prices",
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (code.OpMerge), which the day prices one a change " +
@@ -766,6 +767,7 @@ func principalAbsent(prefix string, carried ...string) map[string]string {
 		"run.run_id":       "the coding run that pushed, and the measured record is a tool's",
 		"run.coding_agent": "the coding agent a box ran, and the measured record is a tool's",
 		"run.work_id":      "the work item's identity, which a box's admission alone stamps",
+		"run.work_project": "the work item's project, which a box's admission alone stamps",
 	} {
 		if !slices.Contains(carried, key) {
 			absent[prefix+"."+key] = why
@@ -807,7 +809,8 @@ var codeLogFields = map[code.OpKind]struct {
 		carried: []string{"repo_id", "pushes.push_id", "pushes.principal.kind",
 			"pushes.principal.seat", "pushes.principal.run.turn_id",
 			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
-			"pushes.principal.run.work_id", "pushes.principal.run.model", "pushes.principal.run.run_id",
+			"pushes.principal.run.work_id", "pushes.principal.run.work_project", "pushes.principal.run.model",
+			"pushes.principal.run.run_id",
 			"pushes.principal.run.coding_agent", "pushes.via", "pushes.node", "pushes.commands.ref",
 			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",

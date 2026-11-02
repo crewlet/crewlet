@@ -111,11 +111,11 @@ type BoxRun struct {
 	// which a box reads past LINEARIZABLE.
 	Floor statelog.Position
 	// Provenance is what the run's pushes are stamped with: TurnID the
-	// row's turn, RunID its launch, WorkBackend, WorkID and WorkKey its work
-	// item — the id what a change its push opens carries the item by — Model
-	// its launch's model, CodingAgent its coding agent — as the row
-	// holds them: the host fits each to the code domain's bound where it
-	// stamps a push (admission.principal).
+	// row's turn, RunID its launch, WorkBackend, WorkID, WorkKey and
+	// WorkProject its work item — the id and the project what a change its
+	// push opens carries the item by — Model its launch's model, CodingAgent
+	// its coding agent — as the row holds them: the host fits each to the
+	// code domain's bound where it stamps a push (admission.principal).
 	Provenance code.RunProvenance
 	// Holds are the row's code holds as admission read them, a set: the
 	// keys of what the run's turn holds, each a key this build may not

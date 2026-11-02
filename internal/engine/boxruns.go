@@ -74,12 +74,13 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		out.Holds[key] = true
 	}
 	if run.WorkItem != nil {
-		// THE ITEM'S IDENTITY BESIDE ITS LABEL: a change the box's push
-		// opens from its options carries its item by its id
-		// (code.RunProvenance.WorkID), as the turn's own code_open_change
-		// does, while the push's row keeps the tracker and the key.
+		// THE ITEM'S IDENTITY AND PROJECT BESIDE ITS LABEL: a change the
+		// box's push opens from its options carries its item by its id and
+		// in its project (code.RunProvenance.WorkID, .WorkProject), as the
+		// turn's own code_open_change and the engine's open at the run's
+		// collection do, while the push's row keeps the tracker and the key.
 		out.Provenance.WorkBackend, out.Provenance.WorkKey = string(run.WorkItem.Backend), run.WorkItem.Key
-		out.Provenance.WorkID = run.WorkItem.ID
+		out.Provenance.WorkID, out.Provenance.WorkProject = run.WorkItem.ID, run.WorkItem.Project
 	}
 	for _, r := range run.Repos {
 		out.Repos = append(out.Repos, host.BoxGrant{RepoID: r.RepoID, Name: r.Repo,
