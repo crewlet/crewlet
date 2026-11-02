@@ -118,7 +118,7 @@ func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error)
 			return withRecomputes(res, recomputes), err
 		}
 		if j.queue {
-			res, err := wr.enqueue(ctx, j)
+			res, err = wr.enqueue(ctx, j)
 			return withRecomputes(res, recomputes), err
 		}
 		res, again, err := wr.buildAndLandMerge(ctx, j)
@@ -259,7 +259,7 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 	}
 	j := mergeJudgement{change: c, tip: tip}
 	if w.Ceiling != nil {
-		if v, err := wr.mergeCeiling(ctx, floor, named); err != nil || v.refusal != "" {
+		if v, err := wr.mergeCeiling(ctx, floor, named); err != nil || v.refusal != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			return mergeJudgement{}, v, err
 		}
 	}
@@ -452,11 +452,11 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 	if done || err != nil {
 		return res, nil, err
 	}
-	if err := s.fault(ctx, codefault.MergeAfterBuild, 0); err != nil {
+	if err = s.fault(ctx, codefault.MergeAfterBuild, 0); err != nil {
 		return code.EngineWriteResult{}, nil, fmt.Errorf("host: merge %s after its build: %w", wr.pushID, err)
 	}
 	wr.cmd.New = commit
-	if res, refused, err := wr.deadlineRule(ctx, sc); refused || err != nil {
+	if res, refused, err := wr.deadlineRule(ctx, sc); refused || err != nil { //nolint:govet // shadow: `res, refused, err := f()` declares refused too; see .golangci.yml
 		return res, nil, err
 	}
 	wr.landed = true
@@ -597,7 +597,7 @@ func (b *building) mergeOnto(ctx context.Context, m mergeOf) (string, code.Engin
 			"has nothing to merge", m.target, named, shortID(m.head))), true, nil
 	}
 	tip, head := &commitHeader{}, &commitHeader{}
-	if err := b.readCommits(ctx, []string{m.tip, m.head}, []*commitHeader{tip, head}); err != nil {
+	if err = b.readCommits(ctx, []string{m.tip, m.head}, []*commitHeader{tip, head}); err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
 	out, err := b.merge(ctx, "", m.tip, m.head)
@@ -605,6 +605,7 @@ func (b *building) mergeOnto(ctx context.Context, m mergeOf) (string, code.Engin
 		return "", code.EngineWriteResult{}, true, err
 	}
 	if !out.clean {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, out, fmt.Sprintf("%s does not merge cleanly into %s at %s: %d paths "+
 			"conflict; rebase it onto its target (code_rebase_change) and resolve them in a coding box "+
 			"(run_sandbox)", named, m.target, shortID(m.tip), len(out.conflicts)+out.omitted))

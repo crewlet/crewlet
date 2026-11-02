@@ -369,7 +369,7 @@ func (wr *writing) run(ctx context.Context) (code.EngineWriteResult, error) {
 	defer sc.Remove()
 
 	buildStart := s.now()
-	built, res, done, err := wr.buildShared(ctx, sc, j)
+	made, res, done, err := wr.buildShared(ctx, sc, j)
 	wr.buildTook = s.now().Sub(buildStart)
 	if done || err != nil {
 		return res, err
@@ -377,7 +377,7 @@ func (wr *writing) run(ctx context.Context) (code.EngineWriteResult, error) {
 	if err := s.fault(ctx, codefault.WriteAfterBuild, 0); err != nil {
 		return code.EngineWriteResult{}, fmt.Errorf("host: write %s after its build: %w", wr.pushID, err)
 	}
-	wr.cmd.New = built.commit
+	wr.cmd.New = made.commit
 	if res, refused, err := wr.deadlineRule(ctx, sc); refused || err != nil {
 		return res, err
 	}
@@ -420,7 +420,7 @@ func (wr *writing) sync(ctx context.Context, fresh statelog.Freshness) (gone boo
 		wr.linear = fresh.Level == statelog.ReadLinearizable
 		return true, nil
 	case errors.Is(err, cache.ErrInvalid):
-		return false, fmt.Errorf("%w: fresh: %v", code.ErrInvalid, err)
+		return false, fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return false, wr.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not "+
 			"reach the write's need before its answer fell due; the sync goes on, and another git node builds "+

@@ -117,7 +117,7 @@ func (s *Server) BuildChain(ctx context.Context, b code.ChainBuild) (code.ChainR
 		res.Settle = func(context.Context, bool) error { return nil }
 		return res, err
 	}
-	if err := s.fault(ctx, codefault.ChainAfterBuild, 0); err != nil {
+	if err = s.fault(ctx, codefault.ChainAfterBuild, 0); err != nil {
 		_ = settle(ctx, nil)
 		return code.ChainResult{}, fmt.Errorf("host: chain %s after its build: %w", b.ChainID, err)
 	}
@@ -171,6 +171,7 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b code.Cha
 	}
 	out := code.ChainResult{Tip: b.Base, Commits: make([]code.ChainCommit, 0, len(b.Entries))}
 	for _, e := range b.Entries {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		kept, err := looseObjects(filepath.Join(sc.Dir, "objects"))
 		if err != nil {
 			return code.ChainResult{}, err

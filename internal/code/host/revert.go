@@ -73,7 +73,7 @@ func (b *building) revertChange(ctx context.Context) (string, code.EngineWriteRe
 			named, c.TargetRef)), true, nil
 	}
 	head, merged := &commitHeader{}, &commitHeader{}
-	if err := b.readCommits(ctx, []string{tip, c.MergeOID}, []*commitHeader{head, merged}); err != nil {
+	if err = b.readCommits(ctx, []string{tip, c.MergeOID}, []*commitHeader{head, merged}); err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
 	before, how, refusal := revertBase(named, c, ans.Revisions, merged.parents)
@@ -85,6 +85,7 @@ func (b *building) revertChange(ctx context.Context) (string, code.EngineWriteRe
 		return "", code.EngineWriteResult{}, true, err
 	}
 	if !m.clean {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("the revert of %s does not apply cleanly on %s: %d paths "+
 			"conflict; resolve them in a coding box (run_sandbox), or write the result yourself", named,
 			shortID(tip), len(m.conflicts)+m.omitted))
