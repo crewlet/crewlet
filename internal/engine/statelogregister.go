@@ -1075,7 +1075,11 @@ func (s *stateLog) verifierFor(domain statelog.Domain) (*recordseal.Verifier, er
 	return recordseal.NewVerifier(domain.Name(), s.ring)
 }
 
-// recordKeyring is the Tier A keyring as the state log's signatures read it.
+// recordKeyring is the Tier A keyring as the fleet's record seal reads it
+// ([recordseal.Keyring]): every state-log record and every signed channel —
+// the estate's envelopes, the broker's asks, a steer, presence, the relay, a
+// box read, an answer to a parked run — derives its keys from it, each in a
+// key domain of its own.
 //
 // THE SAME MATERIAL THE PER-RUN TOKENS DERIVE FROM, and deliberately: a
 // deployment has one keyring, and a second one for records would be a second
