@@ -475,9 +475,10 @@ re-publishes its MCP servers as they are at each beat on its presence heartbeat
 *Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
 started*, *Not reported* or *Disabled* (turned off, [below](#turning-a-server-off)) with one cell per live node and the first failure's
 reason and seat, and the first waiting instance's sentence and seat
-(`GET /mcp-servers`, which takes `admin` because it shows each server's
-configured launch, as `/config` does; the heartbeat carries each reason
-bounded, and the whole
+(`GET /mcp-servers`, everybody's, though only an administrator reads each
+server's configured launch, as `/config` shows it, and the reasons and
+sentences: see [Who sees what](#who-sees-what); the heartbeat carries each
+reason bounded, and the whole
 text is the node's `mcp_server_failed` log line, or `server_exited` for one
 that [went down after starting](#a-server-that-dies-or-will-not-start)). Clicking a server opens its own page:
 its state, reach and launch, every node's reason as the node reported it rather
@@ -492,7 +493,8 @@ therefore publishes what its own instances list, per server, and every node keep
 a watched copy of what the others publish. That is what puts a per-agent server's
 tools in the catalogue (`GET /tools` and the dashboard's `tools` push) on every
 node, including one that runs none of its children, and what one server's page
-reads (`GET /mcp-servers/{name}`, `admin`, see the
+reads (`GET /mcp-servers/{name}`, everybody's in
+[two readings](#who-sees-what), see the
 [API reference](../reference/api-endpoints.md#get-mcp-serversname)).
 
 - **What a listing holds.** Per server, the union of the node's instances: each
@@ -530,6 +532,33 @@ In the catalogue, a listed tool is added under a name nothing on the node
 already holds: one tool per name, as a model is offered, so a name a built-in
 or another server's tool wins shows that tool. A server's page lists every tool
 its server lists, whichever wins the name.
+
+### Who sees what
+
+Over the API, what each MCP server is doing and which tools it serves is
+everybody's: an agent without a tool is the first thing somebody asks about,
+and the answer is usually here. `GET /mcp-servers`, a server's
+`GET /mcp-servers/{name}` and the catalogue, `GET /mcp-catalogue`, answer a
+member in a reading of their own (`reading: "member"`): each server's name,
+title, what it is for and whether it is on, its state and its counts on each
+node, why an instance failed in [a class](#why-a-server-failed) and since
+when, each instance's seat and state, every tool it lists with its hints,
+risk and arguments, the tools not offered under their names, how it signs in
+(`none`, `headers` or `integration`) and the integration it reads, and the
+curated catalogue.
+
+A member's reading names no launch line, header, variable, account or call:
+no command, arguments or address; no failure's or wait's sentence, which can
+quote what a server said or name the variables an instance waits for; not the
+headers or variables a seat's credential goes in, nor the seats whose boxes
+are given the server; not the server's instructions or what removing it would
+take with it; and no community registry or search. An administrator, whoever
+`config.read` admits, reads all of it (`reading: "admin"`), and every change
+is theirs. A member's answer is built from types of its own, copied field by
+field, so a field added to the administrator's answer reaches no member until
+it is added to theirs; the
+[API reference](../reference/api-endpoints.md#a-members-reading-of-mcp--tools)
+lists every field each reading carries.
 
 ### Adding a server from the dashboard
 

@@ -78,8 +78,11 @@ var MCPServerStates = []MCPServerState{
 // Valid reports whether s is a state this build sends.
 func (s MCPServerState) Valid() bool { return slices.Contains(MCPServerStates, s) }
 
-// MCPStatusAnswer is `mcp_servers_status`.
+// MCPStatusAnswer is `mcp_servers_status`, the admin's reading; a member is
+// answered [MemberMCPStatusAnswer].
 type MCPStatusAnswer struct {
+	// Reading is [ReadingAdmin]: which of the answer's two readings this is.
+	Reading string `json:"reading"`
 	// Servers in name order: every server the active configuration
 	// declares, then any a node reports that it does not (a node still
 	// on an older revision, mid-rollout). ALWAYS A LIST.
@@ -254,10 +257,12 @@ type MCPServerNode struct {
 // that did not answer in time, only one whose last heartbeat carried no
 // status, and that is a column of its own rather than a row of zeros.
 //
-// ADMIN'S, AS THE CONFIGURATION IS (ADR-0033): it names the launch commands
-// and the first line of each failure, which is the configuration and what
-// became of it rather than the company's work — `/config` shows the same
-// reader the same commands.
+// EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
+// server's state and its tools are what tell a member why an agent lacks one.
+// The configuration's reader reads the whole answer, the launch commands and
+// the first line of each failure included, which is the configuration and what
+// became of it (`/config` shows the same reader the same commands); anybody
+// else reads [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -266,7 +271,11 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
-	return s.mcpStatusOf(leases), nil
+	status := s.mcpStatusOf(leases)
+	if MCPReading(ctx) != ReadingAdmin {
+		return MemberMCPStatus(status), nil
+	}
+	return status, nil
 }
 
 // mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
@@ -297,6 +306,7 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 	slices.SortFunc(reports, func(a, b report) int { return cmp.Compare(a.node, b.node) })
 
 	out := MCPStatusAnswer{
+		Reading: ReadingAdmin,
 		Servers: []MCPServerRow{},
 		Nodes:   make([]MCPStatusNode, 0, len(reports)),
 		Builtin: s.builtinGroups(),

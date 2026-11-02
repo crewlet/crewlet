@@ -192,9 +192,9 @@ func TestARestartIsAskedOfTheFleetAndAuditedRefusalsIncluded(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE IS DECIDED ON ITS OWN VERB: the catalogue and the detail are the
-// configuration's reader's, and a restart is `tools.retry`, declared as acting
-// on the server its path names and keeping it.
+// EVERY ROUTE IS DECIDED ON ITS OWN VERB: the catalogue and the detail are
+// `tools.read`, everybody's in two readings, and a restart is `tools.retry`,
+// declared as acting on the server its path names and keeping it.
 func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 	t.Parallel()
 	svc := restartSurface(t, &fakeRestarter{}, &recordedAudit{})
@@ -203,8 +203,8 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]authz.Action{
-		"GET /mcp-catalogue":             authz.ActionConfigRead,
-		"GET /mcp-servers/{name}":        authz.ActionConfigRead,
+		"GET /mcp-catalogue":             authz.ActionToolsRead,
+		"GET /mcp-servers/{name}":        authz.ActionToolsRead,
 		"POST /mcp-servers/{name}/retry": authz.ActionToolsRetry,
 	}
 	for pattern, action := range want {

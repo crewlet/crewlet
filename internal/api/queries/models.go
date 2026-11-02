@@ -115,7 +115,9 @@ var llmAlarmKinds = []statelog.Kind{statelog.KindLLMCredentialExpiring,
 	statelog.KindLLMCredentialExpiresSoon, statelog.KindLLMSignInRefused,
 	statelog.KindLLMLimit, statelog.KindLLMLimitWaiting}
 
-// ModelReading is which reading of `llm_entries` an answer is.
+// ReadingAdmin and ReadingMember are which reading of a two-reading answer an
+// answer is, named on the answer as `reading`: `llm_entries` ([Sources.llmEntries])
+// and Settings › MCP & tools' ([MCPReading]).
 const (
 	ReadingAdmin  = "admin"
 	ReadingMember = "member"

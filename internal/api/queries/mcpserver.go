@@ -35,8 +35,12 @@ type MCPListingReader interface {
 	MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error)
 }
 
-// MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole.
+// MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole, the admin's
+// reading; a member is answered [MemberMCPServer] of it.
 type MCPServerAnswer struct {
+	// Reading is [ReadingAdmin]: which of the answer's two readings this is.
+	Reading string `json:"reading"`
+
 	// Server is the server's row exactly as `mcp_servers_status` answers
 	// it, and Nodes the live nodes its cells are drawn against.
 	Server MCPServerRow    `json:"server"`
@@ -160,9 +164,12 @@ var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of th
 // an instance of it, or that carried no report, is asked at query time
 // ([Sources.MCPInstances]), and each is named with whether it answered.
 //
-// THE CONFIGURATION READER'S, as `mcp_servers_status` is admin's and for its
-// reason: the row names the launch command and the first line of each
-// failure. [ErrBadParams] for an empty name, [ErrNotFound] for a server no
+// THE ADMIN'S READING, WHOLE: the row names the launch command and the first
+// line of each failure, the dependants each block and secret naming the
+// server, and the resolved facts the headers or variables a credential goes
+// in. A route answers a member [MemberMCPServer] of it ([MCPReading]), as
+// `mcp_servers_status` answers a member its own reading. [ErrBadParams] for an
+// empty name, [ErrNotFound] for a server no
 // node configures, reports or lists, [ErrMCPDetailUnavailable] on a node with
 // no copy, and any other error is a store that could not be read or a read of
 // the instances this node could not make.
@@ -194,7 +201,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		return MCPServerAnswer{}, fmt.Errorf("%w: no MCP server %q is configured, reported or listed", ErrNotFound, name)
 	}
 	out := MCPServerAnswer{
-		Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
+		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
 		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
