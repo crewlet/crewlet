@@ -1,7 +1,9 @@
 package types
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,6 +117,15 @@ type PromptSection struct {
 // arguments did not parse — and `origin`/`server` are absent on a call no tool
 // answered (an unknown name, one not offered, one a guard refused): absent
 // means "not recorded", never "instant" or "the engine's own".
+//
+// `source` is whose tool the call NAMED, in the origin grammar, on every call
+// whose name resolved to a registered tool, the ones refused before any tool
+// ran included (which `origin` leaves out), so a refused call is still filed
+// under the server it was for; absent on a name nothing registered. And
+// `refusal` is the class of a failed call the engine classified (mcp.Refusal:
+// `forbidden` for a call refused where it was made, `unavailable` for an MCP
+// server that was not running), absent on a success and on a third-party
+// server's own failure.
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
@@ -600,6 +611,85 @@ type TurnTally struct {
 	Reviews    int `json:"reviews,omitempty"`
 	SentBack   int `json:"sent_back,omitempty"`
 	Unaccepted int `json:"unaccepted,omitempty"`
+	// Tools is the turn's calls to MCP servers' tools, one entry per
+	// (server, tool) in that order, counted off the calls each phase
+	// record states (a delegated worker's included, and an executor run's
+	// as its bridge recorded them) as each segment ran them, and handed on
+	// across a park like the reviews. Absent on a turn that called none.
+	// What the usage domain counts a seat's calls per tool from.
+	Tools []ToolTally `json:"tools,omitempty"`
+}
+
+// ToolTally is one MCP tool's calls in one turn: how many the turn made and
+// what became of them.
+//
+// FOUR OUTCOMES, EACH CALL IN EXACTLY ONE, so Calls is their sum and nothing
+// is counted twice: a call the server answered well; one it answered with a
+// failure (Failed); one it never saw because the server was not running, or
+// its session ended under the call (Unavailable, the engine's `unavailable`
+// refusal); and one the engine REFUSED before any tool ran (Refused), because
+// the tool was not offered where it was called or a guard held it. An unknown
+// name is none of them: nothing registered it, so it was no server's tool.
+//
+// NO ARGUMENT AND NO RESULT, ever: a call's words can hold a credential or a
+// customer's data, and a count needs neither. The calls themselves are the
+// phase records' (`tool_executions`), read where they were written.
+type ToolTally struct {
+	// Server is the bare MCP server name, and Tool the name the call
+	// used: the tool as its seat was offered it, prefix included.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+
+	Calls       int `json:"calls"`
+	Failed      int `json:"failed,omitempty"`
+	Unavailable int `json:"unavailable,omitempty"`
+	Refused     int `json:"refused,omitempty"`
+
+	// TotalMS is how long the calls that RAN took between them, each as
+	// the engine timed it, summed. So a mean is TotalMS over the calls
+	// that ran (Calls less Refused), never over every call: a refused
+	// call took no time a reader should average in.
+	TotalMS int64 `json:"total_ms,omitempty"`
+
+	// LastAt is when the newest call that ran was handed to the tool, UTC;
+	// zero when none ran.
+	LastAt time.Time `json:"last_at,omitzero"`
+}
+
+// Add is t with o's calls added: the same tool, both tallies summed.
+func (t ToolTally) Add(o ToolTally) ToolTally {
+	t.Calls += o.Calls
+	t.Failed += o.Failed
+	t.Unavailable += o.Unavailable
+	t.Refused += o.Refused
+	t.TotalMS += o.TotalMS
+	if o.LastAt.After(t.LastAt) {
+		t.LastAt = o.LastAt
+	}
+	return t
+}
+
+// SumToolTallies is every list's tallies summed per (server, tool), in that
+// order: one entry per tool however many lists name it. Nil when none does.
+func SumToolTallies(lists ...[]ToolTally) []ToolTally {
+	type key struct{ server, tool string }
+	at := map[key]int{}
+	var out []ToolTally
+	for _, list := range lists {
+		for _, t := range list {
+			k := key{t.Server, t.Tool}
+			if i, ok := at[k]; ok {
+				out[i] = out[i].Add(t)
+				continue
+			}
+			at[k] = len(out)
+			out = append(out, t)
+		}
+	}
+	slices.SortFunc(out, func(a, b ToolTally) int {
+		return cmp.Or(cmp.Compare(a.Server, b.Server), cmp.Compare(a.Tool, b.Tool))
+	})
+	return out
 }
 
 // EventType is the "turn_completed" wire type, the learning subsystem's

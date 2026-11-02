@@ -228,6 +228,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 				Output: rec.result.Output, Failed: rec.result.Failed,
 				StartedAt: zeroIfRefused(rec, rec.started), Duration: rec.took,
 				Origin: rec.result.Origin, Server: rec.result.Server,
+				Source: rec.result.Source, Refusal: rec.result.Refusal(),
 			})
 		}
 	}

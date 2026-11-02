@@ -176,6 +176,7 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_reads":         "day, node, agent_id, backend, page_id, via",
 		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
 		"usage_person_tokens": "day, node, person, phase, worker, model, provider_key",
+		"usage_tool_calls":    "day, node, agent_id, server, tool",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
@@ -294,6 +295,15 @@ func (e *events) turn(at time.Time, agent, handle, turn string, failed bool,
 	e.add("turn_completed", at, agent, "Dev", map[string]any{
 		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
 		"duration_ms": duration.Milliseconds(), "turn": whole,
+	})
+}
+
+// turnCalling records a turn whose ending states the MCP tool calls it made
+// (types.TurnTally.Tools), each given in its wire shape.
+func (e *events) turnCalling(at time.Time, agent, handle, turn string, tools ...map[string]any) {
+	e.add("turn_completed", at, agent, "Dev", map[string]any{
+		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
+		"duration_ms": 1000, "turn": map[string]any{"duration_ms": 1000, "tools": tools},
 	})
 }
 

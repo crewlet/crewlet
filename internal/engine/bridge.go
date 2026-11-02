@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -55,6 +56,8 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Duration:  time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:    call.Origin,
 			Server:    call.Server,
+			Source:    call.Source,
+			Refusal:   mcp.Refusal(call.Refusal),
 		})
 	}
 	return out
@@ -169,6 +172,8 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			DurationMS: call.Duration.Milliseconds(),
 			Origin:     call.Origin,
 			Server:     call.Server,
+			Source:     call.Source,
+			Refusal:    string(call.Refusal()),
 		},
 		Spent: l.spent(),
 	})

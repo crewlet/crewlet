@@ -734,6 +734,7 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 			Output: call.Result, Failed: call.Failed,
 			StartedAt: call.StartedAt, Duration: call.Duration,
 			Origin: call.Origin, Server: call.Server,
+			Source: call.Source, Refusal: call.Refusal,
 		})
 	}
 	if strings.TrimSpace(answer) != "" {

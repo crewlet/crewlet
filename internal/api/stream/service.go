@@ -580,9 +580,20 @@ var snapshotKinds = map[string]Kind{
 // Exported because a config apply has to re-send it: the client's own doc
 // says a merge cannot express a deletion, so a revision that removed a role
 // would leave its card on screen until someone reloaded the page.
+//
+// EACH SEAT'S STATUS AND NOT ITS CALL IN FLIGHT ([livestate.LiveState.MergeRoster]),
+// so the read grows with the seats and not with what they are doing: a call
+// carries its prompt, its rounds and its tool executions, and `GET /agents`
+// that carried every seat's was refused to the assistant (whose step reads 64
+// KiB) exactly while the company was busy. The call stays where a live view
+// reads it: the handshake snapshot ([Service.Snapshot]), the `agents` pushes,
+// and its own question, `live_call{agent_id}`. The `seats` push loses nothing
+// by it either: the client merges it over the row it holds, so a key it does
+// not carry keeps the call the pushes delivered, where a whole call on every
+// config apply overwrote it.
 func (s *Service) Roster() AgentRows {
 	s.RefreshPlacement()
-	return AgentRows(s.state.MergeAgents(s.currentRoster()))
+	return AgentRows(s.state.MergeRoster(s.currentRoster()))
 }
 
 // AudienceFor is what principal p may receive on this node: [NewAudience] over

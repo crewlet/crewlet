@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -560,5 +561,28 @@ func TestEveryOutcomeRowIsCountedOnce(t *testing.T) {
 	}
 	if none := MergeOutcomes(nil); none.Skipped == nil || none.Coalesced == nil {
 		t.Errorf("an empty merge is %+v, want two empty maps", none)
+	}
+}
+
+// A SERVER'S NEWEST CALLS MERGE EXACTLY: each node sent its own newest in the
+// listing's one order, so the fleet's newest are among them, ordered by when
+// each call was handed to its tool and, at one instant, by its record and its
+// place in that record's tool log, the same on every node.
+//
+// Mutation: sort by the record's id first, or leave the merge uncut, and the
+// order or the length moves.
+func TestAServersNewestCallsMergeAcrossNodes(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	call := func(min int, event string, index int) store.ToolCall {
+		return store.ToolCall{At: at.Add(time.Duration(min) * time.Minute), EventID: event,
+			Index: index, Tool: "github_get_issue"}
+	}
+	a := toolCallsPart{Calls: []store.ToolCall{call(9, "e-a2", 0), call(5, "e-a1", 1), call(5, "e-a1", 0)}}
+	b := toolCallsPart{Calls: []store.ToolCall{call(7, "e-b1", 0), call(5, "e-b0", 3)}}
+	got := MergeToolCalls([]toolCallsPart{a, b}, 4)
+	want := []store.ToolCall{call(9, "e-a2", 0), call(7, "e-b1", 0), call(5, "e-b0", 3), call(5, "e-a1", 1)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the merge is\n%+v\nwant the four newest, ties by record then place:\n%+v", got, want)
 	}
 }
