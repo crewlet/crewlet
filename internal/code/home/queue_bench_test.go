@@ -19,9 +19,10 @@ import (
 // queue of depth D lands with every candidate green and one change each, so
 // its trains always run full. Each round the worker's own [home.BatchOf]
 // cuts the train: up to D candidates of min(B, ⌈W/D⌉) waiting changes; the
-// longest green prefix lands; a red first candidate is bisected, a probe a
-// round, in ⌈log₂ n⌉ rounds while the queue lands nothing, and its culprit
-// ejected, the rest waiting again at the front.
+// longest green prefix lands; the first red candidate — first once the
+// prefix before it landed, as the worker's later candidates stand on it — is
+// bisected, a probe a round, in ⌈log₂ n⌉ rounds while the queue lands
+// nothing, and its culprit ejected, the rest waiting again at the front.
 //
 // It reports, per cell: `p99-rounds`, a landed change's p99 TIME TO LAND —
 // rounds from the train that first tested it to the round that landed it,
@@ -35,13 +36,14 @@ import (
 // lowest `p99-wait` — at p = 5 % and the default depth, the larger of a tie
 // (it costs fewer checks); TestTheDefaultQueueBatchLandsSoonestFromArrival
 // reads the same simulation. The design's rule, the largest B whose p99
-// from first test is at most 3 rounds, picks only B = 1: a red first
-// candidate stalls every candidate behind it for the ⌈log₂ n⌉ rounds of its
-// bisect, so no batch above one lands its train's changes inside 3 rounds at
-// p99, and B = 1 is the one batch whose backlog grows without bound under
-// saturation — the time a person waits for a change, from the moment it was
-// queued, is what a batch is there to bound. Bounded: -benchtime 1x runs
-// each cell's 2 000 rounds once, a fixed seed a run.
+// from first test is at most 3 rounds, picks the same B = 2 today (2, 3, 7
+// and 9 rounds at B = 1, 2, 4 and 8), but it would keep B = 1 wherever a
+// batch of two missed it, and B = 1 is the one batch whose backlog grows
+// without bound under saturation (148 rounds from arrival at p99 over 2 000
+// rounds, against 5 at B = 2) — the time a person waits for a change, from
+// the moment it was queued, is what a batch is there to bound, so that is
+// the rule the test holds. Bounded: -benchtime 1x runs each cell's 2 000
+// rounds once, a fixed seed a run.
 //
 // THE WORKER CANCELS A GIVEN-UP TRAIN'S CHECKS (queue.go's cancelAbandoned),
 // and the model holds it as it stands: a run lasts one round, and a train is
@@ -53,8 +55,7 @@ import (
 // `git.max_checks` containers, the company's e2b box time — that a dead
 // train's runs would hold ahead of the live train's and its probes', which
 // claim oldest first: a model of unbounded cells prices none of it, so the
-// cancellation moves no figure here and no default (re-read on this code: the
-// table in config.CodeDefaultQueueBatch's comment, unchanged).
+// cancellation moves no figure here and no default.
 func BenchmarkQueueThroughput(b *testing.B) {
 	for _, pct := range []int{1, 5, 10} {
 		for _, depth := range []int{1, 4, 8} {
@@ -119,21 +120,24 @@ func simulateQueue(seed uint64, p float64, depth, batch, rounds int) queueRun {
 			}
 		}
 		round++
-		if red != 0 {
-			upto := take
-			if red > 0 {
-				upto = red * n
-			}
-			for _, s := range waiting[:upto] {
-				landed = append(landed, round-s.tested)
-				wait = append(wait, round-s.arrived)
-			}
-			waiting = waiting[upto:]
+		upto := take
+		if red >= 0 {
+			upto = red * n
+		}
+		for _, s := range waiting[:upto] {
+			landed = append(landed, round-s.tested)
+			wait = append(wait, round-s.arrived)
+		}
+		waiting = waiting[upto:]
+		if red < 0 {
 			continue
 		}
-		// THE FIRST CANDIDATE RED: ⌈log₂ n⌉ probes, a round each, while
-		// changes keep arriving, then its first bad change ejected.
-		size := min(n, take)
+		// THE RED CANDIDATE, first once its green prefix landed — the
+		// worker's candidates after a landing stand, each built onto the one
+		// before, so it is bisected next and never tested again:
+		// ⌈log₂ n⌉ probes, a round each, while changes keep arriving, then
+		// its first bad change ejected and the rest waiting at the front.
+		size := min(n, take-upto)
 		for range bits.Len(uint(size - 1)) {
 			checks++
 			arrive(round)

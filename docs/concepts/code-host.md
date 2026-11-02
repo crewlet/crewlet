@@ -6415,11 +6415,11 @@ holds.
   finds its culprit in log₂ `batch` more rounds, and while it does nothing
   behind it lands, since every later candidate holds the culprit too. That
   is why `batch` defaults to two: under arrivals as fast as the queue lands
-  at a 5 % failure rate and the default depth, a change waits at most 17
-  rounds at p99 from the moment it was queued, against 23 at a batch of
-  four and 44 at eight, while a queue that never batches falls further
-  behind with every red candidate. A larger batch spends fewer check runs a
-  landed change (0.89 at two, 0.78 at four, 0.63 at eight) for that wait.
+  at a 5 % failure rate and the default depth, a change waits at most 5
+  rounds at p99 from the moment it was queued, against 9 at a batch of four
+  and 12 at eight, while a queue that never batches falls further behind
+  with every red candidate. A larger batch spends a few fewer check runs a
+  landed change (0.98 at two, 0.95 at four, 0.94 at eight) for that wait.
 - **Cancel what a given-up train still runs.** An eject, a dequeue, a person
   moving the branch and a new train each give the branch's train up, and
   its candidates' and probes' checks still queued or running measure commits

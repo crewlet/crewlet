@@ -162,19 +162,19 @@ const (
 	// seed 0):
 	//
 	//	batch  p99 rounds from arrival  check runs a landed change
-	//	1      364, growing unbounded   1.29
-	//	2      17                       0.89
-	//	4      23                       0.78
-	//	8      44                       0.63
+	//	1      148, growing unbounded   1.14
+	//	2      5                        0.98
+	//	4      9                        0.95
+	//	8      12                       0.94
 	//
 	// One never catches up: every red candidate costs a round a saturated
 	// queue has no slack for. Past two, a bigger batch is red more often and
-	// a red FIRST candidate stalls the whole train while it is bisected
-	// (every candidate behind it holds the culprit), so the p99 a change
-	// waits grows faster than the checks it saves shrink. Four, the figure
-	// the design estimated, waits a third longer than two for 12 % fewer
-	// check runs; eight, the bound, stays for a company that prices checks
-	// above latency.
+	// a red candidate stalls every candidate behind it while it is bisected
+	// (each of them holds the culprit), so the p99 a change waits grows far
+	// faster than the checks it saves shrink. Four, the figure the design
+	// estimated, waits nearly twice as long as two for 3 % fewer check runs;
+	// eight, the bound, stays for a company that prices checks above
+	// latency.
 	CodeDefaultQueueBatch = 2
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
