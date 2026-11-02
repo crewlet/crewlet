@@ -17,8 +17,8 @@
 -- human paths it holds a target to, the checks' directory among them where it
 -- requires checks and does not set agents_edit_checks), written by the
 -- applier beside the code_protections rows by every record that writes them,
--- as 0103 writes owners_digest beside the path owners. THE DEFAULT IS '' for
--- 0103's reason: every record that writes the rules writes the column.
+-- as 0106 writes owners_digest beside the path owners. THE DEFAULT IS '' for
+-- 0106's reason: every record that writes the rules writes the column.
 --
 -- code_revision_facts gains two columns:
 --   - human_paths_digest is the digest the facts' match was made against. The
