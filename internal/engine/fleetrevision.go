@@ -171,7 +171,7 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 		return nil, maintenance.ErrNoActiveRevision
 	}
 	company := e.Company()
-	if company, err := fleetCompanyAt(target, company); err == nil {
+	if _, err = fleetCompanyAt(target, company); err == nil {
 		return company, nil
 	}
 	served := servedAgainst(target, company)
@@ -191,25 +191,27 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	return fleetCompanyAt(target, e.Company())
 }
 
-// fleetCompany is c when it is the company of the activation the fleet is
-// pointed at, or a later one, or an error saying why that is unknown — for a
-// caller judging a company it holds rather than the one this node publishes:
+// fleetCompany is nil when c is the company of the activation the fleet is
+// pointed at, or a later one, and otherwise an error saying why that is
+// unknown — for a caller judging a company it holds rather than the one this
+// node publishes:
 // the clearing of a removed seat's pause, which runs on the company an apply
 // is about to publish ([Engine.clearRemovedSeatPauses]), and the model
 // catalogue's retry, on the one it is about to install. Every other reader
 // asks [Engine.servedFleetRevision].
-func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
+func (e *Engine) fleetCompany(ctx context.Context, c *Company) error {
 	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
+		return fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
 	}
 	target, found, err := e.backends.Fleet.Target(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read the activation pointer: %w", err)
+		return fmt.Errorf("engine: read the activation pointer: %w", err)
 	}
 	if !found {
-		return nil, maintenance.ErrNoActiveRevision
+		return maintenance.ErrNoActiveRevision
 	}
-	return fleetCompanyAt(target, c)
+	_, err = fleetCompanyAt(target, c)
+	return err
 }
 
 // fleetCompanyAt is c when it was applied from target's activation or a later
