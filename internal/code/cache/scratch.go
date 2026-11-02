@@ -270,13 +270,13 @@ func (s *Scratch) fillLayer(from string, under []code.LayerRow) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(s.Dir, "HEAD"), head, hostbox.FileMode); err != nil {
+	if err = os.WriteFile(filepath.Join(s.Dir, "HEAD"), head, hostbox.FileMode); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(s.Dir, "config"), []byte(gitproc.RepoConfig), hostbox.FileMode); err != nil {
+	if err = os.WriteFile(filepath.Join(s.Dir, "config"), []byte(gitproc.RepoConfig), hostbox.FileMode); err != nil {
 		return err
 	}
-	if err := os.Link(filepath.Join(from, "packed-refs"), filepath.Join(s.Dir, "packed-refs")); err != nil {
+	if err = os.Link(filepath.Join(from, "packed-refs"), filepath.Join(s.Dir, "packed-refs")); err != nil {
 		return err
 	}
 	packs, err := os.ReadDir(filepath.Join(from, "objects", "pack"))

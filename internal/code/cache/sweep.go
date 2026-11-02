@@ -922,7 +922,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	}
 	leaving := map[leaveKey]Event{}
 	for _, s := range strays {
-		key, ev := leaveKey{s.place, s.name}, EventPackRemoved
+		key, ev := leaveKey(s), EventPackRemoved
 		if m := packFileName().FindStringSubmatch(s.name); m != nil {
 			key.name = m[1]
 			switch {
@@ -1248,6 +1248,7 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 		if rel == packRel {
 			continue
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		other, err := c.image.sizes(inc.dir, rel, c.image.owns(rel))
 		if err != nil {
 			return err

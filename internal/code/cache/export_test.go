@@ -1827,3 +1827,14 @@ func Maintained(c *Cache, repoID string) (time.Time, time.Duration) {
 	}
 	return e.current.maintained.LastRun, e.current.maintained.Took
 }
+
+// LayerOutcomes is every outcome of crewlet.code.cache.layers, from the
+// installer's own list, so a test asking for each one is asked for an
+// outcome the day the installer gains it.
+func LayerOutcomes() []string {
+	out := make([]string, len(layerOutcomes))
+	for i, o := range layerOutcomes {
+		out[i] = string(o)
+	}
+	return out
+}

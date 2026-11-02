@@ -116,7 +116,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 				Truncated: true}}),
 		answer: code.SearchAnswer{Hits: []code.SearchHit{}, Tip: tip, Ref: ref}}
 	if viaIndex {
-		if view, ok := r.s.o.Cache.CodeIndex(r.synced); ok {
+		if view, ok := r.s.o.Cache.CodeIndex(ctx, r.synced); ok {
 			err = s.viaIndex(sctx, view)
 		} else {
 			viaIndex = false

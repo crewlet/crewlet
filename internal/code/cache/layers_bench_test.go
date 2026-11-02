@@ -211,7 +211,7 @@ func graphLayerCmd(dir string, packs []string) gitproc.Cmd {
 // so a fixture one sub-benchmark builds outlives it for the next.
 func scratchRepo(b *testing.B, root, name string) string {
 	b.Helper()
-	dir, err := os.MkdirTemp(root, name+"-")
+	dir, err := os.MkdirTemp(root, name+"-") //nolint:usetesting // under the caller's root, outliving this sub-benchmark: b.TempDir() would go with it
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -261,10 +261,12 @@ func (fakeCache) WantHistory(string)                                {}
 func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
-func (fakeCache) Memo(cache.Synced) *cache.MemoBatch                  { return nil }
-func (fakeCache) Spool() (*os.File, error)                            { return nil, os.ErrInvalid }
-func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool)      { return cache.IndexedTip{}, false }
-func (fakeCache) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
+func (fakeCache) Memo(cache.Synced) *cache.MemoBatch             { return nil }
+func (fakeCache) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
+func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
+func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
+	return nil, false
+}
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still

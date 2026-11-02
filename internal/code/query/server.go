@@ -57,8 +57,9 @@ type Cache interface {
 	// whether this node is one of the repository's index holders (search.go).
 	IndexTip(s cache.Synced) (cache.IndexedTip, bool)
 	// CodeIndex is the pinned copy's code index, mapped and opened, valid
-	// while s is held — or false, which a search answers with git grep.
-	CodeIndex(s cache.Synced) (*cache.CodeIndexView, bool)
+	// while s is held — or false, which a search answers with git grep; one
+	// it cannot read it drops, under ctx's values.
+	CodeIndex(ctx context.Context, s cache.Synced) (*cache.CodeIndexView, bool)
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
