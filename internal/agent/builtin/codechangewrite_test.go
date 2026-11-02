@@ -402,25 +402,28 @@ func TestAnUpdateAskingTwoThingsReadsNoItem(t *testing.T) {
 	}
 }
 
-// EVERY CHANGE REFUSAL IS IN AN EXISTING CLASS, and the class says what it
-// tells its reader: a rule of the repository or the change forbidden, a change
-// that moved stale, a branch already heading a live change exists, branches
-// no change can be about invalid, a write only a live change takes conflict,
-// what is gone not found, and what waiting clears unavailable — never the
-// engine's own fault — each answered with the decide's own sentence.
+// EVERY CHANGE REFUSAL IS IN AN EXISTING CLASS, by the rule a push's are: a
+// rule of the repository or the change refusing the caller forbidden, a
+// change that moved stale, a branch already heading a live change exists,
+// branches no change can be about invalid, the change or its repository in a
+// state that refuses the write until somebody changes it (closed, merged,
+// archived, a pull mirror) conflict, what is gone not found, and what waiting
+// clears unavailable — never the engine's own fault — each answered with the
+// decide's own sentence.
 //
 // Mutation: drop change_exists from changeClass → red; answer repo_mirrored
-// unavailable, as an import's wait is → red.
+// unavailable, as an import's wait is → red; answer repo_archived forbidden
+// again, as a rule → red.
 func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	want := map[code.ChangeRefusal]tools.Refusal{
-		code.ChangeRefusalNotPermitted: tools.RefusalForbidden, code.ChangeRefusalRepoArchived: tools.RefusalForbidden,
+		code.ChangeRefusalNotPermitted: tools.RefusalForbidden, code.ChangeRefusalRepoArchived: tools.RefusalConflict,
 		code.ChangeRefusalStale: tools.RefusalStaleVersion, code.ChangeRefusalChangeExists: tools.RefusalExists,
 		code.ChangeRefusalNoSource: tools.RefusalInvalid, code.ChangeRefusalNoDifference: tools.RefusalInvalid,
 		code.ChangeRefusalChangeClosed: tools.RefusalConflict, code.ChangeRefusalChangeMerged: tools.RefusalConflict,
 		code.ChangeRefusalRepoDeleted: tools.RefusalNotFound, code.ChangeRefusalChangeNotFound: tools.RefusalNotFound,
 		code.ChangeRefusalBusy: tools.RefusalUnavailable, code.ChangeRefusalUnavailable: tools.RefusalUnavailable,
-		code.ChangeRefusalRepoMirrored: tools.RefusalForbidden, code.ChangeRefusalRepoImporting: tools.RefusalUnavailable,
+		code.ChangeRefusalRepoMirrored: tools.RefusalConflict, code.ChangeRefusalRepoImporting: tools.RefusalUnavailable,
 	}
 	for _, refusal := range code.ChangeRefusals() {
 		writer := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {

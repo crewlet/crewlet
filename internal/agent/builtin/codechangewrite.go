@@ -922,20 +922,25 @@ func (d CodeDeps) converse(ctx context.Context, w code.ConversationWrite) (code.
 	return d.Writer.Converse(ctx, w)
 }
 
-// changeClass is the class a refusal of a change's lifecycle is answered in —
-// chosen by what each class tells its reader, as a push's are ([pushClass]):
-// a rule of the repository or the change refusing the caller FORBIDDEN — a
-// pull mirror's among them, as a push's repo_mirrored is; a change that moved since the caller read it STALE_VERSION; a branch already
-// heading a live change EXISTS; a write naming branches no change can be
-// about INVALID — the fix is another call; a write only a live change takes,
-// of one that is not, CONFLICT; a repository or a change gone NOT_FOUND; and
-// what waiting clears UNAVAILABLE, the same call again being the same write —
-// an import finishing among it, as a push's repo_importing is. The two only a push's receiver answers (ambiguous_source, bad_option) are
-// INVALID on the same reading, though no tool's write is ever refused either.
+// changeClass is the class a refusal of a change's lifecycle is answered in, by
+// the one rule a push's are ([pushClass]): a rule of the repository or the
+// change refusing the caller FORBIDDEN; a change that moved since the caller
+// read it STALE_VERSION; a branch already heading a live change EXISTS; a
+// write naming branches no change can be about INVALID — the fix is another
+// call; the change or its repository in a state that refuses the write until
+// somebody changes it CONFLICT — a change closed or merged, a repository
+// archived or a pull mirror, as a push's repo_archived and repo_mirrored are;
+// a repository or a change gone NOT_FOUND; and what waiting clears
+// UNAVAILABLE, the same call again being the same write — an import finishing
+// among it, as a push's repo_importing is. The two only a push's receiver
+// answers (ambiguous_source, bad_option) are INVALID on the same reading,
+// though no tool's write is ever refused either.
 func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
 	switch r {
-	case code.ChangeRefusalNotPermitted, code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
+	case code.ChangeRefusalNotPermitted:
 		return tools.RefusalForbidden, true
+	case code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
+		return tools.RefusalConflict, true
 	case code.ChangeRefusalStale:
 		return tools.RefusalStaleVersion, true
 	case code.ChangeRefusalChangeExists:
@@ -970,6 +975,10 @@ func changeRefused(tool string, res code.ChangeResult) tools.Result {
 		said += " Nothing was written; make the same call again — it is the same write."
 	case tools.RefusalForbidden:
 		said += " That is a rule of the repository or the change, so the same call is refused again."
+	case tools.RefusalConflict:
+		said += fmt.Sprintf(" That is the change's or the repository's state, which the sentence names: read "+
+			"the change again with %s before you decide, since the same call does not land while it stands.",
+			CodeGetChangeTool)
 	default:
 		said += " The same call is refused again; change what it asks for."
 	}
