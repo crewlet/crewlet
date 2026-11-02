@@ -67,19 +67,18 @@ import (
 // TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps,
 // TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit).
 //
-// WHAT IT COSTS IN TIME (BenchmarkLookup, over a segment of 65 536 blobs in
-// one bounded run — -benchtime 200x -count 1, no race detector, two E-cores
-// of a Core Ultra 7 265U — beside the per-literal lookup's own loop in the
-// same run): decoding a list of 65 536 ordinals takes 137 µs, against 220 µs
-// for the loop over its bytes the posting reader replaced, and 334 µs while
-// the reader's every step was a call (ordinals); the candidates of
+// WHAT IT COSTS IN TIME (BenchmarkLookup, over a segment of 65 536 blobs,
+// in bounded runs — -benchtime 200x -count 1, no race detector, two E-cores
+// of a Core Ultra 7 265U — each beside the per-literal lookup's own loop):
+// decoding a list of 65 536 ordinals takes 137 µs, against 220 µs for the
+// loop over its bytes the posting reader replaced, and 334 µs while the
+// reader's every step was a call (ordinals); the candidates of
 // handlerequest, one literal, whose lists of every blob it narrows by it
 // reads to their ends — blobs sit in id order, so what it keeps runs to the
 // segment's last — take 2.5 ms and allocate 7 560 bytes, against 3.9 ms and
 // 10.6 MB looked up a literal at a time, and 3.5 ms while a step was a call;
-// and of
-// handle(request|response|record|reply), four literals sharing handle's
-// lists, 2.6 ms and 29 456 bytes, against 9.4 ms and 24.7 MB.
+// and of handle(request|response|record|reply), four literals sharing
+// handle's lists, 2.6 ms and 27 280 bytes, against 9.4 ms and 24.7 MB.
 
 // reading is one lookup's reads of a segment's posting lists — every clause
 // of one plan, in one segment — and the bytes of them it has read, each list

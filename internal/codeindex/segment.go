@@ -801,11 +801,20 @@ func (u *union) merged() []uint32 {
 			// Made afresh, never grown: nothing it holds is read again, and
 			// growing it copies what an earlier round merged into it — and,
 			// built with the race detector, which does not elide the append
-			// of a make that slices.Grow is, allocates the growth twice. As
-			// long as buf can hold, which append grows a factor at a time,
-			// so the spare too is made a logarithmic number of times however
-			// the unions it merges grow from one to the next.
-			u.spare = make([]uint32, 0, cap(u.buf))
+			// of a make that slices.Grow is, allocates the growth twice.
+			// As long as what this round merges, never as buf can hold: a
+			// lookup decodes a literal's least list straight into buf and
+			// narrows it there (reading.admitted), so buf can hold a few
+			// blobs in the capacity of the longest list a literal decoded,
+			// and a spare that long was that list's decode again for every
+			// clause merging two literals or more. Exactly that long, and
+			// still made a logarithmic number of times as the unions a merge
+			// keeps it for grow from one trigram to the next: once merged
+			// into, it becomes buf, which append grows a factor at a time,
+			// and the spare it is swapped for is a buf append grew — so it
+			// is made only once a union outgrows what append last made
+			// room for (TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes).
+			u.spare = make([]uint32, 0, len(u.buf))
 		}
 		u.spare, u.spareEnds = u.spare[:0], u.spareEnds[:0]
 		from := 0

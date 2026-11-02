@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -404,6 +405,43 @@ func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
 	if limit := uint64(len(whole)); max(two, five, many) > limit {
 		t.Errorf("merges writing %d bytes (%d postings) allocated %d (2 segments), %d (5) and %d (32): more "+
 			"than they write", len(whole), postings, two, five, many)
+	}
+}
+
+// A UNION KEPT FROM ONE MERGE TO THE NEXT MAKES ITS BUFFERS A LOGARITHMIC
+// NUMBER OF TIMES. A merge keeps one union from trigram to trigram, and the
+// unions it merges grow from one to the next; the spare is made exactly as
+// long as what a round merges, and only once a union outgrows the buffer it
+// is swapped for, which append grew a factor at a time — so unions growing
+// by two ordinals at a time to 4 096 make their buffers a few tens of times,
+// never once a union.
+func TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the union's.
+	const most = 2048
+	evens, odds := make([]uint32, most), make([]uint32, most)
+	for i := range evens {
+		evens[i], odds[i] = uint32(2*i), uint32(2*i+1)
+	}
+	var u union
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for n := 1; n <= most; n++ {
+		u.reset()
+		u.add(evens[:n])
+		u.add(odds[:n])
+		if got := u.merged(); len(got) != 2*n || got[2*n-1] != uint32(2*n-1) {
+			t.Fatalf("the union of %d evens and %d odds holds %d ordinals", n, n, len(got))
+		}
+	}
+	runtime.ReadMemStats(&after)
+	made := after.Mallocs - before.Mallocs
+	bound := uint64(8 * bits.Len(2*most))
+	t.Logf("%d unions growing to %d ordinals made %d allocations, against a bound of %d", most, 2*most, made,
+		bound)
+	if made > bound {
+		t.Errorf("%d unions growing to %d ordinals made %d allocations, past the %d of eight for each doubling: "+
+			"a buffer is made once a union", most, 2*most, made, bound)
 	}
 }
 

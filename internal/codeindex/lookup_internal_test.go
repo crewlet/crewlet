@@ -807,3 +807,75 @@ func TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps(t *testing.T) {
 			early, blobs, r.read, bound)
 	}
 }
+
+// A CLAUSE'S UNION SPARES WHAT IT MERGES, NOT WHAT ITS BUFFER CAN HOLD. A
+// lookup decodes a literal's least list straight into its clause's union
+// and narrows it there (reading.admitted), so a union can hold a few blobs in
+// the capacity of the longest list one of its literals decoded; the spare it
+// merges them into is made as long as what it merges. Made as long as the
+// buffer can hold, it was that list's decode again for every clause of two
+// or more literals that narrow what they decode.
+//
+// Over a segment of 16 384 blobs, each holding the first halves of three
+// words — abcde, ijklm, qrstu — or their second halves, and one in 1 024 all
+// three whole, each literal of abcdefgh|ijklmnop|qrstuvwx decodes a list of
+// half the blobs and keeps 16. Merging the 48 ordinals they admit allocates
+// within twice them and their 3 lists' ends.
+//
+// It measures the merge alone: what the whole lookup allocates turns on
+// whether the race detector doubles slices.Grow's growth, by as much as a
+// spare too long.
+func TestAClausesUnionSparesWhatItMergesNotWhatItsBufferHolds(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the merge's.
+	const blobs, every = 16384, 1024
+	texts := make([][]byte, blobs)
+	for i := range texts {
+		switch {
+		case i%every == 0:
+			texts[i] = []byte("x := abcdefgh ijklmnop qrstuvwx\n")
+		case i%2 == 0:
+			texts[i] = []byte("x := abcde ijklm qrstu\n")
+		default:
+			texts[i] = []byte("x := defgh lmnop tuvwx\n")
+		}
+	}
+	s := segmentOf(t, texts, 1, 1)
+	plan, err := NewPlan(regexp.MustCompile("abcdefgh|ijklmnop|qrstuvwx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.index) != 1 || len(plan.index[0].alts) != 3 || len(plan.index[0].shared) != 0 {
+		t.Fatalf("the plan is %d clauses: the case is not the one it claims", len(plan.index))
+	}
+	c := plan.index[0]
+	r := reading{s: s}
+	var u union
+	if err := c.literals(&r, &u, r.held(plan.held)); err != nil {
+		t.Fatal(err)
+	}
+	admitted, lists := len(u.buf), len(u.ends)
+	// The case is the one it claims: the union holds what three literals
+	// admit in the capacity of a list one of them decoded.
+	if lists != 3 || admitted != 3*blobs/every || cap(u.buf) < blobs/2 {
+		t.Fatalf("the union holds %d lists, %d ordinals in a capacity of %d: the case is not the one it claims",
+			lists, admitted, cap(u.buf))
+	}
+	capacity := cap(u.buf)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := u.merged()
+	runtime.ReadMemStats(&after)
+	if want := perLiteral(t, c, s); !slices.Equal(got, want) {
+		t.Fatalf("the union of what the literals admit is %v; looked up a literal at a time, %v", got, want)
+	}
+	allocated := after.TotalAlloc - before.TotalAlloc
+	budget := uint64(2 * (4*admitted + 8*lists))
+	t.Logf("merging %d ordinals of %d lists from a buffer of capacity %d allocated %d bytes, against a budget of "+
+		"%d", admitted, lists, capacity, allocated, budget)
+	if allocated > budget {
+		t.Errorf("merging the %d ordinals %d literals admit allocated %d bytes, past the %d of twice them and "+
+			"their ends: the spare is as long as the buffer can hold, not as what it merges", admitted, lists,
+			allocated, budget)
+	}
+}
