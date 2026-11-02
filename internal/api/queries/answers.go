@@ -333,15 +333,16 @@ type Sources struct {
 	// listed, and no node here could read a transcript.
 	SessionObjects SessionObjects
 
-	// SessionRuns and SessionRestorers are what a session's row is told
+	// SessionRuns and RelaunchTargets are what a session's row is told
 	// whether a relaunch continues it by (`continuable`), beside the row
 	// itself: the turns' run records in the fleet's coordination store, and
-	// this build's runner for a harness's sessions — the sources a relaunch
-	// decides on (see executorsessions.go). Nil SessionRuns leaves every live
-	// turn's row undecided, said as such; nil SessionRestorers decides that
-	// no runner here restores a session.
-	SessionRuns      SessionRuns
-	SessionRestorers SessionRestorers
+	// the member a relaunch of the seat's turn would be launched on, by the
+	// engine's one pick of it — the sources a relaunch decides on (see
+	// executorsessions.go). Nil leaves every live turn's row undecided, said
+	// as such: a node that cannot read what a relaunch reads cannot say what
+	// a relaunch would do.
+	SessionRuns     SessionRuns
+	RelaunchTargets RelaunchTargets
 
 	// Config serves the config family, every one of which is admin's: the
 	// document names every ${VAR} the company holds a credential under.

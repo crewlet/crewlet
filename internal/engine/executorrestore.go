@@ -176,25 +176,6 @@ func (e *Engine) RelaunchTarget(handle string) sandbox.RelaunchTarget {
 	return company.relaunchTarget(seat, company.catalogue)
 }
 
-// SessionRestorer is this build's runner for the sessions harness wrote, as the
-// company this node runs registers it in its sandbox catalogue, or nil where
-// this node runs no company, its company reaches no sandbox cell, or none of
-// its runners restores a session: what the read surface hands
-// [sandbox.ContinuityOf] for each row of a seat's sessions (internal/api/queries'
-// `continuable`) until it asks [Engine.RelaunchTarget].
-func (e *Engine) SessionRestorer(harness string) sandbox.SessionRestorer {
-	company := e.Company()
-	if company == nil || company.catalogue == nil {
-		return nil
-	}
-	run, err := company.catalogue.RunnerFor(harness)
-	if err != nil {
-		return nil
-	}
-	restorer, _ := run.(sandbox.SessionRestorer)
-	return restorer
-}
-
 // sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil
 // where it continues none: the brief for the box the session was last worked
 // in, and the one for any other, each where the sandbox layer hands it.
