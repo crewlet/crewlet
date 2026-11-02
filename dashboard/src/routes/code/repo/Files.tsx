@@ -25,14 +25,19 @@
  * A page is at most code.MaxGitAnswerBytes, about fifteen hundred lines of
  * ordinary source, so a link to a line further in — a search hit, ⌘K, a
  * Permalink — opened on lines that did not hold it, and the reader paged
- * forward to find what the link had named. Where the first page does not
- * draw the picked line, the file is read again from PICK_CONTEXT lines before
- * it (`start_line`), paged forward from there as before, and "Load earlier
- * lines" reads back towards line 1 a step at a time (`start_line` and
- * `end_line`). A blame is asked a range of at most CODE_MAX_BLAME_LINES lines
- * at a time — the engine's whole range for one — so it is opened at the
- * picked line the same way, read range after range forward, and back the same
- * way: before, it could never show a line past its first range.
+ * forward to find what the link had named. A path the address picks a line of
+ * is now read, the FIRST time, from PICK_CONTEXT lines before that line
+ * (`start_line`, [openingLine]), decided before any read: every read of a
+ * file streams the whole of it from git, and every page answers the file's
+ * line count, so a read from line 1 to learn where to read next would be a
+ * second stream nothing draws. It is paged forward from there as before, and
+ * "Load earlier lines" reads back towards line 1 a page's worth at a time
+ * (`start_line` and `end_line`). A line past the file's end, which the engine
+ * refuses as a `start_line`, reads the file again from line 1 and says so.
+ * A blame is asked a range of at most CODE_MAX_BLAME_LINES lines at a time —
+ * the engine's whole range for one — so it is opened at the picked line the
+ * same way, its first range the one that holds the line, read range after
+ * range forward, and back the same way.
  *
  * # A Permalink names the commit
  *
@@ -54,6 +59,7 @@ import {
   isWholeOID,
   lineToOpenAt,
   linesValue,
+  openingLine,
   parseLines,
   pathSteps,
   shortOID,
@@ -173,11 +179,23 @@ function PathView({
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
 }) {
-  const params = useMemo(
+  // THE LINE THE PATH IS READ FROM, taken once per revision and path from the
+  // address it was opened with ([openingLine]): a link to line 2400 asks from
+  // line 2350 in its one read, and a later press asks nothing.
+  const [start, open] = useOpened(`${rev}\n${path}`, openingLine(picked));
+  const base = useMemo(
     () => ({ name: repo.name, path, ...(rev ? { ref: rev } : {}) }),
     [repo.name, path, rev],
   );
+  const params = useMemo(() => (start > 1 ? { ...base, start_line: start } : base), [base, start]);
   const first = useCodeQuery("code_blob", params);
+  // A LINE PAST THE FILE'S END — a stale link — is refused as a `start_line`
+  // (the engine's `bad_params`, naming the file's lines), and the file is read
+  // again from line 1, where its caption says it has no such line. The line
+  // is the one parameter the address added, so a refusal it did not cause is
+  // refused again from line 1, and said there. React draws again at once with
+  // the line moved, before anything of the refusal is shown.
+  if (start > 1 && first.error === "bad_params") open(1);
   const paged = usePaged(
     first,
     params,
@@ -215,7 +233,8 @@ function PathView({
         <FileLines
           rev={rev}
           path={path}
-          params={params}
+          params={base}
+          opened={start}
           opening={first}
           paged={paged}
           total={file.lines}
@@ -231,21 +250,30 @@ function PathView({
 
 /** The place a file's lines (or its blame) begin at, under the reading it was decided for. */
 interface Opened {
-  /** The file and the lens it was decided for: another starts again from line 1. */
+  /** The file and the lens it was decided for: another starts again from its own opening line. */
   place: string;
-  /** The first line read forward from: 1, or where the address's line needed them. */
+  /** The first line read forward from: the opening line, or where the address's line needed them. */
   from: number;
 }
 
 /**
- * Where a file's lines (or its blame) begin: line 1 for a place first opened,
- * and wherever [useOpenAt] moves them.
+ * Where a file's lines (or its blame) begin: `initial` for a place first
+ * opened — taken ONCE, as the place opens, from the address it was opened
+ * with, so a press that picks another line later re-takes nothing — and
+ * wherever `open` moves them after.
  */
-function useOpened(place: string): [number, (from: number) => void] {
-  const [opened, setOpened] = useState<Opened>({ place, from: 1 });
-  const from = opened.place === place ? opened.from : 1;
+function useOpened(place: string, initial: number): [number, (from: number) => void] {
+  const [opened, setOpened] = useState<Opened>({ place, from: initial });
+  let now = opened;
+  if (opened.place !== place) {
+    // A PLACE OPENED SINCE THE LAST DRAWING keeps the line decided for it
+    // now: React draws again at once with it held, before anything is shown,
+    // so a pick that moves later is never read as where the place opened.
+    now = { place, from: initial };
+    setOpened(now);
+  }
   const open = useCallback((at: number) => setOpened({ place, from: at }), [place]);
-  return [from, open];
+  return [now.from, open];
 }
 
 /**
@@ -370,36 +398,42 @@ const blobOf = (a: CodeGitAnswer): readonly CodeBlobAnswer[] => (a.blob ? [a.blo
 const pageId = (p: CodeBlobAnswer): string => `page:${p.start_line ?? 0}:${p.start_byte ?? 0}`;
 
 /**
- * A file's lines: from line 1, or from where the line the address picks
- * needs them ([useOpenAt]) — a second question, `start_line`, read a page at
- * a time forward as the first is — with the lines before them a press away.
- * `opening` is the path's own read, from line 1, and its `paged` pages: what
- * is drawn while the lines begin there, so a file whose first page draws the
- * picked line is read once, as before.
+ * A file's lines: from `opened`, the line the path's own read began at — 1,
+ * or PICK_CONTEXT lines before the line the address picked as the path opened
+ * — and drawn from that read and its `paged` pages, so a file is read once
+ * wherever its link points. Only where those do not draw the picked line —
+ * a line longer than a page above it, or an address moved to another line
+ * since — are the lines read again from where it needs them ([useOpenAt]), a
+ * second question read a page at a time forward as the first is; the lines
+ * before them are a press away.
  */
 function FileLines({
   rev,
   path,
   params,
+  opened,
   opening,
-  paged: fromStart,
+  paged: fromOpening,
   total,
   picked,
   onPick,
 }: {
   rev: string;
   path: string;
+  /** The path's read without a line: what every other read of its lines adds its own to. */
   params: CodeParams;
+  opened: number;
   opening: QueryResult<CodeGitAnswer>;
   paged: Paged<PathPart, CodeGitAnswer>;
   total: number;
   picked: LineRun | null;
   onPick: (run: LineRun | null) => void;
 }) {
-  const place = `${rev}\n${path}`;
-  const [from, open] = useOpened(place);
+  const place = `${rev}\n${path}\n${opened}`;
+  const [from, open] = useOpened(place, opened);
+  const moved = from !== opened;
   const atParams = useMemo(() => ({ ...params, start_line: from }), [params, from]);
-  const atLine = useCodeQuery("code_blob", atParams, { enabled: from > 1 });
+  const atLine = useCodeQuery("code_blob", atParams, { enabled: moved });
   const fromLine = usePaged(
     atLine,
     atParams,
@@ -408,7 +442,7 @@ function FileLines({
     pageId,
     nextOf,
   );
-  const first = from > 1 ? atLine : opening;
+  const first = moved ? atLine : opening;
   const earlier = useEarlier(`${place}\n${from}`, from, EARLIER_FILE_LINES, (start, end, cursor) =>
     codeRest.query("code_blob", {
       ...params,
@@ -421,11 +455,11 @@ function FileLines({
   // only when a page arrives — so the text is joined and split once a page,
   // never on a render that brought none: a line pressed, or the repository's
   // row read again every minute.
-  const startPages = useMemo(
-    () => fromStart.items.filter((p): p is CodeBlobAnswer => !("mode" in p)),
-    [fromStart.items],
+  const openedPages = useMemo(
+    () => fromOpening.items.filter((p): p is CodeBlobAnswer => !("mode" in p)),
+    [fromOpening.items],
   );
-  const forward = from > 1 ? fromLine.items : startPages;
+  const forward = moved ? fromLine.items : openedPages;
   const pages = useMemo(
     () => (earlier.answers.length ? [...earlier.answers.flatMap(blobOf), ...forward] : forward),
     [earlier.answers, forward],
@@ -444,7 +478,7 @@ function FileLines({
       </QueryState>
     );
   }
-  const more = from > 1 ? fromLine : fromStart;
+  const more = moved ? fromLine : fromOpening;
   return (
     <>
       <EarlierLines earlier={earlier} />
@@ -808,8 +842,8 @@ const SourceLine = memo(function SourceLine({
  * Scroll the first line an address picks into view, ONCE for each place the
  * lines are opened at (`place`: the file and the line read forward from), and
  * only once that line is DRAWN — `drawn` counts the lines on screen, so the
- * lines a move to the picked line brings ask again, where the lines from line
- * 1 drawn first did not hold it. An address that names a line is opened at
+ * lines a move to the picked line brings ask again, where the lines drawn
+ * first did not hold it. An address that names a line is opened at
  * it, and a press that picks another moves nothing under the reader's
  * pointer: it moves no lines, so their place has been scrolled already.
  */
@@ -860,9 +894,10 @@ function parseRangeCursor(cursor: string): { line: number; at: string } {
  * it, so the lines are read range after range: the cursor after a range's
  * last page is the next range's first line, and the cursor inside one carries
  * the line its range was asked from, which the engine holds every page of it
- * to. They begin at line 1, or where the line the address picks needs them
- * ([useOpenAt]), with the lines before them a press away, as a file's are.
- * `total` is the file's lines, from its own read.
+ * to. They begin PICK_CONTEXT lines before the line the address picks as the
+ * blame opens ([openingLine]), or at line 1, and move only where those do not
+ * draw it ([useOpenAt]), with the lines before them a press away, as a
+ * file's are. `total` is the file's lines, from its own read.
  */
 function Blame({
   repo,
@@ -880,7 +915,12 @@ function Blame({
   onPick: (run: LineRun | null) => void;
 }) {
   const place = `${rev}\n${path}\nblame`;
-  const [from, open] = useOpened(place);
+  // THE FIRST RANGE ASKED HOLDS THE PICKED LINE, decided from the address
+  // and the file's lines before any blame is asked: a blame walks the file's
+  // history for every line it names, the costliest read of a file, and a
+  // range from line 1 that only said where to ask next would be one walk
+  // more that nothing draws.
+  const [from, open] = useOpened(place, openingLine(picked, total));
   const params = useMemo(
     () => ({ name: repo.name, path, ...(rev ? { ref: rev } : {}) }),
     [repo.name, path, rev],

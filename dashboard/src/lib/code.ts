@@ -489,6 +489,25 @@ export function linesValue(run: LineRun): string {
 export const PICK_CONTEXT = 50;
 
 /**
+ * The line a file's lines (or its blame) are FIRST asked from, decided before
+ * any read of them: PICK_CONTEXT lines before the line the address picks, or
+ * line 1 where it picks none — or, where the file's lines are known (`total`),
+ * one it does not have, a stale link, which opens the file where it is.
+ *
+ * Decided before the first read rather than after it, because every read of a
+ * file is a whole `git cat-file blob` stream (the engine counts the file's
+ * lines whatever the range), and every blame a history walk over the lines it
+ * names: a read from line 1 that only told the dashboard where to read next
+ * would be one more of each, and nothing would draw it. So a line inside the
+ * first page opens fifty lines above it too (at line 1 where that is nearer),
+ * with the lines before a press away.
+ */
+export function openingLine(picked: LineRun | null, total = Number.POSITIVE_INFINITY): number {
+  if (!picked || picked.start > total) return 1;
+  return Math.max(1, picked.start - PICK_CONTEXT);
+}
+
+/**
  * How many lines of a FILE one press of "Load earlier lines" reads back: as
  * many as one answer page of ordinary source holds — `code.MaxGitAnswerBytes`
  * (56 KiB) at under forty bytes a line — so a press draws one page, as a press

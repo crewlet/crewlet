@@ -538,13 +538,20 @@ afterEach(() => {
   delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
 });
 
+/** The `start_line` of every read of the big file a kind of read asked, in order: null where it named none. */
+const bigStarts = (asked: URL[], what: string) =>
+  reads(asked, what)
+    .filter((u) => u.searchParams.get("path") === BIG_FILE)
+    .map((u) => u.searchParams.get("start_line"));
+
 // A LINK TO A LINE PAST A FILE'S FIRST PAGE OPENS AT IT — a search hit, ⌘K, a
-// Permalink: the file is read again from PICK_CONTEXT lines before the line
-// (`start_line`), the line is drawn picked and scrolled into view, and the
-// lines before are read back a press at a time, each step a range that meets
-// the lines after it. Mutation: read the file from its first page alone (no
-// `start_line`), or leave the earlier step's end short of the lines drawn, and
-// this fails.
+// Permalink — in ONE read: the path's own read asks from PICK_CONTEXT lines
+// before the line (`start_line`), since every read of a file is a stream of
+// the whole of it from git, the line is drawn picked and scrolled into view,
+// and the lines before are read back a press at a time, each step a range
+// that meets the lines after it. Mutation: read the path from line 1 first
+// (no `start_line`), or leave the earlier step's end short of the lines
+// drawn, and this fails.
 test("a file opens at a picked line past its first page, and reads back from there", async () => {
   const scrolled = watchScrolls();
   const asked = stubEngine();
@@ -554,8 +561,7 @@ test("a file opens at a picked line past its first page, and reads back from the
   expect(line.getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByText("line 2400")).toBeTruthy();
   await waitFor(() => expect(scrolled.map((e) => e.id)).toContain("L2400"));
-  const opened = reads(asked, "code_blob").filter((u) => u.searchParams.has("start_line"));
-  expect(opened.map((u) => u.searchParams.get("start_line"))).toEqual(["2350"]);
+  expect(bigStarts(asked, "code_blob")).toEqual(["2350"]);
   expect(screen.queryByRole("button", { name: "Line 1" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Line 2349" })).toBeNull();
 
@@ -576,11 +582,14 @@ test("a file opens at a picked line past its first page, and reads back from the
   expect(scrolled.map((e) => e.id)).toEqual(["L2400"]);
 });
 
-// A FILE'S BLAME OPENS AT THE PICKED LINE TOO, and reads range after range: a
-// blame names at most CODE_MAX_BLAME_LINES lines, so its lines past the first
-// range — never reachable before — are read from the line after it, and a page
-// inside a range is asked with the range's own first line. Mutation: page the
-// blame by the engine's cursor alone, or open it from line 1, and this fails.
+// A FILE'S BLAME OPENS AT THE PICKED LINE TOO, its FIRST range the one that
+// holds it — a blame walks the file's history for every line it names, so a
+// range from line 1 that only said where to ask next is a walk nothing draws
+// — and reads range after range: a blame names at most CODE_MAX_BLAME_LINES
+// lines, so its lines past a range are read from the line after it, and a
+// page inside a range is asked with the range's own first line. Mutation: page
+// the blame by the engine's cursor alone, or open it from line 1 first, and
+// this fails.
 test("a blame opens at a picked line past its first range and reads on across ranges", async () => {
   const scrolled = watchScrolls();
   const asked = stubEngine();
@@ -594,7 +603,8 @@ test("a blame opens at a picked line past its first range and reads on across ra
       u.searchParams.get("start_line"),
       u.searchParams.get("cursor"),
     ]);
-  expect(ranges()).toContainEqual(["2350", null]);
+  expect(ranges()).toEqual([["2350", null]]);
+  expect(bigStarts(asked, "code_blob")).toEqual(["2350"]);
   expect(screen.queryByRole("button", { name: "Line 2600" })).toBeNull();
 
   // ON PAST THE RANGE'S FIRST PAGE, then into the next range.
@@ -608,6 +618,22 @@ test("a blame opens at a picked line past its first range and reads on across ra
   fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
   expect(await screen.findByRole("button", { name: "Line 1850" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Line 2349" })).toBeTruthy();
+  // NO BLAME FROM LINE 1 was ever asked: every range named its first line.
+  expect(bigStarts(asked, "code_blame")).not.toContain(null);
+});
+
+// A LINK TO A LINE THE FILE DOES NOT HAVE — a stale one — is refused by the
+// engine as a `start_line` past the file's end, and the file is read again
+// from line 1, its caption saying the line is not there rather than the
+// refusal standing in for the file. Mutation: keep the refused line, or read
+// the file again from it, and this fails.
+test("a link past a file's end opens the file from its first line, saying so", async () => {
+  const asked = stubEngine();
+  mount(`#/code/repos/web?tab=files&path=src%2Fbig.go&lines=3100`);
+
+  expect(await screen.findByRole("button", { name: "Line 1" })).toBeTruthy();
+  expect(screen.getByText(/it has no line 3100/)).toBeTruthy();
+  expect(bigStarts(asked, "code_blob")).toEqual(["3050", null]);
 });
 
 // A BRANCH OPENS ITS FILES: the default branch at the bare Files address, any

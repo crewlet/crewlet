@@ -12,6 +12,7 @@ import {
   changeRef,
   lineToOpenAt,
   omittedOf,
+  openingLine,
   parseChangeRef,
   preconditionWord,
   standingBlockers,
@@ -134,5 +135,20 @@ describe("where a file's lines begin for the line an address picks", () => {
     expect(lineToOpenAt(at(30), 1800, { start: 1800, end: 3000 }, 3000)).toBe(1);
     expect(lineToOpenAt(at(20), 1, { start: 1, end: 5 }, 3000)).toBe(20);
     expect(lineToOpenAt(at(2400), 2350, { start: 2350, end: 2360 }, 3000)).toBe(2400);
+  });
+
+  // THE FIRST READ IS ASKED WHERE THE LINE IS, before anything is known of
+  // the file but its line count where the caller has it: PICK_CONTEXT lines
+  // before a picked line, line 1 for none, near the top, or one past the
+  // file's end. Mutation: open every file at line 1, or at the picked line
+  // whatever the file's lines, and this fails.
+  test("open PICK_CONTEXT lines before the picked line, from line 1 where none fits", () => {
+    expect(openingLine(at(2400))).toBe(2400 - PICK_CONTEXT);
+    expect(openingLine(at(2400), 3000)).toBe(2400 - PICK_CONTEXT);
+    expect(openingLine({ start: 300, end: 320 }, 3000)).toBe(300 - PICK_CONTEXT);
+    expect(openingLine(at(30), 3000)).toBe(1);
+    expect(openingLine(null, 3000)).toBe(1);
+    expect(openingLine(at(3001), 3000)).toBe(1);
+    expect(openingLine(at(3000), 3000)).toBe(3000 - PICK_CONTEXT);
   });
 });

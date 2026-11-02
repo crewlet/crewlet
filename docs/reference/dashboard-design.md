@@ -7895,20 +7895,25 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted, as a picked line of a diff is.
-  An address whose `lines=` the file's first page does not draw — a Code ›
-  Search hit, a ⌘K hit or a Permalink to a line past the first ~56 KiB —
-  OPENS AT THE LINE: the file is read again from fifty lines before it
-  (`code_blob`'s `start_line`), paged forward from there as before, the line
+  An address that picks `lines=` — a Code › Search hit, a ⌘K hit or a
+  Permalink — OPENS AT THE LINE: the path's one read asks from fifty lines
+  before it (`code_blob`'s `start_line`), decided before anything is read,
+  because every read of a file streams the whole of it from git and answers
+  its line count, so a read from line 1 first would be a second stream that
+  nothing draws. A line inside the first page opens fifty lines above it too
+  (at line 1 where that is nearer).
+  The file is paged forward from there as before, the line
   drawn picked and scrolled to the middle of the screen, and **Load earlier
   lines** reads back towards line 1 fifteen hundred lines a press, a page's
   worth (`start_line` and `end_line`, each step followed through its pages, so
   it meets the lines after it; every step costs the git node one stream of
   the whole file, however wide). The blame does the same through its own
-  `start_line`, and reads a range of at most `code.MaxBlameLines` (500) lines
-  at a time, forward and back, range after range, so **Load more lines**
-  reaches a blame's last line. A press picks a
-  line on screen and so reads nothing; a line the file does not have is said
-  so beside its size.
+  `start_line`, its first range the one that holds the line, and reads a
+  range of at most `code.MaxBlameLines` (500) lines at a time, forward and
+  back, range after range, so **Load more lines** reaches a blame's last line.
+  A press picks a line on screen and so reads nothing; a line the file does
+  not have, which the engine refuses as a `start_line`, reads the file again
+  from line 1 and is said so beside its size.
   The revision picker lists the first page of the branches and of the tags
   (`code_refs`), read ONCE by the page while its Files or Commits tab is open
   and handed to every picker it draws — a comparison's two pickers share one
