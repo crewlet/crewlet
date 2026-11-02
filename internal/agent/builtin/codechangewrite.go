@@ -637,12 +637,11 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 		body := argString(args, "body")
 		edit.Body = &body
 	}
-	item, given, clear, refusal := t.deps.workItemArg(ctx, tool, args)
-	if refusal != nil {
-		return code.ChangeProposal{}, refusal
-	}
-	edit.WorkItem, edit.ClearWorkItem = item, clear
-	edits := edit.Title != nil || edit.Body != nil || given
+	// THE ASK IS COUNTED BEFORE THE ITEM IS RESOLVED, from the arguments'
+	// presence alone: a Worklet key is resolved by a read of the tracker, and
+	// a call asking for more than one thing is refused without one, as the
+	// open refuses every malformed call before anything is read.
+	edits := edit.Title != nil || edit.Body != nil || workItemAsked(args)
 	_, draft := argval.Bool(args["draft"])
 	retarget := strings.TrimSpace(argString(args, "target")) != ""
 	asked := 0
@@ -656,6 +655,7 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 			"`work_item`), `draft`, or `target` — each is a record of its own.", tool))
 		return code.ChangeProposal{}, &r
 	}
+	var refusal *tools.Result
 	switch {
 	case draft:
 		return code.ChangeProposal{Draft: &code.ChangeDraft{Draft: argBool(args, "draft")}}, nil
@@ -666,6 +666,11 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 		}
 		return code.ChangeProposal{Retarget: &code.ChangeRetarget{TargetRef: target}}, nil
 	}
+	item, _, clear, refusal := t.deps.workItemArg(ctx, tool, args)
+	if refusal != nil {
+		return code.ChangeProposal{}, refusal
+	}
+	edit.WorkItem, edit.ClearWorkItem = item, clear
 	// WHAT THE EDIT SETS NAMES ITS MENTIONS, and nothing it leaves standing:
 	// whoever the old title or body named was told when it was written.
 	var said []string

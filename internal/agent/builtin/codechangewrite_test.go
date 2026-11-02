@@ -355,6 +355,53 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 	}
 }
 
+// AN UPDATE ASKING TWO THINGS READS NO ITEM: code_update_change counts what a
+// call asks from its arguments' presence before it resolves the work item one
+// names, so a call naming a Worklet key beside `draft` or a `target` is
+// refused as changing more than ONE thing without a read of the tracker — and
+// a key naming no task does not hide that refusal behind its own. The same key
+// asked alone is read once and carried by the edit.
+//
+// Mutation: the item resolved before the ask is counted → the tracker is read
+// and a key naming no task answers as one, red.
+func TestAnUpdateAskingTwoThingsReadsNoItem(t *testing.T) {
+	t.Parallel()
+	book := taskBook{{ID: "t-9", Key: "ENG-9", Project: "ENG"}}
+	for name, args := range map[string]map[string]any{
+		"a draft and a key":              {"draft": true, "work_item": "ENG-9"},
+		"a title, a target and a key":    {"title": "x", "target": "release", "work_item": "ENG-9"},
+		"a draft and a key with no task": {"draft": true, "work_item": "ENG-404"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host, writer, tasks := newChangeHost(siteChange()), &codeWrites{}, &countedTasks{book: book}
+			args["change"], args["expected_version"] = "site!7", 4
+			got := callWrite(everyGrant(), t, codeRegistry(t, changeWriteDeps(host, writer, tasks)), writerTurn(t),
+				builtin.CodeUpdateChangeTool, args)
+			reads, _, _ := host.asked()
+			changes, _ := writer.changesAsked()
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output, "ONE thing") {
+				t.Errorf("answered %q as %s, want the call refused for changing more than ONE thing", got.Output,
+					tools.RefusalOf(got))
+			}
+			if n := tasks.reads(); n+len(reads)+len(changes) != 0 {
+				t.Errorf("the refused call made %d tracker reads, %d code reads and %d writes, want none", n,
+					len(reads), len(changes))
+			}
+		})
+	}
+
+	host, writer, tasks := newChangeHost(siteChange()), &codeWrites{}, &countedTasks{book: book}
+	got := callWrite(everyGrant(), t, codeRegistry(t, changeWriteDeps(host, writer, tasks)), writerTurn(t),
+		builtin.CodeUpdateChangeTool, map[string]any{"change": "site!7", "expected_version": 4, "work_item": "ENG-9"})
+	changes, _ := writer.changesAsked()
+	if got.Failed || len(changes) != 1 || changes[0].Edit == nil || changes[0].Edit.WorkItem == nil ||
+		changes[0].Edit.WorkItem.ID != "t-9" || tasks.reads() != 1 {
+		t.Errorf("the key alone answered %q with %+v after %d tracker reads, want one edit carrying t-9 after one",
+			got.Output, changes, tasks.reads())
+	}
+}
+
 // EVERY CHANGE REFUSAL IS IN AN EXISTING CLASS, and the class says what it
 // tells its reader: a rule of the repository or the change forbidden, a change
 // that moved stale, a branch already heading a live change exists, branches
