@@ -800,9 +800,8 @@ func registeredStatements() map[string]statement {
 		// target's live entries after a seq, a repository's from the top and
 		// after a place, and every repository's the same way, each in its
 		// index's order; the active repositories holding one, grouped on the
-		// index's leading column; the merge rate's enqueues of a target,
-		// its live entries over code_queue_live_idx and the repository's
-		// entries ended since over code_queue_ended_idx; a repository's
+		// index's leading column; the merge rate's enqueues of a target, one
+		// seek of code_queue_enqueued_idx answered from the index; a repository's
 		// ejections and a target's, each by the index partial on ejections
 		// that leads with what it names; a target's trains by
 		// code_candidates_train_idx; its landings above a place and its
@@ -839,10 +838,9 @@ func registeredStatements() map[string]statement {
 			50}, []string{"code_queue_live_idx (repo_id>=?)"}},
 		"queue due repositories": {queueDueReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_queue_live_idx (repo_id>?)", repoKey + " (id=?)"}},
-		"a target's live entries enqueued since": {enqueuedLiveSQL, []any{"repo-1", "refs/heads/main", 1000,
-			MergeRateScan}, []string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
-		"a repository's entries ended since": {enqueuedEndedSQL, []any{"repo-1", 1000, "refs/heads/main", 1000,
-			MergeRateScan}, []string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
+		"a target's entries enqueued since": {enqueuedSQL, []any{"repo-1", "refs/heads/main", 1000,
+			MergeRateScan}, []string{"COVERING INDEX code_queue_enqueued_idx (repo_id=? AND target_ref=? AND " +
+			"enqueued_at>=?)"}},
 		"a repository's ejections": {ejectedOfRepoSQL, []any{"repo-1", 1000, MaxEjectionsShown},
 			[]string{"code_queue_ejected_idx (repo_id=? AND ended_at>=?)"}},
 		"a target's ejections": {ejectedOfTargetSQL, []any{"repo-1", "refs/heads/main", 1000, MaxEjectionsShown},

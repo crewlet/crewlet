@@ -359,37 +359,32 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 }
 
 // enqueuedSince is how many entries were enqueued on repoID's target at or
-// after since, up to [MergeRateScan] — what a queue was asked to
-// land within its merge rate's window (M5-D28). Two seeks, each counting at
-// most the scan: the live entries over code_queue_live_idx, and the entries
-// ENDED since — an entry enqueued within the window that has ended ended
-// within it — over code_queue_ended_idx, each filtered on its enqueue's
-// instant.
+// after since, up to [MergeRateScan] — what a queue was asked to land within
+// its merge rate's window (M5-D28), live and ended alike. ONE SEEK of
+// code_queue_enqueued_idx, the target's entries by their enqueue's instant,
+// answered from the index and stopped at the scan: the walk is the count,
+// never another target's endings nor a row of the table, so a page costs the
+// same whatever the repository's other queues land. Measured by
+// BenchmarkQueueDuePage (-benchtime 3x -count 1, the runner's two E-cores) on
+// four targets each with an hour of 3 840 landings: 8.6 ms a page with the
+// two seeks this replaced — the target's live entries over
+// code_queue_live_idx and the repository's endings over code_queue_ended_idx,
+// each row fetched to filter — and 2.8 ms with this one, which walks main's
+// own 3 841 entries and nothing of the other targets'.
 func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since time.Time) (int, error) {
-	at := store.EncodeTime(since)
-	var live, ended int
-	if err := tx.QueryRowContext(ctx, enqueuedLiveSQL, repoID, target, at, MergeRateScan).Scan(&live); err != nil {
-		return 0, fmt.Errorf("code: count %s's live entries enqueued since %s: %w", target, since, err)
+	var n int
+	if err := tx.QueryRowContext(ctx, enqueuedSQL, repoID, target, store.EncodeTime(since), MergeRateScan).Scan(
+		&n); err != nil {
+		return 0, fmt.Errorf("code: count %s's entries enqueued since %s: %w", target, since, err)
 	}
-	if err := tx.QueryRowContext(ctx, enqueuedEndedSQL, repoID, at, target, at, MergeRateScan).Scan(
-		&ended); err != nil {
-		return 0, fmt.Errorf("code: count %s's ended entries enqueued since %s: %w", target, since, err)
-	}
-	return min(live+ended, MergeRateScan), nil
+	return n, nil
 }
 
-// The merge rate's two counts (registered in plan_test.go): a target's live
-// entries over code_queue_live_idx, and a repository's entries ended from an
-// instant over code_queue_ended_idx, each index's partial predicate spelled
-// as it declares it, the target and the enqueue's instant filtered from the
-// row.
-const (
-	enqueuedLiveSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_live_idx
-		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND enqueued_at >= ? LIMIT ?)`
-	enqueuedEndedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_ended_idx
-		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at >= ? AND target_ref = ?
-			AND enqueued_at >= ? LIMIT ?)`
-)
+// enqueuedSQL is the merge rate's count (registered in plan_test.go): a
+// target's entries enqueued from an instant over code_queue_enqueued_idx, up
+// to a limit.
+const enqueuedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_enqueued_idx
+	WHERE repo_id = ? AND target_ref = ? AND enqueued_at >= ? LIMIT ?)`
 
 // workEntriesOf is entries as the home's queue reads them, their changes read
 // in ONE statement by the changes' key ([changeRowsIn]) — their descriptions

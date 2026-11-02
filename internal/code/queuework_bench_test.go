@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // BenchmarkTheHomesQueueWork times ONE PAGE of a `queue_due` read — what a
@@ -149,4 +151,58 @@ func seedQueueWork(b *testing.B, n *node, depth, batch int, standing bool) strin
 		b.Fatalf("seed the queue work: %v", err)
 	}
 	return repo
+}
+
+// BenchmarkQueueDuePage times ONE PAGE of the home's queue work — the
+// `queue_due` read a queue turn makes for every target, on every nudge of its
+// repository — that counts its target's enqueues within code.MergeRateWindow,
+// on a repository whose queues have each landed a full hour at the queue's
+// bound: four targets, main among them, each with 3 840 entries enqueued and
+// landed within the window (depth 8 and batch 8 at one-minute rounds, the
+// figure code.MergeRateScan is sized to), and main holding one live entry
+// besides. The count is main's 3 841, so the page pays for main's own hour and
+// never for the other three targets' endings, whatever the repository's other
+// queues land. Bounded: -benchtime 3x -count 1 on the runner's two E-cores;
+// the figure is at enqueuedSince in queuework.go.
+func BenchmarkQueueDuePage(b *testing.B) {
+	const landedPerTarget = 3840
+	n := newNode(b)
+	n.chart = testChart()
+	c, _ := committerOn(b, n, n.pub)
+	w, _ := writerOn(b, n, n.pub)
+	repo, change := queueRepo(b, n, c, "web")
+	ready(b, n, w, repo, change)
+	n.storedAt = func(uint64, time.Time) time.Time { return harnessAt }
+	res, err := c.ProposeQueue(b.Context(), enqueueing(repo, change, ada, oidOf("B")))
+	requireQueued(b, res, err, code.QueueWaiting, 1)
+
+	ctx := context.Background()
+	since := harnessAt.Add(-code.MergeRateWindow)
+	step := code.MergeRateWindow / (landedPerTarget + 1)
+	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
+		for _, target := range []string{mainRef, releaseRef, "refs/heads/next", "refs/heads/stable"} {
+			for i := range landedPerTarget {
+				at := since.Add(time.Duration(i+1) * step)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id,
+					seq, head_oid, method, delete_source, close_task, enqueued_by, enqueued_kind,
+					enqueued_operator, state, enqueued_at, ended_at, ended_position, end_reason)
+					VALUES (?, ?, ?, ?, ?, ?, 'merge', 0, 0, 'dev', 'agent', '', 'landed', ?, ?, 2, '')`,
+					repo, uuid.Must(uuid.NewV7()).String(), target, uuid.Must(uuid.NewV7()).String(), i+2,
+					oidOf("B"), store.EncodeTime(at), store.EncodeTime(at.Add(step/2))); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatalf("seed four targets' hour of landings: %v", err)
+	}
+	q := code.ReadQuery{Kind: code.ReadQueueDue, QueueDue: &code.QueueDueQuery{RepoID: repo, EnqueuedSince: since}}
+	for b.Loop() {
+		answer, err := n.reader.Read(ctx, q)
+		if err != nil || answer.DueQueue == nil || answer.DueQueue.Enqueued != landedPerTarget+1 {
+			b.Fatalf("the page reads %+v (%v), want main's %d enqueues", answer.DueQueue, err, landedPerTarget+1)
+		}
+	}
+	b.ReportMetric(float64(b.Elapsed().Microseconds())/float64(b.N), "us/page")
 }

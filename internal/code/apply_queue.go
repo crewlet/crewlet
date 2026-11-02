@@ -183,8 +183,8 @@ const (
 			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, entry_id) DO NOTHING`
-	endEntrySQL = `UPDATE code_queue SET state = ?, ended_at = ?, ended_position = ?, end_reason = ?
-		WHERE repo_id = ? AND entry_id = ?`
+	endEntrySQL = `UPDATE code_queue INDEXED BY ` + queueKey + ` SET state = ?, ended_at = ?, ended_position = ?,
+		end_reason = ? WHERE repo_id = ? AND entry_id = ?`
 	endChangeEntrySQL = `UPDATE code_queue SET state = ?, ended_at = ?, ended_position = ?, end_reason = ?
 		WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY code_queue_change_idx
 			WHERE change_id = ? AND state IN ('waiting', 'testing'))`
@@ -195,7 +195,7 @@ const (
 
 	// A purge part's bounded deletes, each table's rows of the repository in
 	// its key's order; and the final purge's, whole.
-	purgeQueueSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue
+	purgeQueueSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY ` + queueKey + `
 		WHERE repo_id = ? ORDER BY entry_id LIMIT ?)`
 	purgeCandidatesSQL = `DELETE FROM code_candidates WHERE rowid IN (SELECT rowid FROM code_candidates
 		WHERE repo_id = ? ORDER BY candidate_id LIMIT ?)`

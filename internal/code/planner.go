@@ -13,8 +13,9 @@ package code
 // lookup of one ref sought code_refs_changed_idx on repo_id alone — every ref
 // the repository holds, through the heap: 3 000 such lookups against a
 // 100 000-ref repository took 29.8 s. code_packs' key and code_packs_added_idx
-// are the same pair. So a statement that compares a key past its first column
-// NAMES the key's index ([refsKey], [packsKey]), and the planner then seeks the
+// are the same pair, and code_queue's key and code_queue_enqueued_idx another.
+// So a statement that compares a key past its first column NAMES the key's
+// index ([refsKey], [packsKey], [queueKey]), and the planner then seeks the
 // whole of it — internal/worklet's field filter does the same, for the same
 // reason. The name is the driver's own for a PRIMARY KEY's index, and naming it
 // is also a GUARD: a schema change that renames it fails every such statement
@@ -88,4 +89,13 @@ const (
 	// so nothing shares its leading column; it is named for the guard, as
 	// every key index here is.
 	dropsKey = "sqlite_autoindex_code_ref_drops_1"
+	// queueKey is code_queue's PRIMARY KEY index, (repo_id, entry_id), which
+	// shares its leading column with code_queue_enqueued_idx (repo_id,
+	// target_ref, enqueued_at; replicated migration 0136) as packsKey does
+	// with code_packs_added_idx: once that index was added, a read of one
+	// entry by its key sought it on repo_id alone, every entry the
+	// repository's queues ever kept within their history. So a statement that
+	// seeks an entry by its key, or walks a repository's entries in its order,
+	// names it.
+	queueKey = "sqlite_autoindex_code_queue_1"
 )

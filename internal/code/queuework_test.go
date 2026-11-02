@@ -177,8 +177,8 @@ func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
 // a read that asks for no count gets none.
 //
 // Mutation: count the live entries alone → the second dequeued entry is
-// missed, red; judge an ended entry by when it ended rather than when it was
-// enqueued → the first entry, dequeued inside the window, is counted, red.
+// missed, red; count the target's entries whenever enqueued → the first
+// entry, enqueued before the window, is counted, red.
 func TestTheHomesQueueWorkCountsItsTargetsEnqueues(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

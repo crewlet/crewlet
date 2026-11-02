@@ -159,10 +159,10 @@ const MergeRateWindow = time.Hour
 // minute or longer a count stopped at the bound is still above the capacity
 // it is compared with, and says what the whole count would; only a queue
 // whose rounds take seconds has a capacity past it, and there the comparison
-// errs quiet. It bounds what the read counts, not what it walks: the live
-// seek walks the target's live entries, at most [MaxQueueEntries] waiting
-// and the trains testing, and the ended seek the repository's entries ended
-// within the window, which its queues' landings and dequeues bound.
+// errs quiet. It bounds what the read walks as well as what it counts: the
+// count is one seek of code_queue_enqueued_idx, the target's entries by their
+// enqueue, stopped at the bound, so a page touches at most this many index
+// entries and never another target's.
 const MergeRateScan = 4096
 
 // QueueEntryID is the entry an enqueue under opID makes — derived from the
@@ -1461,7 +1461,8 @@ const (
 	qualifiedEntryColumns = `q.repo_id, q.entry_id, q.target_ref, q.change_id, q.seq, q.head_oid, q.method,
 		q.delete_source, q.close_task, q.enqueued_by, q.enqueued_kind, q.enqueued_operator, q.state, q.train,
 		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason`
-	entrySQL       = `SELECT ` + entryColumns + ` FROM code_queue WHERE repo_id = ? AND entry_id = ?`
+	entrySQL = `SELECT ` + entryColumns + ` FROM code_queue INDEXED BY ` + queueKey +
+		` WHERE repo_id = ? AND entry_id = ?`
 	liveEntriesSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
 		WHERE q.change_id = CAST(j.value AS TEXT) AND q.state IN ('waiting', 'testing')`

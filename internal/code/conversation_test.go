@@ -112,7 +112,7 @@ func resolving(repo, change string, asker code.Principal, thread string, resolve
 }
 
 // requireConversed fails t unless res is a write applied at a position.
-func requireConversed(t *testing.T, res code.ConversationResult, err error) {
+func requireConversed(t testing.TB, res code.ConversationResult, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("Converse: %v", err)

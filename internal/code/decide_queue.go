@@ -1067,7 +1067,8 @@ func ejectedDetail(x Ejection) (string, error) {
 // of code_queue_change_idx a change.
 const (
 	entriesNamedSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?1) AS j
-		CROSS JOIN code_queue AS q WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
+		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
+		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
 	pushEjectedSQL = `SELECT q.entry_id FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
 		WHERE q.change_id = CAST(j.value AS TEXT) AND q.ended_position = ? AND q.state = ? AND q.end_reason = ?`
