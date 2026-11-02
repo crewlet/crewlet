@@ -1,14 +1,14 @@
 /**
  * A seat's executor sessions, beside its Conversations under Memory.
  *
- * Every turn whose executor captured its harness's session keeps it, so a
- * later turn of the same conversation can continue it — and that session is
- * the only whole record of what the run read and wrote. The list is every
- * turn's: how it ended, what it was asked, the harness that wrote it, and
- * whether a later launch could take it up (or why not). Choosing one opens its
- * transcript, as the harness recorded it: the brief, the notes a person sent
- * the run, the model's words, every tool call and what answered it, the
- * compaction summaries, and each subagent's own transcript after the run's.
+ * Every turn whose executor captured its harness's session has a row: it names
+ * the session the harness kept when its run ended — the whole record of what
+ * the run read, called and wrote — and how the turn ended. The list is every
+ * turn's: how it ended, what it was asked and the harness that wrote it.
+ * Choosing one opens its transcript, as the harness recorded it: the brief,
+ * the notes a person sent the run, the model's words, every tool call and what
+ * answered it, the compaction summaries, and each subagent's own transcript
+ * after the run's.
  *
  * # The seat's trail, read through any node
  *
@@ -457,8 +457,7 @@ export function readCutWords(readBytes: number): string {
 
 /**
  * How the session's turn ended, as the engine recorded it — what its
- * harness's own transcript cannot know — beside what is kept of it and whether
- * a later launch could take it up.
+ * harness's own transcript cannot know — beside what is kept of it.
  *
  * EVERY FACT IS DRAWN ONLY WHERE THE ENDING CARRIES IT: an ending says what
  * the way its turn ended established, and a blank "Stopped by" on a turn
@@ -502,24 +501,8 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         </p>
       )}
       {ending?.failure && <p className="t-caption">{ending.failure}</p>}
-      <p className="t-caption">{continuationWords(row)}</p>
     </div>
   );
-}
-
-/**
- * Whether a later launch can take the session up, in a reader's words.
- *
- * WHICH LAUNCH IS THE ROW'S: a turn on a conversation is continued by the next
- * turn of that conversation, and one on none only by its own next launch — the
- * engine answers such a turn continuable while it runs, and a sentence naming
- * "its conversation" would name one the turn does not have.
- */
-export function continuationWords(row: ExecutorSessionRow): string {
-  if (!row.continuable) return `No later launch continues it: ${row.not_continuable ?? ""}`;
-  return row.conversation_key
-    ? "A later launch of its conversation can continue this session."
-    : "Its turn's next launch can continue this session.";
 }
 
 /**

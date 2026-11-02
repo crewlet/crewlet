@@ -3811,7 +3811,7 @@ then they are loading — so the last thread's turns never stand under the new
 one's name. Each turn's trigger reads as plain words, its markdown stripped. A
 seat no node holds says why it shows nothing. Beside them are the seat's
 **Sessions** (`session=` opens one): every turn whose executor captured its
-harness's session, kept so a later turn of its conversation can continue it —
+harness's session, the whole record of what its run read, called and wrote —
 read through any node, since the rows are the replicated estate's and the
 bytes the fleet's object store's, and on the same `audit.seat.read` as the
 rest of the tab, the verb an executor's live output is decided by. Each row is
@@ -3824,9 +3824,7 @@ shown, the list bounded beside it and the chosen row kept in its view: the
 engine's account of how the turn ended — the decision, whether its reply
 reached anybody and where, what landed, what blocked it, who stopped it and
 why, the failure — each only where the ending carries it, what is kept of the
-session and its size, whether a later launch can continue it (its
-conversation's next turn, or for a turn on none its own next launch) or the
-engine's sentence for why not, and a link to the turn. Under it is the
+session and its size, and a link to the turn. Under it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
 harness recorded it: each entry labelled by who it is from (brief, note, model,
 tool call, result, summary), a subagent's entries naming the subagent, a

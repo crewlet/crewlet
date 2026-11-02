@@ -2393,9 +2393,7 @@ test("choosing a session opens its transcript, asked by its turn", async () => {
     turn_id: SESSION_TURN,
   });
   expect(screen.getByText("Note")).toBeTruthy();
-  expect(
-    screen.getByText("A later launch of its conversation can continue this session."),
-  ).toBeTruthy();
+  expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
 });
 
 // A SESSION WHOSE OBJECT IS GONE IS A WARNING SAYING SO, in the engine's own

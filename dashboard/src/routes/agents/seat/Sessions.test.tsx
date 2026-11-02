@@ -18,7 +18,6 @@ import { afterEach, expect, test } from "vitest";
 
 import {
   blockLabel,
-  continuationWords,
   KIND_LABELS,
   readCutWords,
   SessionAccount,
@@ -125,17 +124,23 @@ test("how a turn ended is told only where its ending carries it", () => {
   expect(screen.queryByText(/reply was delivered/)).toBeNull();
 });
 
-// WHETHER A LATER LAUNCH COULD TAKE THE SESSION UP is the engine's to say, and
-// where it could not, the engine's sentence says why: a reader deciding
-// whether the next turn remembers this one needs the reason, not a flag.
-test("a session no later launch continues says why", () => {
-  const why = "the seat's session budget released this session's object to make room";
-  render(
+// A SESSION THE SEAT NO LONGER KEEPS STATES NO SIZE: the budget released its
+// object, and a size beside it would read as bytes still held. Why it is gone
+// is the transcript's to say, in the engine's own sentence.
+test("a session no longer kept states no size kept", () => {
+  const { unmount } = render(
     <Router>
-      <SessionAccount row={session({ kept: false, continuable: false, not_continuable: why })} />
+      <SessionAccount row={session()} />
     </Router>,
   );
-  expect(screen.getByText(`No later launch continues it: ${why}`)).toBeTruthy();
+  expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
+  unmount();
+
+  render(
+    <Router>
+      <SessionAccount row={session({ kept: false, object_bytes: 0 })} />
+    </Router>,
+  );
   expect(screen.queryByText(/kept/)).toBeNull();
 });
 
@@ -234,22 +239,6 @@ test("every kind of entry and every unread state has words of its own", () => {
 // its own bound has its Load more instead.
 test("a page cut at the read's own bound says the rest cannot be shown", () => {
   expect(readCutWords(256 * 1024 * 1024)).toMatch(/cannot be shown.*256 MiB/);
-});
-
-// WHICH LAUNCH CONTINUES A SESSION IS THE ROW'S: a turn on a conversation is
-// taken up by its conversation's next turn, and a running turn on none by its
-// own next launch — told of "its conversation", a reader looks for one the
-// turn does not have.
-test("a session's continuation names the launch that takes it up", () => {
-  expect(continuationWords(session())).toBe(
-    "A later launch of its conversation can continue this session.",
-  );
-  expect(continuationWords(session({ conversation_key: "", ending: null, ended_at: null }))).toBe(
-    "Its turn's next launch can continue this session.",
-  );
-  expect(continuationWords(session({ continuable: false, not_continuable: "it is gone" }))).toBe(
-    "No later launch continues it: it is gone",
-  );
 });
 
 // A NOTE A PERSON SENT THE RUN IS LABELLED A NOTE, never a brief: the model
