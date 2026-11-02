@@ -1409,6 +1409,23 @@ dropping packs ([metrics reference](../reference/metrics.md)); its log says
 `code_expunge_failed` with why when a cycle stops — each tried again at the
 next pass.
 
+The repository's detail keeps only the **latest** expunge, so every one is
+also an event: once a commit applies, the maintainer that proposed it
+publishes one `code_expunged` — the repository by id and name, the purge it
+served (none for one the weekly schedule began), the expunge's id, the
+objects and bytes it dropped, its commit's position on the code log, and
+`store_until`, the latest a healthy fleet's object store keeps the dropped
+bytes (the day's grace, then the retention duty's quarter-hour and the
+collector's hour, above). The event log keeps it out of the activity feed
+— the person who asked for a purge is already there, as their
+`operator_acted` — for whoever asks what left a repository and when
+([What gets stored, and under which
+category](../guides/deployment.md#what-gets-stored-and-under-which-category)).
+A commit the maintainer did not hear applied (its answer pending, or the node gone
+before it published) is no event, and a stream that does not take the
+event within five seconds is logged `code_expunged_unpublished`; the commit
+stands either way, and the repository's detail names it.
+
 **What it costs.** On the schedule, the scan that judges an expunge due is
 one `git rev-list` over the repository's whole history, each object it names
 looked up in the index of every pack old enough to rewrite, and every

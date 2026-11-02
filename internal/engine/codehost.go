@@ -422,7 +422,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 	compactor, err := codecompact.New(codecompact.Options{
 		Cache: c, Objects: objects, Estate: compactions, Maintainers: e.router, NodeID: nodeID,
-		Limits: e.codeLimits, Metrics: e.metrics,
+		Limits: e.codeLimits, Events: e.codeEvents(), Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))

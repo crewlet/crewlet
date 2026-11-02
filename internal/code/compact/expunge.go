@@ -17,7 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -1005,7 +1009,48 @@ func (c *Compactor) finish(ctx context.Context, cand code.ExpungeCandidate, open
 	c.log.Info("code_expunge_committed", "repo", cand.Name, "expunge", open.id, "request", open.request,
 		"retired", len(commit.Retire), "rescued", len(rescue), "dropped_bytes", dropped,
 		"position", res.Position.String(), "resumed", open.scanTips == nil)
+	c.announceExpunged(ctx, types.CodeExpunged{RepoID: cand.ID, RepoName: s.Repo.Name, Request: open.request,
+		Expunge: open.id, DroppedObjects: max(droppingObjects-outputObjects(rescue), 0), DroppedBytes: dropped,
+		Position: res.Position.String(), StoreUntil: storeUntil(c.now())})
 	return OutcomeApplied, nil
+}
+
+// storeUntil is the latest the object store keeps the packs an expunge
+// committed at committed retired, on a healthy fleet: code.RetireGrace, the
+// retired rows' grace that lets a clone already reading one finish; then up
+// to code.RetentionInterval, the code-retention duty's cadence, for its
+// retire_sweep to remove their rows; then up to collect.CollectInterval for
+// the collector's next pass to delete what no row names. The collector's own
+// grace for an object nothing names (collect.PendingGrace) adds nothing: it
+// runs from the object's key minted and its upload, and every dropping pack
+// was minted and stored by the expunge's build before its begin, so before
+// the commit — by the time the retired grace has passed after the commit, the
+// pending one, which is no longer, has passed too.
+func storeUntil(committed time.Time) time.Time {
+	return committed.UTC().Add(code.RetireGrace + code.RetentionInterval + collect.CollectInterval)
+}
+
+// The collector's pending grace is never past the retired rows' grace, which
+// [storeUntil] relies on to leave it out: were collect.PendingGrace ever
+// longer than code.RetireGrace this constant would overflow, and the build
+// fail.
+const _ = uint64(code.RetireGrace - collect.PendingGrace)
+
+// announceExpunged publishes an applied expunge commit's account
+// (code_expunged) on this node's event stream, bounded by [eventBudget]; a
+// stream that does not take it is logged, and the commit stands.
+func (c *Compactor) announceExpunged(ctx context.Context, ev types.CodeExpunged) {
+	if c.o.Events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), eventBudget)
+	defer cancel()
+	e := events.New(ev, events.TraceContext{})
+	e.Source = c.o.NodeID
+	if err := c.o.Events.Publish(ctx, topics.Event(e.Type), e); err != nil {
+		c.log.Warn("code_expunged_unpublished", "repo", ev.RepoName, "expunge", ev.Expunge, "error", err.Error(),
+			"detail", "the event log does not hold this expunge; the repository's detail names it as its latest")
+	}
 }
 
 // rescue builds the rescue of the expunge open on s's repository, where any

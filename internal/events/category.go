@@ -374,6 +374,12 @@ var categories = map[string]placement{
 	// on. ENGINE-rated: the home pushes on its own schedule, at most one push
 	// a repository at a time.
 	"code_mirror_pushed": {"system", RateEngine},
+	// An expunge's commit, by the repository's maintainer: PERSISTED, UNFED —
+	// the audit of what left a repository. ENGINE-rated: the maintainer
+	// commits at most one expunge a repository at a time, weekly on its own
+	// schedule; a person's purge only asks for the next one, and two purges
+	// asked before it begins are one.
+	"code_expunged": {"system", RateEngine},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -537,6 +543,13 @@ var unfed = map[string]string{
 		"settings told it to — nobody acts on one. The event log keeps it " +
 		"for whoever asks what the company published and when; a push that " +
 		"failed is code_mirror_failing's, never an event",
+	"code_expunged": "AN AUDIT, NOT ACTIVITY: what an expunge's commit took " +
+		"out of a repository — its objects and bytes, and until when the " +
+		"store still holds them — by the maintainer's weekly housekeeping " +
+		"or serving a person's purge, whose asking is already in the feed " +
+		"as that person's operator_acted. The repository's detail keeps " +
+		"only its latest expunge, so the event log keeps every one, for " +
+		"whoever asks what left the repository and when",
 	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
 		"the auxiliary model cost for one key, several per turn beside the " +
 		"turn's own phases and a burst of them when a compaction runs. In " +

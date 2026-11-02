@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -128,8 +129,22 @@ type Cache interface {
 	AdoptLayer(ctx context.Context, repoID string, sc *cache.Scratch, row code.LayerRef) error
 }
 
-// Options builds a [Compactor]. Every field but Faults, Metrics, Logger and Now
-// is required, and New refuses a missing one by name.
+// Publisher is a node's event stream as an expunge's commit announces itself
+// on it (code_expunged): queue.Queue satisfies it.
+type Publisher interface {
+	Publish(ctx context.Context, subject string, ev *events.Event) error
+}
+
+// eventBudget bounds the announcement of one committed expunge: FIVE SECONDS,
+// the JetStream client's own request timeout, as every code-host announcement
+// is bounded (internal/code's checkEventBudget). The commit has applied by
+// then, so nothing waits on it but the cycle's end, and a stream that has not
+// taken it in that long costs the event log the one account, which the
+// repository's detail still names as its latest expunge.
+const eventBudget = 5 * time.Second
+
+// Options builds a [Compactor]. Every field but Events, Faults, Metrics, Logger
+// and Now is required, and New refuses a missing one by name.
 type Options struct {
 	Cache       Cache
 	Objects     Uploader
@@ -143,6 +158,10 @@ type Options struct {
 	// the build's window charge and its pack.windowMemory read
 	// max_blob_bytes.
 	Limits func() code.Limits
+	// Events is this node's event stream, which every expunge commit this
+	// node proposes and hears applied is announced on (code_expunged); nil
+	// announces none.
+	Events Publisher
 	// Faults is nil in production (internal/code/codefault).
 	Faults codefault.Injector
 	// Metrics nil records nothing.
