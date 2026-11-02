@@ -168,5 +168,8 @@ func (s *Service) refusedAudited(action types.MCPServerAction) authz.Refusal {
 func (s *Service) record(r *http.Request, action types.MCPServerAction) types.MCPServerActed {
 	by := auth.AttributionOf(r.Context())
 	return types.MCPServerActed{ActorName: by.Name, ActorKind: string(by.Kind), OperatorID: by.OperatorID,
-		Action: action, Server: r.PathValue("name")}
+		Action: action, Server: r.PathValue("name"),
+		// A CHECK IS SAID AS ONE even where the guard refused it, before
+		// the handler read its query.
+		DryRun: action == types.MCPServerSetTools && r.URL.Query().Get("dry_run") == "true"}
 }

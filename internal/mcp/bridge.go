@@ -149,8 +149,8 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	s := b.newServer(spec, stop)
 	b.mu.Lock()
 	before := maps.Clone(b.tools)
-	tools, refused := s.toolsFor(defs)
-	s.tools, s.refused = tools, refused
+	tools, blocked, refused := s.toolsFor(defs)
+	s.tools, s.blocked, s.refused = tools, blocked, refused
 	// RECORDED, NOT JUDGED. An override keyed on a name this instance does
 	// not list changes nothing here, and this is the one place that holds
 	// both the keys and the listing — but one instance's listing is not the
@@ -172,6 +172,9 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	attrs := []any{"server", spec.Name, "tool_count", len(tools), "tool_names", toolNames(tools)}
 	if len(unlisted) > 0 {
 		attrs = append(attrs, "annotation_keys_unlisted", unlisted)
+	}
+	if len(blocked) > 0 {
+		attrs = append(attrs, "tools_blocked", len(blocked))
 	}
 	if len(refused) > 0 {
 		attrs = append(attrs, "tools_refused", len(refused))
@@ -237,7 +240,7 @@ func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 		return Change{}, false
 	}
 	before := maps.Clone(b.tools)
-	s.tools, s.refused = s.toolsFor(defs)
+	s.tools, s.blocked, s.refused = s.toolsFor(defs)
 	s.unlisted = unlistedOverrides(s.spec, defs)
 	s.up(c)
 	return b.reindexLocked(before), true
@@ -577,6 +580,22 @@ func (b *Bridge) ServerTools(name string) []*Tool {
 	return slices.Clone(s.tools)
 }
 
+// BlockedTools is what one INSTANCE's last listing named and its entry blocks
+// ([Spec.Levels]), in the listing's order: definitions only, never filed and
+// in no catalogue, kept so a reader of what the server lists sees what the
+// operator held back and can let it through again. nil for an instance that
+// blocks nothing, has never listed (a start the bridge is still retrying) or
+// that the bridge does not hold.
+func (b *Bridge) BlockedTools(name string) []*Definition {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	s, ok := b.servers[name]
+	if !ok {
+		return nil
+	}
+	return slices.Clone(s.blocked)
+}
+
 // UnlistedOverrides is every tool_annotations key of the running server
 // instance name that names no tool its listing carries — by the server's own
 // name or with the entry's tool_prefix — sorted, or nil when every key names
@@ -622,7 +641,8 @@ func (b *Bridge) Registrations() []Registration {
 // resolving an agent's account id on its own per-role Jira instance, for
 // instance. Such a caller has the instance name and the server's tool name and
 // no catalogue entry to look up, and it deliberately bypasses tool_prefix and
-// the exclusion list, neither of which is about what the ENGINE may ask.
+// the levels, neither of which is about what the ENGINE may ask: a level
+// decides what an agent is offered.
 //
 // A tool the server refuses is an error here, not a Result: there is no model
 // in this path to show a failure message to. A server that is down is

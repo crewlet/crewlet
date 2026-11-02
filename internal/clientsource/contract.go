@@ -194,6 +194,7 @@ var contract = []Entry{
 	{"McpValueAs", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpReach", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpReachReason", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpToolLevel", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpRisk", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpInstanceState", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpAuth", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},

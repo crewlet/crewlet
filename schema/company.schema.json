@@ -1861,6 +1861,10 @@
             "null"
           ]
         },
+        "tools": {
+          "$ref": "#/$defs/MCPToolPolicy",
+          "description": "The level each tool runs at: default for every tool, levels for one tool by the server's own name. allow offers it; blocked never offers it to an agent. Absent = every tool allowed."
+        },
         "transport": {
           "description": "stdio (default) or http.",
           "enum": [
@@ -1883,6 +1887,39 @@
       "required": [
         "name"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPToolPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "The level of every tool levels does not name: allow (the default) or blocked.",
+          "enum": [
+            "allow",
+            "blocked",
+            "",
+            null
+          ]
+        },
+        "levels": {
+          "additionalProperties": {
+            "enum": [
+              "allow",
+              "blocked",
+              "",
+              null
+            ]
+          },
+          "description": "One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow or blocked.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"

@@ -302,7 +302,9 @@ func (c *Company) ValidateRunnable() error {
 // whether it is on, holds access the vendor offers within the company's reach,
 // and writes no credential the engine manages. And the community MCP
 // registry's address ([Company.validateMCPRegistry]), which only a search
-// reads.
+// reads. And an executor box's listing of an MCP server any tool of which is
+// held back from the agents ([Company.validateBoxToolLevels]), which the box
+// would reach past the engine.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -315,7 +317,8 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
-		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry(), c.validateMCPAccess(o))
+		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry(), c.validateMCPAccess(o),
+		c.validateBoxToolLevels())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

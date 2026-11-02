@@ -114,6 +114,19 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 		summary: "jane-founder stored Authorization of MCP server linear as MCP_LINEAR_AUTHORIZATION: " +
 			"refused (value_test_failed)",
 	}, {
+		name: "an MCP server's tool levels set",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerSetTools, Server: "github", Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder set the tool levels of MCP server github",
+	}, {
+		name: "a change to an MCP server's tool levels checked and refused, said as a check",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerSetTools, Server: "github", DryRun: true, Outcome: AuditRefused,
+			Refusal: "validation_error"}),
+		actor:   "jane-founder",
+		summary: "jane-founder checked a change to the tool levels of MCP server github: refused (validation_error)",
+	}, {
 		name: "a device sign-in cancelled, said apart from its start",
 		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
 			Action: ModelDeviceSignInCancel, ProviderKey: "codex", Outcome: AuditApplied}),

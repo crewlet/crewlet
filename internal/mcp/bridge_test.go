@@ -66,7 +66,7 @@ func TestAddDiscoversAndIndexes(t *testing.T) {
 	}
 }
 
-func TestAddAppliesPrefixAndExclusions(t *testing.T) {
+func TestAddAppliesPrefixAndLevels(t *testing.T) {
 	t.Parallel()
 	b := newTestBridge(t)
 	spec := helperSpec(t, "slack", "serve", map[string]string{
@@ -76,16 +76,80 @@ func TestAddAppliesPrefixAndExclusions(t *testing.T) {
 		),
 	})
 	spec.ToolPrefix = "slack_"
-	// Exclusions match the SERVER's name, before the prefix: an operator
-	// writing them has the server's listing in front of them, not ours.
-	spec.ExcludeTools = []string{"noisy_debug"}
+	// Levels match the SERVER's name, before the prefix: an operator setting
+	// them has the server's listing in front of them, not ours.
+	spec.Levels = Levels{Tools: map[string]Level{"noisy_debug": LevelBlocked, "slack_conversations_add_message": LevelBlocked}}
 
 	change, err := b.Add(t.Context(), spec)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if got := addedNames(change); !slices.Equal(got, []string{"slack_conversations_add_message"}) {
-		t.Fatalf("added = %v", got)
+		t.Fatalf("added = %v: a level keyed by the prefixed name blocks nothing", got)
+	}
+}
+
+// A BLOCKED TOOL IS NEVER FILED, and the server's listing still says it is
+// there. A tool at the blocked level is in no catalogue the bridge keeps (not
+// the whole bridge's, not the server's contribution, not a lookup by name), so
+// no registry is ever told it and no call through one can reach it; it is kept
+// as a definition alone, under the name and hints the entry gives it, so a
+// reader of what the server lists sees what was held back. A default of
+// blocked holds back every tool no level names, including one whose name no
+// model could be handed (blocked, not refused: the operator's decision is the
+// one that holds it back), and a tool allowed by name is filed past it.
+func TestABlockedToolIsNeverFiledAndIsKeptAsADefinition(t *testing.T) {
+	t.Parallel()
+	b := newTestBridge(t)
+	long := strings.Repeat("x", 60)
+	spec := helperSpec(t, "github", "serve", map[string]string{
+		helperToolsEnv: toolsJSON(
+			[3]string{"search_issues", "Search", `{"readOnlyHint":true}`},
+			[3]string{"delete_repository", "Delete", ""},
+			[3]string{"merge_pull_request", "Merge", ""},
+			[3]string{long, "Long", ""},
+		),
+	})
+	spec.ToolPrefix = "gh_"
+	spec.Levels = Levels{Default: LevelBlocked, Tools: map[string]Level{"search_issues": LevelAllow}}
+	spec.AnnotationOverrides = map[string]Annotations{"merge_pull_request": {Destructive: Yes}}
+
+	change, err := b.Add(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if got := addedNames(change); !slices.Equal(got, []string{"gh_search_issues"}) {
+		t.Fatalf("added = %v, want only the tool allowed by name", got)
+	}
+	if got := toolNames(b.Tools()); !slices.Equal(got, []string{"gh_search_issues"}) {
+		t.Fatalf("catalogue = %v", got)
+	}
+	if got := toolNames(b.ServerTools("github")); !slices.Equal(got, []string{"gh_search_issues"}) {
+		t.Fatalf("server's contribution = %v", got)
+	}
+	for _, name := range []string{"gh_delete_repository", "gh_merge_pull_request", "delete_repository"} {
+		if _, ok := b.Tool(name); ok {
+			t.Fatalf("%s resolves in the catalogue although it is blocked", name)
+		}
+	}
+	if got := b.RefusedTools("github"); len(got) != 0 {
+		t.Fatalf("refused = %v, want none: a blocked tool is blocked, not refused", got)
+	}
+	blocked := b.BlockedTools("github")
+	var names []string
+	for _, d := range blocked {
+		names = append(names, d.Name()+"="+d.RawName())
+	}
+	want := []string{"gh_delete_repository=delete_repository", "gh_merge_pull_request=merge_pull_request",
+		"gh_" + long + "=" + long}
+	if !slices.Equal(names, want) {
+		t.Fatalf("blocked = %v, want %v", names, want)
+	}
+	if blocked[1].Annotations().Destructive != Yes || blocked[0].Digest() == "" {
+		t.Fatalf("a blocked definition lost its overrides or digest: %+v", blocked[:2])
+	}
+	if got := b.BlockedTools("nobody"); got != nil {
+		t.Fatalf("BlockedTools for an unknown server = %v, want nil", got)
 	}
 }
 
@@ -123,7 +187,7 @@ func TestAnnotationOverrideMatchesEitherSpelling(t *testing.T) {
 // credential for — so a key one instance does not list can be exactly right
 // for its sibling. The instance's record is what the per-server row
 // intersects; a warning from one instance would fire on a correct entry.
-// A key spelled either way newTool accepts is listed, an excluded tool's
+// A key spelled either way newTool accepts is listed, a blocked tool's
 // included. One bridge per seat, as the engine runs them: a seat's children
 // live on a bridge of their own.
 func TestAnOverrideAnInstanceDoesNotListIsRecordedNotWarned(t *testing.T) {
@@ -149,7 +213,7 @@ func TestAnOverrideAnInstanceDoesNotListIsRecordedNotWarned(t *testing.T) {
 			helperToolsEnv: toolsJSON(tools...),
 		})
 		spec.ToolPrefix = "atl_"
-		spec.ExcludeTools = []string{"jira_debug"}
+		spec.Levels = Levels{Tools: map[string]Level{"jira_debug": LevelBlocked}}
 		spec.AnnotationOverrides = overrides
 		return spec
 	}

@@ -539,15 +539,22 @@ func (e *Engine) nodeMCPListings(node string, epoch int64, now time.Time) map[st
 				entry.listing.Instructions = id.Instructions
 			}
 		}
+		// A BLOCKED TOOL IS LISTED, flagged: the instance never filed it, and
+		// the operator who blocked it reads it here to let it through again.
+		definitions := make([]*mcp.Definition, 0, len(listed))
 		for _, t := range listed {
+			definitions = append(definitions, &t.Definition)
+		}
+		blocked := in.bridge.BlockedTools(in.instance)
+		for i, d := range slices.Concat(definitions, blocked) {
 			at := slices.IndexFunc(entry.listing.Tools, func(l coord.MCPListedTool) bool {
-				return l.Name == t.Name()
+				return l.Name == d.Name()
 			})
 			if at >= 0 {
 				entry.listing.Tools[at].Instances++
 				continue
 			}
-			row, schema := listedTool(t, now)
+			row, schema := listedTool(d, i >= len(definitions), now)
 			entry.listing.Tools = append(entry.listing.Tools, row)
 			if row.SchemaKept {
 				entry.schemas[row.Digest] = schema
@@ -591,9 +598,9 @@ func (n nodeListing) bounded(budget int) nodeListing {
 	return n
 }
 
-// listedTool is one tool as a listing names it, and its schemas as they are
-// stored: kept only within [coord.MaxMCPToolSchemaBytes].
-func listedTool(t *mcp.Tool, now time.Time) (coord.MCPListedTool, coord.MCPToolSchema) {
+// listedTool is one tool as a listing names it, blocked or filed, and its
+// schemas as they are stored: kept only within [coord.MaxMCPToolSchemaBytes].
+func listedTool(t *mcp.Definition, blocked bool, now time.Time) (coord.MCPListedTool, coord.MCPToolSchema) {
 	hints := t.Annotations()
 	row := coord.MCPListedTool{
 		Name: t.Name(), Raw: t.RawName(), Title: t.Title(), Description: t.Description(),
@@ -601,7 +608,7 @@ func listedTool(t *mcp.Tool, now time.Time) (coord.MCPListedTool, coord.MCPToolS
 			ReadOnly: hints.ReadOnly.String(), Destructive: hints.Destructive.String(),
 			Idempotent: hints.Idempotent.String(), OpenWorld: hints.OpenWorld.String(),
 		},
-		Digest: t.Digest(), Instances: 1,
+		Digest: t.Digest(), Instances: 1, Blocked: blocked,
 	}
 	input, inErr := json.Marshal(t.Parameters())
 	var output []byte

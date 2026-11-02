@@ -887,8 +887,9 @@ func New(opts Options) (*App, error) {
 	// never a nil pointer behind an interface.
 	var drafts mcpapi.DraftChecker
 	var documents mcpapi.ValueDocuments
+	var toolDocuments mcpapi.ToolDocuments
 	if sources.Config != nil {
-		drafts, documents = sources.Config, sources.Config
+		drafts, documents, toolDocuments = sources.Config, sources.Config, sources.Config
 	}
 	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
 		if sources.Company == nil {
@@ -897,7 +898,8 @@ func New(opts Options) (*App, error) {
 		company, _ := sources.Company()
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
-		Drafts: drafts, Documents: documents, Values: opts.Runtime.MCPValues(), Now: now, Audit: opts.Audit})
+		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
+		Audit: opts.Audit})
 	if err != nil {
 		return nil, err
 	}

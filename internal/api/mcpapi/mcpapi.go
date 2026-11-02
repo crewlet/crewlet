@@ -4,8 +4,10 @@
 // `POST /mcp-servers/{name}/retry`, a restart of it now, and the tests:
 // `POST /mcp-servers/{name}/check` of a saved server, `POST /mcp-checks` of a
 // draft and `POST /mcp-probe` of an address before a server is added at it
-// (check.go), and `PUT /mcp-servers/{name}/values/{key}`, a header or variable
-// stored write-only, tested first (values.go).
+// (check.go), `PUT /mcp-servers/{name}/values/{key}`, a header or variable
+// stored write-only, tested first (values.go), and
+// `PUT /mcp-servers/{name}/tools`, the level each of its tools runs at
+// (tools.go).
 //
 // # Routes, not registry questions
 //
@@ -103,6 +105,9 @@ type Options struct {
 	// Documents writes a stored value's pointer; nil answers it unavailable.
 	Documents ValueDocuments
 
+	// Tools writes a server's tool levels; nil answers it unavailable.
+	Tools ToolDocuments
+
 	// Values is the secret store a value is sealed in: required.
 	Values ValueStore
 
@@ -129,6 +134,7 @@ type Service struct {
 	checker   Checker
 	drafts    DraftChecker
 	documents ValueDocuments
+	tools     ToolDocuments
 	values    ValueStore
 	now       func() time.Time
 	audit     operator.AuditPublisher
@@ -174,7 +180,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		values: opts.Values, now: now, audit: opts.Audit, guard: guard}, nil
+		tools: opts.Tools, values: opts.Values, now: now, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -224,8 +230,19 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// A value is a credential: `secrets.write`, never the assistant's, with
 	// `config.write` asked in the handler (values.go).
 	values := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerStoreValue))
-	return values.Handle("PUT /mcp-servers/{name}/values/{key}", authz.Policy{Action: authz.ActionSecretWrite},
-		s.audited(types.MCPServerStoreValue, s.serveValue))
+	if err := values.Handle("PUT /mcp-servers/{name}/values/{key}", authz.Policy{Action: authz.ActionSecretWrite},
+		s.audited(types.MCPServerStoreValue, s.serveValue)); err != nil {
+		return err
+	}
+	// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as a configuration
+	// write is (tools.go): `config.write`, a check on `dry_run=true` and a
+	// revision summary, both declared here for the assistant's preview.
+	// Letting a tool through is a write like blocking one, at the
+	// configuration verb's own step-up.
+	tools := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerSetTools))
+	return tools.Handle("PUT /mcp-servers/{name}/tools",
+		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
+		s.audited(types.MCPServerSetTools, s.serveTools))
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a

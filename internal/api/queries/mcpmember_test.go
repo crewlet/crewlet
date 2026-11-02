@@ -322,7 +322,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		under("tools", nil), under("tools[]", []string{"name", "raw", "title", "description", "annotations",
 			"annotations.read_only", "annotations.destructive", "annotations.idempotent",
 			"annotations.open_world", "risk", "risk_declared", "external", "digest", "definitions",
-			"instances", "nodes", "input_schema", "output_schema"})[1:],
+			"instances", "nodes", "input_schema", "output_schema", "level", "custom"})[1:],
 		under("server_info", []string{"name", "title", "version", "protocol"}),
 		under("instances", nil), under("instances[]", []string{"seat", "node", "state", "since", "restarts",
 			"tools", "last_answer"})[1:],

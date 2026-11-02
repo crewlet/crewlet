@@ -471,13 +471,9 @@ func (w *walk) list(ctx context.Context, c *client) {
 		w.fail(StageList, took, c.startClass(err), err)
 		return
 	}
-	excluded := make(map[string]struct{}, len(w.spec.ExcludeTools))
-	for _, name := range w.spec.ExcludeTools {
-		excluded[name] = struct{}{}
-	}
 	offered, refused, left := 0, 0, 0
 	for _, def := range defs {
-		if _, skip := excluded[def.Name]; skip {
+		if w.spec.Levels.Blocks(def.Name) {
 			left++
 			continue
 		}
@@ -591,7 +587,7 @@ func listDetail(listed, offered, refused, excluded int) string {
 		notes = append(notes, strconv.Itoa(refused)+" not offered under their names")
 	}
 	if excluded > 0 {
-		notes = append(notes, strconv.Itoa(excluded)+" excluded by the configuration")
+		notes = append(notes, strconv.Itoa(excluded)+" blocked by the server's tool levels")
 	}
 	if len(notes) > 0 && offered > 0 {
 		detail += ", " + strings.Join(notes, ", ")
@@ -607,11 +603,11 @@ func emptySaid(listed, refused, excluded int) string {
 		return "the server answered and lists no tool"
 	case refused > 0 && excluded > 0:
 		return fmt.Sprintf("the server lists %s: %d cannot be offered under their names and the "+
-			"configuration excludes the rest", toolCount(listed), refused)
+			"server's tool levels block the rest", toolCount(listed), refused)
 	case refused > 0:
 		return fmt.Sprintf("the server lists %s, and none can be offered under its name", toolCount(listed))
 	}
-	return fmt.Sprintf("the server lists %s, and the configuration excludes every one", toolCount(listed))
+	return fmt.Sprintf("the server lists %s, and the server's tool levels block every one", toolCount(listed))
 }
 
 // toolCount is n tools, in words.

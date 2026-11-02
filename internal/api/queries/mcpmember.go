@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -146,22 +147,25 @@ type MemberMCPToolUsage struct {
 
 // MemberMCPToolView is one tool the server lists, a member's reading: the
 // definition an agent is handed, which the `tools` push already carries to
-// everybody, and where the fleet lists it.
+// everybody, where the fleet lists it, and the level it runs at, which tells a
+// member why no agent is offered a blocked one.
 type MemberMCPToolView struct {
-	Name         string         `json:"name"`
-	Raw          string         `json:"raw"`
-	Title        string         `json:"title"`
-	Description  string         `json:"description"`
-	Annotations  ToolHints      `json:"annotations"`
-	Risk         mcp.Risk       `json:"risk"`
-	RiskDeclared bool           `json:"risk_declared"`
-	External     bool           `json:"external"`
-	Digest       string         `json:"digest"`
-	Definitions  int            `json:"definitions"`
-	Instances    int            `json:"instances"`
-	Nodes        []string       `json:"nodes"`
-	InputSchema  map[string]any `json:"input_schema"`
-	OutputSchema map[string]any `json:"output_schema"`
+	Name         string              `json:"name"`
+	Raw          string              `json:"raw"`
+	Title        string              `json:"title"`
+	Description  string              `json:"description"`
+	Annotations  ToolHints           `json:"annotations"`
+	Risk         mcp.Risk            `json:"risk"`
+	RiskDeclared bool                `json:"risk_declared"`
+	External     bool                `json:"external"`
+	Digest       string              `json:"digest"`
+	Definitions  int                 `json:"definitions"`
+	Instances    int                 `json:"instances"`
+	Nodes        []string            `json:"nodes"`
+	InputSchema  map[string]any      `json:"input_schema"`
+	OutputSchema map[string]any      `json:"output_schema"`
+	Level        config.MCPToolLevel `json:"level"`
+	Custom       bool                `json:"custom"`
 }
 
 // MemberMCPServerInfo is what the server said of itself in its handshake.
@@ -254,7 +258,8 @@ func MemberMCPServer(a MCPServerAnswer) MemberMCPServerAnswer {
 		out.Tools = append(out.Tools, MemberMCPToolView{Name: t.Name, Raw: t.Raw, Title: t.Title,
 			Description: t.Description, Annotations: t.Annotations, Risk: t.Risk, RiskDeclared: t.RiskDeclared,
 			External: t.External, Digest: t.Digest, Definitions: t.Definitions, Instances: t.Instances,
-			Nodes: nonNil(t.Nodes), InputSchema: t.InputSchema, OutputSchema: t.OutputSchema})
+			Nodes: nonNil(t.Nodes), InputSchema: t.InputSchema, OutputSchema: t.OutputSchema,
+			Level: t.Level, Custom: t.Custom})
 	}
 	if info := a.ServerInfo; info != nil {
 		out.ServerInfo = &MemberMCPServerInfo{Name: info.Name, Title: info.Title, Version: info.Version,

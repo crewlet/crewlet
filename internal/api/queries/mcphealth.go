@@ -115,8 +115,9 @@ type MCPResolved struct {
 	// reads, null for a server that reads none.
 	Binding *MCPBinding `json:"binding"`
 	// BoxSeats are the seats whose executor box is given the server
-	// (`sandbox.mcp.servers`, for a seat the server is granted to), each with
-	// the cell its box runs in. ALWAYS A LIST.
+	// (`sandbox.mcp.servers`, for a seat the server is granted to, while
+	// every tool of it is allowed), each with the cell its box runs in.
+	// ALWAYS A LIST.
 	BoxSeats []MCPBoxSeat `json:"box_seats"`
 	// Warnings are placements the engine expects to fail, each naming the
 	// seat and why. ALWAYS A LIST.
@@ -202,9 +203,11 @@ func resolvedOf(company *config.Company, roster *org.Organization, server *confi
 	if server.Kind() == config.TransportStdio {
 		out.RunsOn = MCPRunsOnEngineHost
 	}
-	if company == nil || !server.IsEnabled() {
+	if company == nil || !server.IsEnabled() || !server.Tools.AllowsEveryTool() {
 		// A SERVER TURNED OFF IS GIVEN TO NO BOX ([config.MCPServer.IsEnabled]),
-		// so it has no box to warn about either.
+		// and nor is one holding any tool back from the agents
+		// ([config.MCPToolPolicy.AllowsEveryTool]), which a box would reach
+		// whole: neither has a box to warn about.
 		return out
 	}
 	for box := range company.SeatBoxes() {

@@ -197,9 +197,10 @@ type MCPListing struct {
 	Info         *MCPServerInfo `json:"info,omitempty"`
 	Instructions string         `json:"instructions,omitempty"`
 
-	// Tools are the tools the node's instances offer, sorted by name, at
-	// most [MaxMCPListedTools]; ToolCount is how many there are in all,
-	// never fewer than are listed.
+	// Tools are the tools the node's instances list, offered and blocked
+	// ([MCPListedTool.Blocked]) alike, sorted by name, at most
+	// [MaxMCPListedTools]; ToolCount is how many there are in all, never
+	// fewer than are listed.
 	Tools     []MCPListedTool `json:"tools"`
 	ToolCount int             `json:"tool_count"`
 
@@ -216,7 +217,7 @@ type MCPServerInfo struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
-// MCPListedTool is one tool a node's instances of a server offer.
+// MCPListedTool is one tool a node's instances of a server list.
 type MCPListedTool struct {
 	// Name is the name it is offered under, the server's tool_prefix
 	// applied; Raw is the server's own name for it.
@@ -240,6 +241,12 @@ type MCPListedTool struct {
 	// Instances is how many of the node's instances list it: a per-agent
 	// server's children list what each seat's credentials reach.
 	Instances int `json:"instances"`
+
+	// Blocked is a tool the server's entry blocks (its tool levels): the
+	// node's instances list it and never file it, so no agent is offered,
+	// lists or calls it. Listed all the same, so a reader of what the
+	// server lists sees what was held back and can let it through again.
+	Blocked bool `json:"blocked,omitempty"`
 }
 
 // MCPToolHints are one tool's four hints as words.

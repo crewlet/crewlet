@@ -363,7 +363,14 @@ export interface McpToolView {
   /** Null where no schema is stored. */
   input_schema: Record<string, unknown> | null;
   output_schema: Record<string, unknown> | null;
+  /** The level it runs at, decided by the server's own name for it; a blocked tool is offered to no agent. */
+  level: McpToolLevel;
+  /** Whether the server's `tools.levels` names it, rather than leaving it at the baseline. */
+  custom: boolean;
 }
+
+/** The level a tool of an MCP server runs at: `allow` offers it, `blocked` never does. */
+type McpToolLevel = "allow" | "blocked";
 
 /** What the server said of itself in its handshake. */
 interface McpServerInfo {
@@ -582,6 +589,10 @@ export interface McpServerAnswer {
   tools: McpToolView[];
   /** How many tools the server lists; never fewer than `tools` holds. */
   tool_count: number;
+  /** The level of every tool `tools.levels` does not name. */
+  baseline: McpToolLevel;
+  /** Tools `tools.levels` names that no live listing names; empty where the listings cannot say. */
+  unlisted_levels: string[];
   server_info: McpServerInfo | null;
   /** What the server offers a client for using it, its own words; "" where none. */
   instructions: string;

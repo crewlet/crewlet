@@ -814,6 +814,7 @@ func serverSpec(server *config.MCPServer, instance string, v serverValues) (mcp.
 		Args:                server.Args,
 		URL:                 v.url,
 		ToolPrefix:          server.ToolPrefix,
+		Levels:              toolLevels(server.Tools),
 		AnnotationOverrides: annotationOverrides(server.ToolAnnotations),
 		StartupTimeout:      mcpTimeout(server.StartupTimeoutSeconds),
 		RequestTimeout:      mcpTimeout(server.RequestTimeoutSeconds),
@@ -837,6 +838,25 @@ func withheldByInstance(outcomes []mcpOutcome) map[string]*credentialMissing {
 		}
 	}
 	return withheld
+}
+
+// toolLevels converts the entry's tool levels ([config.MCPToolPolicy]) into
+// what the MCP client files the server's tools by: a blocked tool is never
+// filed, on this server's every instance, shared or a seat's own child.
+//
+// THE DEFAULT IS WRITTEN OUT, never left unset: an entry that says
+// `default: allow` and one that says nothing decide every tool alike, and a
+// spec that told them apart would restart a running server for an edit that
+// changes none of its tools.
+func toolLevels(p config.MCPToolPolicy) mcp.Levels {
+	out := mcp.Levels{Default: mcp.Level(p.DefaultLevel())}
+	if len(p.Levels) > 0 {
+		out.Tools = make(map[string]mcp.Level, len(p.Levels))
+		for tool, level := range p.Levels {
+			out.Tools[tool] = mcp.Level(level)
+		}
+	}
+	return out
 }
 
 // annotationOverrides converts the operator's per-tool hints.

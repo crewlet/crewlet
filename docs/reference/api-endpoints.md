@@ -390,6 +390,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/mcp-checks` | Test a draft MCP server entry before it is saved, as a write would leave it. **Takes `tools.check`**, and `config.write` and `secrets.write` on top, decided before the body is read (see [below](#post-mcp-checks)) |
 | `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
 | `PUT` | `/mcp-servers/{name}/values/{key}` | Store one header or variable of an MCP server, tested first by default, sealed write-only and read through a `${VAR}` the key is pointed at. **Takes `secrets.write`**, and `config.write` on top, both at a recent step-up and decided before the body is read; never the assistant (see [below](#put-mcp-serversnamevalueskey)) |
+| `PUT` | `/mcp-servers/{name}/tools` | Set the level each tool of an MCP server runs at (`allow` or `blocked`), as one revision of the company document; `?dry_run=true` checks it. **Takes `config.write`**, at a recent step-up for a write (see [below](#put-mcp-serversnametools)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9748,9 +9749,20 @@ it under, so a node that drained, died or restarted stops counting at once.
   fleet. `input_schema` and `output_schema` are the definition's schemas, or
   `null` where none is kept: a tool that publishes no output schema, schemas
   past 64 KiB, or a tool past its listing's 1 MiB of schemas (kept in name
-  order).
+  order). `level` is the level the tool runs at, `allow` or `blocked`, decided
+  by the server's entry by `raw` (`tools.levels`, else `tools.default`), and
+  `custom` whether `tools.levels` names it. A blocked tool is listed here and
+  offered to no agent ([Tools and MCP › Blocking a server's tools](../guides/tools-and-mcp.md#blocking-a-servers-tools));
+  for a server the configuration does not declare, `level` says what the nodes
+  did.
 - `tool_count` is how many tools the server lists, never fewer than `tools`
   holds: a node's listing names at most 256 of them.
+- `baseline` is the level of every tool `tools.levels` does not name: the
+  entry's `tools.default`, `allow` where it sets none. `unlisted_levels` are the
+  tools `tools.levels` names that no live node's listing names, sorted: a level
+  that decides nothing, most often a name written with the `tool_prefix` or
+  spelled otherwise than the server spells it. Empty where the listings cannot
+  say: no live node lists the server, or one lists more than its 256.
 - `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
   are what the server said of itself in its handshake, from the listing that
   changed last; `null` and `""` where no live node's listing carries them. Both
@@ -9822,7 +9834,8 @@ it under, so a node that drained, died or restarted stops counting at once.
   and the `keys` it is started with, `{field, key}` by name; `null` for none);
   `box_seats` (the seats whose executor box is given the server through
   `sandbox.mcp.servers`, each with the `cell` its box runs in; a seat the
-  server is not granted to is given nothing, so it is not one); and `warnings`
+  server is not granted to is given nothing, so it is not one, and nor is any
+  seat while the server holds a tool back at a level other than `allow`); and `warnings`
   (placements expected to fail, `{kind, seat, cell, message}`:
   `private_address_in_cloud_box` for a server on a private network given to a
   box in the `e2b` cell, which runs outside that network, and `command_in_box`
@@ -10295,6 +10308,71 @@ for a seat the server is not granted to. **No answer, log line or audit record
 carries the value**, a refusal included: every call is one `mcp_server_acted`
 with the action `store_value`, naming the `key` and the `variable`, and a
 test's sentences withhold the values the server was started with.
+
+### `PUT /mcp-servers/{name}/tools`
+
+Sets the level each tool of a server runs at, from the server's Tools tab, as
+one revision of the company document (`mcp_servers[].tools`): `allow` offers a
+tool to every agent the server reaches, `blocked` never offers it to an agent
+([Tools and MCP › Blocking a server's tools](../guides/tools-and-mcp.md#blocking-a-servers-tools)).
+
+```json
+{"default": "blocked", "levels": {"search_issues": "allow", "get_issue": "allow", "delete_repository": null},
+ "_summary": "github: block every tool but the two reads"}
+```
+
+- `levels` names each tool by the server's own name for it (`raw` on
+  [`GET /mcp-servers/{name}`](#get-mcp-serversname)), never with the
+  `tool_prefix`. A tool the body leaves out keeps its level; `null` removes a
+  tool's own level, so it runs at the default.
+- `default` sets the level of every tool `levels` does not name; `null`
+  removes it, which is `allow`. Left out, it stays.
+- A body that names neither is `400 invalid_body`, and so is any other field,
+  or a level that is not a string.
+
+**A change, not a replacement**, so the write takes no `If-Match`: it is made on
+the document as it stands when it is written, and two people setting two
+tools' levels both land. `_summary` (or `X-Summary`) is the revision's audit
+summary, required of a write and asked last.
+
+**Who may.** `config.write`, an administrator's: a write at a recent step-up,
+and a check (`?dry_run=true`) at the read's proof, as every configuration write.
+The assistant proposes one for a person to approve. A managed document
+(`api.auth.company_writers`) refuses it `403 config_managed`.
+
+**The whole document is validated**, as any write of it is: a level other than
+`allow` or `blocked`, or a key that names no tool (empty, or holding a space),
+is `422 validation_error` with the problem at
+`mcp_servers.<i>.tools.levels.<tool>`. A level that leaves a server some
+role's `sandbox.mcp.servers` lists with a tool held back is refused at that
+box entry (`roles.<i>.sandbox.mcp.servers.<j>`): a box reaches a server whole.
+`404 no_such_entity` for a server the configuration does not declare.
+
+```json
+{
+  "server": "github", "dry_run": false,
+  "default": "blocked", "baseline": "blocked",
+  "levels": {"get_issue": "allow", "search_issues": "allow"},
+  "unlisted": ["get_issue"], "listing": "read",
+  "revision_id": "rev-0193", "epoch": 15, "warnings": [], "derived": {}
+}
+```
+
+- `default` is `tools.default` as written (`""` unset) and `baseline` the
+  level it decides, `allow` where unset; `levels` every tool's own level now.
+- `unlisted` are the tools `levels` names that no live node's listing of the
+  server names, as `unlisted_levels` on the detail: **kept**, since a server
+  may list the tool later, and **said**, since a level that decides nothing is
+  most often misspelled. `listing` is `unavailable` where this node could not
+  read the fleet's listings, which leaves `unlisted` empty.
+- The rest is the configuration's own answer: a write's `revision_id`,
+  `epoch`, `warnings` and `derived`, or a check's `valid`,
+  `base_revision_id`, `warnings` and `derived`, with `dry_run: true`.
+
+The engine applies the revision as any other: each node restarts its
+instances of the server, and files only the tools left at `allow`. Every call
+is one `mcp_server_acted` with the action `set_tools`, a check marked
+`dry_run`; the revision names the levels.
 
 ### `GET /fleet`
 
