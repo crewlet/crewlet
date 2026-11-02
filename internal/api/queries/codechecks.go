@@ -222,6 +222,7 @@ func (s Sources) codeCheckLog(ctx context.Context, p Params) (any, error) {
 	q.Limit = 0
 	var named *objstore.Key
 	if raw := strings.TrimSpace(p.String("object")); raw != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		k, err := objstore.ParseKey(raw)
 		if err != nil {
 			return nil, fmt.Errorf("%w: object %q is not an object's key", ErrBadParams, raw)

@@ -284,6 +284,7 @@ func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 			return nil, fmt.Errorf("%w: since_revision %d is not before revision %d, the one read", ErrBadParams,
 				call.since, rev.N)
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		earlier, err := g.revision(ctx, call.since, d.Revision, first)
 		if err != nil {
 			return nil, err
@@ -291,7 +292,7 @@ func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 		revs, since = append(revs, earlier), &earlier
 	}
 	for _, r := range revs {
-		if err := g.gap(d, r, since == nil); err != nil {
+		if err = g.gap(d, r, since == nil); err != nil {
 			return nil, err
 		}
 	}
