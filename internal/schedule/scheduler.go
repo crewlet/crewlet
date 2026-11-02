@@ -107,6 +107,14 @@ type Publisher interface {
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 }
 
+// Mailboxes is the one question the scheduler asks of the node that holds the
+// seats' mailboxes: is this seat's complete? An error means not yet, and the
+// fire waits for the next tick rather than being claimed into a mailbox that
+// would drop it.
+type Mailboxes interface {
+	ConfirmMailbox(ctx context.Context, seat uuid.UUID) error
+}
+
 // DutyFunc reports whether this node holds the scheduler duty for this tick.
 //
 // It is CLAIMED PER TICK rather than held, so a node that dies between ticks
@@ -204,6 +212,16 @@ type Options struct {
 	// failed is a standup lost for a seat nobody paused.
 	Paused func(seat uuid.UUID) (bool, error)
 
+	// Mailboxes confirms a runner seat's mailbox before a fire for it is
+	// claimed. Nil confirms nothing, and every fire is claimed as before.
+	//
+	// BEFORE THE CLAIM, because the claim is spent the moment it is
+	// written: a fire claimed and then refused at the publish is one no
+	// later tick will send. A fire whose seat's mailbox cannot be
+	// confirmed is not claimed, and the tick keeps its window open so the
+	// next one tries it again ([Scheduler.Tick]).
+	Mailboxes Mailboxes
+
 	// Trace mints the trace context each fire runs under; nil uses a
 	// built-in W3C-shaped random minter.
 	//
@@ -229,6 +247,8 @@ type Scheduler struct {
 	duty   DutyFunc
 	paused func(seat uuid.UUID) (bool, error)
 	trace  func(context.Context) events.TraceContext
+
+	mailboxes Mailboxes
 
 	// mu serialises ticks and guards lastTick.
 	//
@@ -284,6 +304,7 @@ func New(opts Options) (*Scheduler, error) {
 		duty:       opts.Duty,
 		paused:     opts.Paused,
 		trace:      cmpOrFunc(opts.Trace, newTrace),
+		mailboxes:  opts.Mailboxes,
 	}
 	// A max below the min is a config the operator did not mean; taking the
 	// min is the conservative reading, since it can only shorten the window
@@ -377,64 +398,123 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 	clock := s.companyZone()
 
 	fired := 0
+	var deferred []deferredFire
 	for _, entry := range Entries(company) {
-		fired += s.evaluate(ctx, company, clock, entry, at, windowStart, first)
+		n, waiting := s.evaluate(ctx, company, clock, entry, at, windowStart, first)
+		fired += n
+		deferred = append(deferred, waiting...)
+	}
+
+	// A FIRE WHOSE SEAT'S MAILBOX COULD NOT BE CONFIRMED WAS NOT CLAIMED,
+	// and the window stays open for it, exactly as a shed tick leaves it:
+	// the next tick evaluates the same window, the fires already claimed
+	// are absorbed by the ledger, and the deferred one is claimed and sent
+	// once its mailbox is confirmed. Fires of one schedule that waited this
+	// way reach the seat together and run once, as the latest, with the
+	// rest recorded superseded ([FirePartition]).
+	//
+	// FOR AT MOST THE CATCHUP WINDOW'S CEILING, the bound this scheduler
+	// already puts on how late a fire may run: a fire older than that is
+	// closer to its next one than to the moment it was due. Past it the
+	// window moves on and each deferred fire is RECORDED as a missed tick,
+	// so a seat whose mailbox never came back leaves a row saying so rather
+	// than a fire that silently never happened. A first tick holds its
+	// window without that test: it replays only the most recent missed fire,
+	// and its own catchup window records that one as skipped once it ages
+	// out ([Scheduler.due]).
+	if len(deferred) > 0 && (first || at.Sub(windowStart) <= s.catchupMax) {
+		log.InfoContext(ctx, "schedule_window_held", "deferred", len(deferred),
+			"detail", "a runner seat's mailbox could not be confirmed, so its fire was not "+
+				"claimed; the next tick evaluates this window again")
+		return fired
+	}
+	for _, d := range deferred {
+		s.recordSkip(ctx, d.entry, d.handle, d.at, d.loc)
 	}
 
 	s.lastTick = at
 	return fired
 }
 
+// deferredFire is a fire a tick did not claim because its runner seat's
+// mailbox could not be confirmed ([Options.Mailboxes]).
+type deferredFire struct {
+	entry  Entry
+	handle string
+	at     time.Time
+	loc    *time.Location
+}
+
+// fireOutcome is what one runner's fire came to.
+type fireOutcome int
+
+const (
+	// fireNotSent is a fire that was not dispatched and needs nothing more
+	// from this tick: claimed elsewhere, recorded paused, unresolvable, or
+	// a publish that failed after its claim.
+	fireNotSent fireOutcome = iota
+	// fireSent is a fire claimed and published.
+	fireSent
+	// fireDeferred is a fire not claimed because its seat's mailbox could
+	// not be confirmed, which the tick keeps its window open for.
+	fireDeferred
+)
+
 // evaluate runs one schedule's share of a tick, returning how many fires it
-// published. Every failure inside it is logged and swallowed: a tick evaluates
-// every schedule, and one that gave up on the first bad cron would let a typo
-// stop a company's whole ritual calendar.
+// published and the ones it deferred. Every failure inside it is logged and
+// swallowed: a tick evaluates every schedule, and one that gave up on the
+// first bad cron would let a typo stop a company's whole ritual calendar.
 func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clock *time.Location,
-	e Entry, at, windowStart time.Time, first bool) int {
+	e Entry, at, windowStart time.Time, first bool) (int, []deferredFire) {
 	sch := e.Schedule
 	if !sch.IsEnabled() {
-		return 0
+		return 0, nil
 	}
 	loc, err := ZoneOf(sch, clock)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope", e.ScopeName, "scope_id", e.ScopeID, "timezone", sch.Timezone, "error", err)
-		return 0
+		return 0, nil
 	}
 	expr, err := cron.Parse(sch.Cron)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope", e.ScopeName, "scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
-		return 0
+		return 0, nil
 	}
 
 	toFire, toSkip := s.due(expr, loc, e, at, windowStart, first)
 	for _, ft := range toSkip {
-		s.recordSkip(ctx, e, ft, loc)
+		s.recordSkip(ctx, e, "", ft, loc)
 	}
 	if len(toFire) == 0 {
-		return 0
+		return 0, nil
 	}
 
 	runners := e.Runners(company)
 	if len(runners) == 0 {
 		log.WarnContext(ctx, "schedule_no_runners", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope", e.ScopeName, "scope_id", e.ScopeID, "target", sch.Target)
-		return 0
+		return 0, nil
 	}
 
 	fired := 0
+	var deferred []deferredFire
 	for _, ft := range toFire {
 		for _, handle := range runners {
 			// One member's failure never aborts the fan-out: each runner
 			// has its own identity in the ledger, so a slow or broken seat
 			// cannot suppress its colleagues' standups.
-			if s.fire(ctx, company, e, handle, ft, loc) {
+			switch s.fire(ctx, company, e, handle, ft, loc) {
+			case fireSent:
 				fired++
+			case fireDeferred:
+				deferred = append(deferred, deferredFire{entry: e, handle: handle, at: ft, loc: loc})
+			case fireNotSent:
 			}
 		}
 	}
-	return fired
+	return fired, deferred
 }
 
 // due returns the canonical UTC fire times this tick should dispatch, and the
@@ -509,7 +589,7 @@ func (s *Scheduler) jitterFor(scopeID, name string) time.Duration {
 }
 
 // fire claims one dispatch and publishes it, reporting whether it went out.
-func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry, handle string, fireUTC time.Time, loc *time.Location) bool {
+func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry, handle string, fireUTC time.Time, loc *time.Location) fireOutcome {
 	// The runner is resolved from the ORG, never from a local agent pool. A
 	// schedule fires into a seat's inbox and the node that OWNS that seat
 	// consumes it, which is usually not the node whose tick won the duty.
@@ -524,20 +604,30 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// should still be able to fire.
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
 			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID)
-		return false
+		return fireNotSent
 	}
 	agentID, ok := company.AgentIDFor(seat)
 	if !ok {
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
 			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID,
 			"reason", "the seat has no derivable agent id")
-		return false
+		return fireNotSent
 	}
 
 	label := FireLabel(fireUTC, loc)
 	if s.pausedSeat(ctx, agentID, handle, e) {
 		s.recordPaused(ctx, e, handle, fireUTC, label)
-		return false
+		return fireNotSent
+	}
+	// THE MAILBOX BEFORE THE CLAIM: see [Options.Mailboxes].
+	if s.mailboxes != nil {
+		if err := s.mailboxes.ConfirmMailbox(ctx, agentID); err != nil {
+			log.WarnContext(ctx, "schedule_fire_deferred", "schedule", e.Schedule.Name,
+				"handle", handle, "fire_label", label, "error", err,
+				"detail", "the runner seat's mailbox could not be confirmed, so the fire was "+
+					"not claimed; the next tick tries it again")
+			return fireDeferred
+		}
 	}
 	// Each dispatched run gets its OWN trace, detached from the tick, so the
 	// ledger row and exactly this turn's calls are linked. The TaskAssigned
@@ -561,10 +651,10 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// unreadable ledger is how one fire becomes N.
 		log.ErrorContext(ctx, "schedule_claim_failed", "schedule", e.Schedule.Name,
 			"handle", handle, "fire_label", label, "error", err)
-		return false
+		return fireNotSent
 	}
 	if !claimed {
-		return false
+		return fireNotSent
 	}
 
 	runID := runID(e, label, handle)
@@ -598,7 +688,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 			"fire_label", label, "error", err,
 			"hint", "the fire is CLAIMED and will not be retried; the ledger row records a "+
 				"dispatch that never reached the seat")
-		return false
+		return fireNotSent
 	}
 
 	log.InfoContext(ctx, "schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
@@ -619,7 +709,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	if err := s.pub.Publish(ctx, topics.Event(fired.Type), fired); err != nil {
 		log.ErrorContext(ctx, "scheduled_task_fired_publish_failed", "schedule", e.Schedule.Name, "error", err)
 	}
-	return true
+	return fireSent
 }
 
 // FirePartition is the inbox partition every fire of one schedule shares.
@@ -650,24 +740,27 @@ func FirePartition(e Entry) string {
 
 // recordSkip notes, once, that a missed fire was deliberately not backfilled.
 //
-// The row carries an EMPTY runner handle, which is what keeps it from
-// colliding with a fire row for the same minute — every real fire names a
+// A catchup skip's row carries an EMPTY runner handle, which is what keeps it
+// from colliding with a fire row for the same minute — every real fire names a
 // runner. Without that, recording the skip would consume the claim a later
-// corrected tick needs.
-func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, loc *time.Location) {
+// corrected tick needs. A fire a tick deferred until it aged out
+// ([Scheduler.Tick]) names its runner, because it is that runner's fire that
+// was missed and its colleagues' were sent.
+func (s *Scheduler) recordSkip(ctx context.Context, e Entry, handle string, fireUTC time.Time, loc *time.Location) {
 	if _, err := s.ledger.Claim(ctx, Run{
 		FireKey: FireKey{
 			Scope:        e.Scope,
 			ScopeID:      e.ScopeID,
 			ScheduleName: e.Schedule.Name,
 			FireLabel:    FireLabel(fireUTC, loc),
+			TargetHandle: handle,
 		},
 		ScheduledAt: fireUTC,
 		Outcome:     OutcomeSkippedCatchup,
 	}); err != nil {
 		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
 	}
-	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
+	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "handle", handle, "scope_type", e.Scope,
 		"scope", e.ScopeName, "scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
 }
 
