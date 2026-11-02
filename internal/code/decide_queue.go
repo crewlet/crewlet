@@ -147,14 +147,18 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 	// WHOM IT CONCERNS, a routing an entry's change: its authors and its
 	// enqueuer told it left the queue — its authors that its merge
 	// conflicted, where it did — the home's own record, so nobody's actor.
+	ids := make([]string, len(e.Entries))
+	for i, x := range e.Entries {
+		ids[i] = entries[x.EntryID].ChangeID
+	}
+	changes, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return queueDecision{}, err
+	}
 	routings := make([]ChangeRouting, 0, len(e.Entries))
 	for _, x := range e.Entries {
 		entry := entries[x.EntryID]
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
-		if err != nil {
-			return queueDecision{}, err
-		}
+		row, found := changes[entry.ChangeID]
 		if !found {
 			continue
 		}
@@ -270,14 +274,18 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 
 	// EVERY ENTRY'S GATE, AGAIN, its enqueuer the merger.
 	ref := repo.grantRef(l.RepoID)
+	ids := make([]string, len(l.Entries))
+	for i, e := range l.Entries {
+		ids[i] = e.ChangeID
+	}
+	changes, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return queueDecision{}, err
+	}
 	subjects := make([]readinessSubject, 0, len(l.Entries))
 	rows := make([]changeRow, len(l.Entries))
 	for i, e := range l.Entries {
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		row, found, err := changeRowIn(ctx, tx, e.ChangeID)
-		if err != nil {
-			return queueDecision{}, err
-		}
+		row, found := changes[e.ChangeID]
 		if !found || row.repoID != l.RepoID {
 			return queueDecision{}, fmt.Errorf("code: entry %s of %s's queue names change %s, which the "+
 				"repository does not hold", e.EntryID, repo.name, e.ChangeID)

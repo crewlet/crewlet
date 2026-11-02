@@ -295,6 +295,13 @@ func (f *fleet) row(key code.CheckKey) (code.CheckRow, bool) {
 	return a.Checks[0], true
 }
 
+// queuedAt is key's attempt's queuing instant as its row holds it: the
+// instant every rank's stagger is counted from.
+func (f *fleet) queuedAt(key code.CheckKey) time.Time {
+	f.t.Helper()
+	return f.await(key, "queued", func(r code.CheckRow) bool { return !r.QueuedAt.IsZero() }).QueuedAt
+}
+
 // await waits until key's row says what ok accepts, failing t past ten
 // seconds with what it last said.
 func (f *fleet) await(key code.CheckKey, what string, ok func(code.CheckRow) bool) code.CheckRow {

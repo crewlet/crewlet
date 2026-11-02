@@ -1647,6 +1647,25 @@
 // prices the checks step from them: listed only past [CheckSweepGrace], a
 // repository is swept at most once a day.
 //
+// A QUEUE SWEEP (BenchmarkApplyAQueueSweep, the record applied and committed
+// over [QueueSweepRows] ended entries past [QueueHistory]; one bounded run,
+// -benchtime 3x and one count, on two E-cores of a Core Ultra 7 265U): 44 ms
+// for a step of QueueSweepRows landed entries, which weigh nothing, and 64 ms
+// for one of conflict ejections at [MaxConflictBytes], which [QueueSweepBytes]
+// cuts at 2 058 of them — where a step bounded by its rows alone removed all
+// 3 999, some 64 MiB of overflow pages, about 150 ms at a purge part's
+// measured 2.4 ms a megabyte. Both are under the third of
+// statelog.ApplyTxTimeBudget a purge part is sized to.
+//
+// A LAND RECORD (BenchmarkApplyALandRecord, the record applied and committed
+// over a train of its entries testing in candidates of [MaxQueueBatch], every
+// entry deleting its change's source; the same run): 5.7 ms for one entry and
+// 33 ms for [MaxLandEntries] — every change merged, every entry landed and
+// its landing written, and 64 pushes moving the target and deleting 64
+// sources — under the third of statelog.ApplyTxTimeBudget. Its entries are
+// written back in one upsert and its changes read in one statement, as a push
+// record's changes are ([writeEntries], [changeRowsIn]).
+//
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm
 // writing the most outputs its inputs allow, so the most rows its input count

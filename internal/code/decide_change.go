@@ -1307,6 +1307,37 @@ func changeRowIn(ctx context.Context, tx *sql.Tx, id string) (changeRow, bool, e
 	return row, true, nil
 }
 
+// changeRowsIn reads the changes ids names in one statement, by their keys —
+// what [changeRowIn] reads of one, for a record that names many, as a queue's
+// landing names up to [MaxLandEntries] — answering each by its id; a change
+// the rows do not hold is absent.
+func changeRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]changeRow, error) {
+	out := make(map[string]changeRow, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	list, err := jsonList(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, changesNamedSQL, list)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		row, err := scanChange(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+		}
+		out[row.id] = row
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read %d changes: %w", len(ids), err)
+	}
+	return out, nil
+}
+
 // liveChangeOn is the number of the live change source heads on repoID, and
 // false where it heads none — one seek of code_changes_open_idx.
 func liveChangeOn(ctx context.Context, tx *sql.Tx, repoID, source string) (int64, bool, error) {
@@ -1347,7 +1378,11 @@ const (
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
 		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
 		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position`
-	changeRowSQL    = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
+	changeRowSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
+	// changesNamedSQL is the changes a list names, each by its key, driven
+	// from the list ([changeRowsIn]).
+	changesNamedSQL = `SELECT ` + qualifiedChangeColumns + ` FROM json_each(?) AS j
+		CROSS JOIN code_changes AS c WHERE c.id = CAST(j.value AS TEXT)`
 	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
 		liveChanges + ` LIMIT 1`
 	// liveChangeAtHeadSQL is the live change into a target at a head — a

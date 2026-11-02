@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -387,8 +388,14 @@ func TestACheckInACellNotAllowedEndsUnrun(t *testing.T) {
 // zero — claims first wherever it can; and a home with no free cell leaves
 // the attempt to the runner-up a stagger later.
 //
-// Mutation: claim at every rank at once — the runner-up takes attempts the
-// home would, red.
+// THE RUNNERS' CLOCK IS THE CASE'S: a rank falls due by the clock alone, so
+// the home's turn is never cut short by a runner too loaded to walk within a
+// stagger of the wall clock — which handed the first attempt to the
+// runner-up, rightly, while the home had not walked yet — and the
+// runner-up's comes only when the case moves the clock a stagger on.
+//
+// Mutation: claim at every rank at once — the runner-up takes the attempt
+// short of its stagger, red.
 func TestTheHomeClaimsFirstAndItsRunnerUpAStaggerLater(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -401,27 +408,64 @@ func TestTheHomeClaimsFirstAndItsRunnerUpAStaggerLater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ranked := &order{nodes: []string{"git-home", "git-next"}}
-	f.runner(f.options("git-home", 1, ranked))
+	clk := &clock{}
+	nodes := []string{"git-home", "git-next"}
+	home := f.options("git-home", 1, &order{nodes: nodes})
+	home.Now = clk.now
+	f.runner(home)
+	ranked := &countedOrder{order: order{nodes: nodes}}
 	next := f.options("git-next", 1, ranked)
 	next.Boxes = func() (checkrun.Boxes, bool) { return m, true }
+	next.Now = clk.now
 	f.runner(next)
+
 	first := f.queue(oidOf("9"), def("unit", time.Minute))
+	clk.set(f.queuedAt(first))
 	if row := f.await(first, "claimed", func(r code.CheckRow) bool { return r.Runner != "" }); row.Runner !=
 		"git-home" {
 		t.Fatalf("the first attempt was claimed by %s, want its home", row.Runner)
 	}
-	// THE HOME'S ONE SLOT IS HELD: the next attempt is its runner-up's, a
-	// stagger after it was queued.
-	queued := time.Now()
+	// THE HOME'S ONE SLOT IS HELD: the next attempt is its runner-up's, once
+	// it has waited a stagger — and not at any walk before. A third walk
+	// ranking it begins only once the second has ended, so by then two
+	// walks have ranked it a millisecond short, the second wholly after the
+	// clock moved, and a claim either made is on the row.
 	second := f.queue(oidOf("b"), def("unit", time.Minute))
-	row := f.await(second, "claimed", func(r code.CheckRow) bool { return r.Runner != "" })
-	if row.Runner != "git-next" || time.Since(queued) < fast.Stagger {
-		t.Fatalf("with the home full the attempt was claimed by %s after %s, want git-next after a stagger "+
-			"(%s)", row.Runner, time.Since(queued), fast.Stagger)
+	queued := f.queuedAt(second)
+	clk.set(queued.Add(fast.Stagger - time.Millisecond))
+	walked := ranked.asked.Load()
+	early := func() {
+		if row, _ := f.row(second); row.Runner != "" {
+			t.Fatalf("with the home full the attempt was claimed by %s a millisecond short of a stagger (%s)",
+				row.Runner, fast.Stagger)
+		}
+	}
+	eventually(t, "three walks of the runner-up ranking the attempt", func() bool {
+		early()
+		return ranked.asked.Load() >= walked+3
+	})
+	early()
+	clk.set(queued.Add(fast.Stagger))
+	if row := f.await(second, "claimed", func(r code.CheckRow) bool { return r.Runner != "" }); row.Runner !=
+		"git-next" {
+		t.Fatalf("with the home full the attempt was claimed by %s once it had waited a stagger, want git-next",
+			row.Runner)
 	}
 	f.container.end(f.container.box(t), 0, "")
 	other.end(other.box(t), 0, "")
+}
+
+// countedOrder is a git order that counts the walks ranking an attempt by it:
+// a runner asks its order once a walk for each repository it holds a queued
+// attempt of (Runner.rank).
+type countedOrder struct {
+	order
+	asked atomic.Int64
+}
+
+func (o *countedOrder) GitOrder(repo string) ([]string, error) {
+	o.asked.Add(1)
+	return o.order.GitOrder(repo)
 }
 
 // A RUNNER NEEDS BOTH OF A BOX'S BASES: the code host's a box clones from,

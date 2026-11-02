@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -557,6 +558,50 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 	}
 }
 
+// A DIFF READS ITS TWO REVISIONS AT ONCE: what changed in revision 2 since
+// revision 1 of a change whose head is 3 reads the head, then the two
+// revisions beside each other — neither needs the other's row — so a node
+// reading the estate through another pays one round trip for the two, as the
+// API's change question does (code.ChangeRevisions).
+//
+// Mutation: read the two revisions one after the other → each is read
+// alone, red.
+func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
+	t.Parallel()
+	host := newChangeHost(siteChange())
+	// Every row read after the call's first waits for another, for at most
+	// five seconds — far past a loaded runner's scheduling delay.
+	both := make(chan struct{})
+	var rows, met atomic.Int32
+	host.before = func(what string) {
+		if what != "read:"+string(code.ReadChange) {
+			return
+		}
+		switch rows.Add(1) {
+		case 1:
+			return
+		case 3:
+			close(both)
+		}
+		select {
+		case <-both:
+			met.Add(1)
+		case <-time.After(5 * time.Second):
+		}
+	}
+	_, answer := changeCall(t, host, codeTurn(t), builtin.CodeGetChangeTool, map[string]any{"change": "site!7",
+		"part": "diff", "file": "a.txt", "revision": 2, "since_revision": 1})
+	_, _, gits := host.asked()
+	if len(gits) != 1 || gits[0].Interdiff == nil || gits[0].Interdiff.ToHead != revHead(2) ||
+		gits[0].Interdiff.FromHead != revHead(1) {
+		t.Fatalf("revision 2 since revision 1 was read as %+v (%v)", gits, answer)
+	}
+	if rows.Load() != 3 || met.Load() != 2 {
+		t.Errorf("the head and the two revisions were read in %d row reads, %d of them beside another, want "+
+			"the two revisions read at once", rows.Load(), met.Load())
+	}
+}
+
 // FINDINGS ARE RE-ANCHORED TO THE ASKED REVISION: a page of findings is read
 // at the seat's level, the change and its head after it at session, and every
 // finding raised on another revision than the one asked about — the head by
@@ -565,11 +610,13 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 // push, the latest any finding was raised on; a finding raised on the asked
 // revision is where it was raised, with nothing asked; and one on the old side
 // of a revision that shares no history with its target is gone. Each finding's
-// `at` is where its lines are, outdated or gone as the git node placed them.
+// `at` is where its lines are, outdated or gone as the git node placed them;
+// and a re-anchoring the git node refuses is answered as that refusal, never
+// as this node's fault.
 //
 // Mutations: every finding placed where it was raised (no re-anchoring); the
 // re-anchoring read at the head whatever revision was asked about; the floor
-// at the asked revision alone → red.
+// at the asked revision alone; a refused re-anchoring told as a fault → red.
 func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Parallel()
 	raised := func(id string, revision int64, side code.Side, start, end int) code.FindingRow {
@@ -683,6 +730,18 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 		if _, _, gits := host.asked(); len(gits) != 1 || len(gits[0].Reanchor.Anchors) != 2 ||
 			gits[0].Reanchor.Base != "" {
 			t.Errorf("a revision of no base was asked %+v", gits)
+		}
+	})
+
+	t.Run("a re-anchoring refused", func(t *testing.T) {
+		t.Parallel()
+		host := newChangeHost(fixture())
+		host.gitErr = &code.ErrGitUnready{Reason: code.UnreadyNoChart, Detail: "n1 holds no chart yet"}
+		got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeGetChangeTool,
+			map[string]any{"change": "site!7", "part": "findings"})
+		if tools.RefusalOf(got) != tools.RefusalUnavailable {
+			t.Errorf("a re-anchoring the git node could not answer was told %+v, want its refusal, unavailable",
+				got)
 		}
 	})
 

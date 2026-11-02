@@ -84,9 +84,31 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(cons.Close)
-	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()), nats.Token(leaderReadsToken))
 	const subject = "crewlet.probe.log.task.a"
 	appendN(t, log, subject, 5)
+	// THE CONSUMER'S OWN COUNT OF THE FIVE, before the fetch whose second
+	// record carries it. The server acknowledges an append before it tells
+	// the stream's consumers of it, from a queue of its own, so a fetch made
+	// as the appends return can be served from a count still short of them,
+	// and a delivery's count is what it was when sent: Pending is a hint, and
+	// the case holds it exact. So the case waits for the consumer to have
+	// counted all five — asking its info itself, before the info is held —
+	// and fetches then.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumPending == 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the consumer counts %d of the five appended records pending", info.NumPending)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()), nats.Token(leaderReadsToken))
 
 	pending := func(want uint64) {
 		t.Helper()
@@ -114,7 +136,7 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 	// WHAT THE STANDING REQUEST DELIVERS AND NO FETCH HAS TAKEN is still to
 	// come for the applier: held in the pull, it is counted.
 	appendN(t, log, subject, 2)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	for {
 		got, err := cons.Pending(context.Background())
 		if err != nil {

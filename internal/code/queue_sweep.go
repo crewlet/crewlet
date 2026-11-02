@@ -37,7 +37,8 @@ import (
 // QueueSweep takes ONE step of sweeping repoID's queue history past
 // [QueueHistory]: a queue_sweep record removing, oldest first, the ended
 // entries and the landings below their green row from before now less the
-// history — at most [QueueSweepRows] — and reports what it did. A caller
+// history — at most [QueueSweepRows], its ejections within [QueueSweepBytes] —
+// and reports what it did. A caller
 // steps a repository while the result says More.
 //
 // now is the DUTY HOLDER'S clock, and the record carries the cutoff it
@@ -74,7 +75,7 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 			case err != nil:
 				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
 			}
-			cut, more, err := queueHistoryIn(ctx, tx, repoID, cutoff, QueueSweepRows)
+			cut, more, err := queueHistoryIn(ctx, tx, repoID, cutoff, QueueSweepRows, QueueSweepBytes)
 			if err != nil || cut.rows() == 0 {
 				return statelog.Decision{}, err
 			}
@@ -118,9 +119,16 @@ type queueSweepQuery struct {
 // oldest ended entry over code_queue_ended_idx, and each of its targets' oldest
 // landing below its green row by the landings' key — the oldest, since a
 // target's landings below its green are removed oldest first. No index orders
-// either by instant across repositories, and a walk of at most CodeMaxRepos
-// rows a pass is a fraction of the pass's budget. A STALE READ of this node's
-// rows, as the purge listing is: every step decides again in its own snapshot.
+// either by instant across repositories, so the walk's cost follows the
+// repositories rather than the history that is due: MEASURED, 80 ms a pass
+// over config.CodeMaxRepos repositories with nothing due, each with an ended
+// entry and two protected branches' green rows (BenchmarkQueueSweepListing;
+// one bounded run, -benchtime 3x and one count, on two E-cores of a Core
+// Ultra 7 265U). Its decision rule is the ref expiry listing's: past a tenth
+// of [RetentionPassBudget] (6 s) at that size, the listing moves to seeks of
+// the due rows by instant, in a migration of its own; at 80 ms the walk
+// stays. A STALE READ of this node's rows, as the purge listing is, which
+// holds no write lane: every step decides again in its own snapshot.
 func (r *Reader) queueSweepDue(ctx context.Context, q queueSweepQuery) ([]string, bool, error) {
 	if q.limit <= 0 {
 		return nil, false, fmt.Errorf("%w: a page of the queue sweep's listing names at least one repository",

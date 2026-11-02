@@ -42,8 +42,10 @@ import (
 // Each candidate, eject and land removes its repository's queue history past
 // [QueueHistory] — its ended entries, then its targets' landings below their
 // green rows, oldest first — at most [queueHorizonRows] a record, as many as a
-// landing ends and lands, so a working queue keeps its own thirty days; an
-// idle repository's history is the retention duty's ([Store.QueueSweep]).
+// landing ends and lands, and its ejections only until they weigh
+// [queueHorizonBytes], as much as one record adds, so a working queue keeps
+// its own thirty days; an idle repository's history is the retention duty's
+// ([Store.QueueSweep]).
 
 // candidateTesting is a candidate's state while its train tests it — the one
 // a candidate row holds, since a train that ends removes its rows.
@@ -82,16 +84,20 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 	base := c.BaseOID
 	bases := make([]string, len(c.Candidates))
+	tested := make([]entryRow, 0, len(named))
 	for i, cand := range c.Candidates {
 		bases[i], base = base, cand.TipOID
 		for _, e := range cand.Entries {
-			if _, err = tx.ExecContext(ctx, testEntrySQL, c.Train, cand.CandidateID, e.Commit, c.RepoID,
-				e.EntryID); err != nil {
-				return 0, fmt.Errorf("code: test entry %s at %s: %w", e.EntryID, at.position, err)
-			}
-			rows++
+			next := entries[e.EntryID]
+			next.State, next.Train, next.CandidateID, next.CommitOID = QueueTesting, c.Train, cand.CandidateID,
+				e.Commit
+			tested = append(tested, entryRow{queueEntry: next})
 		}
 	}
+	if err = writeEntries(ctx, tx, at.maxVariables, entryTested, tested); err != nil {
+		return 0, fmt.Errorf("code: test train %s's entries at %s: %w", c.Train, at.position, err)
+	}
+	rows += len(tested)
 	encoded := make([]string, len(c.Candidates))
 	for i, cand := range c.Candidates {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -121,7 +127,8 @@ func (a *Applier) applyCandidate(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, err
 	}
 	rows += added
-	swept, err := sweepQueueHistory(ctx, tx, c.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)), queueHorizonRows)
+	swept, err := sweepQueueHistory(ctx, tx, c.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
+		queueHorizonRows, queueHorizonBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -153,19 +160,22 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 		}
 		testing = testing || entry.State == QueueTesting
 	}
-	rows := 0
-	for _, x := range e.Entries {
+	ejected := make([]entryRow, len(e.Entries))
+	for i, x := range e.Entries {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := ejectedDetail(x)
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, ejectEntrySQL, at.at(), at.packed, string(x.Reason), detail, e.RepoID,
-			x.EntryID); err != nil {
-			return 0, fmt.Errorf("code: eject entry %s at %s: %w", x.EntryID, at.position, err)
-		}
-		rows++
+		next := entries[x.EntryID]
+		next.State, next.EndedAt, next.EndedPosition, next.EndReason = QueueEjected, at.at(), at.packed,
+			QueueEndReason(x.Reason)
+		ejected[i] = entryRow{queueEntry: next, ejected: detail}
 	}
+	if err = writeEntries(ctx, tx, at.maxVariables, entryEjected, ejected); err != nil {
+		return 0, fmt.Errorf("code: eject %d entries at %s: %w", len(ejected), at.position, err)
+	}
+	rows := len(ejected)
 	if testing {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		abandoned, err := abandonTrainOn(ctx, tx, e.RepoID, target)
@@ -177,7 +187,8 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 	if _, err = tx.ExecContext(ctx, touchedSQL, at.packed, e.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", e.RepoID, at.position, err)
 	}
-	swept, err := sweepQueueHistory(ctx, tx, e.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)), queueHorizonRows)
+	swept, err := sweepQueueHistory(ctx, tx, e.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
+		queueHorizonRows, queueHorizonBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -212,6 +223,15 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	if err != nil {
 		return 0, err
 	}
+	// EVERY CHANGE IN ONE READ, driven from the list of them.
+	ids := make([]string, len(l.Entries))
+	for i, e := range l.Entries {
+		ids[i] = e.ChangeID
+	}
+	rowsOf, err := changeRowsIn(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
 	changes := make([]changeRow, len(l.Entries))
 	for i, e := range l.Entries {
 		entry, found := entries[e.EntryID]
@@ -219,11 +239,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			return queueNotApplied(ctx, at, l.RepoID, e.EntryID, "a landing lands live entries of its target, "+
 				"and it "+why)
 		}
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		row, found, err := changeRowIn(ctx, tx, e.ChangeID)
-		if err != nil {
-			return 0, err
-		}
+		row, found := rowsOf[e.ChangeID]
 		switch {
 		case !found || row.repoID != l.RepoID || entry.ChangeID != e.ChangeID:
 			return queueNotApplied(ctx, at, l.RepoID, e.EntryID, "the repository holds no such change of it")
@@ -272,10 +288,6 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	rows := len(merged)
 	// AND THEIR STORED READINESS CLEARED, one statement for them all: a
 	// merged change waits on nobody ([clearReadiness]).
-	ids := make([]string, len(merged))
-	for i, row := range merged {
-		ids[i] = row.id
-	}
 	cleared, err := clearReadiness(ctx, tx, ids)
 	if err != nil {
 		return 0, fmt.Errorf("%w (the landing at %s)", err, at.position)
@@ -283,13 +295,17 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	rows += cleared
 
 	// 2 EVERY ENTRY LANDED, and a train's landed candidates removed.
-	for _, e := range l.Entries {
-		if _, err = tx.ExecContext(ctx, landEntrySQL, at.at(), at.packed, e.Commit, l.RepoID,
-			e.EntryID); err != nil {
-			return 0, fmt.Errorf("code: land entry %s at %s: %w", e.EntryID, at.position, err)
-		}
-		rows++
+	ended := make([]entryRow, len(l.Entries))
+	for i, e := range l.Entries {
+		next := entries[e.EntryID]
+		next.State, next.EndedAt, next.EndedPosition, next.EndReason, next.CommitOID = QueueLanded, at.at(),
+			at.packed, "", e.Commit
+		ended[i] = entryRow{queueEntry: next}
 	}
+	if err = writeEntries(ctx, tx, at.maxVariables, entryLanded, ended); err != nil {
+		return 0, fmt.Errorf("code: land %d entries at %s: %w", len(ended), at.position, err)
+	}
+	rows += len(ended)
 	dropped, err := dropLandedCandidates(ctx, tx, l)
 	if err != nil {
 		return 0, fmt.Errorf("code: remove train %s's landed candidates at %s: %w", l.Train, at.position, err)
@@ -315,7 +331,8 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	rows++
 
 	// 4 THE QUEUE'S HISTORY, before the pushes' own horizons.
-	swept, err := sweepQueueHistory(ctx, tx, l.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)), queueHorizonRows)
+	swept, err := sweepQueueHistory(ctx, tx, l.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
+		queueHorizonRows, queueHorizonBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -391,10 +408,12 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 }
 
 // applyQueueSweep removes the repository's queue history from before Through,
-// oldest first, at most [QueueSweepRows] — what its decide counted from the
-// same rows — and moves its version.
+// oldest first, at most [QueueSweepRows] and its ejections within
+// [QueueSweepBytes] — what its decide counted from the same rows — and moves
+// its version.
 func (a *Applier) applyQueueSweep(ctx context.Context, tx *sql.Tx, at applyContext, s QueueSweep) (int, error) {
-	swept, err := sweepQueueHistory(ctx, tx, s.RepoID, store.EncodeTime(s.Through), QueueSweepRows)
+	swept, err := sweepQueueHistory(ctx, tx, s.RepoID, store.EncodeTime(s.Through), QueueSweepRows,
+		QueueSweepBytes)
 	if err != nil {
 		return 0, err
 	}
@@ -473,18 +492,21 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 }
 
 // sweepQueueHistory removes repoID's queue history from before cutoff (a
-// store.EncodeTime instant), oldest first, at most budget rows — its ended
-// entries first, then each target's landings below its green row — and
-// answers how many it removed: exactly what [queueHistoryIn] counts in the
-// same rows.
-func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int) (int, error) {
-	cut, _, err := queueHistoryIn(ctx, tx, repoID, cutoff, budget)
+// store.EncodeTime instant), oldest first, at most rows rows and its
+// ejections only until they weigh bytes — its ended entries first, then each
+// target's landings below its green row — and answers how many it removed:
+// exactly what [queueHistoryIn] counts in the same rows, each removal a range
+// of a key up to the last row the walk took.
+func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, rows int,
+	bytes int64) (int, error) {
+
+	cut, _, err := queueHistoryIn(ctx, tx, repoID, cutoff, rows, bytes)
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
 	if cut.entries > 0 {
-		res, err := tx.ExecContext(ctx, sweepEndedSQL, repoID, cutoff, cut.entries)
+		res, err := tx.ExecContext(ctx, sweepEndedSQL, repoID, cut.endedAt, cut.endedAt, cut.entryID)
 		if err != nil {
 			return 0, fmt.Errorf("code: remove %s's ended queue entries: %w", repoID, err)
 		}
@@ -503,10 +525,15 @@ func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff in
 }
 
 // historyCut is what of a repository's queue history lies past a cutoff within
-// a budget: how many of its ended entries, and for each target the last
-// landing below its green row that does, every one before it doing too.
+// a budget: how many of its ended entries, the key of the last of them — when
+// it ended and its id, every entry before it in that order going too — and
+// what their ejections weigh; and for each target the last landing below its
+// green row that does, every one before it doing too.
 type historyCut struct {
 	entries  int
+	endedAt  int64
+	entryID  string
+	weighed  int64
 	landings []landingCut
 }
 
@@ -529,37 +556,44 @@ func (h historyCut) rows() int {
 }
 
 // queueHistoryIn is what of repoID's queue history lies before cutoff — ended
-// entries oldest first over code_queue_ended_idx, then each target's landings
-// below its green row in the order they landed, stopping at the first that
-// does not, since a later landing is no older — within budget rows, and
+// entries oldest first by their key over code_queue_ended_idx, then each
+// target's landings below its green row in the order they landed, stopping at
+// the first that does not, since a later landing is no older — within budget
+// rows, its ended entries weighed until their ejections reach bytes, and
 // whether more lies past it.
+//
+// WEIGHED, AS A PURGE PART IS ([PurgePartBytes]): an ended entry is taken
+// while what the entries before it weigh is under bytes — the first whatever
+// it weighs, and at most one past — each by its ejected_bytes, read from the
+// index alone, so weighing an ejection never reads it. A walk whose entries
+// stopped at either bound takes no landing: the next record or step does.
+//
+// THE CUT NAMES ITS LAST ENTRY BY ITS KEY, (ended_at, entry_id), the index's
+// order, and the apply removes the range up to it: at a tie of instants — a
+// landing ends up to [MaxLandEntries] entries at one — "the first n" would be
+// whichever the engine's row order put first, which a copy of the file need
+// not share, and the copies would differ by which rows each removed.
 //
 // THE WALK STOPS AT THE FIRST LANDING INSIDE THE HISTORY, and that stop is
 // SAFE, never exact, as a retired-pack sweep's is (sweepThrough): positions
 // are only nearly monotone in instants, so a landing behind a later-stamped
 // one waits for the next record — at most the members' skew past its history.
-func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int) (historyCut,
-	bool, error) {
+func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int,
+	bytes int64) (historyCut, bool, error) {
 
 	var cut historyCut
 	if budget <= 0 {
 		return cut, false, nil
 	}
-	var ended int
-	if err := tx.QueryRowContext(ctx, endedBeforeSQL, repoID, cutoff, budget+1).Scan(&ended); err != nil {
-		return historyCut{}, false, fmt.Errorf("code: count %s's ended queue entries: %w", repoID, err)
+	more, err := endedWithin(ctx, tx, repoID, cutoff, budget, bytes, &cut)
+	if err != nil || more {
+		return cut, more, err
 	}
-	if ended > budget {
-		cut.entries = budget
-		return cut, true, nil
-	}
-	cut.entries = ended
-	left := budget - ended
 	greens, err := greenRowsIn(ctx, tx, repoID)
 	if err != nil {
 		return historyCut{}, false, err
 	}
-	more := false
+	left := budget - cut.entries
 	for _, g := range greens {
 		if left <= 0 {
 			more = true
@@ -605,6 +639,35 @@ func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64
 	return cut, more, nil
 }
 
+// endedWithin walks repoID's ended entries from before cutoff into cut,
+// oldest first by their key: at most budget of them, and none once what the
+// entries taken weigh reaches bytes. It answers whether an entry past the cut
+// is left.
+func endedWithin(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int, bytes int64,
+	cut *historyCut) (bool, error) {
+
+	rows, err := tx.QueryContext(ctx, endedWithinSQL, repoID, cutoff, budget+1)
+	if err != nil {
+		return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		if cut.entries == budget || (cut.entries > 0 && cut.weighed >= bytes) {
+			return true, nil
+		}
+		var weighs int64
+		if err := rows.Scan(&cut.endedAt, &cut.entryID, &weighs); err != nil {
+			return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+		}
+		cut.entries++
+		cut.weighed += weighs
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("code: read %s's ended queue entries: %w", repoID, err)
+	}
+	return false, nil
+}
+
 // greenRowsIn is repoID's green rows, by target.
 func greenRowsIn(ctx context.Context, tx *sql.Tx, repoID string) ([]GreenRow, error) {
 	rows, err := tx.QueryContext(ctx, greensSQL, repoID)
@@ -640,25 +703,72 @@ func moveGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, ta
 	return nil
 }
 
-// The queue's own records' writes, each registered in plan_test.go: an entry
-// put in a candidate, ejected and landed by its key; a target's train
-// abandoned — its testing entries over code_queue_live_idx with its partial
-// predicate spelled as the index declares it, and its candidates over
+// entryRow is a queue entry as a queue record writes it back: its row, and
+// the ejection's JSON an eject keeps on it ("" for any other write).
+type entryRow struct {
+	queueEntry
+	ejected string
+}
+
+// entryWrite is what a queue record did to its entries: the conflict clause
+// of their upsert, naming only the columns that write moves, since the driver
+// rewrites a row's entry in every index whose key or predicate holds a
+// column a write names, whatever the value — an entry put in a candidate
+// stays in the live index's entry it holds, and only an ending moves it into
+// the ended one.
+type entryWrite string
+
+// The writes of a queue record's entries.
+const (
+	entryTested entryWrite = `ON CONFLICT (repo_id, entry_id) DO UPDATE SET state = excluded.state,
+		train = excluded.train, candidate_id = excluded.candidate_id, commit_oid = excluded.commit_oid`
+	entryEjected entryWrite = `ON CONFLICT (repo_id, entry_id) DO UPDATE SET state = excluded.state,
+		ended_at = excluded.ended_at, ended_position = excluded.ended_position, end_reason = excluded.end_reason,
+		ejected = excluded.ejected, ejected_bytes = excluded.ejected_bytes`
+	entryLanded entryWrite = `ON CONFLICT (repo_id, entry_id) DO UPDATE SET state = excluded.state,
+		ended_at = excluded.ended_at, ended_position = excluded.ended_position, end_reason = excluded.end_reason,
+		commit_oid = excluded.commit_oid`
+)
+
+// writeEntries writes a queue record's entries back over their rows by w —
+// up to [MaxLandEntries] of them, the rows the record read — in as few
+// statements as the engine's parameters allow ([store.InsertRows]), each an
+// upsert whose conflict is the entry's own key, as [writeChanges] writes a
+// record's changes: written a statement an entry, a landing of
+// [MaxLandEntries] prepared and ran sixty-four of each kind on every data
+// node's one write lane, in the queue's hottest record; written so, that
+// record holds the lane 33 ms (BenchmarkApplyALandRecord). Every entry is one
+// the record read live, so the insert half never takes.
+func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entryWrite, rows []entryRow) error {
+	_, err := store.InsertRows(ctx, tx, maxVariables, insertEntriesSQL, entryValuesSQL, string(w), len(rows),
+		func(i int) []any {
+			e := rows[i]
+			return []any{e.RepoID, e.EntryID, e.TargetRef, e.ChangeID, e.Seq, e.HeadOID, string(e.Method),
+				e.DeleteSource, e.CloseTask, e.EnqueuedBy.Handle, string(e.EnqueuedBy.Kind), e.EnqueuedOperator,
+				string(e.State), e.Train, e.CandidateID, e.CommitOID, e.EnqueuedAt, e.EndedAt, e.EndedPosition,
+				string(e.EndReason), e.ejected, len(e.ejected)}
+		})
+	return err
+}
+
+// The queue's own records' writes, each registered in plan_test.go but the
+// entries' upserts, whose conflict is found by the key it is on: a target's
+// train abandoned — its testing entries over code_queue_live_idx with its
+// partial predicate spelled as the index declares it, and its candidates over
 // code_candidates_train_idx — and a train's landed candidates; a train's pack
 // and its counters; a landing broken by its key, and the landings a green
 // marks over the key's range; and the queue's history — ended entries over
-// code_queue_ended_idx, its predicate spelled as declared, oldest first, and a
-// target's landings below its green row by the key's range, walked oldest
-// first and removed up to the last one past the history.
+// code_queue_ended_idx, its predicate spelled as declared, walked oldest first
+// in its key's order and weighed from the index alone, and removed over the
+// same key's range up to the last one walked; and a target's landings below
+// its green row by the key's range, walked oldest first and removed up to the
+// last one past the history.
 const (
-	testEntrySQL = `UPDATE code_queue SET state = 'testing', train = ?, candidate_id = ?, commit_oid = ?
-		WHERE repo_id = ? AND entry_id = ?`
-	ejectEntrySQL = `UPDATE code_queue SET state = 'ejected', ended_at = ?, ended_position = ?, end_reason = ?,
-			ejected = ?
-		WHERE repo_id = ? AND entry_id = ?`
-	landEntrySQL = `UPDATE code_queue SET state = 'landed', ended_at = ?, ended_position = ?, end_reason = '',
-			commit_oid = ?
-		WHERE repo_id = ? AND entry_id = ?`
+	// insertEntriesSQL and entryValuesSQL are entry rows as [writeEntries]
+	// writes them: every column [entryColumns] reads, and the ejection.
+	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes) VALUES `
+	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 	resetTrainSQL = `UPDATE code_queue SET state = 'waiting', train = '', candidate_id = '', commit_oid = ''
 		WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY code_queue_live_idx
 			WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND state = 'testing')`
@@ -676,12 +786,13 @@ const (
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	greenLandingsSQL = `UPDATE code_landings SET green = 1 WHERE rowid IN (SELECT rowid FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position > ? AND position <= ? AND green = 0)`
-	endedBeforeSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_ended_idx
-		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ? LIMIT ?)`
+	endedWithinSQL = `SELECT ended_at, entry_id, ejected_bytes FROM code_queue INDEXED BY code_queue_ended_idx
+		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
+		ORDER BY ended_at, entry_id LIMIT ?`
 	sweepEndedSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue
 		INDEXED BY code_queue_ended_idx
-		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
-		ORDER BY ended_at LIMIT ?)`
+		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at <= ?
+			AND (ended_at < ? OR entry_id <= ?))`
 	landingsBelowSQL = `SELECT position, ordinal, at FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position < ? ORDER BY position, ordinal LIMIT ?`
 	sweepLandingsSQL = `DELETE FROM code_landings WHERE rowid IN (SELECT rowid FROM code_landings
