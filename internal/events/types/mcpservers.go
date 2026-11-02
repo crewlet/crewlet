@@ -25,10 +25,12 @@ const (
 	MCPServerCheck MCPServerAction = "check"
 	// MCPServerProbe checks an address before a server is added at it.
 	MCPServerProbe MCPServerAction = "probe"
+	// MCPServerStoreValue stores a server's header or variable, write-only.
+	MCPServerStoreValue MCPServerAction = "store_value"
 )
 
 // MCPServerActions is every action, for a reader's copy.
-var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe}
+var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -64,6 +66,9 @@ type MCPServerActed struct {
 	// withheld (redact.URL): a dial the engine made at a person's word is
 	// one the trail names.
 	Address string `json:"address,omitempty"`
+	// Key and Variable name a stored value's key and secret, never the value.
+	Key      string `json:"key,omitempty"`
+	Variable string `json:"variable,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
@@ -91,6 +96,11 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		}
 	case MCPServerProbe:
 		text = "checked the MCP server address " + e.Address
+	case MCPServerStoreValue:
+		text = "stored " + e.Key + " of MCP server " + e.Server
+		if e.Variable != "" {
+			text += " as " + e.Variable
+		}
 	default:
 		text = string(e.Action) + " MCP server " + e.Server
 	}

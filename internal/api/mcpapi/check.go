@@ -78,6 +78,8 @@ type CheckRequest struct {
 	// Draft is the entry as a write would leave it, nil for the saved one.
 	Draft *config.MCPServer
 	Seat  string
+	// Value is a value tested before it is stored, nil for none.
+	Value *ValueTry
 	By    iam.Actor
 }
 
@@ -341,7 +343,12 @@ func mayRunDraft(w http.ResponseWriter, r *http.Request, guard authz.Guard) bool
 // decodeBody reads a gesture's JSON body into out, refusing a field the route
 // does not read; an empty body leaves out as it is.
 func decodeBody(w http.ResponseWriter, r *http.Request, out any, shape string) bool {
-	raw, err := httpjson.ReadBody(w, r, maxCheckBody)
+	return decodeBodyWithin(w, r, out, shape, maxCheckBody)
+}
+
+// decodeBodyWithin is [decodeBody] for a body of at most limit bytes.
+func decodeBodyWithin(w http.ResponseWriter, r *http.Request, out any, shape string, limit int64) bool {
+	raw, err := httpjson.ReadBody(w, r, limit)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return false

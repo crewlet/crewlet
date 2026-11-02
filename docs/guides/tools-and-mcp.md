@@ -1357,6 +1357,44 @@ which you can configure as the server's address if you trust it. A redirect on
 the server's own origin, such as a moved path, is followed, and the headers you
 configured are only ever sent to that origin.
 
+### Storing a header or variable
+
+A server's **Connection** tab lists every header (a remote server) or variable
+(a local one) it is sent, by name: the variable each reads, whether the secret
+store holds it and who stored it last, never its value. **Replace value**
+stores a new one
+([`PUT /mcp-servers/{name}/values/{key}`](../reference/api-endpoints.md#put-mcp-serversnamevalueskey)):
+what the server is sent under the key, whole, as the curated catalogue's format
+says (`Bearer <API key>`, for one).
+
+1. **Tested first.** The server is tested as it would run with the new value,
+   where it runs, before anything is stored ([Testing a server](#testing-a-server)).
+   A value the server refuses stores nothing, and you are told the stage and
+   the reason. You can store a value untested, for a server you cannot reach
+   yet.
+2. **Write-only.** The value is sealed in the
+   [secret store](../concepts/secret-store.md) on a row no reveal answers:
+   the engine reads it for the `${VAR}` that names it, and neither
+   `crewlet secrets get -reveal` nor the API's reveals hand it back, to anybody.
+   To change it, store a new one.
+3. **One gesture.** The key is pointed at the variable in the configuration
+   (`Authorization: "${MCP_LINEAR_AUTHORIZATION}"`) as one revision, or, where
+   it already read a variable of its own, that revision is re-activated, so the
+   running server is restarted with the new value either way.
+
+The variable is the key's own where it already reads one that nothing else in
+the configuration reads; otherwise it is `MCP_<SERVER>_<KEY>`. For a per-agent
+server, a value can be one agent's (`MCP_<SERVER>_<KEY>_<AGENT>`, written into
+that seat's `mcp_env` block, and tested as that agent), and only for an agent
+the server is already granted to. A key an integration fills for each agent
+(GitHub's token, for one) is never stored here.
+
+Storing a value is an administrator's, at a recent step-up, and Ask Crewlet
+never does it: a value it typed would sit in its conversation. A configuration
+another system manages refuses it; set the credential where that system
+reads it. Each store is recorded in the runtime audit as `mcp_server_acted`
+with the action `store_value`, naming the key and the variable.
+
 ---
 
 ## Per-agent identity

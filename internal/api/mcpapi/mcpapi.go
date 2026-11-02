@@ -4,7 +4,8 @@
 // `POST /mcp-servers/{name}/retry`, a restart of it now, and the tests:
 // `POST /mcp-servers/{name}/check` of a saved server, `POST /mcp-checks` of a
 // draft and `POST /mcp-probe` of an address before a server is added at it
-// (check.go).
+// (check.go), and `PUT /mcp-servers/{name}/values/{key}`, a header or variable
+// stored write-only, tested first (values.go).
 //
 // # Routes, not registry questions
 //
@@ -50,6 +51,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -98,6 +100,15 @@ type Options struct {
 	// serves no configuration surface, answers a draft's test unavailable.
 	Drafts DraftChecker
 
+	// Documents writes a stored value's pointer; nil answers it unavailable.
+	Documents ValueDocuments
+
+	// Values is the secret store a value is sealed in: required.
+	Values ValueStore
+
+	// Now stamps a stored value; nil is the wall clock.
+	Now func() time.Time
+
 	// Audit is where each gesture's `mcp_server_acted` is published: this
 	// node's queue, whose publish listener writes the event store.
 	// Required: a restart leaves no record anywhere else.
@@ -117,6 +128,9 @@ type Service struct {
 	restarter Restarter
 	checker   Checker
 	drafts    DraftChecker
+	documents ValueDocuments
+	values    ValueStore
+	now       func() time.Time
 	audit     operator.AuditPublisher
 	guard     authz.Guard
 }
@@ -142,6 +156,14 @@ func New(opts Options) (*Service, error) {
 	if opts.Audit == nil {
 		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
 	}
+	if opts.Values == nil {
+		return nil, errors.New("mcpapi: Options.Values is required: a server's header or variable is " +
+			"sealed in the fleet's secret store")
+	}
+	now := opts.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
 	registry := opts.Registry
 	if registry == nil {
 		registry = catalogue.NewRegistry(catalogue.RegistryOptions{})
@@ -151,8 +173,8 @@ func New(opts Options) (*Service, error) {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
-		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, audit: opts.Audit,
-		guard: guard}, nil
+		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
+		values: opts.Values, now: now, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -195,8 +217,15 @@ func (s *Service) Routes(mux authz.Mux) error {
 		return err
 	}
 	probes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerProbe))
-	return probes.Handle("POST /mcp-probe", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
-		s.audited(types.MCPServerProbe, s.serveProbe))
+	if err := probes.Handle("POST /mcp-probe", authz.Policy{Action: authz.ActionToolsCheck}.Reading(),
+		s.audited(types.MCPServerProbe, s.serveProbe)); err != nil {
+		return err
+	}
+	// A value is a credential: `secrets.write`, never the assistant's, with
+	// `config.write` asked in the handler (values.go).
+	values := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerStoreValue))
+	return values.Handle("PUT /mcp-servers/{name}/values/{key}", authz.Policy{Action: authz.ActionSecretWrite},
+		s.audited(types.MCPServerStoreValue, s.serveValue))
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a

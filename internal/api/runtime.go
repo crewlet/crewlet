@@ -266,4 +266,8 @@ type NodeRuntime interface {
 	// which its detail answers.
 	MCPChecker() mcpapi.Checker
 	MCPChecks() queries.MCPCheckReader
+
+	// MCPValues is the secret store a server's value is sealed in, under
+	// the engine's keyring.
+	MCPValues() mcpapi.ValueStore
 }

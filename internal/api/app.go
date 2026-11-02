@@ -886,8 +886,9 @@ func New(opts Options) (*App, error) {
 	// serves one: a nil service leaves the draft test answered unavailable,
 	// never a nil pointer behind an interface.
 	var drafts mcpapi.DraftChecker
+	var documents mcpapi.ValueDocuments
 	if sources.Config != nil {
-		drafts = sources.Config
+		drafts, documents = sources.Config, sources.Config
 	}
 	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
 		if sources.Company == nil {
@@ -896,7 +897,7 @@ func New(opts Options) (*App, error) {
 		company, _ := sources.Company()
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
-		Drafts: drafts, Audit: opts.Audit})
+		Drafts: drafts, Documents: documents, Values: opts.Runtime.MCPValues(), Now: now, Audit: opts.Audit})
 	if err != nil {
 		return nil, err
 	}

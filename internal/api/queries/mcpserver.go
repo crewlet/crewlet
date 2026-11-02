@@ -111,6 +111,10 @@ type MCPServerAnswer struct {
 	// whichever node ([coord.MCPCheck]): null where it was never tested, or
 	// where the apply that removed it removed its test with it.
 	LastCheck *MCPCheckView `json:"last_check"`
+
+	// Values are the headers or variables the server is sent, by name
+	// ([MCPValueState]). Always a list.
+	Values []MCPValueState `json:"values"`
 }
 
 // MCPUsageDays is how many company days a server's usage and recent calls
@@ -305,7 +309,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	}
 	out := MCPServerAnswer{
 		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
-		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{},
+		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -328,6 +332,11 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 				resolved := resolvedOf(company, &company.MCPServers[i])
 				out.Resolved = &resolved
 			}
+			values, valuesErr := s.mcpValues(ctx, company, name)
+			if valuesErr != nil {
+				return MCPServerAnswer{}, valuesErr
+			}
+			out.Values = values
 		}
 	}
 	if out.Server.Configured {
