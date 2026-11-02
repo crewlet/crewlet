@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -117,16 +118,18 @@ func continuingKept(kept SessionCapture) LaunchRequest {
 	return req
 }
 
-// launchRestoring launches req through a coordinator of the rig's own store and
-// queue that continues kept sessions from restore, as an engine's does.
+// launchRestoring launches req through a coordinator of the rig's own store,
+// queue and spool directory that continues kept sessions from restore, as an
+// engine's does.
 func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req LaunchRequest) (LaunchResult, error) {
 	t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
 		Answers: rigAnswers(),
 		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
-		Lease:   leased(rigLease),
-		Restore: restore,
+		Lease:    leased(rigLease),
+		Restore:  restore,
+		SpoolDir: rig.coordinator.spoolDirectory(),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -135,16 +138,30 @@ func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req La
 	return c.Launch(t.Context(), rig.manager, req)
 }
 
+// restoreSpools is every spool a launch left of a session it carried, in the
+// rig's spool directory.
+func restoreSpools(t *testing.T, rig *coordRig) []string {
+	t.Helper()
+	left, err := filepath.Glob(filepath.Join(rig.coordinator.spoolDirectory(), restoreSpoolPrefix+"*"))
+	if err != nil {
+		t.Fatalf("listing the restore spools: %v", err)
+	}
+	return left
+}
+
 // A TURN'S KEPT SESSION IS CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS. The
 // job before was collected and its box handed back, so the relaunch's box is a
 // new one: the run is handed the job's kept archive to restore, the session it
 // names to take up, the brief written for a session in a box that replaced the
 // one it was last worked in — and, beside it, the fresh brief its script hands
 // a session of its own if the restore fails there. The launch's record says
-// which brief it handed, and its caller is told so before the run starts.
+// which brief it handed, and its caller is told so before the run starts. And
+// the spool it carried the session in, in the node's spool directory, is gone
+// once the run has started.
 //
 // Mutation: continue only in the box the session lives in, hand the same-box
-// brief to a new box, or tell the caller nothing, and this goes red.
+// brief to a new box, tell the caller nothing, or leave the spool, and this
+// goes red.
 func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 	t.Parallel()
 	rig, restore, kept := keptTurn(t)
@@ -178,6 +195,9 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 	}
 	if len(decided) != 1 || decided[0] != (LaunchDecision{Brief: BriefContinuedNewBox, Kept: true}) {
 		t.Errorf("the launch's caller was told %+v, want once: the turn's kept session, in a new box", decided)
+	}
+	if left := restoreSpools(t, rig); len(left) != 0 {
+		t.Errorf("the launch left the spool it carried the session in: %v", left)
 	}
 }
 

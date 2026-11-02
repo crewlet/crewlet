@@ -694,8 +694,8 @@ func (c *Coordinator) notContinued(ctx context.Context, req LaunchRequest, why s
 }
 
 // restoreSpoolPrefix names a launch's spool of the session it carries, under
-// [spoolPrefix] so a spool a crash left behind is swept with the captures'
-// ([Coordinator.sweepSpools]).
+// [spoolPrefix] and in the same directory, so a spool a crash left behind is
+// swept with the captures' ([Coordinator.sweepSpools]).
 const restoreSpoolPrefix = spoolPrefix + "restore-"
 
 // fetchedSession is a kept session spooled SEALED on this node's disk, every
@@ -707,10 +707,12 @@ type fetchedSession struct {
 }
 
 // fetchSession spools row's session sealed and checks it can be read whole,
-// before any of it reaches a box ([executordomain.SessionStore.Fetch]).
+// before any of it reaches a box ([executordomain.SessionStore.Fetch]) — in the
+// coordinator's spool directory ([Coordinator.spoolDirectory]), where its
+// sweep looks.
 func (c *Coordinator) fetchSession(ctx context.Context, row executordomain.Session) (*fetchedSession, error) {
 	c.sweepSpools()
-	file, err := os.CreateTemp(os.TempDir(), restoreSpoolPrefix+"*")
+	file, err := os.CreateTemp(c.spoolDirectory(), restoreSpoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("a spool for the session on this node's disk: %w", err)
 	}
