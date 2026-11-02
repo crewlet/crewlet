@@ -172,7 +172,10 @@ type knobs struct {
 	indexSegmentBytes int64
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
-	// in place of a timer: a case moves its clock and wakes it.
+	// in place of a timer, and firing as one: once that clock reaches the
+	// end, and at once where it has, since a pass that read the clock before
+	// a case moved it arms its wake after. A case moves its clock and so
+	// wakes it.
 	installWake func(at time.Time) <-chan time.Time
 	// installSettling, when set, runs as an installer's task has ended its
 	// try of the repository id and is about to settle it: a case holds the
@@ -253,8 +256,11 @@ type knobs struct {
 	// error it answers is that read's: a case's disk failing under a file.
 	readFault func(path string) error
 	// scrubWake, when set, is the scrubber's wake for the next interval's
-	// end, next on the cache's clock, in place of a timer: a case on a clock
-	// of its own sees when the scrubber means to wake, and wakes it.
+	// end, next on the cache's clock, in place of a timer, and firing as one:
+	// once that clock reaches next, and at once where it has, since a pass
+	// that read the clock before a case moved it arms its wake after. A case
+	// on a clock of its own sees when the scrubber means to wake, and wakes
+	// it by moving the clock there.
 	scrubWake func(next time.Time) <-chan time.Time
 	// derived, when set, is the cache's declarations of its derived files in
 	// place of DerivedFiles(): a case proves the code reads the

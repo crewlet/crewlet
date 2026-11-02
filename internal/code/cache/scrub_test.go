@@ -704,20 +704,48 @@ func probeReads(b *testing.B, pool *gitproc.Pool) (stop func() []time.Duration) 
 }
 
 // wakes is the scrubber's wakes as a case's clock sees them: every interval's
-// end it asked to be woken at, and the channel that wakes it then.
+// end it asked to be woken at, each a timer on the case's clock (clock.At)
+// that the case fires by moving the clock there; and the next arming a case
+// holds (holdNext).
 type wakes struct {
+	clk   *clock
 	mu    sync.Mutex
 	asked []time.Time
-	chans []chan time.Time
+	hold  *wakeHold
 }
+
+// wakeHold is an arming held at its start: closed once it is, and what lets
+// it go on.
+type wakeHold struct{ held, release chan struct{} }
 
 // at is the ScrubWakesWith knob.
 func (w *wakes) at(next time.Time) <-chan time.Time {
-	ch := make(chan time.Time, 1)
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.asked, w.chans = append(w.asked, next), append(w.chans, ch)
-	return ch
+	hold := w.hold
+	w.hold = nil
+	w.mu.Unlock()
+	if hold != nil {
+		close(hold.held)
+		<-hold.release
+	}
+	w.mu.Lock()
+	w.asked = append(w.asked, next)
+	w.mu.Unlock()
+	return w.clk.At(next)
+}
+
+// holdNext holds the scrubber's next arming at its start — its pass has read
+// the clock and decided when to wake — and answers a channel closed once it is
+// held there, and the release that lets it arm, which the case's cleanup calls
+// too, so a case that fails first leaves no scrubber waiting on it.
+func (w *wakes) holdNext(t *testing.T) (held <-chan struct{}, release func()) {
+	hold := &wakeHold{held: make(chan struct{}), release: make(chan struct{})}
+	w.mu.Lock()
+	w.hold = hold
+	w.mu.Unlock()
+	release = sync.OnceFunc(func() { close(hold.release) })
+	t.Cleanup(release)
+	return hold.held, release
 }
 
 // has reports whether the scrubber has asked to be woken at at.
@@ -725,20 +753,6 @@ func (w *wakes) has(at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return slices.ContainsFunc(w.asked, at.Equal)
-}
-
-// fire wakes the scrubber from the last wake it asked for at at, and reports
-// whether it asked for one.
-func (w *wakes) fire(at time.Time) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for i := len(w.asked) - 1; i >= 0; i-- {
-		if w.asked[i].Equal(at) {
-			w.chans[i] <- at
-			return true
-		}
-	}
-	return false
 }
 
 // A USED COPY'S SCRUB COMES ROUND AGAIN, HOWEVER ITS USES FALL. The interval
@@ -761,12 +775,18 @@ func (w *wakes) fire(at time.Time) bool {
 // process built (whose first round begins its interval with no scrub) go
 // round three times under each kind of first use, each round taking a reader
 // after it that is held across the scrub at the interval's end and is the one
-// the next round lets go of or makes its scratch over.
+// the next round lets go of or makes its scratch over. In the second round a
+// kick the scrubber takes while it waits — another copy's use, a report — has
+// it pass again and arm its wake anew from a clock it read before the case
+// moved it to the interval's end: armed for a time come already, that wake
+// fires at once, as the timer it stands in for does, and the scrub comes then
+// all the same.
 //
 // Mutations: wake the scrubber only on a first use past the interval (pin's
 // old condition) — no wake is armed after a reader taken inside it; drop the
 // release's wake — none after the release; drop the scratch's — none after
-// the scratch.
+// the scratch; let a wake armed for a time come already wait for the clock to
+// move again (clock.At's firing at once) — the second round's never fires.
 func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 	t.Parallel()
 	// uses is each kind of first use since the copy's last scrub: held is a
@@ -821,7 +841,7 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 				t.Parallel()
 				w := newSyncWorld(t, onMemory)
 				clk := newClock()
-				var wk wakes
+				wk := &wakes{clk: clk}
 				c, repo := tc.copy(t, w, clk, func(o *cache.Options) { cache.ScrubWakesWith(o, wk.at) })
 				c.Start(t.Context())
 				// A reader taken as the interval begins, at the instant the
@@ -845,8 +865,31 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 					held = w.sync(t, c, repo)
 					end := base.Add(cache.ScrubInterval)
 					eventually(t, "the scrubber's wake armed for the interval's end", func() bool { return wk.has(end) })
+					// The clock reaching the interval's end is what wakes the
+					// scrubber, as its timer would: whichever wake it waits on
+					// — a use landing between a pass's taking its kicks and its
+					// reading the copy leaves its kick pending, so the pass
+					// that armed a wake is followed by one arming another —
+					// and at once one armed by a pass that read the clock
+					// before it moved. The second round makes sure of that
+					// one: a kick taken while the scrubber waits, its pass
+					// held where it arms the wake anew, once it has read the
+					// clock, until the clock is at the interval's end.
+					var release func()
+					if round == 1 {
+						var held <-chan struct{}
+						held, release = wk.holdNext(t)
+						cache.KickScrubber(c)
+						select {
+						case <-held:
+						case <-time.After(hangDetector):
+							t.Fatalf("round %d: the scrubber, kicked, armed no wake within %v", round, hangDetector)
+						}
+					}
 					clk.Set(end)
-					wk.fire(end)
+					if release != nil {
+						release()
+					}
 					eventually(t, "the scrub at the interval's end", func() bool {
 						now, _, _ := cache.Scrubbed(c, repo)
 						return now.After(at) || (at.IsZero() && !now.IsZero())
