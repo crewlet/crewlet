@@ -124,7 +124,7 @@
 // The build is ONE `pack-objects --stdin-packs --max-pack-size` over the
 // inputs with NO pack excluded, in a scratch repository whose one alternate is
 // a store holding EXACTLY THE INPUTS — hard links of the packs of the
-// incarnation the plan was made over (internal/code/cache's NewMergeScratch)
+// incarnation serving the plan's sync (internal/code/cache's NewMergeScratch)
 // — so the inputs are read through it, and the build writes nothing but the
 // scratch. Every object of the inputs is in the outputs, an object an input
 // shares with a pack that is no input included: two compactions decided from

@@ -524,6 +524,39 @@ func TestARewritesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
 	}
 }
 
+// A MERGE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: a compaction
+// or a publication's repack makes its scratch after its plan, while another
+// record of the repository — another merge, an expunge's begin or commit —
+// swaps the copy its sync took, which leaves that copy no live set. The
+// scratch is made over the copy serving now, its store linking the inputs
+// from there, never refused for inputs the old copy's emptied live set no
+// longer names.
+//
+// Mutation: resolve no serving copy for a merge in newScratch, and the
+// scratch is refused: its input is no pack live in the copy the sync took.
+func TestAMergesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, first := w.push(t, repo, "refs/heads/main", nil)
+	_, second := w.push(t, repo, "refs/heads/main", nil)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	planned := w.sync(t, c, repo)
+	w.compacted(t, repo, second, third)
+	if after := w.sync(t, c, repo); after.Dir == planned.Dir {
+		t.Fatalf("the premise: the other merge's round left the copy at %s, want it swapped", after.Dir)
+	}
+	sc, err := c.NewMergeScratch(t.Context(), planned, uuid.Must(uuid.NewV7()).String(), []string{first.GitChecksum})
+	if err != nil {
+		t.Fatalf("a merge's scratch over a copy another merge's swap replaced: %v", err)
+	}
+	defer sc.Remove()
+	if got, want := packFiles(t, sc.Alternate), rowFiles(first); !slices.Equal(got, want) {
+		t.Errorf("the merge's store holds %v, want its input's %v", got, want)
+	}
+}
+
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
 // internal/code that names a copy's dropping view (gitproc.Cmd.Dropping) is
 // a read — a subcommand of gitReaders — that SERVES the copy, a row of
