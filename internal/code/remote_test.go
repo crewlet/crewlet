@@ -223,18 +223,18 @@ func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	s.MirrorFrom = mirrorSource
 	n.ensure("web", s, t2)
 	endImport(t, n, c, web, 0)
-	if got := detail("web"); got.MirrorFrom == nil || *got.MirrorFrom != *mirrorSource ||
-		!got.MirrorSyncedAt.IsZero() || got.Import == nil ||
+	imported := detail("web")
+	if got := imported; got.MirrorFrom == nil || *got.MirrorFrom != *mirrorSource || got.Import == nil ||
 		got.Import.Source != (code.ImportSource{URL: mirrorSource.URL, Credential: mirrorSource.Credential}) ||
-		got.Import.DoneAt.IsZero() {
-		t.Fatalf("a pull mirror imported and never synced details %+v, want its source, the import from it "+
-			"ended and no sync", got)
+		got.Import.DoneAt.IsZero() || !got.MirrorSyncedAt.Equal(got.Import.DoneAt) {
+		t.Fatalf("a pull mirror imported whole details %+v, want its source, the import from it ended and its "+
+			"last sync at that end", got)
 	}
 	sync := syncOf(n, web, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
 	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})
 	requireSynced(t, "the sync", res, err)
-	if got := detail("web"); got.MirrorSyncedAt.IsZero() {
-		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant", got)
+	if got := detail("web"); !got.MirrorSyncedAt.After(imported.MirrorSyncedAt) {
+		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant past its import's end", got)
 	}
 }
 
@@ -318,14 +318,18 @@ func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
 	s.MirrorFrom = mirrorSource
 	// Every repository made at one activation before any is made a mirror at
 	// a later one: activations only move forward.
+	// Each import a mirror_from starts ends short, so each is an active
+	// pull mirror never synced: one that landed whole is synced at its end.
 	names := []string{"first", "second"}
+	ids := map[string]string{}
 	for _, name := range names {
-		repoOn(t, n, name)
-	}
-	for _, name := range names {
-		n.ensure(name, s, t2)
+		ids[name] = repoOn(t, n, name)
 	}
 	c, _ := committerOn(t, n, n.pub)
+	for _, name := range names {
+		n.ensure(name, s, t2)
+		endImportShort(t, n, c, ids[name], 0, "the source is unreachable")
+	}
 	stale := statelog.Freshness{Level: statelog.ReadStale}
 	pulls := func() []code.MirrorCandidate {
 		t.Helper()
@@ -404,14 +408,17 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	for i := range 3 {
 		n.ensure(fmt.Sprintf("out-%d", i), to, t2)
 	}
+	// Each pull mirror's import ends short, so each is active and never
+	// synced until a sync lands: one that landed whole is synced at its end.
+	c, _ := committerOn(t, n, n.pub)
 	for i := range 4 {
 		n.ensure(fmt.Sprintf("in-%d", i), from, t2)
+		endImportShort(t, n, c, pulls[i], 0, "the source is unreachable")
 	}
 	slices.Sort(pushes)
 	slices.Sort(pulls)
 	// The greater id synced first, so the order by instant is not the
 	// order by id.
-	c, _ := committerOn(t, n, n.pub)
 	for _, repo := range []string{pulls[3], pulls[2]} {
 		sync := syncOf(n, repo, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
 		res, err := c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})

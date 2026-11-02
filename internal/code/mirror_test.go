@@ -449,6 +449,16 @@ func endImport(t *testing.T, n *node, c *code.Committer, repo string, seq int64)
 	requireSynced(t, "the import's end", res, err)
 }
 
+// endImportShort lands the end of repo's import at its seq-th chunk through
+// c with why it ended short: repo is ACTIVE after it and, being a pull
+// mirror, never synced, which an import that landed whole would not leave it.
+func endImportShort(t *testing.T, n *node, c *code.Committer, repo string, seq int64, why string) {
+	t.Helper()
+	done := code.ImportDone{RepoID: repo, Node: n.id, Seq: seq, Error: why}
+	res, err := c.ProposeImport(t.Context(), code.ImportProposal{Done: &done})
+	requireSynced(t, "the import's end short", res, err)
+}
+
 // NOTHING MERGES INTO A PULL MIRROR OR A REPOSITORY BEING IMPORTED: a merge
 // moves its target, and a pull mirror moves only by its syncs from its
 // source, so a merge of a change that meets its gate is refused repo_mirrored,
