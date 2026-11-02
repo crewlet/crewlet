@@ -53,8 +53,11 @@ import (
 // expungeState is what an expunge's apply reads of the repository's row — its
 // drop epoch, the open expunge, and the purge requested and its record's
 // position — and what a repository's detail says of its last commit beside
-// them ([ExpungeState]): its broker instant and what it dropped. ONE READ for
-// both, so the detail and the applier never read the row two ways.
+// them ([ExpungeState]): its broker instant and what it dropped. ONE TYPE AND
+// ONE SCAN for both ([expungeState.dests]): the applier reads the expunge
+// columns alone ([expungeStateSQL]), and a repository's detail reads them
+// first in the same order with the rest of what it serves of the row
+// ([detailRowSQL]), so the two never read the columns two ways.
 type expungeState struct {
 	dropEpoch   int64
 	expungeID   string
@@ -65,11 +68,17 @@ type expungeState struct {
 	droppedB    int64
 }
 
+// dests is where a scan of the expunge columns writes them, in the order
+// [expungeStateSQL] and [detailRowSQL] both select them.
+func (s *expungeState) dests() []any {
+	return []any{&s.dropEpoch, &s.expungeID, &s.request, &s.requestedAt, &s.expungedAt, &s.droppedObj,
+		&s.droppedB}
+}
+
 // expungeStateIn reads it.
 func expungeStateIn(ctx context.Context, tx *sql.Tx, repoID string) (expungeState, error) {
 	var s expungeState
-	err := tx.QueryRowContext(ctx, expungeStateSQL, repoID).Scan(&s.dropEpoch, &s.expungeID, &s.request,
-		&s.requestedAt, &s.expungedAt, &s.droppedObj, &s.droppedB)
+	err := tx.QueryRowContext(ctx, expungeStateSQL, repoID).Scan(s.dests()...)
 	if err != nil {
 		return expungeState{}, fmt.Errorf("code: read %s's expunge: %w", repoID, err)
 	}

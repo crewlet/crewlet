@@ -2668,23 +2668,65 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
-	// AND WHERE ITS EXPUNGES STAND, from the row an expunge's apply reads
-	// ([expungeStateIn]): a person who asked for a purge reads its progress
-	// here — the request open until its maintainer serves it, and what the
-	// last commit dropped.
-	state, err := expungeStateIn(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	out.Repo.Expunge = state.view()
-	// AND WHERE IT STANDS WITH OTHER HOSTS ([remotesShownIn]): a person who
-	// imported it, or set a mirror, reads the import's progress and the
-	// mirror's last sync here.
-	if out.Repo.Remotes, err = remotesShownIn(ctx, tx, id); err != nil {
-		return err
-	}
-	return nil
+	// AND WHERE ITS EXPUNGES STAND AND WHERE IT STANDS WITH OTHER HOSTS, in
+	// one seek of its row ([detailRowIn]): a person who asked for a purge
+	// reads its progress here — the request open until its maintainer serves
+	// it, and what the last commit dropped — and one who imported it, or set
+	// a mirror, the import's progress and the mirror's last sync.
+	out.Repo.Expunge, out.Repo.Remotes, err = detailRowIn(ctx, tx, id)
+	return err
 }
+
+// detailRowIn reads what a repository's detail serves of its row beyond its
+// summary — its expunges ([expungeState.view]) and its other hosts
+// ([RemoteState]) — in ONE statement by its primary key, in tx.
+//
+// ONE SEEK, NEVER ONE A PART: every resolution of a repository reads this
+// detail (a git read at HEAD or no branch, a search's repo: filter, a merge,
+// code_get_repo), so a statement a part was a second seek of the row the
+// first had just read, on every one of them. The applier's and the decide's
+// narrower reads ([expungeStateSQL], [remotesSQL]) stay their own: they read
+// what a record needs and nothing of the progress a person reads here.
+func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, RemoteState, error) {
+	var (
+		state                    expungeState
+		remotes                  RemoteState
+		from, to, source, failed string
+		chunks, doneAt, syncedAt int64
+	)
+	dests := append(state.dests(), &from, &to, &source, &chunks, &doneAt, &failed, &syncedAt)
+	if err := tx.QueryRowContext(ctx, detailRowSQL, id).Scan(dests...); err != nil {
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's detail row: %w", id, err)
+	}
+	var err error
+	if remotes.MirrorFrom, err = remoteOf[MirrorSource](from); err != nil {
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's mirror_from: %w", id, err)
+	}
+	if remotes.MirrorTo, err = remoteOf[MirrorTarget](to); err != nil {
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's mirror_to: %w", id, err)
+	}
+	imported, err := remoteOf[ImportSource](source)
+	if err != nil {
+		return ExpungeState{}, RemoteState{}, fmt.Errorf("code: read repository %s's import_source: %w", id, err)
+	}
+	if imported != nil {
+		remotes.Import = &ImportState{Source: *imported, Chunks: chunks, Error: failed}
+		if doneAt != 0 {
+			remotes.Import.DoneAt = store.DecodeTime(doneAt)
+		}
+	}
+	if syncedAt != 0 {
+		remotes.MirrorSyncedAt = store.DecodeTime(syncedAt)
+	}
+	return state.view(), remotes, nil
+}
+
+// detailRowSQL reads what [detailRowIn] serves, by the primary key: the
+// expunge columns first, in [expungeStateSQL]'s order ([expungeState.dests]),
+// then the other hosts' — registered in plan_test.go.
+const detailRowSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position,
+	expunged_at, expunge_dropped_objects, expunge_dropped_bytes, mirror_from, mirror_to, import_source,
+	import_seq, imported_at, import_error, mirror_synced_at FROM code_repos WHERE id = ?`
 
 // pushes serves one repository's push history, newest first IN LOG ORDER —
 // the order the pushes landed in — keyset-paged by (position, push_id): the
