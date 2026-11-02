@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -182,14 +183,16 @@ func (t *transcriptLines) take() []string {
 	return lines
 }
 
-// redactContext is how much MORE than it keeps a read from a stream's end
-// takes, so a credential that began before the kept window is still
-// recognised and redacted.
+// redactContext is how much MORE than it shows a reading that begins inside a
+// stream reads before what it shows, so a credential that began before what is
+// shown is still recognised and redacted. What it reads there is context and
+// nothing else: it is never shown ([settledEnd]).
 //
 // Every credential shape the redaction pass knows fits on one line except a
 // private key, whose block runs at most [redact.MaxKeyBlockBytes] past its
-// BEGIN line. A window opening inside such a block
-// would show its base64 body with no BEGIN for the rule to anchor on; with
+// BEGIN line. A window opening inside such a block would show its base64 body
+// with no BEGIN for the rule to anchor on, and read back from its END, the
+// lines above three that part it are published (package redact's doc); with
 // this much read before the window, any key that reaches into it is read
 // whole and redacted as one — and the bound is the redaction's own, so the two
 // cannot drift.
@@ -197,26 +200,107 @@ const redactContext = redact.MaxKeyBlockBytes
 
 // streamEnd is the end of a stream as text a person or a model can be shown:
 // at most keep bytes of WHOLE lines from the end of tail, redacted, and how
-// many bytes of the file came before what is shown.
+// many bytes of the stream came before what is shown. tail is the stream's
+// end read [redactContext] past keep, or the whole stream.
 //
 // REDACTED BEFORE IT IS BOUNDED, for the reason [redactContext] exists, and
 // on WHOLE LINES by the one rule every stream's end is shown by
 // ([sandbox.KeepEnd]).
 //
+// SHOWN ONLY WHERE THE CONTEXT SETTLES IT. The first [redactContext] bytes of
+// a read that began inside the stream are context, and what is shown is the
+// end of what comes after them, as the whole read redacts it ([settledEnd]).
+// Bounded by the redacted text's bytes alone, the end reached back into the
+// context whenever the redaction shrank what came after it — a stream's last
+// mebibytes holding keys enough, each block a marker of twenty-two bytes —
+// and showed the lines of a key whose BEGIN came before the read.
+//
 // A READ THAT OPENED INSIDE A LINE RUNNING TO THE END has no line break to
 // start a whole line at, and dropping the line it opened inside dropped
 // everything the process said last — a failure built on it said nothing of
 // the stream at all, not even that it was there. That is the one case whole
-// lines cannot meet, and KeepEnd keeps such a line's end on a character,
-// marked, so it is handed the read whole.
+// lines cannot meet, and such a line's end is kept on a character, marked:
+// past the context, as anything shown is.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
-	data, partial := tail.Lines()
-	if len(data) == 0 && partial > 0 {
-		data, partial = tail.Data, 0
+	ctx := 0
+	if tail.Before() > 0 {
+		ctx = redactContext
 	}
-	text := redact.Secrets(string(data))
-	kept, at := sandbox.KeepEnd(text, keep)
-	return kept, tail.Before() + int64(partial) + int64(at)
+	kept, at := settledEnd(string(tail.Data), ctx, keep)
+	return kept, tail.Before() + int64(at)
+}
+
+// settledEnd is the end of text that its first ctx bytes settle, redacted: at
+// most keep bytes of whole lines, kept as [sandbox.KeepEnd] keeps them. And
+// how much of text came before what it keeps — counted in text's own bytes up
+// to where what is settled begins, and in the redacted text's past that, which
+// is what a reader would have been shown of them, as the failure that carries
+// a stream's end counts what it cuts off it ([failureDetail]).
+//
+// WHAT IS SETTLED begins on the first line past the context ([settledStart]),
+// and is shown as the WHOLE of text redacts it. Redacted alone, its start can
+// read otherwise: a key whose BEGIN is in the context reads as one cut off
+// from its BEGIN, and a password's value under a key in the context as no
+// password's. So only what the two redactions agree on is kept, from the line
+// after the last place they part — where whatever the context decided ends.
+func settledEnd(text string, ctx, keep int) (string, int) {
+	from, opensLine := settledStart(text, ctx)
+	part := redact.Secrets(text[from:])
+	start := 0
+	if from > 0 {
+		start = len(part) - sharedSuffix(redact.Secrets(text), part)
+	}
+	if start == len(part) {
+		return "", from + start
+	}
+	if !(start == 0 && opensLine || start > 0 && part[start-1] == '\n') {
+		i := strings.IndexByte(part[start:], '\n')
+		if i < 0 || start+i+1 == len(part) {
+			// THE END OF ONE LINE, which began before what is settled: kept
+			// on a character and marked, as a line longer than keep is.
+			kept, at := sandbox.KeepEnd(part[start:], keep)
+			if at == 0 {
+				kept = sandbox.KeepEndMark + kept
+			}
+			return kept, from + start + at
+		}
+		start += i + 1
+	}
+	kept, at := sandbox.KeepEnd(part[start:], keep)
+	return kept, from + start + at
+}
+
+// settledStart is where what the first ctx bytes of text settle begins, and
+// whether it opens a line: the first line that starts ctx bytes in or later,
+// or — where none does, the last line having begun before — the first
+// character there, inside that line.
+func settledStart(text string, ctx int) (int, bool) {
+	switch {
+	case ctx <= 0:
+		return 0, true
+	case ctx >= len(text):
+		return len(text), true
+	case text[ctx-1] == '\n':
+		return ctx, true
+	}
+	if i := strings.IndexByte(text[ctx:], '\n'); i >= 0 && ctx+i+1 < len(text) {
+		return ctx + i + 1, true
+	}
+	for ctx < len(text) && !utf8.RuneStart(text[ctx]) {
+		ctx++
+	}
+	return ctx, false
+}
+
+// sharedSuffix is how many bytes a and b end with alike.
+func sharedSuffix(a, b string) int {
+	n := min(len(a), len(b))
+	for i := range n {
+		if a[len(a)-1-i] != b[len(b)-1-i] {
+			return i
+		}
+	}
+	return n
 }
 
 // humanSize renders a byte count as a reader would say it.
