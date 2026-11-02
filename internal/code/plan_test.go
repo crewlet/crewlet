@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1266,7 +1267,12 @@ func registeredStatements() map[string]statement {
 		// its check's later attempts on the key; a
 		// repository's newest ended first, from the top or after a place, on
 		// code_checks_finished_idx; the window's between its start and its
-		// end, or a cursor's place, on code_checks_recent_idx; and the home's
+		// end, or a cursor's place, on code_checks_recent_idx; the places of
+		// a narrowed listing, each a covering seek of the index leading with
+		// its narrowing — a repository's in one state, and of one check in
+		// one state, at its first page's place above every ending; the
+		// window's in one ending, and of one check in one ending, from its
+		// end; and the home's
 		// due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
@@ -1274,18 +1280,26 @@ func registeredStatements() map[string]statement {
 		"check whole":        {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"check log":          {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"latest check":       {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"checks of a commit": {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
-		"checks of a target": {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
-		"latest of a commit": {latestOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 64},
+		"checks of a commit": {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50, "unit", "failed"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
+		"checks of a target": {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50, "", ""}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
+		"latest of a commit": {latestOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 64, "", "failed"},
 			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
-		"latest of a target": {latestOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 64},
+		"latest of a target": {latestOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 64, "unit", ""},
 			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
 		"checks of a repo":      {checksOfRepoSQL, []any{"repo-1", 50}, []string{checksEndedKey + " (repo_id=?)"}},
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
 		"checks window":         {checksWindowSQL, []any{1, 1000, 50}, []string{"code_checks_recent_idx (finished_at<? AND finished_at>=?)"}},
 		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "refs/heads/main", "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
+		"repo checks in a state": {repoStatePlacesSQL, []any{"repo-1", "running", int64(math.MaxInt64), "", "", "", 0, 50},
+			[]string{"COVERING INDEX code_checks_state_idx (repo_id=? AND state=? AND finished_at<=?)"}},
+		"repo checks of a name": {repoNamePlacesSQL, []any{"repo-1", "unit", "failed", 1000, oid("c"), "refs/heads/main", 1, 50},
+			[]string{"COVERING INDEX code_checks_name_idx (repo_id=? AND name=? AND state=? AND finished_at<=?)"}},
+		"window checks in a state": {windowStatePlacesSQL, []any{"failed", 1, 1000, "", "", "", "", 0, 50},
+			[]string{"COVERING INDEX code_checks_state_recent_idx (state=? AND finished_at<=? AND finished_at>=?)"}},
+		"window checks of a name": {windowNamePlacesSQL, []any{"unit", "passed", 1, 1000, "repo-1", oid("c"), "refs/heads/main", 1, 50},
+			[]string{"COVERING INDEX code_checks_name_recent_idx (name=? AND state=? AND finished_at<=? AND finished_at>=?)"}},
 		// THE HOME'S CHECK WORK (checksread.go, checksdispatch.go): a head's
 		// dispatch by the two rows' keys, its requeue by the partial index
 		// holding only the attempts their infrastructure ended and the next

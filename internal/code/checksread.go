@@ -1,6 +1,7 @@
 package code
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,8 +38,11 @@ import (
 //     each kept only where its repository is one the asker reads, so a page
 //     is the rows it READ and may be short, as a listing of changes across
 //     repositories is. Every shape takes a check's name and a state as
-//     NARROWINGS, tested on the rows a page read beside the grant
-//     ([CheckQuery.State]): the dashboard's Checks section's facets.
+//     NARROWINGS, each the STATEMENT'S, never a filter of what a page read
+//     ([CheckQuery.State]): a repository's and the window's seek an index
+//     that leads with the narrowing (narrowedPlaces), and a change's and a
+//     commit's test it inside their walk of one commit's attempts. The
+//     dashboard's Checks section's facets.
 //   - `check` ([ReadCheck]) is one attempt whole: the row, the definition it
 //     ran under, its tail, the failures its ending named, and the log a
 //     failed run kept.
@@ -247,6 +252,10 @@ func (q ReadQuery) validateChecks() error {
 		return refused("checks.name", fmt.Sprintf("%q is not a check name", c.Name))
 	case c.State != "" && !c.State.Valid():
 		return refused("checks.state", fmt.Sprintf("%q is not one of %s", c.State, words.Or(CheckStates())))
+	case q.Repo == "" && c.State != "" && !c.State.Ended():
+		return refused("checks.state", fmt.Sprintf("the window lists the attempts that ENDED in it, so none "+
+			"is %s: narrow it to %s, or a repository's listing to the attempts still %s", c.State,
+			words.Or(endedCheckStates()), words.Or([]CheckState{CheckStateQueued, CheckStateRunning})))
 	case c.Change < 0:
 		return refused("checks.change", fmt.Sprintf("%d is no change's number", c.Change))
 	case c.OID != "" && (!gitref.ValidOID(c.OID) || c.OID == ZeroOID):
@@ -648,9 +657,9 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if c.OID != "" {
 			oid = c.OID
 		}
-		rows, err = checksOfTarget(ctx, tx, q.Cursor, c.Latest, repo.ref.ID, oid, change.target, limit)
+		rows, err = checksOfTarget(ctx, tx, q.Cursor, c, repo.ref.ID, oid, change.target, limit)
 	case c.Target != "":
-		rows, err = checksOfTarget(ctx, tx, q.Cursor, c.Latest, repo.ref.ID, c.OID, c.Target, limit)
+		rows, err = checksOfTarget(ctx, tx, q.Cursor, c, repo.ref.ID, c.OID, c.Target, limit)
 	case c.OID != "":
 		target, name, attempt, ok := cutTargetCursor(q.Cursor)
 		if !ok {
@@ -660,7 +669,10 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if c.Latest {
 			statement = latestOfCommitSQL
 		}
-		rows, err = tx.QueryContext(ctx, statement, repo.ref.ID, c.OID, target, name, attempt, limit)
+		rows, err = tx.QueryContext(ctx, statement, repo.ref.ID, c.OID, target, name, attempt, limit, c.Name,
+			string(c.State))
+	case c.Name != "" || c.State != "":
+		return r.narrowedRepoChecks(ctx, tx, q, c, repo.ref, limit, out)
 	case q.Cursor == "":
 		rows, err = tx.QueryContext(ctx, checksOfRepoSQL, repo.ref.ID, limit)
 	default:
@@ -681,15 +693,15 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	for i := range scanned {
 		scanned[i].Repo = repo.ref.Name
 	}
-	r.pageChecks(scanned, c.keeps, limit, checksWalk(q), out)
+	r.pageChecks(scanned, nil, limit, checksWalk(q), out)
 	return nil
 }
 
 // checksOfTarget runs the walk of one commit's attempts checked for one
 // target — a change's, or a commit's beside the branch it names — after the
-// (name, attempt) cursor names: every attempt, or each check's latest where
-// latest asks ([CheckQuery.Latest]).
-func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, latest bool, repoID, oid, target string,
+// (name, attempt) cursor names: every attempt, or each check's latest where c
+// asks ([CheckQuery.Latest]), of the check and in the state c narrows to.
+func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, c CheckQuery, repoID, oid, target string,
 	limit int) (*sql.Rows, error) {
 
 	name, attempt, ok := cutNameAttempt(cursor)
@@ -697,10 +709,45 @@ func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, latest bool,
 		return nil, fmt.Errorf("%w: %q", ErrBadCursor, cursor)
 	}
 	statement := checksOfTargetSQL
-	if latest {
+	if c.Latest {
 		statement = latestOfTargetSQL
 	}
-	return tx.QueryContext(ctx, statement, repoID, oid, target, name, attempt, limit)
+	return tx.QueryContext(ctx, statement, repoID, oid, target, name, attempt, limit, c.Name, string(c.State))
+}
+
+// narrowedRepoChecks serves a page of a repository's listing narrowed by c —
+// by a check's name, a state or both — in the listing's own order (newest
+// ended first, then the attempts not yet ended), its rows those
+// [narrowedPlaces] seeks after the cursor's place and nothing else, so a page
+// is full wherever the narrowing holds as many rows after it, whatever the
+// repository's history around them.
+func (r *Reader) narrowedRepoChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery,
+	repo RepoRef, limit int, out *ReadAnswer) error {
+
+	// A FIRST PAGE'S PLACE IS ABOVE EVERY ENDING: no instant encodes to
+	// MaxInt64, so `finished_at < ?` holds of every row.
+	from := checkPlace{at: math.MaxInt64, key: CheckKey{RepoID: repo.ID}}
+	if q.Cursor != "" {
+		at, oid, target, name, attempt, ok := cutEndedCursor(q.Cursor)
+		if !ok || (c.Name != "" && name != c.Name) {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+		from = checkPlace{at: at, key: CheckKey{RepoID: repo.ID, OID: oid, Target: target, Name: name,
+			Attempt: attempt}}
+	}
+	places, err := narrowedPlaces(ctx, tx, repo.ID, c, from, 0, limit)
+	if err != nil {
+		return fmt.Errorf("code: list repository %s's checks: %w", repo.Name, err)
+	}
+	scanned, err := narrowedRows(ctx, tx, places, nil)
+	if err != nil {
+		return fmt.Errorf("code: list repository %s's checks: %w", repo.Name, err)
+	}
+	for i := range scanned {
+		scanned[i].Repo = repo.Name
+	}
+	r.pageChecks(scanned, nil, limit, checksWalk(q), out)
+	return nil
 }
 
 // checksWindow serves one page of the window: every repository's attempts
@@ -718,6 +765,9 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	}
 	if !c.Until.IsZero() {
 		until = store.EncodeTime(c.Until)
+	}
+	if c.Name != "" || c.State != "" {
+		return r.narrowedWindow(ctx, tx, q, c, chart, since, until, limit, out)
 	}
 	var (
 		rows *sql.Rows
@@ -753,9 +803,195 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 			scanned[i].Repo = repo.ref.Name
 		}
 	}
-	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok && c.keeps(row) },
-		limit, checksWalk(q), out)
+	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok }, limit,
+		checksWalk(q), out)
 	return nil
+}
+
+// narrowedWindow serves a page of the window narrowed by c — a check's name,
+// an ENDED state (validateChecks refuses another: the window holds endings)
+// or both — between since and until, newest ended first, its places those
+// [narrowedPlaces] seeks after the cursor's and nothing else. The asker's
+// grant is tested on the places a page read, as the unnarrowed window's is,
+// and only a place it keeps has its row read: a place it shuts out is a
+// cursor's place, never a row read for nobody.
+func (r *Reader) narrowedWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery, chart Roster,
+	since, until int64, limit int, out *ReadAnswer) error {
+
+	// A FIRST PAGE'S PLACE IS THE WINDOW'S END, before every key there:
+	// `finished_at <= ?end AND (finished_at < ?end OR repo_id < '' …)` is
+	// `finished_at < ?end`, the unnarrowed first page's own bound.
+	from := checkPlace{at: until}
+	if q.Cursor != "" {
+		at, repo, oid, target, name, attempt, ok := cutWindowCursor(q.Cursor)
+		if !ok || at >= until || (c.Name != "" && name != c.Name) {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+		from = checkPlace{at: at, key: CheckKey{RepoID: repo, OID: oid, Target: target, Name: name,
+			Attempt: attempt}}
+	}
+	places, err := narrowedPlaces(ctx, tx, "", c, from, since, limit)
+	if err != nil {
+		return fmt.Errorf("code: list the checks of every repository: %w", err)
+	}
+	ids := make([]string, len(places))
+	for i, p := range places {
+		ids[i] = p.key.RepoID
+	}
+	listed, err := listedReposAmong(ctx, tx, ids, q.Asker, q.CeilingSeat, chart, "a page of checks")
+	if err != nil {
+		return err
+	}
+	kept := func(repoID string) bool { _, ok := listed[repoID]; return ok }
+	scanned, err := narrowedRows(ctx, tx, places, func(p checkPlace) bool { return kept(p.key.RepoID) })
+	if err != nil {
+		return fmt.Errorf("code: list the checks of every repository: %w", err)
+	}
+	for i, row := range scanned {
+		if repo, ok := listed[row.RepoID]; ok {
+			scanned[i].Repo = repo.ref.Name
+		}
+	}
+	r.pageChecks(scanned, func(row CheckRow) bool { return kept(row.RepoID) }, limit, checksWalk(q), out)
+	return nil
+}
+
+// checkPlace is an attempt's place in a listing newest ended first — a
+// repository's and the window's: its ending's encoded instant, 0 for one not
+// yet ended, and its key, each walked DESCENDING in that order (a
+// repository's listing holds one repo_id, so the window's order is its own).
+type checkPlace struct {
+	at  int64
+	key CheckKey
+}
+
+// compare is negative where a comes BEFORE b in a listing newest ended first:
+// the later ending, then the greater key column by column, compared as the
+// store's BINARY collation compares them — bytewise, as Go's strings are.
+func (a checkPlace) compare(b checkPlace) int {
+	return -cmp.Or(cmp.Compare(a.at, b.at), strings.Compare(a.key.RepoID, b.key.RepoID),
+		strings.Compare(a.key.OID, b.key.OID), strings.Compare(a.key.Target, b.key.Target),
+		strings.Compare(a.key.Name, b.key.Name), cmp.Compare(a.key.Attempt, b.key.Attempt))
+}
+
+// endedCheckStates is the five endings, in [CheckStates]' order: every state
+// the window holds an attempt in.
+func endedCheckStates() []CheckState {
+	return slices.DeleteFunc(CheckStates(), func(s CheckState) bool { return !s.Ended() })
+}
+
+// narrowedPlaces is the first limit places after from, in the listing's
+// order, of the attempts c narrows a repository's listing (repoID) or the
+// window (repoID "", ending at or after since) to — SOUGHT, never filtered
+// out of a walk of everything: a STATE alone seeks the index leading with the
+// state (code_checks_state_idx for a repository's, which holds every state;
+// code_checks_state_recent_idx for the window's, which holds the endings),
+// and a CHECK'S NAME the index leading with the name and then the state
+// (code_checks_name_idx; code_checks_name_recent_idx) — one seek where c
+// names a state too, and one a state, their places merged, where it names
+// none: every state a repository holds, the five endings the window does.
+// Each seek is a covering read of at most limit places and no row, so a page
+// reads at most seven times limit index entries (a repository's listing
+// narrowed by a name alone) and never a place the narrowing does not hold:
+// what a page costs follows the rows it answers, never the history around
+// them.
+func narrowedPlaces(ctx context.Context, tx *sql.Tx, repoID string, c CheckQuery, from checkPlace, since int64,
+	limit int) ([]checkPlace, error) {
+
+	if c.Name == "" {
+		return seekPlaces(ctx, tx, repoID, "", c.State, from, since, limit)
+	}
+	states := []CheckState{c.State}
+	switch {
+	case c.State != "":
+	case repoID == "":
+		states = endedCheckStates()
+	default:
+		states = CheckStates()
+	}
+	var merged []checkPlace
+	for _, s := range states {
+		got, err := seekPlaces(ctx, tx, repoID, c.Name, s, from, since, limit)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, got...)
+	}
+	slices.SortFunc(merged, checkPlace.compare)
+	return merged[:min(len(merged), limit)], nil
+}
+
+// seekPlaces runs one seek of narrowedPlaces: the places of the attempts in
+// state — of the check named name, where it names one — after from.
+func seekPlaces(ctx context.Context, tx *sql.Tx, repoID, name string, state CheckState, from checkPlace,
+	since int64, limit int) ([]checkPlace, error) {
+
+	k := from.key
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch {
+	case repoID != "" && name == "":
+		rows, err = tx.QueryContext(ctx, repoStatePlacesSQL, repoID, string(state), from.at, k.OID, k.Target,
+			k.Name, k.Attempt, limit)
+	case repoID != "":
+		rows, err = tx.QueryContext(ctx, repoNamePlacesSQL, repoID, name, string(state), from.at, k.OID,
+			k.Target, k.Attempt, limit)
+	case name == "":
+		rows, err = tx.QueryContext(ctx, windowStatePlacesSQL, string(state), since, from.at, k.RepoID, k.OID,
+			k.Target, k.Name, k.Attempt, limit)
+	default:
+		rows, err = tx.QueryContext(ctx, windowNamePlacesSQL, name, string(state), since, from.at, k.RepoID,
+			k.OID, k.Target, k.Attempt, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []checkPlace
+	for rows.Next() {
+		p := checkPlace{key: CheckKey{RepoID: repoID, Name: name}}
+		dest := []any{&p.at, &p.key.OID, &p.key.Target, &p.key.Attempt}
+		if repoID == "" {
+			dest = append(dest, &p.key.RepoID)
+		}
+		if name == "" {
+			dest = append(dest, &p.key.Name)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// narrowedRows is the row at each place, as a listing reads it — one seek of
+// code_checks' key each — where keep keeps the place (every one where keep is
+// nil), and where it does not the place alone, its key and its ending: what
+// a page's cursor is minted from. The places were read in tx, so each row is
+// there.
+func narrowedRows(ctx context.Context, tx *sql.Tx, places []checkPlace,
+	keep func(checkPlace) bool) ([]CheckRow, error) {
+
+	out := make([]CheckRow, 0, len(places))
+	for _, p := range places {
+		if keep != nil && !keep(p) {
+			out = append(out, CheckRow{CheckKey: p.key, FinishedAt: activityAt(p.at)})
+			continue
+		}
+		row, found, err := checkRowIn(ctx, tx, p.key)
+		switch {
+		case err != nil:
+			return nil, err
+		case !found:
+			return nil, fmt.Errorf("code: check %s of %s for %s, attempt %d, was listed and holds no row",
+				p.key.Name, p.key.OID, p.key.Target, p.key.Attempt)
+		}
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 // scanChecks reads every row of a listing's statement.
@@ -771,9 +1007,9 @@ func scanChecks(rows *sql.Rows) ([]CheckRow, error) {
 	return out, rows.Err()
 }
 
-// pageChecks files the rows a listing READ into out — those keep keeps: the
-// listing's narrowing ([CheckQuery.keeps]) and, on the window, the asker's
-// grant — until the page's byte budget, and names where the
+// pageChecks files the rows a listing READ into out — those keep keeps, the
+// window's asker's grant, and every one where keep is nil — until the page's
+// byte budget, and names where the
 // next page resumes: after the last row it served where the budget ended it,
 // and after the last row it READ where it read a whole page, so a page the
 // grant kept little of still advances.
@@ -782,7 +1018,7 @@ func (r *Reader) pageChecks(scanned []CheckRow, keep func(CheckRow) bool, limit 
 
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range scanned {
-		if !keep(row) {
+		if keep != nil && !keep(row) {
 			continue
 		}
 		out.Checks = append(out.Checks, row)
@@ -1280,6 +1516,16 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 // its end, or from a cursor's place below it, down to its start. Each
 // keyset's >= beside its OR is what keeps the index's range seek
 // (planner.go).
+//
+// A NARROWING ([CheckQuery.State], a Name) is the statement's. A commit's and
+// a change's walks test it beside their keyset — a name ?7 and a state ?8,
+// each where it is not empty — so the statement reads on until its page is full
+// of what the narrowing holds: a walk of one commit's attempts, at most
+// MaxCheckAttempts of each check its target's file declares
+// (MaxChecksPerFile) a target, which is all such a walk can read whatever it
+// is asked. A repository's and the window's seek an index that leads with
+// the narrowing instead — the PLACES statements below — since what their
+// walks hold is the history, which no narrowing bounds.
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
@@ -1292,9 +1538,11 @@ const (
 	checksOfCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref >= ?3
 			AND (target_ref > ?3 OR name > ?4 OR (name = ?4 AND attempt > ?5))
+			AND (?7 = '' OR name = ?7) AND (?8 = '' OR state = ?8)
 		ORDER BY target_ref, name, attempt LIMIT ?6`
 	checksOfTargetSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref = ?3 AND name >= ?4 AND (name > ?4 OR attempt > ?5)
+			AND (?7 = '' OR name = ?7) AND (?8 = '' OR state = ?8)
 		ORDER BY name, attempt LIMIT ?6`
 	// THE LATEST ATTEMPTS ([CheckQuery.Latest]): the same walks of the key,
 	// each row kept only where the key holds no later attempt of its check —
@@ -1306,11 +1554,12 @@ const (
 	latestOfCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks AS k INDEXED BY ` + checksKey + `
 		WHERE k.repo_id = ?1 AND k.commit_oid = ?2 AND k.target_ref >= ?3
 			AND (k.target_ref > ?3 OR k.name > ?4 OR (k.name = ?4 AND k.attempt > ?5))
-			AND ` + latestOnly + `
+			AND (?7 = '' OR k.name = ?7) AND (?8 = '' OR k.state = ?8) AND ` + latestOnly + `
 		ORDER BY k.target_ref, k.name, k.attempt LIMIT ?6`
 	latestOfTargetSQL = `SELECT ` + checkColumns + ` FROM code_checks AS k INDEXED BY ` + checksKey + `
 		WHERE k.repo_id = ?1 AND k.commit_oid = ?2 AND k.target_ref = ?3 AND k.name >= ?4
-			AND (k.name > ?4 OR k.attempt > ?5) AND ` + latestOnly + `
+			AND (k.name > ?4 OR k.attempt > ?5) AND (?7 = '' OR k.name = ?7) AND (?8 = '' OR k.state = ?8)
+			AND ` + latestOnly + `
 		ORDER BY k.name, k.attempt LIMIT ?6`
 	latestOnly = `NOT EXISTS (SELECT 1 FROM code_checks AS n INDEXED BY ` + checksKey + `
 		WHERE n.repo_id = k.repo_id AND n.commit_oid = k.commit_oid AND n.target_ref = k.target_ref
@@ -1334,6 +1583,42 @@ const (
 					OR (name = ?6 AND attempt < ?7))))))))
 		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
 		LIMIT ?8`
+	// THE NARROWED LISTINGS' PLACES (narrowedPlaces), each a covering read
+	// of the index that leads with its narrowing, the narrowing its leading
+	// equalities and the cursor's place a keyset after them, newest ended
+	// first: a repository's attempts in one state, on code_checks_state_idx;
+	// a repository's of one check in one state, on code_checks_name_idx; the
+	// window's in one ending, on code_checks_state_recent_idx; and the
+	// window's of one check in one ending, on code_checks_name_recent_idx —
+	// the two window indexes' partial predicate repeated verbatim. A first
+	// page's place is above every ending (a repository's: MaxInt64) or the
+	// window's end, with an empty key, which no row's key sorts below.
+	repoStatePlacesSQL = `SELECT finished_at, commit_oid, target_ref, attempt, name
+		FROM code_checks INDEXED BY code_checks_state_idx
+		WHERE repo_id = ?1 AND state = ?2 AND finished_at <= ?3
+			AND (finished_at < ?3 OR commit_oid < ?4 OR (commit_oid = ?4 AND (target_ref < ?5
+				OR (target_ref = ?5 AND (name < ?6 OR (name = ?6 AND attempt < ?7))))))
+		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC LIMIT ?8`
+	repoNamePlacesSQL = `SELECT finished_at, commit_oid, target_ref, attempt
+		FROM code_checks INDEXED BY code_checks_name_idx
+		WHERE repo_id = ?1 AND name = ?2 AND state = ?3 AND finished_at <= ?4
+			AND (finished_at < ?4 OR commit_oid < ?5 OR (commit_oid = ?5 AND (target_ref < ?6
+				OR (target_ref = ?6 AND attempt < ?7))))
+		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, attempt DESC LIMIT ?8`
+	windowStatePlacesSQL = `SELECT finished_at, commit_oid, target_ref, attempt, repo_id, name
+		FROM code_checks INDEXED BY code_checks_state_recent_idx
+		WHERE finished_at > 0 AND state = ?1 AND finished_at >= ?2 AND finished_at <= ?3
+			AND (finished_at < ?3 OR repo_id < ?4 OR (repo_id = ?4 AND (commit_oid < ?5
+				OR (commit_oid = ?5 AND (target_ref < ?6 OR (target_ref = ?6 AND (name < ?7
+					OR (name = ?7 AND attempt < ?8))))))))
+		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
+		LIMIT ?9`
+	windowNamePlacesSQL = `SELECT finished_at, commit_oid, target_ref, attempt, repo_id
+		FROM code_checks INDEXED BY code_checks_name_recent_idx
+		WHERE finished_at > 0 AND name = ?1 AND state = ?2 AND finished_at >= ?3 AND finished_at <= ?4
+			AND (finished_at < ?4 OR repo_id < ?5 OR (repo_id = ?5 AND (commit_oid < ?6
+				OR (commit_oid = ?6 AND (target_ref < ?7 OR (target_ref = ?7 AND attempt < ?8))))))
+		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, attempt DESC LIMIT ?9`
 	// THE BACKLOG'S WALK: the queued attempts overdue by ?1, in the order
 	// they fell overdue, on code_checks_overdue_idx — its partial predicate
 	// repeated verbatim, and its range what the seek reads; each kept only

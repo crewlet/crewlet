@@ -2358,16 +2358,25 @@ type CheckQuery struct {
 	// its own, which such a build refuses as one it does not know.
 	Latest bool `json:"latest,omitempty"`
 	// State narrows a `checks` read to the attempts in one state; refused on
-	// a `check` read, which names its one attempt whatever its state.
+	// a `check` read, which names its one attempt whatever its state, and on
+	// the window where it is not an ending ([CheckState.Ended]): the window
+	// lists the attempts that ENDED in it, so it holds no attempt queued or
+	// running, and a repository's listing is where those are narrowed to.
 	//
-	// A NARROWING TESTED ON THE ROWS A PAGE READ, as Name's is, and never a
-	// seek: every shape of the listing walks the one index its own order
-	// leads (code_checks' key, code_checks_finished_idx,
-	// code_checks_recent_idx), and an index per state or per name would be
-	// one more write on every check's every transition for a filter a person
-	// applies to a page. So a narrowed page is the rows it READ, never the
-	// rows it kept, and may be short — or empty with a cursor — as a window
-	// a reader reads little of is.
+	// THE STATEMENT'S, as Name's narrowing is, and never a filter of the rows
+	// a page read: a page is full wherever the narrowing holds as many rows
+	// after its place, so what it costs follows what it answers rather than
+	// the history around it. A repository's listing and the window SEEK an
+	// index that leads with the narrowing (replicated 0136): the state, or the
+	// check's name and then the state — a name alone is one seek a state,
+	// merged ([narrowedPlaces]). Their writes are what any index on
+	// code_checks costs: the two over a repository's attempts hold every
+	// state, so they move with each of an attempt's three records (queued,
+	// claimed, ended), as code_checks_finished_idx does; the two over the
+	// window's are PARTIAL on the ended rows, as code_checks_recent_idx is,
+	// so each is written once, when an attempt ends, and again only when a
+	// later ending replaces it. A change's and a commit's walks — one
+	// commit's attempts, which their shape bounds — test it inside the walk.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row — and neither does Name's use as a narrowing. AS A
@@ -2399,13 +2408,6 @@ type CheckQuery struct {
 	// answer the window up to its newest ending; were such a build ever to
 	// run first, a window with an end would move to a kind of its own.
 	Until time.Time `json:"until,omitzero"`
-}
-
-// keeps reports whether row is one a `checks` listing narrowed by c keeps:
-// of the check c names, where it names one, and in the state it names, where
-// it names one.
-func (c CheckQuery) keeps(row CheckRow) bool {
-	return (c.Name == "" || row.Name == c.Name) && (c.State == "" || row.State == c.State)
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
