@@ -212,3 +212,36 @@ func contains(kinds []worklet.ObjectKind, want worklet.ObjectKind) bool {
 	}
 	return false
 }
+
+// A TASK ID IS THE CANONICAL UUID, WHICH NO KEY SPELLS: the code tools list a
+// work item's changes by a name IsTaskID takes as the item's identity with no
+// read of the tracker, so a key it took, in either case, would be listed as an
+// id no change carries and answer nothing, and so would a spelling no task's
+// row holds (the comparison is byte for byte), where a resolution refuses it
+// and says why.
+//
+// Mutation: IsTaskID accepting whatever uuid.Parse accepts → the uppercase,
+// braced, urn and undashed spellings, red.
+func TestATaskIDIsTheCanonicalUUIDNoKeySpells(t *testing.T) {
+	t.Parallel()
+	const id = "3f1c2a9e-7b4d-5e60-8a1f-0c9d2e7b4a51"
+	for name, c := range map[string]struct {
+		s    string
+		want bool
+	}{
+		"a minted id":              {id, true},
+		"a key":                    {"ENG-42", false},
+		"a key in lower case":      {"eng-42", false},
+		"the longest key":          {"ABCDEFGHIJ-9223372036854775807", false},
+		"an id in upper case":      {strings.ToUpper(id), false},
+		"an id in braces":          {"{" + id + "}", false},
+		"an id as a urn":           {"urn:uuid:" + id, false},
+		"an id without its dashes": {strings.ReplaceAll(id, "-", ""), false},
+		"an id with a space":       {" " + id, false},
+		"nothing":                  {"", false},
+	} {
+		if got := worklet.IsTaskID(c.s); got != c.want {
+			t.Errorf("%s: IsTaskID(%q) = %v, want %v", name, c.s, got, c.want)
+		}
+	}
+}

@@ -387,11 +387,11 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	if work != "" {
-		// THE ITEM IS RESOLVED AS THE CHANGE WRITES RESOLVE THEIRS
-		// ([CodeDeps.workItemOf]) — a Worklet key or id by the tracker's own
-		// read — once every argument has been judged, and listed by the
-		// identity a change's row holds, which is all the reader takes.
-		item, refusal := t.deps.workItemOf(ctx, t.Name(), "work", work)
+		// THE ITEM IS NAMED AS THE CHANGE WRITES NAME THEIRS, once every
+		// argument has been judged, and listed by the identity a change's row
+		// holds, which is all the reader takes: a Worklet key resolved by the
+		// tracker's own read, an identity as named ([CodeDeps.listedWorkItem]).
+		item, refusal := t.deps.listedWorkItem(ctx, t.Name(), "work", work)
 		if refusal != nil {
 			return *refusal, nil
 		}

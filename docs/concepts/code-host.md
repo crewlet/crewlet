@@ -1719,8 +1719,10 @@ answer that holds every record the code log had committed when it was asked.
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
   `<backend>:<id>`, such as `native:<task id>`, which is what a change's row
-  holds; the code tools also take a Worklet item's key or id, as the change
-  writes do, and ask for the identity it resolves to — a **state**, a **reviewer**
+  holds; the code tools also take a Worklet item's key, as the change writes
+  do, and ask for the identity it resolves to, while an identity (a Worklet
+  task's id, bare or under `native:`) is listed as named, with no read of the
+  tracker — a **state**, a **reviewer**
   or **what its changes wait on**, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
@@ -1828,7 +1830,11 @@ the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code
 `code_list_changes` is the listing — its `work` named as `code_open_change`
 names the item a change carries, so a seat woken on `ENG-42` lists that
 item's changes by the key it holds, resolved through Worklet's own read to the
-item's identity before the listing is asked — and `code_get_change` one change a part at
+item's identity before the listing is asked. Only a key is resolved: an item
+named by its identity, as a change prints it (`native:<task id>`, or the id
+alone), is listed as named, so it costs no second read and still lists the
+changes that carry an item whose task was purged, which a purge leaves in
+place — and `code_get_change` one change a part at
 a time — its summary, its [merge readiness](#merge-readiness), a revision's
 files and a file's patch from the base its facts record or, since an earlier
 revision, what changed between the two ([What changed between two

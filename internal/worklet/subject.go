@@ -175,6 +175,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -363,6 +365,29 @@ type Subject struct {
 // that task is published on, so two writers racing on one task contend at the
 // broker and writers on different tasks never contend at all.
 func TaskSubject(id string) Subject { return Subject{Kind: KindTask, ID: id} }
+
+// IsTaskID reports whether s is spelled as every task id the engine mints:
+// a uuid in its canonical form, lowercase with its four dashes, which is how
+// create_work_item derives one from its operation and how a task's row, its
+// subject and every item a change carries (`native:<id>`) spell it.
+//
+// NO KEY TAKES THIS FORM, current or former: a key is a project key, one
+// dash and a number (`[A-Z][A-Z0-9]{1,9}-[0-9]+`, [taskKeyPattern]), and a
+// canonical uuid holds four dashes. So a caller that holds the identity of an
+// item and needs no proof the task still exists — a listing of what carries
+// the item, which a purged task's rows still carry — may take it as named,
+// and only a key needs [Reader.Task]'s resolution.
+//
+// THE CANONICAL FORM ONLY, not whatever uuid.Parse accepts: braces, a `urn:`
+// prefix, uppercase or no dashes parse to the same uuid and match no row,
+// since [resolveTaskID] compares the id byte for byte. Such a spelling is no
+// id here, and a caller resolves it as it would a key, which refuses it.
+// A task some other writer filed under an id of another shape is resolved
+// the same way, and is found.
+func IsTaskID(s string) bool {
+	u, err := uuid.Parse(s)
+	return err == nil && u.String() == s
+}
 
 // ProjectSubject names one project's settings by its key. Deliberately NOT the
 // subject its key counter mints on — see [CounterSubject].
