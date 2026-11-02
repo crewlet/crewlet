@@ -692,7 +692,7 @@ Changes on this company's code host (opened at the run's collection):
 - docs: no change opened from seats/swe/ENG-42 — the run pushed nothing to its branch, so there was no work to propose
 ```
 
-A refusal is the code host's own sentence — a target merged into since, a branch at its target's commit — and an open whose outcome is unknown says so and names what to read first; neither holds the collection back (logged `sandbox_change_unopened`).
+A refusal is the code host's own sentence — a target merged into since, a branch at its target's commit — and an open whose outcome is unknown says so, and why: the code host could not be asked, or did not say. Each line is a fact about the open and never a step to take, since the reviewer reads it beside the seat and holds none of the code tools; neither holds the collection back (logged `sandbox_change_unopened`).
 
 **A box's own push opens on the run's work item too.** A box's `git push -o change` opens its change in the push's own record ([Code Host](code-host.md)); the box's admission stamps every push it makes with the run's work item — its tracker and key, and its identity — so that change carries the item the run was charged to, as the engine's own open does.
 
