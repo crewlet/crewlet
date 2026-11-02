@@ -292,7 +292,19 @@ const (
 	// never config or a credential: the server is restarted from the spec
 	// it runs.
 	ActionToolsRetry Action = "tools.retry"
-	ActionAuditRead  Action = "audit.read"
+	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
+	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
+	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
+	// READINGS: whoever [ActionConfigRead] admits reads the launch lines,
+	// each failure's sentence, the headers and variables a credential goes
+	// in, what removing a server takes with it and the community registry
+	// the company names, and everybody else each server's condition and
+	// tools and the curated catalogue, with none of that (internal/api/
+	// queries' mcpmember.go). The servers' list is a question,
+	// `mcp_servers_status`, whose everybody posture admits whom this row
+	// does.
+	ActionToolsRead Action = "tools.read"
+	ActionAuditRead Action = "audit.read"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -1058,6 +1070,12 @@ var rules = map[Action]rule{
 	// WHO HOLDS EACH HUMAN SEAT is the org chart's people, named — see
 	// [ActionSeatsRead]. The route masks each holder per caller.
 	ActionSeatsRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// WHAT EACH MCP SERVER IS DOING AND WHICH TOOLS IT SERVES is everybody's,
+	// as each model's condition is: it is what tells a member why an agent
+	// lacks a tool. What a member is answered names no launch line, header,
+	// variable, account or call ([ActionToolsRead]); the configuration's
+	// reader is answered the rest, by [ActionConfigRead]'s own row.
+	ActionToolsRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- an agent's own ---------------------------------------------- //
 	//

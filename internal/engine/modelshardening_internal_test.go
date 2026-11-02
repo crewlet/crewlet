@@ -676,13 +676,13 @@ func TestAFailedSecretReadKeepsTheExpiry(t *testing.T) {
 	e := epochEngine(c)
 	e.backends, e.cipher = &Backends{Fleet: fleet}, cipher
 	var first, second statelog.Reading
-	e.modelsReading(t.Context(), time.Now(), &first)
+	e.entriesReading(t.Context(), time.Now(), &first)
 	expiry := conditionOf(t, first.Models, "plan").ExpiresAt
 	if expiry.IsZero() {
 		t.Fatal("the premise: the stored token has an expiry")
 	}
 	fleet.fail.Store(true)
-	e.modelsReading(t.Context(), time.Now(), &second)
+	e.entriesReading(t.Context(), time.Now(), &second)
 	if got := conditionOf(t, second.Models, "plan").ExpiresAt; !got.Equal(expiry) {
 		t.Errorf("after a failed read the expiry is %v, want the last good %v", got, expiry)
 	}

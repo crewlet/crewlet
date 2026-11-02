@@ -67,6 +67,10 @@ func World() map[string]any {
 			"revision": 4, "message_seq": 12, "member": true,
 			"members": []any{map[string]any{"handle": "pm", "follow_all": true},
 				map[string]any{"handle": "ada"}}},
+		// WHOM A DRAFT IN IT WOULD REACH: pm, who follows the room whole.
+		"/chatlet/channels/" + RecordID + "/reach": map[string]any{"channel_id": RecordID,
+			"reach": map[string]any{"recipients": []any{
+				map[string]any{"handle": "pm", "reason": "follow_all"}}}},
 		"/chatlet/channels/" + RecordID + "/threads/" + RecordID: map[string]any{
 			"channel_id": RecordID, "root": map[string]any{
 				"message": map[string]any{"id": RecordID, "channel_id": RecordID,

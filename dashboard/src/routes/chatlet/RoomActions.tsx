@@ -42,11 +42,9 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 
-import { MAX_READER_MARKS } from "~/contract/chat.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
 import { copyLink } from "~/lib/pageLink.ts";
 import { useAct } from "~/lib/useAct.ts";
-import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 
 import { canLeave } from "./directory.ts";
 import { stackMember } from "./Face.tsx";
@@ -55,10 +53,8 @@ import { NOTIFY_LABEL, NOTIFY_MEANS, useNotifyLevel } from "./notify.tsx";
 import { useChatPeople } from "./people.ts";
 import { unreadIn } from "./rooms.ts";
 import { useRoomScope } from "./scope.tsx";
+import { useRoomStar } from "./star.ts";
 import { calloutFor, reportFor } from "./start.ts";
-
-/** Why a room cannot be starred once the reader holds the engine's cap of stars. */
-const STARS_FULL = `You have starred ${MAX_READER_MARKS} rooms, the most one reader keeps. Remove a star to add this room.`;
 
 /**
  * A menu item held with why, or the item itself where nothing holds it: the
@@ -78,7 +74,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
   const people = useChatPeople();
   const toast = useToast();
   const notify = useNotifyLevel(open?.id ?? "");
-  const marks = useWriteAccess("mark_chat_read");
+  const star = useRoomStar(open?.id ?? "");
   const leave = useAct("leave_channel");
   const { rules } = useRoomScope();
   if (!open) return null;
@@ -92,8 +88,6 @@ export function RoomActions({ tight }: { tight: boolean }) {
     ? { kind: detail.data.channel.kind, member, unit: detail.data.channel.unit }
     : null;
   const members = detail.data?.members ?? [];
-  const starred = frame.starred.has(id);
-  const starsFull = !starred && frame.starred.size >= MAX_READER_MARKS;
   const unread = summary ? unreadIn(summary, frame.measured) : false;
   const membersOpen =
     nav.pane?.kind === "details" && nav.pane.room === id && nav.pane.tab === "members";
@@ -215,11 +209,11 @@ export function RoomActions({ tight }: { tight: boolean }) {
     held(
       {
         key: "star",
-        label: starred ? "Remove from Starred" : "Add to Starred",
+        label: star.starred ? "Remove from Starred" : "Add to Starred",
         icon: <StarGlyph size="sm" />,
-        onSelect: () => frame.star(id, !starred),
+        onSelect: () => star.set(!star.starred),
       },
-      marks.can ? (starsFull ? STARS_FULL : "") : marks.reason,
+      star.held,
     ),
     {
       key: "read",

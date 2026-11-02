@@ -772,9 +772,10 @@ hold identical rows.
 | **usage** | `CREWLET_USAGE_LOG` | (node, company day, seat, schedule or person) | **every data node, for its own days only** | 181 days |
 
 **`usage` is what makes history fleet-wide.** Each data node derives its own
-day — the spend by phase, worker, model and provider slot, the turns that ended
-and how (failed, reviewed, first pass, sent back, a duration histogram), the
-pages its seats read, the schedules it fired — from its own event log, every 15
+day (the spend by phase, worker, model and provider slot, the turns that ended
+and how: failed, reviewed, first pass, sent back, a duration histogram; the
+calls its seats' turns made to each MCP server's tool and how they ended; the
+pages its seats read; the schedules it fired) from its own event log, every 15
 seconds while the day moves, and publishes each object's whole cumulative value.
 A node without `data` keeps no event log of its own: what its seats did is
 handed to the data node that keeps its events, and is counted in that node's

@@ -146,6 +146,7 @@ func everySeam(t *testing.T) queries.Sources {
 		// `chat_search` is gated on its own seam.
 		Chat:       emptyChat{},
 		ChatSearch: emptyChat{},
+		ChatDraft:  emptyChat{},
 		ChatReads:  coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
@@ -220,6 +221,11 @@ func (emptyChat) Directory(context.Context, string,
 
 func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
 	return estate.ChatSearchAnswer{Hits: []search.ChatHit{}}, nil
+}
+
+func (emptyChat) Reach(_ context.Context, _ chatlet.Actor, channelID, _ string,
+	_ chatlet.NewMessage) (chatlet.Draft, error) {
+	return chatlet.Draft{ChannelID: channelID}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on

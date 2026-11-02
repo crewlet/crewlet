@@ -2,9 +2,12 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -351,8 +354,8 @@ func ExtractTags(payload []byte) map[string]string {
 	if failed {
 		tags["failed"] = "true"
 	}
-	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read and the
-	// only other one. Every turn-level record carries it as an object,
+	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read. Every
+	// turn-level record carries it as an object,
 	// `work_item{backend, id, key, project}`, and the tag is its identity
 	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
 	// that is the one of the four that a move or a rename leaves alone and
@@ -377,8 +380,134 @@ func ExtractTags(payload []byte) map[string]string {
 			}.Ref()
 		}
 	}
+	// WHAT STARTED THE TURN, the third nested read: every turn record
+	// carries its trigger, and the trigger names its PRIMARY origin
+	// (types.TriggerOrigin) as `trigger.origin{kind, id, reason}`. The tag is
+	// `<kind>:<id>`, BOTH HALVES OR NOTHING for work_item's reason, and the
+	// reason rides beside it: what the turns list's row reads its origin
+	// from. Finding a turn BY an origin, a coalesced trigger's every message
+	// included, is the turn start's own index ([TurnOrigins], node/0059).
+	if raw, ok := flat["trigger"]; ok {
+		var trigger struct {
+			Origin types.TriggerOrigin `json:"origin"`
+		}
+		if json.Unmarshal(raw, &trigger) == nil {
+			if origin := OriginRef(trigger.Origin.Kind, trigger.Origin.ID); origin != "" {
+				tags["trigger_origin"] = origin
+				if trigger.Origin.Reason != "" {
+					tags["trigger_reason"] = trigger.Origin.Reason
+				}
+			}
+		}
+	}
+	// THE MCP SERVERS A RECORD'S CALLS WERE FOR, the fourth nested read: every
+	// `tool_executions[].source` that names a server (types.ToolExecution),
+	// answered or refused. A server's recent calls are read out of the phase
+	// records that made them ([EventLog.ToolCalls]), and a listing never
+	// selects the payload (a phase record carries its whole prompt and tool
+	// log), so without the tag every phase record in the window was read
+	// whole to find the few that called one server.
+	if raw, ok := flat["tool_executions"]; ok {
+		if servers := mcpServersTag(raw); servers != "" {
+			tags[mcpServersTagKey] = servers
+		}
+	}
 	return tags
 }
+
+// OriginOfTags is the origin a record's tags name ([ExtractTags]), or nil: what
+// the turn detail reads off the earliest of its rows that names one, as the
+// turns list's aggregate does.
+func OriginOfTags(tags map[string]string) *types.TriggerOrigin {
+	kind, id, ok := strings.Cut(tags["trigger_origin"], ":")
+	if !ok || kind == "" || id == "" {
+		return nil
+	}
+	return &types.TriggerOrigin{Kind: kind, ID: id, Reason: tags["trigger_reason"]}
+}
+
+// turnStarted is the record a turn's origins are indexed from: its own start,
+// one per segment, rather than every phase record, which repeat the trigger.
+var turnStarted = types.AgentTurnStarted{}.EventType()
+
+// TurnOrigins is every object a turn's start record says started it, as
+// `<kind>:<id>`, each once, the primary origin first and then every object a
+// COALESCED trigger took in ([types.Trigger.Origins]); nil for any other
+// record. What [EventLog.Append] writes into crewlet_turn_origins (node/0059).
+//
+// READ OFF THE SERIALIZED TRIGGER, as the tags are, so a newer peer's record
+// is indexed as a known one is.
+func TurnOrigins(eventType string, payload []byte) []string {
+	if eventType != turnStarted {
+		return nil
+	}
+	var body struct {
+		Trigger struct {
+			Origin  types.TriggerOrigin   `json:"origin"`
+			Origins []types.TriggerOrigin `json:"origins"`
+		} `json:"trigger"`
+	}
+	if json.Unmarshal(payload, &body) != nil {
+		return nil
+	}
+	var out []string
+	for _, o := range append([]types.TriggerOrigin{body.Trigger.Origin}, body.Trigger.Origins...) {
+		if ref := OriginRef(o.Kind, o.ID); ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// OriginRef is a turn origin's identity as the log files it, `<kind>:<id>`,
+// or empty when either half is missing: a kind with no id names no object, and
+// an id with no kind could be two objects.
+//
+// ONE SPELLING, read by the tag above and by every reader that asks the log
+// for the turns an object started, so the two can never compose it apart.
+func OriginRef(kind, id string) string {
+	if kind == "" || id == "" {
+		return ""
+	}
+	return kind + ":" + id
+}
+
+// mcpServersTagKey is the tag [ExtractTags] names a record's MCP servers under.
+const mcpServersTagKey = "mcp_servers"
+
+// mcpServersTag is the servers a record's tool calls named, as the tag holds
+// them: each between commas, sorted, once (`,github,linear,`), and "" for a
+// record whose calls named none.
+//
+// ONE STRING because a tag is one (the tags are a flat map the listing reads
+// whole), and DELIMITED AT BOTH ENDS so [mcpServerTagNeedle] matches one whole
+// name: a server name is letters, digits and hyphens (config's server name
+// rule), so no name holds a comma and `,git,` never matches inside
+// `,github,`. Only the `source` of each call is decoded; the rest of the tool
+// log stays bytes.
+func mcpServersTag(raw json.RawMessage) string {
+	var calls []struct {
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(raw, &calls) != nil {
+		return ""
+	}
+	var servers []string
+	for _, c := range calls {
+		if server, ok := mcp.OriginServer(c.Source); ok && !slices.Contains(servers, server) {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		return ""
+	}
+	slices.Sort(servers)
+	return "," + strings.Join(servers, ",") + ","
+}
+
+// mcpServerTagNeedle is what a record whose calls named server holds inside
+// its [mcpServersTag].
+func mcpServerTagNeedle(server string) string { return "," + server + "," }
 
 // jsonInt reads a number out of a raw JSON field.
 //

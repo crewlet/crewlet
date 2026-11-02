@@ -442,6 +442,23 @@ const (
 	// that broke after its turn began is not announced under this or any
 	// reason: that turn published its own failed completion.
 	ExecutorFailureResumeBroken = "resume_broken"
+
+	// ExecutorFailureDeadline is a run whose turn's wall-clock cap (a
+	// scheduled fire's timeout) passed while the turn that would review its
+	// job could not run: refused by a condition that ends by waiting (a
+	// model's usage limit, a spent budget, a paused seat) or failing. Past the
+	// cap nothing waits and nothing is retried, so the run is ended and the
+	// seat freed rather than held for as long as the condition lasts. What
+	// the job did was collected and charged; the work it pushed, if any, is
+	// on its branch.
+	ExecutorFailureDeadline = "deadline_passed"
+
+	// ExecutorFailureResumeFailing is a run whose job finished and was
+	// collected, but whose turn could not be resumed: every attempt failed
+	// for the resume give-up window. It names the turn's own re-entry (its
+	// models unreachable, a defect it keeps meeting), never the box, which
+	// answered.
+	ExecutorFailureResumeFailing = "resume_failing"
 )
 
 // EventType is the "executor_failed" wire type.

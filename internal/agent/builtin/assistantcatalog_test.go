@@ -160,20 +160,21 @@ func TestACuratedChatWriteTakesWhatTheRoomTakes(t *testing.T) {
 // fails.
 func TestTheAssistantSaysWhoAChatMessageWakes(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"post_chat_message", "get_chat_room"} {
+	for _, name := range []string{"post_chat_message", "get_chat_room", "read_chat_messages"} {
 		tool, ok := catalog.Lookup(name)
 		if !ok {
 			t.Fatalf("the catalogue has no %s", name)
 		}
 		for _, said := range []string{
-			"mention (@handle) wakes the agent",
-			"@channel asks every agent in the room to answer, up to " +
-				strconv.Itoa(chatlet.MaxCollectiveRecipients),
+			"an agent it names with @handle",
+			"every agent in the room for a person's @channel (up to " +
+				strconv.Itoa(chatlet.MaxCollectiveRecipients) + ")",
 			"names nobody and wakes no other agent wakes one agent to answer it",
-			"A message that names a person wakes no agent",
+			"one that names a person wakes no agent",
 			"most senior agent member",
-			"woken as news",
+			"as news",
 			"never reads the message later",
+			"which agents it reached and which have answered",
 		} {
 			if !strings.Contains(tool.Description, said) {
 				t.Errorf("%s does not say %q:\n%s", name, said, tool.Description)

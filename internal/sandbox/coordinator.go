@@ -1272,8 +1272,11 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	// cannot see and would admit into again ([Coordinator.keepRefused]).
 	// Refused as the gate refuses, so the announcement is acknowledged and
 	// the waiter's next one asks again; quietly, since the hold itself was
-	// said when it was taken and the waiter repeats it every poll.
+	// said when it was taken and the waiter repeats it on its schedule.
 	if refusal, held := c.stillRefused(ev); held {
+		if c.pastDeadline(ctx, ev) {
+			return c.completeAtDeadline(ctx, ev, fence, refusal.Reason)
+		}
 		log.DebugContext(ctx, "sandbox_completion_held_here",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "condition", string(refusal.Condition),
 			"until", refusal.Until.UTC().Format(time.RFC3339))
@@ -1281,6 +1284,11 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	}
 	adm, err := c.admitTurn(ctx, ev.AgentHandle, ResumeCompletion)
 	if err != nil {
+		if c.pastDeadline(ctx, ev) {
+			// PAST ITS TURN'S DEADLINE, A REFUSED RESUME IS NOT WAITED
+			// FOR: see [Coordinator.completeAtDeadline].
+			return c.completeAtDeadline(ctx, ev, fence, err.Error())
+		}
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
 			"detail", "this node may not start the turn the completion resumes, so the "+
@@ -1356,9 +1364,54 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		return err
 	}
 
+	run, result, collected, err := c.collectClaimed(ctx, run)
+	if !collected {
+		return err
+	}
+
+	if run.asked() {
+		return c.park(ctx, run, result)
+	}
+
+	// THE ERROR IS THIS ROUTE'S WHOLE ANSWER, and the disposition beside it
+	// says nothing this caller can act on differently. A completion is
+	// handed back by NAKing it, which spends one of the broker's own 25
+	// deliveries, so the retry is bounded where it stands, and the budget
+	// an answer needs ([MaxAnswerAttempts]) has no counterpart here: both
+	// routes now hand a failed resume back the same way and take the same
+	// backoff, and what an answer needs on top is a bound that stops SHORT
+	// of the dead-letter boundary, because the delivery it is spending is a
+	// person's reply rather than an engine-generated completion. That bound
+	// is [AnswerDeliveryReserve], off the count the message carries: a
+	// per-process attempt ceiling cannot make a claim about a budget that
+	// survives the handoffs which reset it. Every
+	// disposition that returns an error is the retry, and every one that
+	// does not is an ending.
+	_, err = c.resumeAndSettle(adm, run, runReport(result), result.Success, trigger, runOutcome{
+		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
+		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
+		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
+			Success: result.Success, At: run.Launch.CollectedAt},
+	})
+	return err
+}
+
+// collectClaimed reads a claimed run's job back and records it: the job's
+// result, its charge and its launch's own record, carried on the claimed row
+// so that handing the claim back hands the record back with it. collected is
+// false where the collection could not read the box, and err is then
+// [Coordinator.collectFailed]'s answer, which is the caller's to return.
+//
+// ONE COLLECTION FOR EVERY WAY A CLAIM ENDS, a resume ([Coordinator.completeAdmitted])
+// and an ending at the turn's deadline ([Coordinator.completeAtDeadline])
+// alike, so a run ended unresumed is still charged and recorded for what its
+// job did.
+func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (PendingRun, Result, bool, error) {
 	result, ended, err := c.collect(ctx, run)
 	if err != nil {
-		return c.collectFailed(ctx, run, err)
+		return run, Result{}, false, c.collectFailed(ctx, run, err)
 	}
 	if ended {
 		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
@@ -1396,34 +1449,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	}
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
-
-	if run.asked() {
-		return c.park(ctx, run, result)
-	}
-
-	// THE ERROR IS THIS ROUTE'S WHOLE ANSWER, and the disposition beside it
-	// says nothing this caller can act on differently. A completion is
-	// handed back by NAKing it, which spends one of the broker's own 25
-	// deliveries — so the retry is bounded where it stands, and the budget
-	// an answer needs ([MaxAnswerAttempts]) has no counterpart here: both
-	// routes now hand a failed resume back the same way and take the same
-	// backoff, and what an answer needs on top is a bound that stops SHORT
-	// of the dead-letter boundary, because the delivery it is spending is a
-	// person's reply rather than an engine-generated completion. That bound
-	// is [AnswerDeliveryReserve], off the count the message carries — a
-	// per-process attempt ceiling cannot make a claim about a budget that
-	// survives the handoffs which reset it. Every
-	// disposition that returns an error is the retry, and every one that
-	// does not is an ending.
-	_, err = c.resumeAndSettle(adm, run, runReport(result), result.Success, trigger, runOutcome{
-		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
-		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
-		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
-		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
-		Ended: RunEnding{Text: result.Text, Error: result.Error, Event: result.Event,
-			Success: result.Success, At: run.Launch.CollectedAt},
-	})
-	return err
+	return run, result, true, nil
 }
 
 // collectFailed answers a collection that could not read its box back: AGAIN,
@@ -1472,7 +1498,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+
 				"handed back uncounted and the completion is retried")
-		if err := c.unclaim(ctx, run, true, collectUnrevertedDetail); err != nil {
+		if err := c.unclaim(ctx, run, collectUnrevertedDetail); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -1490,7 +1516,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 				"the claim is handed back uncounted and that node announces the completion again")
 		// A hand-back that did not land ended and announced the run itself
 		// ([Coordinator.unclaim]), so either way nothing is retried here.
-		_ = c.unclaim(ctx, run, true, collectUnrevertedDetail)
+		_ = c.unclaim(ctx, run, collectUnrevertedDetail)
 		return nil
 	}
 	now := c.now()
@@ -1520,7 +1546,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"collection is retried until it has failed for the poll's give-up window")
 	// COUNTED: the claim did not move the seat's holding count — running and
 	// resumed both hold it — and handing it back to running leaves it there.
-	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, now, nil); err != nil {
+	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -1982,7 +2008,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, parkUnannouncedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, as at the record below: the
 			// claim did not go back, so the run has been ended and a
 			// redelivered completion would find no record to claim.
@@ -2016,7 +2042,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			"detail", "the question could not be recorded, so the run is not parked; its "+
 				"claim is given back for the completion to be retried, or the run is "+
 				"ended where it cannot be")
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, parkUnrecordedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate: the claim was not handed back,
 			// so the run has been SETTLED and there is nothing left for
 			// a redelivered completion to claim. Sending it back would
@@ -2833,6 +2859,19 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// has already acted on.
 			return AnswerConsumed, nil
 		}
+		// PAST THE TURN'S DEADLINE NOTHING WAITS AND NOTHING IS RETRIED. A
+		// completion's resume that failed, or met a condition that ends by
+		// waiting, after its turn's wall-clock cap passed is the turn's last:
+		// the run is ended and its seat freed ([Coordinator.endAtDeadline]).
+		// Handed back instead, a scheduled health check whose ten-minute cap
+		// passed while its review met a model's weekly limit was held and
+		// re-announced on every poll for twenty-seven hours, the seat's next
+		// three fires queued behind it. An answer's resume is bounded by its
+		// own series ([MaxAnswerAttempts]) and is left to it.
+		if !claimedAnswer(run) && run.PastDeadline(c.now()) {
+			c.endAtDeadline(ctx, run, err.Error(), outcome.DeliveredRefs, outcome.DeliveredRefsElided)
+			return AnswerConsumed, nil
+		}
 		// A RESUME ITS SEAT'S CONDITIONS REFUSED IS HELD, not retried — see
 		// [ErrResumeHeld]. A COMPLETION'S only: a recorded answer's resume is
 		// already its own series, which asks the seat's conditions before
@@ -2881,7 +2920,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// models may know of no limit at all, left the job unannounced for up
 		// to the hour a vendor's window is benched for. An answer's is its
 		// own series, which waits in this node's memory already.
-		if refusal, refused := waitingRefusal(err); refused {
+		refusal, refused := waitingRefusal(err)
+		if refused {
 			log.InfoContext(ctx, "sandbox_resume_refused",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"condition", string(refusal.Condition), "reason", refusal.Reason,
@@ -2889,10 +2929,22 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 					"reverted and resumed once the condition clears")
 		} else {
 			log.ErrorContext(ctx, "sandbox_resume_failed",
-				"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
+				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
+		}
+		// A FAILURE IS COUNTED AND BOUNDED, a wait is not: see
+		// [Coordinator.resumeGivenUp]. A completion's only, for the reason
+		// the deadline above gives.
+		var failed failure
+		if !refused && !claimedAnswer(run) {
+			now := c.now()
+			if c.resumeGivenUp(ctx, run, now) {
+				return AnswerConsumed, nil
+			}
+			failed.resumeFailed = now
 		}
 		c.uncountRun(run.AgentHandle, StatusResumed)
-		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failed, nil); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -3196,8 +3248,13 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // release's own error where the run was ended in its place. The caller's own
 // error is not this answer — a retry keeps it, so the delivery comes back, and
 // an ending drops it, because there is nothing left to come back to.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
-	return c.unclaimAt(ctx, run, counted, detail, time.Time{}, nil)
+//
+// THE SEAT'S COUNT IS LEFT AS IT IS: every caller hands back a claim whose run
+// the seat still counts (a collection that failed, a park that did not land),
+// since running and resumed both hold it. A resume's failure gives the claim's
+// count back first and hands back through [Coordinator.unclaimAt].
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string) error {
+	return c.unclaimAt(ctx, run, true, detail, failure{}, nil)
 }
 
 // unclaimHeld hands back a claim whose resume the seat's conditions refused,
@@ -3216,23 +3273,24 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
 		"detail", "the job stays collected in its paused box and its seat held behind it; "+
 			"its completion is announced again when the refusal lifts")
-	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, time.Time{}, &refusal)
+	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, failure{}, &refusal)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
-// collection it was taken for failed at collectFailedAt — which the release
-// counts onto the job's record ([Release.CollectFailedAt]); zero is any other
-// hand-back. counted is [Coordinator.unclaim]'s, and hold, where set, holds the
+// collection it was taken for, or the resume after it, failed: failed is what
+// the release counts onto the job's record, and its zero value is any other
+// hand-back. counted is whether the seat still counts the run, so the release
+// counts it again only where it does not; and hold, where set, holds the
 // run's resume back ([Release.Hold]).
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
-	collectFailedAt time.Time, hold *Refusal,
+	failed failure, hold *Refusal,
 ) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
-		Published: run.Launch.Published, CollectFailedAt: collectFailedAt,
+		Published: run.Launch.Published, CollectFailedAt: failed.collectFailed, ResumeFailedAt: failed.resumeFailed,
 		Collected: run.Collected, CollectedAt: run.Launch.CollectedAt, Fence: fenceOf(run), Hold: hold,
 	})
 	switch {

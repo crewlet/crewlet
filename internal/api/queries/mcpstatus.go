@@ -9,8 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -78,8 +76,11 @@ var MCPServerStates = []MCPServerState{
 // Valid reports whether s is a state this build sends.
 func (s MCPServerState) Valid() bool { return slices.Contains(MCPServerStates, s) }
 
-// MCPStatusAnswer is `mcp_servers_status`.
+// MCPStatusAnswer is `mcp_servers_status`, the admin's reading; a member is
+// answered [MemberMCPStatusAnswer].
 type MCPStatusAnswer struct {
+	// Reading is [ReadingAdmin]: which of the answer's two readings this is.
+	Reading string `json:"reading"`
 	// Servers in name order: every server the active configuration
 	// declares, then any a node reports that it does not (a node still
 	// on an older revision, mid-rollout). ALWAYS A LIST.
@@ -94,6 +95,11 @@ type MCPStatusAnswer struct {
 	// empty "Work items" would say its agents hold a group they do not.
 	// ALWAYS A LIST.
 	Builtin []BuiltinGroup `json:"builtin"`
+	// Alarms are the MCP alarms standing on this node's latest evaluation,
+	// in the table's order, each server with the gesture that fixes it
+	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
+	// log, which evaluates no alarm.
+	Alarms []MCPAlarm `json:"alarms"`
 }
 
 // BuiltinGroup is one shelf of the built-in catalogue.
@@ -254,10 +260,12 @@ type MCPServerNode struct {
 // that did not answer in time, only one whose last heartbeat carried no
 // status, and that is a column of its own rather than a row of zeros.
 //
-// ADMIN'S, AS THE CONFIGURATION IS (ADR-0033): it names the launch commands
-// and the first line of each failure, which is the configuration and what
-// became of it rather than the company's work — `/config` shows the same
-// reader the same commands.
+// EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
+// server's state and its tools are what tell a member why an agent lacks one.
+// The configuration's reader reads the whole answer, the launch commands and
+// the first line of each failure included, which is the configuration and what
+// became of it (`/config` shows the same reader the same commands); anybody
+// else reads [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -266,7 +274,14 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
-	return s.mcpStatusOf(leases), nil
+	status := s.mcpStatusOf(leases)
+	if MCPReading(ctx) != ReadingAdmin {
+		// NO ALARM ON A MEMBER'S READING: each one quotes a failure or a
+		// wait sentence, which that reading leaves out.
+		return MemberMCPStatus(status), nil
+	}
+	status.Alarms = s.mcpAlarms()
+	return status, nil
 }
 
 // mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
@@ -297,9 +312,11 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 	slices.SortFunc(reports, func(a, b report) int { return cmp.Compare(a.node, b.node) })
 
 	out := MCPStatusAnswer{
+		Reading: ReadingAdmin,
 		Servers: []MCPServerRow{},
 		Nodes:   make([]MCPStatusNode, 0, len(reports)),
 		Builtin: s.builtinGroups(),
+		Alarms:  []MCPAlarm{},
 	}
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})
@@ -348,9 +365,9 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 			if m, ok := r.servers[name]; ok {
 				cell.Started, cell.Failed, cell.Waiting, cell.Tools = m.Started, m.Failed, m.Waiting, m.Tools
 				cell.Error = m.Error
-				cell.ErrorSeat = instanceSeat(organization, m.ErrorSeat)
+				cell.ErrorSeat = organization.AgentHandleByID(m.ErrorSeat)
 				cell.Wait = m.Wait
-				cell.WaitSeat = instanceSeat(organization, m.WaitSeat)
+				cell.WaitSeat = organization.AgentHandleByID(m.WaitSeat)
 				if class := mcp.FailureClass(m.ErrorClass); class.Valid() {
 					cell.ErrorClass = class
 				}
@@ -418,25 +435,6 @@ func shadowedTools(notes map[coord.MCPToolShadow]struct{}) []MCPShadowedTool {
 		return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.By, b.By))
 	})
 	return out
-}
-
-// instanceSeat names the seat a failed instance was launched for, or a waiting
-// one is held back for, by its handle.
-//
-// A NODE REPORTS THE SEAT'S ID, as a lease names its seat, and the screen reads
-// a handle; resolved here, on this answer's own org. A seat this org no longer
-// holds is named by its id — the honest fallback, as a lease's is in `fleet`
-// — and a shared server's failure names none.
-func instanceSeat(organization *org.Organization, id uuid.UUID) string {
-	if id == uuid.Nil {
-		return ""
-	}
-	if organization != nil {
-		if role := organization.AgentSeatByID(id); role != nil {
-			return role.Handle()
-		}
-	}
-	return id.String()
 }
 
 // configuredRow is a server's launch as the configuration declares it, with

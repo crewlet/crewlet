@@ -716,6 +716,14 @@ func (c Chat) Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo
 	return out, err
 }
 
+// Reach answers whom a post or a reply would reach if it were sent now,
+// without sending it: the post's own decision, run dry on a data node.
+func (c Chat) Reach(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Draft, error) {
+	return call(ctx, c.r, opChatReach, nil,
+		chatReachArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
+}
+
 // Edit rewrites a message its actor wrote.
 func (c Chat) Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
 	in chatlet.EditMessage) (chatlet.Written, error) {

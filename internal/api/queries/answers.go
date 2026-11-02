@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -26,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
@@ -422,6 +424,13 @@ type Sources struct {
 	// unregistered.
 	ChatSearch ChatSearcher
 
+	// ChatDraft is a post's dry run through the router, and ChatMentions
+	// the seats a message's words name, read by the post tool's own
+	// reading: together they answer `chat_reach`, whom a draft would reach.
+	// Nil ChatDraft leaves it unregistered.
+	ChatDraft    ChatDrafter
+	ChatMentions builtin.MentionResolver
+
 	// ChatReads is where each person's eye has reached, which rooms they
 	// muted and whether they are in do-not-disturb: the ONE piece of chat
 	// state that is not on the log, kept in coordination. Nil is "this
@@ -526,9 +535,15 @@ type Sources struct {
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):
-	// what this node resolved for each entry and its latest alarms. Nil
-	// leaves `llm_entries` unregistered, with `llm_runners` beside it.
+	// what this node resolved for each entry. Nil leaves `llm_entries`
+	// unregistered, with `llm_runners` beside it.
 	Models ModelSource
+
+	// Alarms is this node's latest alarm evaluation, nil before one has run
+	// or on a node that runs no state log: the ONE evaluation the Models and
+	// the MCP servers answers carry their kinds from, the same one the health
+	// count, the gauge and the log lines were told. Nil answers no alarm.
+	Alarms func() []statelog.Alarm
 
 	// Secrets is the fleet's secret rows, metadata only, which a model's
 	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
@@ -702,12 +717,15 @@ func Register(r *Registry, s Sources) {
 		r.Register("fleet", Requires(iam.GrantAdmin), s.fleet)
 		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
 		// table: every node re-publishes its starts on its presence
-		// heartbeat, so one listing answers for the fleet. Admin's, as
-		// the company document is, because that is what it discloses —
-		// every server's launch command and the first line of each
-		// failure, which `/config` shows the same reader. See
+		// heartbeat, so one listing answers for the fleet. Everybody's,
+		// in two readings, as `llm_entries` is: the configuration's
+		// reader reads every server's launch command and the first line
+		// of each failure, which `/config` shows the same reader, and
+		// anybody else each server's condition with none of that. The
+		// routes beside it (internal/api/mcpapi) are `tools.read`, which
+		// admits exactly whom this posture does. See
 		// [Sources.mcpServersStatus].
-		r.Register("mcp_servers_status", Requires(iam.GrantAdmin), s.mcpServersStatus)
+		r.Register("mcp_servers_status", Everybody(), s.mcpServersStatus)
 		// WHAT EACH MODEL IS DOING, from the same heartbeats: everybody's,
 		// in two readings (see [Sources.llmEntries]), and the runners'
 		// readiness the admin's, as the configuration is.
@@ -985,6 +1003,11 @@ func Register(r *Registry, s Sources) {
 		r.Register("chat_rooms", Requires(iam.GrantChatlet), s.chatRooms)
 		if s.ChatSearch != nil {
 			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
+		}
+		// WHOM A DRAFT WOULD REACH, before it is sent: the post's own
+		// decision run dry (chatreach.go).
+		if s.ChatDraft != nil {
+			r.Register("chat_reach", Requires(iam.GrantChatlet), s.chatReach)
 		}
 	}
 	if s.Memory != nil {

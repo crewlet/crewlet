@@ -871,6 +871,9 @@ func New(opts Options) (*App, error) {
 	// And how each server's instances are, which only the engine can ask
 	// the nodes holding them.
 	sources.MCPInstances = opts.Runtime.MCPInstances()
+	// And the node's latest alarm evaluation, which the Models and the MCP
+	// servers answers carry their kinds from.
+	sources.Alarms = opts.Runtime.LatestAlarms
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
 	// company this node applied, the community registry it names and, for
 	// one server's detail, the sources as they stand here, every field the

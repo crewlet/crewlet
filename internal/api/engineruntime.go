@@ -159,6 +159,10 @@ func (r engineRuntime) MCPInstances() queries.MCPInstanceReader { return r.engin
 // onto the route's ([mcpRestarter]).
 func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: r.engine} }
 
+// LatestAlarms is the engine's latest alarm evaluation
+// ([engine.Engine.LatestAlarms]).
+func (r engineRuntime) LatestAlarms() []statelog.Alarm { return r.engine.LatestAlarms() }
+
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.
 //

@@ -234,6 +234,10 @@ service account, a machine token, a Tier A token — reads the company's
 - **executors' status**;
 - **spend**, the token rollups and series, and **budgets**;
 - **schedules** and their runs, the **tools** list and the node's **health**;
+- **each MCP server's condition and its tools**, in a member's reading that
+  names no launch line, header, variable, account or call (`GET /mcp-servers`,
+  `GET /mcp-servers/{name}` and the curated half of `GET /mcp-catalogue`; an
+  administrator reads the rest);
 - who to ask: `lookup_colleague` and the person-facing colleague question —
   the latter masking a seat's external contact ids for anybody but an
   administrator;

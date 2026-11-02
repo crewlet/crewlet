@@ -385,6 +385,12 @@ type Call struct {
 	// — and empty where no tool did.
 	Origin string
 	Server string
+
+	// Source is whose tool the call named, answered or refused
+	// ([toolloop.ToolResult.Source]), and empty for a call nothing
+	// resolved: one made after the run's tools closed, or whose arguments
+	// did not parse.
+	Source string
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -1550,7 +1556,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
-			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server}
+			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server,
+			Source: res.Source}
 	}
 
 	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
@@ -1563,7 +1570,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		Call: tools.Call{Name: in.Name, Args: args, Output: res.Output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
-		Origin: res.Origin, Server: res.Server,
+		Origin: res.Origin, Server: res.Server, Source: res.Source,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }
