@@ -574,7 +574,7 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			host, writer := newChangeHost(suggestedChange()), &codeWrites{}
+			host, writer := newChangeHost(suggestedChange().queued()), &codeWrites{}
 			reg := codeRegistry(t, writeDeps(host, writer))
 			turn := writerTurn(t)
 			turn.Requester, turn.Senders = c.requester, c.senders
@@ -1268,13 +1268,15 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 const scratchID = siteID
 
 // scratchHost is a code host whose one repository is agent-cto's scratch
-// repository, last active lastActive ago, holding the change !7 site!7 is.
+// repository, last active lastActive ago, holding the change !7 site!7 is, in
+// its target's queue — so every change write a case calls has its change to
+// act on, a dequeue among them.
 func scratchHost(lastActive time.Duration) *codeHost {
 	host := newCodeHost()
 	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
 	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
 	host.detail.LastActivityAt = time.Now().Add(-lastActive)
-	change := suggestedChange()
+	change := suggestedChange().queued()
 	change.repo = host.detail.Name
 	host.changes = change.read
 	return host

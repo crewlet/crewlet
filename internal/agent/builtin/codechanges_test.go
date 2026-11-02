@@ -85,6 +85,17 @@ func siteChange() *changeFixture {
 	return f
 }
 
+// queued is f's change in its target's queue, waiting at place 2: its
+// readiness's queue precondition names its live entry, siteEntryID, the entry
+// a dequeue takes out (code.Precondition.Queue).
+func (f *changeFixture) queued() *changeFixture {
+	f.detail.Readiness.Preconditions = append(f.detail.Readiness.Preconditions, code.Precondition{
+		Kind: code.PreconditionQueue, State: code.PreconditionComputing, Detail: "site!7 waits at place 2",
+		Queue: &code.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: code.QueueWaiting,
+			Place: 2}})
+	return f
+}
+
 // newChangeHost is the code host holding site and its change site!7.
 func newChangeHost(f *changeFixture) *codeHost {
 	h := newCodeHost()
