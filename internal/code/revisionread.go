@@ -24,10 +24,12 @@ import (
 // NOTHING HERE READS: each surface makes its own reads — through the estate
 // router, as its caller — and says, in its own words, what it could not read.
 // What is decided here is which reads an answer takes, and that the ones that
-// need nothing of each other go AT ONCE ([AtOnce]): the re-anchorings of one
-// page of findings ([Place]). Every read made after another rather than
-// beside it is one more wait in the answer — and both surfaces make the same
-// reads by the same rule.
+// need nothing of each other go AT ONCE ([AtOnce]): a revision read beside
+// another once the head is read ([ChangeRevisions]), and the re-anchorings of
+// one page of findings ([Place]). A node without the data role asks each read
+// of the estate through another node, so every read made after another
+// rather than beside it is one more round trip in the answer — and both
+// surfaces make the same reads, in the same order, by the same rule.
 //
 // # Files from the recorded base
 //
@@ -282,6 +284,39 @@ func Place(rev RevisionRow, findings []FindingRow, ask func(*ReanchorQuery) (*Re
 		}
 	}
 	return placed, nil
+}
+
+// ChangeRevisions is the revisions a read of a change by object id names once
+// its head revision is read: revision n — the head itself, with no read,
+// where n is 0 or the head's own number — and, where since is not 0, revision
+// since, each read through one AT ONCE ([AtOnce]): neither needs the other's
+// row, so a node reading the estate through another pays one round trip for
+// the two rather than one each. one reads a revision at the floor of the
+// head's read, refusing one the change does not hold in its caller's words;
+// its first error in the order n, since is answered as it is.
+func ChangeRevisions(head RevisionRow, n, since int64, one func(n int64) (RevisionRow, error)) (RevisionRow,
+	*RevisionRow, error) {
+
+	rev := head
+	var earlier *RevisionRow
+	var reads []func() error
+	if n != 0 && n != head.N {
+		reads = append(reads, func() (err error) {
+			rev, err = one(n)
+			return err
+		})
+	}
+	if since != 0 {
+		earlier = &RevisionRow{}
+		reads = append(reads, func() (err error) {
+			*earlier, err = one(since)
+			return err
+		})
+	}
+	if err := AtOnce(reads...); err != nil {
+		return RevisionRow{}, nil, err
+	}
+	return rev, earlier, nil
 }
 
 // AtOnce runs each of reads in a goroutine of its own — on the caller's for a

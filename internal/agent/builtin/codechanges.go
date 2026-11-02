@@ -693,6 +693,22 @@ func (g changeRead) revision(ctx context.Context, n, latest int64, after statelo
 	return answer.Revisions[0], nil
 }
 
+// revisionAt is [changeRead.revision] as the code domain reads a change's
+// revisions beside each other ([code.ChangeRevisions]): each of a change whose
+// latest is latest, read at session floored at after, its refusal carried as
+// an error ([refusedRead]).
+func (g changeRead) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
+	code.RevisionRow, error) {
+
+	return func(n int64) (code.RevisionRow, error) {
+		rev, refusal := g.revision(ctx, n, latest, after)
+		if refusal != nil {
+			return code.RevisionRow{}, refusedRead{refusal}
+		}
+		return rev, nil
+	}
+}
+
 // plural is one where n is 1, many otherwise.
 func plural(n int64, one, many string) string {
 	if n == 1 {
@@ -938,39 +954,41 @@ type codeChangeDiff struct {
 // diff answers a revision's files or one file's patch: from the revision's
 // recorded base to its head, or — since an earlier revision — the interdiff
 // of the two, kept to the files either touches (code-host.md, "What changed
-// between two revisions").
+// between two revisions") — the two revisions read at once once the head is
+// ([code.ChangeRevisions]), as the API's change question reads them.
 func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
 	d, head, first, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	rev := head
-	if call.revision != 0 && call.revision != head.N {
-		if rev, refusal = g.revision(ctx, call.revision, d.Revision, first); refusal != nil {
-			return *refusal, nil
-		}
+	// THE REVISION READ, AS ITS NUMBER SAYS: the head where none is asked —
+	// so an earlier one is checked against it before either is read.
+	asked := head.N
+	if call.revision != 0 {
+		asked = call.revision
+	}
+	if call.since != 0 && call.since >= asked {
+		return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
+			asked)), nil
+	}
+	rev, since, err := code.ChangeRevisions(head, call.revision, call.since,
+		g.revisionAt(ctx, d.Revision, first))
+	if refusal = refusedIn(err); refusal != nil {
+		return *refusal, nil
+	}
+	if err != nil {
+		// UNREACHABLE: revisionAt answers its refusals alone.
+		return faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's revisions: %s.", g.tool, g.ref(),
+			faultSaid)), nil
 	}
 	revs := []code.RevisionRow{rev}
-	if call.since != 0 {
-		if call.since >= rev.N {
-			return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
-				rev.N)), nil
-		}
-		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		since, refusal := g.revision(ctx, call.since, d.Revision, first)
-		if refusal != nil {
-			return *refusal, nil
-		}
-		revs = append(revs, since)
+	if since != nil {
+		revs = append(revs, *since)
 	}
 	for _, r := range revs {
 		if refusal = g.recorded(d, r, call.since == 0); refusal != nil {
 			return *refusal, nil
 		}
-	}
-	var since *code.RevisionRow
-	if call.since != 0 {
-		since = &revs[1]
 	}
 	q, err := code.RevisionDiff(g.repo.ID, rev, since, call.file, call.fileB64)
 	if err != nil {

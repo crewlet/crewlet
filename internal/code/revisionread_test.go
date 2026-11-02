@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -318,5 +320,93 @@ func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
 	}
 	if _, err := code.Place(rev, page, misplacing); !errors.Is(err, code.ErrMisplaced) {
 		t.Errorf("a read answering one anchor short answered %v, want ErrMisplaced", err)
+	}
+}
+
+// meeting is a barrier of two reads, each answering whether the other arrived
+// while it waited: a read made only after the other has answered meets
+// nobody. meetWait bounds the wait — far past a loaded runner's scheduling
+// delay, and short enough that a read made alone fails the case quickly.
+type meeting struct {
+	arrived atomic.Int32
+	both    chan struct{}
+}
+
+const meetWait = 5 * time.Second
+
+func newMeeting() *meeting { return &meeting{both: make(chan struct{})} }
+
+func (m *meeting) meet() bool {
+	if m.arrived.Add(1) == 2 {
+		close(m.both)
+	}
+	select {
+	case <-m.both:
+		return true
+	case <-time.After(meetWait):
+		return false
+	}
+}
+
+// A CHANGE'S REVISIONS ARE READ AT ONCE: once its head is read, the revision
+// asked about and the earlier one an interdiff reads from need nothing of
+// each other, so neither waits for the other's answer — a node reading the
+// estate through another pays one round trip for the two; the head is never
+// read again; and of two refusals the one answered is the revision asked
+// about's, however late it arrives.
+//
+// Mutations: AtOnce reads one after the other → the two reads never meet,
+// red; read the head again → a read too many, red; answer the first refusal
+// to arrive → the earlier revision's, red.
+func TestAChangesRevisionsAreReadAtOnce(t *testing.T) {
+	t.Parallel()
+	head := measured(3, "head-3", oidOf("base"), 30, 28)
+	m := newMeeting()
+	var reads atomic.Int32
+	rev, earlier, err := code.ChangeRevisions(head, 2, 1, func(n int64) (code.RevisionRow, error) {
+		reads.Add(1)
+		if !m.meet() {
+			return code.RevisionRow{}, fmt.Errorf("revision %d was read alone", n)
+		}
+		return measured(n, fmt.Sprintf("head-%d", n), oidOf("base"), uint64(10*n), uint64(10*n-2)), nil
+	})
+	if err != nil || rev.N != 2 || earlier == nil || earlier.N != 1 || reads.Load() != 2 {
+		t.Fatalf("revisions 2 and 1 were read as %d, %+v in %d reads (%v), want each once, at once", rev.N, earlier,
+			reads.Load(), err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		n, since  int64
+		wantReads int32
+	}{
+		{"the head by its number", 3, 0, 0},
+		{"the head by default", 0, 0, 0},
+		{"the head since an earlier revision", 3, 1, 1},
+	} {
+		var reads atomic.Int32
+		rev, earlier, err := code.ChangeRevisions(head, tc.n, tc.since, func(n int64) (code.RevisionRow, error) {
+			reads.Add(1)
+			return measured(n, fmt.Sprintf("head-%d", n), "", 0, 0), nil
+		})
+		if err != nil || rev.N != head.N || rev.Head != head.Head || reads.Load() != tc.wantReads ||
+			(earlier != nil) != (tc.since != 0) {
+			t.Errorf("%s: read revision %d and %+v in %d reads (%v), want the head unread and %d reads", tc.name,
+				rev.N, earlier, reads.Load(), err, tc.wantReads)
+		}
+	}
+
+	asked, since := errors.New("no revision 2"), errors.New("no revision 1")
+	sinceDone := make(chan struct{})
+	_, _, err = code.ChangeRevisions(head, 2, 1, func(n int64) (code.RevisionRow, error) {
+		if n == 1 {
+			defer close(sinceDone)
+			return code.RevisionRow{}, since
+		}
+		<-sinceDone
+		return code.RevisionRow{}, asked
+	})
+	if !errors.Is(err, asked) {
+		t.Errorf("two refused revisions answered %v, want the revision asked about's refusal", err)
 	}
 }

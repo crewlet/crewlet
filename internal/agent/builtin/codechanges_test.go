@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -554,6 +555,50 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 		"since_revision": 1})
 	if _, _, gits := host.asked(); len(gits) != 1 || gits[0].Interdiff.FromBase != "" {
 		t.Errorf("an interdiff from a revision of no base was read as %+v", gits)
+	}
+}
+
+// A DIFF READS ITS TWO REVISIONS AT ONCE: what changed in revision 2 since
+// revision 1 of a change whose head is 3 reads the head, then the two
+// revisions beside each other — neither needs the other's row — so a node
+// reading the estate through another pays one round trip for the two, as the
+// API's change question does (code.ChangeRevisions).
+//
+// Mutation: read the two revisions one after the other → each is read
+// alone, red.
+func TestADiffReadsItsTwoRevisionsAtOnce(t *testing.T) {
+	t.Parallel()
+	host := newChangeHost(siteChange())
+	// Every row read after the call's first waits for another, for at most
+	// five seconds — far past a loaded runner's scheduling delay.
+	both := make(chan struct{})
+	var rows, met atomic.Int32
+	host.before = func(what string) {
+		if what != "read:"+string(code.ReadChange) {
+			return
+		}
+		switch rows.Add(1) {
+		case 1:
+			return
+		case 3:
+			close(both)
+		}
+		select {
+		case <-both:
+			met.Add(1)
+		case <-time.After(5 * time.Second):
+		}
+	}
+	_, answer := changeCall(t, host, codeTurn(t), builtin.CodeGetChangeTool, map[string]any{"change": "site!7",
+		"part": "diff", "file": "a.txt", "revision": 2, "since_revision": 1})
+	_, _, gits := host.asked()
+	if len(gits) != 1 || gits[0].Interdiff == nil || gits[0].Interdiff.ToHead != revHead(2) ||
+		gits[0].Interdiff.FromHead != revHead(1) {
+		t.Fatalf("revision 2 since revision 1 was read as %+v (%v)", gits, answer)
+	}
+	if rows.Load() != 3 || met.Load() != 2 {
+		t.Errorf("the head and the two revisions were read in %d row reads, %d of them beside another, want "+
+			"the two revisions read at once", rows.Load(), met.Load())
 	}
 }
 
