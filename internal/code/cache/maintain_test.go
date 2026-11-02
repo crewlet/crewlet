@@ -1670,6 +1670,83 @@ func TestAFullRoundWakesTheMaintainerOnceItLetsTheRepositoryGo(t *testing.T) {
 	})
 }
 
+// A PASS A ROUND HELD BACK IS OWED A WAKE AS THE ROUND LETS GO. A pass starts no
+// run on a repository a round holds (runnable), and the next tick is no promise
+// of a gap: every linearizable read is a round, so a repository read steadily is
+// in one for much of its time and a tick lands in one about that often. Owing
+// nothing, each landing cost another MidxDebounce, and a graph due at once was
+// left to the odds — the code host's suite, polling a copy for it, saw a minute's
+// ticks all land in a round and no graph at all.
+//
+// The copy is read whole empty and takes its first pack by a delta, so no full
+// round's wake stands in for this one. A pass runs inside the round that applied
+// the pack, as a tick landing there runs it: the walk finds the round holding the
+// repository; or, in the second arm, the walk found it runnable and the round
+// began before the pass came to start the run. Either way it starts nothing, and
+// the round's end wakes the maintainer, whose pass writes the graph with no tick.
+//
+// Mutations: owe the wake for an adoption alone (oweWake's round term), or not as
+// a run starts (startMaintenance's oweWake) — no wake follows the round; start
+// runs under a round (runnable's round term) — the pass in the round starts one.
+func TestAPassARoundHeldBackIsOwedAWake(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// pass is what a tick landing in the round runs, and answers whether
+		// it started a run.
+		pass func(c *cache.Cache, repo string) bool
+	}{
+		{name: "held back at its walk", pass: func(c *cache.Cache, _ string) bool {
+			started, _ := cache.StartMaintainerPass(c)
+			return len(started) > 0
+		}},
+		{name: "held back as it starts the run", pass: cache.StartMaintenanceOf},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			var c *cache.Cache
+			var inRound, started, kickedInRound atomic.Bool
+			c = w.open(t, func(o *cache.Options) {
+				cache.BeforeRoundEnds(o, func(string) {
+					// The cache is never started: a kick stays where it was sent.
+					if inRound.Swap(false) {
+						started.Store(tc.pass(c, repo))
+						kickedInRound.Store(cache.KickPending(c))
+					}
+				})
+			})
+			w.sync(t, c, repo)
+			eventually(t, "the full round's own wake", func() bool { return cache.MaintainerKicked(c) })
+			if ran := cache.MaintainerPass(c); len(ran) != 0 {
+				t.Fatalf("a pass over a copy holding no pack ran %v", ran)
+			}
+
+			w.push(t, repo, "refs/heads/main", nil)
+			inRound.Store(true)
+			w.sync(t, c, repo)
+			if inRound.Load() {
+				t.Fatal("no round reached the knob: the case held nothing")
+			}
+			if started.Load() {
+				t.Error("a pass started a run on a repository a round holds")
+			}
+			if kickedInRound.Load() {
+				t.Error("the maintainer was woken while the round still held the repository")
+			}
+			eventually(t, "the wake the round owes the pass it held back",
+				func() bool { return cache.MaintainerKicked(c) })
+			if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+				t.Errorf("the pass the wake runs ran %v, want %s's graph", ran, repo)
+			}
+			if _, _, graphed := cache.Indexed(c, repo); !graphed {
+				t.Error("no commit-graph after the pass the wake runs")
+			}
+		})
+	}
+}
+
 // A STARTED CACHE MAINTAINS AT ITS TICKS, AND STOP ENDS A RUN: Start runs
 // the maintainer, which looks at every tick and runs what is due then — not
 // before — and Stop cancels a run in flight and waits for it, so the

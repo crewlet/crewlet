@@ -607,7 +607,9 @@ func (c *Cache) run(e *entry, r *round) {
 	// a full round once sent from inside itself met that round still running
 	// and left the repository to the next tick, MidxDebounce later: a
 	// graph-first run, an index repair and a copy's first index, each due
-	// at once, waited for it. A round queued behind this one owes it on.
+	// at once, waited for it. So does a pass that met this round on its own,
+	// which owes it the same wake (oweWake). A round queued behind this one
+	// owes it on.
 	wake := c.owedWake(e)
 	e.mu.Unlock()
 	if wake {
@@ -1887,7 +1889,9 @@ func sameRepo(a, b code.RepoRef) bool {
 //     the maintainer works on (converged in this process) or written the
 //     round's index without a bitmap, either of them due at once once its
 //     packs have stood still. A delta adding packs needs no kick — they are
-//     due only after the debounce, which the maintainer's tick is.
+//     due only after the debounce, which the maintainer's tick is — and a first
+//     pack, which leaves a copy read whole with nothing due for its graph,
+//     waits for that same tick (maintain.go, AT ONCE IS THE NEXT PASS).
 func (c *Cache) account(e *entry, inc *incarnation, snap snapshot, res applied, took time.Duration) {
 	kind := snap.kind()
 	e.mu.Lock()

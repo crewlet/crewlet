@@ -124,13 +124,16 @@ func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 // merge until somebody changes it (closed, merged, a draft, archived, a pull
 // mirror) conflict, as a race lost is, and never invalid or forbidden, which
 // would tell a caller who asked nothing wrong to send something else or that
-// they may not; a repository past the most it may keep quota_exceeded; an
+// they may not; a repository past the most it may keep quota_exceeded; a
+// committer busy or a compaction behind unavailable, as a push's are, since a
+// wait clears them and nobody the sentence could name changes anything; an
 // entry no queue holds, which never becomes live again by itself, not_found.
 // The table names EVERY value of code.MergeRefusals(), so a refusal the
 // domain adds fails here until somebody decides its class, rather than
 // falling into one unexamined; and each is answered in that class.
 //
-// Mutation: class change_not_open as invalid again → red.
+// Mutation: class change_not_open as invalid again → red; class busy as
+// conflict again → red.
 func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 	t.Parallel()
 	want := map[code.MergeRefusal]tools.Refusal{
@@ -140,22 +143,22 @@ func TestEveryMergeRefusalIsClassedByWhatClearsIt(t *testing.T) {
 		code.MergeRefusalHeadMoved:   tools.RefusalStaleVersion,
 		code.MergeRefusalTargetMoved: tools.RefusalStaleVersion,
 
-		code.MergeRefusalChangeNotOpen:    tools.RefusalConflict,
-		code.MergeRefusalChangeDraft:      tools.RefusalConflict,
-		code.MergeRefusalRepoArchived:     tools.RefusalConflict,
-		code.MergeRefusalRepoMirrored:     tools.RefusalConflict,
-		code.MergeRefusalTargetMoving:     tools.RefusalConflict,
-		code.MergeRefusalBusy:             tools.RefusalConflict,
-		code.MergeRefusalCompactionBehind: tools.RefusalConflict,
-		code.MergeRefusalQueueFull:        tools.RefusalConflict,
+		code.MergeRefusalChangeNotOpen: tools.RefusalConflict,
+		code.MergeRefusalChangeDraft:   tools.RefusalConflict,
+		code.MergeRefusalRepoArchived:  tools.RefusalConflict,
+		code.MergeRefusalRepoMirrored:  tools.RefusalConflict,
+		code.MergeRefusalTargetMoving:  tools.RefusalConflict,
+		code.MergeRefusalQueueFull:     tools.RefusalConflict,
 
 		code.MergeRefusalRepoSize: tools.RefusalQuotaExceeded,
 
-		code.MergeRefusalRepoImporting: tools.RefusalUnavailable,
-		code.MergeRefusalExpunging:     tools.RefusalUnavailable,
-		code.MergeRefusalUploadExpired: tools.RefusalUnavailable,
-		code.MergeRefusalUnavailable:   tools.RefusalUnavailable,
-		code.MergeRefusalNotApplied:    tools.RefusalUnavailable,
+		code.MergeRefusalBusy:             tools.RefusalUnavailable,
+		code.MergeRefusalCompactionBehind: tools.RefusalUnavailable,
+		code.MergeRefusalRepoImporting:    tools.RefusalUnavailable,
+		code.MergeRefusalExpunging:        tools.RefusalUnavailable,
+		code.MergeRefusalUploadExpired:    tools.RefusalUnavailable,
+		code.MergeRefusalUnavailable:      tools.RefusalUnavailable,
+		code.MergeRefusalNotApplied:       tools.RefusalUnavailable,
 
 		code.MergeRefusalNotPerson:    tools.RefusalForbidden,
 		code.MergeRefusalNotPermitted: tools.RefusalForbidden,

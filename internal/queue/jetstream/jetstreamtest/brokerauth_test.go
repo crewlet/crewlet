@@ -190,14 +190,17 @@ func TestGossipedRoutesAuthenticate(t *testing.T) {
 // k2 with k1 still active, flip the active key to k2, drop k1. After EVERY
 // restart the mesh is whole and a replicated append through every member
 // lands — because within a step every node already holds every key any node
-// presents.
+// presents. "Lands" as the engine's writer waits for it to ([landAppend]): the
+// member just stopped may have led the stream, so the group may be electing.
 //
 // NOT PARALLEL: a member comes back on the route port it had, and a cluster
 // another case reserved ports for in the same moment could take it while it
 // is down (TestARestartedMemberRejoinsAsItself's reason).
 //
-// Mutation: accept only the active key → the first member to flip is refused
-// by the others, red.
+// Mutations: accept only the active key → the first member to flip is refused
+// by the others, red; have a rotated member's routes refuse the stream's
+// subjects → it routes to both others and no append through it is ever
+// answered, red once the wait's bound runs out.
 func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 	k1 := runtoken.KeyMaterial{ID: "k1", Material: "the rotation case's first placeholder material"}
 	k2 := runtoken.KeyMaterial{ID: "k2", Material: "the rotation case's second placeholder material"}
@@ -205,8 +208,24 @@ func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 	clients := []*js.Queue{c.Client(t, 0), c.Client(t, 1), c.Client(t, 2)}
 	spec := js.DomainStream{Name: "CREWLET_ROTATION_LOG", Subjects: []string{"crewlet.rotation.>"},
 		MaxBytes: 1 << 20, Duplicates: time.Minute}
-	if err := clients[0].EnsureDomainStream(t.Context(), spec); err != nil {
-		t.Fatalf("provision a replicated log: %v", err)
+	// AS A NODE'S BOOT OPENS ONE: provisioned, then opened, which is
+	// [js.Queue.DomainLog]'s contract. A restarted member's open meets the
+	// election its stop may have left, and the provision's lookup is what waits
+	// one out: the open alone gives up in five seconds ([jsprovision.ReadBack]).
+	logs := make([]*js.DomainLog, len(clients))
+	open := func(when string, i int) {
+		t.Helper()
+		if err := clients[i].EnsureDomainStream(t.Context(), spec); err != nil {
+			t.Fatalf("%s: provision the log through member %d: %v", when, i, err)
+		}
+		log, err := clients[i].DomainLog(t.Context(), spec.Name)
+		if err != nil {
+			t.Fatalf("%s: open the log through member %d: %v", when, i, err)
+		}
+		logs[i] = log
+	}
+	for i := range clients {
+		open("before the rotation", i)
 	}
 	whole := func(when string) {
 		t.Helper()
@@ -224,13 +243,9 @@ func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 			}
 			return true
 		})
-		for i, q := range clients {
-			log, err := q.DomainLog(t.Context(), spec.Name)
-			if err != nil {
-				t.Fatalf("%s: open the log through member %d: %v", when, i, err)
-			}
-			if _, _, err := log.Append(t.Context(), "crewlet.rotation.a",
-				fmt.Sprintf("%s/%d", when, i), nil, []byte(when)); err != nil {
+		for i, log := range logs {
+			if err := landAppend(t.Context(), c, log, spec.Name, "crewlet.rotation.a",
+				fmt.Sprintf("%s/%d", when, i), []byte(when)); err != nil {
 				t.Fatalf("%s: a replicated append through member %d: %v", when, i, err)
 			}
 		}
@@ -248,7 +263,9 @@ func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 			_ = clients[i].Stop(context.WithoutCancel(t.Context()))
 			c.StopMember(i)
 			clients[i] = c.RestartMemberWith(t, i, func(cfg *js.Config) { cfg.FleetAuth = step.auth })
-			whole(fmt.Sprintf("%s, member %d restarted", step.name, i))
+			when := fmt.Sprintf("%s, member %d restarted", step.name, i)
+			open(when, i)
+			whole(when)
 		}
 	}
 }

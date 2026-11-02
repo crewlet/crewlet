@@ -443,6 +443,16 @@ func MaintainerTicksFrom(o *Options, ticks <-chan time.Time) {
 	o.knobs.maintTicks = ticks
 }
 
+// StartMaintenanceOf asks for a run of repo as a pass asks of a candidate its
+// walk found runnable (startMaintenance), whatever has happened to the
+// repository since, and answers whether one started.
+func StartMaintenanceOf(c *Cache, repo string) bool {
+	lane := c.git.Slots(gitproc.ClassMaintenance)
+	m, _, _ := c.startMaintenance(context.Background(), lookup(c, repo), maintenanceRuns(lane), lane,
+		c.maint.budgetNow(), reservation{})
+	return m != nil
+}
+
 // MaintainerKicked reports whether a kick is waiting for the maintainer, and
 // takes it: a case that answers the kicks itself sees each one once.
 func MaintainerKicked(c *Cache) bool {
