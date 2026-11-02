@@ -162,8 +162,8 @@ func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			row.Harness)}
 	}
-	if ok, why := restorer.Restores(archiveOf(row)); !ok {
-		return SessionContinuity{Why: why}
+	if ok, refused := restorer.Restores(archiveOf(row)); !ok {
+		return SessionContinuity{Why: refused}
 	}
 	return SessionContinuity{Continues: true}
 }
