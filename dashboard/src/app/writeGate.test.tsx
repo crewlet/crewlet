@@ -151,9 +151,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/chatlet/Room.tsx": {
     why:
-      "a room's Join bar in place of its composer, for a room the reader may read and is " +
-      "not in (join_channel), or the star a team's room offers in its place, the room's " +
-      "own refusal said once above the transcript",
+      "a room's Join bar above its composer, for a room the reader may read and is not " +
+      "in (join_channel), or the star a team's room offers in its place, and in the " +
+      "composer's place where the engine takes no post, the room's own refusal said once " +
+      "above the transcript",
     suite: "routes/chatlet/Access.test.tsx",
   },
   "routes/chatlet/scope.tsx": {
