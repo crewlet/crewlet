@@ -220,10 +220,15 @@ func resolvedOf(company *config.Company, roster *org.Organization, server *confi
 			continue
 		}
 		handle := box.Seat.Seat().Handle()
-		if roster == nil || !server.Grants(roster.AgentSeatByHandle(handle)) {
+		if roster == nil {
+			continue
+		}
+		seat := roster.AgentSeatByHandle(handle)
+		if !server.Grants(seat) || len(seat.LimitOn(server.Name).Tools) > 0 {
 			// A BOX IS GIVEN ONLY A SERVER ITS SEAT IS GRANTED
 			// ([config.MCPServer.Grants]), so a listing the grant does not
-			// back gives it nothing.
+			// back gives it nothing; nor one a limit on the way down to the
+			// seat holds a tool of back, which a box would reach whole.
 			continue
 		}
 		out.BoxSeats = append(out.BoxSeats, MCPBoxSeat{Seat: handle, Cell: string(box.Cell)})

@@ -3,8 +3,9 @@
  * that may go with it, in one write.
  *
  * THE ENGINE LISTS EVERY REFERENCE. A dry run of the removal answers what
- * names the server from elsewhere (an agent's or a team's `mcp_env`, a box's
- * `sandbox.mcp.servers`) and the stored values nothing else reads once it is
+ * names the server from elsewhere (an agent's or a team's `mcp_env` and
+ * `mcp_limits`, a box's `sandbox.mcp.servers`) and the stored values nothing
+ * else reads once it is
  * gone; the removal clears those fields in the same revision, or is refused
  * naming them. A value may be deleted with it only where nothing else reads
  * it, which the engine decides again as it deletes. Disabling keeps
@@ -38,6 +39,11 @@ type Load =
   | { kind: "loading" }
   | { kind: "failed"; message: string }
   | { kind: "ready"; etag: string; dependants: McpDependants };
+
+/** How many fields name the server from elsewhere, which the removal clears or is refused over. */
+function namedElsewhere(d: McpDependants): number {
+  return d.mcp_env.length + d.sandbox.length + d.mcp_limits.length;
+}
 
 /** What the toast says became of the values the removal was asked to delete. */
 function secretsWords(secrets: readonly McpSecretDeletion[]): string | undefined {
@@ -103,7 +109,7 @@ export function RemoveDialog({
         return;
       }
       const dependants = check.check.dependants;
-      setClear(dependants.mcp_env.length + dependants.sandbox.length === 0);
+      setClear(namedElsewhere(dependants) === 0);
       setSecrets(dependants.secrets);
       setLoad({ kind: "ready", etag: read.etag, dependants });
     })().catch(() => undefined);
@@ -141,7 +147,7 @@ export function RemoveDialog({
 
   const losing = (data.reaches(server.name) ?? []).map((s) => s.name);
   const deps = load.kind === "ready" ? load.dependants : null;
-  const elsewhere = deps ? deps.mcp_env.length + deps.sandbox.length : 0;
+  const elsewhere = deps ? namedElsewhere(deps) : 0;
   // FOCUS STARTS ON CANCEL, as in every prompt of the family: Remove is
   // disabled until the dry run answers and is destructive after, and the
   // first control in the footer is Disable instead, a different action.
@@ -212,6 +218,12 @@ export function RemoveDialog({
                   {deps.sandbox.map((d) => (
                     <li key={`box-${d.seat}`}>
                       {d.name}'s coding box: <span className="mono">sandbox.mcp.servers</span>
+                    </li>
+                  ))}
+                  {deps.mcp_limits.map((d) => (
+                    <li key={`limits-${d.kind}-${d.key}`}>
+                      {d.kind === "seat" ? "Agent" : "Team"} {d.name}: its{" "}
+                      <span className="mono">mcp_limits.{server.name}</span> limits
                     </li>
                   ))}
                 </ul>

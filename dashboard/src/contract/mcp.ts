@@ -708,11 +708,14 @@ interface McpServerCalls {
   coverage: Coverage;
 }
 
-/** Who holds an `mcp_env` block naming the server. */
+/** Who holds an `mcp_env` or `mcp_limits` block naming the server. */
 type McpHolderKind = "seat" | "unit";
 
-/** One `mcp_env` block naming the server: the agent's or the team's own values for it. */
-interface McpEnvDependant {
+/**
+ * One agent's or team's block naming the server: its own values for it
+ * (`mcp_env`), or what its lead holds it back to (`mcp_limits`).
+ */
+interface McpBlockDependant {
   kind: McpHolderKind;
   /** The seat's handle or the unit's key. */
   key: string;
@@ -735,8 +738,9 @@ interface McpSandboxDependant {
  * is gone, which may be deleted with it.
  */
 export interface McpDependants {
-  mcp_env: McpEnvDependant[];
+  mcp_env: McpBlockDependant[];
   sandbox: McpSandboxDependant[];
+  mcp_limits: McpBlockDependant[];
   /** Names only, never a value. */
   secrets: string[];
   /** Whether somebody holds an OAuth grant for it, which the removal revokes. */
@@ -779,7 +783,10 @@ export interface McpServerAnswer {
   last_check: McpCheckView | null;
   /** Every header or variable the server is sent, and its OAuth client's secret, by name and never by value. */
   values: McpValueState[];
-  /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
+  /**
+   * Every agent seat the server's grant reaches, and why, whether or not it is
+   * on, with what its team leads' limits hold the server to for it.
+   */
   reaches: McpReach[];
   /** Every change the server made to its tools since their levels were decided, by tool. */
   changes: McpChangeView[];
@@ -843,6 +850,33 @@ interface McpReach {
   reason: McpReachReason;
   /** The granting unit's key for `unit`, the lane for `integration`, null otherwise. */
   via: string | null;
+  /** What the seat's own and its units' `mcp_limits` hold the server to; null where none does. */
+  limited: McpReachLimit | null;
+}
+
+/** The level a limit holds a tool to: never `allow`, which only the server's entry sets. */
+type McpToolLimitLevel = "approve" | "blocked";
+
+/**
+ * What the limits on the way down to one agent hold a server to: the strictest
+ * of its own block and every enclosing team's, each part naming the block
+ * nearest the agent that holds it there.
+ */
+interface McpReachLimit {
+  /** A limit turns the server off for the agent; its grant stands. */
+  off: boolean;
+  /** The key of the team whose limit turns it off; null where the agent's own does, or none. */
+  off_by: string | null;
+  /** Each tool held back, by the server's own name for it. */
+  tools: McpToolLimit[];
+}
+
+/** One tool a limit holds back for an agent; it runs at the stricter of this and its own level. */
+interface McpToolLimit {
+  tool: string;
+  level: McpToolLimitLevel;
+  /** The key of the team whose limit holds it; null for the agent's own. */
+  by: string | null;
 }
 
 /**
@@ -956,8 +990,9 @@ export interface McpSecretDeletion {
 
 /** The fields a written removal cleared with the server. */
 interface McpCleared {
-  mcp_env: McpEnvDependant[];
+  mcp_env: McpBlockDependant[];
   sandbox: McpSandboxDependant[];
+  mcp_limits: McpBlockDependant[];
 }
 
 /** A dry run of a removal that would land: what it checked and what it takes. */
