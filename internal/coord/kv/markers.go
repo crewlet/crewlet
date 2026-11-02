@@ -290,5 +290,12 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 			errs = append(errs, err)
 		}
 	}
+	// AND THE ONE VALUE A REMOVAL CAN LEAVE: a sandbox run's log whose
+	// record went while its node stopped before the log did.
+	n, err := f.sweepRunLogs(ctx, cutoff)
+	swept += n
+	if err != nil {
+		errs = append(errs, err)
+	}
 	return swept, errors.Join(errs...)
 }

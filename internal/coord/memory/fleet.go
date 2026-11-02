@@ -36,18 +36,22 @@ import (
 type Fleet struct {
 	mu sync.Mutex
 
-	windows      map[windowKey]int
-	claims       map[string]time.Time
-	worked       map[string]workedEntry
-	applies      map[string]coord.NodeApply
-	budgets      map[string]coord.Tally
-	channels     map[string]coord.Channel
-	follows      map[string]followEntry
-	chatReads    map[string]coord.ChatReadState
-	fires        map[string]time.Time
-	custody      map[string]string
-	rebases      map[string]rebaseEntry
-	runs         map[string]coord.Record
+	windows   map[windowKey]int
+	claims    map[string]time.Time
+	worked    map[string]workedEntry
+	applies   map[string]coord.NodeApply
+	budgets   map[string]coord.Tally
+	channels  map[string]coord.Channel
+	follows   map[string]followEntry
+	chatReads map[string]coord.ChatReadState
+	fires     map[string]time.Time
+	custody   map[string]string
+	rebases   map[string]rebaseEntry
+	runs      map[string]coord.Record
+	// runLogs are the logs beside the runs' records, by turn id — kept
+	// apart from runs as the KV keeps them under keys a listing of records
+	// never reads.
+	runLogs      map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 
@@ -144,6 +148,7 @@ func NewFleet() *Fleet {
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
+		runLogs:      map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		seatAccess:   map[string]map[string][]byte{},

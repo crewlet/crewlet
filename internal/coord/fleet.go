@@ -1190,9 +1190,9 @@ type SandboxRunUpdate struct {
 // SandboxRuns is the fleet's record of detached coding runs.
 //
 // THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
-// record has fields of which coordination understands none: the suspended
-// executor conversation, the box and command ids, the brief, the question a
-// person is being asked. Every decision taken on those fields —
+// record has fields of which coordination understands none: the box and
+// command ids, the brief, the question a person is being asked, the bridged
+// tool calls in its log. Every decision taken on those fields —
 // the at-most-once tail claim, the epoch fence, the conditional pause expiry —
 // is sandbox's, lives in internal/sandbox where its suite is, and would be
 // nothing but duplication here. So this holds bytes and a version, and every
@@ -1235,12 +1235,35 @@ type SandboxRunUpdate struct {
 // a run's record as it changes — rather than reading it again on every call it
 // serves — is told of that run's writes and of no other run's, however busy
 // the fleet.
+//
+// # A record has its LOG beside it
+//
+// A run's bridged tool log — every tool call its box makes over the bridge,
+// each with its arguments and output, up to internal/sandbox's bound of two
+// hundred — is kept beside the record under a key of its own
+// ([SandboxRuns.SandboxRunLog]), never on it. The record is what every
+// reader decides on: every flip of a run is a read-decide-write of it whole,
+// every listing reads every record whole, and every git request of a coding
+// box reads its run's record and every ref answer past its floor writes it.
+// Measured on a full log, the record with the log on it was half a megabyte,
+// and every one of those moved it through the bucket's stream leader; kept
+// beside it, the record is a few kilobytes and only the log's own readers
+// and its appends move the log.
+//
+// THE LOG LIVES AND DIES WITH ITS RECORD, and the store, not its caller, is
+// what holds that: a log is written only beside a run that has a record
+// ([SandboxRuns.MutateSandboxRunLog] undoes a write that raced the record's
+// removal), and a delete of the record removes the log with it
+// ([SandboxRuns.MutateSandboxRun]). So a log never outlives its run by
+// anything a write does; a node that stops between the record's removal and
+// the log's leaves the log, and [Markers.SweepMarkers] removes it with the
+// record's marker.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
 
 	// SandboxRuns returns every record, by turn id — the records ALONE,
-	// never a part beside one.
+	// never the log beside one.
 	//
 	// Every listing this serves — the seat's busy check, the boot recovery
 	// pass, the pause reaper, the clarification match — filters on fields
@@ -1281,6 +1304,13 @@ type SandboxRuns interface {
 	// With true it answers the record as written for a Put — the new value
 	// at its new version — and the record it removed for a Delete; with
 	// false, the record as the last decision read it.
+	//
+	// A DELETE TAKES THE RUN'S LOG WITH IT: the record goes first, at the
+	// version decided on, and then the log whatever it holds, so no reader
+	// ever finds a record whose log was removed under it. A log that
+	// could not be removed once the record went is still a landed delete —
+	// the decision did what it decided — and is left to the sweep (see the
+	// type's doc).
 	MutateSandboxRun(ctx context.Context, turnID string,
 		decide func(current Record) (SandboxRunChange, error)) (Record, bool, error)
 
@@ -1303,6 +1333,36 @@ type SandboxRuns interface {
 	// last knew and watches again, and the new watch's first update is the
 	// state then, so a change made while nobody listened is not lost.
 	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
+
+	// SandboxRunLog reads the log kept beside turnID's run, as the store's
+	// newest write left it: a log appended a moment ago is in the answer.
+	// Record.Key is the turn id. False is a run with no log — one whose
+	// record has none written yet, or one that is gone.
+	SandboxRunLog(ctx context.Context, turnID string) (Record, bool, error)
+
+	// MutateSandboxRunLog changes the log beside turnID's run by a decision
+	// taken on the log as it stands, answering the log as the change left it
+	// and whether a change landed — [SandboxRuns.MutateSandboxRun]'s
+	// read-decide-write, on the log's own key.
+	//
+	// decide is handed the log read and whether there is one, and answers
+	// the log's next value whole; an empty answer writes nothing. A write
+	// lands only where the log still stands as decide read it — absent, or
+	// at the version decide was handed — and is otherwise decided again on
+	// the log as it then stands, within the store's patience, an error
+	// decide returns coming back as it is. The decision never reads the
+	// record: a caller whose condition is on the record keeps the facts it
+	// decides by in the log it writes, so one compare-and-swap of one key
+	// holds the condition and the write together.
+	//
+	// ONLY BESIDE A RECORD. A log is written for a run that has a record and
+	// for no other: a write that finds, once it has landed, that the
+	// record was removed under it removes what it wrote and answers
+	// (Record{}, false, nil), as a run that is gone answers
+	// MutateSandboxRun. So a write racing the run's end never leaves a log
+	// behind it.
+	MutateSandboxRunLog(ctx context.Context, turnID string,
+		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 }
 
 // SecretRecord is one stored credential, as coordination holds it.
@@ -1638,6 +1698,13 @@ type Markers interface {
 	// SweepMarkers removes every marker written before cutoff from the
 	// record families no clock ages, reporting how many went. A failure
 	// part-way reports the markers already removed beside the error.
+	//
+	// AND A SANDBOX RUN'S LOG WHOSE RECORD IS GONE, written before cutoff:
+	// the one value a removal can leave behind when its node stops between
+	// the record's removal and the log's ([SandboxRuns]). Whether the run
+	// has a record is read after the log is found, so a record written
+	// under the turn again keeps its log, and the log is removed only as it
+	// was found.
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
 }
 

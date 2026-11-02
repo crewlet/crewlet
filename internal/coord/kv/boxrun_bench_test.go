@@ -30,23 +30,28 @@ import (
 //   - raise: the raise of the run's code floor every ref answer past it and
 //     every applied push makes before it answers (host.Runs.RaiseFloor, through
 //     sandbox.PendingStore.RaiseCodeFloor), each operation a higher floor, so
-//     every one writes.
+//     every one writes;
+//   - append: one bridged call the box makes, appended to the run's log
+//     (sandbox.PendingStore.AppendBridgeCall) — where the log's size is paid
+//     now that the record does not carry it.
 //
 // THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its turn
 // parked (its bookkeeping and a 32 KiB frozen context), and the bridge's log
 // full at sandbox.MaxBridgeCalls calls of 256 bytes of arguments and 2 KiB of
-// output each, which the record carries ([sandbox.PendingRun.BridgeCalls]).
-// Reported beside the time are its spread (ms-p50, ms-p99) and the bytes of
-// the run's own record (row-bytes): what each read moves, and what each raise
-// reads and writes back. A request that fails fails the benchmark.
+// output each, kept beside the record ([sandbox.BridgeLog]). Reported beside
+// the time are its spread (ms-p50, ms-p99), the bytes of the run's own record
+// (row-bytes) — what each read moves, and what each raise reads and writes
+// back — and of its log (log-bytes), what each append reads and writes back.
+// A request that fails fails the benchmark.
 //
-// Measured on 2026-11-01, thirty operations an arm and one count, on two
-// E-cores of an Intel Core Ultra 7 265U: a read 5.8 ms at the median (7.9 at
-// the 99th percentile) and a raise 11.1 ms (26.0), on a record of 516 173
-// bytes, nearly all of it the bridge's log. Kept beside the record instead,
-// the record was 2 983 bytes, a read took 0.15 ms (0.21) and a raise 0.42 ms
-// (0.88): every request of a box moves the run's whole tool log, not the
-// request.
+// Measured on 2026-11-02, thirty operations an arm and one count, on two
+// E-cores of an Intel Core Ultra 7 265U, with the log beside the record: see
+// docs/concepts/code-host.md ("What a box's request costs the coordination
+// store") for the figures, both layouts'. With the log on the record, as
+// main's run record kept it (measured 2026-11-01 on the same machine), the
+// record was 516 173 bytes, nearly all of it the log, a read took 5.8 ms at
+// the median (7.9 at the 99th percentile) and a raise 11.1 ms (26.0): every
+// request of a box moved the run's whole tool log, not the request.
 func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 	ctx := context.Background()
 	fleet := boxRunFleet(b)
@@ -57,6 +62,13 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 		record, found, err := fleet.SandboxRun(ctx, turn)
 		if err != nil || !found {
 			b.Fatalf("read the run's record: (%v, %v)", found, err)
+		}
+		return len(record.Value)
+	}
+	logBytes := func() int {
+		record, found, err := fleet.SandboxRunLog(ctx, turn)
+		if err != nil || !found {
+			b.Fatalf("read the run's log: (%v, %v)", found, err)
 		}
 		return len(record.Value)
 	}
@@ -77,6 +89,7 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 		b.ReportMetric(float64(at(0.5).Microseconds())/1000, "ms-p50")
 		b.ReportMetric(float64(at(0.99).Microseconds())/1000, "ms-p99")
 		b.ReportMetric(float64(row()), "row-bytes")
+		b.ReportMetric(float64(logBytes()), "log-bytes")
 	}
 
 	b.Run("read", func(b *testing.B) {
@@ -102,6 +115,21 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 				return fmt.Errorf("raise the floor: %w", err)
 			case !wrote:
 				return fmt.Errorf("the raise to %s wrote nothing", next)
+			}
+			return nil
+		})
+	})
+	b.Run("append", func(b *testing.B) {
+		output := strings.Repeat("o", 2<<10)
+		measure(b, func(i int) error {
+			recorded, err := store.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+				Call: sandbox.BridgeCall{Name: "read_page",
+					Args: fmt.Sprintf(`{"id":%d,"q":"%s"}`, i, strings.Repeat("q", 240)), Output: output}})
+			switch {
+			case err != nil:
+				return fmt.Errorf("append a call: %w", err)
+			case !recorded:
+				return fmt.Errorf("the append of call %d recorded nothing", i)
 			}
 			return nil
 		})
