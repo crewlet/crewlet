@@ -274,6 +274,14 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	if q.Brief, err = askedFor(p, "brief"); err != nil {
 		return code.ReadQuery{}, err
 	}
+	// THE PROTECTED REPOSITORIES ALONE ([code.ReadQuery.Protected]) are a
+	// listing's, asked the same way, `protected=true`: the reader walks an
+	// index of those alone, so a page of them costs what they cost however
+	// many repositories no rule protects, and on any other read the filter
+	// is the reader's to refuse, naming it.
+	if q.Protected, err = askedFor(p, "protected"); err != nil {
+		return code.ReadQuery{}, err
+	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {
 			continue
