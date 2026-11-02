@@ -380,6 +380,10 @@ export default defineConfig({
       // (routes/settings/models/api.ts). The models themselves are the
       // socket's questions.
       "/llm": { target: "http://localhost:8000" },
+      // One MCP server whole and its restart (Settings › MCP & tools,
+      // routes/settings/mcp-tools/api.ts). The servers' list is the socket's
+      // question.
+      "/mcp-servers": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they

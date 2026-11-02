@@ -1000,6 +1000,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
     importer: "routes/chatlet/Pane.tsx",
     owns: /\.chat-[a-z_-]+\b/,
   },
+  "mcp.css": {
+    importer: "routes/settings/mcp-tools/McpTools.tsx",
+    owns: /\.mcp-[a-z_-]+\b/,
+  },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",
     owns: /\.(?:artifacts-(?:folders?|folder-[a-z-]+|move(?:-[a-z]+)?|selection|empty-actions)|artifact-folder-fact)\b/,
