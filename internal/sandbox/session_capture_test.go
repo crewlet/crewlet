@@ -1,10 +1,13 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,4 +122,107 @@ func TestASpoolNeverOutlivesItsCapture(t *testing.T) {
 			t.Errorf("the capture whose seal failed stands %+v, want it refused", c)
 		}
 	})
+}
+
+// A JOB THAT CONTINUES IN ITS TURN'S BOX IS SCRUBBED OF WHAT THE JOBS BEFORE IT
+// WERE HANDED. The relaunch runs no setup and resumes the session the box holds,
+// which holds the earlier job's lines, so its record seals the earlier job's
+// secrets beside its own: a token rotated while the box waited, handed only to
+// the first job, is in the continued session and in the box, and no capture of
+// the relaunch was scrubbed of it. And a box continued whose record says nothing
+// of what the jobs before it were handed keeps no capture at all, rather than
+// one scrubbed of less than the box holds.
+//
+// Mutation: seal only the relaunch's own secrets, or seal them alone where the
+// earlier jobs' are unknown, and a check below goes red.
+func TestAJobContinuingInItsTurnsBoxScrubsWhatTheJobsBeforeItWereHanded(t *testing.T) {
+	t.Parallel()
+	for name, earlier := range map[string]bool{
+		"the earlier job's secrets on the record": true,
+		"none on the record":                      false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, _, keep := keepingRig(t)
+			run := rig.launch("t1")
+			if earlier {
+				rig.handOver(t, "t1", HandedSecrets{Values: []string{"the-first-jobs-rotated-token"}})
+			}
+			var relaunch LaunchResult
+			rig.resumer.during = func(ctx context.Context, r PendingRun) {
+				req := launchReq(r.TurnID)
+				req.Secrets = []string{"the-relaunchs-own-token"}
+				res, err := rig.coordinator.Launch(ctx, rig.manager, req)
+				if err != nil {
+					t.Errorf("relaunch: %v", err)
+				}
+				relaunch = res
+			}
+			rig.runner.Finish(Result{Success: true, Text: "first pass"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			rig.awaitKeeps()
+			if !relaunch.Reused || relaunch.SandboxID != run.SandboxID {
+				t.Fatalf("relaunch = %+v, want it continued in the turn's box %q", relaunch, run.SandboxID)
+			}
+			sealed := rig.get("t1").Handed
+			if !earlier {
+				if sealed != "" {
+					t.Fatalf("sealed %q for a box whose earlier jobs' secrets are unknown, want nothing", sealed)
+				}
+				return
+			}
+			raw, err := keep.OpenHanded("t1", sealed)
+			if err != nil {
+				t.Fatalf("opening the relaunch's seal: %v", err)
+			}
+			handed, err := decodeHanded(raw)
+			if err != nil {
+				t.Fatalf("decoding the relaunch's seal: %v", err)
+			}
+			for _, want := range []string{"the-first-jobs-rotated-token", "the-relaunchs-own-token"} {
+				if !slices.Contains(handed.Values, want) {
+					t.Errorf("the relaunch's scrub holds %q, want %q among them", handed.Values, want)
+				}
+			}
+		})
+	}
+}
+
+// A LOGIN THE BOX'S CODE GREW PAST WHAT A LAUNCH MAY HAND REFUSES THE CAPTURE.
+// The box can write its login — its harness refreshes the file there — and every
+// string in it was a value of the scrub, held whole in one replacer: a file of
+// millions of short strings cost the engine host a gibibyte before a byte of the
+// session was read. A login past what a whole launch may hand is no harness's,
+// and the capture is refused, saying why.
+//
+// Mutation: read the login again without its bound, and the session is taken.
+func TestALoginTheBoxGrewPastItsBoundRefusesTheCapture(t *testing.T) {
+	t.Parallel()
+	rig, writes, _ := keepingRig(t)
+	run := rig.launchKept(t, "t1")
+	const rel = ".claude/.credentials.json"
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
+		Logins: map[string]string{rel: filepath.Join(t.TempDir(), "absent.json")}})
+	box := rig.provider.Box(run.SandboxID)
+	grown := `["` + strings.Repeat(`abcdefgh","`, MaxHandedBytes/10) + `abcdefgh"]`
+	if err := box.WriteFile(t.Context(), path.Join(box.Home(), rel), []byte(grown)); err != nil {
+		t.Fatalf("writing the grown login: %v", err)
+	}
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+
+	if takes := rig.runner.Takes(); len(takes) != 0 {
+		t.Fatalf("took %d sessions scrubbed by a login past its bound", len(takes))
+	}
+	if len(writes.captured()) != 0 {
+		t.Fatal("recorded a capture scrubbed by a login past its bound")
+	}
+	if c := rig.get("t1").Capture; c == nil || c.State != CaptureRefused ||
+		!strings.Contains(c.Reason, "a whole launch may hand") {
+		t.Fatalf("the record holds %+v, want the capture refused for the login's bound", c)
+	}
 }

@@ -785,13 +785,16 @@ type PendingRun struct {
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
-	// Handed is every secret this launch handed its box, SEALED under the
-	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
-	// capture of the box's session takes out by value. Written with the
-	// job's command ([PendingStore.AttachSandbox]) and cleared by the next
-	// launch, since it is the launch's; empty where the launch could not seal
-	// them, which refuses every capture of its job rather than keeping a
-	// session scrubbed of less than its box was given.
+	// Handed is every secret the job's box was handed, SEALED under the fleet
+	// keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a capture of
+	// the box's session takes out by value. Written with the job's command
+	// ([PendingStore.AttachSandbox]) and cleared by the next launch, which
+	// writes its own — carrying this one forward where it continues in the
+	// same box, since the box still holds what the jobs before it were handed
+	// and the session it resumes holds their lines ([PriorBox.Handed]). Empty
+	// where the launch could not seal them, which refuses every capture of its
+	// job rather than keeping a session scrubbed of less than its box was
+	// given.
 	Handed string `json:"handed,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
@@ -2415,6 +2418,11 @@ type PriorBox struct {
 	// whose host a local box is on ([PendingRun.LaunchNode]), and so the one
 	// node a box in a local cell may be continued in or reclaimed by.
 	LaunchNode string
+	// Handed is what the job that used the box was handed, sealed
+	// ([PendingRun.Handed]): a job that continues in the box carries it
+	// forward, since the box still holds those values and the session it
+	// resumes their lines ([Coordinator.sealHanded]).
+	Handed string
 }
 
 // ContinuesIn reports whether a launch of spec may continue in this box

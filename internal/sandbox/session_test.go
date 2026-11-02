@@ -616,33 +616,49 @@ func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 	}
 }
 
-// THE SWITCH OFF KEEPS NOTHING AND STILL ENDS THE TURN. With
-// `turn_engine.conversation_session.enabled: false` no session is taken out of
-// a box and nothing is stamped, while the turn's end — the account, not the
-// session — is still recorded.
+// THE SWITCH OFF KEEPS NOTHING, SEALS NOTHING, AND STILL ENDS THE TURN — through
+// the run's own ending, as every end is recorded. With
+// `turn_engine.conversation_session.enabled: false` a launch seals nothing for a
+// scrub, a stop's read takes no session and nothing is stamped, while the
+// turn's end — the account, not the session — is owed on the row and recorded
+// by the stop's ending as it is with the switch on, the row deleted after it.
 //
-// Mutation: read the switch after the take, or let it gate the end, and a
-// session is taken, or the turn's end goes unrecorded.
+// Mutation: read the switch after the take, seal a launch's secrets with it
+// off, or let it gate the end anywhere on the ending's path — its owe, its
+// decision, its record — and a session is taken, a seal is written, or the
+// turn's end goes unrecorded.
 func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
 	keep.policy.Keep = false
-	rig.launchKept(t, "t1")
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
+	ctx := t.Context()
+	if _, err := rig.coordinator.Launch(ctx, rig.manager, launchReq("t1")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rig.suspend("t1")
+	if handed := rig.get("t1").Handed; handed != "" {
+		t.Fatalf("the launch sealed %q for a scrub with the switch off", handed)
+	}
+	rig.runner.Finish(Result{Text: "halfway through"})
+	if err := rig.coordinator.StopSeat(ctx, "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
 	if takes := rig.runner.Takes(); len(takes) != 0 {
 		t.Fatalf("took %d sessions with the switch off", len(takes))
 	}
-	if run := rig.get("t1"); run.Capture != nil || run.Kept != nil {
-		t.Fatalf("stamped %+v with the switch off", run.Capture)
+	if captures := writes.captured(); len(captures) != 0 {
+		t.Fatalf("recorded %d captures with the switch off", len(captures))
 	}
-	if err := rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeFailed}}); err != nil {
-		t.Fatalf("EndTurn: %v", err)
+	ends := writes.endedRecords()
+	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeStopped {
+		t.Fatalf("recorded %+v with the switch off, want the stopped turn's one end", ends)
 	}
-	if ends := writes.endedRecords(); len(ends) != 1 {
-		t.Fatalf("recorded %d ends with the switch off, want the turn's one", len(ends))
+	if _, found, _ := rig.pending.Get(ctx, "t1"); found {
+		t.Fatal("the stopped run's record was left behind its end")
 	}
 }
 

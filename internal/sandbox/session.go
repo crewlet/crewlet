@@ -864,11 +864,28 @@ func nextCaptureSeq(run PendingRun) int64 {
 	return 1
 }
 
+// maxScrubBytes bounds what one capture scrubs out by value, in all: what its
+// launch handed the box ([MaxHandedBytes]) and its seeded logins read again, in
+// the box and on the host ([Coordinator.scrubValues]).
+//
+// FOUR TIMES WHAT A LAUNCH MAY HAND: a launch at its bound, and every login it
+// was seeded with read again twice — a login document is a kibibyte or two —
+// still fits with room to spare, and the scrub, which holds every value whole
+// in one replacer, costs the host a few mebibytes at the most. The bound is
+// what the box's own code cannot move: it can write its login file (its
+// harness refreshes the file there), and a file of millions of short strings,
+// each a value of the scrub, built a replacer of a gibibyte on the engine
+// host before a byte of the session was read. A capture past it is refused.
+const maxScrubBytes = 4 * MaxHandedBytes
+
 // scrubValues is every value a capture of run's box scrubs out by value: what
 // its launch handed the box ([PendingRun.Handed]), and its seeded logins as
 // they are NOW, in the box and on the host, since a refresh mints values the
 // launch never saw. [ErrHandedUnknown] where they cannot be known — see
-// handed.go — which refuses the capture rather than scrub less.
+// handed.go — which refuses the capture rather than scrub less; and refused
+// too past its bounds — a login read again larger than a whole launch may hand
+// ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
+// code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
 	if run.Handed == "" {
 		return nil, fmt.Errorf("%w: the run's record keeps none for its job, so its session cannot be "+
@@ -889,6 +906,12 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 			return nil, fmt.Errorf("%w: the login the box was seeded with at %s could not be read "+
 				"again in the box: %w", ErrHandedUnknown, rel, err)
 		}
+		if len(inBox) > MaxHandedBytes {
+			return nil, fmt.Errorf("the login the box was seeded with at %s is %d bytes in the box now, "+
+				"past the %d a whole launch may hand its box; a login document is a few kibibytes, so "+
+				"the box's own code wrote it, and the session is not scrubbed of what it holds",
+				rel, len(inBox), MaxHandedBytes)
+		}
 		values = append(values, loginValuesOf(inBox)...)
 		onHost, err := os.ReadFile(handed.Logins[rel]) //nolint:gosec // the entry's own login, at the path its harness keeps it
 		switch {
@@ -900,7 +923,16 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 			values = append(values, loginValuesOf(onHost)...)
 		}
 	}
-	return dedupe(values), nil
+	values = dedupe(values)
+	total := 0
+	for _, v := range values {
+		total += len(v)
+	}
+	if total > maxScrubBytes {
+		return nil, fmt.Errorf("the values the session would be scrubbed of are %d bytes in all, past "+
+			"the %d a capture holds for its scrub, so it is not kept", total, maxScrubBytes)
+	}
+	return values, nil
 }
 
 // loginValuesOf is [loginValues] of a login read again, nothing for an empty

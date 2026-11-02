@@ -207,7 +207,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
-			LaunchNode: existing.LaunchNode,
+			LaunchNode: existing.LaunchNode, Handed: existing.Handed,
 		}
 		// And whether the job it replaces asked, which the reset clears
 		// below and the round's cut is decided by.
@@ -242,7 +242,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		}
 		existing.Lost = nil
 		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S, nor
-		// what its box was handed.
+		// what its box was handed: the launch writes its own, carrying the
+		// previous job's forward where it continues in the same box
+		// ([PriorBox.Handed]).
 		existing.CommandID, existing.SessionID, existing.Handed = "", "", ""
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}

@@ -15,21 +15,54 @@ import (
 // THE SECRETS A LAUNCH HANDS ITS BOX, kept for the scrub its session leaves
 // through (session.go).
 //
+// # Every credential position, and only those
+//
+// A kept session must carry no secret the engine put in its box, and must keep
+// everything else, since a transcript scrubbed of an ordinary word is one the
+// next launch reads wrong. So the scrub takes out by value what sits in a
+// CREDENTIAL POSITION of the launch:
+//
+//   - every value a `${...}` reference resolved to — in the run's
+//     environment, in a setup file that is one reference whole, in an MCP
+//     server's url — what the operator kept out of the document
+//     ([LaunchRequest.Secrets], [MCPServer.Secrets]);
+//   - every variable of the run's environment whose name says it carries a
+//     credential, and the entry's sign-in, written or referenced alike
+//     ([LaunchRequest.Secrets]);
+//   - every MCP server's env and headers, written or referenced — where a
+//     tool server's credentials are declared;
+//   - the run's own export token, in its telemetry endpoint;
+//   - and the login the box was seeded with.
+//
+// NOT the engine's identity facts (the seat's handle and email, which a
+// transcript names in every commit), a setting written in the document, the
+// unresolved text of a reference, or a setup step's script or file: none is a
+// secret, and scrubbed by value each was lost from every kept session — the
+// seat's own name read as a redacted secret throughout — and a setup step's
+// large file put a launch past [MaxHandedBytes], which refused every capture of
+// the seat. A credential written in the document is the shape pass's
+// (internal/redact): the document keeps it in every revision anyway.
+//
 // # Taken at the launch, from what the box was given
 //
-// A kept session must carry no value the engine put in its box: the run's
-// environment — the seat's declared tokens, its setup steps' env, the entry's
-// whole env and sign-in, the run's telemetry — its MCP servers' env and
-// headers, its setup steps' files, and the login it was seeded with. Read again
-// at the capture, off the company the node runs THEN, they were not that: a
-// value written in the document rather than referenced was passed over, a
-// rotated secret resolved to its new value while the box held the old one, and
-// an entry renamed since resolved to nothing at all, so the scrub took out
-// less than the box was handed and said nothing. So the launch collects them
-// from the very request it starts the job with ([handedSecrets]), and the row
-// keeps them SEALED under the fleet keyring ([SessionKeep.SealHanded]), bound
-// to the turn: the coordination store is not encrypted, and a capture may be
-// made on any node whose host the box is on.
+// Read again at the capture, off the company the node runs THEN, they were not
+// what the box was given: a rotated secret resolved to its new value while the
+// box held the old one, and an entry renamed since resolved to nothing at all,
+// so the scrub took out less than the box was handed and said nothing. So the
+// launch collects them from the very request it starts the job with
+// ([handedSecrets]), and the row keeps them SEALED under the fleet keyring
+// ([SessionKeep.SealHanded]), bound to the turn: the coordination store is not
+// encrypted, and a capture may be made on any node whose host the box is on.
+//
+// # Carried forward where a box is kept
+//
+// A job that continues in the box the turn's previous job ran in — its
+// reviewer's send-back, a person's answer — runs no setup, and resumes the
+// previous job's session, which holds that job's lines. So its launch carries
+// the previous job's sealed set forward and seals both together
+// ([PriorBox.Handed]): a secret rotated while the box waited, or a step removed
+// since, was otherwise handed to the box by the first launch and scrubbed by no
+// later capture of it.
 //
 // # And read again where they change
 //
@@ -49,10 +82,9 @@ import (
 // HandedSecrets is every value a launch handed its box that a capture of the
 // box's session scrubs out by value, and where its seeded logins live.
 type HandedSecrets struct {
-	// Values is every value the launch handed the box: the run's whole
-	// environment, its MCP servers' env and headers, and its setup steps'
-	// env and files, written or referenced alike, and the strings its
-	// seeded login held.
+	// Values is every value the launch handed the box out of a credential
+	// position (see the file comment), and the strings its seeded login
+	// held.
 	Values []string `json:"values"`
 
 	// Logins maps each login file the box was seeded with — its path
@@ -63,13 +95,14 @@ type HandedSecrets struct {
 }
 
 // MaxHandedBytes bounds the secrets one launch's row keeps, encoded, before
-// they are sealed.
+// they are sealed — its own and those carried from the jobs before it in the
+// same box.
 //
-// SIXTY-FOUR KIBIBYTES. A box is handed a few dozen variables, a handful of
-// MCP servers' headers and the files its setup steps write — a token file, an
-// `.npmrc`, a deploy key — and a login document of a kibibyte or two: a few
-// kibibytes in all, a key file the largest single value. Sixty-four is room for
-// a dozen keys beside everything else, and still a small part of a row the
+// SIXTY-FOUR KIBIBYTES. A box is handed a handful of tokens, a few MCP servers'
+// headers, a deploy key a setup step writes from a reference, and a login
+// document of a kibibyte or two: a few kibibytes in all, a key file the
+// largest single value. Sixty-four is room for a dozen keys beside everything
+// else, carried across a turn's relaunches, and still a small part of a row the
 // coordination store reads whole on every write of the run. A launch handed
 // more keeps none, and its captures are refused saying so, rather than a row
 // grown without bound or a scrub of only some of them.
@@ -79,8 +112,10 @@ const MaxHandedBytes = 64 << 10
 // handed cannot be known: the row keeps none, or a seal this node cannot open.
 var ErrHandedUnknown = errors.New("sandbox: the secrets the engine handed the box cannot be read back")
 
-// handedSecrets is what req hands its box, env being the environment the job
-// is started with ([withTelemetry]).
+// handedSecrets is what req hands its box out of a credential position — see
+// the file comment — env being the environment the job is started with
+// ([withTelemetry]), whose run export token is the one secret of it this
+// package adds itself.
 func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	var values []string
 	add := func(vs ...string) {
@@ -90,8 +125,9 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 			}
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(env)) {
-		add(env[key])
+	add(req.Secrets...)
+	if _, token, ok := strings.Cut(env[otelBoxEndpointVar], otelTokenPath); ok {
+		add(token)
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
 		server := req.MCPServers[name]
@@ -101,14 +137,7 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 		for _, key := range slices.Sorted(maps.Keys(server.Headers)) {
 			add(server.Headers[key])
 		}
-	}
-	for _, step := range req.Setup {
-		for _, key := range slices.Sorted(maps.Keys(step.Env)) {
-			add(step.Env[key])
-		}
-		for _, file := range slices.Sorted(maps.Keys(step.Files)) {
-			add(step.Files[file])
-		}
+		add(server.Secrets...)
 	}
 	handed := HandedSecrets{Logins: maps.Clone(req.Spec.CredentialFiles)}
 	for _, rel := range slices.Sorted(maps.Keys(handed.Logins)) {
@@ -122,6 +151,20 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	}
 	handed.Values = dedupe(values)
 	return handed
+}
+
+// union is h with what carried holds that h does not: the secrets a job before
+// this one handed the same box ([PriorBox.Handed]), its values and its logins.
+func (h HandedSecrets) union(carried HandedSecrets) HandedSecrets {
+	out := HandedSecrets{Values: dedupe(append(slices.Clone(h.Values), carried.Values...))}
+	if len(h.Logins)+len(carried.Logins) > 0 {
+		out.Logins = maps.Clone(carried.Logins)
+		if out.Logins == nil {
+			out.Logins = map[string]string{}
+		}
+		maps.Copy(out.Logins, h.Logins)
+	}
+	return out
 }
 
 // dedupe is values, each once, in the order first given.
@@ -199,14 +242,29 @@ func boxLoginPath(box Sandbox, rel string) string {
 }
 
 // sealHanded is what a launch's row keeps of the secrets it handed its box
-// ([PendingRun.Handed]): sealed, or "" where they cannot be — no executor log
-// to keep a session for, secrets past [MaxHandedBytes], a keyring that cannot
-// seal — which the log says, and which refuses every capture of the job.
-func (c *Coordinator) sealHanded(ctx context.Context, req LaunchRequest, env map[string]string) string {
-	if !c.keepsSessions() {
+// ([PendingRun.Handed]): sealed — with, where the job continues in the box the
+// job before it ran in (continues), what prior's job and those before it handed
+// that box ([PriorBox.Handed]) — or "" where they cannot be: a company that
+// keeps no session ([Coordinator.capturing]), a box continued whose record says
+// nothing of what it was handed or holds a seal this node cannot open, secrets
+// past [MaxHandedBytes], a keyring that cannot seal. Each but the first is
+// logged, and refuses every capture of the job rather than one scrubbed of less
+// than its box holds.
+func (c *Coordinator) sealHanded(ctx context.Context, req LaunchRequest, env map[string]string,
+	prior PriorBox, continues bool) string {
+
+	if !c.capturing() {
 		return ""
 	}
-	raw, err := handedSecrets(req, env).encode()
+	handed := handedSecrets(req, env)
+	var err error
+	if continues {
+		handed, err = c.carryHanded(req.Turn.TurnID, handed, prior.Handed)
+	}
+	var raw []byte
+	if err == nil {
+		raw, err = handed.encode()
+	}
 	if err == nil {
 		var sealed string
 		if sealed, err = c.keep.SealHanded(req.Turn.TurnID, raw); err == nil {
@@ -217,4 +275,23 @@ func (c *Coordinator) sealHanded(ctx context.Context, req LaunchRequest, env map
 		"detail", "the secrets the launch handed its box could not be kept for its session's scrub, so no "+
 			"capture of this job is kept")
 	return ""
+}
+
+// carryHanded is handed with what the jobs before it handed the box it
+// continues in, from their sealed set (carried), or why that cannot be known.
+func (c *Coordinator) carryHanded(turnID string, handed HandedSecrets, carried string) (HandedSecrets, error) {
+	if carried == "" {
+		return HandedSecrets{}, errors.New("the job continues in a box whose record keeps nothing of " +
+			"what the jobs before it handed the box, so its session cannot be scrubbed of them")
+	}
+	raw, err := c.keep.OpenHanded(turnID, carried)
+	if err != nil {
+		return HandedSecrets{}, fmt.Errorf("the secrets the jobs before it handed the box it continues in "+
+			"could not be opened to carry them forward: %w", err)
+	}
+	before, err := decodeHanded(raw)
+	if err != nil {
+		return HandedSecrets{}, err
+	}
+	return handed.union(before), nil
 }
