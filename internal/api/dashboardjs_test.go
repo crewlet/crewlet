@@ -1512,13 +1512,13 @@ const (
 	// sessions, the latest begun first, and one session's transcript a page
 	// at a time: its entries, the states a session that cannot be read is
 	// answered in, and the account of how its turn ended) took it from
-	// 5328.2 KiB to 5337.8 KiB (+9.6 KiB): the agents chunk +9.4 KiB, the
-	// remedy chunk +0.2 KiB for keepInView, which Conversations and Sessions
-	// now share from lib/scroller.ts, and the one sheet +0.1 KiB for the
-	// view's rules. The view itself is all in the agents chunk; the shell
-	// preloads the remedy chunk and links the sheet, so the initial load
-	// gained what those two did, under 0.1 KiB once compressed. 5338 KiB.
-	treeBudget = 5<<20 + 218<<10
+	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
+	// view loads in. The initial load is unchanged: keepInView, which
+	// Conversations and Sessions share, is a module of the Memory tab's own
+	// rather than of lib/scroller.ts, which the shell imports, and a
+	// transcript's prose takes the shared .prose rule rather than a rule of
+	// its own in the one sheet. 5339 KiB.
+	treeBudget = 5<<20 + 219<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
