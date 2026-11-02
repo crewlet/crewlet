@@ -388,6 +388,7 @@ export default defineConfig({
       "/mcp-catalogue": { target: "http://localhost:8000" },
       "/mcp-checks": { target: "http://localhost:8000" },
       "/mcp-probe": { target: "http://localhost:8000" },
+      "/mcp-sign-ins": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they
