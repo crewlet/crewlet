@@ -119,11 +119,16 @@ const (
 	// in Settings › MCP & tools (`PUT /mcp-servers/{name}/values/{key}`),
 	// sealed write-only ([Record.WriteOnly]).
 	SourceMCP Source = "mcp"
+
+	// SourceMCPSignIn is an MCP server's OAuth grant, written by the engine
+	// when a person signs the company in at the server's vendor and each
+	// time the engine renews it ([Reserved] names, which no listing shows).
+	SourceMCPSignIn Source = "mcp-sign-in"
 )
 
 // Sources are every write path's word.
 var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
-	SourceLLMLogin, SourceIAM, SourceModels, SourceMCP}
+	SourceLLMLogin, SourceIAM, SourceModels, SourceMCP, SourceMCPSignIn}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
