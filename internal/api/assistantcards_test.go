@@ -444,6 +444,10 @@ func (r filledRuns) ListActive(ctx context.Context) ([]sandbox.PendingRun, error
 	return []sandbox.PendingRun{run}, err
 }
 
+func (filledRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return filled[sandbox.BridgeLog](), nil
+}
+
 func (filledRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	run := filled[sandbox.PendingRun]()
 	run.Status, run.AudienceHandles = sandbox.StatusAwaiting, []string{assistSeat}

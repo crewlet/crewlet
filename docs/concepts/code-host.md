@@ -4407,18 +4407,21 @@ and paid from the run's re-syncs (below).
 each lazy fetch of a blob into a blobless clone among them — reads its run's
 record once, from the stream leader of the bucket the fleet keeps runs in,
 and each raise of its floor is one compare-and-set of that record — which
-carries the job's bridged tool log with its facts
+holds the job's facts and never its bridged tool log, kept beside it under a
+key of its own
 ([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
-and a full bridge log of 200 calls: the record is 516 173 bytes, nearly all
-of it the log, and a read takes 5.8 ms and a raise 11.1 ms at the median
-(7.9 and 26.0 at the 99th percentile) — and every listing of runs and every
-flip of one moves the same half mebibyte. With the log kept apart from the
-record, the record was 2 983 bytes, its 2 KiB brief among them, and a read
-took 0.15 ms and a raise 0.42 ms (0.21 and 0.88)
+and a full bridge log of 200 calls: the record is 37 884 bytes, the frozen
+context and the 2 KiB brief among them, and a read takes 0.39 ms and a raise
+1.06 ms at the median (0.65 and 2.04 at the 99th percentile). The log beside
+it is 478 337 bytes, and only the calls that use it move it: an append of the
+box's next call takes 12.9 ms (25.0). With the log on the record, as the
+record kept it before (measured 2026-11-01 on the same machine), the record
+was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and 26.0), and
+every listing of runs and every flip of one moved the same half mebibyte
 (`BenchmarkABoxRequestOnItsRun`, `internal/coord/kv`, thirty operations each
-on two E-cores of an Intel Core Ultra 7 265U).
+on two E-cores of an Intel Core Ultra 7 265U, measured 2026-11-02).
 
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold

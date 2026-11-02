@@ -348,6 +348,24 @@ func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Pendin
 	return got
 }
 
+// loggedRun is a run's row with the bridged tool log beside it, as a reader of
+// both reads them: the row first, then its job's log
+// ([sandbox.PendingStore.BridgeLog]).
+type loggedRun struct {
+	sandbox.PendingRun
+	Log sandbox.BridgeLog
+}
+
+func mustLogged(t *testing.T, s sandbox.PendingStore, turnID string) loggedRun {
+	t.Helper()
+	run := mustGet(t, s, turnID)
+	log, err := s.BridgeLog(t.Context(), run)
+	if err != nil {
+		t.Fatalf("read the log of %s: %v", turnID, err)
+	}
+	return loggedRun{PendingRun: run, Log: log}
+}
+
 func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.PendingStore) {
 	// A second launch in one turn presents the same turn id, and
 	// the box on that row is the paused checkout it may reattach to. A
@@ -620,18 +638,18 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
-	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
-		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
+	if got := mustLogged(t, s, first.TurnID); len(got.Log.Calls) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(got.Log.Calls))
 	}
 
 	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
-	got := mustGet(t, s, first.TurnID)
-	if len(got.BridgeCalls) != 0 {
+	got := mustLogged(t, s, first.TurnID)
+	if len(got.Log.Calls) != 0 {
 		t.Errorf("the second round inherited %d calls from the first: %+v",
-			len(got.BridgeCalls), got.BridgeCalls)
+			len(got.Log.Calls), got.Log.Calls)
 	}
-	if got.BridgeCallsElided != 0 {
-		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
+	if got.Log.Elided != 0 {
+		t.Errorf("the elision count survived the relaunch: %d", got.Log.Elided)
 	}
 }
 
@@ -2714,23 +2732,23 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 3 {
-		t.Fatalf("%d calls recorded: %+v", len(got.BridgeCalls), got.BridgeCalls)
+	got := mustLogged(t, s, r.TurnID)
+	if len(got.Log.Calls) != 3 {
+		t.Fatalf("%d calls recorded: %+v", len(got.Log.Calls), got.Log.Calls)
 	}
 	want := []string{"read_page", "post_message", "read_page"}
 	for i, name := range want {
-		if got.BridgeCalls[i].Name != name {
-			t.Errorf("call %d = %q, want %q", i, got.BridgeCalls[i].Name, name)
+		if got.Log.Calls[i].Name != name {
+			t.Errorf("call %d = %q, want %q", i, got.Log.Calls[i].Name, name)
 		}
 	}
 	// The ARGUMENTS and the OUTCOME ride along, because a log of bare
 	// names does not tell a reviewer whether the turn delivered anything.
-	if got.BridgeCalls[0].Args != `{"id":1}` || got.BridgeCalls[0].Output != "read_page ok" {
-		t.Errorf("the call does not carry what it did: %+v", got.BridgeCalls[0])
+	if got.Log.Calls[0].Args != `{"id":1}` || got.Log.Calls[0].Output != "read_page ok" {
+		t.Errorf("the call does not carry what it did: %+v", got.Log.Calls[0])
 	}
 	// STAMPED, so a reader can see the shape of a run that stalled.
-	if got.BridgeCalls[0].At.IsZero() {
+	if got.Log.Calls[0].At.IsZero() {
 		t.Error("the call has no timestamp")
 	}
 }
@@ -2753,8 +2771,8 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	if err != nil || !recorded {
 		t.Fatalf("a log append was refused by ownership: %v, %v", recorded, err)
 	}
-	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
-		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	if got := mustLogged(t, s, r.TurnID); len(got.Log.Calls) != 1 {
+		t.Errorf("%d calls recorded", len(got.Log.Calls))
 	}
 }
 
@@ -2816,9 +2834,9 @@ func testManyBridgedWritersAllLand(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("a write racing the bridged calls failed: %v", err)
 	}
 
-	got := mustGet(t, s, r.TurnID)
+	got := mustLogged(t, s, r.TurnID)
 	var names []string
-	for _, call := range got.BridgeCalls {
+	for _, call := range got.Log.Calls {
 		names = append(names, call.Name)
 	}
 	slices.Sort(names)
@@ -2868,21 +2886,21 @@ func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStor
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
-		t.Fatalf("%d calls kept, want %d", len(got.BridgeCalls), sandbox.MaxBridgeCalls)
+	got := mustLogged(t, s, r.TurnID)
+	if len(got.Log.Calls) != sandbox.MaxBridgeCalls {
+		t.Fatalf("%d calls kept, want %d", len(got.Log.Calls), sandbox.MaxBridgeCalls)
 	}
-	if first := got.BridgeCalls[0].Name; first != "call-000" {
+	if first := got.Log.Calls[0].Name; first != "call-000" {
 		t.Errorf("the first call was dropped: %q — a log cut to its tail loses how the run began", first)
 	}
-	last := got.BridgeCalls[len(got.BridgeCalls)-1].Name
+	last := got.Log.Calls[len(got.Log.Calls)-1].Name
 	if want := fmt.Sprintf("call-%03d", total-1); last != want {
 		t.Errorf("the last call = %q, want %q", last, want)
 	}
 	// AND THE GAP IS REPORTED: a log that silently skips is a log that
 	// lies about what the run did.
-	if got.BridgeCallsElided != 10 {
-		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
+	if got.Log.Elided != 10 {
+		t.Errorf("elided = %d, want 10", got.Log.Elided)
 	}
 }
 
@@ -2966,10 +2984,10 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 			if recorded {
 				t.Error("a call from a job that is over was recorded on the next one")
 			}
-			got := mustGet(t, s, r.TurnID)
-			if len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+			got := mustLogged(t, s, r.TurnID)
+			if len(got.Log.Calls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
 				t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
-					got.BridgeCalls, got.Launch.Bridged)
+					got.Log.Calls, got.Launch.Bridged)
 			}
 		})
 	}
@@ -2987,10 +3005,10 @@ func testABridgedCallNamingNoJobIsNotRecorded(t *testing.T, s sandbox.PendingSto
 	if err != nil {
 		t.Fatalf("an unnamed append was an error: %v", err)
 	}
-	got := mustGet(t, s, r.TurnID)
-	if recorded || len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+	got := mustLogged(t, s, r.TurnID)
+	if recorded || len(got.Log.Calls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("an append naming no job was recorded (%v): calls %+v, spend %+v",
-			recorded, got.BridgeCalls, got.Launch.Bridged)
+			recorded, got.Log.Calls, got.Launch.Bridged)
 	}
 }
 
@@ -3020,10 +3038,10 @@ func testABridgedCallAfterItsJobsClaimStaysOnItsJob(t *testing.T, s sandbox.Pend
 	if got := claimed.Launch.Bridged; got != bridged(1) {
 		t.Errorf("the claim read %+v, want what the job held when it was claimed: %+v", got, bridged(1))
 	}
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 2 || got.Launch.Bridged != bridged(2) {
+	got := mustLogged(t, s, r.TurnID)
+	if len(got.Log.Calls) != 2 || got.Launch.Bridged != bridged(2) {
 		t.Fatalf("the job's record after the late call: calls %d, spend %+v; want 2 and %+v",
-			len(got.BridgeCalls), got.Launch.Bridged, bridged(2))
+			len(got.Log.Calls), got.Launch.Bridged, bridged(2))
 	}
 }
 

@@ -45,9 +45,9 @@ func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 // it: an error is the store unreachable, never "no run".
 //
 // ONE READ OF THE RUN'S FACTS, made by every request a box sends — a lazy
-// fetch of a blobless clone's blob included — so it moves the row: its facts
-// and the job's bridged-call log the row carries, which is bounded
-// (sandbox.MaxBridgeCalls) whatever the turn's size.
+// fetch of a blobless clone's blob included — so it moves the row and only the
+// row: its facts, a few kilobytes whatever the turn's size, never the job's
+// bridged-call log, which is kept beside it (sandbox.BridgeLog).
 //
 // LIVE is a row whose job is in its box: LAUNCHING — a job's first calls,
 // its checkouts' clones among them, can come before the launch marks it

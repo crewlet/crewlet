@@ -265,7 +265,7 @@ func testAnInvalidAskIsAnError(t *testing.T, s sandbox.PendingStore) {
 
 // AN ANSWER CUTS THE ROUND WHERE THE ASKING JOB STOPPED. The job that
 // continues one which asked is opened after every call the row holds then, and
-// the row records that place ([sandbox.PendingRun.AnsweredThrough]): the
+// the row records that place ([sandbox.BridgeLog.AnsweredThrough]): the
 // collection reports no submission from before it, made without the answer. A
 // job carried on after a loss keeps the cut, which the answer made and the loss
 // did not move; a new round has none.
@@ -296,21 +296,21 @@ func testAnAnswerCutsTheRoundWhereTheAskingJobStopped(t *testing.T, s sandbox.Pe
 	if got, err := s.RecordAsk(ctx, turn, asking, branchAsk()); err != nil || got != sandbox.AskRecorded {
 		t.Fatalf("RecordAsk = %q, %v; want it recorded", got, err)
 	}
-	if got := mustGet(t, s, turn); got.AnsweredThrough != 0 {
-		t.Fatalf("a round no answer carried on is cut at %d, want 0", got.AnsweredThrough)
+	if got := mustLogged(t, s, turn); got.Log.AnsweredThrough != 0 {
+		t.Fatalf("a round no answer carried on is cut at %d, want 0", got.Log.AnsweredThrough)
 	}
 	answered := carryOn()
-	if got := mustGet(t, s, turn); got.AnsweredThrough != 2 || len(got.BridgeCalls) != 2 {
+	if got := mustLogged(t, s, turn); got.Log.AnsweredThrough != 2 || len(got.Log.Calls) != 2 {
 		t.Fatalf("the answer's job opened with the cut at %d over %d calls, want 2 over the "+
-			"asking job's 2", got.AnsweredThrough, len(got.BridgeCalls))
+			"asking job's 2", got.Log.AnsweredThrough, len(got.Log.Calls))
 	}
 	call(answered, 3, "read_file")
 	carryOn()
-	if got := mustGet(t, s, turn); got.AnsweredThrough != 2 {
-		t.Errorf("a job carried on without an answer moved the cut to %d, want 2", got.AnsweredThrough)
+	if got := mustLogged(t, s, turn); got.Log.AnsweredThrough != 2 {
+		t.Errorf("a job carried on without an answer moved the cut to %d, want 2", got.Log.AnsweredThrough)
 	}
 	mustLaunched(t, s, run(turn))
-	if got := mustGet(t, s, turn); got.AnsweredThrough != 0 {
-		t.Errorf("a new round starts cut at %d, want 0", got.AnsweredThrough)
+	if got := mustLogged(t, s, turn); got.Log.AnsweredThrough != 0 {
+		t.Errorf("a new round starts cut at %d, want 0", got.Log.AnsweredThrough)
 	}
 }

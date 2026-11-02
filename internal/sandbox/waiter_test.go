@@ -304,6 +304,17 @@ func (r *waiterRig) getIn(ctx context.Context, turnID string) PendingRun {
 	return run
 }
 
+// callsIn is the bridged tool log of turnID's run, read from inside a call the
+// coordinator made, under that call's context.
+func (r *waiterRig) callsIn(ctx context.Context, turnID string) BridgeLog {
+	r.t.Helper()
+	log, err := r.pending.BridgeLog(ctx, r.getIn(ctx, turnID))
+	if err != nil {
+		r.t.Fatalf("BridgeLog %s = %v", turnID, err)
+	}
+	return log
+}
+
 // finished asserts that a run ended: its record is deleted, which is the
 // only shape a settled run has.
 func (r *waiterRig) finished(turnID string) {

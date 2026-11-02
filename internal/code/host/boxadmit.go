@@ -447,12 +447,13 @@ func (s *Server) boxHoldFailed(w http.ResponseWriter, r *http.Request, adm admis
 // read: one compare-and-set on the row, taken only when the box is shown
 // something newer than its floor already holds.
 //
-// WHAT IT MOVES is the run's whole row, its job's bridged tool log with it
-// (sandbox.PendingRun.BridgeCalls), so a raise reads and writes back as much
-// as that log holds — 11.1 ms at the median on three members with the log
-// full, a row of 516 173 bytes (BenchmarkABoxRequestOnItsRun,
-// internal/coord/kv) — as the read of the run every request of the box begins
-// with moves it once (Runs.Run: 5.8 ms).
+// WHAT IT MOVES is the run's whole row and never its job's bridged tool log,
+// which is kept beside it (sandbox.BridgeLog), so a raise reads and writes back
+// the row's facts alone — 1.06 ms at the median on three members with the log
+// full, a row of 37 884 bytes (BenchmarkABoxRequestOnItsRun,
+// internal/coord/kv), against 11.1 ms on 516 173 bytes when the row carried
+// the log — as the read of the run every request of the box begins with moves
+// it once (Runs.Run: 0.39 ms, against 5.8).
 //
 // UNDER context.WithoutCancel, bounded by statelog.ReadBudget: a box that
 // hangs up once it has been shown refs still holds what it was shown, and the
