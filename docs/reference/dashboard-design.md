@@ -3833,7 +3833,11 @@ says it — a turn's end is recorded with no new capture, so it reaches the
 list's poll and never the transcript — with the decision, whether its reply
 reached anybody and where, what landed, what blocked it, who stopped it and
 why, the failure, each only where the ending carries it, what is kept of the
-session and its size, and a link to the turn. Under it is the
+session and its size, and a link to the turn — and a sentence saying whether a
+relaunch of the turn would continue the session, as the engine decided it, and
+where it would not, the engine's own reason, or, where the engine could not
+decide (the turn's run record could not be read), that this cannot be said now
+and why: an unknown is never drawn as a no. Under it is the
 **transcript**, a page at a time (**Load more of the transcript**) as the
 harness recorded it: each entry labelled by who it is from (brief, note, model,
 tool call, result, summary), a subagent's entries naming the subagent, a

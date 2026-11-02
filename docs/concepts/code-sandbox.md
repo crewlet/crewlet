@@ -1309,6 +1309,24 @@ or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessi
 which the transcript cannot know), what it was asked, and whether its session
 is still kept.
 
+**Each says whether a relaunch would continue it** (`continuable`, and where
+not, why: `not_continuable`), decided by the one decision a relaunch takes
+([above](#a-relaunch-continues-the-turns-session)) over what a relaunch reads:
+the turn's row of the executor log, the turn's run record in the coordination
+store and the job that record names as the one a relaunch would follow, and the
+runner this build registers for the row's harness. True where the turn is live
+and not ending, the newest capture of that job was kept and is the one the row
+names, and the runner restores its harness, format and release. As far as the
+engine can know before a box is chosen, and no further: whether the box a
+relaunch gets runs a harness that can take the session up, and whether the
+seat's budget can carry its context, are the launch's to find out, and no row
+says them. An ended turn's session is never continuable: no later turn
+continues a session yet. A page reads the coordination store once, one listing
+of the seat's live runs, and not at all where every turn on it has ended; where
+the store does not answer, a live turn's row says so (`continuable` null, its
+reason that the run record could not be read) rather than no, and the page is
+answered all the same.
+
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
 its object is streamed out of the store and opened under its own associated
