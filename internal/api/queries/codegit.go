@@ -59,8 +59,9 @@ import (
 // live ref of the repository — every one named in the sentence.
 const ReasonNoRef = "no_ref"
 
-// headRev names the repository's default branch, as the code tools take it.
-const headRev = "HEAD"
+// headRev names the repository's default branch, as the code tools take it
+// and as a resolve of refs answers it (code.HeadRef).
+const headRev = code.HeadRef
 
 // CodePage is a read by object id as a code question answers it: the
 // repository by the name the request asked by, the kind, the object a tree or
@@ -195,31 +196,32 @@ func (s Sources) gitAskOf(ctx context.Context, p Params, what string) (gitAsk, e
 }
 
 // resolve is the repository the question names and every revision of revs as
-// an object id: an object id passes as it is; every other is a ref, and all
-// of them are resolved in ONE read of their refs at the caller's freshness —
-// `HEAD` as the default branch, which a read of the repository names first,
-// every later read at `session` floored at that read's position. Where no
-// revision names a ref the repository is read alone, for its id. A name no
-// live ref holds is [NotFound] (`no_ref`), every one of them named.
+// an object id: an object id passes as it is; every other is a ref — `HEAD`
+// among them, the default branch, which the reader resolves from the
+// repository's row in the same transaction (code.HeadRef) — and all of them
+// are resolved in ONE read at the caller's freshness, which answers the
+// repository too. Where no revision names a ref the repository is read alone,
+// for its id. A name no live ref holds is [NotFound] (`no_ref`), every one of
+// them named.
+//
+// ONE READ FOR EVERY SPELLING: the default branch is what a question's `ref`
+// defaults to, so a read of the row ahead of the refs, to learn which branch
+// `HEAD` is, would cost the commonest question a repository is asked a second
+// snapshot — on a node without the estate, a second hop through the router —
+// and would let the name be released and taken again between the two.
 func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, error) {
-	var (
-		repo  code.RepoRef
-		names []string
-		head  bool
-	)
+	var names []string
 	for _, r := range revs {
 		switch {
 		case code.ValidRev(r.spelled):
 			r.oid = r.spelled
-		case r.spelled == headRev:
-			head = true
 		case !slices.Contains(names, r.spelled):
 			names = append(names, r.spelled)
 		}
 	}
-	fresh := g.fresh
-	if head || len(names) == 0 {
-		a, err := g.reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: g.name, Asker: g.asker, Fresh: fresh})
+	if len(names) == 0 {
+		a, err := g.reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: g.name, Asker: g.asker,
+			Fresh: g.fresh})
 		if err != nil {
 			return code.RepoRef{}, codeRefusal(g.name, err)
 		}
@@ -227,15 +229,9 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 			return code.RepoRef{}, fmt.Errorf("queries: the code host answered repository %s's read with no "+
 				"detail", g.name)
 		}
-		repo, fresh = a.Repo.RepoRef, statelog.FloorAt(statelog.ReadSession, a.Position)
-		if head && !slices.Contains(names, repo.DefaultBranch) {
-			names = append(names, repo.DefaultBranch)
-		}
+		return a.Repo.RepoRef, nil
 	}
-	if len(names) == 0 {
-		return repo, nil
-	}
-	a, err := g.reads.ResolveRef(ctx, code.RefQuery{Repo: g.name, Refs: names, Fresh: fresh, Asker: g.asker})
+	a, err := g.reads.ResolveRef(ctx, code.RefQuery{Repo: g.name, Refs: names, Fresh: g.fresh, Asker: g.asker})
 	if err != nil {
 		return code.RepoRef{}, codeRefusal(g.name, err)
 	}
@@ -246,22 +242,11 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 		return code.RepoRef{}, fmt.Errorf("queries: the code host answered %d of the %d refs asked of %s",
 			len(a.Refs), len(names), g.name)
 	}
-	// A NAME RELEASED AND TAKEN AGAIN between the read of the repository and
-	// the read of its refs names two repositories: nothing read of the one is
-	// an answer about the other, and the same question asked again reads one.
-	if repo.ID != "" && a.Repo.ID != repo.ID {
-		return code.RepoRef{}, fmt.Errorf("%w: repository %q was deleted and declared again while it was read: "+
-			"ask again", ErrUnavailable, g.name)
-	}
 	for _, r := range revs {
 		if r.oid != "" {
 			continue
 		}
-		name := r.spelled
-		if name == headRev {
-			name = a.Repo.DefaultBranch
-		}
-		ref := a.Refs[slices.Index(names, name)]
+		ref := a.Refs[slices.Index(names, r.spelled)]
 		r.oid, r.ref = ref.OID, &ref
 	}
 	return a.Repo, nil

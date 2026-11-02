@@ -9407,7 +9407,9 @@ A revision — `?ref=`, `?base=`, `?head=` — is a commit's id, whole or its
 first 7 or more hex digits, or a branch, a tag, a whole ref, or `HEAD` for the
 default branch (the default where `ref` is not given); a branch whose name is
 all hex digits is named by its whole ref. Every ref a request names is
-resolved in one read at the caller's freshness, and the home git node is asked
+resolved in one read at the caller's freshness — `HEAD` too, the default
+branch read from the repository in that same read, so a question at the
+default branch costs no more than one naming a branch — and the home git node is asked
 at the position of the record that last moved each, so its copy holds what
 the ref named.
 

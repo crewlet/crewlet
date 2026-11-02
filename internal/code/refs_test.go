@@ -170,7 +170,7 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 	for ref, tried := range map[string]string{
 		"refs/heads/old": `"refs/heads/old"`,
 		"nope":           `"refs/heads/nope" or "refs/tags/nope"`,
-		"HEAD":           `"refs/tags/HEAD"`,
+		code.HeadRef:     `"refs/heads/main", its default branch`,
 	} {
 		got, err := resolve(ref, "v1")
 		if err != nil || len(got.Refs) != 2 || got.Refs[1].OID != oidOf("branch v1") {
@@ -225,5 +225,60 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 	}
 	if _, err := resolve("v1"); !errors.Is(err, code.ErrRepoNotFound) || !strings.Contains(err.Error(), "is deleted") {
 		t.Fatalf("ResolveRef on a deleted repository = %v, want ErrRepoNotFound saying it is deleted", err)
+	}
+}
+
+// HEAD IS THE DEFAULT BRANCH THE ROW NAMES, IN THE SAME READ: a resolve
+// naming code.HeadRef answers the branch the repository's row names its
+// default — read in the resolve's own transaction, so no asker reads the row
+// first to learn it — by the name HEAD, with its whole ref, its object and
+// where it last moved, beside the other names of the query; never a tag
+// called HEAD, and never the branch a short name would reach. Where the
+// default branch holds no live ref it is missing, the sentence naming it as
+// the default branch.
+//
+// Mutation: HEAD not resolved through the row → it is missing naming no
+// branch; the default branch tried as a short name, its tag after it → the
+// tag trunk answers a HEAD whose branch holds no ref.
+func TestResolveRefReadsHEADAsTheDefaultBranch(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	settings := described("app")
+	settings.DefaultBranch = "trunk"
+	id := n.ensure("app", settings, t1).RepoID
+	p1 := n.push(id, entry("p1",
+		set("refs/heads/main", code.ZeroOID, oidOf("branch main")),
+		set("refs/tags/HEAD", code.ZeroOID, oidOf("tag HEAD")),
+		set("refs/tags/trunk", code.ZeroOID, oidOf("tag trunk"))))
+	resolve := func(refs ...string) code.RefAnswer {
+		t.Helper()
+		got, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Refs: refs, Fresh: stale,
+			Asker: asker})
+		if err != nil || len(got.Refs) != len(refs) || got.Repo.DefaultBranch != "trunk" {
+			t.Fatalf("ResolveRef(%v) = %+v, %v; want an answer for each, of app whose default is trunk", refs,
+				got, err)
+		}
+		return got
+	}
+
+	absent := resolve(code.HeadRef, "main").Refs
+	if m := absent[0]; m.Name != code.HeadRef || m.Ref != "" || m.OID != "" ||
+		m.Missing != `repository app holds no live "refs/heads/trunk", its default branch` {
+		t.Errorf("HEAD of a repository whose default branch holds no ref resolved %+v, want it missing, "+
+			"naming refs/heads/trunk as the default branch — never the tag HEAD or the tag trunk", m)
+	}
+	if absent[1].Ref != "refs/heads/main" || absent[1].OID != oidOf("branch main") {
+		t.Errorf("main beside a missing HEAD resolved %+v, want refs/heads/main", absent[1])
+	}
+
+	p2 := n.push(id, entry("p2", set("refs/heads/trunk", code.ZeroOID, oidOf("branch trunk"))))
+	got := resolve("main", code.HeadRef)
+	if h := got.Refs[1]; h.Name != code.HeadRef || h.Ref != "refs/heads/trunk" || h.OID != oidOf("branch trunk") ||
+		h.Moved != p2.Position || h.Missing != "" {
+		t.Errorf("HEAD resolved %+v, want refs/heads/trunk at %s, moved at %v", h, oidOf("branch trunk"),
+			p2.Position)
+	}
+	if m := got.Refs[0]; m.Ref != "refs/heads/main" || m.Moved != p1.Position {
+		t.Errorf("main beside HEAD resolved %+v, want refs/heads/main moved at %v", m, p1.Position)
 	}
 }

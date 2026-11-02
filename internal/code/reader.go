@@ -3881,9 +3881,11 @@ func cutPublishCursor(s string) (int64, string, bool) {
 // [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which the code
 // host's admission says too; the asker's grant ([ErrNotPermitted]) and its
 // ceiling's ([ErrAboveCeiling], [JudgeRead]); then each ref — a whole ref as
-// itself, or a short name as a branch and then as a tag — with the position
-// of the record that last moved it ([ResolvedRef.Moved]), its row's own, read
-// in the same lookup. A deleted ref is absent, and a name none of its refs
+// itself, a short name as a branch and then as a tag, and [HeadRef] as the
+// branch the repository's row names its default, the row this transaction
+// read — with the position of the record that last moved it
+// ([ResolvedRef.Moved]), its row's own, read in the same lookup. A deleted ref
+// is absent, and a name none of its refs
 // holds is answered so ([ResolvedRef.Missing]) beside the names that
 // resolved, never failing them: whether a call can go on without it is its
 // caller's to say. Its scope is the name's, as [Reader.Resolve]'s is.
@@ -3911,6 +3913,9 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 	}
 	tried := make([][]string, len(q.Refs))
 	for i, ref := range q.Refs {
+		if ref == HeadRef {
+			continue // the default branch, which the row read below names
+		}
 		names, nameErr := refNames(ref)
 		if nameErr != nil {
 			return RefAnswer{}, nameErr
@@ -3948,13 +3953,17 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		}
 		out = RefAnswer{Repo: v.ref, Refs: make([]ResolvedRef, len(q.Refs)), Position: cp.At}
 		for i, names := range tried {
+			said := ""
+			if q.Refs[i] == HeadRef {
+				names, said = []string{branchPrefix + v.ref.DefaultBranch}, ", its default branch"
+			}
 			resolved, err := firstLiveIn(ctx, tx, id, names)
 			if err != nil {
 				return fmt.Errorf("code: read %s of %s: %w", q.Refs[i], q.Repo, err)
 			}
 			resolved.Name = q.Refs[i]
 			if resolved.Ref == "" {
-				resolved.Missing = fmt.Sprintf("repository %s holds no live %s", q.Repo, words.Or(names))
+				resolved.Missing = fmt.Sprintf("repository %s holds no live %s%s", q.Repo, words.Or(names), said)
 			}
 			out.Refs[i] = resolved
 		}

@@ -151,12 +151,15 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 // freshness, and asks its git node at the furthest of the node's own write to
 // the repository, the caller's floor on the code log and where each ref last
 // moved — never at the resolve's own checkpoint. `HEAD` is the default branch,
-// which a read of the repository names first: the resolve is then floored at
-// that read. A name no live ref holds is not_found (`no_ref`), naming it, and
-// nothing is read by object id.
+// which the resolve answers from the repository's row in its own transaction
+// (code.HeadRef): a tree at HEAD — the Repository page's commonest question —
+// is ONE read of the rows, a resolve naming HEAD at the caller's freshness,
+// with no read of the repository ahead of it. A name no live ref holds is
+// not_found (`no_ref`), naming it, and nothing is read by object id.
 //
 // Mutation: floor the git read at the resolve's Position — red; resolve each
-// ref in a read of its own — red.
+// ref in a read of its own — red; read the repository first to name its
+// default branch — red.
 func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	t.Parallel()
 	caller := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 30}
@@ -187,14 +190,16 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	}
 
 	headed := &stubCode{}
-	if _, err := askNative(t, queries.Sources{Code: headed}, "code_tree", map[string]any{"name": "web"}); err != nil {
+	if _, err := askNative(t, queries.Sources{Code: headed}, "code_tree", map[string]any{"name": "web",
+		"read_level": "session", "min_position": caller.String()}); err != nil {
 		t.Fatal(err)
 	}
-	if len(headed.asked) != 1 || headed.asked[0].Kind != code.ReadRepo || len(headed.resolved) != 1 ||
-		!slices.Equal(headed.resolved[0].Refs, []string{"main"}) ||
-		headed.resolved[0].Fresh.Level != statelog.ReadSession {
-		t.Errorf("a tree at HEAD read %+v and resolved %+v, want the repository first and its default branch "+
-			"at session floored there", headed.asked, headed.resolved)
+	if len(headed.asked) != 0 || len(headed.resolved) != 1 ||
+		!slices.Equal(headed.resolved[0].Refs, []string{code.HeadRef}) ||
+		headed.resolved[0].Fresh.Level != statelog.ReadSession ||
+		headed.resolved[0].Fresh.Floor("CREWLET_CODE_LOG") != caller {
+		t.Errorf("a tree at HEAD read %+v and resolved %+v, want one resolve naming HEAD at the caller's "+
+			"session floored at %v and no read of the repository", headed.asked, headed.resolved, caller)
 	}
 
 	missing := &stubCode{refs: func(q code.RefQuery) (code.RefAnswer, error) {

@@ -809,8 +809,23 @@ type RefQuery struct {
 	// Repo is the repository's NAME.
 	Repo string `json:"repo"`
 	// Refs is every ref the read resolves, one to [MaxRefsPerQuery] of
-	// them: each a whole ref (refs/heads/main), or a branch or a tag by its
-	// short name — a branch first, then a tag.
+	// them: each a whole ref (refs/heads/main), a branch or a tag by its
+	// short name — a branch first, then a tag — or [HeadRef], the
+	// repository's default branch, read from the repository's row in the
+	// read's own transaction.
+	//
+	// HEAD IS RESOLVED BY THE READ, NEVER BY ITS ASKER: an asker that read
+	// the row first to learn the default branch paid a second read — on a
+	// node without the estate, a second hop through the router — for the
+	// commonest question a repository is asked, and named a branch a rename
+	// or a settings change may have moved between the two. AS A STATED
+	// CONDITION (M3-O84 §2 item 5), as [ResolvedRef.At]'s: no build that
+	// carries the code domain has resolved `HEAD` otherwise — none of the
+	// domain is on main — and a query's meaning is no record's, so it takes
+	// no versionedFields row. A build that read `HEAD` as a short name would
+	// answer it as refs/tags/HEAD — missing, but for a tag of that name — so
+	// were such a build ever to answer beside this one, an asker would name
+	// the default branch itself.
 	Refs []string `json:"refs"`
 	// Fresh is REQUIRED, as on every code point read: whoever names a ref
 	// names the level it must be read at.
@@ -822,6 +837,12 @@ type RefQuery struct {
 	// grant bounds the resolve as [ReadQuery.CeilingSeat] bounds a read.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
 }
+
+// HeadRef is the name a [RefQuery] gives a repository's default branch, as
+// git's own HEAD names the branch a clone checks out: resolved to
+// refs/heads/<default branch> and never to a tag, whatever else the name
+// could be.
+const HeadRef = "HEAD"
 
 // MaxRefsPerQuery is the most refs one [RefQuery] resolves: what one page of
 // the refs listing answers ([MaxRefsPerPage]), the reader's one bound on the
