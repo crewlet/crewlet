@@ -233,9 +233,13 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 // facts, a re-anchoring and an interdiff name every commit by the whole id
 // its rows recorded — never an abbreviation, which would make an interdiff's
 // two bases unequal ids of one commit — a re-anchoring places a bounded list
-// of ranges, each named once, and an interdiff's touched lists are the ones
+// of ranges, each named once and within the lines a file can hold
+// (code.MaxAnchorLine), and an interdiff's touched lists are the ones
 // facts give: within their bounds, beside no word that they touch all, and
 // clean paths. Each refusal names its field.
+//
+// Mutation: drop the bound on an anchor's last line — the line past any
+// file's is admitted, red.
 func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 	t.Parallel()
 	const a, b = "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
@@ -305,6 +309,11 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		{"a backwards range", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Start = 5 }),
 			"reanchor.anchors[0]"},
 		{"line zero", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Start = 0 }), "reanchor.anchors[0]"},
+		{"the last line a file holds", reanchor(func(q *code.ReanchorQuery) {
+			q.Anchors[0].Start, q.Anchors[0].End = code.MaxAnchorLine, code.MaxAnchorLine
+		}), ""},
+		{"a line past any file's", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].End = code.MaxAnchorLine + 1 }),
+			"reanchor.anchors[0]"},
 		{"an unclean path", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Path = "src/../a.go" }),
 			"reanchor.anchors[0].path"},
 		{"an abbreviated blob", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].BlobOID = b[:9] }),

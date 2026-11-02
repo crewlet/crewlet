@@ -93,10 +93,11 @@ func (a *Applier) Committed(context.Context) {
 //     rows an operator's configuration removed. Its hit is counted on the
 //     marker, an operator surface: a repository still catching records
 //     months after its purge is a writer nobody stopped. A record on a
-//     CHANGE's subject is about the repository its payload names, read off
-//     the record's body, and one on a repository's CHECKS subject about the
-//     repository its subject names ([gatedRepo]) — so a check that ends
-//     after its repository's purge writes nothing.
+//     CHANGE's subject is about the repository its scope names — read off
+//     the envelope the framework decoded, never the payload, which the
+//     apply then holds to it — and one on a repository's CHECKS subject
+//     about the repository its subject names ([gatedRepo]) — so a check that
+//     ends after its repository's purge writes nothing.
 //
 // The eviction window first, the knowledge base's order: a record both gates
 // drop is dropped either way, so the order decides only which gate COUNTS it.
@@ -114,7 +115,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 			}
 		}
 	}
-	repoID, ok := gatedRepo(rec.Subject, rec.Payload)
+	repoID, ok := gatedRepo(rec.Subject, rec.Scope)
 	if !ok {
 		return "", false, nil
 	}
@@ -439,14 +440,22 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if at.record.ActorKind == ActorConfig {
 		createdBy = ""
 	}
+	// ITS MIRRORS AND WHAT ITS IMPORT FETCHES, each as its column holds it:
+	// a create that imports — its own import, or a pull mirror's first fetch
+	// from its source — makes the repository importing ([CreateRepo.status]).
+	from, to, imports, err := remoteColumns(s, p.importSource())
+	if err != nil {
+		return 0, fmt.Errorf("code: the create at %s: %w", at.position, err)
+	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
 			(id, name, status, managed_by, kind, owner_kind, owner, visibility, search, default_branch,
-			 description, config_epoch, created_at, created_by, created_by_kind, last_activity_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 description, config_epoch, created_at, created_by, created_by_kind, last_activity_at, version,
+			 mirror_from, mirror_to, import_source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
-		p.RepoID, p.Name, string(s.status()), string(s.ManagedBy), string(s.Kind), string(s.Owner.Kind),
+		p.RepoID, p.Name, string(p.status()), string(s.ManagedBy), string(s.Kind), string(s.Owner.Kind),
 		s.Owner.Ref, string(s.Visibility), string(s.Search), s.DefaultBranch, s.Description, s.ConfigEpoch,
-		at.at(), createdBy, createdKind, at.at(), at.packed)
+		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports)
 	if err != nil {
 		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -557,6 +566,12 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
 		payloadRepo = p.RepoID
+	case ImportChunk:
+		payloadRepo = p.RepoID
+	case ImportDone:
+		payloadRepo = p.RepoID
+	case MirrorSync:
+		payloadRepo = p.RepoID
 	case Hold:
 		payloadRepo = p.RepoID
 	case ChangeOpen:
@@ -578,6 +593,18 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case Enqueue:
 		payloadRepo = p.RepoID
 	case Dequeue:
+		payloadRepo = p.RepoID
+	case Candidate:
+		payloadRepo = p.RepoID
+	case Eject:
+		payloadRepo = p.RepoID
+	case Land:
+		payloadRepo = p.RepoID
+	case Green:
+		payloadRepo = p.RepoID
+	case Broken:
+		payloadRepo = p.RepoID
+	case QueueSweep:
 		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
@@ -623,6 +650,12 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyExpungeBegin(ctx, tx, at, p)
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
+	case ImportChunk:
+		return a.applyImportChunk(ctx, tx, at, p)
+	case ImportDone:
+		return a.applyImportDone(ctx, tx, at, p)
+	case MirrorSync:
+		return a.applyMirrorSync(ctx, tx, at, p)
 	case ChangeOpen:
 		n, err := a.applyChangeOpen(ctx, tx, at, p)
 		return a.noticed(ctx, tx, at, id, payload, n, err)
@@ -630,11 +663,28 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		n, err := a.applyChangeWrite(ctx, tx, at, payload)
 		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Merge:
-		return a.applyMerge(ctx, tx, at, p)
+		n, err := a.applyMerge(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Enqueue:
 		return a.applyEnqueue(ctx, tx, at, p)
 	case Dequeue:
-		return a.applyDequeue(ctx, tx, at, p)
+		n, err := a.applyDequeue(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case Candidate:
+		return a.applyCandidate(ctx, tx, at, p)
+	case Eject:
+		n, err := a.applyEject(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case Land:
+		n, err := a.applyLand(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case Green:
+		return a.applyGreen(ctx, tx, at, p)
+	case Broken:
+		n, err := a.applyBroken(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case QueueSweep:
+		return a.applyQueueSweep(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }
@@ -699,9 +749,13 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
+	from, to, _, err := remoteColumns(s, nil)
+	if err != nil {
+		return 0, fmt.Errorf("code: the settings at %s: %w", at.position, err)
+	}
 	res, err := tx.ExecContext(ctx, settingsSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
@@ -788,9 +842,13 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	if refused, err := fenced(ctx, tx, s.ManagedBy, p.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
+	from, to, _, err := remoteColumns(s, nil)
+	if err != nil {
+		return 0, fmt.Errorf("code: the restore at %s: %w", at.position, err)
+	}
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -842,19 +900,28 @@ func jsonList(keys []string) (string, error) {
 const (
 	purgedSQL      = `SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?`
 	repoVersionSQL = `SELECT version, managed_by FROM code_repos WHERE id = ?`
-	settingsSQL    = `UPDATE code_repos SET
+	// settingsSQL settles a repository's settings, its status only where it
+	// is active or archived: an importing repository stays importing until
+	// its import is done, and a deleted or purging one stays as it is.
+	settingsSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
-			description = ?, status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
+			description = ?, mirror_from = ?, mirror_to = ?,
+			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
-		WHERE id = ? AND status IN ('active', 'archived')`
+		WHERE id = ? AND status IN ('importing', 'active', 'archived')`
+	// restoreRepoSQL brings a deleted repository back: IMPORTING where its
+	// create imported and the import is not done — it resumes from what of
+	// it landed — and otherwise in the status its settings say.
 	restoreRepoSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
-			description = ?, status = ?, deleted_at = NULL, config_epoch = ?, last_activity_at = ?, version = ?
+			description = ?, mirror_from = ?, mirror_to = ?,
+			status = CASE WHEN import_source != '' AND imported_at = 0 THEN 'importing' ELSE ? END,
+			deleted_at = NULL, config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ? AND status = 'deleted'`
 	// countKindSQL counts one repository of a kind in, and uncountKindSQL
 	// one out: code_repo_kinds, by its key.

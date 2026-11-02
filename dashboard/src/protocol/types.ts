@@ -34,11 +34,13 @@ import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
+import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "../contract/checks.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
   CHANGE_STATES,
+  CodeSearchAnswer,
   COMMAND_OUTCOMES,
   FINDING_CATEGORIES,
   FINDING_SEVERITIES,
@@ -1961,6 +1963,20 @@ export interface FleetNode {
    * no status at all.
    */
   posture?: string;
+  /**
+   * The alarms firing on this node, as its own table found them at its last
+   * beat — the longest-standing first. ABSENT RATHER THAN EMPTY on a node
+   * that has evaluated no table (one running no state log, or mid-boot): an
+   * empty list is a node that looked and found nothing.
+   */
+  alarms?: FleetNodeAlarm[];
+}
+
+/** One alarm firing on a node, as the fleet's node row carries it. */
+export interface FleetNodeAlarm {
+  kind: string;
+  /** When it was raised, empty where the node did not say. */
+  since: string;
 }
 
 /**
@@ -5705,6 +5721,19 @@ export interface CodeNoticeChange {
   body_cut?: boolean;
   /** The findings seats raised that stand open, by severity. */
   agent_findings?: Record<string, number>;
+  /** Where a live change's merge stands, judged at the read for its reader;
+   *  absent for a merged or closed change, which merges nothing. */
+  readiness?: CodeNoticeReadiness;
+}
+
+/** What a code notice carries of its change's readiness
+ *  (`code.NoticeReadiness`): its counts and its first sentence — the first
+ *  unmet precondition's, else the first still computing, else that it is
+ *  ready. The change's own page reads every precondition. */
+export interface CodeNoticeReadiness {
+  met: number;
+  total: number;
+  first: string;
 }
 
 /** One notice the code host routed to a person (`code.InboxNotice`). */
@@ -6444,6 +6473,11 @@ export interface SeatActivityTotals {
   first_pass: number;
   sent_back: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the previous window, oldest first — so the fortnight a
    *  week-on-week figure is made over comes from the same answer. */
   per_day: SeatActivityDay[];
@@ -6472,6 +6506,11 @@ export interface SeatActivityRow {
   p50_ms?: number;
   p90_ms?: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the window, oldest first, a quiet day as zeros. */
   per_day: SeatActivityDay[];
   last_turn_at?: string;
@@ -8027,6 +8066,12 @@ export interface CodeRepoSummary {
    * search naming it.
    */
   search: "indexed" | "grep" | (string & {});
+  /**
+   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by the code host's syncs
+   * from a repository at another host, and takes no push and no change of its own.
+   * Absent for one that is not.
+   */
+  mirrored?: boolean;
   default_branch: string;
   description?: string;
   protections?: CodeProtection[];
@@ -8107,14 +8152,18 @@ export interface CodePushRow {
   at: string;
   /** A seat's handle, or the credential an operator pushed through (`pat:…`, `session:…`). */
   actor: string;
-  actor_kind: "agent" | "operator" | (string & {});
+  actor_kind: "agent" | "operator" | "system" | (string & {});
   /** The seat: the seat itself, or the human seat an operator's credential is bound to. */
   actor_seat?: string;
   /**
    * `git` for what a client's git sent, `engine` for a commit the engine built
-   * from a tool's call, `merge` for a branch a change's merge record moved.
+   * from a tool's call, `merge` for a branch a change's merge record moved,
+   * `expiry` for an idle seat branch the engine's own account deleted,
+   * `queue` for a branch a merge queue's landing moved, one push a change,
+   * `import` for refs an import set and `mirror` for refs a pull mirror's
+   * sync moved, each on the engine's own account.
    */
-  via: "git" | "engine" | "merge" | (string & {});
+  via: "git" | "engine" | "merge" | "expiry" | "queue" | "import" | "mirror" | (string & {});
   /** A seat's push: the turn, its work item and its model. */
   run?: CodePushRun;
   node?: string;
@@ -8342,7 +8391,21 @@ export interface CodeRevisionFacts {
   patch_id_omitted?: boolean;
   touched: string[];
   touches_all?: boolean;
+  /** The revision's change classes, each a list of places in `touched`; absent where none is classed. */
+  classes?: CodeRevisionClasses;
   node: string;
+}
+
+/**
+ * Which of a revision's touched paths change only whitespace or only comments
+ * (`code.RevisionClasses`): each a list of places in its facts' `touched`,
+ * and `complete` where every touched path was classified — a lexer read each
+ * one — so a path in neither list changes code.
+ */
+export interface CodeRevisionClasses {
+  whitespace_only?: number[];
+  comment_only?: number[];
+  complete?: boolean;
 }
 
 /** One revision of a change (`code.RevisionRow`): a move of its source branch's head. */
@@ -8389,6 +8452,11 @@ export interface CodeReviewRow {
   model?: string;
   position: LogPosition;
   at: string;
+  /**
+   * The change it judged, on a `code_reviews` listing's rows, which span
+   * changes; absent on a change's own read, which names its change.
+   */
+  change?: CodeChangeName;
 }
 
 /** Where a comment on a line points (`code.CommentAnchor`). */
@@ -8547,8 +8615,8 @@ export interface CodeChangeRoutingAnswer extends CodePage {
 /**
  * One branch rule's merge gate (`code.MergeGate`): who may merge, how many
  * approvals it waits for and what spares a change them, the paths a person
- * must approve, the checks it waits for, how its queue lands a change, and
- * its switches.
+ * must approve, the checks it waits for, how many changes its queue tests at
+ * once, and its switches.
  */
 export interface CodeMergeGate {
   merge_by: "writers" | "maintainers" | "persons" | (string & {});
@@ -8556,10 +8624,9 @@ export interface CodeMergeGate {
   approvals_unless?: string[];
   human_paths?: { glob: string; unless?: string[] }[];
   checks?: string[];
-  landing: { policy: string; depth: number; batch: number };
+  landing: { depth: number; batch: number };
   owners_approve?: boolean;
   delete_source: "seats" | "none" | (string & {});
-  auto_revert?: boolean;
   agents_edit_checks?: boolean;
 }
 
@@ -8823,8 +8890,171 @@ export interface CodeCommitAnswer {
   level: ReadLevel;
 }
 
+/** One live entry of a branch's merge queue (`code.QueueRow`), in queue order. */
+export interface CodeQueueRow {
+  repo_id: string;
+  repo: string;
+  entry_id: string;
+  target_ref: string;
+  change_id: string;
+  /** Its change's number on its repository: `web!42`'s 42. */
+  number: number;
+  /** Its place in its branch's queue, from 1. */
+  place: number;
+  seq: LogPosition;
+  head_oid: string;
+  method: string;
+  delete_source?: boolean;
+  close_task?: boolean;
+  enqueued_by: CodeParty;
+  enqueued_operator?: string;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  /** The train and the candidate testing it, and the commit the candidate built of it: absent until one takes it. */
+  train?: string;
+  candidate_id?: string;
+  commit_oid?: string;
+  enqueued_at: string;
+}
+
+/** One candidate a merge queue built (`code.CandidateRow`): a train's merge of its entries onto `base_oid`. */
+export interface CodeCandidateRow {
+  repo_id: string;
+  candidate_id: string;
+  target_ref: string;
+  train: string;
+  ordinal: number;
+  base_oid: string;
+  tip_oid: string;
+  entries: { entry_id: string; commit: string }[];
+  pack_id?: string;
+  state: string;
+  position: LogPosition;
+}
+
+/**
+ * One entry a queue put out lately (`code.EjectedRow`): the change, who
+ * enqueued it, why, and the required checks that failed on what it was tested
+ * in or the paths its merge conflicted on.
+ */
+export interface CodeEjectedRow {
+  repo_id: string;
+  repo: string;
+  entry_id: string;
+  target_ref: string;
+  change_id: string;
+  number: number;
+  head_oid: string;
+  enqueued_by: CodeParty;
+  reason: string;
+  checks?: string[];
+  paths?: string[];
+  enqueued_at: string;
+  ejected_at: string;
+}
+
+/**
+ * `code_queue`: a page of the live entries of merge queues, in queue order,
+ * beside a named repository's trains and — on its first page — what its
+ * queues put out in the last day.
+ */
+export interface CodeQueueAnswer {
+  queue?: CodeQueueRow[];
+  trains?: CodeCandidateRow[];
+  ejected?: CodeEjectedRow[];
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/**
+ * One attempt of one check of one commit, checked for one branch
+ * (`code.CheckRow`): its key, where it stands, what it was checking, and what
+ * its queue, its run and its ending say.
+ */
+export interface CodeCheckRow {
+  repo_id: string;
+  /** Its repository's name, which every link to it takes: absent only on a box admission's read. */
+  repo?: string;
+  oid: string;
+  /** The branch it was checked for, in full: `refs/heads/main`. */
+  target: string;
+  name: string;
+  attempt: number;
+  state: (typeof CHECK_STATES)[number] | (string & {});
+  purpose?: (typeof CHECK_PURPOSES)[number] | (string & {});
+  change_id?: string;
+  revision?: number;
+  candidate_id?: string;
+  entry_id?: string;
+  base?: string;
+  defs_oid?: string;
+  /** Whether the branch's protection requires it. */
+  required?: boolean;
+  run_in?: string;
+  timeout_seconds?: number;
+  reason?: string;
+  runner?: string;
+  placement?: string;
+  box?: string;
+  borrowed?: boolean;
+  reporter?: string;
+  queued_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+  exit_code?: number;
+  summary?: string;
+  failures_omitted?: number;
+  url?: string;
+}
+
+/** One failure an ending names (`code.CheckFailure`): where, which test, and what it said. */
+export interface CodeCheckFailure {
+  path?: string;
+  line?: number;
+  test_id?: string;
+  message: string;
+}
+
+/** One attempt read whole (`code.CheckDetail`): its row, its definition, its tail, its failures and its log. */
+export interface CodeCheckDetail extends CodeCheckRow {
+  def?: { name: string; run: string; timeout_seconds: number; paths?: string[]; run_in?: string };
+  tail?: string;
+  failures?: CodeCheckFailure[];
+  log?: { object: string; hash: string; size: number };
+}
+
+/** `code_checks`: a page of attempts of checks, newest ended first. */
+export interface CodeChecksAnswer {
+  checks?: CodeCheckRow[];
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_check`: one attempt whole. */
+export interface CodeCheckAnswer {
+  check?: CodeCheckDetail;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_check_log`: one page of the log a failed run kept (`queries.CheckLogPage`). */
+export interface CodeCheckLogPage {
+  object: string;
+  size: number;
+  offset: number;
+  text: string;
+  /** Where the next page starts; absent on the page that reaches the end. */
+  next?: number;
+}
+
 /** The code questions the dashboard asks, and what each answers. */
 export interface CodeQueryMap {
+  code_queue: CodeQueueAnswer;
+  code_checks: CodeChecksAnswer;
+  code_check: CodeCheckAnswer;
+  code_check_log: CodeCheckLogPage;
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
   code_compare: CodeComparisonAnswer;
@@ -8839,6 +9069,18 @@ export interface CodeQueryMap {
   code_changes: CodeChangesAnswer;
   code_change: CodeChangeAnswer;
   code_change_routing: CodeChangeRoutingAnswer;
+  code_reviews: CodeReviewsAnswer;
+  /** Read at no session floor: it answers at the tip it names (`contract/code.ts`). */
+  code_search: CodeSearchAnswer;
+}
+
+/**
+ * `code_reviews`: one reviewer's reviews across the repositories the asker may
+ * read, newest first, each naming the change it judged.
+ */
+export interface CodeReviewsAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  reviews?: CodeReviewRow[];
 }
 
 export type CodeQueryName = keyof CodeQueryMap;

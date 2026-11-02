@@ -161,6 +161,12 @@ type derivedState struct {
 	// this. At most maxStateCohorts, so a state stays constant-size whatever
 	// the memo holds. IMMUTABLE once stored, as Provenance is.
 	Cohorts []memoCohort `json:"cohorts,omitempty"`
+	// CodeIndex is the code index's record (codeindex.go) — its tip, its tip
+	// map and its segments — which only that declaration's entry carries, and
+	// only with its Step: a set of files with no main one, so its record is
+	// what says it is there. At most codeindex.MaxSegments segments, so a
+	// state stays constant-size. IMMUTABLE once stored, as Provenance is.
+	CodeIndex *codeIndexState `json:"codeindex,omitempty"`
 	// Layers is an installed published chain's record (layers.go), which only
 	// the two chains' entries carry, and only with their Step: the ids their
 	// chain file lists, root first — what a boot's first round holds that
@@ -248,6 +254,15 @@ func (st *state) check() error {
 				"by the write that made it", name, d.Step, d.Provenance != nil)
 		case d.Provenance != nil:
 			if err := d.Provenance.check(d.Bytes); err != nil {
+				return fmt.Errorf("it records derived file %q as %w", name, err)
+			}
+		case d.CodeIndex != nil && name != DerivedCodeIndex:
+			return fmt.Errorf("it records a code index for derived file %q, which keeps none", name)
+		case name == DerivedCodeIndex && (d.CodeIndex != nil) != (d.Step != ""):
+			return fmt.Errorf("it records derived file %q made by step %q with an index %t: an index is recorded "+
+				"by the write that made it", name, d.Step, d.CodeIndex != nil)
+		case d.CodeIndex != nil:
+			if err := d.CodeIndex.check(d.Bytes); err != nil {
 				return fmt.Errorf("it records derived file %q as %w", name, err)
 			}
 		case d.Cohorts != nil && name != DerivedMemo:

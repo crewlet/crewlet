@@ -477,6 +477,11 @@ var cacheWriters = []writerRow{
 			"made for its first run, and a rebuild's links of the runs of the copy it replaces into its own — " +
 			"every run itself staged in tmp/ and renamed in through durable.go, and retired through layout.go's " +
 			"toTrash", []cache.DerivedName{cache.DerivedProvenance}},
+	{"internal/code/cache/codeindex.go", kindOS,
+		"the code index, the cache's own derived file under the incarnation's crewlet/codeindex: the directory " +
+			"made for its first file, a swap's and a rebuild's links of the files the record of the copy it " +
+			"replaces names — every segment and tip map itself staged in tmp/ and renamed in through durable.go, " +
+			"and retired through layout.go's toTrash", []cache.DerivedName{cache.DerivedCodeIndex}},
 	{"internal/code/cache/memo.go", kindOS,
 		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
 			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +
@@ -544,23 +549,27 @@ var cacheWriters = []writerRow{
 		"an engine write's touched directories, written into its scratch a level at a time; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " commit-tree",
 		"an engine write's commit — a merge_change's merge commit or squash and a rebase's replayed commits " +
-			"among them — written into its " +
-			"scratch", nil},
+			"among them, and each merged entry's of a chain (chain.go, in the chain's scratch, named its id) — " +
+			"written into its scratch", nil},
 	{"internal/code/host/build.go", kindGit + " merge-tree",
 		"a revert's or a cherry-pick's merged tree (`--write-tree`), and a merge_change's of its change into its " +
-			"target (`--allow-unrelated-histories`, as the home's mergeability merges them), and a rebase's of " +
+			"target (`--allow-unrelated-histories`, as the home's mergeability merges them) — a chain's every " +
+			"entry's onto the commit the entry before made among them — and a rebase's of " +
 			"each commit it replays onto what it rebased so far, and its conflicted " +
 			"files, written into its scratch; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " pack-objects",
-		"an engine write's one pack (`--stdout`), of its scratch's loose objects into a file staged in its " +
-			"scratch — pack-objects writes a repository only with a base name, so the row is argued for what " +
-			"the build does with its output", nil},
+		"an engine write's one pack (`--stdout`), and a chain's, of its scratch's loose objects into a file " +
+			"staged in its scratch — pack-objects writes a repository only with a base name, so the row is " +
+			"argued for what the build does with its output", nil},
 	{"internal/code/host/build.go", kindGit + " index-pack",
-		"an engine write's pack (`--strict --stdin`) indexed into its scratch's objects/pack under the relay's " +
-			"own fsck; it enters a cache only by Adopt, once its row has applied", nil},
+		"an engine write's pack and a chain's (`--strict --stdin`) indexed into its scratch's objects/pack under " +
+			"the relay's own fsck; it enters a cache only by Adopt, once its row has applied — a chain's by its " +
+			"Settle, once its caller's record has", nil},
 	{"internal/code/host/build.go", kindOS,
 		"an engine write's staging under its scratch's write/: its new files, its edited files, the directories " +
-			"it touches as git stores them, each level's input to mktree and its pack — removed with the scratch",
+			"it touches as git stores them, each level's input to mktree and its pack — removed with the scratch; " +
+			"and a chain's prune of the loose objects a skipped entry's merge wrote into the chain's scratch " +
+			"(building.prune), never a path of the cache's",
 		nil},
 	{"internal/code/host/scan.go", kindRuntime,
 		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +
@@ -580,11 +589,25 @@ var cacheWriters = []writerRow{
 			"the copy: the merged tree and every blob a conflict leaves marked written into the scratch alone and " +
 			"removed with it, never a cache; an object the copy already holds is freshened there, as an engine " +
 			"write's build freshens it (home.TestMergeabilityRunsInAScratch)", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " fetch",
+		"an import's or a pull mirror's fetch of its source's branches and tags, in the attempt's own SCRATCH " +
+			"(cache.NewScratch) leaning on the copy, so it negotiates from the copy's refs: what it brings is " +
+			"written into the scratch alone and removed with it, entering the cache only by Adopt, once the rows " +
+			"of a chunk or a sync have applied", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " pack-objects",
+		"an import's or a pull mirror's cut: ONE `pack-objects --stdin-packs` over what the fetch wrote, every " +
+			"live pack of the copy excluded, in the same scratch — its outputs written there alone, entering the " +
+			"cache only by Adopt, once their rows have applied", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " ls-remote",
+		"an import's read of the branch its source's HEAD names — `ls-remote --symref <url> HEAD`, in no " +
+			"repository — whose one argument not spelled as a literal is the source's URL, which the one outbound " +
+			"dial (gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
 		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
 			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +
 			"spelled as literals are the two whole object ids a read resolved and `-M`; a path never reaches " +
-			"the command line (the stat is filtered after git answers, an interdiff's by its touched paths, and " +
+			"the command line (the stat is filtered after git answers — an interdiff kept to its touched paths " +
+			"walks no tree, looking each path up on a cat-file's standard input instead — and " +
 			"the records it admits reach diff-pairs on its standard input), and " +
 			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
@@ -606,6 +629,13 @@ var cacheWriters = []writerRow{
 			"reads as a path whatever it spells (`-- :(literal)--output=x` is the history of that path, measured " +
 			"on 2.56.0); query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
+	{"internal/code/query/search.go", kindGit + " grep",
+		"a code search read with git grep: the only arguments not spelled as literals are `-E`, `-i` and " +
+			"`-e` themselves, the pattern — the plan's alternation of escaped strings, or `^` — as the " +
+			"argument of `-e`, which git reads as a pattern whatever it spells (`-e --open-files-in-pager=x` " +
+			"looks for that text), and after `--end-of-options` the whole commit id the search resolved; its " +
+			"paths are filtered after git answers, never handed to it, and query.TestAPathReachesGitOnlyAsData " +
+			"holds every argument list to its template, so no --open-files-in-pager can be added unseen", nil},
 	{"internal/code/query/blame.go", kindGit + " blame",
 		"a file's blame: the only arguments not spelled as literals are the -L range the server formats, the " +
 			"whole commit id a read resolved and, after `--`, the path, which git reads as a path whatever it " +
@@ -649,7 +679,9 @@ type gitReader struct{ writes, why string }
 // gitReaders is the CLOSED set of git subcommands judged to read; every
 // other is a writer until argued here.
 var gitReaders = map[string]gitReader{
-	"cat-file":    {why: "reads objects by id"},
+	"cat-file": {why: "reads objects by id"},
+	"grep": {writes: "--open-files-in-pager", why: "searches a tree's files by id for a pattern, reading " +
+		"only the object database; --open-files-in-pager (-O) runs a program on the files it found"},
 	"fsck":        {writes: "--lost-found", why: "checks objects and connectivity; --lost-found writes lost-found/"},
 	"version":     {why: "prints the binary's version and opens no repository"},
 	"upload-pack": {why: uploadPackReads},
@@ -1380,17 +1412,16 @@ func (m *writerMatch) handoff(call *ast.CallExpr) {
 // typed reports whether the walk knows enough of t to say whether it is a
 // Cmd: a type it resolved, one of a package it does not read (which cannot
 // be gitproc's Cmd, a type only this module can name), a value only such a
-// package can type, or a value of a type parameter nothing binds — which is
-// a Cmd only once a conversion or an assertion makes it one, a typed
-// expression this rule judges wherever it is handed on.
+// package can type, or a value of a type parameter nothing binds — a
+// function's, a type's or a generic method's receiver's ([decltype.World.Param])
+// — which is a Cmd only once a conversion or an assertion makes it one, a
+// typed expression this rule judges wherever it is handed on.
 func (m *writerMatch) typed(t decltype.Type) bool {
 	if _, unread := t.Unread(); unread {
 		return true
 	}
-	if id, ok := t.Expr().(*ast.Ident); ok && id.Obj != nil && id.Obj.Kind == ast.Typ {
-		if _, param := id.Obj.Decl.(*ast.Field); param {
-			return true
-		}
+	if m.w.Param(t) {
+		return true
 	}
 	_, how := m.w.Underlying(t)
 	return how == decltype.Resolved || how == decltype.Outside
@@ -1719,13 +1750,16 @@ func controlWriters(t *testing.T) {
 		// of a variadic parameter of Cmds, which the parameter alone says
 		// is a Cmd; and what passes on neither side because it can be no
 		// Cmd: nil, a constant an iota list continues, the type make is
-		// handed, and a value of a type parameter.
+		// handed, and a value of a type parameter — a function's, and a
+		// generic method's receiver's, which the parser gives no object.
 		"internal/code/c/untyped.go": "package c\n\nimport (\n\t\"fmt\"\n\n\tg " + gp + "\n)\n\n" +
 			"const (\n\tfirst int = iota\n\tsecond\n)\n\n" +
 			"func u(x any) {\n\tswitch v := x.(type) {\n\tcase int:\n\t\tfmt.Println(v)\n" +
 			"\tcase g.Cmd:\n\t\tmany(v)\n\t}\n" +
 			"\tfmt.Println(nil, second, make([]string, 1), smaller(1, 2))\n}\n\n" +
-			"func smaller[T int | uint](a, b T) T { return min(a, b) }\n",
+			"func smaller[T int | uint](a, b T) T { return min(a, b) }\n\n" +
+			"type names[T ~string] []T\n\n" +
+			"func (n names[T]) show() {\n\tfor _, v := range n {\n\t\tfmt.Println(v)\n\t}\n}\n",
 		// gitproc imported with a dot: its Cmd is one the walk cannot type.
 		"internal/code/d/dot.go": "package d\n\nimport . " + gp + "\n\nvar _ = Cmd{Args: []string{\"rerere\"}}\n",
 		// gitproc's own Cmd, named unqualified, and its plumbing. What

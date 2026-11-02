@@ -183,14 +183,14 @@ const MinDomainCeiling int64 = 1 << 30
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
 //
 // The code log holds what the mutation log holds — a trailing window of
-// records, as long as a blocked trim lasts — at two thirds of its byte rate,
-// the reference company's pushes and its git clients' reads against its
-// tracker writes and its seats' reads (config.DerivedCodeLogNumerator), so an
-// unset one takes two thirds of the mutation log's ceiling, set or derived
-// (config.Stream.CodeMaxBytes), and a blocked trim fills both in the same
-// time. A push record names its pack bundle and never carries it: the bytes
-// are the object store's, so nothing a repository grows to reaches this
-// ceiling.
+// records, as long as a blocked trim lasts — so an unset one takes a share of
+// the mutation log's ceiling, set or derived (config.Stream.CodeMaxBytes):
+// two thirds, a reservation every node makes whether or not the company hosts
+// code, weighed against what it costs the logs beside it rather than set at
+// the code log's byte rate, which a company whose seats work through changes
+// sets itself (config.DerivedCodeLogNumerator). A push record names its pack
+// bundle and never carries it: the bytes are the object store's, so nothing
+// a repository grows to reaches this ceiling.
 // The chat log holds a trailing window too, and it is the one such log that
 // does NOT follow the mutation log's ceiling: it grows faster than the mutation
 // log, so following it at that ratio would make it the largest ask here, and

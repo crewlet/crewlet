@@ -447,6 +447,7 @@ const NO_GAP: Record<string, string> = {
   "schedules.upcoming": "the schedules' answer carries no flag",
   "home.pinned": "the reader's own stars, kept in this browser; a pinned project says its own gap",
   "home.live": "who is working is the live push",
+  "home.code": "the code host's listings carry no flag: each is one estate copy's answer",
   "home.tokens": "a window's spend carries no flag",
   "home.figure":
     "its first choice is the agents working now, the live push; the tracker's figures are held in Kpis.test.tsx",

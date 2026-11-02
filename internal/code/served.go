@@ -88,6 +88,28 @@ func (s Served) ProposeCompaction(ctx context.Context, p CompactionProposal) (Co
 	return s.Committer.ProposeCompaction(ctx, p)
 }
 
+// ProposeImport decides one import record — a chunk or the import's end — on
+// this node's committer — see [Committer.ProposeImport] — and, on a node that
+// publishes nothing, refuses it as a push is refused there: the router asks
+// the repository's runner-up with the same proposal.
+func (s Served) ProposeImport(ctx context.Context, p ImportProposal) (SyncResult, error) {
+	if s.Committer == nil {
+		return SyncResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no import", ErrNotServing)
+	}
+	return s.Committer.ProposeImport(ctx, p)
+}
+
+// ProposeMirrorSync decides one pull mirror's sync on this node's committer —
+// see [Committer.ProposeMirrorSync] — and, on a node that publishes nothing,
+// refuses it as a push is refused there.
+func (s Served) ProposeMirrorSync(ctx context.Context, p MirrorSyncProposal) (SyncResult, error) {
+	if s.Committer == nil {
+		return SyncResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no mirror sync",
+			ErrNotServing)
+	}
+	return s.Committer.ProposeMirrorSync(ctx, p)
+}
+
 // ProposeExpunge decides one expunge record — a person's request, or a
 // maintainer's begin or commit — on this node's committer — see
 // [Committer.ProposeExpunge] — and, on a node that publishes nothing, refuses

@@ -38,12 +38,22 @@
  * you ([pairAnswered]).
  */
 
-import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
+import {
+  firstLine,
+  fmtDateCompact,
+  fmtDuration,
+  plural,
+  toWall,
+  zoneOffset,
+} from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { companyZone } from "~/lib/range.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
+import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";
+import { FINDING_SEVERITIES } from "~/contract/code.ts";
+import { changeDiffHref } from "~/routes/code/paths.ts";
 import {
   ENGINE_SENTENCES,
   authorOf,
@@ -60,11 +70,22 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
+import {
+  checkStateWord,
+  classCount,
+  gatedByChecks,
+  humanPathsAsking,
+  measuredChecks,
+  type ClassCount,
+  type Measured,
+} from "~/lib/checks.ts";
 import type {
   AgentRow,
   AnsweredDecision,
   AnsweredDecisionsAnswer,
   AnsweredWorkAsk,
+  CodeChangeAnswer,
+  CodeCheckRow,
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
@@ -456,9 +477,17 @@ export function rowItem(row: InboxRow): ItemRef | null {
       return item.id || item.key ? item : null;
     }
     case "change":
-      return null;
+      // THE WORK ITEM THE CHANGE IMPLEMENTS is the row's task, as a turn's is
+      // a run's: the intent the change serves, one click from the card.
+      return changeItem(row.notice);
   }
   return null;
+}
+
+/** The work item a code notice's change implements, to address it, or null. */
+function changeItem(notice: CodeInboxNotice): ItemRef | null {
+  const work = notice.change?.work_item;
+  return work ? turnItem({ ...work, project: work.project ?? "" }) : null;
 }
 
 /** The work item a row is on, by the key a reader reads, or "". */
@@ -483,7 +512,7 @@ export function rowKey(row: InboxRow): string {
     case "notice":
       return row.notice.subject_key ?? "";
     case "change":
-      return "";
+      return row.notice.change?.work_item?.key ?? "";
   }
   return "";
 }
@@ -497,6 +526,157 @@ export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: 
   const text = notice.change?.title || notice.change_ref;
   const said = plainText(notice.excerpt ?? "");
   return said ? { text, excerpt: said } : { text };
+}
+
+/** How many open agent findings stand on a change at one weight. */
+export interface FindingCount {
+  severity: string;
+  count: number;
+}
+
+/**
+ * A code notice's card, INTENT FIRST: what the change is for before what it
+ * did — the work item it implements and the description its author wrote —
+ * then what stands in its way: the findings seats raised that still stand
+ * open, the heaviest first, and the one sentence of where its merge stands.
+ * Its diff is one click away, on the change's own page.
+ *
+ * DRAWN FROM THE NOTICE ALONE, with no question per card: the engine reads
+ * all of it with the inbox page, in the page's one snapshot
+ * (`code.NoticeChange`), so a page of fifty cards is one read and a card
+ * never says something the row beside it contradicts.
+ */
+export interface ChangeCard {
+  /** The change's repository and number, from its reference (`web!42`); null
+   *  for a reference this build cannot read, which then links nowhere. */
+  named: { repo: string; number: number } | null;
+  /** Why it reached the reader, in their own voice ("asked for your review"). */
+  why: string;
+  /** The work item it implements, to open, and the key it is named by. */
+  item: ItemRef | null;
+  itemKey: string;
+  /** Its description's opening, ending in "…" where the engine cut it; "" for none. */
+  intent: string;
+  /** Its open agent findings by weight, the heaviest first; none at zero. */
+  findings: FindingCount[];
+  /** Where a live change's merge stands, the engine's sentence; null for a change
+   *  no longer live, or one whose change no row holds any more. */
+  readiness: string | null;
+  /** The change's page on its diff; null where the reference names no change. */
+  diff: string | null;
+}
+
+/** A code notice as its card draws it — [ChangeCard]. */
+export function changeCard(notice: CodeInboxNotice): ChangeCard {
+  const named = parseChangeRef(notice.change_ref);
+  const change = notice.change;
+  const body = change?.body ?? "";
+  return {
+    named,
+    why: codeReasonPhrase(notice.reason, "short"),
+    item: changeItem(notice),
+    itemKey: change?.work_item?.key ?? "",
+    intent: body && change?.body_cut ? `${body}…` : body,
+    findings: findingCounts(change?.agent_findings),
+    readiness: change?.readiness?.first || null,
+    diff: named ? changeDiffHref(named.repo, named.number) : null,
+  };
+}
+
+/**
+ * What a change's merge gate says on its card (M5), read for the ONE card
+ * the reader has open — never a question per listed row, which keeps a page
+ * of fifty cards one read ([ChangeCard]):
+ *
+ * - `measured`: what the head revision's REQUIRED checks measured, each
+ *   one's state and how long it ran — durations, never tokens: a check runs
+ *   no model. Null where the target holds the change to no check (its
+ *   readiness judges no `check` precondition), so a change into an ungated
+ *   branch says nothing of checks rather than "none measured".
+ * - `classes`: the head revision's change classes in a line — how many of
+ *   its touched paths change only whitespace or only comments — or "" where
+ *   no lexer classed anything.
+ * - `humanPaths`: the engine's sentence of the human paths that asked for
+ *   THIS reader — the gate's human_approval precondition, unmet and waiting
+ *   on them — or "" where none does.
+ *
+ * Every field is read from the change's own answers (`code_change`'s
+ * readiness and revisions, `code_checks` of the change), so the card needs
+ * nothing of the engine the change's page does not already read.
+ */
+export interface ChangeGate {
+  measured: Measured[] | null;
+  classes: string;
+  humanPaths: string;
+}
+
+/** A change's gate as its open card draws it — [ChangeGate]. */
+export function changeGate(
+  answer: CodeChangeAnswer | undefined,
+  checks: readonly CodeCheckRow[],
+  handle: string,
+): ChangeGate {
+  const change = answer?.change;
+  const readiness = change?.readiness;
+  const head = (answer?.revisions ?? []).find((r) => r.n === change?.revision);
+  return {
+    measured: change && gatedByChecks(readiness) ? measuredChecks(checks, change.head) : null,
+    classes: classesLine(classCount(head?.facts)),
+    humanPaths: humanPathsAsking(readiness, handle) ?? "",
+  };
+}
+
+/**
+ * A revision's change classes in a line: "Of the 5 paths it touches, 2
+ * change only whitespace, 1 only comments; the rest change code" — the rest
+ * said only where every path was classified, since a path no lexer reached
+ * is in neither list without being code. "" where nothing was classed.
+ */
+export function classesLine(count: ClassCount | null): string {
+  if (!count) return "";
+  const parts: string[] = [];
+  if (count.whitespaceOnly > 0) parts.push(`${count.whitespaceOnly} change only whitespace`);
+  if (count.commentOnly > 0) parts.push(`${count.commentOnly} only comments`);
+  if (parts.length === 0) return count.complete ? "Every path it touches changes code" : "";
+  const lead =
+    count.touched === null
+      ? "Of the paths it touches"
+      : `Of the ${plural(count.touched, "path")} it touches`;
+  return `${lead}, ${parts.join(", ")}${count.complete ? "; the rest change code" : ""}`;
+}
+
+/** One line of what a check measured: "unit passed in 1m 4s", "e2e running". */
+export function measuredLine(m: Measured): string {
+  const word = checkStateWord(m.state);
+  return m.durationMs === null
+    ? `${m.name} ${word}`
+    : `${m.name} ${word} in ${fmtDuration(m.durationMs)}`;
+}
+
+/**
+ * A card's open agent findings as one line, the heaviest first: "Blocker 1 ·
+ * Nit 3". Weight then count, never "3 nit": a weight is an adjective ("Major"),
+ * and no plural reads right after a number for all four. "" for none.
+ */
+export function findingsLine(findings: readonly FindingCount[]): string {
+  return findings.map((f) => `${severityWord(f.severity)} ${f.count}`).join(" · ");
+}
+
+/**
+ * Counts by weight, in the contract's order, the heaviest first — a blocker
+ * before a nit — and a weight a newer engine names after every one this build
+ * knows, by name, rather than dropped.
+ */
+function findingCounts(counts: Readonly<Record<string, number>> | undefined): FindingCount[] {
+  const known: readonly string[] = FINDING_SEVERITIES;
+  const rank = (severity: string) => {
+    const at = known.indexOf(severity);
+    return at < 0 ? known.length : at;
+  };
+  return Object.entries(counts ?? {})
+    .filter(([, count]) => count > 0)
+    .map(([severity, count]) => ({ severity, count }))
+    .sort((a, b) => rank(a.severity) - rank(b.severity) || a.severity.localeCompare(b.severity));
 }
 
 /**

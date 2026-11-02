@@ -22,13 +22,15 @@ import (
 )
 
 // THE MEMO OF ANSWERS BY OBJECT ID: every page a server-side read cut — a
-// listing's, a file's, a diff's, a comparison — kept beside the incarnation it
-// was read from, one file an answer under crewlet/memo, keyed by everything it
-// is a function of (NewMemoKey), so the next read that asks the same is
-// answered from a file rather than from git. A derived file of the cache's own
-// (derived.go's DerivedMemo), so the budget counts it and it leaves with the
-// repository; internal/code/query forms its keys and its bodies, and the cache
-// keeps, checks, counts and trims them, knowing nothing of what one says.
+// listing's, a file's, a diff's, a comparison — and every decided merge
+// preview, kept beside the incarnation it was read from, one file an answer
+// under crewlet/memo, keyed by everything it is a function of (NewMemoKey), so
+// the next read that asks the same is answered from a file rather than from
+// git. A derived file of the cache's own (derived.go's DerivedMemo), so the
+// budget counts it and it leaves with the repository; internal/code/query and
+// internal/code/home's merge previews form its keys and their bodies, each
+// under a format of its own as a key's first part, and the cache keeps,
+// checks, counts and trims them, knowing nothing of what one says.
 //
 // # Immutable, so never stale — and answered with no git run
 //

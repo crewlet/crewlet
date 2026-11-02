@@ -93,6 +93,13 @@ type codeHost struct {
 	// and one change a part at a time (codechanges_test.go) — under the
 	// host's lock, every one recorded with the rest.
 	changes func(q code.ReadQuery) (code.ReadAnswer, error)
+	// checks is every attempt of every check the repository holds, read
+	// whole: a `checks` read answers their rows — a commit's, or every one
+	// for a change's, narrowed to the check its question names as the data
+	// node narrows them — and a `check` read the one its question names
+	// (codechecks_test.go). newCodeHost holds one: attempt 1 of `unit` at
+	// main, for main, ended errored.
+	checks []code.CheckDetail
 	// before, set, is called with each question's kind before it is
 	// answered, outside the host's lock — so a case can read what the asking
 	// turn held when the question arrived.
@@ -123,6 +130,9 @@ func newCodeHost() *codeHost {
 			"refs/heads/main": codeAt(10), "refs/heads/feature": codeAt(11), "refs/tags/v1": codeAt(8),
 		},
 		floor: codeAt(3), at: codeAt(12),
+		checks: []code.CheckDetail{{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID, OID: mainOID,
+			Target: "refs/heads/main", Name: "unit", Attempt: 1}, State: code.CheckStateErrored,
+			Reason: code.CheckReasonBoxFailed}}},
 	}
 }
 
@@ -197,10 +207,45 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 			}
 		}
 		return out, nil
-	case code.ReadChanges, code.ReadChange:
+	case code.ReadChanges, code.ReadChange, code.ReadQueue:
 		if h.changes != nil {
 			return h.changes(q)
 		}
+	case code.ReadChecks, code.ReadCheck:
+		if _, err := h.named(q.Repo); err != nil {
+			return code.ReadAnswer{}, err
+		}
+		c := q.Checks
+		for i := range h.checks {
+			d := h.checks[i]
+			switch {
+			case c.OID != "" && d.OID != c.OID:
+			case q.Kind == code.ReadChecks && c.Name != "" && d.Name != c.Name:
+			case q.Kind == code.ReadChecks:
+				out.Checks = append(out.Checks, d.CheckRow)
+			case d.Target == c.Target && d.Name == c.Name && d.Attempt == c.Attempt:
+				out.Check = &d
+				return out, nil
+			}
+		}
+		if q.Kind == code.ReadCheck {
+			return code.ReadAnswer{}, fmt.Errorf("%w: attempt %d of check %s", code.ErrCheckNotFound, c.Attempt,
+				c.Name)
+		}
+		// A PAGE OF THEM, from the cursor its listing's walk names a row by
+		// (code.ReadQuery.ChecksCursor), as the code host pages a listing.
+		if q.Cursor != "" {
+			at := slices.IndexFunc(out.Checks, func(r code.CheckRow) bool { return q.ChecksCursor(r) == q.Cursor })
+			if at < 0 {
+				return code.ReadAnswer{}, fmt.Errorf("%w: %q", code.ErrBadCursor, q.Cursor)
+			}
+			out.Checks = out.Checks[at+1:]
+		}
+		if q.Limit > 0 && len(out.Checks) > q.Limit {
+			out.Checks = out.Checks[:q.Limit]
+			out.Next = q.ChecksCursor(out.Checks[q.Limit-1])
+		}
+		return out, nil
 	}
 	return code.ReadAnswer{}, fmt.Errorf("%w: a code tool read kind %s", code.ErrInvalid, q.Kind)
 }
@@ -403,18 +448,22 @@ func asBoundPerson() context.Context {
 	})
 }
 
-// asUnboundToken is a machine token bound to nobody, as CI holds one.
+// asUnboundToken is a machine token bound to nobody, as CI holds one —
+// stepped up, as the node composes every machine token
+// (iam.Principal.MachineToken), so a gesture asking a fresh proof reaches the
+// tool and is refused there for the binding it lacks, never for the proof.
 func asUnboundToken() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
 		Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+		ReauthAt: time.Now().Add(time.Hour).UTC(),
 	})
 }
 
 // ---- one list, two surfaces --------------------------------------------- //
 
 // THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same code tools — the eleven reads,
+// built over the same deps, hold the same code tools — the twelve reads,
 // then the writes, every one the authority table names, in the list's own
 // order — with byte-identical descriptions and schemas but for the one
 // argument the operator surface alone offers, the writes' `op_id`, which no
@@ -432,7 +481,7 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 	host := newCodeHost()
 	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
 	operator := operatorCode(t, host, nil)
-	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	every := slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool}, builtin.CodeWrites())
 	for _, name := range every {
 		entry, ok := reg.Lookup(name)
 		if !ok {
@@ -512,8 +561,8 @@ func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 			reads = append(reads, tool.Name())
 		}
 	}
-	if !slices.Equal(reads, builtin.CodeToolNames()) {
-		t.Fatalf("the code tools that are not writes are %v, want the reads %v", reads, builtin.CodeToolNames())
+	if want := append(builtin.CodeToolNames(), builtin.CodeSearchTool); !slices.Equal(reads, want) {
+		t.Fatalf("the code tools that are not writes are %v, want the reads %v", reads, want)
 	}
 	for _, name := range reads {
 		entry, ok := reg.Lookup(name)
@@ -1535,8 +1584,8 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 func widestGate(t *testing.T) code.MergeGate {
 	t.Helper()
 	g := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
-		Landing:      code.Landing{Policy: code.LandingPostLand, Depth: code.MaxQueueDepth, Batch: code.MaxQueueBatch},
-		DeleteSource: code.DeleteSeats, OwnersApprove: true, AutoRevert: true, AgentsEditChecks: true}
+		Landing:      code.Landing{Depth: code.MaxQueueDepth, Batch: code.MaxQueueBatch},
+		DeleteSource: code.DeleteSeats, OwnersApprove: true, AgentsEditChecks: true}
 	for i := range code.MaxRequiredChecks {
 		g.Checks = append(g.Checks, fmt.Sprintf("%02d", i)+strings.Repeat("x", 62))
 	}
@@ -1754,10 +1803,12 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty code tools'
+// codeCatalogueBudget is the most bytes the thirty-nine code tools'
 // definitions may add to the tool list a run's session serves its CLI
 // ([listedBytes]): what a seat at full_access carries, the one tier offered
-// the writes (CodeWritesWithheld); every other seat carries the reads alone
+// the writes (CodeWritesWithheld), but for code_report_check,
+// code_purge_unreachable and code_import_repo, each a person's alone, and
+// what the operator catalogue serves; every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
 // THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A CLI'S PROMPT ONCE CARRIED
@@ -1810,10 +1861,38 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // what said once in each description. And 42 000 → 43 200 when
 // code_apply_suggestions joined, deliberately, with its measured cost:
 // 39 603 → 40 680, 1 077 bytes (~269 tokens), what it applies and that the
-// applier becomes an author said once, in its description.
-const codeCatalogueBudget = 43_200
+// applier becomes an author said once, in its description. And 43 200 →
+// 49 400 when the check tools joined, deliberately, with their measured cost:
+// 41 644 → 46 587 (~11 647 tokens), 4 943 bytes (~1 236 tokens) —
+// code_get_check_failures 1 433, code_rerun_checks 1 709 and
+// code_report_check 1 801, which no seat is shown (it is human-only, so a
+// full_access seat carries 44 786) — each argument its name and type but
+// where they do not say it, who may rerun what and that a report is a
+// person's said once, in each description; ~6% headroom again. And 49 400 →
+// 52 900 when a change's merge, dequeue and revert joined beside its rebase,
+// deliberately, with their measured cost: 46 587 → 49 963 (~12 491 tokens),
+// 3 376 bytes (~844 tokens), what a refused merge names and that a revert is a
+// change of its own said once, in each description, and every argument cut
+// to its name and type; ~6% headroom again. And code_purge_unreachable joined
+// within it, deliberately, with its measured cost: 49 963 → 50 535 (~12 634
+// tokens), 572 bytes (~143 tokens), which no seat is shown (it is human-only),
+// its one argument the repository and what it is answered with said once, in
+// its description; ~4% headroom left, so the next tool raises this. And
+// 52 900 → 55 600 when code_import_repo joined, deliberately: all thirty-eight
+// measured 52 427 (~13 107 tokens) with it, 473 bytes under the old budget —
+// 1 892 above the purge's 50 535, which is the import's definition (its seven
+// arguments, the owner's shape and the credential's one rule said once) and
+// code_protect_branch's item-at-a-time list changes landed between, not
+// measured apart — none of which a seat is shown (the import is human-only);
+// ~6% headroom again. And 55 600 → 57 500 when code_search joined,
+// deliberately, with its measured cost: 52 427 → 54 223 (~13 556 tokens),
+// 1 796 bytes (~449 tokens) — the one grammar's filters said once in
+// `query`'s description, the answer's shape (hits, tips, coverage, pages)
+// once in the tool's — the cost codeReadsCatalogueBudget pays too, since
+// every seat carries it; ~6% headroom again.
+const codeCatalogueBudget = 57_500
 
-// codeReadsCatalogueBudget is the most bytes the eleven code reads'
+// codeReadsCatalogueBudget is the most bytes the thirteen code reads'
 // definitions may add to the tool list a run's session serves its CLI: what
 // every seat of a company hosting code carries on every round, whatever its
 // tier, since a seat below full_access is offered the reads alone
@@ -1826,18 +1905,25 @@ const codeCatalogueBudget = 43_200
 // (~3 013 tokens) between the two budgets' figures then, and a change's three
 // lifecycle writes, four conversation writes and the apply of its suggestions
 // beside them make the eighteen 23 105 (~5 776 tokens), carried by a
-// full_access seat alone.
-const codeReadsCatalogueBudget = 18_600
+// full_access seat alone. And 18 600 → 20 300 when code_get_check_failures
+// joined, deliberately, with its measured cost: 17 649 → 19 082 (~4 771
+// tokens), 1 433 bytes (~358 tokens), the check named as its siblings name a
+// commit and how its log is paged said once, in `cursor`'s description; ~6%
+// headroom again. And 20 300 → 22 100 when code_search joined the reads,
+// deliberately, with its measured cost: 19 082 → 20 878 (~5 220 tokens),
+// 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
+// and its answer's shape once in its own; ~6% headroom again.
+const codeReadsCatalogueBudget = 22_100
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code is offered the eleven reads on every run of every turn, and a seat at
-// full_access the nineteen writes beside them: the CLI lists them from the
+// code is offered the thirteen reads on every run of every turn, and a seat at
+// full_access twenty-three writes beside them: the CLI lists them from the
 // run's tool session (internal/toolsession) and carries every listed tool's
 // name, description, schema and hints into its model's context, each byte
 // paid again on every request it makes. Measured as that list reaches a
 // client — the SDK's own serialisation, through a real MCP session, since what
 // a CLI is handed is what arrives rather than what was registered — the reads
-// alone and all thirty, each held to a budget, so a later description edit is
+// alone and all thirty-nine, each held to a budget, so a later description edit is
 // a decision rather than drift, as the executor prompt's budgets make a
 // sentence one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1846,9 +1932,10 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		what        string
 		got, budget int
 	}{
-		{"the eleven code reads (every seat's)", listedBytes(t, builtin.CodeTools(codeDeps(newCodeHost()))),
+		{"the thirteen code reads (every seat's)",
+			listedBytes(t, builtin.CodeTools(withSearch(codeDeps(newCodeHost()), &codeSearches{}))),
 			codeReadsCatalogueBudget},
-		{"all thirty code tools (a full_access seat's)",
+		{"all thirty-nine code tools (a full_access seat's and the operator's)",
 			listedBytes(t, builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{}))), codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))
@@ -1955,7 +2042,7 @@ func TestThePagesNameEveryCodeTool(t *testing.T) {
 	for _, m := range regexp.MustCompile("\\| `(code_[a-z_]+)` \\|").FindAllStringSubmatch(guide[start:end], -1) {
 		rows = append(rows, m[1])
 	}
-	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	every := slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool}, builtin.CodeWrites())
 	if !slices.Equal(rows, every) {
 		t.Errorf("the tools guide's code table lists %v, want %v in that order", rows, every)
 	}

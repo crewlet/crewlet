@@ -95,7 +95,7 @@ func TestASeatsBoxesAndToolsShareItsTerm(t *testing.T) {
 		_ = l.Box(key.Resyncs())
 	}
 	if r := l.Box(key.Resyncs()); r == nil {
-		t.Error("the check's seventeenth re-sync was taken")
+		t.Errorf("the check's re-sync past its burst of %d was taken", code.ResyncBurst)
 	}
 	counts := map[string]uint64{}
 	for _, s := range rec.Read() {
@@ -105,6 +105,6 @@ func TestASeatsBoxesAndToolsShareItsTerm(t *testing.T) {
 	}
 	if counts["taken"] != 2*code.ResyncBurst || counts["spent"] != 1 {
 		t.Errorf("%s = %v, want taken %d (the run's and the check's bursts) and spent 1 (the check's "+
-			"seventeenth; a turn is no box)", metrics.CodeBoxResyncs, counts, 2*code.ResyncBurst)
+			"one past its burst; a turn is no box)", metrics.CodeBoxResyncs, counts, 2*code.ResyncBurst)
 	}
 }

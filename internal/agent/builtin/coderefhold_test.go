@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -112,7 +113,7 @@ var refArgs = map[string]bool{
 
 var notRefArgs = map[string]string{
 	"repo":               "a repository, held by HoldRepo",
-	"name":               "a repository's name, held by HoldRepo on its derived id",
+	"name":               "a repository's name, held by HoldRepo on its derived id; or a check's name",
 	"rename_to":          "a repository's new name",
 	"path":               "a path in a tree the call's revision names",
 	"path_b64":           "a path in a tree the call's revision names, its bytes in base64",
@@ -126,8 +127,11 @@ var notRefArgs = map[string]string{
 	"grep":               "a message filter",
 	"since":              "an instant",
 	"cursor":             "a page's place",
+	"query":              "a search's text after its filters; a ref: among them is held as `ref` is",
+	"mode":               "how a search's text is read",
+	"ignore_case":        "how a search's text is read",
 	"limit":              "a page's size",
-	"status":             "a repository status filter",
+	"status":             "a repository status filter, or the state a check is reported in",
 	"branches_prefix":    "a listing's prefix: it reads every ref under it and depends on none",
 	"branches_cursor":    "a listing's place",
 	"protections_cursor": "a listing's place",
@@ -160,11 +164,10 @@ var notRefArgs = map[string]string{
 	"approvals":          "a merge gate's field",
 	"approvals_unless":   "a merge gate's field",
 	"human_paths":        "a merge gate's field",
-	"checks":             "a merge gate's field",
+	"checks":             "a merge gate's field, or the checks a rerun names by name and attempt",
 	"landing":            "a merge gate's field",
 	"delete_source":      "a merge gate's field",
 	"owners_approve":     "a merge gate's field",
-	"auto_revert":        "a merge gate's field",
 	"agents_edit_checks": "a merge gate's field",
 	"op_id":              "an operation's id",
 	"title":              "a change's title",
@@ -177,7 +180,7 @@ var notRefArgs = map[string]string{
 	"expected_version":   "a change's version the write is compared with, never a ref",
 	"reopen":             "whether a close reopens; the source it reopens at is the change's, held by the steer",
 	"verdict":            "a review's verdict",
-	"summary":            "a review's summary",
+	"summary":            "a review's or a reported check's summary",
 	"findings":           "findings, raised or named by id: each anchored to a revision the change already holds",
 	"carries":            "earlier findings a review carries, by id",
 	"anchor":             "a comment's place in a revision the change already holds",
@@ -185,6 +188,22 @@ var notRefArgs = map[string]string{
 	"finding":            "a finding's id",
 	"resolve":            "whether a comment resolves its thread",
 	"resolution":         "a finding's resolution",
+	"sha":                "a whole commit id a check is keyed by: nothing resolves it, and nothing is read through it",
+	"checked_for":        "the branch a check's rows are keyed by, which filters them: nothing is read through it",
+	"attempt":            "a check's attempt",
+	"all_failed":         "whether a rerun names every check that did not pass",
+	"tail":               "a reported check's output",
+	"failures":           "a reported check's failures",
+	"failures_omitted":   "how many failures a reported check counted past those it names",
+	"duration_ms":        "a reported check's duration",
+	"url":                "a reported check's page on its CI, or an import's source at another host",
+	"credential":         "an import's credential: the name of a variable, never anything of a repository",
+	"mirror":             "whether an import keeps its repository in step with the source",
+	"method":             "how a change merges",
+	"delete_branch":      "whether a merge deletes the change's own source, which the merge record moves",
+	"close_task":         "whether a merge closes the change's work item",
+	"override_reason":    "a person's reason to merge past a gate",
+	"merge":              "whether a revert's change is merged as its call's second write",
 }
 
 // refCallDrops is the arguments a tool's holdingCall row carries that the call
@@ -380,6 +399,79 @@ func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A CALL'S SEAT BRANCHES ARE HELD IN ONE ROW WRITE (M3-boxes §10.6.5): a turn
+// with a run row — a resumed executor, a run's bridged calls —
+// whose call depends on two seats' branches (a comparison's base and head, a
+// commit and the branch it asks about, a change's source and target) writes
+// both keys on its row in ONE compare-and-set, not one each, before the
+// request; and an open between the two resolves them in one read — two
+// branches neither of which exists yet included, which it holds with no
+// read.
+//
+// Mutations: refsOf leaving each ref's Take to its HoldRef → two writes for
+// compare and landed_in, red; the open holding its branches one call of
+// CodeDeps.branch each → two writes and two resolves, red; CodeDeps.branch
+// leaving each unread branch's Take to its HoldRef → two writes for the open
+// of two new branches, red.
+func TestACallsSeatBranchesAreHeldInOneRowWrite(t *testing.T) {
+	t.Parallel()
+	const (
+		other      = "refs/heads/seats/qa/y"
+		otherShort = "seats/qa/y"
+	)
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		// unborn: neither branch exists, and both are held with no read.
+		unborn bool
+	}{
+		{name: "compare", tool: builtin.CodeCompareTool,
+			args: map[string]any{"repo": "site", "base": seatBranchShort, "head": otherShort}},
+		{name: "landed_in", tool: builtin.CodeLandedInTool,
+			args: map[string]any{"repo": "site", "commit": seatBranchShort, "target": otherShort}},
+		{name: "open", tool: builtin.CodeOpenChangeTool, args: map[string]any{"repo": "site",
+			"branch": seatBranchShort, "target": otherShort, "title": "Fix the lab"}},
+		{name: "open/unborn", tool: builtin.CodeOpenChangeTool, unborn: true, args: map[string]any{"repo": "site",
+			"branch": seatBranchShort, "target": otherShort, "title": "Fix the lab"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newChangeHost(suggestedChange())
+			if !c.unborn {
+				withSeatBranch(host, "qa", time.Hour)
+				host.refs[other] = mainOID
+				host.seats[other] = "qa"
+				host.ats[other] = time.Now().Add(-time.Hour)
+			}
+			writer, turn := &codeWrites{}, writerTurn(t)
+			ev := watch(host, writer, nil)
+			var mu sync.Mutex
+			var written [][]string
+			turn.Holds.Attach(func(_ context.Context, keys []string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				written = append(written, slices.Clone(keys))
+				return nil
+			})
+			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
+			if got.Failed {
+				t.Fatalf("%s answered %q", c.tool, got.Output)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{seatBranchKey, code.RefHoldKey(siteID, other)}
+			if len(written) != 1 ||
+				!slices.Equal(slices.Sorted(slices.Values(written[0])), slices.Sorted(slices.Values(want))) {
+				t.Errorf("%s wrote %v on the turn's row, want ONE write of both branches' keys %v", c.tool,
+					written, want)
+			}
+			if n := count(ev.list(), "resolve_ref"); n != 1 {
+				t.Errorf("%s resolved its branches in %d reads, want one", c.tool, n)
+			}
+		})
 	}
 }
 

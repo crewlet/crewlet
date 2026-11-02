@@ -1798,7 +1798,9 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 // in between waits, and the row's writer is attached the moment the row
 // exists ([sandbox.LaunchRequest.Opened], called after the store opened the
 // job and before any box exists) — from then on every hold is on the row
-// before its request. A launch that fails before the row existed unseals the
+// before its request. A RELAUNCH, its row's writer already attached, reads the
+// set unsealed: the row exists, and its reset unions what it is handed with
+// what the row holds. A launch that fails before the row existed unseals the
 // set, and one that fails after it detaches the writer: the coordinator
 // abandons that row, and the turn runs on holding in memory.
 type launchHold struct {

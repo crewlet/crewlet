@@ -156,7 +156,8 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	if j.parent == "" {
 		j.parent = w.Base
 	}
-	creates := w.Kind == code.WriteCreateBranch || (w.Kind == code.WriteCommitFiles && w.ExpectedHead == "")
+	creates := w.Kind == code.WriteCreateBranch || w.Kind == code.WriteRevertChange ||
+		(w.Kind == code.WriteCommitFiles && w.ExpectedHead == "")
 	if (creates && head != "") || (!creates && head != w.ExpectedHead) {
 		return j, writeVerdict{reason: code.RefusalStale, detail: wr.headSentence(head), stale: true}, nil
 	}
@@ -517,6 +518,8 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		commit, res, done, err = b.applySuggestions(ctx, j)
 	case code.WriteRebaseChange:
 		commit, res, done, err = b.rebase(ctx)
+	case code.WriteRevertChange:
+		commit, res, done, err = b.revertChange(ctx)
 	default:
 		commit, res, done, err = b.pick(ctx)
 	}
@@ -1186,8 +1189,11 @@ func utf8Encoding(enc string) bool {
 	return strings.EqualFold(enc, "utf-8") || strings.EqualFold(enc, "utf8")
 }
 
-// readCommits is ONE `cat-file --batch -Z` of commits in the copy, each
-// streamed into its header.
+// readCommits is ONE `cat-file --batch -Z` of commits in the build's scratch,
+// through its alternate — so the copy's commits, and those the build itself
+// made, which a chain's next entry is merged onto (chain.go) — each streamed
+// into its header. Never in the copy alone, where a commit the build made is
+// not.
 func (b *building) readCommits(ctx context.Context, ids []string, into []*commitHeader) error {
 	var stdin bytes.Buffer
 	for _, id := range ids {
@@ -1210,7 +1216,7 @@ func (b *building) readCommits(ctx context.Context, ids []string, into []*commit
 		return err
 	}
 	res, err := b.wr.s.runGit(ctx, gitproc.Cmd{
-		Dir: b.wr.synced.Dir, Args: []string{"cat-file", "--batch", "-Z"}, Config: b.wr.s.o.Cache.ServeConfig(),
+		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"cat-file", "--batch", "-Z"},
 		Stdin: &stdin, Stdout: reader, Class: gitproc.ClassRead, Deadline: left,
 	})
 	if err == nil {
@@ -1570,6 +1576,21 @@ func fitConflicts(res code.EngineWriteResult, conflicts []code.Conflict, omitted
 // refused at the door. A pack past code.MaxWritePackBytes is too_large; an
 // object the check refuses is rejected_object, in git's own words.
 func (b *building) pack(ctx context.Context) (code.EngineWriteResult, bool, error) {
+	return b.packWithin(ctx, code.MaxWritePackBytes, func(size int64) string {
+		return fmt.Sprintf("this change's pack is %s, past the %s one engine write may store "+
+			"(code.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
+			humanBytes(size),
+			humanBytes(code.MaxWritePackBytes))
+	})
+}
+
+// packWithin is pack under a bound of the build's own: a pack past bound
+// bytes is too_large, tooLarge its sentence of the pack's size — a chain's is
+// code.MaxChainPackBytes, every entry's merge at a merge_change's bound
+// (chain.go).
+func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(size int64) string) (
+	code.EngineWriteResult, bool, error) {
+
 	wr := b.wr
 	ids, err := looseObjects(filepath.Join(b.sc.Dir, "objects"))
 	if err != nil {
@@ -1611,10 +1632,8 @@ func (b *building) pack(ctx context.Context) (code.EngineWriteResult, bool, erro
 	if err != nil {
 		return code.EngineWriteResult{}, true, err
 	}
-	if info.Size() > code.MaxWritePackBytes {
-		return wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("this change's pack is %s, past the %s one engine "+
-			"write may store (code.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
-			humanBytes(info.Size()), humanBytes(code.MaxWritePackBytes))), true, nil
+	if info.Size() > bound {
+		return wr.changeRefused(code.WriteTooLarge, tooLarge(info.Size())), true, nil
 	}
 	in, err := os.Open(packPath)
 	if err != nil {
@@ -1687,4 +1706,29 @@ func looseObjects(objects string) ([]string, error) {
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// prune removes from the build's scratch every loose object it holds that
+// kept does not name: what one merge of a chain wrote before the chain skipped
+// it — a conflicting merge-tree's tree and its marked files, a merge cut by
+// its budget part way — so the chain's one pack is exactly the objects of the
+// commits it made, and a chain built again with that entry gone from its
+// rows packs the same bytes. An object kept named stays whatever the skipped
+// merge did: git never writes a loose object it holds again, only freshens
+// it.
+func (b *building) prune(kept []string) error {
+	objects := filepath.Join(b.sc.Dir, "objects")
+	ids, err := looseObjects(objects)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, found := slices.BinarySearch(kept, id); found {
+			continue
+		}
+		if err := os.Remove(filepath.Join(objects, id[:2], id[2:])); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("host: dropping object %s a skipped merge wrote: %w", id, err)
+		}
+	}
+	return nil
 }

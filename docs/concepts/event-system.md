@@ -482,8 +482,15 @@ code_check_finished        # one attempt of a check of a commit ENDED, as
                            # the row kept (a slow runner's exit after its
                            # attempt was errored runner_lost) names it in
                            # `replaces`: a correction of that ending, never
-                           # the attempt's second. STORED AND NOT FED
-                           # (code-host.md, "Who records a check")
+                           # the attempt's second. An ending that FAILS a
+                           # change's head (failed, or errored past the
+                           # home's own requeue) names the change's owner,
+                           # and their seat on `agent_id`, the column the
+                           # seat's day counts it off, once by its attempt,
+                           # as `checks_failed`; every other ending names
+                           # no seat, so the day passes it over. STORED
+                           # AND NOT FED (code-host.md, "Who records a
+                           # check")
 change_merged              # a change a MERGE RECORD merged into its
                            # branch: repository by id and name, the change
                            # and its number, the branch, the method and the
@@ -515,6 +522,44 @@ review_submitted           # a review of a change was given: the change and
                            # record; the reviewer's seat day counts it as
                            # `reviews_given`, the owner's its findings as
                            # `findings_received`. STORED AND FED
+code_queue_ejected         # a merge queue put an entry OUT: repository
+                           # by id and name, the entry, its change and
+                           # number, the branch, why (check_failed,
+                           # conflict, gate_unmet, head_moved,
+                           # not_fast_forward), the failed checks or the
+                           # conflicted paths, who enqueued it, and the
+                           # change's owner with `owner_agent_id`, whose
+                           # seat day counts it once by its entry as
+                           # `ejections`. Published ONCE an entry, by the data node whose
+                           # committer landed the eject record — or the push
+                           # whose move of a queued change's head ejected
+                           # its entry head_moved in the push's own record —
+                           # never by an applier, never for a retry its
+                           # operation ledger collapsed. STORED AND FED
+                           # (code-host.md, "The merge queue")
+code_target_broken         # a protected branch's tip checks found the
+                           # FIRST landing they failed on: repository by id
+                           # and name, the branch, the landing's commit and
+                           # kind, the change it landed and its number
+                           # (none for a person's push), who landed it, and
+                           # the checks it broke. Published ONCE a landing,
+                           # by the data node whose committer landed the
+                           # broken record — never by an applier, never for
+                           # a retry its operation ledger collapsed. STORED
+                           # AND FED (code-host.md, "Tip checks and
+                           # code_green")
+code_mirror_pushed         # a repository's home pushed it to its push
+                           # mirror: repository by id and name, the other
+                           # host's URL (never a credential), the seat whose
+                           # identity there it pushed as, the refs it set
+                           # and onto what, those it deleted, and the
+                           # protected branches it held back with no green
+                           # commit to publish. Published once a push that
+                           # moved something, by the home git node that
+                           # pushed; a failed push is no event (its home
+                           # raises code_mirror_failing). STORED, NOT FED:
+                           # the audit of what the company published
+                           # (code-host.md, "Mirrors and imports")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

@@ -421,11 +421,16 @@ const WORKING: Partial<AgentRow> = {
 // A PERSON RUNS NO TURN: the engine never spawns one, so their profile asks
 // nothing a runtime answers — every one of those reads would be a question
 // about a thing that cannot exist, and the tabs that draw them are absent.
-test("a person's profile has three tabs and asks nothing a runtime answers", async () => {
+test("a person's profile has four tabs and asks nothing a runtime answers", async () => {
   // A BOOKMARK NAMING AN AGENT'S TAB lands on Overview rather than a blank.
   mount("#/company/org/seats/jane?tab=turns", { answers: { viewer: OPERATOR, config: DOCUMENT } });
   await settle();
-  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual(["Overview", "Work", "Settings"]);
+  expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
+    "Overview",
+    "Work",
+    "Code",
+    "Settings",
+  ]);
   const selected = screen
     .getAllByRole("tab")
     .find((t) => t.getAttribute("aria-selected") === "true");
@@ -465,6 +470,7 @@ test("an agent's profile has seven tabs, and Work counts the engine's total rath
   expect(tabNames().map((n) => n?.replace(/\d+$/, ""))).toEqual([
     "Overview",
     "Work",
+    "Code",
     "Turns",
     "Memory",
     "Schedules",

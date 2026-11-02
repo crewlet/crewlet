@@ -104,6 +104,31 @@ const codeHistorySection = "\n## Reading the company's code" +
 	"costs minutes for one file. A change's diff, its findings and what changed " +
 	"since your review are read with `" + toolname.CodeGetChange + "`."
 
+// KeyCodeSearch is the outline key of the guidance on searching the company's
+// code.
+const KeyCodeSearch = "code_searching"
+
+// CodeSearchTools are the code tools [codeSearchSection]'s claim rests on: the
+// search. The section renders only where the executor holds it — registered
+// where the engine's search is wired, beside the reads, which a seat holds
+// all of or none — so no prompt sends a seat to a search its surface does not
+// carry. Exported for internal/agent/builtin's test that holds it to the tool
+// that package registers, which this package cannot import.
+func CodeSearchTools() []string { return []string{toolname.CodeSearch} }
+
+// codeSearchSection is the one rule about SEARCHING the company's code that no
+// tool's description reaches a seat early enough to make: the choice between
+// one search across the repositories it reads, which the git nodes answer from
+// an index where a repository keeps one, and walking trees file by file with
+// code_read to find where something lives, a round each and the turn's context
+// spent on files that do not hold it. How a search is written — its filters,
+// its mode, its pages, and that an unfiltered one reads only the repositories
+// that keep an index — is the tool's description, not repeated here: "every
+// repository" would be false of a `search: grep` one no repo: names.
+const codeSearchSection = "\n## Searching the company's code" +
+	"\nWhere something is defined, used or mentioned is found with `" + toolname.CodeSearch + "` " +
+	"across the repositories you can read — search before reading whole trees."
+
 // KeyCodeWrites is the outline key of the guidance on changing the company's
 // own code.
 const KeyCodeWrites = "code_writes"
@@ -135,6 +160,27 @@ const codeWritesSection = "\n## Changing the company's code" +
 	"few lines — is committed on the server with `" + toolname.CodeCommitFiles + "`; anything to " +
 	"build or test belongs in a checkout. Your experiments go in a scratch " +
 	"repository, `<your handle>.<name>`."
+
+// KeyCodeMerging is the outline key of the guidance on merging a change.
+const KeyCodeMerging = "code_merging"
+
+// CodeMergeTools are the code tools [codeMergingSection]'s claims rest on: the
+// merge itself. Exported for internal/agent/builtin's test that holds them to
+// the change writes it registers.
+func CodeMergeTools() []string { return []string{toolname.CodeMergeChange} }
+
+// codeMergingSection is the one rule about MERGING a change that no tool's
+// description can carry early enough: what a seat does while a change waits.
+// A merge its gate does not allow yet is answered not_ready and a queued one
+// lands later, and in both the engine wakes the seat when it is time — a
+// ready_to_merge wake once the last precondition is met, a merged one once a
+// queue lands it — so a seat that polls, or keeps its turn open waiting, spends
+// rounds on what a wake already delivers. Which preconditions, who clears them
+// and the change's place in its queue are the tool's answer, not repeated here.
+const codeMergingSection = "\n## Merging a change" +
+	"\nA change merges with `" + toolname.CodeMergeChange + "` once it is ready. A merge that " +
+	"is not ready, or is queued for its checks, is not waited on: end the turn, " +
+	"and a `ready_to_merge` or `merged` wake brings you back."
 
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
@@ -315,9 +361,18 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
 		b.Heading(KeyCodeHistory, codeHistorySection)
 	}
-	// AND HOW TO CHANGE IT, right after: the same choice made for a write.
+	// AND HOW TO FIND WHAT TO READ, right after: the choice made before a
+	// read, of a search over every repository rather than a walk of one.
+	if holdsAll(in.AvailableTools, CodeSearchTools()) {
+		b.Heading(KeyCodeSearch, codeSearchSection)
+	}
+	// AND HOW TO CHANGE IT, after both: the same choice made for a write.
 	if holdsAll(in.AvailableTools, CodeWriteTools()) {
 		b.Heading(KeyCodeWrites, codeWritesSection)
+	}
+	// AND HOW A CHANGE MERGES, last of the four: what to do while it waits.
+	if holdsAll(in.AvailableTools, CodeMergeTools()) {
+		b.Heading(KeyCodeMerging, codeMergingSection)
 	}
 
 	// The tool-skills catalogue lands adjacent to the tools to discover so

@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -82,17 +84,42 @@ func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()
 // codeSeatRules is the chart and the calendar the committer judges a SEAT'S
 // push by ([code.CommitterOptions.SeatRules]) — the current epoch's roster,
 // the one a seat's code read is judged by ([Engine.codeRoster]), and the
-// company's clock its day's quota is counted on — both off ONE epoch, so a
-// revision that moves a seat and the clock together is judged by both or by
-// neither, and false where no epoch is installed yet: no chart, on which the
-// committer hands a seat's push to the repository's next committer rather
-// than judge it. Read once a batch that carries a seat's push.
+// company's clock its day's quota is counted on — and the activation the
+// chart is of, which a mergeability stamps the readiness it judges with
+// ([code.SeatRules.Epoch]) — all off ONE epoch, so a revision that moves a
+// seat and the clock together is judged by both or by neither, and false
+// where no epoch is installed yet: no chart, on which the committer hands a
+// seat's push to the repository's next committer rather than judge it. Read
+// once a batch that carries a seat's push.
 func (e *Engine) codeSeatRules() (code.SeatRules, bool) {
 	c := e.Company()
 	if c == nil || c.roster == nil {
 		return code.SeatRules{}, false
 	}
-	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location()}, true
+	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location(), Epoch: chartEpochOf(c)}, true
+}
+
+// codeChartEpoch is the activation of the chart this node holds now
+// ([chartEpochOf]), 0 while it holds none: what the home's change work names
+// in its listings ([codehome.Options.Chart]), so a chart apply makes every
+// change its records judged by an earlier chart due a refresh.
+func (e *Engine) codeChartEpoch() int64 {
+	c := e.Company()
+	if c == nil || c.roster == nil {
+		return 0
+	}
+	return chartEpochOf(c)
+}
+
+// chartEpochOf is the activation c's chart is of (configplane.ActivationStamp
+// of the instant its revision was activated), 0 for an epoch built from no
+// activation — a stamp of the zero instant is a negative millisecond, which
+// would read as earlier than every chart rather than as none.
+func chartEpochOf(c *Company) int64 {
+	if c.ActivatedAt.IsZero() {
+		return 0
+	}
+	return configplane.ActivationStamp(c.ActivatedAt)
 }
 
 // codeDeletedRetention is how long a deleted repository waits for its purge at
@@ -225,21 +252,66 @@ func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommit
 // reasons: a write of a change's conversation or of a repository's checks
 // waiting its turn is answered "not serving" and taken to the runner-up, and a
 // publish in flight finishes before the estate subject cancels its answer and
-// before the admission is withdrawn. One bound for all three, the writers'
-// stops after the committer's.
+// before the admission is withdrawn. All three are CLOSED FIRST and then
+// drained TOGETHER under the one bound ([stopTogether]).
 func (n *native) stopCommitter(ctx context.Context) {
 	if n == nil || n.committer == nil {
 		return
 	}
-	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), statelog.DefaultResolveBudget)
-	defer cancel()
-	n.committer.Stop(bounded)
+	stopTogether(ctx, statelog.DefaultResolveBudget, n.proposalWriters()...)
+}
+
+// proposalWriters is every writer of this node's code half that answers on the
+// estate's proposal lane — its committer, and its change writer and checks
+// writer where it built them — each a [closingWriter] only where it is set,
+// never a nil pointer behind a non-nil interface.
+func (n *native) proposalWriters() []closingWriter {
+	writers := []closingWriter{n.committer}
 	if n.changeWriter != nil {
-		n.changeWriter.Stop(bounded)
+		writers = append(writers, n.changeWriter)
 	}
 	if n.checksWriter != nil {
-		n.checksWriter.Stop(bounded)
+		writers = append(writers, n.checksWriter)
 	}
+	return writers
+}
+
+// closingWriter is a writer as the teardown stops it: Close refuses every new
+// write, and every one still waiting for its turn, as a node that ran nothing,
+// leaving the publishes in flight to run; Stop closes it and waits for those
+// publishes, cancelling them once its context ends. [code.Committer],
+// [code.ChangeWriter] and [code.ChecksWriter] satisfy it.
+type closingWriter interface {
+	Close()
+	Stop(ctx context.Context)
+}
+
+// stopTogether stops writers under ONE bound, CLOSING EVERY ONE FIRST and only
+// then draining them ALL AT ONCE.
+//
+// CLOSED FIRST, because a writer still open admits and publishes new work on a
+// node that is stopping: stopped one after another, the change writer took
+// conversation writes for as long as the committer's stop waited on a batch
+// a broker election held — the whole bound — and published them, records the
+// estate subject's withdrawal and the admission's then cut short.
+//
+// DRAINED TOGETHER, because the bound is the teardown's, not each writer's:
+// stopped one after another, a writer whose turn came after a committer that
+// spent the bound got a context already ended and cancelled its publishes in
+// flight at once, answering their askers from a cancelled publish, where it
+// would have finished them inside the very bound it was handed. Each now
+// drains with the whole of it, beside the others.
+func stopTogether(ctx context.Context, bound time.Duration, writers ...closingWriter) {
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	defer cancel()
+	for _, w := range writers {
+		w.Close()
+	}
+	var drained sync.WaitGroup
+	for _, w := range writers {
+		drained.Go(func() { w.Stop(bounded) })
+	}
+	drained.Wait()
 }
 
 // clientTerm is one log's census term of readers that are neither seats nor
@@ -478,6 +550,9 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 		leave(fmt.Errorf("engine: walk the code log's repositories, without which no "+
 			"removal from code.repos is deleted: %w", listErr))
 	}
+	if listErr == nil {
+		importsIgnored(ctx, logger, decided, was)
+	}
 	var wrote codeReposWritten
 	defer wrote.log(ctx, logger)
 	results, err := store.EnsureRepos(ctx, a, decided)
@@ -548,6 +623,34 @@ func (w *codeReposWritten) ensured(name string, was map[string]code.RepoStatus, 
 	default:
 		w.changed = append(w.changed, name)
 	}
+}
+
+// importsIgnored says, in ONE line a run, which declarations name an import
+// for a repository that existed before the run — live or deleted, as the walk
+// of the rows found it (was) — and is not being imported: an import is read
+// by its repository's create alone ([code.Declared.Import]), so each of these
+// is passed by, and the line is what tells the person who added one to a
+// repository that already holds history that nothing will be fetched — and
+// the one who left one in place after its import that it can go. One still
+// being imported is its create's import running, and is not named. Its count,
+// and its first [codeReposLoggedNames] names; nothing where there are none.
+func importsIgnored(ctx context.Context, logger *slog.Logger, decided []code.Declared,
+	was map[string]code.RepoStatus) {
+
+	var names []string
+	for _, d := range decided {
+		if status, existed := was[d.Name]; existed && status != code.RepoStatusImporting && d.Import != nil {
+			names = append(names, d.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	logger.InfoContext(ctx, "code_import_ignored", "count", len(names),
+		"names", names[:min(len(names), codeReposLoggedNames)],
+		"detail", "import is read only when its repository is created, and these existed already, so "+
+			"nothing is fetched for them: remove import from each declaration — a pull mirror's "+
+			"mirror_from is what follows another host")
 }
 
 // codeReposLoggedNames is the most names the reconcile's line lists of each
@@ -677,7 +780,8 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 // [code.Store.DeleteRepo] checks the manager again inside its own snapshot,
 // so this is the reconcile not asking rather than the only guard.
 func retiredByOmission(l code.RepoLife) bool {
-	live := l.Status == code.RepoStatusActive || l.Status == code.RepoStatusArchived
+	live := l.Status == code.RepoStatusImporting || l.Status == code.RepoStatusActive ||
+		l.Status == code.RepoStatusArchived
 	return live && l.ManagedBy == code.ManagedConfig
 }
 
@@ -691,7 +795,11 @@ func retiredByOmission(l code.RepoLife) bool {
 // carries one canonical order, so every node deciding one declaration forms
 // byte-identical records, and [code.RepoSettings.Validate] refuses any other —
 // and the default branch, the visibility and the search mode defaulted, the
-// last to indexed: a repository the company declares is searched across.
+// last to indexed: a repository the company declares is searched across. Its
+// mirrors and its import are recorded as written — each credential the ${VAR}
+// reference itself, never what it resolves to, which is read only when the
+// remote is dialed — a push mirror's seat by its handle, trimmed as an owner's
+// is, and its refs in the document's order, unset for the default.
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
@@ -728,12 +836,23 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 		}
 		owners = append(owners, code.PathOwner{Owner: who, Paths: po.Paths})
 	}
-	return code.Declared{Name: r.Name, Settings: code.RepoSettings{
+	d := code.Declared{Name: r.Name, Settings: code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
 		Search: code.SearchMode(r.Search.Resolved()), DefaultBranch: r.ResolvedDefaultBranch(),
 		Description: r.Description, Archived: r.Archived, Protections: protections,
 		PathOwners: code.CanonicalPathOwners(owners),
-	}}, nil
+	}}
+	if m := r.MirrorFrom; m != nil {
+		d.Settings.MirrorFrom = &code.MirrorSource{URL: m.URL, Credential: m.Credential}
+	}
+	if m := r.MirrorTo; m != nil {
+		d.Settings.MirrorTo = &code.MirrorTarget{URL: m.URL, Credential: m.Credential,
+			As: strings.TrimSpace(m.As), Refs: slices.Clone(m.Refs)}
+	}
+	if i := r.Import; i != nil {
+		d.Import = &code.ImportSource{URL: i.URL, Credential: i.Credential}
+	}
+	return d, nil
 }
 
 // declaredGate is a rule's resolved merge gate ([config.CodeProtection.Gate])
@@ -746,10 +865,9 @@ func declaredGate(g config.CodeGate) code.MergeGate {
 	out := code.MergeGate{
 		MergeBy: code.MergeBy(g.MergeBy), Approvals: code.Approvals(g.Approvals),
 		ApprovalsUnless: declaredClasses(g.ApprovalsUnless), Checks: g.Checks,
-		Landing: code.Landing{Policy: code.LandingPolicy(g.Landing.Policy), Depth: g.Landing.Depth,
-			Batch: g.Landing.Batch},
+		Landing:       code.Landing{Depth: g.Landing.Depth, Batch: g.Landing.Batch},
 		OwnersApprove: g.OwnersApprove, DeleteSource: code.DeleteSource(g.DeleteSource),
-		AutoRevert: g.AutoRevert, AgentsEditChecks: g.AgentsEditChecks,
+		AgentsEditChecks: g.AgentsEditChecks,
 	}
 	if g.HumanPaths != nil {
 		out.HumanPaths = make([]code.HumanPath, len(g.HumanPaths))
@@ -1029,7 +1147,8 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
 	ended bool) {
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
-		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows, "purged", report.Purged,
+		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows,
+		"queue_sweeps", report.QueueSweeps, "queue_swept_rows", report.QueueSweptRows, "purged", report.Purged,
 		"steps", report.Steps, "remain", report.Remain, "released", report.Released, "expired", report.Expired,
 		"scratch_held", report.ScratchHeld, "refs_expired", report.RefsExpired, "refs_kept", report.RefsKept,
 		"refs_held", report.RefsHeld}
@@ -1052,10 +1171,11 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	case err != nil && !ended:
 		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
-	case report.Sweeps > 0 || report.ChecksSweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
-		len(report.Unhanded) > 0 || report.Remain || report.Released > 0 || report.Expired > 0 ||
-		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "" || report.RefsExpired > 0 ||
-		report.RefsKept > 0 || report.RefsHeld > 0 || len(report.ExpiryFailed) > 0 || report.ExpiryUnread != "":
+	case report.Sweeps > 0 || report.ChecksSweeps > 0 || report.QueueSweeps > 0 || len(report.Purged) > 0 ||
+		len(report.Failed) > 0 || len(report.Unhanded) > 0 || report.Remain || report.Released > 0 ||
+		report.Expired > 0 || report.ScratchHeld > 0 || report.ScratchExpiryUnread != "" ||
+		report.RefsExpired > 0 || report.RefsKept > 0 || report.RefsHeld > 0 || len(report.ExpiryFailed) > 0 ||
+		report.ExpiryUnread != "":
 		logger.InfoContext(ctx, "code_retention_pass", attrs...)
 	default:
 		logger.DebugContext(ctx, "code_retention_pass", attrs...)

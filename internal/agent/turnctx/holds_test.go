@@ -13,16 +13,19 @@ import (
 )
 
 // rowWriter is a run row as a turn's holds write to it: the keys it took, in
-// order, and an error it answers every write with while one is set.
+// order, each write it was asked for, and an error it answers every write
+// with while one is set.
 type rowWriter struct {
-	mu   sync.Mutex
-	keys []string
-	fail error
+	mu     sync.Mutex
+	keys   []string
+	writes [][]string
+	fail   error
 }
 
 func (w *rowWriter) write(_ context.Context, keys []string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.writes = append(w.writes, slices.Clone(keys))
 	if w.fail != nil {
 		return w.fail
 	}
@@ -34,6 +37,55 @@ func (w *rowWriter) held() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return slices.Clone(w.keys)
+}
+
+// asked is every write the row was asked for, in order.
+func (w *rowWriter) asked() [][]string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.writes)
+}
+
+// ONE WRITE A CALL: a call that takes several keys — a comparison's two seats'
+// branches — writes every one the set does not hold in ONE write to its run
+// row, each once, and a key the set already holds is not written again; a
+// write the row refuses adds none of the call's keys.
+//
+// Mutations: write each new key in a write of its own → three writes for the
+// first call, red; write a call's held keys too → the second call writes
+// [a d], red.
+func TestATakeWritesEveryNewKeyOfACallInOneWrite(t *testing.T) {
+	t.Parallel()
+	row := &rowWriter{}
+	h := turnctx.NewHolds(nil)
+	h.Attach(row.write)
+	if err := h.Take(t.Context(), "a", "b", "a", "c"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if err := h.Take(t.Context(), "a", "d"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if err := h.Take(t.Context(), "c", "a"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	want := [][]string{{"a", "b", "c"}, {"d"}}
+	if got := row.asked(); !slices.EqualFunc(got, want, slices.Equal[[]string]) {
+		t.Errorf("three calls wrote %v, want %v: one write a call, of the keys the set did not hold", got, want)
+	}
+	if got := h.IDs(); !slices.Equal(got, []string{"a", "b", "c", "d"}) {
+		t.Errorf("the turn holds %v, want [a b c d]", got)
+	}
+
+	refused := errors.New("the run's row is gone or ending, so it can hold nothing new")
+	row.mu.Lock()
+	row.fail = refused
+	row.mu.Unlock()
+	if err := h.Take(t.Context(), "e", "f"); !errors.Is(err, refused) {
+		t.Fatalf("a call the row refused = %v, want its refusal", err)
+	}
+	if got := h.IDs(); !slices.Equal(got, []string{"a", "b", "c", "d"}) {
+		t.Errorf("the turn holds %v after its row refused a call, want none of the call's keys", got)
+	}
 }
 
 // A TAKE DURING A LAUNCH WAITS FOR ITS ROW. A launch reads the turn's set
@@ -57,7 +109,7 @@ func TestATakeDuringALaunchWaitsForItsRow(t *testing.T) {
 			}
 			took := make(chan error, 1)
 			go func() {
-				_, err := h.Take(t.Context(), "repo-b")
+				err := h.Take(t.Context(), "repo-b")
 				took <- err
 			}()
 			select {
@@ -98,7 +150,7 @@ func TestASealedTakeEndsWithItsContext(t *testing.T) {
 	h.Seal()
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := h.Take(ctx, "repo-a"); !errors.Is(err, context.DeadlineExceeded) {
+	if err := h.Take(ctx, "repo-a"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a Take sealed past its context = %v, want its deadline", err)
 	}
 	if got := h.IDs(); len(got) != 0 {
@@ -117,7 +169,7 @@ func TestADerivedTurnSharesItsHolds(t *testing.T) {
 	worker := parent.WithCalls(parent.Calls.Fork())
 	phase := parent.InPhase("execute")
 	for _, derived := range []*turnctx.Turn{worker, phase} {
-		if _, err := derived.Holding().Take(t.Context(), "repo-"+string(rune('a'+len(parent.Holds.IDs())))); err != nil {
+		if err := derived.Holding().Take(t.Context(), "repo-"+string(rune('a'+len(parent.Holds.IDs())))); err != nil {
 			t.Fatalf("a derived turn's Take: %v", err)
 		}
 	}
@@ -138,7 +190,7 @@ func TestAFailedHoldWriteAddsNothing(t *testing.T) {
 	row := &rowWriter{fail: refused}
 	h := turnctx.NewHolds(nil)
 	h.Attach(row.write)
-	if _, err := h.Take(t.Context(), "repo-a"); !errors.Is(err, refused) {
+	if err := h.Take(t.Context(), "repo-a"); !errors.Is(err, refused) {
 		t.Fatalf("a Take the row refused = %v, want its refusal", err)
 	}
 	if got := h.IDs(); len(got) != 0 {
@@ -147,8 +199,8 @@ func TestAFailedHoldWriteAddsNothing(t *testing.T) {
 	row.mu.Lock()
 	row.fail = nil
 	row.mu.Unlock()
-	if taken, err := h.Take(t.Context(), "repo-a"); err != nil || !taken {
-		t.Fatalf("the Take again = (%v, %v), want it taken", taken, err)
+	if err := h.Take(t.Context(), "repo-a"); err != nil {
+		t.Fatalf("the Take again = %v, want it taken", err)
 	}
 	if got := row.held(); !slices.Equal(got, []string{"repo-a"}) {
 		t.Errorf("the row holds %v, want [repo-a]", got)
@@ -157,22 +209,39 @@ func TestAFailedHoldWriteAddsNothing(t *testing.T) {
 
 // A TURN HOLDS AT MOST MaxHolds, and the one past it is refused naming the
 // bound — never a hold dropped. A key already held is no new hold, at the
-// bound or not.
+// bound or not. The bound is judged over a whole call's keys: a Take whose
+// new keys would carry the set past it adds none of them, and one that fits
+// adds them all.
+//
+// Mutation: judge the bound per key (the set before the call) → the call of
+// two at one below the bound adds them, red.
 func TestATurnPastItsHoldBoundIsRefused(t *testing.T) {
 	t.Parallel()
-	seed := make([]string, turnctx.MaxHolds)
+	seed := make([]string, turnctx.MaxHolds-1)
 	for i := range seed {
 		seed[i] = fmt.Sprintf("repo-%04d", i)
 	}
 	h := turnctx.NewHolds(seed)
-	if taken, err := h.Take(t.Context(), seed[7]); err != nil || taken {
-		t.Errorf("a held key at the bound = (%v, %v), want no new hold and no error", taken, err)
+	if err := h.Take(t.Context(), seed[7]); err != nil || len(h.IDs()) != len(seed) {
+		t.Errorf("a held key = %v, the set %d long, want no new hold and no error", err, len(h.IDs()))
 	}
-	if _, err := h.Take(t.Context(), "repo-past"); !errors.Is(err, turnctx.ErrHoldsFull) {
+	if err := h.Take(t.Context(), "repo-x", "repo-y"); !errors.Is(err, turnctx.ErrHoldsFull) {
+		t.Errorf("a call of two new keys at one below the bound = %v, want ErrHoldsFull", err)
+	}
+	if got := h.IDs(); len(got) != len(seed) {
+		t.Errorf("a refused call added %v", got[len(seed):])
+	}
+	if err := h.Take(t.Context(), "repo-x", seed[3]); err != nil || len(h.IDs()) != turnctx.MaxHolds {
+		t.Errorf("a call whose one new key fits = %v, the set %d long, want it taken", err, len(h.IDs()))
+	}
+	if err := h.Take(t.Context(), seed[7]); err != nil {
+		t.Errorf("a held key at the bound = %v, want no new hold and no error", err)
+	}
+	if err := h.Take(t.Context(), "repo-past"); !errors.Is(err, turnctx.ErrHoldsFull) {
 		t.Errorf("a Take past the bound = %v, want ErrHoldsFull", err)
 	}
 	var none *turnctx.Holds
-	if _, err := none.Take(t.Context(), "repo-a"); !errors.Is(err, turnctx.ErrNoHolds) {
+	if err := none.Take(t.Context(), "repo-a"); !errors.Is(err, turnctx.ErrNoHolds) {
 		t.Errorf("a Take on no holds = %v, want ErrNoHolds — a request reaching a repository unheld", err)
 	}
 }
@@ -199,7 +268,7 @@ func TestOnlyATakenKeyIsConfirmedAndNoneIsWritten(t *testing.T) {
 	if h.Confirm("untaken") || h.Confirmed("untaken") {
 		t.Error("a key nothing took was confirmed")
 	}
-	if _, err := h.Take(t.Context(), "taken"); err != nil {
+	if err := h.Take(t.Context(), "taken"); err != nil {
 		t.Fatalf("take: %v", err)
 	}
 	written := len(w.held())

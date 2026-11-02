@@ -31,15 +31,17 @@ import (
 //     ended at or after a moment, newest ended first (code_checks_recent_idx),
 //     each kept only where its repository is one the asker reads, so a page
 //     is the rows it READ and may be short, as a listing of changes across
-//     repositories is.
+//     repositories is. Every shape takes a check's name and a state as
+//     NARROWINGS, tested on the rows a page read beside the grant
+//     ([CheckQuery.State]): the dashboard's Checks section's facets.
 //   - `check` ([ReadCheck]) is one attempt whole: the row, the definition it
 //     ran under, its tail, the failures its ending named, and the log a
 //     failed run kept.
 //   - `checks_due` ([ReadChecksDue]) is the home's: the live changes whose head
 //     no dispatch for its target names its target's checks file, or whose
 //     head's attempt its infrastructure ended is due a requeue, each with
-//     what it owes, and the targets due a reading of their checks file again
-//     (dueCheckWork's doc).
+//     what it owes, the targets due a reading of their checks file again,
+//     and the protected targets owing tip work (dueCheckWork's doc).
 //   - `check_box` ([ReadCheckBox]) is a check's box's admission's: the one
 //     attempt its token names, by its key (code_checks' own), as its row
 //     stands — the engine's own read, held to no grant, since the box is no
@@ -196,6 +198,9 @@ func (q ReadQuery) validateChecks() error {
 			return refused("checks.change", "a check read names its attempt by its commit, never a change")
 		case !c.Since.IsZero():
 			return refused("checks.since", "only a window of checks is bounded by a moment")
+		case c.State != "":
+			return refused("checks.state", "a check read names one attempt, whatever its state; a listing of "+
+				"checks is narrowed by one")
 		case q.Cursor != "" || q.Limit != 0:
 			return refused("limit", "one attempt is read whole, never paged")
 		case !gitref.ValidOID(c.OID) || c.OID == ZeroOID:
@@ -218,8 +223,12 @@ func (q ReadQuery) validateChecks() error {
 	case c.Target != "":
 		return refused("checks.target", "a listing of checks names no branch: a change's are those checked "+
 			"for its own target, and a commit's those checked for every branch it was; a check read names one")
-	case c.Name != "" || c.Attempt != 0:
-		return refused("checks.name", "a listing of checks names no attempt; a check read reads one")
+	case c.Attempt != 0:
+		return refused("checks.attempt", "a listing of checks names no attempt; a check read reads one")
+	case c.Name != "" && !config.ValidCodeCheckName(c.Name):
+		return refused("checks.name", fmt.Sprintf("%q is not a check name", c.Name))
+	case c.State != "" && !c.State.Valid():
+		return refused("checks.state", fmt.Sprintf("%q is not one of %v", c.State, CheckStates()))
 	case c.Change < 0:
 		return refused("checks.change", fmt.Sprintf("%d is no change's number", c.Change))
 	case c.OID != "" && (!gitref.ValidOID(c.OID) || c.OID == ZeroOID):
@@ -267,9 +276,10 @@ func (q ReadQuery) validateChecksDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+
@@ -310,9 +320,10 @@ func (q ReadQuery) validateCheckBox() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
@@ -350,8 +361,9 @@ func (q ReadQuery) validateChecksQueued() error {
 		{"owner", q.Owner != ""}, {"work", q.Work != ""}, {"reviewer", q.Reviewer != ""},
 		{"needs", q.Needs != ""}, {"part", q.Part != ""}, {"changes_due", q.ChangesDue != nil},
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
@@ -398,6 +410,7 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
@@ -554,10 +567,7 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return err
 	}
-	var (
-		rows   *sql.Rows
-		cursor func(CheckRow) string
-	)
+	var rows *sql.Rows
 	switch {
 	case c.Change != 0:
 		// ONE err FOR EVERY BRANCH, never one declared here: a statement's
@@ -585,24 +595,20 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfTargetSQL, repo.ref.ID, oid, change.target, name, attempt, limit)
-		cursor = func(row CheckRow) string { return nameAttemptCursor(row) }
 	case c.OID != "":
 		target, name, attempt, ok := cutTargetCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfCommitSQL, repo.ref.ID, c.OID, target, name, attempt, limit)
-		cursor = targetCursor
 	case q.Cursor == "":
 		rows, err = tx.QueryContext(ctx, checksOfRepoSQL, repo.ref.ID, limit)
-		cursor = endedCursor
 	default:
 		at, oid, target, name, attempt, ok := cutEndedCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfRepoAfterSQL, repo.ref.ID, at, oid, target, name, attempt, limit)
-		cursor = endedCursor
 	}
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
@@ -612,7 +618,10 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
 	}
-	r.pageChecks(scanned, nil, limit, cursor, out)
+	for i := range scanned {
+		scanned[i].Repo = repo.ref.Name
+	}
+	r.pageChecks(scanned, c.keeps, limit, checksWalk(q), out)
 	return nil
 }
 
@@ -655,8 +664,13 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	if err != nil {
 		return err
 	}
-	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok }, limit,
-		windowCursor, out)
+	for i, row := range scanned {
+		if repo, ok := listed[row.RepoID]; ok {
+			scanned[i].Repo = repo.ref.Name
+		}
+	}
+	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok && c.keeps(row) },
+		limit, checksWalk(q), out)
 	return nil
 }
 
@@ -673,8 +687,9 @@ func scanChecks(rows *sql.Rows) ([]CheckRow, error) {
 	return out, rows.Err()
 }
 
-// pageChecks files the rows a listing READ into out — those keep keeps, every
-// one where it is nil — until the page's byte budget, and names where the
+// pageChecks files the rows a listing READ into out — those keep keeps: the
+// listing's narrowing ([CheckQuery.keeps]) and, on the window, the asker's
+// grant — until the page's byte budget, and names where the
 // next page resumes: after the last row it served where the budget ended it,
 // and after the last row it READ where it read a whole page, so a page the
 // grant kept little of still advances.
@@ -683,7 +698,7 @@ func (r *Reader) pageChecks(scanned []CheckRow, keep func(CheckRow) bool, limit 
 
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range scanned {
-		if keep != nil && !keep(row) {
+		if !keep(row) {
 			continue
 		}
 		out.Checks = append(out.Checks, row)
@@ -719,6 +734,7 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	case err != nil:
 		return fmt.Errorf("code: read check %s of %s: %w", key.Name, key.OID, err)
 	}
+	d.Repo = repo.ref.Name
 	d.Tail = tail
 	if def != "" {
 		d.Def = &CheckDef{}
@@ -773,6 +789,8 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // reading was recorded at or before [ChecksDueQuery.RefreshBefore] — the
 // home's clock less its refresh — so a target pushed to on every landing is
 // read at the home's pace, and only a file that changed makes its heads due.
+// And a repository owes its home the TIP WORK of each protected target holding
+// a landing its tip checks have not judged (tipwork.go, ADR-0091).
 //
 // TWO SHAPES, as `changes_due`'s, and over the same index: with no repository
 // it pages the repositories holding such a change or such a target, by id,
@@ -781,7 +799,10 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // tip and the position that moved it there — the tip whose checks file the
 // home reads — and what it owes ([CheckWork], read in the same snapshot), and
 // on its FIRST PAGE its targets due a reading ([ReadAnswer.DueTargets]),
-// walking its targets' rows by their key. Every change is tested by its
+// walking its targets' rows by their key, and its tip work
+// ([ReadAnswer.DueTips]), walking code_landings_unjudged_idx. The listing of
+// repositories is the union of the two listings, one keyset page of each
+// after the cursor merged into one. Every change is tested by its
 // dispatch's key and its target's, one seek of each, and by
 // code_checks_requeue_idx, which holds only the attempts a requeue reads.
 //
@@ -794,24 +815,25 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 		if q.Cursor != "" && !canonicalUUID(q.Cursor) {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err := tx.QueryContext(ctx, dueCheckReposSQL, q.Cursor, r.pageRows, refresh, AutoRequeueAttempts)
+		changes, err := repoIDsIn(ctx, tx, dueCheckReposSQL, q.Cursor, r.pageRows, refresh, AutoRequeueAttempts)
 		if err != nil {
 			return fmt.Errorf("code: list the repositories check work is due in: %w", err)
 		}
-		defer func() { _ = rows.Close() }()
+		tips, err := repoIDsIn(ctx, tx, dueTipReposSQL, q.Cursor, r.pageRows)
+		if err != nil {
+			return fmt.Errorf("code: list the repositories tip work is due in: %w", err)
+		}
+		ids, next := mergeRepoPages(changes, tips, r.pageRows)
 		pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return fmt.Errorf("code: list the repositories check work is due in: %w", err)
-			}
+		for _, id := range ids {
 			out.DueRepos = append(out.DueRepos, id)
 			if pg.add(stringBytes(id) + 1) {
-				out.Next = id
+				next = id
 				break
 			}
 		}
-		return rows.Err()
+		out.Next = next
+		return nil
 	}
 	repoID := q.ChecksDue.RepoID
 	if q.Cursor != "" && !ValidRef(q.Cursor) {
@@ -835,6 +857,11 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 		// THE TARGETS DUE A READING, on the first page alone: at most one a
 		// branch the repository's changes target, so bounded by its refs.
 		if err := r.dueCheckTargets(ctx, tx, repoID, refresh, &pg, out); err != nil {
+			return err
+		}
+		// ITS PROTECTED TARGETS' TIP WORK (tipwork.go), on the first page
+		// alone too: one a target holding a landing its tip checks owe.
+		if err := r.dueTips(ctx, tx, repoID, required, &pg, out); err != nil {
 			return err
 		}
 	}
@@ -884,6 +911,24 @@ func (r *Reader) dueCheckTargets(ctx context.Context, tx *sql.Tx, repoID string,
 		}
 	}
 	return rows.Err()
+}
+
+// repoIDsIn is the repository ids query answers with args, in its order.
+func repoIDsIn(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // BacklogScan is the most overdue attempts one reading of the checks' backlog
@@ -1008,6 +1053,37 @@ func checksBacklogIn(ctx context.Context, tx *sql.Tx, now time.Time) (ChecksBack
 
 // cursorTarget spells a target branch in a cursor.
 var cursorTarget = base64.RawURLEncoding
+
+// checksWalk is how a `checks` listing q spells the cursor that resumes it
+// after a row it served, by the walk its question takes: the window's where it
+// names no repository ([windowCursor]); one change's attempts at its head, by
+// name and attempt ([nameAttemptCursor]); one commit's for every target
+// ([targetCursor]); and a repository's, newest ended first ([endedCursor]).
+// THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor] answers
+// from it, so a page's own cursor and one a caller asks for after any of its
+// rows are spelled alike.
+func checksWalk(q ReadQuery) func(CheckRow) string {
+	c := CheckQuery{}
+	if q.Checks != nil {
+		c = *q.Checks
+	}
+	switch {
+	case q.Repo == "":
+		return windowCursor
+	case c.Change != 0:
+		return nameAttemptCursor
+	case c.OID != "":
+		return targetCursor
+	}
+	return endedCursor
+}
+
+// ChecksCursor is the cursor that resumes q — a `checks` listing — after row,
+// a row a page of it served: what a caller that keeps fewer of a page's rows
+// than it was served hands back as the next page's cursor. It is spelled by
+// the walk q's question takes ([checksWalk]), as the page's own cursor is, so
+// a caller never learns how a walk spells one.
+func (q ReadQuery) ChecksCursor(row CheckRow) string { return checksWalk(q)(row) }
 
 // nameAttemptCursor is a row's place among one commit's attempts for one
 // target.

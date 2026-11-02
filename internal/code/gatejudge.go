@@ -31,11 +31,14 @@ import (
 // merge_by the strictest of the rules' — a rule with no gate reading as
 // writers — and of code.merge_by_floor, on a protected target alone; an
 // approval where any gate asks one, exempted only by a class every gate
-// asking one exempts; every gate's human paths and required checks; path
-// owners gating where any gate makes them so; pre_land where any gate
-// requiring checks lands so. A branch no rule matches has no gate: a change
-// into it merges on M4's preconditions and its merger's right to push the
-// branch.
+// asking one exempts; every gate's human paths and required checks — a gate
+// requiring checks naming ChecksDirGlob among its human paths unless it sets
+// agents_edit_checks, so a change to the checks a target is measured with
+// waits for a person (U44), the default added here and never stored; path
+// owners gating where any gate makes them so; the smallest queue depth and
+// batch of the gates requiring checks. A branch no rule matches has no gate:
+// a change into it merges on M4's preconditions and its merger's right to
+// push the branch.
 //
 // # What it judges, beside M4's preconditions
 //
@@ -59,10 +62,9 @@ import (
 //     home's work on every decide's round. A snapshot whose owner rows digest
 //     to another digest than the match recorded is owners the home has not
 //     matched yet, and leaves the term COMPUTING until its next revise.
-//   - CHECK, where it requires checks and lands pre_land: every required check
-//     passed — or skipped, its paths untouched — on the head commit, by its
-//     latest attempt whatever ran it; a post_land target's checks hold its
-//     tip and never a landing (code_green).
+//   - CHECK, where it requires checks: every required check passed — or
+//     skipped, its paths untouched — on the head commit, by its latest
+//     attempt whatever ran it.
 //   - MERGE_AUTHORITY, where a merger is named ([GateFacts.Merger]): the
 //     asker of a read, the principal of a decide. A person always holds it;
 //     a seat and a credential the gate's merge_by on a protected target, and
@@ -111,18 +113,27 @@ type GateRules struct {
 	Approvals       Approvals
 	ApprovalsUnless []ChangeClass
 	// HumanPaths is every gate's human paths, each entry as its gate wrote
-	// it, by glob; Checks every gate's required checks, sorted and each once.
+	// it, by glob — and, for every gate requiring checks that does not set
+	// agents_edit_checks, ChecksDirGlob, which no record stores (U44);
+	// Checks every gate's required checks, sorted and each once.
 	HumanPaths []HumanPath
 	Checks     []string
-	// Landing is post_land only where every gate requiring checks lands so:
-	// a gate that tests a change before it lands holds the target whatever a
-	// looser one beside it allows.
-	Landing LandingPolicy
-	// OwnersApprove is whether any gate makes path owners gating;
-	// AutoRevert whether every gate requiring checks lets an enqueuer
-	// consent to a reverting of a landing that breaks the target.
+	// QueueDepth and QueueBatch are how many candidates the target's queue
+	// tests at once and how many changes one candidate takes: the SMALLEST
+	// of each over the gates requiring checks — throughput, never what is
+	// tested (M5-D3), so the smallest is the one that keeps every matching
+	// rule's bound — and zero where no such gate matches.
+	QueueDepth int
+	QueueBatch int
+	// OwnersApprove is whether any gate makes path owners gating.
 	OwnersApprove bool
-	AutoRevert    bool
+	// KeepsSource is whether any gate matching Target keeps a seat's source
+	// branch when a change merges (delete_source: none): a merge's caller
+	// deletes a source in a seat's namespace unless it is so, and keeps
+	// every other source (Q4) — a gate that keeps it wins over one that
+	// deletes it, since a deleted branch is the one of the two no later
+	// write undoes.
+	KeepsSource bool
 }
 
 // GateRulesOf is the gate target is held to by rules — a repository's rules,
@@ -135,13 +146,10 @@ type GateRules struct {
 // build does not know reads as its strictest, FAIL CLOSED, as a loosening is
 // judged ([MergeGate.LoosenedBy]).
 func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, error) {
-	out := GateRules{Target: target, Approvals: ApprovalsNone, Landing: LandingPreLand}
+	out := GateRules{Target: target, Approvals: ApprovalsNone}
 	var (
-		asked      int
-		unless     []ChangeClass
-		gatedCheck int
-		postLand   int
-		reverting  int
+		asked  int
+		unless []ChangeClass
 	)
 	// THE FIRST MATCHING RULE SETS MERGE_BY and every later one can only
 	// tighten it — never "" as a start, which ranks as a value this build does
@@ -183,7 +191,19 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 			}
 			asked++
 		}
-		for _, h := range g.HumanPaths {
+		humans := g.HumanPaths
+		if len(g.Checks) > 0 && !g.AgentsEditChecks {
+			// A RULE REQUIRING CHECKS HOLDS ITS CHECKS TO A PERSON (U44):
+			// ChecksDirGlob is a human path of its gate unless it sets
+			// agents_edit_checks — added here, where every reader and every
+			// decide takes its gate from, and never stored, so the rule's
+			// record says what its writer wrote and the default reaches
+			// every rule without a record rewriting one. Here rather than in
+			// JudgeGate alone: the gate's human paths are what decide that a
+			// snapshot reads a change's touched paths at all (readsPaths).
+			humans = append(slices.Clone(humans), HumanPath{Glob: ChecksDirGlob})
+		}
+		for _, h := range humans {
 			if !slices.ContainsFunc(out.HumanPaths, h.Equal) {
 				out.HumanPaths = append(out.HumanPaths, h)
 			}
@@ -194,14 +214,12 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 			}
 		}
 		out.OwnersApprove = out.OwnersApprove || g.OwnersApprove
+		// A VALUE THIS BUILD DOES NOT KNOW KEEPS the branch, as an unknown
+		// term reads as its strictest.
+		out.KeepsSource = out.KeepsSource || g.DeleteSource != DeleteSeats
 		if len(g.Checks) > 0 {
-			gatedCheck++
-			if g.Landing.Policy == LandingPostLand {
-				postLand++
-			}
-			if g.AutoRevert {
-				reverting++
-			}
+			out.QueueDepth = smallest(out.QueueDepth, g.Landing.Depth)
+			out.QueueBatch = smallest(out.QueueBatch, g.Landing.Batch)
 		}
 	}
 	if len(out.Patterns) > 0 && floor != "" {
@@ -212,11 +230,15 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 	}
 	slices.SortStableFunc(out.HumanPaths, func(a, b HumanPath) int { return strings.Compare(a.Glob, b.Glob) })
 	slices.Sort(out.Checks)
-	if gatedCheck > 0 && postLand == gatedCheck {
-		out.Landing = LandingPostLand
-	}
-	out.AutoRevert = gatedCheck > 0 && reverting == gatedCheck
 	return out, nil
+}
+
+// smallest is the smaller of held and next, held zero reading as none yet.
+func smallest(held, next int) int {
+	if held == 0 {
+		return next
+	}
+	return min(held, next)
 }
 
 // Protected reports a target some rule matches: a merge into it is held to
@@ -224,19 +246,15 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 func (r GateRules) Protected() bool { return len(r.Patterns) > 0 }
 
 // QueueTarget reports a target whose merges land through its QUEUE: a gated
-// one requiring a check (M5-D9) — pre_land, its queue testing each change
-// merged on it, or post_land, its lane landing changes ahead of the checks
-// its tip then runs. Every other merge is a direct one.
+// one requiring a check (M5-D9), its queue testing each change merged on it
+// before it lands. Every other merge is a direct one. Its required checks
+// are what hold a change's head ([JudgeGate]'s check term), so a target is a
+// queue's exactly where they do.
 func (r GateRules) QueueTarget() bool { return len(r.Checks) > 0 }
 
 // readsPaths reports a gate that judges the paths a change touches: one naming
 // human paths, or classes that exempt a change from its approval.
 func (r GateRules) readsPaths() bool { return len(r.HumanPaths) > 0 || len(r.ApprovalsUnless) > 0 }
-
-// judgesChecks reports a gate whose required checks hold a CHANGE: pre_land,
-// where a change's head is checked before it lands — a post_land target's
-// checks hold its tip (M5-D8).
-func (r GateRules) judgesChecks() bool { return len(r.Checks) > 0 && r.Landing != LandingPostLand }
 
 // GateFacts is everything a change's merge gate judges, as ONE snapshot holds
 // it ([LoadGateFacts], [gateFactsIn]), beside the chart and the floor of ONE
@@ -389,7 +407,7 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		if gate.OwnersApprove {
 			owned = appendOnce(owned, s.repo.ID)
 		}
-		if !gate.judgesChecks() {
+		if !gate.QueueTarget() {
 			continue
 		}
 		// EACH (REPOSITORY, COMMIT, TARGET, CHECK) ASKED ONCE, whichever
@@ -628,7 +646,7 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]
 // in [PreconditionKinds]' order: M4's draft, facts, blocker and mergeable
 // always, and each other only where it holds the change — the approval where
 // the gate asks one, a person's where it names human paths, the owners' where
-// it makes them gating, the checks where it requires them pre_land, the merge
+// it makes them gating, the checks where it requires them, the merge
 // authority where f names a merger.
 func JudgeGate(f GateFacts, r GateRules) Readiness {
 	j := newReadinessJudge(f.Rows, f.Roster)
@@ -644,7 +662,7 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 		pre = append(pre, g.ownersApproval())
 	}
 	pre = append(pre, j.blocker())
-	if r.judgesChecks() {
+	if r.QueueTarget() {
 		pre = append(pre, g.check())
 	}
 	pre = append(pre, j.mergeable())
@@ -1059,6 +1077,35 @@ func (g gateJudge) mergeAuthority() Precondition {
 		"rules' and code.merge_by_floor): %s or a person merges it", who, grant.Access, g.rows.Repo.Name,
 		target, need, g.rules.MergeBy, maintainedBy(g.rows.Repo, g.roster))
 	return p
+}
+
+// mergingAuthors is the authors of f's change who may merge it into its target
+// under gate r — [PreconditionMergeAuthority] judged for each as the merger,
+// in the order f reads them: whom a change that became ready is announced to
+// (concerns.go). A person always may; a seat as its grant and the gate's
+// merge_by say.
+func mergingAuthors(f GateFacts, r GateRules) []Reviewer {
+	g := gateJudge{readinessJudge: newReadinessJudge(f.Rows, f.Roster), f: f, rules: r}
+	var out []Reviewer
+	for _, a := range f.Rows.Authors {
+		g.f.Merger = a.principal()
+		if g.f.Merger != (Principal{}) && g.mergeAuthority().State == PreconditionMet {
+			out = append(out, a.reviewer())
+		}
+	}
+	return out
+}
+
+// principal is p as the principal its rows name: a seat by its handle, a
+// person by the human seat they hold — the zero Principal for neither.
+func (p Party) principal() Principal {
+	switch p.Kind {
+	case PartyAgent:
+		return Principal{Kind: PrincipalAgent, Seat: p.Handle}
+	case PartyPerson:
+		return Principal{Kind: PrincipalOperator, Seat: p.Handle}
+	}
+	return Principal{}
 }
 
 // seatParties is seats as the parties a readiness names.

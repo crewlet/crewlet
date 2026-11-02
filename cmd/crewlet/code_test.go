@@ -377,7 +377,7 @@ func TestTheCodeCommandDispatchesItsSubcommands(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) || out != "" {
 		t.Fatalf("`crewlet code` = %v, stdout %q; want the usage and flag.ErrHelp", err, out)
 	}
-	for _, sub := range []string{"status", "verify", "export", "import", "credential"} {
+	for _, sub := range []string{"status", "verify", "export", "import", "purge-unreachable", "credential"} {
 		if !strings.Contains(errOut, "  "+sub+" ") {
 			t.Errorf("the usage does not name %s:\n%s", sub, errOut)
 		}
@@ -949,6 +949,48 @@ func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%s does not say %q:\n%s", tc.name, want, out.String())
 			}
+		}
+	}
+}
+
+// A REPOSITORY'S STATUS SAYS WHERE ITS PURGE STANDS, which is how a person
+// who ran `code purge-unreachable` learns it is done: the purge requested and
+// not yet served, the expunge its maintainer opened for it, and the last one
+// committed with what it dropped — and a repository never purged prints no
+// expunge line at all.
+//
+// Mutation: leave the expunge line unprinted, or drop the committed
+// expunge's instant from it → red.
+func TestCodeStatusSaysWhereAPurgeStands(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, expunge string
+		want          string
+	}{
+		{"never purged", `{}`, ""},
+		{"requested", `{"request":"019a0c2e-0000-7000-8000-0000000000e0"}`,
+			"  expunge:      purge 019a0c2e-0000-7000-8000-0000000000e0 requested, not yet served\n"},
+		{"being served", `{"request":"019a0c2e-0000-7000-8000-0000000000e0","open":"x-1"}`,
+			"  expunge:      purge 019a0c2e-0000-7000-8000-0000000000e0 requested, not yet served; " +
+				"expunge x-1 open\n"},
+		{"committed", `{"expunged_at":"2026-10-30T08:15:00Z","dropped_objects":3,"dropped_bytes":4096}`,
+			"  expunge:      last committed 2026-10-30 08:15 UTC, dropping 3 objects (4.0 KiB)\n"},
+	} {
+		var r codeRepoView
+		view := `{"name":"web","status":"active","managed_by":"config","kind":"project",` +
+			`"owner":{"kind":"unit","ref":"eng"},"default_branch":"main","expunge":` + tc.expunge + `}`
+		if err := json.Unmarshal([]byte(view), &r); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var out strings.Builder
+		if err := renderCodeRepo(&out, r, nil); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		switch got := out.String(); {
+		case tc.want == "" && strings.Contains(got, "expunge:"):
+			t.Errorf("%s prints an expunge line:\n%s", tc.name, got)
+		case tc.want != "" && !strings.Contains(got, tc.want):
+			t.Errorf("%s does not say %q:\n%s", tc.name, tc.want, got)
 		}
 	}
 }

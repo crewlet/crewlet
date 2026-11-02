@@ -184,7 +184,7 @@ func newWiredNodeWith(tb testing.TB, q *js.Queue, nodeID string, opts store.Opti
 	if err != nil {
 		tb.Fatalf("NewPublisher: %v", err)
 	}
-	index, err := statelog.NewReadIndex(probeDomain{}, spec, log, signer, reserve, probeEncode, gen, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, spec, log, log.Members, signer, reserve, probeEncode, gen, nil)
 	if err != nil {
 		tb.Fatalf("NewReadIndex: %v", err)
 	}

@@ -105,6 +105,57 @@ const (
 // derived file, so the remedy is to drop it and build it again.
 var ErrMalformed = errors.New("codeindex: a file this build does not write; drop it and the index is built again")
 
+// SegmentSourceBytes is the most source one segment is built from: a
+// builder takes blobs until it has read this much (Builder.SourceBytes) and
+// the segment is written then, so what an index build holds is one segment's
+// postings — a byte or two for each distinct trigram of each blob, in lists
+// grown by doubling, and a table entry and a list header for each distinct
+// trigram of the segment — the segment written beside it, and the blob being
+// read: at most 256 MiB at its peak (M6's sizing). BenchmarkCodeIndex
+// measured that peak at 120 MiB for 256 MiB of source (37 MiB for 64 MiB:
+// the table of distinct trigrams grows slower than the source), so 256 MiB
+// is the largest power of two measured within the bound; 512 MiB would be
+// 240 MiB by the rate at 256, with nothing left for the blob and the merge
+// beside it. Re-derived from the PROVISIONAL 64 MiB (M3-O6) by that run: a
+// tip of 120k files, 1.96 GiB of this repository's own tree, on two E-cores
+// of a Core Ultra 7 265U.
+const SegmentSourceBytes = 256 << 20
+
+// MaxSegments is the most segments one repository's index keeps: past it the
+// smaller ones are merged (MergeSegments), keeping only the blobs the tip
+// still names, so a search reads at most this many tables a trigram and an
+// index gives back what its branch no longer holds. Merged GEOMETRICALLY —
+// the newest segments while each is at least half the one before it — so a
+// blob is rewritten a logarithmic number of times over the index's life
+// rather than at every tip. Merged so, an index of I bytes keeps at most
+// log2(I / its smallest segment) + 1 — BenchmarkCodeIndex's 120k files index
+// in 0.29 GiB (0.147 bytes a source byte), and a segment of one small blob is
+// about half a kilobyte, so at most 20 — and 32, the next power of two, binds
+// only on an index four thousand times larger, while its lookups cost
+// nothing a search notices (p50 11 ms and p99 417 ms over the whole search,
+// confirmation included). Re-derived, and kept, by that run (M3-O6).
+const MaxSegments = 32
+
+// MergeNewest says whether the two newest segments of an index are to be
+// merged into one, where sizes is what each of its segments holds, oldest
+// first: when there are more than MaxSegments, or when the newest holds at
+// least half what the one before it does. A writer asks it again after each
+// merge, and AFTER EACH SEGMENT IT APPENDS — never once over a batch of
+// them. Asked as each is appended, every segment stays more than twice the
+// one after it, so an index of k segments' worth of source keeps at most
+// 2·log2(k) segments, and a merge grows the segment a blob is in by at
+// least half, so each blob is written at most log base 1.5 of k times.
+// Asked once over a batch of equal segments, the merged one is always the
+// newest and always at least half the one before it, so the batch folds
+// into one segment from its end, rewriting what it merged at every step:
+// k²/2 segments' worth of writes for k segments' source — 189 for a
+// repository of nineteen segments, where asking as each is appended writes
+// 62 and keeps three.
+func MergeNewest(sizes []int64) bool {
+	n := len(sizes)
+	return n >= 2 && (n > MaxSegments || 2*sizes[n-1] >= sizes[n-2])
+}
+
 // blobEntry is one row of a segment's blob table.
 type blobEntry struct {
 	oid   OID

@@ -1,8 +1,8 @@
 package code
 
 import (
-	"strconv"
-	"strings"
+	"bytes"
+	"math"
 )
 
 // WHERE ANCHORED LINES ARE NOW. A finding or a comment is written against a
@@ -34,17 +34,22 @@ type Hunk struct {
 // ParseHunk reads a hunk header — `@@ -<start>[,<lines>] +<start>[,<lines>]
 // @@`, a count left out for one line as git writes it, and whatever git
 // writes after the closing `@@` — or false where line is no such header.
-func ParseHunk(line string) (Hunk, bool) {
-	rest, ok := strings.CutPrefix(line, "@@ -")
+//
+// IT READS THE BYTES AS THEY CAME AND ALLOCATES NOTHING: a diff of two large
+// files is millions of headers, and a reader that streams them — a
+// re-anchoring's, a suggestion's — would otherwise make a string of every one
+// it is handed, garbage that grows with the diff it keeps none of.
+func ParseHunk(line []byte) (Hunk, bool) {
+	rest, ok := bytes.CutPrefix(line, []byte("@@ -"))
 	if !ok {
 		return Hunk{}, false
 	}
-	old, rest, ok := strings.Cut(rest, " +")
+	old, rest, ok := bytes.Cut(rest, []byte(" +"))
 	if !ok {
 		return Hunk{}, false
 	}
-	add, rest, ok := strings.Cut(rest, " @@")
-	if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\n') {
+	add, rest, ok := bytes.Cut(rest, []byte(" @@"))
+	if !ok || (len(rest) > 0 && rest[0] != ' ' && rest[0] != '\n') {
 		return Hunk{}, false
 	}
 	var h Hunk
@@ -59,8 +64,8 @@ func ParseHunk(line string) (Hunk, bool) {
 
 // hunkRange reads one side of a hunk header, "<start>" or "<start>,<lines>",
 // each in canonical decimal.
-func hunkRange(s string) (start, lines int, ok bool) {
-	first, count, two := strings.Cut(s, ",")
+func hunkRange(s []byte) (start, lines int, ok bool) {
+	first, count, two := bytes.Cut(s, []byte(","))
 	if start, ok = hunkNumber(first); !ok {
 		return 0, 0, false
 	}
@@ -71,13 +76,21 @@ func hunkRange(s string) (start, lines int, ok bool) {
 	return start, lines, ok
 }
 
-// hunkNumber is a header's number: decimal digits alone, as git writes them.
-func hunkNumber(s string) (int, bool) {
-	if s == "" || s[0] < '0' || s[0] > '9' {
+// hunkNumber is a header's number: decimal digits alone, as git writes them —
+// no sign, and no leading zero but a zero's own — and none past what an int
+// holds.
+func hunkNumber(s []byte) (int, bool) {
+	if len(s) == 0 || (len(s) > 1 && s[0] == '0') {
 		return 0, false
 	}
-	n, err := strconv.Atoi(s)
-	return n, err == nil && strconv.Itoa(n) == s
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' || n > (math.MaxInt-int(c-'0'))/10 {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
 }
 
 // Reanchor is where lines start to end (1-based, inclusive) of a file are in

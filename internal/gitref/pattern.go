@@ -341,6 +341,55 @@ func walk(parts []part, between string, ends []uint8) bool {
 	return i == len(parts)
 }
 
+// PatternReachesSeats reports whether pattern — a protection pattern
+// ([ParsePattern]), and false for anything that is not one — matches some ref
+// a seat's namespace can hold: refs/heads/seats/<handle>/<branch>, one
+// component or more below the handle ([SeatsRoot]). A push mirror's patterns
+// are held to it (the code domain's MirrorTarget, code.repos' mirror_to): a
+// mirror publishes what the company merged, never a seat's own branches.
+//
+// EXACT, NEVER A PREFIX TEST: every component below seats/ is its seat's to
+// name, so a pattern reaches the namespace exactly where its part over the
+// component after refs/heads/ admits `seats` and the parts after that can take
+// two components or more — or where that part is **, which can take seats and
+// whatever the rest needs. So refs/heads/** and refs/heads/*/*/* reach it,
+// while refs/heads/*, refs/heads/*/* and refs/heads/seats/x match no ref there
+// — seats and seats/<one name> are reserved ([ReservedSeatBranch]), and no ref
+// is either.
+func PatternReachesSeats(pattern string) bool {
+	var buf [MaxPatternComponents + 1]part
+	p, ok := parsePattern(pattern, buf[:0])
+	return ok && p.reachesSeats()
+}
+
+// reachesSeats is [PatternReachesSeats] over a parsed pattern.
+func (p Pattern) reachesSeats() bool {
+	if p.parts == nil {
+		rest, under := strings.CutPrefix(p.literal, SeatsRoot)
+		return under && strings.Contains(rest, "/")
+	}
+	// A glob's first two parts are refs and its namespace, each a literal
+	// (parsePattern cut one of patternNamespaces off it).
+	if p.parts[1].text != "heads" {
+		return false
+	}
+	rest := p.parts[2:]
+	if rest[0].kind == partAny {
+		return true
+	}
+	if !rest[0].match("seats") {
+		return false
+	}
+	below := 0
+	for i := range rest[1:] {
+		if rest[1+i].kind == partAny {
+			return true
+		}
+		below++
+	}
+	return below >= 2
+}
+
 // componentAt is component j of s, cut at ends.
 func componentAt(s string, ends []uint8, j int) string {
 	start := 0

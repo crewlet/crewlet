@@ -264,7 +264,8 @@ type holds struct {
 // three loops, each a pass every minute — COMPACTION, which merges a
 // repository's small packs ([Compactor.Poll]); PUBLICATION, which writes its
 // next published layer ([Compactor.PublishPass]); and EXPUNGE, which drops what
-// no ref reaches when a person asks ([Compactor.ExpungePass]) — so a
+// no ref reaches when a person asks, and weekly once it is a quarter of the
+// repository ([Compactor.ExpungePass]) — so a
 // publication of a large repository, minutes of its build, never delays a
 // compaction that keeps a hot repository under the pack bound, that
 // repository's own included, and neither delays a purge. Each runs one build
@@ -332,6 +333,12 @@ type Compactor struct {
 	// pack may be among and whose cap is its own ([ExpungeInputByteCap]),
 	// floored at its lightest input.
 	expungeCaps map[string]int64
+	// clean is every repository an expunge's scan on the maintainer's own
+	// schedule found NOT DUE, and when it scanned it: left unscanned for
+	// code.ExpungeInterval after, so a repository with little garbage is
+	// walked at most weekly however often the weekly arm lists it
+	// ([Compactor.cleanAt]).
+	clean map[string]time.Time
 	// held is what a full object store holds back of each loop.
 	held [loops]holds
 	// behind is the last compaction pass's repositories this node maintains
@@ -380,10 +387,14 @@ type behindRepo struct {
 type bounds struct {
 	cut, maxBundle int64
 	minMerge       int
+	// expungeMin is the unreachable bytes below which an expunge on the
+	// maintainer's own schedule is never due (code.ExpungeMinBytes).
+	expungeMin int64
 }
 
 // production is what every compactor the engine builds is held to.
-var production = bounds{cut: code.CompactPackBytes, maxBundle: code.MaxPackBytes, minMerge: code.CompactMinMerge}
+var production = bounds{cut: code.CompactPackBytes, maxBundle: code.MaxPackBytes, minMerge: code.CompactMinMerge,
+	expungeMin: code.ExpungeMinBytes}
 
 // New builds a Compactor, refusing every required field missing, by name, in
 // one error listing them all. It starts nothing: [Compactor.Start] does.
@@ -407,7 +418,7 @@ func New(o Options) (*Compactor, error) {
 		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]bool{},
 		notDue: map[string]memo{}, nothing: map[string]statelog.Position{}, built: map[string]lastBuild{},
 		tails: map[string]time.Time{}, caps: map[string]int64{}, expungeCaps: map[string]int64{},
-		done: make(chan struct{})}
+		clean: map[string]time.Time{}, done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
 	}
@@ -645,7 +656,9 @@ func (c *Compactor) unclaimPublication(repoID string) {
 // layer planned beside it would name one or sit over a layer the begin drops
 // — either refusing the begin stale after its whole build, or itself. So a
 // repository's merges wait on this node for the length of one cycle, at the
-// rate a person asks a purge: a cycle or two a request.
+// rate a person asks a purge or the weekly schedule finds an expunge due: a
+// cycle or two each, and a repository found not due takes no claim past its
+// scan.
 func (c *Compactor) claimExpunge(repoID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

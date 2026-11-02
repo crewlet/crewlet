@@ -291,10 +291,12 @@ git push -o change origin feature
 ```
 
 The change proposes `feature` into the repository's default branch, titled by
-the subject of the commit you pushed, and git prints which one it opened:
+the subject of the commit you pushed, and git prints which one it opened, with
+the link to its page on the dashboard — on `api.external_url`, the address you
+reach the deployment at:
 
 ```text
-remote: crewlet: change web!42 opened
+remote: crewlet: change web!42 opened: https://crewlet.example.com/dashboard#/code/repos/web/changes/42
 ```
 
 It opens **in the push's own record**, so the commit and the change land
@@ -304,15 +306,15 @@ together or not at all. More options shape it:
 |---|---|
 | `-o change` | Asks for a change. The options below do nothing without it, so a target kept in your `push.pushOption` configuration waits for a push that asks. |
 | `-o change.target=<branch>` | The branch it proposes into, by name (`main`) or in full (`refs/heads/main`): the repository's default branch unless you name one. |
-| `-o change.title=<title>` | Its title, one line of at most 256 bytes: the subject of the commit you pushed unless you name one. |
+| `-o change.title=<title>` | Its title, one line of at most 256 bytes: the subject of the commit you pushed unless you name one — or, for a commit with no message, the branch's name. |
 | `-o change.description=<text>` | Its description, at most 32 KiB — one line, since git takes no line break in a push option. |
 | `-o change.draft` | Opens it as a draft, not yet asking to be merged. |
 
 - **Push the change's branch alone.** A change proposes one branch, so a push
   that asks for one sets exactly one; tags beside it are fine.
 - **A branch heads one live change.** A push to a branch that already heads an
-  open change revises it — `change web!42 updated` — and opens no other: the
-  options shape only a change a push opens.
+  open change revises it — `change web!42 updated`, and the same link — and
+  opens no other: the options shape only a change a push opens.
 - **The push lands whatever becomes of its change.** An option the engine does
   not read, a target that is no branch, or a branch already at its target's
   commit leaves the push to land with no change, and git says why in the same
@@ -339,6 +341,236 @@ moved since is refused `stale_version` rather than changed under them. Who may
 is the [change's rule](../concepts/code-host.md#opening-editing-and-closing-a-change):
 whoever may push its branch opens one, and its owner, a maintainer of the
 repository or any person steers it ([the tools](tools-and-mcp.md#the-companys-code)).
+
+## Review a change
+
+A change is reviewed where it lives: on its own page in the dashboard's
+**Code** workspace (`g o`), or through the code tools by a seat or by your own
+assistant, as you. Each ask, review, comment and answer is one record of the
+change's **conversation** ([Reviews and
+findings](../concepts/code-host.md#reviews-and-findings)), and each record
+tells the seats and people it concerns.
+
+**Find what waits on you.** **Code › Changes** lists the open changes, and
+**Waiting on** narrows them to the ones waiting on you, on a review, on a fix
+or on a person. A record that concerns you leaves a notice in your
+**Inbox** — the change, why you hear of it ("asked for your review", "asked
+to look again") and where its merge stands — whose **Open the diff** opens the
+change's page on its files. A seat is woken instead, told the change, why it
+hears and the tool that answers ([Who a change
+wakes](../concepts/code-host.md#who-a-change-wakes)).
+
+**Ask for a review.** **Request review** on the change's page names
+reviewers by handle, with a note; a seat or your assistant asks with
+`code_request_review`, which also withdraws an ask. An author of the change,
+anybody who reviews the repository and any person may ask, at most 32
+reviewers at once. A person may always be asked; a seat only where its grant
+lets it review the repository, and never an author of the change, whose
+review would count for nothing ([Asking for
+review](../concepts/code-host.md#asking-for-review)). A change whose
+revision touches paths the repository's `path_owners` name asks their owners
+itself, once its home has read the revision ([Path
+owners](../concepts/code-host.md#path-owners)).
+
+**Read it.** **Conversation** is the change's readiness, its description and
+its timeline in the order its records landed; **Files** is a revision's
+diff — the head unless you pick another, or what changed since an earlier
+revision — with each finding under the lines it points at, and one whose
+lines have changed since drawn above the diff, never dropped. A seat reads the
+same with `code_get_change`, a part at a time ([Reading a
+conversation](../concepts/code-host.md#reading-a-conversation)).
+
+**Review it.** On the head revision, pick lines by their numbers and draft a
+finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
+what it is about, a title, a body and, on the new side, the lines you suggest
+in their place. Drafts stay in the browser tab until **Approve**, **Request
+changes** or **Comment** sends them all as ONE review with your summary — a
+review and every finding it raises are one record, never half there. A seat
+reviews with `code_review_change`. Anybody who reviews the repository, and
+any person, may review — never an author of the change.
+
+- **A request for changes stands until its reviewer reviews again.** A push
+  answers none: the reviewer's next review, approving or asking again, does.
+- **A review of a later revision carries what still stands.** It names the
+  findings of yours that still stand and should — the page offers each,
+  checked — and every other finding you raised on an earlier revision is
+  superseded. A second review of the same revision adds to the first.
+- **An approval carries to a later revision only where nothing it approved
+  changed**: the same code, or the same diff, as a rebase that moved nothing
+  near the change keeps it ([Merge
+  readiness](../concepts/code-host.md#merge-readiness)).
+
+**Answer the findings.** An author answers a finding `resolved`, `wont_fix`
+or `disputed` with `code_resolve_finding` — a seat, or your assistant as
+you — and says why in a reply on its thread, which the page offers under
+every finding. A blocker an author answered still stands, for its raiser to judge: only its
+raiser's dismissal — or a maintainer's, or any person's, each `dismissed`
+through the same tool — or the raiser's review of a later revision that does not carry it clears it
+([Findings](../concepts/code-host.md#findings)). **Apply suggestion**
+(`code_apply_suggestions`) commits a finding's suggested lines onto the
+change's branch as one commit of yours, against the head on screen, and
+answers the finding resolved; it makes you an author of the change, so your
+approval of it no longer counts ([A review's suggestions
+applied](../concepts/code-host.md#a-reviews-suggestions-applied)).
+
+**Discuss it.** A comment (`code_comment_on_change`) starts a thread — on a
+line of a revision, or on the change as a whole — or replies to a thread's
+first comment or to a finding: threads are one level deep. Whoever started a
+thread, an author, a maintainer or any person resolves it ([Comments and
+threads](../concepts/code-host.md#comments-and-threads)).
+
+**See whether it is ready.** A live change's readiness is one judgement on
+one snapshot: its head's facts read, no draft, an approval counted where its
+branch's gate asks one, no blocker standing, a clean merge into its target,
+and whatever else the gate adds — its first unmet precondition in one
+sentence naming who can clear it ([Merge
+readiness](../concepts/code-host.md#merge-readiness)). Its authors whom the
+branch's gate lets merge it hear `ready_to_merge` once, when it turns ready —
+or, where the gate lets none of them, the lead of the repository's owner
+([Who a change wakes](../concepts/code-host.md#who-a-change-wakes)) — and
+merge it as [Merging a change](#merging-a-change) says.
+
+**Who heard about it.** The page's **Woke** tab is whom each record about the
+change reached, newest first, each with the one reason they heard under; the
+same answer is `GET /code/repos/{name}/changes/{n}/routing` ([A change's
+questions](../reference/api-endpoints.md#a-changes-questions)).
+
+### The Inbox card
+
+A notice about a change opens in your Inbox as a card that leads with what
+the change is FOR: its title, the work item it implements and the opening of
+its description, then what the record said, then **Where it stands** — the
+engine's sentence of where its merge stands and the agent findings that stand
+open, by weight — and **Open the diff**, one press to its files.
+
+While the change is live and its branch has a merge gate, the card also says
+**Its gate**, read for the one card you have open (the list asks nothing per
+card):
+
+- **What its checks measured**: each check the branch requires, on the
+  change's head, with its state and how long it ran (`unit failed in 1m 4s`,
+  `e2e running`) — durations, never tokens. A branch that requires no check
+  draws no list, rather than "none measured".
+- **Its change classes**: how many of the paths the head revision touches
+  change only whitespace or only comments, and — where every path was
+  classified — that the rest change code
+  ([Change classes](../concepts/code-host.md#change-classes)).
+- **The human paths that asked for you**: where the gate holds a path the
+  change touches to a person's approval and waits on you, the engine's
+  sentence naming the globs and the branch. A person it waits on sees it;
+  nobody else's card says it.
+
+A merged or closed change has no gate left to meet, and its card asks for
+none.
+
+## Merging a change
+
+A ready change is merged with `code_merge_change`, naming the change and the
+head you read (`expected_head`) — by a seat, or by your own assistant or the
+dashboard, as you. The code host builds the merge on the repository's home git
+node onto the target's tip and lands it, the target moved and the change
+merged in **one record** its committer decides against the target's merge
+gate. It answers one of three things:
+
+- **merged** — the commit the target moved to;
+- **queued at place n** — a target whose gate requires a check takes the
+  change into its merge queue instead, and the queue's landing is the merge:
+  the change's people hear `merged` when it lands. `code_dequeue_change`
+  takes it out again, at its enqueuer's, its owner's, a maintainer's or a
+  person's ask;
+- **`not_ready`** — a change its gate does not allow yet: the answer names
+  **every** unmet precondition and who each waits on, nothing is merged or
+  queued, and its authors who may merge it hear `ready_to_merge` once the
+  last is met (where none may, the lead of the repository's owner). A seat is
+  told to end its turn rather than ask again.
+
+`method` is `merge` (a merge commit, the default), `squash` or
+`fast_forward`. `delete_branch` deletes the change's branch as it merges;
+unsaid, a seat's branch (`seats/<handle>/…`) is deleted unless a rule over the
+target keeps it (`delete_source: none`), and any other branch is kept.
+`close_task` closes the change's work item once it merges — a second write of
+the same operation, so the same call made again is the same close, and the
+tracker's write, so it is decided as `update_work_item` is: a person who does
+not use the tracker has the change merged and the item left as it was. A
+close that fails or is refused leaves the change merged and says why
+(`merged; ENG-42 not closed: …`), and a queued change's landing closes it. `override_reason` is a
+person's reason to merge past the gate, merged directly and recorded on the
+change; a seat cannot override.
+
+### From the change's page
+
+A live change's page (**Code › Changes**, then the change) carries the same
+call as controls above its tabs, each made as you and never ahead of the
+engine's answer:
+
+- **Where its gate stands** — how many of its conditions are met, and the
+  first one that is not, judged with *you* as the merger, so a reader without
+  the authority to merge into the target is told so before pressing anything.
+- **Merge**, or **Add to queue** where the target's gate requires a check, with
+  how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
+  its branch** — left unticked, the rule above decides — and **Close ENG-42
+  once it merges** where the change names a work item. It sends the head the
+  page shows as `expected_head`, so a push that landed since you opened the
+  page is refused rather than merged unseen. While the gate is unmet the
+  button is held with the gate's own sentence.
+- **Override**, a person's alone: a dialog that asks your reason, says what
+  the gate still waits on, and merges directly past it — even into a branch
+  whose merges land through its queue. The reason is kept with the merge
+  (the change's Provenance tab shows it) and the override is audited.
+- **Re-run checks** — every check of the change's head whose latest attempt
+  did not pass, each at its next attempt (`code_rerun_checks` with
+  `all_failed`).
+
+A refusal is said beside the controls in words of its own: a head that moved
+("somebody pushed to it since you loaded it"), a target that moved under every
+rebuild of the merge, a change that does not merge cleanly onto the target's
+tip, a full queue; and in the engine's own words where those say more — every
+unmet precondition and who clears it (`not_ready`), or why you may not.
+
+## Protecting a branch
+
+A branch's protection is a rule over the branches a pattern matches: what a
+push may do to them ([Protection
+rules](../concepts/code-host.md#protection-rules)), and — with a **merge
+gate** — what a change must meet before it merges into one. Unset, a rule's
+`direct_push` lets only a person push to the branch, so a seat's work reaches
+it as a change. A rule is declared with the repository in the company
+document, or set on a repository a tool made with `code_protect_branch`, by a
+seat or your own assistant ([Who may change a
+protection](../concepts/code-host.md#who-may-change-a-protection)):
+
+```yaml
+code:
+  repos:
+    - name: web
+      protect:
+        - branch: main
+          merge_by: maintainers    # writers (unset), maintainers or persons
+          approvals: one
+          human_paths:
+            - glob: "infra/**"     # a person approves anything here
+          checks: [unit, lint]     # each must pass on the change's head
+```
+
+Walk one change through it. A seat pushes `seats/dev/retry` and opens
+`web!42` into `main` ([Open a change from a push](#open-a-change-from-a-push)).
+The head's checks run, from `.crewlet/checks.yaml` as `main` holds it ([Adding
+checks](#adding-checks)); a reviewer approves; a person approves the change's
+`infra/` paths. Its readiness — on its page, and in `code_get_change` — lists
+each of those conditions and whom each waits on, and its authors who may
+merge into `main` hear `ready_to_merge` when the last is met. Because the gate requires checks, a
+merge **adds it to `main`'s queue**, which tests it merged on the branch
+before it lands ([The merge queue](../concepts/code-host.md#the-merge-queue)),
+and `main`'s tip is checked again once it lands, `code_green` advancing on
+green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a-green-branch)).
+
+**Settings › Code** lists every protected repository, each rule with what it
+lets a push do and what its gate asks, and says where the repository's rules
+are set — the company document, or the code tools. A repository's own page
+shows the same under its **Settings** tab. A seat may tighten a gate and never
+loosen it ([Who may change a
+protection](../concepts/code-host.md#who-may-change-a-protection)); every
+field of a gate is in [Merge gates](../concepts/code-host.md#merge-gates).
 
 ## Rebasing a change
 
@@ -371,6 +603,37 @@ new revision at its new head.
 The rebase is built on the repository's [home git
 node](../concepts/code-host.md#the-home-git-node) under forty seconds of git
 ([How a rebase is built](../concepts/code-host.md#a-change-rebased)).
+
+## Reverting a change
+
+A merged change that turns out wrong is undone by **a change of its own**,
+never by moving its target back: `code_revert_change`, naming the change — by
+a seat, or by your own assistant, as you. The code host undoes what the
+change's merge brought into its target, onto the target's current tip, as one
+commit of yours on a **new branch** — `seats/<handle>/revert-<n>` for a seat,
+`revert-<n>` for a person — and the push of that branch opens the change
+**"Revert web!42"** into the same target, in the same record. That change is
+gated, reviewed and merged like any other; pass `merge` and it is merged as
+the call's second write, as far as its target's gate allows — a merge it
+could not make yet is said beside the opened change, and the revert stays
+open for you to merge.
+
+- **Every way it was merged reverts the same way.** A merge commit is
+  reverted against its first parent (git's `revert -m 1`), a squash against
+  its one parent, and a fast-forward over the change's whole range, from the
+  base its head revision was measured against — so the revert is the whole of
+  the change, as one commit, whatever its method.
+- **A conflict stops it.** Where the target has since changed what the change
+  changed, nothing is created: the answer names each conflicted path with its
+  stages' ids and the start of the file as git marked it. Resolve it in a
+  coding box, or revert it yourself with `git revert` and push.
+- **What it refuses:** a change that is not merged (`not_merged`), and a
+  revert branch already there (`exists` — a revert of the change is under
+  way: find its change, or delete the branch to revert again).
+
+The revert is built on the repository's [home git
+node](../concepts/code-host.md#the-home-git-node) as any engine write is
+([How a revert is built](../concepts/code-host.md#a-change-reverted)).
 
 ## Adding checks
 
@@ -438,10 +701,63 @@ checks file](../concepts/code-host.md#the-checks-file).
    checked by the file it edits, and its edit governs the changes after it
    lands.
 
-Every git node runs a queued check in a box of the company's sandbox
-catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)), but
-nothing queues one yet in this release: the file is defined and validated
-([What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+Once the file is on a branch, the repository's home git node queues its
+checks at the head of every live change into that branch ([How a head's
+checks are dispatched](../concepts/code-host.md#how-a-heads-checks-are-dispatched))
+and, on a protected branch, the required ones at its newest landing ([Tip
+checks and code_green](../concepts/code-host.md#tip-checks-and-code_green)),
+and every git node runs a queued check in a box of the company's sandbox
+catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)). A
+change's readiness counts the checks its branch's gate requires, and a merge
+into that branch puts the change in its merge queue, which the home git node
+lands as below.
+
+**A branch whose gate requires a check lands through its merge queue.** The
+home git node tests the waiting
+changes merged on the branch before any of them lands: up to `depth`
+candidates at once, each one change while the queue keeps up and up to
+`batch` changes as it falls behind, every candidate's tip checked under the
+`checks.yaml` the branch itself holds. The longest run of candidates whose
+newest tip is green lands in one go, each change merged as whoever queued it,
+and a work item they asked closed is closed as them. A red candidate is
+bisected: its changes' own commits are checked until the change that broke it
+is found, and only that change leaves the queue (its `code_queue_ejected`
+event names the checks); the rest are tested again without it. A change that
+conflicts with the ones ahead of it leaves the queue naming the paths, and a
+push to the branch while candidates are testing starts them again on the new
+tip. [What the home does with a
+queue](../concepts/code-host.md#what-the-home-does-with-a-queue) has the
+detail.
+
+### Choosing a queue's depth and batch
+
+A queue lands at most `depth` × `batch` changes a round, and a round lasts as
+long as the slowest required check: at ten-minute checks and one change a
+candidate, the default depth of four lands 576 changes a day and the most,
+eight, 1 152. Size it for how many changes the branch is asked to land:
+
+```yaml
+code:
+  checks:
+    max_timeout_seconds: 1800      # what the slowest check really takes
+  repos:
+    - name: web
+      owner: {unit: engineering}
+      protect:
+        - branch: main
+          checks: [unit, lint]
+          landing: {depth: 6, batch: 2}   # up to 6 candidates of up to 2 changes a round
+```
+
+`crewlet validate` warns at a rule's `landing` when the queue cannot land one
+change a day for every seat that may merge into the branch, priced at a round
+as long as `code.checks.max_timeout_seconds` — the longest a check may run —
+so set that to what your checks actually take. A running queue asked past
+what it lands raises `code_merge_rate_over_capacity` on its home git node,
+priced at the rounds its trains really took over the last hour. Either way,
+raise `depth` or `batch`, make the required checks faster or fewer, or split
+the work over more branches or repositories ([How fast a queue
+lands](../concepts/code-host.md#how-fast-a-queue-lands)).
 
 ## Reading a failed check
 
@@ -487,26 +803,176 @@ log. One that ended **errored** measured nothing: its box or its setup failed
 the engine queues it again, up to its third attempt; a file naming a cell or a
 secret the company does not allow is `defs_invalid`, and is not queued again.
 
+A seat reads all four with `code_get_check_failures` — naming the commit by
+`change` (its head) or `sha`, and the check by `name` — its failures a page at
+a time and its log 32 KiB a page, every page from the attempt the first one
+read even once a rerun ends or the change's head moves, and every word fenced
+as text nobody in the company wrote ([Text somebody else
+wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)); and
+`code_get_change`'s `checks` part lists a change's head's checks in a line
+each. **Running a check again** is `code_rerun_checks`, naming each check and
+the attempt you read as its latest (or `all_failed`), so two people who read
+the same red check queue one attempt between them, never two. A person reruns
+any ended attempt; a seat only one its infrastructure or a stop ended —
+`errored` or `cancelled` — and only on a repository it may write or a change
+it wrote, because a failure is a measurement of the code, and a seat that
+could rerun one would re-roll a flaky test until it passed. A check runs at
+most ten attempts.
+
+## The Queue and Checks
+
+The dashboard's Code workspace draws both in sections of their own, each over
+the same questions a seat's tools ask.
+
+**Code › Queue** (`#/code/queue`) is the merge queues of your gated branches:
+a band per repository and branch, its entries in the order the queue lands
+them — the place, the change, who enqueued it and where it stands (`waiting`
+for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
+each entry also shows the **train base** it is tested on, a meter of the
+**required checks** of what it is tested in — passed, failed and running, the
+rest not yet a verdict — and how long it has been queued against the slowest
+of those checks' declared `timeout_seconds`, since the queue waits for its
+slowest required check. Under each of its bands, in the danger tone, is what
+the queue **put out in the last day**: the change, why (`a required check
+failed`, `its merge conflicted`, `it no longer met the branch's gate`, `its
+head moved`, `the branch moved under the queue`) and the required checks that
+failed on what it was tested in or the paths its merge conflicted on. A branch
+with nothing queued and nothing put out lately draws no band, and a company
+with nothing queued says so. The queues are read fifty entries at a time;
+**Load more** reads the next fifty.
+
+**Code › Checks** (`#/code/checks`) is every repository's attempts that
+ended in a window — a day by default, at most the thirty days an ended
+attempt is kept — newest ended first, with a chart of when they ended (the
+failed ones the foot of each bar) and chips that narrow the listing by state
+and by a check's name; the engine narrows them, and the chart and the chips
+count the attempts loaded, as each says. A repository's page has its own
+**Checks** tab, every attempt it keeps with no window, and a change's page
+has one too: the attempts that judge it, its head's, checked for its target.
+
+Press an attempt to open it: what it was checking (a change's head, a queue's
+candidate, a branch's tip, a landing bisected), the commit and branch, how
+long it ran, its exit code and why it ended; its **failures**, each
+`path:line` a link into the diff it was checked on — the comparison of its
+base and its commit, opened on that file; its **tail**; and **Read its log**,
+which reads the log a failed run kept a page at a time, only when you ask. A
+check measures durations and exit codes, never tokens: it runs no model.
+
+## External CI
+
+A check the engine does not run — your own CI's, on a runner of yours — is
+reported onto the same rows, so a change's readiness, its checks part and the
+dashboard read it beside the engine's own. A report is a **person's**: your CI
+calls `code_report_check` over [your own
+assistant's](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+surface with a token of your own (`crewlet iam token -login`), and the report
+names you. A token bound to no seat only reads, and no seat may report: a
+check result is a measurement, and a seat runs no CI whose result it could
+send.
+
+```json
+{"name": "code_report_check", "arguments": {
+  "repo": "web", "sha": "<the commit's whole id>", "name": "e2e",
+  "status": "running", "url": "https://ci.example.com/runs/812"}}
+```
+
+Report `running` when the run starts, then how it ended — `passed`,
+`failed`, `errored` or `cancelled` — with its `summary`, `tail` and
+`failures` (each a `path`, `line`, `test_id` and `message`, at the bounds an
+engine check keeps) and the run's `url`. Name the commit by `sha` and the
+branch it is checked for by `checked_for` (the repository's default branch
+when left out), or by `change`, which reports for the change's head and
+target. An ending sent again is answered from the row, so a CI that retries a
+lost answer records nothing twice; a run after an ended one is the check's
+next attempt. One check of a commit is one runner's or one CI's, never both:
+a name the engine has queued at that commit for that branch is refused
+`native_check`, so the engine's result is never overwritten, and a name your
+CI reported first is left to it — the engine's dispatch queues nothing of a
+name the commit already holds an attempt of. So name your CI's checks apart
+from the ones `.crewlet/checks.yaml` defines.
+
+## Finding code
+
+A code search reads lines, not files: an expression, matched one line at a
+time with Go's regular expressions, over a commit of each repository
+searched — its default branch's tip unless the search names another. It is
+written the way the knowledge base's search is, filters first:
+
+```text
+repo:billing repo:ledger path:src/**/*.go ref:main  retryBudget
+```
+
+- `repo:<name>` searches that repository (repeat it for more); with none, a
+  search covers every repository you may read that is searched by index.
+- `path:<pattern>` keeps the files a `.gitignore`-style pattern matches.
+- `ref:<ref>` searches a branch, a whole ref or a commit's id.
+- The text after them is searched as it is written; a search may be asked
+  as a regular expression or as a whole word instead, and to ignore case. It
+  needs one run of at least three characters to look up, matches within a
+  line, and takes at most 400 bytes — the knowledge search's bound.
+
+**Indexed or grep, per repository.** A repository declared in the company
+file is searched by index unless its entry says `search: grep`; one a seat's
+tool makes, and every scratch repository, by grep. An indexed repository's
+default branch is kept as a trigram index on two of your git nodes, so a
+search of the whole company reads only the files that can match. A grep
+repository is read with git grep whenever it is searched, which costs a
+large repository a second or two of a git node's CPU, so a search reaches it
+only when a `repo:` filter names it — at most eight of them at once.
+
+**A search says what it did not search.** Several repositories are searched
+in one question to every git node at once, each repository answered by the
+node first in its order and, where that one does not answer, once more by the
+next. Every answer carries a coverage block naming every repository it could
+not search and why — a node not answering, an index still being built, a node
+behind, a grant its chart refused, a ref the repository does not hold — and
+the grep repositories a search with no `repo:` left out. An empty answer with
+an empty coverage means nothing matched; an empty answer with a coverage that
+names repositories means those were not looked at: search them again by name,
+or ask after the node named. At most 500 lines come back, in the order of
+repository, path and line, and `truncated` says more matched. See
+[Code search](../concepts/code-host.md#code-search).
+
+**Searching from a script.** The same search is the question `code_search`,
+on [`GET /code/search`](../reference/api-endpoints.md#get-codesearch):
+`?q=` is the search as written above, with `mode`, `ignore_case` and one
+`repo`, `path` and `ref` beside it where a script would rather not write them
+into the text. Its answer names the commit each repository was searched at,
+so read a hit's file at that commit, not at the branch, which may have moved
+since.
+
+**A seat searches with a tool.** The same search is `code_search`, a seat's
+and your own assistant's ([The company's
+code](tools-and-mcp.md#the-companys-code)): `query` in the grammar above,
+with the same `mode`, `ignore_case`, `repo`, `path` and `ref` beside it. Each
+line arrives fenced as a file's text that nobody vouches for, and the 500
+lines come a page at a time, each page under one tool answer.
+
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through the thirty [code
+repositories through thirty-six of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
-names. A seat holds no git credential and needs none. Every seat reads with
-eleven of the tools; a seat whose `role.code.access` is `full_access` also
-changes the repositories with the other nineteen; and a seat's coding run
-checks a repository out into its box with `code_checkout` and works in that
-clone besides. What each may do is its grant, derived from
+names — every one but `code_report_check`, `code_purge_unreachable` and
+`code_import_repo`, each a person's. A seat holds no git credential and needs
+none. Every seat reads with thirteen of the tools; a seat whose
+`role.code.access` is `full_access` also changes the repositories with the
+other twenty-three; and a seat's coding run checks a repository out into its
+box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
 ### What your seats read
 
-Every seat reads the repositories with eleven of the code tools — a file's
+Every seat reads the repositories with thirteen of the code tools — a file's
 lines, a directory, what changed between two commits, how two commits relate,
 whether a fix reached a branch and which push put it there, a path's history
-and who last changed each line of a file, and a repository's changes: what
-each one changes, its findings placed in the revision it reads and what
-changed since an earlier revision — with no clone and no token.
+and who last changed each line of a file, a repository's changes: what each
+one changes, its findings placed in the revision it reads and what changed
+since an earlier revision, and what a check of a commit said — with no clone
+and no token. And it finds where something is with `code_search`, the
+[search](#finding-code) a person makes, across the repositories it reads that
+keep a search index, or those its `repo:` filters name:
+its prompt tells it to search before reading whole trees.
 
 What each seat may read is its grant, from the chart: its
 [`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a
@@ -520,7 +986,7 @@ out the URL to clone from, on `api.external_url`.
 
 ### What your seats change
 
-A seat at `full_access` changes the repositories with the other eighteen code
+A seat at `full_access` changes the repositories with the other twenty-three code
 tools, one change a call: a commit of up to 1 000 file operations to a branch
 (`code_commit_files`), a commit reverted or picked onto one (`code_revert`,
 `code_cherry_pick`), a branch created or deleted (`code_create_branch`,
@@ -528,9 +994,10 @@ tools, one change a call: a commit of up to 1 000 file operations to a branch
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
-`read_only` is what a seat that sets none runs at — is offered the eleven
-reads alone, none of the eighteen. Your assistant has the same eighteen, as
-you.
+`read_only` is what a seat that sets none runs at — is offered the thirteen
+reads alone, none of the twenty-three. Your assistant has the same twenty-three
+and `code_report_check`, `code_purge_unreachable` and `code_import_repo`
+besides, each a person's alone, as you.
 
 **A commit is built on the server and lands as one push** in the seat's name
 ([Engine-built commits](../concepts/code-host.md#engine-built-commits)). The
@@ -763,9 +1230,11 @@ the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
 `actor_kind` `system`) for the 181 days the history keeps it. The row says
 where the branch was; restoring it needs the commit itself, which the
 repository is held to keep only for the deletion's **14-day** prune grace
-([ref drops](../concepts/code-host.md#retention-and-history)). Restore a
+([ref drops](../concepts/code-host.md#retention-and-history)), and not even
+that once a person purges the repository's unreachable objects. Restore a
 branch you need within two weeks of its deletion: after that, it comes back
-only while the repository still holds the commit. A repository
+only until the repository's next [expunge](../concepts/code-host.md#expunge)
+drops the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
@@ -794,14 +1263,60 @@ them; its answer says so. What counts as a read, how long it is kept and why
 only an admin may ask are in [Who read
 it](../concepts/code-host.md#who-read-it).
 
-## Import from GitHub or GitLab
+## Moving a repository in
 
-Declare the repository first — the import fills one that `code.repos`
-declares, and creates none — then, with your token exported:
+A repository that lives at another forge comes in one of three ways, each a
+person's to start: **imported once** by the repository's home git node, which
+then holds it like any other; imported and then kept in step with its source
+for good as a **pull mirror**, which moves only when its source does; or
+**pushed from your machine** into a repository that exists, for a source only
+your machine can reach. The first two dial the source from the node, over
+HTTPS alone and only at a public address unless Tier A says otherwise
+([Reaching other forges](deployment.md#reaching-other-forges)); what each moves, and how often, is
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
+
+### Import from GitHub or GitLab
+
+There are two imports. **The node's** creates the repository and has its home
+git node fetch the source: nothing runs on your machine, and with `-mirror` the
+repository stays in step with the source for good. **Your machine's**
+(`-local`) has your own git clone the source and push it into a repository that
+exists, for a source only your machine can reach. Either is a person's: run it
+with your own token exported ([Give each person a token](#give-each-person-a-token)).
+
+#### The node imports it
 
 ```sh
-crewlet code import https://github.com/acme/web.git web
-crewlet code import git@gitlab.com:acme/web.git web     # SSH works as well
+crewlet secrets set GITHUB_TOKEN          # the source's token, where it is private
+crewlet code import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
+crewlet code import https://github.com/acme/api.git api -owner unit:eng -mirror   # a public source, mirrored
+```
+
+The repository is created at once, owned as `-owner` says, and reads
+`importing` until its home git node has fetched every branch and tag of the
+source and landed them, in chunks of packs and refs that no push limit bounds,
+so `code.limits.max_push_bytes` caps none of it; it takes no push meanwhile, and
+`crewlet code status -repo web` shows it `importing` until it is done. The home dials HTTPS alone, and only a public address
+unless Tier A's `git.import_allow_private` lets it reach your own network.
+`-credential` names the variable holding the source's token — never the token,
+which the repository's settings would carry on every data node and in every
+backup; the node resolves it from the secret store, then its environment, each
+time it dials. A blob past `code.limits.max_blob_bytes` or a history past
+`code.limits.repo_max_bytes` ends the import early: the repository turns
+`active` holding what landed, and the import is not tried again. A **pull mirror**
+(`-mirror`) is imported the same way and then moves only by its home's syncs
+from the source, so every push to it is refused. Your own assistant does the
+same with `code_import_repo`; no seat is offered it. Every flag is in
+[`crewlet code import`](../reference/cli.md#crewlet-code-import).
+
+#### Your machine pushes it
+
+Create or declare the repository first — `-local` fills one that exists, and
+creates none — then:
+
+```sh
+crewlet code import https://github.com/acme/web.git web -local
+crewlet code import git@gitlab.com:acme/web.git web -local     # SSH works as well
 ```
 
 **Your git does the work, with your access.** It clones the source with your
@@ -813,7 +1328,8 @@ your git asks you on the terminal, as it would for a clone of your own. Your tok
 your seat ([Give each person a token](#give-each-person-a-token)): a token bound
 to nobody fetches only, and the import says so before it downloads anything.
 The source is cloned into the system's temporary directory, so point `TMPDIR`
-at a volume with room for it.
+at a volume with room for it, and for two steps' packs beside it — up to three
+times `code.limits.max_push_bytes`.
 
 **What it takes, and what it skips.** Every branch and every tag. A forge's own
 refs — GitHub's `refs/pull/*`, GitLab's `refs/merge-requests/*` — are the
@@ -843,7 +1359,7 @@ sent whole and measured before it is sent, so what it sends is what the
 repository stores, and no step is refused for its size; a single commit or tag
 that is past the limit on its own is refused naming it, since nothing can split
 it, and a merge that brings in more than one step is stepped from the other
-side first. `crewlet code import … -dry-run` prints the plan and pushes
+side first. `crewlet code import … -local -dry-run` prints the plan and pushes
 nothing.
 
 **A stepped import stores more than the source.** Every step keeps whole the
@@ -868,7 +1384,61 @@ repository already holds and pushes the rest. A branch protected with
 rule for the import and put it back after.
 
 Every step, flag and message is in
-[`crewlet code import`](../reference/cli.md#crewlet-code-import).
+[`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local).
+
+## Mirroring to another forge
+
+A repository the company keeps here can be published to a repository at
+another forge — GitHub, GitLab, a forge on your own network — as a **push
+mirror**: its home git node pushes it there whenever it moves, and every 15
+minutes while it does not. Declare it on the repository:
+
+```yaml
+code:
+  native: true
+  repos:
+    - name: web
+      owner: {unit: eng}
+      mirror_to:
+        url: https://github.com/acme/web.git
+        credential: "${GITHUB_MIRROR_TOKEN}"   # the as seat's own token there
+        as: jane                               # a seat that reads web
+        # refs: [refs/heads/main, refs/heads/release/*, refs/tags/*]
+```
+
+```sh
+crewlet secrets set GITHUB_MIRROR_TOKEN   # a token of jane's own GitHub account, allowed to push
+```
+
+**What reaches the other forge is what passed.** A branch a protection rule
+protects is pushed at its **green** commit — the newest landed on it whose
+required checks passed — so a commit that has not passed its checks here never
+appears there, and a branch with no green commit yet is left as the other
+forge has it. Every other branch it covers, and every tag, is pushed as it is.
+Left unset, `refs` covers the default branch and every tag; the seats' own
+branches (`refs/heads/seats/…`) are never covered. The other forge's copy is
+the repository's: the mirror force-pushes onto it and deletes a covered branch
+the repository no longer has, so make it a repository nobody pushes to there,
+and allow force-pushes on its protected branches. Commits keep their messages
+as they are, a coding box's `Crewlet-Seat`, `Crewlet-Run` and
+`Crewlet-Work-Item` trailers with them.
+
+**It pushes as the seat `as` names, never as a bot**, with that seat's own token
+at the other forge: what appears there is that person's or that agent's push.
+The seat must read the repository, and is asked again before every push, so a
+chart change that takes its read away stops the mirror. The token is never
+written in the company file — `credential` names the variable that holds it,
+resolved from the secret store and then the node's environment when it
+dials. A forge that wants a particular user name with its token is given it in
+the variable itself, as `user:token`.
+
+**When it cannot push**, its home logs `code_mirror_attempt_failed` with the
+reason and tries again a minute later, longer after each failure in a row; a
+mirror that has not been brought level for half an hour raises
+[`code_mirror_failing`](../reference/alarms.md) on its home, which clears with
+its next push. Every push that moved something is in the event log as
+`code_mirror_pushed`, naming what it set, deleted and held back. The rules are
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
 
 ## Status and verify
 
@@ -982,18 +1552,58 @@ it with now. Past the window it is purged, in bounded steps, and its name is
 free again. A purge cannot be undone, which is why the window exists; see
 [Deletion and purge](../concepts/code-host.md#deletion-and-purge).
 
-## A leaked secret is rotated, not force-pushed away
+## A leaked secret is rotated, then purged
 
-A force-push moves a branch; it does not remove a commit's objects. Every push
-is stored as it arrived, a repository's packs are kept for as long as the
-repository is, and an object is fetchable by its id from any node that holds
-it. A credential that was ever pushed is a credential to **rotate** — and then
-to remove from the history you keep, for tidiness rather than for safety.
+A force-push moves a branch; it does not remove a commit's objects. What no
+branch or tag reaches stays in the repository's packs, fetchable by its id,
+until an [expunge](../concepts/code-host.md#expunge) drops it — on the
+repository's maintainer every week once a quarter of the repository, and at
+least 64 MiB, is unreachable, keeping what a force-push or a deletion left
+for two weeks. A
+credential that was ever pushed is in every clone that fetched it, so:
+
+1. **Rotate it** at whatever issued it. This is the step that makes you
+   safe; everything after is tidiness.
+2. **Take it out of the history you keep**: rewrite the branches and tags
+   that reach it (`git filter-repo` — a revert keeps the commit in the
+   history), and force-push them; a protected branch takes the push only
+   where its rule's `direct_push` lets a person push and its `allow_force`
+   lets the branch be rewritten, so loosen the rule for the push and tighten
+   it again ([Protecting a branch](#protecting-a-branch)). An expunge also keeps what work in flight
+   still names: every revision of a draft or open change, so close a change
+   that ever carried the secret and open a new one from the rewritten
+   branch; a queued change's head, so take it out of its queue; and a
+   protected branch's last green commit, until a newer commit's checks pass.
+3. **Purge the repository's unreachable objects**, so the commit goes now
+   rather than two weeks on:
+
+   ```sh
+   crewlet code purge-unreachable web
+   ```
+
+   or `code_purge_unreachable` from your assistant ([`crewlet code
+   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)).
+   It is a person's alone, on your own token, and it keeps no grace: every
+   object nothing reaches goes, whoever left it and however recently. The
+   answer comes once the request is recorded; `crewlet code status -repo web`
+   shows it until the maintainer has served it, then when it committed and
+   what it dropped.
+
+The answer also says what still holds the secret after the purge: each git
+node's cache until it next syncs the repository, the object store for a day,
+every backup taken before the purge (on the `nats` store, before the store
+deletes it — [A purge and the backups before
+it](backup.md#a-purge-and-the-backups-before-it)) and, on a versioned S3
+bucket, the old version its own rules keep — and nothing on the server
+reaches a clone that already fetched it. Which is why the rotation comes
+first ([What still holds a purged
+object](../concepts/code-host.md#expunge)).
 
 ## See also
 
-- [Code Host](../concepts/code-host.md) — what a repository is, the committer,
-  the cache on a git node, and a push end to end
+- [Code Host](../concepts/code-host.md) — what a repository is, its changes
+  and their reviews, the committer, the cache on a git node, and a push end to
+  end
 - [Deployment: The code host](deployment.md#the-code-host) — git on the host,
   the cache's volume, the balancer in front of `/git/`
 - [Running a Fleet](fleet.md) — which nodes to give the `git` role

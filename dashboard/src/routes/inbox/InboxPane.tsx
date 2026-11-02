@@ -80,8 +80,11 @@ import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/work.ts";
-import { reasonPhrase } from "~/lib/reasons.ts";
+import { changeLive } from "~/lib/code.ts";
+import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { ChangeStateTag } from "../code/Changes.tsx";
 import type {
+  CodeChangeState,
   CodeInboxNotice,
   AnsweredDecision,
   AnsweredWorkAsk,
@@ -100,7 +103,11 @@ import {
   askQuestion,
   followThrough,
   budgetLine,
+  changeCard,
+  changeGate,
   changeWords,
+  findingsLine,
+  measuredLine,
   moment,
   noticeNote,
   noticeText,
@@ -319,10 +326,60 @@ function OpenPane({
 }
 
 /**
- * A notice the code host routed: the change it is about, why it reached this
- * reader, what the record said and what the change says, and the reader's own
- * marks over it (`code_mark_inbox`). Reviewing the change is the change's own
- * page's.
+ * What an open change card's merge gate says ([changeGate]): what the head
+ * revision's required checks measured, its change classes, and the human
+ * paths that asked for this reader — each said only where it is so, so a
+ * change into an ungated branch draws nothing here. Two reads, of the change
+ * (its readiness, judged for this reader, and its revisions' facts) and of
+ * its checks, the questions its own page asks.
+ */
+function GateFacts({ repo, number }: { repo: string; number: number }) {
+  const { handle } = useViewer();
+  const change = useCodeQuery("code_change", { name: repo, change: number });
+  const checks = useCodeQuery("code_checks", { repo, change: number });
+  if (!change.data || !checks.data) return null;
+  const gate = changeGate(change.data, checks.data.checks ?? [], handle);
+  if (gate.measured === null && !gate.classes && !gate.humanPaths) return null;
+  return (
+    <ReadingPaneSection label="Its gate">
+      <Stack gap={2}>
+        {gate.humanPaths && <Text>{gate.humanPaths}</Text>}
+        {gate.measured !== null && (
+          <ul aria-label="What its checks measured" className="col gap-1">
+            {gate.measured.length === 0 ? (
+              <li>
+                <Text variant="caption">No required check has run on its head yet</Text>
+              </li>
+            ) : (
+              gate.measured.map((m) => (
+                <li key={m.name}>
+                  <Text variant="caption">{measuredLine(m)}</Text>
+                </li>
+              ))
+            )}
+          </ul>
+        )}
+        {gate.classes && <Text variant="caption">{gate.classes}</Text>}
+      </Stack>
+    </ReadingPaneSection>
+  );
+}
+
+/**
+ * A notice the code host routed, drawn as an INTENT-FIRST card ([changeCard]):
+ * the change it is about and why it reached this reader, then what the change
+ * is FOR — the work item it implements and the description its author wrote —
+ * before what happened to it, and then where it stands: its open agent
+ * findings by weight and the engine's one sentence of where its merge stands.
+ * The diff is one press away, on the change's own page, and the reader's own
+ * marks close the card (`code_mark_inbox`).
+ *
+ * THE LIST ASKS NOTHING: every word above is the notice's, read with the
+ * inbox page, so a list of cards costs no read per card. What the change's
+ * merge gate says — its checks, its change classes, the human paths that
+ * asked for this reader — is read for the ONE card open, by [GateFacts], and
+ * only for a live change, which still has a gate to meet. Reviewing the
+ * change is the change's own page's.
  */
 function ChangeNoticePane({
   notice,
@@ -340,25 +397,58 @@ function ChangeNoticePane({
   onSettled: (label: string | null) => void;
 }) {
   const words = changeWords(notice);
-  const body = notice.change?.body ?? "";
+  const card = changeCard(notice);
+  const state = notice.change?.state;
+  const findings = findingsLine(card.findings);
   return (
     <ReadingPane>
       {frame.byline(
         <>
           <strong>{notice.change_ref}</strong> in {notice.repo}
         </>,
-        reasonPhrase(notice.reason),
+        card.why,
       )}
       <ReadingPaneTitle>{words.text}</ReadingPaneTitle>
+      {frame.task && (
+        <Text as="p" variant="caption">
+          For {frame.task}
+        </Text>
+      )}
+      {card.intent && (
+        <ReadingPaneLead>
+          <p>{card.intent}</p>
+        </ReadingPaneLead>
+      )}
       {words.excerpt && (
         <ReadingPaneQuote>
           <p>{words.excerpt}</p>
         </ReadingPaneQuote>
       )}
-      {body && (
-        <ReadingPaneLead>
-          <p>{notice.change?.body_cut ? `${body}…` : body}</p>
-        </ReadingPaneLead>
+      {state && (
+        <ReadingPaneSection label="Where it stands">
+          <Stack gap={2}>
+            {card.readiness ? (
+              <Text>{card.readiness}</Text>
+            ) : (
+              <span>
+                <ChangeStateTag state={state} />
+              </span>
+            )}
+            <Text variant="caption">
+              {findings ? `Open agent findings: ${findings}` : "No agent finding stands open"}
+            </Text>
+          </Stack>
+        </ReadingPaneSection>
+      )}
+      {card.named && state && changeLive(state as CodeChangeState) && (
+        <GateFacts repo={card.named.repo} number={card.named.number} />
+      )}
+      {card.diff && (
+        <span>
+          <ButtonLink variant="secondary" size="small" href={card.diff}>
+            Open the diff
+          </ButtonLink>
+        </span>
       )}
       <NoticeActions
         notice={notice}

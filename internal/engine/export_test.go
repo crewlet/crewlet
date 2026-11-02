@@ -8,6 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -183,6 +185,28 @@ func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact
 	return opts
 }
 
+// WithHomeSeams is opts with wrap standing between a git node's home change
+// work and the router's code seam and the code host's chain builder it works
+// through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
+// outside the package whose subject is what a running node's queue worker
+// raises — a queue asked past its capacity, shown it without the changes, the
+// passed checks and the hour of rounds a real queue needs to fall behind.
+func WithHomeSeams(opts Options,
+	wrap func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)) Options {
+	opts.homeSeams = wrap
+	return opts
+}
+
+// WithMirrorSeams is opts with wrap standing between a git node's mirrors and
+// the options they are built with ([mirror.Options]), for a case outside the
+// package whose subject is the mirror alarm a running node raises — a push
+// mirror's every dial refused, on a clock the case moves past the mirror's
+// refresh rather than the half hour a real one takes.
+func WithMirrorSeams(opts Options, wrap func(mirror.Options) mirror.Options) Options {
+	opts.mirrorSeams = wrap
+	return opts
+}
+
 // TestGitTransfers is the transfer lane [PinGitLanes] gives a case's node:
 // four, 256 MiB of request spool.
 const TestGitTransfers = 4
@@ -195,7 +219,9 @@ const TestGitTransfers = 4
 // free space, a sixteen-core machine's 4 GiB of spools left a node no room
 // under 16 GiB free, and its node refused to host code: a property of the
 // machine running the suite, never of the case. Pinned, the room is a quarter
-// of the free space less 256 MiB, which every volume a node boots on has.
+// of the free space less 768 MiB — the request spools' 256 MiB and the revision
+// facts' patch spools' 512 MiB (query.PatchSpoolAllowance) — which every volume a
+// node boots on has.
 func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor

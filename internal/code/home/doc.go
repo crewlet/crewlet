@@ -20,11 +20,12 @@
 // A [Loop] runs on every git node and schedules REPOSITORIES — a (worker,
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
 // for every [Worker] registered with it: the changes worker
-// ([WorkerChanges]) and the checks worker ([WorkerChecks]), and M5's merge
-// queue and M6's mirrors after them, each a listing of the repositories it
-// has work in (Worker.Due) and the work of one (Worker.Work), each read from
-// the rows. A repository is worked
-// by ONE turn of a worker at a time; asked again while it is being worked, it
+// ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
+// ([WorkerQueue]), and the imports and pull mirrors (internal/code/mirror,
+// which the engine registers), each a listing of the
+// repositories it has work in (Worker.Due) and the work of one
+// (Worker.Work), each read from the rows. A repository is worked by ONE turn
+// of a worker at a time; asked again while it is being worked, it
 // is worked once more after, at the furthest floor it was asked at, so a
 // burst of records costs a repository a turn or two, never one a record.
 //
@@ -41,7 +42,13 @@
 // follows waits for this node's copy to hold the record before it reads the
 // rows, rather than reading the rows from before it and finding nothing to
 // do. A watch that may have missed records (a Gap) schedules a backstop pass
-// at the position it reaches.
+// at the position it reaches. One record the watch does not see moves another
+// worker's work, and the worker that made it schedules that work itself, at
+// its position: a revision's facts, on its change's subject, which the
+// change work records and a head's checks dispatch waits for — the check
+// work is scheduled for the repository as they land ([Loop.follow]), so a
+// new head is dispatched in the same breath as its facts rather than a
+// backstop later.
 //
 // THE BACKSTOP: every [Backstop] — a minute, and at once at Start — the loop
 // asks every worker for its listing and its placement which of the listed
@@ -64,9 +71,10 @@
 // # What a turn of the changes worker does
 //
 // It reads the repository's due changes — at the nudge's floor, or stale on a
-// backstop pass — with the repository's path owners in the same snapshot, and
-// for each change owing its FACTS: asks the repository's git reads for the
-// revision's facts (internal/code's GitRevisionFacts, the engine's own read,
+// backstop pass — with the repository's path owners in the same snapshot on
+// a page naming a change owing its facts, and for each change owing its
+// FACTS: asks the repository's git reads for the revision's facts
+// (internal/code's GitRevisionFacts, the engine's own read,
 // through the router, which asks the home first — this node — and its
 // runner-up when the home's copy cannot answer), then either lands the change
 // — its head inside its target's tip, whatever push moved the target there —
@@ -75,7 +83,13 @@
 // (code.MatchOwners) and asks the change writer to record the facts — the
 // trees of the base and the head and the touched paths' classes among them,
 // as the git node read them — the owners matched and the digest of the owners
-// matched against. And for each
+// matched against. Only FINAL facts are recorded
+// (code.RevisionFactsAnswer.Final): a git node that ran its read's budget out
+// before the patch id or the classes says so apart from a bound's omission,
+// and such facts measure the node's moment, not the commits — recorded, they
+// would hold for good, since a revise takes a revision's facts against a tip
+// once — so they are the turn's failure for that change, which stays due its
+// facts for the next pass. And for each
 // change owing its MERGE — a new head revision, or one its moved target asks
 // again within the repository's budget, the oldest merge first (merge.go) — it
 // merges the change over this node's own copy, in a scratch beside it, and
@@ -106,21 +120,45 @@
 // for each change, each with what it owes (code.CheckWork), in order: the next
 // attempt of each check its head's infrastructure ended (a requeue); where its
 // DISPATCH is owed, the attempts its change moved on from ended cancelled
-// superseded, then every check the checks file at its TARGET'S TIP defines —
-// never the head's: a change is never measured by a definition it brought —
-// that the head holds no attempt of queued, or recorded skipped where what
-// the head touches against that tip matches none of its paths, one an
-// earlier dispatch errored for a file that did not run queued as its next
-// attempt, and every name the target's gate requires errored defs_invalid
-// where the file is none that runs. The page's dispatches are recorded LAST
-// (code.CheckDispatched, a target's heads in records of at most
-// code.MaxDispatchHeads), so a dispatch cut short is the next turn's, every
-// queue that landed answered from its row. The tip's file is read through the
+// superseded, then — once its head revision's facts are recorded for its
+// target, which the listing carries, and not before — every check the checks
+// file at its TARGET'S TIP defines — never the head's: a change is never
+// measured by a definition it brought — that the head holds no attempt of
+// queued, or recorded skipped where what the head touches matches none of
+// its paths, one an earlier dispatch errored for a file that did not run
+// queued as its next attempt, and every name the target's gate requires
+// errored defs_invalid where the file is none that runs. Those attempts are
+// not written one a check: each head's ride its DISPATCH RECORD
+// (code.CheckDispatched's Attempts), a target tip's heads in as few records
+// as code.MaxDispatchRows and code.MaxDispatchBytes allow, so a head's
+// attempts and the row that takes it off the list land in one append, and a
+// record's worth of heads costs one round trip to the committing data node
+// rather than one a check, which held one of the node's two home slots for
+// heads × checks of them.
+// The tip's file is read through the
 // git reads (internal/code's GitChecksFile, the engine's own read), once a
-// tip and parsed once a blob a turn; what a head touches is its revision's
-// facts, read as the change work reads them. Its refusals are the change
+// tip and parsed once a blob a turn; what a head touches is what its
+// revision's RECORDED facts say, never a git read of the worker's own. A head
+// with none recorded owes no dispatch yet: the change work, which records
+// them, schedules the repository's check work at the record's position, so
+// the head is dispatched once they land. Its refusals are the change
 // work's: the rows moving is the next pass's, a write deciding nothing the
 // turn's failure.
+//
+// # What a turn of the merge queue does
+//
+// One repository's queue work, a target a page (`queue_due`), each target's
+// next step decided from ONE snapshot of its tip, its gate, its live entries
+// and its live train: a train BUILT where none stands on the target's tip —
+// candidates of [BatchOf] entries, up to the gate's depth, as one chain this
+// node builds ([Chains]) and one candidate record; a standing train's tips
+// queued the required checks the train's BASE defines; its longest green
+// prefix LANDED in one land record; a red first candidate BISECTED over its
+// entries' commits and its culprit ejected. Nothing of a train lives in the
+// worker: a home that takes a repository over resumes its queue from the
+// rows. Each landed entry that asked it has its work item closed as its
+// enqueuer, through [Tasks] — the engine's tracker, which this package does
+// not import. queue.go has the rules of each step.
 //
 // # Merge previews, beside the loop
 //
@@ -134,25 +172,31 @@
 //
 // A TURN IS ONE BACKSTOP LONG: a repository with more due work than a turn
 // finishes yields its goroutine to the next repository, and the next pass
-// lists it again. CONCURRENCY TWO: a turn spends its time waiting on reads and
-// records — a facts read holds one unit of the answering node's seat git-work
-// share for its git, a record one of its repository's committer's turns — so
-// two repositories at once keep a burst of nudges from queueing behind one
-// large repository's turn. On a git node of four cores or fewer, two facts
-// reads at once are its whole share, which a seat's read waits for at most
-// code.GitShareWait before another git node answers it (PROVISIONAL, as M4's
-// spec marks it, until BenchmarkHomeLoop measures a home's turns: [Concurrency]
-// says what moves it). A MERGE holds one slot of the node's maintenance lane,
+// lists it again. CONCURRENCY TWO: a turn spends its time waiting on its reads
+// and its records — a record one of its repository's committer's turns — so
+// two repositories at once overlap one's records with the other's read, and a
+// burst of nudges does not queue behind one large repository's records
+// ([Concurrency] states what BenchmarkHomeLoop measured of it). ITS OWN GIT
+// READS are bounded apart, every worker's together ([OwnReads]): each holds a
+// unit of the answering node's seat git-work share for its git — counted as
+// the engine's own (code.SeatWorkEngine) — and a seat's read waits for a unit
+// at most code.GitShareWait before it is sent on, so the home runs ALL BUT
+// ONE of its node's units at once, at least one: wherever the share has two
+// units the seats keep one, and on a node of one (three cores or fewer) a seat
+// waits behind one background read at the most, the turns past the bound
+// waiting in the home rather than ahead of the seats in the share's own
+// queue. A MERGE holds one slot of the node's maintenance lane,
 // which never waits — a lane full of other maintenance answers the merge busy,
 // the turn's failure — within [MergeabilityDeadline]; a moved target's merges
-// are at most [MergeabilityPerPass] a repository a window, each once
+// are at most [MergeabilityPerPass] a repository a paced pass, each once
 // [MergeabilityRefresh] old.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
-// internal/code/checkrun and this package never import each other
-// (home_test.go holds the five) — the check runner's sweep of the checks whose
-// runner is gone is a [Worker] the engine registers, satisfying this
-// package's interface without importing it:
+// internal/code/checkrun, internal/code/mirror and this package never import
+// each other (home_test.go holds the six) — the check runner's sweep of the
+// checks whose runner is gone and a node's imports and pull mirrors are each a
+// [Worker] the engine registers, satisfying this package's interface without
+// importing it:
 // each reaches the others' work through the estate's router — a facts read
 // through its git walk, a record through its repository's committer — so a
 // home's turn is the same whichever node answers each step of it.

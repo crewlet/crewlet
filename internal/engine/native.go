@@ -23,6 +23,7 @@ import (
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -213,6 +214,12 @@ type native struct {
 	// bounded stop, before the compactor.
 	home *codehome.Loop
 
+	// mirrors is the imports and pull mirrors of the repositories this node
+	// is home to (internal/code/mirror), a worker of home built with it, and
+	// nil where it is; stopped after home in the code host's one bounded
+	// stop, so no turn starts an attempt it would not wait for.
+	mirrors *mirror.Mirrors
+
 	// checkRunner claims and runs the company's queued checks in boxes of
 	// this node's sandbox catalogue (internal/code/checkrun), built with
 	// codeHost and started with home, and nil where they are or where this
@@ -233,6 +240,9 @@ type native struct {
 	// host's status (codestatus.go), registered beside codeHost and nil where
 	// it is; the code host's stop runs it first.
 	withdrawCodeStatus queue.Unsubscribe
+	// withdrawCodeSearch withdraws this node as an answerer of the code
+	// search scatter (codesearch.go), beside withdrawCodeStatus.
+	withdrawCodeSearch queue.Unsubscribe
 
 	// chatIndex is the chat corpus's own keyword index, separate from
 	// [native.indexer] for the reason ADR-0071 gives: chat is in neither
@@ -484,8 +494,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// applied ending is announced on, once, from here.
 			if n.checksWriter, err = code.NewChecksWriter(code.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
-				Retention: e.codeDeletedRetention, Events: e.codeEvents(),
-				Metrics: e.metrics, Logger: logging.Get("code"),
+				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)
 			}
@@ -512,8 +522,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
 			n.mergePreviews = parts.previews
-			n.compactor, n.home, n.checkRunner = parts.compactor, parts.home, parts.checks
-			n.withdrawCodeStatus = parts.withdrawStatus
+			n.compactor, n.home, n.mirrors, n.checkRunner = parts.compactor, parts.home, parts.mirrors, parts.checks
+			n.withdrawCodeStatus, n.withdrawCodeSearch = parts.withdrawStatus, parts.withdrawSearch
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER

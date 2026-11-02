@@ -468,14 +468,18 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // `code_repo` (which `crewlet code status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
 // `code_blame`, and a commit's page and a comparison those of `code_commit`,
-// `code_diff` and `code_compare`. And a seat's reviews, read by a script on
-// the path api-endpoints.md prints (docs/reference/api-endpoints.md, "The code
-// reads") until a seat's page draws the reviews it gave. And the tracker's own
+// `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
+// that of `code_reviews`, and Code › Queue, Code › Checks and the checks
+// tabs those of a repository's merge queues and its checks, `code_queue`,
+// `code_checks`, `code_check` and `code_check_log`. And the tracker's own
 // inbox, `work_inbox`, which the Inbox reads composed with the code host's
-// through `inbox` and a script and a seat's tool read alone.
+// through `inbox` and a script and a seat's tool read alone. And a search of
+// the repositories' lines, `code_search`, read by a script on the path
+// api-endpoints.md prints ("GET /code/search") until the Code workspace's
+// Search draws it, whose screen deletes its line.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
-	"code_reviews":      "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
+	"code_search":       "a script: GET /code/search, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with the code host's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

@@ -386,10 +386,27 @@ func (page *idleRefsPage) readRepos(ctx context.Context, tx *sql.Tx) error {
 // keyset page over its partial index, the predicate repeated verbatim and the
 // >= beside the OR keeping the range seek (the reader's own rule), and the
 // page's repositories by their key.
+//
+// THE PAGE SKIPS A LIVE CHANGE'S BRANCHES (M4-D32): a ref a draft or an open
+// change is proposed from, or into, one seek of code_changes_open_idx and one
+// of code_changes_target_idx a row, the live states spelled as both indexes
+// are partial on them. The decide keeps such a branch whatever its age
+// ([ExpiryRule]), so listing it proposed a deletion the committer refused on
+// every pass for as long as the review lasted — a decide's round and a
+// stale answer a branch a pass, and refs_kept counting what nothing raced.
+// The decide's term stays, for a change opened after the page was read. What
+// a page steps over is bounded by the live changes — each keeps two branches
+// at most, its source and its target — and the keyset resumes after the last
+// ref the page names, so a skipped row is read once a pass and never makes a
+// page short of its LIMIT while idle branches remain past it.
 const (
-	expiryListingSQL = `SELECT repo_id, ref, target, at FROM code_refs INDEXED BY code_refs_expiry_idx
-		WHERE seat != '' AND at <= ?1 AND at >= ?2 AND (at > ?2 OR repo_id > ?3 OR (repo_id = ?3 AND ref > ?4))
-		ORDER BY at, repo_id, ref LIMIT ?5`
+	expiryListingSQL = `SELECT r.repo_id, r.ref, r.target, r.at FROM code_refs AS r INDEXED BY code_refs_expiry_idx
+		WHERE seat != '' AND at <= ?1 AND at >= ?2 AND (at > ?2 OR r.repo_id > ?3 OR (r.repo_id = ?3 AND r.ref > ?4))
+			AND NOT EXISTS (SELECT 1 FROM code_changes AS s INDEXED BY code_changes_open_idx
+				WHERE s.repo_id = r.repo_id AND s.source_ref = r.ref AND ` + liveChanges + `)
+			AND NOT EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
+				WHERE t.repo_id = r.repo_id AND t.target_ref = r.ref AND ` + liveChanges + `)
+		ORDER BY r.at, r.repo_id, r.ref LIMIT ?5`
 	expiryReposSQL = `SELECT p.id, p.name, p.status, p.default_branch, p.drop_epoch
 		FROM json_each(?) AS j CROSS JOIN code_repos AS p WHERE p.id = CAST(j.value AS TEXT)`
 )

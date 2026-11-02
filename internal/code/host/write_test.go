@@ -386,7 +386,7 @@ func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 //
 // Mutations: build with the seat's own grant alone (drop the ceiling in
 // rules) — bob's and nobody's main lands, red; refuse the seat's own work under
-// a ceiling (ownWork answering false) — the namespace write is refused, red.
+// a ceiling (OwnWork answering false) — the namespace write is refused, red.
 func TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})

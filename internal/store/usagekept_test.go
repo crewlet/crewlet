@@ -466,7 +466,8 @@ func TestARedeliveredBatchThisNodeSettledIsNotOpenedAgain(t *testing.T) {
 // fingerprints: so the oldest is lowered by an older batch and never raised by
 // a newer one, every settle that marks moves the newest seq — which is what
 // the publisher clears against — a batch of rows no day is derived from marks
-// nothing, and a batch not kept marks nothing because none of its rows ever
+// nothing, a check's ending that names no seat among them, and a batch not
+// kept marks nothing because none of its rows ever
 // counted. The clear takes what it read and only that: a settle after the read
 // survives it — and survives it ALONE, carrying its own day rather than the
 // oldest one the cleared marks named, or a busy keeper's settles of today's
@@ -520,6 +521,11 @@ func TestAKeptSettleMarksTheOldestDayItChanged(t *testing.T) {
 		Category: "notification", Payload: []byte(`{}`)})
 	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {
 		t.Fatalf("a kept batch of rows no day is derived from moved the mark to %+v", m)
+	}
+	settle("d2", true, gateRecord(t, "d2", days(20), failedCheck("unit", 1, "oid-b", "passed", "dev", "a-dev")))
+	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {
+		t.Fatalf("a kept batch of a check's ending that names no seat — one of a type a day counts some "+
+			"rows of — moved the mark to %+v", m)
 	}
 	settle("e", false, phaseRecord(t, "e1", days(10), "s", "t", "execute", "", 1))
 	if m, _ := mark(); !m.Since.Equal(days(5)) || m.Seq != 3 {

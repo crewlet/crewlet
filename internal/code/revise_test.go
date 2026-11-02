@@ -450,9 +450,14 @@ func TestAnOwnerRuleChangeSupersedesTheRevise(t *testing.T) {
 // (lead_fallback); a change somebody may review is asked of falls back to
 // nobody.
 //
+// The routing is the ONE copy of both (no payload field restates them): the
+// apply asks plat-lead again from its re_review, and a later tip's facts,
+// which concern nobody, carry no routing at all.
+//
 // Mutation: wake again on every facts of a revision, and the later tip's
 // facts name plat-lead a second time; fall back whatever was asked, and the
-// owned repository's first facts name the cto beside its path owner.
+// owned repository's first facts name the cto beside its path owner; let the
+// apply ask nobody again, and plat-lead's ask stays answered.
 func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -461,39 +466,52 @@ func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 	ctx := t.Context()
 	res, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
 	requireConversed(t, res, err)
-	first := decodedRevise(t, n, res.Position)
-	if first.LeadFallback == nil || *first.LeadFallback != (code.Reviewer{Handle: "cto", Kind: code.PartyAgent}) ||
-		len(first.ReReview) != 0 {
-		t.Fatalf("the change's first facts wake %+v and fall back to %+v; want nobody again and Engineering's "+
-			"lead, the cto, since nobody may review it", first.ReReview, first.LeadFallback)
+	// WHOM THE FACTS WAKE, as their routing holds it: its one copy, and none
+	// at all where they concern nobody.
+	woken := func(r code.Revise) (again []string, lead string) {
+		if r.Routing == nil {
+			return nil, ""
+		}
+		return r.Routing.ReReview, r.Routing.LeadFallback
+	}
+	first, firstLead := woken(decodedRevise(t, n, res.Position))
+	if firstLead != "cto" || len(first) != 0 {
+		t.Fatalf("the change's first facts wake %+v and fall back to %q; want nobody again and Engineering's "+
+			"lead, the cto, since nobody may review it", first, firstLead)
 	}
 
+	converse(t, w, asking(repo, change, dev, "plat-lead"))
 	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil))
 	requireReviewed(t, review, err)
 	n.revise(repo, "B", "B2")
 	res, err = w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, nil, "upload/retry.go"))
 	requireConversed(t, res, err)
-	second := decodedRevise(t, n, res.Position)
-	if want := []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}}; !reflect.DeepEqual(second.ReReview,
-		want) || second.LeadFallback != nil {
-		t.Fatalf("revision 2's first facts wake %+v and fall back to %+v; want plat-lead again, who asked for "+
-			"changes on revision 1, and no lead: the change has had facts", second.ReReview, second.LeadFallback)
+	second, secondLead := woken(decodedRevise(t, n, res.Position))
+	if !reflect.DeepEqual(second, []string{"plat-lead"}) || secondLead != "" {
+		t.Fatalf("revision 2's first facts wake %+v and fall back to %q; want plat-lead again, who asked for "+
+			"changes on revision 1, and no lead: the change has had facts", second, secondLead)
+	}
+	if asked, ok := n.reviewer(change, "plat-lead"); !ok || asked.state != string(code.ReviewerRequested) {
+		t.Fatalf("revision 2's facts left plat-lead's ask %+v (%v); want it asked again, from the routing's "+
+			"re_review", asked, ok)
 	}
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("A2"))))
 	res, err = w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, nil, "upload/retry.go"))
 	requireConversed(t, res, err)
-	if later := decodedRevise(t, n, res.Position); len(later.ReReview) != 0 || later.LeadFallback != nil {
-		t.Fatalf("a later tip's facts of revision 2 wake %+v and fall back to %+v; want nobody", later.ReReview,
-			later.LeadFallback)
+	later := decodedRevise(t, n, res.Position)
+	if again, lead := woken(later); len(again) != 0 || lead != "" || later.Routing != nil {
+		t.Fatalf("a later tip's facts of revision 2 wake %+v and fall back to %q, routed %+v; want nobody, "+
+			"and no routing on a record that concerns nobody", again, lead, later.Routing)
 	}
 
 	owners := []code.PathOwner{pathOwner(code.OwnerUnit, "Platform", "upload/**")}
 	owned, ownedID := ownedChange(t, n, "api", owners...)
 	res, err = w.Converse(ctx, n.revising(owned, ownedID, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
 	requireConversed(t, res, err)
-	if r := decodedRevise(t, n, res.Position); r.LeadFallback != nil || len(r.Asked) != 1 {
-		t.Fatalf("a change its path owner is asked of falls back to %+v, asking %+v; want nobody to fall back to",
-			r.LeadFallback, r.Asked)
+	if r := decodedRevise(t, n, res.Position); len(r.Asked) != 1 {
+		t.Fatalf("a change its path owner is asked of asks %+v; want its path owner", r.Asked)
+	} else if _, lead := woken(r); lead != "" {
+		t.Fatalf("a change its path owner is asked of falls back to %q; want nobody to fall back to", lead)
 	}
 }
 

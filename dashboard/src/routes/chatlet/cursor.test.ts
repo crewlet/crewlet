@@ -285,6 +285,7 @@ describe("whether a flush is still owed", () => {
     sentence: "",
     detail: "",
     hint: "",
+    hostRefusal: "",
     grants: [],
     reason: "",
     retryable,

@@ -296,7 +296,8 @@ git:
   the volume's free space when that is unset — a share of the same free space,
   so a budget taken beside it claimed the same bytes twice) **and less the
   request spools' allowance** (64 MiB a transfer slot, on this volume and never
-  in the budget). Of that room the cache takes half where the volume also holds
+  in the budget) **and the revision facts' patch spools** (two patches at once
+  of up to 256 MiB each, 512 MiB, there too). Of that room the cache takes half where the volume also holds
   the store, the replicated estate, the snapshots or the broker's streams — the
   other half is the store's to grow into, a snapshot's to be written beside the
   one it replaces — and seven eighths of a volume of its own (the eighth left
@@ -1665,6 +1666,8 @@ Every node holds a **Tier A keyring** — `crewlet validate` refuses a `crewlet.
 ### `${VAR}` references
 
 A credential in the company document is normally a `${ENV_VAR}` reference, stored verbatim and resolved where a provider, transport or integration is constructed (`internal/engine`). It resolves from the encrypted [secret store](secret-store.md) first and the process environment behind it — which is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. A reference the store does not answer resolves from the environment, so a deployment that keeps its credentials in its platform's own secret mechanism needs nothing else.
+
+A repository's mirror and import credentials in `code.repos` (`mirror_from.credential`, `mirror_to.credential`, `import.credential`) are held to more: each must be **one whole `${VAR}`** and nothing else, and `crewlet validate` refuses a literal or a reference with text around it. The code log records each repository's settings on every data node and in every backup, so the code domain records the reference itself, never what it resolves to, and the code host resolves it — store first, then the environment — only when it dials the other host ([Declaring repositories](code-host.md#declaring-repositories)). Rotating the token is then a `crewlet secrets set` and no new revision.
 
 ### Encrypted at rest, and authenticated
 

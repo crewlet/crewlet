@@ -85,9 +85,11 @@
 //
 // Candidates are CONFIRMED with Go's regexp, line by line, and only on a line
 // that holds what every match needs (Plan.Confirm): an answer is RE2's
-// whichever path offered the blob, the index or `git grep -F` over the plan's
-// literals. A second dialect — ERE through `git grep -E` — would answer the
-// same query two ways.
+// whichever path offered the blob, the index or git grep over the plan's
+// literals (Plan.Grep: one `-E` expression that is only an alternation of
+// those strings, every byte of its syntax escaped). A second dialect — the
+// query's own expression handed to `git grep -E` — would answer the same
+// query two ways.
 //
 // # What a confirm may cost
 //

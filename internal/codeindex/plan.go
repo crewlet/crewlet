@@ -5,9 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"regexp/syntax"
 	"slices"
+	"strings"
+	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/regexlit"
 )
@@ -149,6 +154,12 @@ type clause struct {
 // trigrams beyond those every literal of the clause holds (clause.shared).
 type alternative struct {
 	text string
+	// grep is every spelling of it the expression requires, as a line holds
+	// it — a plain literal as written, a folded one in its lowering — and
+	// folded whether any is compared folded: what git grep looks for
+	// (Plan.Grep), which reads no lowering.
+	grep   []string
+	folded bool
 	// rest is its trigrams beyond the clause's shared ones, ascending.
 	rest []ref
 }
@@ -239,7 +250,7 @@ func program(re *regexp.Regexp) (int, error) {
 func indexable(terms []regexlit.Term) (clause, bool) {
 	var c clause
 	var trigrams [][]Trigram
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, term := range terms {
 		text := term.Text
 		if term.Folded {
@@ -250,11 +261,18 @@ func indexable(terms []regexlit.Term) (clause, bool) {
 		if len(text) < trigramBytes {
 			return clause{}, false
 		}
-		if seen[text] {
+		if i, ok := seen[text]; ok {
+			// One literal to the index, and another spelling to git grep,
+			// which compares the bytes a line holds (Plan.Grep).
+			a := &c.alts[i]
+			if !slices.Contains(a.grep, term.Text) {
+				a.grep = append(a.grep, term.Text)
+			}
+			a.folded = a.folded || term.Folded
 			continue
 		}
-		seen[text] = true
-		c.alts = append(c.alts, alternative{text: text})
+		seen[text] = len(c.alts)
+		c.alts = append(c.alts, alternative{text: text, grep: []string{term.Text}, folded: term.Folded})
 		trigrams = append(trigrams, appendTrigrams(nil, []byte(text)))
 	}
 	if len(c.alts) == 0 {
@@ -363,6 +381,163 @@ func (p *Plan) share() {
 
 // Regexp is the expression p plans.
 func (p *Plan) Regexp() *regexp.Regexp { return p.re }
+
+// Grep is what a search that reads a commit with git grep in place of an
+// index looks for (M6-D13): ONE extended regular expression (git grep -E)
+// that is nothing but an alternation of fixed strings, any one of which a
+// line must hold for p's expression to match it, and whether git compares
+// them ignoring case (-i) — so the lines git answers are a superset of the
+// lines the expression matches, which Confirm then holds to RE2 exactly as
+// the index path's candidates are. ok is false where no clause of p can be
+// looked for that way, and git must answer every line.
+//
+// THE MOST SELECTIVE CLAUSE THAT GIT READS EXACTLY: the one whose shortest
+// string is longest, of the fewest strings. git's -i folds ASCII letters
+// alone and lowers no line, so a clause is exact only where every folded
+// literal of it is ASCII — a plain literal is looked for as written, its
+// other bytes compared as they are — and, where -i is set, each rune
+// outside ASCII that RE2 folds onto an ASCII letter, or that a folded
+// literal's lowering turned into one (asciiFolds: ſ for s, the Kelvin sign
+// for k, İ for i), is looked for too, admitting every line that holds one:
+// (?i)status matches ſtatus, which no ASCII fold finds, and (?i)İstanbul,
+// lowered to istanbul, matches İSTANBUL, which git's -i cannot see. A clause
+// folding a literal outside ASCII — (?i)école, whose É git's -i cannot
+// see — is not one git reads exactly, and is never chosen; nor is one with a
+// string holding a NUL, which no argument of a process can carry, or a
+// newline, at which git splits a pattern in two.
+//
+// ONE ALTERNATION, NEVER A STRING A PATTERN (-F -e s1 -e s2 …): git looks
+// ahead for the next line any of its patterns matches, scanning the rest of
+// the file for EACH pattern after every hit, so a second string a file lacks
+// costs a scan of the rest of it at every line the first matches —
+// quadratic in the file: a second for a 1 MiB file of matching lines; and
+// -F -i compiles each string outside ASCII as a case-folding expression of
+// its own: three and a half seconds for that file with the three
+// asciiFolds. One alternation is one pattern, whose look-ahead is linear:
+// 0.02 s for each (git 2.53 under LC_ALL=C, as gitproc runs it, one core,
+// a file of 46 000 lines each matching, every figure measured once). It is
+// no second dialect of the query: every byte of the expression syntax in a
+// string is escaped (ereMeta), so it matches exactly the lines -F would,
+// and the query is answered by RE2 alone (Confirm).
+func (p *Plan) Grep() (pattern string, fold, ok bool) {
+	pieces, fold, ok := p.grepStrings()
+	if !ok {
+		return "", false, false
+	}
+	var b strings.Builder
+	for i, piece := range pieces {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		for j := range len(piece) {
+			if strings.IndexByte(ereMeta, piece[j]) >= 0 {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(piece[j])
+		}
+	}
+	return b.String(), fold, true
+}
+
+// ereMeta is every byte a POSIX extended regular expression reads as
+// syntax: Grep escapes each, so a string is matched as its bytes.
+const ereMeta = `\.[]()*+?{}|^$`
+
+// grepStrings is the strings of the clause Grep looks for, and whether git
+// compares them ignoring case.
+func (p *Plan) grepStrings() (pieces []string, fold, ok bool) {
+	best, bestShort := -1, 0
+	for i, c := range p.index {
+		short, exact := 0, true
+		for j, a := range c.alts {
+			if a.folded && !ascii(a.text) {
+				exact = false
+			}
+			for k, g := range a.grep {
+				if strings.ContainsAny(g, "\x00\n") {
+					exact = false
+				}
+				if (j == 0 && k == 0) || len(g) < short {
+					short = len(g)
+				}
+			}
+			if !exact {
+				break
+			}
+		}
+		if !exact {
+			continue
+		}
+		if best < 0 || short > bestShort || (short == bestShort && c.grepLen() < p.index[best].grepLen()) {
+			best, bestShort = i, short
+		}
+	}
+	if best < 0 {
+		return nil, false, false
+	}
+	c := p.index[best]
+	for _, a := range c.alts {
+		pieces = append(pieces, a.grep...)
+	}
+	if c.folded {
+		pieces = append(pieces, asciiFolds()...)
+	}
+	return pieces, c.folded, true
+}
+
+// grepLen is how many strings git grep looks for of c.
+func (c clause) grepLen() int {
+	n := 0
+	for _, a := range c.alts {
+		n += len(a.grep)
+	}
+	return n
+}
+
+// ascii reports whether s holds no byte past ASCII.
+func ascii(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiFolds is every rune outside ASCII that a folded clause's ASCII
+// strings can stand for in a line git's ASCII-only -i does not fold: those
+// RE2's (?i) folds together with an ASCII letter, and those whose Unicode
+// lowering is one — a folded literal is held as its lowering
+// (regexlit.Term), so (?i)İstanbul's is istanbul, while RE2 matches the İ it
+// was written with. Derived from the Unicode tables this build carries, as
+// regexlit's escapes are, rather than listed: U+0130 (İ), U+017F (ſ) and
+// U+212A (the Kelvin sign) today. Not regexlit.HasEscape's set: the Kelvin
+// sign and İ lower to k and i, so the index sees through them, while git's
+// -i does not.
+var asciiFolds = sync.OnceValue(func() []string {
+	found := map[rune]bool{}
+	for c := rune(0); c < utf8.RuneSelf; c++ {
+		for m := unicode.SimpleFold(c); m != c; m = unicode.SimpleFold(m) {
+			if m >= utf8.RuneSelf {
+				found[m] = true
+			}
+		}
+	}
+	// Every rune with a lowering lies in a case range, so the ranges are
+	// the whole of the walk.
+	for _, cr := range unicode.CaseRanges {
+		for r := max(rune(cr.Lo), utf8.RuneSelf); r <= rune(cr.Hi); r++ {
+			if l := unicode.ToLower(r); l < utf8.RuneSelf {
+				found[r] = true
+			}
+		}
+	}
+	var out []string
+	for _, m := range slices.Sorted(maps.Keys(found)) {
+		out = append(out, string(m))
+	}
+	return out
+})
 
 // LineBytes is the longest line Confirm runs p's expression on: MaxLineWork
 // over its program's instructions, so MaxLineWork/MaxProgram (32 KiB) at the

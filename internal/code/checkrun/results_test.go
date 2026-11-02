@@ -109,12 +109,14 @@ func TestARunsReportsAndSummaryReachItsEnding(t *testing.T) {
 	key := f.queue(oidOf("d"), d)
 	box := f.container.box(t)
 	box.Put(sandbox.DefaultHome+"/.crewlet-check/junit.xml", junitOf(2, 5, 3))
-	f.await(key, "named its box", func(r code.CheckRow) bool { return r.Box != "" })
+	f.container.end(box, 1, "")
+	row := f.ended(key)
+	// Read once the attempt has ENDED, never once its row names the box: the
+	// runner names the box before it starts the command, so a read between
+	// the two sees no command at all.
 	if bg := box.Background(); len(bg) != 1 || !strings.Contains(bg[0], "cp -f -- 'out/junit.xml'") {
 		t.Fatalf("the box's command %q copies no report", bg)
 	}
-	f.container.end(box, 1, "")
-	row := f.ended(key)
 	if !strings.Contains(row.Summary, "2 of 7 tests failed") {
 		t.Errorf("the summary of a run with a JUnit report = %q, want its counts", row.Summary)
 	}

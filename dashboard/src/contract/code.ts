@@ -14,7 +14,7 @@
  * state reads as its raw word, and one this keeps that the engine dropped is a
  * choice every listing refuses.
  */
-export const REPO_STATUSES = ["active", "archived", "deleted", "purging"] as const;
+export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "purging"] as const;
 
 /**
  * What became of one command of a push, in the engine's order
@@ -185,10 +185,25 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       about: "an author, changes asked",
       why: "a reviewer asked for changes to a change you wrote",
     },
+    checks_failed: {
+      short: "a check of yours failed",
+      about: "an author, a check failed",
+      why: "a check of the head of a change you wrote, or one your CI reported, failed",
+    },
+    target_broken: {
+      short: "it broke its target",
+      about: "told its landing broke the target",
+      why: "a required check fails on the landing of a change you wrote, or of one whose repository you lead",
+    },
     conflicted: {
       short: "yours conflicts",
       about: "an author, it conflicts",
       why: "a change you wrote no longer merges cleanly into its target",
+    },
+    dequeued: {
+      short: "it left the queue",
+      about: "told it left the queue",
+      why: "a change you wrote or queued left its target's merge queue without landing",
     },
     finding_replied: {
       short: "your finding was answered",
@@ -196,9 +211,9 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       why: "somebody answered a finding you raised",
     },
     ready_to_merge: {
-      short: "yours is ready",
+      short: "it is ready",
       about: "told it is ready",
-      why: "every precondition of a change you own is met",
+      why: "every precondition of a change you may merge, or whose repository you lead, is met",
     },
     merged: {
       short: "yours merged",
@@ -231,3 +246,92 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       why: "nobody who may review was asked, and you lead the change's owner",
     },
   };
+
+/**
+ * The alarm kinds that are the code host's (the `code_` kinds of
+ * `statelog.Kinds()`, in its sorted order): what Settings › Code lists from
+ * each node's alarms, of everything the node's table can raise. Held both
+ * ways, in order, by `internal/code.TestTheDashboardKnowsEveryCodeAlarm`.
+ */
+export const CODE_ALARM_KINDS = [
+  "code_checks_backlog",
+  "code_commit_busy",
+  "code_compaction_behind",
+  "code_maintenance_refused",
+  "code_merge_rate_over_capacity",
+  "code_refs_near_limit",
+] as const;
+
+/**
+ * What an unset `code.scratch` and `code.identity_domain` read as — the
+ * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
+ * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
+ * Settings › Code says beside an unset field so the page states the policy in
+ * force. Held by `internal/code.TestTheDashboardStatesTheCodePolicysDefaults`.
+ */
+export const CODE_SCRATCH_IDLE_DAYS = 7;
+export const CODE_SCRATCH_MAX_PER_SEAT = 50;
+export const CODE_IDENTITY_DOMAIN = "seats.invalid";
+
+/**
+ * `code_search` (`GET /code/search`): the lines that match a search, the
+ * commit each repository with a hit was searched at, and what was not
+ * searched (`codesearch.Answer`). HELD BOTH WAYS, with the rows it composes,
+ * by `internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers`.
+ *
+ * A search answers at the tip it names, so it is read at no session floor
+ * (`domains.ts`): a hit's file is read at `tips[repo]`, by commit, never at
+ * the branch the search named, which may have moved since.
+ */
+export interface CodeSearchAnswer {
+  /** In the order of repository, path and line. */
+  hits: CodeSearchHit[];
+  /** The commit each repository with a hit was searched at, by its name. */
+  tips?: Record<string, string>;
+  coverage: CodeSearchCoverage;
+}
+
+/** One matching line of one repository (`codesearch.Hit`). */
+interface CodeSearchHit {
+  repo: string;
+  path: string;
+  /** The path's exact bytes, in base64, where they are not UTF-8. */
+  path_b64?: string;
+  line: number;
+  /** The line, at most 256 bytes of it. */
+  text: string;
+  /** The file's object id, whole. */
+  blob: string;
+}
+
+/**
+ * What a search covered (`codesearch.Coverage`): every repository it names is
+ * in exactly one of `searched` and the sets after it, beside the grep
+ * repositories an unfiltered search leaves out and the indexed ones read with
+ * git grep.
+ */
+interface CodeSearchCoverage {
+  searched: number;
+  not_indexed: CodeSearchRepoSet;
+  building: CodeSearchRepoSet;
+  not_answering: CodeSearchNodeGap[] | null;
+  not_permitted: CodeSearchRepoSet;
+  grep_not_named: CodeSearchRepoSet;
+  stale: CodeSearchRepoSet;
+  no_ref: CodeSearchRepoSet;
+  skipped_files: number;
+  truncated: boolean;
+}
+
+/** A set of repositories: how many, and the first hundred names in order. */
+interface CodeSearchRepoSet {
+  count: number;
+  names: string[] | null;
+}
+
+/** A git node that did not answer, why, and what it left unanswered. */
+interface CodeSearchNodeGap {
+  node: string;
+  why: string;
+  repos: CodeSearchRepoSet;
+}

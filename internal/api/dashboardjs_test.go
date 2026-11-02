@@ -1190,8 +1190,13 @@ const (
 	// through the grid and nothing of the lazy-screen table beside it, so the
 	// two are compressed apart). Merged, the load measured 381.7 KiB
 	// (390,899 bytes), so it moved to 382 KiB, which is 2.08 seconds on that
-	// link.
-	initialBudget = 382 << 10
+	// link. The code host's next round, merged in (My work's sections read
+	// from the services that run them, a code host's own word on an act's
+	// refusal and its not_ready class among the act errors, and the
+	// workspace's service notice for My work's queue), took it to 382.2 KiB,
+	// with no screen's module in the entry, so it moved to 383 KiB, still
+	// 2.08 seconds on that link.
+	initialBudget = 383 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1475,8 +1480,14 @@ const (
 	// reviews, checks and merge queue, and their words), took it from 5253.0
 	// KiB to 5377.4 KiB (+124.4 KiB), nearly all of it in chunks a reader
 	// fetches on opening Code; the frame's part is in initialBudget's history
-	// above. 5378 KiB.
-	treeBudget = 5<<20 + 258<<10
+	// above. 5378 KiB. The code host's next round, merged in (the merge
+	// queue's and the checks' screens, the merge controls on a change,
+	// Settings › Code and the changes on Home), took it to 5428.4 KiB
+	// (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB,
+	// Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8
+	// KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in
+	// the entry, nearly all of it fetched on opening Code. 5429 KiB.
+	treeBudget = 5<<20 + 309<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

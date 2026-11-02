@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -557,6 +560,193 @@ func TestOneChangesWritesAreTakenOneAtATime(t *testing.T) {
 	}
 }
 
+// A CLOSED WRITER TAKES NOTHING NEW AND FINISHES WHAT IT STARTED — the first
+// half of its stop, which a teardown takes for every writer of the node before
+// it drains any: once closed, a write arriving and one waiting its change's
+// turn are each answered ErrNotServing, appending nothing, so the router asks
+// the runner-up; and the publish already in flight is not cut short, landing
+// and answered applied once its record goes through.
+//
+// Mutation: make Close a no-op, and the write arriving after it waits its turn
+// and lands; cancel the publishes in Close, and the one in flight is answered
+// from a cancelled publish.
+func TestAClosedWriterTakesNothingNewAndFinishesWhatItStarted(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	gate := newGate(n.pub)
+	w, _ := writerOn(t, n, gate)
+	type answer struct {
+		res code.ConversationResult
+		err error
+	}
+	converse := func(cw code.ConversationWrite) <-chan answer {
+		out := make(chan answer, 1)
+		go func() {
+			res, err := w.Converse(t.Context(), cw)
+			out <- answer{res, err}
+		}()
+		return out
+	}
+	inFlight := converse(saying(repo, change, ada, "", "In flight."))
+	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
+	waiting := converse(saying(repo, change, ada, "", "Waiting."))
+	eventually(t, "the second write waiting its turn", func() bool { return code.ChangeWriterHolders(w, change) == 2 })
+
+	before := n.end()
+	w.Close()
+	notServing := func(what string, ch <-chan answer) {
+		t.Helper()
+		select {
+		case a := <-ch:
+			if !errors.Is(a.err, code.ErrNotServing) {
+				t.Fatalf("%s on a closed writer answered %+v, %v; want ErrNotServing", what, a.res, a.err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s on a closed writer was not answered in 10 s", what)
+		}
+	}
+	notServing("the write waiting its turn", waiting)
+	notServing("a write arriving", converse(saying(repo, change, ada, "", "Arriving.")))
+	if got := n.end(); got != before {
+		t.Fatalf("the log moved from %d to %d while the closed writer's publish was held", before, got)
+	}
+
+	gate.open()
+	select {
+	case a := <-inFlight:
+		requireConversed(t, a.res, a.err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the publish in flight was not answered in 30 s once its record went through")
+	}
+}
+
+// A BURST PAST THE WRITER'S BOUNDS IS REFUSED BUSY AT ONCE, the committer's
+// rule for a proposal: a write of a change that already has as many writes
+// holding or waiting for its turn as one change takes, a write of any change
+// once the node holds its whole count across changes, and one whose bytes
+// would pass what the node holds are each refused busy, undecided, the moment
+// they arrive — naming the bound — never left holding the node's answer slot
+// while they wait to be refused; another change's write is still taken while
+// one change is full; and each refused write appends nothing, its place given
+// back, so the writes taken land once the held publish goes through.
+//
+// Mutation: drop the per-change count (or the node's), and the write past it
+// waits for its turn and lands rather than being refused at once.
+func TestABurstPastTheWritersBoundsIsRefusedAtOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	c, _ := committerOn(t, n, n.pub)
+	var others []string
+	for _, source := range []string{releaseRef, mainRef} {
+		ref := "refs/heads/other-" + strings.TrimPrefix(source, "refs/heads/")
+		n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(ref, code.ZeroOID, oidOf(ref))))
+		opened, err := c.ProposeChange(t.Context(), opening(repo, ref, mainRef, dev))
+		requireChanged(t, opened, err)
+		others = append(others, opened.ChangeID)
+	}
+	gate := newGate(n.pub)
+	w, rec := writerOn(t, n, gate)
+	// EVERY WRITE OF THE BURST WEIGHS THE SAME: one body, and ids of one
+	// length.
+	burst := func(on string) code.ConversationWrite { return saying(repo, on, ada, "", "One of a burst.") }
+	weight, err := code.ConversationWeight(burst(change))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// THREE OF ONE CHANGE, FOUR ACROSS CHANGES, AND ROOM FOR FIVE WRITES'
+	// BYTES — each bound met by its own write below.
+	code.SetChangeWriterBounds(w, 3, 4, 5*weight)
+	type answer struct {
+		res code.ConversationResult
+		err error
+	}
+	converse := func(cw code.ConversationWrite) <-chan answer {
+		out := make(chan answer, 1)
+		go func() {
+			res, err := w.Converse(t.Context(), cw)
+			out <- answer{res, err}
+		}()
+		return out
+	}
+	var taken []<-chan answer
+	taken = append(taken, converse(burst(change)))
+	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
+	taken = append(taken, converse(burst(change)), converse(burst(change)))
+	eventually(t, "the change's turn holding three writes", func() bool {
+		return code.ChangeWriterHolders(w, change) == 3
+	})
+
+	refusedAtOnce := func(what string, cw code.ConversationWrite, says string) {
+		t.Helper()
+		before := n.end()
+		select {
+		case a := <-converse(cw):
+			requireConversationRefused(t, n, before, a.res, a.err, code.ConversationRefusalBusy, says)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s waited rather than being refused at once", what)
+		}
+	}
+	refusedAtOnce("a fourth write of the full change", burst(change),
+		"3 writes of this change hold or wait for its turn on this node, the most one change takes at once "+
+			"(MaxChangeWritesWaiting)")
+
+	// ANOTHER CHANGE IS STILL TAKEN, and with it the node holds its count.
+	taken = append(taken, converse(burst(others[0])))
+	eventually(t, "the other change's write reaching the publisher", func() bool { return gate.calls.Load() == 2 })
+	refusedAtOnce("a write of a third change past the node's count", burst(others[1]),
+		"4 writes hold or wait for their change's turn on this node, the most it takes at once "+
+			"(ChangeWriterNodeWrites)")
+	if got := readingOf(rec, metrics.CodeConversationWrites, metrics.Attrs{"op": "comment",
+		"outcome": "busy"}).Total; got != 2 {
+		t.Fatalf("crewlet.code.conversation.writes counts %d busy comments, want the 2 refused", got)
+	}
+
+	// THE BYTES: four writes held, and room for half a write more — a write
+	// that would pass it is refused, whatever the counts leave.
+	code.SetChangeWriterBounds(w, 3, 8, 4*weight+weight/2)
+	refusedAtOnce("a write past the node's bytes", burst(others[1]),
+		"would pass the "+strconv.Itoa(4*weight+weight/2)+" it holds (ChangeWriterNodeBytes)")
+
+	gate.open()
+	for i, ch := range taken {
+		select {
+		case a := <-ch:
+			requireConversed(t, a.res, a.err)
+		case <-time.After(30 * time.Second):
+			t.Fatalf("taken write %d was not answered in 30 s", i)
+		}
+	}
+	if got := code.ChangeWriterHolders(w, change); got != 0 {
+		t.Fatalf("%d writes of the change still hold its turn once every write was answered", got)
+	}
+}
+
+// BenchmarkAChangesWritesInTurn is one change's single flight draining: its
+// writes one after another through the writer, each decided, published,
+// applied on a real embedded member and answered from the rows before the
+// next takes the turn — what a write of a change's turn costs on a healthy
+// log, which MaxChangeWritesWaiting's doc reads the drain of a full turn from.
+// Run it bounded: -run '^$' -bench '^BenchmarkAChangesWritesInTurn$'
+// -benchtime 64x -count 1, one turn's worth.
+func BenchmarkAChangesWritesInTurn(b *testing.B) {
+	n := newNode(b)
+	repo := changeRepo(b, n, "web")
+	c, _ := committerOn(b, n, n.pub)
+	opened, err := c.ProposeChange(b.Context(), opening(repo, featureRef, mainRef, dev))
+	if err != nil || opened.Refusal != "" {
+		b.Fatalf("open the change: %+v, %v", opened, err)
+	}
+	w, _ := writerOn(b, n, n.pub)
+	for b.Loop() {
+		res, err := w.Converse(b.Context(), saying(repo, opened.ChangeID, ada, "", "In its turn."))
+		if err != nil || res.Outcome != statelog.OutcomeApplied {
+			b.Fatalf("a write in its turn answered %+v, %v; want applied", res, err)
+		}
+	}
+}
+
 // A WRITE WAITS ITS TURN ONLY WHILE ITS ASKER'S ATTEMPT HAS ROOM: one whose
 // deadline leaves no more than a publish and its answer is refused busy,
 // undecided, at once — the committer's rule for a push's wait in its queue —
@@ -774,22 +964,32 @@ func TestAPurgedRepositorysConversationIsGated(t *testing.T) {
 		t.Fatalf("the deletion marker counts %d records dropped, want the one comment", got)
 	}
 
-	body, err := code.Encode(code.MutationRecord{RecordEnvelope: code.RecordEnvelope{OpID: "op-late",
-		Subject: code.ChangeSubject(change), Op: code.OpComment, Scope: code.Scope{code.ChangePath(change)}},
-		Mutation: []byte(`{"repo_id":"` + repo + `"}`)})
-	if err != nil {
-		t.Fatal(err)
+	// THE GATE READER JUDGES A CHANGE'S RECORD BY ITS SCOPE, never its payload:
+	// a body whose mutation names no repository at all is dropped by the
+	// marker of the repository its scope names, and one whose scope names
+	// none is not, whatever its payload says.
+	encoded := func(scope code.Scope, mutation string) []byte {
+		body, err := code.Encode(code.MutationRecord{RecordEnvelope: code.RecordEnvelope{OpID: "op-late",
+			Subject: code.ChangeSubject(change), Op: code.OpComment, Scope: scope}, Mutation: []byte(mutation)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
 	}
 	gates := code.NewGates(n.db.Reader())
 	subject := statelog.Subject{Kind: string(code.KindChange), ID: change}
 	at := statelog.Position{Stream: code.Domain{}.Stream().Name, Seq: n.end() + 1}
-	if reason, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, body); err != nil || !gated ||
+	scoped := encoded(code.Scope{code.RepoPath(repo), code.ChangePath(change)}, `{}`)
+	if reason, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, scoped); err != nil || !gated ||
 		reason != statelog.ReasonDeleted {
 		t.Fatalf("the gate reader judged the record's body %q, %v, %v; want deleted", reason, gated, err)
 	}
-	if _, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, nil); err != nil || gated {
-		t.Fatalf("the gate reader judged a change's record with no body gated (%v, %v): its subject names no "+
-			"repository", gated, err)
+	unscoped := encoded(code.Scope{code.ChangePath(change)}, `{"repo_id":"`+repo+`"}`)
+	for name, body := range map[string][]byte{"no body": nil, "a scope naming no repository": unscoped} {
+		if _, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, body); err != nil || gated {
+			t.Fatalf("the gate reader judged a change's record with %s gated (%v, %v): it names no repository "+
+				"the gate reads", name, gated, err)
+		}
 	}
 
 	before := n.end()
@@ -989,8 +1189,8 @@ func (n *node) seedMergeability(changeID string, width int64) {
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO code_mergeability (change_id, revision, target_ref,
 			target_oid, target_position, state, conflicts_count, node, bytes, position, at, change_version,
-			readiness_version, checks_position, ready, waits_person, conflicts)
-			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, 1, 1, 0, 0, 0, ?)`, changeID,
+			readiness_version, checks_position, chart_epoch, ready, waits_person, conflicts)
+			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, 1, 1, 0, 0, 0, 0, ?)`, changeID,
 			width, strings.Repeat("p", int(min(width, 1<<10)))); err != nil {
 			return err
 		}

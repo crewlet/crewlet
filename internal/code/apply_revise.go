@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // applyRevise writes a revision's facts ([Revise]) — the row of its revision,
@@ -19,6 +21,10 @@ import (
 // collapsed, met again, and a skip. The conversation's text_bytes moves by
 // what the facts' wide columns weigh, less what the row they replace weighed,
 // so a purge weighs the change's subject's wide rows by its one narrow row.
+//
+// And it asks each reviewer the record's routing asks to look again
+// ([ChangeRouting.ReReview]) for a review once more, where their review
+// answered their ask.
 //
 // PURE IN THE RECORD, its position and the prior rows, as every apply here:
 // whom the facts ask, skip and wake rides the record, stamped by the writer
@@ -50,19 +56,38 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 			return 0, conversationCounts{}, fmt.Errorf("code: the facts at %s ask reviewer %q of kind %q, which no "+
 				"writer stamps", at.position, rv.Handle, rv.Kind)
 		}
-		if _, err := tx.ExecContext(ctx, askPathOwnerSQL, r.ChangeID, rv.Handle, string(rv.Kind),
-			string(ReviewerPathOwner), string(ReviewerRequested), at.packed); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: ask %s of change %s at %s: %w", rv.Handle, r.ChangeID,
-				at.position, err)
-		}
-		if _, err := tx.ExecContext(ctx, addParticipantSQL, r.ChangeID, rv.Handle, string(rv.Kind),
-			at.packed); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", rv.Handle,
-				r.ChangeID, at.position, err)
-		}
-		rows += 2
 	}
-	return rows, counts, nil
+	// THE OWNERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, as an
+	// ask for review writes its own.
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, askPathOwnersSQL, `(?, ?, ?, ?, ?, '', '', '', ?)`,
+		`ON CONFLICT (change_id, reviewer) DO NOTHING`, len(r.Asked), func(i int) []any {
+			rv := r.Asked[i]
+			return []any{r.ChangeID, rv.Handle, string(rv.Kind), string(ReviewerPathOwner), string(ReviewerRequested),
+				at.packed}
+		}); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("code: ask change %s's path owners at %s: %w", r.ChangeID,
+			at.position, err)
+	}
+	if err := addParticipants(ctx, tx, at, r.ChangeID, r.Asked); err != nil {
+		return 0, conversationCounts{}, err
+	}
+	rows += 2 * len(r.Asked)
+	// THE REVIEWERS ASKED TO LOOK AGAIN are waited on again: a reviewer whose
+	// review answered their ask, and whose standing verdict asks for changes
+	// on an earlier revision, owes the change a review of this one — the
+	// re_review its routing carries, the one copy of whom it names. A
+	// reviewer nobody asked gains no ask, and one whose ask was withdrawn
+	// keeps that word; a record with no routing concerns nobody, so it asks
+	// nobody again.
+	var again []string
+	if r.Routing != nil {
+		again = r.Routing.ReReview
+	}
+	reopened, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerReviewed, ReviewerRequested, again)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + reopened, counts, nil
 }
 
 // factsWide is a revision's facts' wide columns as a row keeps them: its
@@ -122,8 +147,8 @@ const (
 			owners_digest = excluded.owners_digest, bytes = excluded.bytes, position = excluded.position,
 			owners = excluded.owners, skipped = excluded.skipped, classes = excluded.classes,
 			touched = excluded.touched`
-	askPathOwnerSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
-			requested_by_kind, note, position)
-		VALUES (?, ?, ?, ?, ?, '', '', '', ?)
-		ON CONFLICT (change_id, reviewer) DO NOTHING`
+	// askPathOwnersSQL is the path owners a revision's facts ask, a collection
+	// store.InsertRows writes, each where the change holds no ask of them.
+	askPathOwnersSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
+			requested_by_kind, note, position) VALUES `
 )

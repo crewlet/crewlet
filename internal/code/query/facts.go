@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -78,24 +79,37 @@ import (
 // once, and a lane filled with first halves would wait on itself for the
 // second. A patch held in memory instead would be MaxPatchIDDiffBytes a read,
 // and a spool is no file of the cache's: the kernel removes it however the
-// read ends.
+// read ends. The NODE holds MaxPatchSpools of them at once, whatever its read
+// share, so the room they take is one the cache is sized beside.
 //
-// AN ID IS OPTIONAL, AND ITS OMISSION THE SAFE SIDE: past MaxPatchIDDiffBytes,
-// and where the patch or its id ran out what was left of the read's budget of
-// git, the facts answer with PatchIDOmitted — an id that equals nothing, so no
-// approval carries across it by its diff — rather than fail: the base, the
-// touched paths and the trees are what a change cannot do without, and they
-// cost little. Those fail the read as any read's git does (server.go): a walk
-// that ran its whole budget is too large, a busy or damaged node unready. So
-// are THE CLASSES OPTIONAL, for the same reason and on the same side: a class
-// only relaxes, so classes cut short by their bound or by what the budget
-// left are answered INCOMPLETE — the paths lexed keep theirs, the rest have
-// none — and never fail the read. They run last, after the id, which carries
-// a reviewer's approval across a rebase: a common change the classes would
-// otherwise take the budget from.
+// AN ID IS OPTIONAL, AND ITS OMISSION THE SAFE SIDE: past MaxPatchIDDiffBytes
+// the facts answer with the id omitted PAST ITS BOUND (code.OmittedPastBound)
+// — an id that equals nothing, so no approval carries across it by its diff —
+// rather than fail: the base, the touched paths and the trees are what a
+// change cannot do without, and they cost little. Those fail the read as any
+// read's git does (server.go): a walk that ran its whole budget is too large,
+// a busy or damaged node unready. So are THE CLASSES OPTIONAL, for the same
+// reason and on the same side: a class only relaxes, so classes cut short by
+// their bound are answered INCOMPLETE — the paths lexed keep theirs, the rest
+// have none — and never fail the read. They run last, after the id, which
+// carries a reviewer's approval across a rebase: a common change the classes
+// would otherwise take the budget from.
+//
+// AN OMISSION FOR TIME IS ANSWERED APART (code.OmittedOutOfTime): where the
+// patch or its id ran out what was left of the read's budget of git, or the
+// classes did, the facts say so in that word, never as the bound's. A bound
+// measures the two commits, and every node omits alike; the budget measures
+// the node at that moment — a slow one under load, where the one beside it
+// takes the id in a second — and facts recorded from it would drop every
+// approval's carry-forward for that revision for good, a re-review forced
+// exactly when the fleet is busiest. So such facts are not FINAL
+// (code.RevisionFactsAnswer.Final): they are answered, since the paths and
+// trees in them are whole and every reader of those alone may take them, and
+// their recorder asks again rather than keep them.
 
 // MaxPatchIDDiffBytes is the largest cumulative diff whose patch-id a
-// revision's facts take: past it the facts answer PatchIDOmitted.
+// revision's facts take: past it the facts answer the id omitted past its
+// bound (code.OmittedPastBound).
 //
 // 256 MIB, MEASURED TO FIT: BenchmarkRevisionFacts read the facts of a change
 // whose patch is 249 MiB — 781 files of 256 KiB, every fourth line rewritten,
@@ -108,10 +122,35 @@ import (
 // outlast the attempt a git read's asker waits (estate.GitReadAttempt, which
 // that budget is a term of), answered late rather than omitted. A spool at
 // the bound is a quarter of a gigabyte on the cache's volume for the second
-// or two its read runs. A change whose diff passes it — a vendored tree, data
+// or two its read runs, two of them on a node at most (MaxPatchSpools). A
+// change whose diff passes it — a vendored tree, data
 // files — carries an approval from one revision to the next by its code alone:
 // the same base and head trees (code.ChangeClassNoCodeChange).
 const MaxPatchIDDiffBytes = 256 << 20
+
+// MaxPatchSpools is how many revisions' patches one git node spools at once:
+// TWO, the facts reads one home asks at once — its loop works
+// internal/code/home's Concurrency repositories at a time, each turn's facts
+// read one after another, and the router's walk asks a repository's home
+// first, so a node's facts reads are its own home's in the steady state
+// (engine.TestEveryFactsReadOfAHomeHasASpool holds the two equal). A third,
+// from another home's walk past a copy that could not answer, waits for a
+// spool as a read waits for a unit of the share — code.GitShareWait at most —
+// and is then answered unready (share) for the walk's next node.
+//
+// THE BOUND IS THE NODE'S, NOT THE READ'S, because the volume is: a read's
+// spool is held to MaxPatchIDDiffBytes, but the reads at once were bounded
+// only by the share (half the read lane — 8 × 256 MiB = 2 GiB on a 16-core
+// git node, 8 GiB on 64 cores) and none of it was in the room the cache is
+// sized against, which on the shared layout is the store's headroom.
+// PatchSpoolAllowance is what these spools may hold, which the engine takes
+// out of the cache's room beside the host's request spools.
+const MaxPatchSpools = 2
+
+// PatchSpoolAllowance is the most every revision's patch spooled on a git
+// node's cache volume at once holds: MaxPatchSpools of MaxPatchIDDiffBytes,
+// 512 MiB.
+const PatchSpoolAllowance = MaxPatchSpools * MaxPatchIDDiffBytes
 
 // emptyTree is git's id of the tree with nothing in it, which every git holds
 // without an object: the base a change whose history shares none with its
@@ -158,7 +197,8 @@ func (r *read) factsRead(ctx context.Context, objs found) (code.GitAnswer, error
 	// holds already.
 	envelope := code.GitAnswer{Kind: code.GitRevisionFacts, RevisionFacts: &code.RevisionFactsAnswer{
 		Head: f.Head, Target: f.Target, MergeBase: mb, BaseTree: f.Head, HeadTree: f.Head, PatchID: f.Head,
-		PatchIDOmitted: true, Touched: []string{}, TouchesAll: true, Classes: widestClasses(r.s.touchedPaths)}}
+		PatchIDOmission: code.OmittedOutOfTime, Touched: []string{}, TouchesAll: true,
+		Classes: widestClasses(r.s.touchedPaths), ClassesOmission: code.OmittedOutOfTime}}
 	limit := min(r.s.touchedBytes, r.room(envelope)+code.TouchedCost(nil))
 	walk, err := r.touched(ctx, base, head.peeled, limit)
 	if err != nil {
@@ -169,10 +209,10 @@ func (r *read) factsRead(ctx context.Context, objs found) (code.GitAnswer, error
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
-	if f.PatchID, f.PatchIDOmitted, err = r.patchID(ctx, base, head.peeled); err != nil {
+	if f.PatchID, f.PatchIDOmission, err = r.patchID(ctx, base, head.peeled); err != nil {
 		return code.GitAnswer{}, err
 	}
-	if f.Classes, err = r.classes(ctx, walk, sizes); err != nil {
+	if f.Classes, f.ClassesOmission, err = r.classes(ctx, walk, sizes); err != nil {
 		return code.GitAnswer{}, err
 	}
 	return a, nil
@@ -325,20 +365,24 @@ func (r *read) shapes(ctx context.Context, f *code.RevisionFactsAnswer, lexed []
 }
 
 // classes is the path classes of the paths the walk found a lexer classes —
-// none, and incomplete, where it touches all — each pair of blobs lexed
-// (code.ClassifyGo) as one `cat-file --batch` writes them: in the touched
-// list's order, a path whose version is past the classed blob bound left
-// unread with no class, and the classification cut, INCOMPLETE, at the first
-// path whose two versions would take what it lexes past the classed bound in
-// all, or wherever what the read's budget of git left runs out. A blob the
-// check found none of — the copy's damage, which the patch's own git reports —
-// is left unread too, the classification incomplete. sizes is the check's
-// answer of each path's two blobs, in the walk's order.
-func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code.RevisionClasses, error) {
+// none, incomplete PAST A BOUND, where it touches all — each pair of blobs
+// lexed (code.ClassifyGo) as one `cat-file --batch` writes them: in the
+// touched list's order, a path whose version is past the classed blob bound
+// left unread with no class, and the classification cut, INCOMPLETE, at the
+// first path whose two versions would take what it lexes past the classed
+// bound in all (code.OmittedPastBound), or wherever what the read's budget of
+// git left runs out (code.OmittedOutOfTime). A blob the check found none of is
+// the copy's damage — its trees name it — which a node with a whole copy would
+// lex: the read is the node's failure, unready, never classes this copy alone
+// would leave out. sizes is the check's answer of each path's two blobs, in
+// the walk's order.
+func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code.RevisionClasses,
+	code.FactsOmission, error) {
+
 	if w.all {
-		return code.RevisionClasses{}, nil
+		return code.RevisionClasses{}, code.OmittedPastBound, nil
 	}
-	complete := true
+	omitted := code.FactsOmission("")
 	var (
 		want  []lexable
 		in    bytes.Buffer
@@ -347,14 +391,15 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code
 	for i, l := range w.lexed {
 		before, after := sizes[2*i], sizes[2*i+1]
 		if before.kind != "blob" || after.kind != "blob" {
-			complete = false
-			continue
+			return code.RevisionClasses{}, "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s holds no blob "+
+				"%s or %s of %s, which the trees of its copy name; another git node answers", r.s.o.NodeID, l.old,
+				l.new, w.paths[l.at]))
 		}
 		if before.size > r.s.classedBlob || after.size > r.s.classedBlob {
 			continue // NO CLASS, as code.ClassifyGo gives none past its bound
 		}
 		if total+before.size+after.size > r.s.classedBytes {
-			complete = false
+			omitted = code.OmittedPastBound
 			break
 		}
 		total += before.size + after.size
@@ -362,11 +407,12 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code
 		fmt.Fprintf(&in, "%s\n%s\n", l.old, l.new)
 	}
 	if len(want) == 0 {
-		return code.RevisionClasses{Complete: complete}, nil
+		return code.RevisionClasses{Complete: omitted == ""}, omitted, nil
 	}
 	deadline, err := r.budget()
 	if err != nil {
-		return code.RevisionClasses{}, nil // the facts before them spent the read's whole budget
+		// THE FACTS BEFORE THEM SPENT the read's whole budget.
+		return code.RevisionClasses{}, code.OmittedOutOfTime, nil
 	}
 	lx := &lexer{want: want, blob: r.s.classedBlob}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
@@ -374,18 +420,18 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (code
 		Args:   []string{"cat-file", "--batch", "--buffer"},
 		Config: r.s.o.Cache.ServeConfig(), Stdin: &in, Stdout: lx, Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if r.omits(ctx, res, err) {
+	if r.omission(ctx, res, err) != "" {
 		// OUT OF THE BUDGET: the paths lexed keep their classes, and the
 		// rest have none.
-		return lx.classes(false), nil
+		return lx.classes(false), code.OmittedOutOfTime, nil
 	}
 	if err == nil {
 		err = lx.close()
 	}
 	if err = r.failed(ctx, "lexing of the Go a change touches", res, err, nil); err != nil {
-		return code.RevisionClasses{}, err
+		return code.RevisionClasses{}, "", err
 	}
-	return lx.classes(complete), nil
+	return lx.classes(omitted == ""), omitted, nil
 }
 
 // lexer is the Stdout of a classification's cat-file: each blob's
@@ -511,16 +557,23 @@ func nameable(rec []byte) bool {
 }
 
 // patchID is `git patch-id --verbatim` of the diff from base to head: "" for
-// a diff of nothing, and omitted past the read's bound on the diff, or where
-// what was left of its budget of git ran out.
-func (r *read) patchID(ctx context.Context, base, head string) (string, bool, error) {
+// a diff of nothing, and omitted past the read's bound on the diff
+// (code.OmittedPastBound), or where what was left of its budget of git ran
+// out (code.OmittedOutOfTime).
+func (r *read) patchID(ctx context.Context, base, head string) (string, code.FactsOmission, error) {
 	deadline, err := r.budget()
 	if err != nil {
-		return "", true, nil // the base and the paths spent the read's whole budget
+		// THE BASE AND THE PATHS SPENT the read's whole budget.
+		return "", code.OmittedOutOfTime, nil
 	}
+	release, err := r.takePatchSpool(ctx, head)
+	if err != nil {
+		return "", "", err
+	}
+	defer release()
 	spool, err := r.s.o.Cache.Spool()
 	if err != nil {
-		return "", false, r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not make a spool for the "+
+		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not make a spool for the "+
 			"patch of %s: %v; another git node answers", r.s.o.NodeID, head, err))
 	}
 	defer func() { _ = spool.Close() }()
@@ -532,64 +585,92 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, bool, er
 		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdout: w, Class: gitproc.ClassRead,
 		Deadline: deadline,
 	})
-	switch {
-	case w.failed != nil && res.Damage == nil:
+	if w.failed != nil && res.Damage == nil {
 		r.charge(res)
-		return "", false, r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not write the patch of %s to "+
+		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not write the patch of %s to "+
 			"its spool: %v; another git node answers", r.s.o.NodeID, head, w.failed))
-	case r.omits(ctx, res, err):
-		return "", true, nil
+	}
+	if o := r.omission(ctx, res, err); o != "" {
+		return "", o, nil
 	}
 	if err = r.failed(ctx, "patch of a change", res, err, nil); err != nil {
-		return "", false, err
+		return "", "", err
 	}
 	if w.wrote == 0 {
 		// A DIFF OF NOTHING has no patch and no id: a revision that changes
 		// nothing carries nothing.
-		return "", false, nil
+		return "", "", nil
 	}
 	if _, err = spool.Seek(0, io.SeekStart); err != nil {
-		return "", false, r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not read back the spool of "+
+		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not read back the spool of "+
 			"the patch of %s: %v; another git node answers", r.s.o.NodeID, head, err))
 	}
 	if deadline, err = r.budget(); err != nil {
-		return "", true, nil // the patch spent the read's whole budget
+		// THE PATCH SPENT the read's whole budget.
+		return "", code.OmittedOutOfTime, nil
 	}
 	res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
 		Args: []string{"patch-id", "--verbatim"}, Config: r.s.o.Cache.ServeConfig(),
 		Stdin: spool, Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if r.omits(ctx, res, err) {
-		return "", true, nil
+	if o := r.omission(ctx, res, err); o != "" {
+		return "", o, nil
 	}
 	if err = r.failed(ctx, "patch-id of a change", res, err, nil); err != nil {
-		return "", false, err
+		return "", "", err
 	}
 	// ONE PATCH, ONE LINE: "<patch-id> <commit id>", the commit id git's
 	// zero id, since a diff of two trees names no commit.
 	fields := strings.Fields(string(res.Stdout))
 	if len(fields) != 2 || !gitref.ValidOID(fields[0]) || fields[1] != gitref.ZeroOID {
-		return "", false, fmt.Errorf("query: patch-id answered %q for a patch of %d bytes, which is no one patch's "+
+		return "", "", fmt.Errorf("query: patch-id answered %q for a patch of %d bytes, which is no one patch's "+
 			"id", truncated(res.Stdout), w.wrote)
 	}
-	return fields[0], false, nil
+	return fields[0], "", nil
 }
 
-// omits reports whether a run of the patch or its id ended where the facts
-// omit the id — at the bound on the patch, or at its deadline, what was left
-// of the read's budget of git — charging its run. A run that reported damage,
-// one the read's answer falling due ended, and one its caller ended are none:
-// failed judges those as it judges every run.
-func (r *read) omits(ctx context.Context, res gitproc.Result, err error) bool {
+// takePatchSpool holds one of the node's MaxPatchSpools for the patch of
+// head, waiting for one to come free at most as long as a read waits for a
+// unit of its share (code.GitShareWait): past it, or where the read's answer
+// falls due first, unready (share), so the walk asks its next node and the
+// home's next pass asks again; its caller's own end is its caller's error.
+// release gives it back.
+func (r *read) takePatchSpool(ctx context.Context, head string) (release func(), err error) {
+	wait := time.NewTimer(r.s.patchSpoolWait)
+	defer wait.Stop()
+	select {
+	case r.s.patchSpools <- struct{}{}:
+		return func() { <-r.s.patchSpools }, nil
+	case <-ctx.Done():
+		if !code.AnswerDue(ctx) {
+			return nil, ctx.Err()
+		}
+	case <-wait.C:
+	}
+	return nil, r.unready(code.UnreadyShare, fmt.Sprintf("%s spools the patches of %d revisions' facts, all it "+
+		"spools at once, and none came free for the patch of %s within %s; another git node answers meanwhile",
+		r.s.o.NodeID, MaxPatchSpools, head, r.s.patchSpoolWait))
+}
+
+// omission is what a run of the patch, its id or the classes left out where
+// it ended short of its answer, charging its run: past the bound on the patch
+// (code.OmittedPastBound), or at its deadline, what was left of the read's
+// budget of git (code.OmittedOutOfTime) — and "" for every other end. A run
+// that reported damage, one the read's answer falling due ended, and one its
+// caller ended are none: failed judges those as it judges every run.
+func (r *read) omission(ctx context.Context, res gitproc.Result, err error) code.FactsOmission {
 	switch {
 	case err == nil, res.Damage != nil, code.AnswerDue(ctx), ctx.Err() != nil:
-		return false
-	case errors.Is(err, errPatchPastBound), errors.Is(err, gitproc.ErrDeadline):
+		return ""
+	case errors.Is(err, errPatchPastBound):
 		r.charge(res)
-		return true
+		return code.OmittedPastBound
+	case errors.Is(err, gitproc.ErrDeadline):
+		r.charge(res)
+		return code.OmittedOutOfTime
 	}
-	return false
+	return ""
 }
 
 // spooled is the Stdout of a patch's run: git's patch written into its spool,

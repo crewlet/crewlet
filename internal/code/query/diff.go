@@ -329,7 +329,23 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 	var res gitproc.Result
 	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in the read's %s of git: %s",
 		code.ErrSliceTooLarge, base, head, r.s.gitBudget, narrowing)
-	if p.keep {
+	switch {
+	case filter.set:
+		// AN EXACT FILTER NAMES EVERY FILE IT ADMITS — an interdiff's
+		// touched paths — so its walk is those files looked up at both
+		// commits (interdiff.go), never the two trees, whose difference
+		// beyond them is nothing the stat counts.
+		err = r.touchedRecords(ctx, base, head, filter.paths, p.record)
+		if p.tooLarge != nil {
+			return statPage{}, p.tooLarge
+		}
+		if err == nil {
+			err = p.end(false)
+		}
+		if err != nil {
+			return statPage{}, err
+		}
+	case p.keep:
 		// A FILTERED STAT'S WALK, its raw records alone: the numstat is
 		// diff-pairs', of the files the filter admits (count). No path
 		// narrows the walk itself, which reads the two trees whatever the
@@ -342,7 +358,7 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 				"--no-textconv"}, tail...),
 			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 		})
-	} else {
+	default:
 		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
 			Dir: r.synced.Dir, Dropping: r.synced.Dropping,
 			Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff",
@@ -350,18 +366,20 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 		})
 	}
-	switch {
-	case p.tooLarge != nil && res.Damage == nil:
-		return statPage{}, p.tooLarge
-	case err == nil:
-		err = recs.close()
-	}
-	if err == nil {
-		// Where the stat names no paths, the one process wrote both halves.
-		err = p.end(!p.keep)
-	}
-	if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
-		return statPage{}, err
+	if !filter.set {
+		switch {
+		case p.tooLarge != nil && res.Damage == nil:
+			return statPage{}, p.tooLarge
+		case err == nil:
+			err = recs.close()
+		}
+		if err == nil {
+			// Where the stat names no paths, the one process wrote both halves.
+			err = p.end(!p.keep)
+		}
+		if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
+			return statPage{}, err
+		}
 	}
 	if p.keep {
 		if err := r.count(ctx, p, base, head); err != nil {
@@ -745,7 +763,14 @@ func (r *read) patchRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) 
 	)
 	// A FILE THE FILTER DOES NOT ADMIT is one the read does not change — an
 	// interdiff's file that neither revision touches — and no git is asked.
-	if d.filter.admits([]string{file}) {
+	// One the exact filter of an interdiff admits is LOOKED UP at both
+	// commits, as its stat's every file is, never found by walking them.
+	switch {
+	case d.filter.set && d.filter.admits([]string{file}):
+		if e, ok, err = r.lookupFile(ctx, base, head, file); err != nil {
+			return code.GitAnswer{}, err
+		}
+	case d.filter.admits([]string{file}):
 		if e, ok, err = r.findFile(ctx, base, head, file, d.renames); err != nil {
 			return code.GitAnswer{}, err
 		}

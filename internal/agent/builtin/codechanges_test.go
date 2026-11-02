@@ -27,6 +27,13 @@ import (
 // siteChangeID is change site!7's id.
 const siteChangeID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d07"
 
+// siteEntryID is site!7's entry in its target's queue; otherEntryID another
+// change's ahead of it.
+const (
+	siteEntryID  = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e01"
+	otherEntryID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e02"
+)
+
 // revHead is revision n's head, and revBase the base its facts recorded —
 // each a whole id of its own, n from 1 to 9.
 func revHead(n int64) string { return strings.Repeat(strconv.FormatInt(n, 10), 40) }
@@ -118,6 +125,11 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		}
 		return out, nil
 	}
+	if q.Kind == code.ReadQueue {
+		// THE CHANGE'S TARGET'S QUEUE holds its one entry, for a dequeue.
+		out.Queue = []code.QueueRow{{EntryID: siteEntryID, ChangeID: f.detail.ID}}
+		return out, nil
+	}
 	if q.Change != f.detail.Number {
 		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrChangeNotFound, code.ChangeRef(f.repo, q.Change))
 	}
@@ -179,19 +191,21 @@ func changeCall(t *testing.T, host *codeHost, turn *turnctx.Turn, name string,
 
 // THE CHANGE TOOLS JOIN THE ONE LIST: code_list_changes and code_get_change
 // are code reads like the nine before them — on the one list a seat's registry
-// and the operator catalogue both take, after the reads by object id, described
-// and shaped the same on both; each a proven, idempotent read a worker may be
-// handed, that delivers nowhere; and offered by neither surface of a company
-// that hosts no code.
+// and the operator catalogue both take, right after the reads by object id
+// (code_blame the last of them), described and shaped the same on both; each a
+// proven, idempotent read a worker may be handed, that delivers nowhere; and
+// offered by neither surface of a company that hosts no code.
 //
 // Mutations: CodeTools leaving either change tool out, or listing it before
 // the reads by object id; a change tool annotated as a write → red.
 func TestTheChangeToolsJoinTheOneList(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
-	if names := builtin.CodeToolNames(); !slices.Equal(names[len(names)-len(builtin.ChangeToolNames()):],
-		builtin.ChangeToolNames()) {
-		t.Fatalf("the code reads are %v, want the change tools %v last", names, builtin.ChangeToolNames())
+	change, names := builtin.ChangeToolNames(), builtin.CodeToolNames()
+	if blame := slices.Index(names, builtin.CodeBlameTool); blame < 0 || len(names) < blame+1+len(change) ||
+		!slices.Equal(names[blame+1:blame+1+len(change)], change) {
+		t.Fatalf("the code reads are %v, want the change tools %v right after the reads by object id", names,
+			change)
 	}
 	var listed []string
 	for _, tool := range builtin.CodeTools(codeDeps(host)) {

@@ -90,6 +90,8 @@ const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
 const CommitPage = lazyScreen("code", (m) => m.CommitPage);
 const ComparePage = lazyScreen("code", (m) => m.ComparePage);
 const Pushes = lazyScreen("code", (m) => m.Pushes);
+const Queue = lazyScreen("code", (m) => m.Queue);
+const Checks = lazyScreen("code", (m) => m.Checks);
 const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
 const Roster = lazyScreen("agents", (m) => m.People);
 const Teams = lazyScreen("agents", (m) => m.Teams);
@@ -148,6 +150,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
+const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -201,6 +204,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <ComparePage key={route.repo} repo={route.repo} />;
     case "code-pushes":
       return <Pushes />;
+    case "code-queue":
+      return <Queue />;
+    case "code-checks":
+      return <Checks />;
     case "org-chart":
       return <OrgChart />;
     case "roster":
@@ -326,6 +333,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "storage":
       return <FileStoragePage />;
+    case "code-settings":
+      return <CodeSettings />;
     case "audit":
       return <Audit />;
     case "account":

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -151,23 +152,34 @@ func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 // either way, so this order decides only which reason is REPORTED, and
 // [Applier.Gated]'s opposite order only which one a drop is COUNTED under.
 //
-// THE BODY IS READ ONLY FOR A CHANGE'S SUBJECT, by the rule the applier's own
-// gate asks ([gatedRepo]): a repository subject names its repository and a
-// name subject's create checks the marker in its own apply, but a change's
-// subject names its change, and the repository it is about is in its payload.
-// Handed no body — the record there is another operation's — a change's record
-// is answered from the subject alone, ungated by a marker, and the re-decide
-// that leads to meets the repository gone in its own snapshot.
+// THE BODY IS READ ONLY FOR A CHANGE'S SUBJECT, and only its ENVELOPE, by the
+// rule the applier's own gate asks ([gatedRepo]): a repository subject names
+// its repository and a name subject's create checks the marker in its own
+// apply, but a change's subject names its change, and the repository it is
+// about is the one its record's scope names — the envelope the framework hands
+// the applier, decoded here by the same function ([Domain.Envelope]), one pass
+// over the body that builds nothing of its payload. Handed no body — the
+// record there is another operation's — a change's record is answered from the
+// subject alone, ungated by a marker, and the re-decide that leads to meets the
+// repository gone in its own snapshot.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db.IsZero() {
 		return "", false, nil
 	}
+	var scope statelog.ScopeSet
+	if ObjectKind(subj.Kind) == KindChange && body != nil {
+		// AN ENVELOPE THIS BUILD CANNOT READ names no scope here, and the
+		// record is answered ungated by a marker, as one handed no body.
+		if env, err := (Domain{}).Envelope(body); err == nil {
+			scope = env.Scope
+		}
+	}
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Read(ctx, func(tx *sql.Tx) error {
-		if repoID, ok := gatedRepo(subj, body); ok {
+		if repoID, ok := gatedRepo(subj, scope); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx, markerSQL, repoID).Scan(&author)
 			switch {
@@ -220,23 +232,48 @@ func evictedAt(at int64, from, readmitted sql.NullInt64) bool {
 }
 
 // gatedRepo is the repository whose deletion marker gates a record on subj
-// with the body given: a repository subject names its own, and so does a
-// repository's CHECKS subject, keyed by the repository's id; a CHANGE's subject
-// names its change, and the repository is the one its payload names
-// ([changeRepoOf]) — none where no body is handed, or one this build cannot
-// decode. A NAME subject names none — its create's payload names the
-// repository, which the gate reader is not handed — so the create's apply
-// checks the marker itself. ONE FUNCTION, asked by [Applier.Gated] and
-// [Gates.GatedAt] alike, because [statelog.Gates] holds the two to one answer.
-func gatedRepo(subj statelog.Subject, body []byte) (string, bool) {
+// whose envelope's scope is scope: a repository subject names its own, and so
+// does a repository's CHECKS subject, keyed by the repository's id; a CHANGE's
+// subject names its change, and the repository is the one its scope names
+// ([scopedRepo]) — every record on a change's subject names its repository's
+// path beside the change's ([ChangeWriter]), and the apply holds the payload's
+// repository to it ([Applier.applyChange]) — none where the scope names none.
+// A NAME subject names none — its create's payload names the repository,
+// which the gate reader is not handed — so the create's apply checks the
+// marker itself. ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt]
+// alike, because [statelog.Gates] holds the two to one answer.
+//
+// THE SCOPE, NEVER THE PAYLOAD: the envelope is decoded once, by the
+// framework, before any gate runs, and hands the applier its scope; a change's
+// record can be most of a record's bytes (a review is), and reading its
+// repository off the payload was three JSON passes over the body (the
+// envelope, the record and the record's fields beside it) and a fourth over
+// the mutation, inside the domain's apply transaction on every data node, to
+// read one field the scope already carries.
+func gatedRepo(subj statelog.Subject, scope statelog.ScopeSet) (string, bool) {
 	switch ObjectKind(subj.Kind) {
 	case KindRepo, KindChecks:
 		return subj.ID, true
 	case KindChange:
-		if body == nil {
-			return "", false
-		}
-		return changeRepoOf(body)
+		return scopedRepo(scope)
 	}
 	return "", false
+}
+
+// scopedRepo is the one repository scope names by its path ([RepoPath]), and
+// false where it names none or more than one — a scope this build could not
+// read is the domain's whole path ([Scope.UnmarshalJSON]), which names none.
+func scopedRepo(scope statelog.ScopeSet) (string, bool) {
+	var repoID string
+	for _, p := range scope.Paths {
+		id, ok := strings.CutPrefix(p, RepoPath(""))
+		if !ok || id == "" || strings.Contains(id, statelog.ScopeSeparator) {
+			continue
+		}
+		if repoID != "" {
+			return "", false
+		}
+		repoID = id
+	}
+	return repoID, repoID != ""
 }

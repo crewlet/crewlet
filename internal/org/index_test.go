@@ -121,6 +121,18 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 		if want != nil {
 			answered++
 		}
+		// A UNIT'S MEMBERS ARE ITS SUBTREE'S SEATS, as the unit's own walk
+		// holds them, in its order.
+		if got, want := lx.Members(u), slices.Collect(u.AllRoles()); !slices.Equal(got, want) {
+			t.Errorf("Members(%s): the index answers %s, the unit %s", unitName(u), roleNames(got),
+				roleNames(want))
+		}
+	}
+	if got := handlesOf(lx.Members(led.Unit("Eng"))); fmt.Sprint(got) != "[eng-lead e1 a1 w1 web-lead]" {
+		t.Errorf("the premise: Eng's members are %v, want its own seats then API's, Web's and Web Core's", got)
+	}
+	if got := lx.Members(o.Unit("Engineering")); got != nil {
+		t.Errorf("another chart's unit answered the members %s, want none", roleNames(got))
 	}
 	// AND THE CASES ARE THE ONES THEY CLAIM TO BE, or the comparison above
 	// holds two nils equal and proves nothing.

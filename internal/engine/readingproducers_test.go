@@ -69,10 +69,12 @@ func TestEveryAlarmReadingFieldHasAProducer(t *testing.T) {
 	}
 	// A GATE ASSERTING PRESENCE PASSES IDENTICALLY WHEN A FIELD IS FILLED AND
 	// WHEN THE WALK GOES WIDER THAN THE PATH: the git cache's half, and the
-	// compactor's beside it, are reached only through a function-valued field
-	// and a method on another package's type, so a walk that stopped
-	// following either would pass this by following something else.
-	for _, must := range []string{"code/cache.Cache.AlarmReading", "code/compact.Compactor.AlarmReading"} {
+	// compactor's and the mirrors' beside it, are reached only through a
+	// function-valued field and a method on another package's type, so a walk
+	// that stopped following either would pass this by following something
+	// else.
+	for _, must := range []string{"code/cache.Cache.AlarmReading", "code/compact.Compactor.AlarmReading",
+		"code/mirror.Mirrors.AlarmReading"} {
 		if !slices.Contains(walk.reached, must) {
 			t.Errorf("the walk did not reach %s through retention.code — the field-valued call or the "+
 				"cross-package method is no longer followed", must)

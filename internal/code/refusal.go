@@ -15,7 +15,7 @@ import (
 // build does not know is a value rather than a panic.
 type Refusal string
 
-// The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
+// The codes. The first nineteen may be RECORDED on a command ([Refusal.Recorded]);
 // the last eleven are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
@@ -46,6 +46,20 @@ const (
 	// purged, purged or not there at all — four states with four remedies,
 	// so its sentence is formed from the state ([RepoGone.Detail]).
 	RefusalRepoDeleted Refusal = "repo_deleted"
+	// RefusalRepoImporting is a write to a repository being imported from
+	// another host ([RepoStatusImporting]) — a push, a change's every write,
+	// an expunge — which takes none until its import is done
+	// ([ImportingDetail]).
+	//
+	// RECORDABLE AS repo_archived IS, though the push decide refuses the
+	// whole push for it, so no record carries it today: a value of
+	// Command.Reason under the code domain's stated condition (mirror.go),
+	// which no build that carries the domain has run without.
+	RefusalRepoImporting Refusal = "repo_importing"
+	// RefusalRepoMirrored is a write to a PULL MIRROR ([RepoRef.Mirrored]) —
+	// a push, a change's every write — which moves only by its syncs from
+	// its source ([MirroredDetail]). Recordable as repo_importing is.
+	RefusalRepoMirrored Refusal = "repo_mirrored"
 	// RefusalRepoSize is a push past code.limits.repo_max_bytes.
 	RefusalRepoSize Refusal = "repo_size"
 	// RefusalRepoRefs is a create past MaxRefsPerRepo live refs.
@@ -132,13 +146,17 @@ const (
 	// revision a head move writes and the author it makes, a merge's and a
 	// close's row (revisions.go) — past [MaxRecordRows] even alone in its
 	// record: a push of hundreds of branches each heading a live change, in
-	// practice a bot's force-push of every change it rebased. Nothing of it
-	// was decided, and it lands as several pushes of fewer branches.
+	// practice a bot's force-push of every change it rebased. A person's push
+	// landing on hundreds of protected branches is refused the same way, each
+	// landing two rows of its own ([PushEntry.Landings]), its sentence naming
+	// them. Nothing of it was decided, and it lands as several pushes of fewer
+	// branches.
 	//
-	// The push decide refuses it, from the change rows its snapshot holds,
-	// counted as the record's apply will write them ([changeBook]); a push
-	// whose changes fit alone but not beside the entries before it is
-	// refused nothing — the committer carries it to lead its next record.
+	// The push decide refuses it, from the change rows and the protection
+	// rules its snapshot holds, counted as the record's apply will write them
+	// ([changeBook], [entryRows]); a push whose rows fit alone but not beside
+	// the entries before it is refused nothing — the committer carries it to
+	// lead its next record.
 	//
 	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
 	// as compaction_behind is: no field of the code domain's records and no
@@ -195,7 +213,8 @@ func Refusals() []Refusal {
 	return []Refusal{
 		RefusalStale, RefusalProtectedForce, RefusalProtectedDelete,
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
-		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
+		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoImporting, RefusalRepoMirrored, RefusalRepoSize,
+		RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
 		RefusalUnavailable, RefusalStoreFull, RefusalForgedCommitter, RefusalNotApplied, RefusalUnknown,
@@ -234,8 +253,12 @@ var sentences = map[Refusal]string{
 	RefusalBadRef:       "not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/",
 	RefusalRepoArchived: "the repository is archived and read-only",
 	RefusalRepoDeleted:  "the repository is deleted, being purged or gone, and takes no push",
-	RefusalRepoSize:     "the repository would hold more than code.limits.repo_max_bytes",
-	RefusalRepoRefs:     "the repository holds as many live refs as one repository may",
+	RefusalRepoImporting: "the repository is being imported from another host, and takes no push until its " +
+		"import is done",
+	RefusalRepoMirrored: "the repository is a pull mirror, which moves only by its syncs from its source; push " +
+		"to its source",
+	RefusalRepoSize: "the repository would hold more than code.limits.repo_max_bytes",
+	RefusalRepoRefs: "the repository holds as many live refs as one repository may",
 	RefusalRefConflict: "a ref and a directory of refs never share a name (feature beside feature/x): " +
 		"every clone holding one could not fetch the other",
 	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",
@@ -404,14 +427,34 @@ func ExpungingDetail(name string, checked, holds int64) string {
 		"decided; run git push again", name, checked, holds)
 }
 
+// ExpungingBuiltDetail is the sentence of a merge, a train or a landing refused
+// expunging ([MergeRefusalExpunging]): what was built (what), who builds it
+// again (builder), the epoch its build read (built) and the repository's
+// (holds) — and that nothing of it was decided. A push's sentence
+// ([ExpungingDetail]) tells its client to push again; this one names the
+// builder, which builds the record again against the repository as the begin
+// left it.
+func ExpungingBuiltDetail(name, what, builder string, built, holds int64) string {
+	if built < holds {
+		return fmt.Sprintf("an expunge of %s's unreachable objects began after this %s was built (drop epoch "+
+			"%d, now %d): nothing was decided; %s builds it again", name, what, built, holds, builder)
+	}
+	return fmt.Sprintf("this %s was built against %s at drop epoch %d, and it is at %d: nothing was decided; "+
+		"%s builds it again", what, name, built, holds, builder)
+}
+
 // tooManyChangesDetail is the sentence of a push refused too_many_changes: how
-// many live changes it moves, the rows a record of its own would hold with
-// their rows beside its own, and the bound. Formed by the push decide alone,
-// the one counter of a record's change rows.
-func tooManyChangesDetail(changes, rows int) string {
-	return fmt.Sprintf("this push moves %d live changes, and their rows beside its own would take its record "+
-		"to %d of the %d rows one record may write: nothing was decided; push their branches in fewer pushes",
-		changes, rows, MaxRecordRows)
+// many live changes it moves, how many protected branches it lands on where it
+// lands on any, the rows a record of its own would hold with their rows beside
+// its own, and the bound. Formed by the push decide alone, the one counter of
+// a record's change and landing rows.
+func tooManyChangesDetail(changes, landings, rows int) string {
+	moves := fmt.Sprintf("this push moves %d live changes", changes)
+	if landings > 0 {
+		moves += fmt.Sprintf(" and lands on %d protected branches", landings)
+	}
+	return fmt.Sprintf("%s, and their rows beside its own would take its record to %d of the %d rows one record "+
+		"may write: nothing was decided; push their branches in fewer pushes", moves, rows, MaxRecordRows)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —
@@ -467,6 +510,12 @@ func reservedRef(ref string) bool {
 type Protections struct {
 	rules    []PushRule
 	patterns []gitref.Pattern
+}
+
+// protects reports a ref some rule of ps matches: one a push to lands on a
+// protected branch, where it is a branch ([PushEntry.Landings]).
+func (ps Protections) protects(ref string) bool {
+	return slices.ContainsFunc(ps.patterns, func(p gitref.Pattern) bool { return p.Match(ref) })
 }
 
 // ParseProtections reads rules for asking about many refs, refusing — rather

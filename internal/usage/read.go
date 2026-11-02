@@ -153,7 +153,8 @@ func scanSeatDay(rows *sql.Rows, day string) (SeatDay, error) {
 	var lastEnded int64
 	if err := rows.Scan(&r.Node, &r.AgentID, &r.Handle, &r.Role,
 		&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
-		&hist, &lastEnded, &r.Code.ChangesOpened, &r.Code.ReviewsGiven, &r.Code.FindingsReceived); err != nil {
+		&hist, &lastEnded, &r.Code.ChangesOpened, &r.Code.ReviewsGiven, &r.Code.FindingsReceived,
+		&r.Code.ChecksFailed, &r.Code.Ejections); err != nil {
 		return r, err
 	}
 	if err := r.Durations.UnmarshalJSON([]byte(hist)); err != nil {

@@ -186,7 +186,8 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 	}
 }
 
-// NO TOOL ASKS FOR A PROOF, NOR DOES ANY VERB A TOOL ASKS FROM INSIDE ITSELF.
+// NO TOOL A SEAT MAY TAKE ASKS FOR A PROOF, NOR DOES ANY VERB A TOOL ASKS FROM
+// INSIDE ITSELF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no
 // dot, and a tool that must read a row before it knows what it is about asks
@@ -198,12 +199,23 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 // model to sign in again. A self arm's own window ([proofAsked]) counts too:
 // it is the one a seat meets on its own record.
 //
+// A HUMAN-ONLY tool may ask one (code_purge_unreachable, a purge as the work,
+// page and artifact purges are): the table refuses every seat it before the
+// window is read, every credential that reaches the operator's MCP surface
+// with nobody at a keyboard is fresh by construction, so no model is ever told
+// to sign in, and the one caller the window does stop is a person's dashboard
+// session, whose press answers step_up_required and runs the step-up ceremony.
+//
 // Mutation: give `work.project.archive` a step-up, or `set_priorities`'s self
-// arm one, and this goes red naming the tool or internal/agent/builtin, where
+// arm one, or drop humanOnly from code_purge_unreachable's row, and this goes
+// red naming the tool or internal/agent/builtin, where
 // the archive tool asks it.
 func TestNoToolAsksForAProof(t *testing.T) {
 	t.Parallel()
 	for _, v := range toolVerbs(t) {
+		if human, _ := authz.HumanOnlyOf(v.verb); human {
+			continue
+		}
 		if r, asks := proofAsked(v.verb); asks {
 			t.Errorf("%s asks for a %s proof, which no seat can give", v.how, r)
 		}

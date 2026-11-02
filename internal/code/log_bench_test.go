@@ -57,10 +57,13 @@ import (
 //   - push=box: the same for that seat's CODING BOX's push of the commit,
 //     received by git: its principal names the seat's run as the engine's
 //     write does and beside it the coding run that pushed — the launch's id,
-//     a UUID — and the coding agent the box ran (`claude-code`), and its
-//     way is `git` (code.Proposal.Validate takes a seat's push git received
-//     only naming its coding run). It is the most a seat's push takes of
-//     the log, which the code log's day prices every seat's push at.
+//     a UUID — the coding agent the box ran (`claude-code`) and the
+//     identity of the work item its run was launched for (a native task's
+//     UUID, RunProvenance.WorkID, which the box's admission stamps and no
+//     engine-built write carries), and its way is `git`
+//     (code.Proposal.Validate takes a seat's push git received only naming
+//     its coding run). It is the most a seat's push takes of the log, which
+//     the code log's day prices every seat's push at.
 //
 // The branches are created before the stream is measured, and each iteration
 // is a fresh log of a fixed number of rounds, so the figure is the same at any
@@ -192,9 +195,12 @@ func BenchmarkPushLogBytes(b *testing.B) {
 	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
 		Run: code.RunProvenance{WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5"}}
 	// box is the same seat's coding box: its run names the coding run too —
-	// the launch's id, a UUID, and its coding agent.
+	// the launch's id, a UUID, and its coding agent — and the work item's
+	// identity, a native task's UUID, which the box's admission stamps from
+	// its run's row and an engine-built write never carries.
 	box := seat
 	box.Run.RunID, box.Run.CodingAgent = "0192f00d-0000-7000-8000-00000000c0de", "claude-code"
+	box.Run.WorkID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("ENG-1234")).String()
 	for _, arm := range []struct {
 		name string
 		who  code.Principal

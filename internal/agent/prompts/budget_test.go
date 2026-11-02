@@ -80,6 +80,21 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // together they take the prompt to ~889, ~4% under the budget — the next
 // sentence needs a decision here, as a section did.
 //
+// 930 -> 985 for a section, deliberately: `code_merging` says a merge that
+// is not ready, or is queued for its checks, is not waited on — the turn ends
+// and a `ready_to_merge` or `merged` wake brings the seat back — which took the
+// prompt from ~889 to ~945 (~56, its heading with it): a seat that polls a
+// merge spends a round on every poll, which no tool's answer reaches a seat
+// early enough to stop. ~945 with it, so ~4% is left, as before it.
+//
+// 985 -> 1030 for a section, deliberately: `code_search` says where something
+// is defined, used or mentioned is found with one search across every
+// repository the seat reads — search before reading whole trees — which took
+// the prompt from ~945 to ~990 (~45, its heading with it): a seat that walks
+// trees file by file with code_read to find where something lives spends a
+// round and its context on every file that does not hold it, which no tool's
+// description reaches a seat early enough to stop. ~4% is left, as before it.
+//
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
 // grows when somebody writes a paragraph. What a roster costs is bounded by
@@ -89,7 +104,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 930)
+	withinBudget(t, "executor", p, 1030)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -100,8 +115,8 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "workers", KeyCodeHistory, KeyCodeWrites,
-		KeyDiscoverableTools} {
+	for _, key := range []string{"escalation", "workers", KeyCodeHistory, KeyCodeSearch, KeyCodeWrites,
+		KeyCodeMerging, KeyDiscoverableTools} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -171,7 +186,7 @@ func referenceExecutor(t *testing.T) ExecutorInput {
 		AvailableTools: append([]string{
 			"activate_tool", escalationTool, "create_work_item", "delegate",
 			"list_mcp_server_tools", "submit_work",
-		}, slices.Concat(CodeHistoryTools(), CodeWriteTools())...),
+		}, slices.Concat(CodeHistoryTools(), CodeSearchTools(), CodeWriteTools(), CodeMergeTools())...),
 		Workers: referenceWorkers(),
 	}
 }
@@ -289,6 +304,14 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // turn's own prose ~1,396, the allowance spending ~987 and the human
 // colleagues note ~93 — so ~2% headroom, with nothing taken from the
 // allowance.
+//
+// 2525 -> 2585 for the code merging guidance (~56 tokens), the same exception
+// once more: rendered only for a seat holding `code_merge_change`. ~2,532 with
+// it, ~2% headroom, as before it.
+//
+// 2585 -> 2625 for the code search guidance (~45 tokens), the same exception
+// once more: rendered only for a seat holding `code_search`. ~2,577 with it,
+// ~2% headroom again.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -313,7 +336,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2525
+const wholeTurnBudget = 2625
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

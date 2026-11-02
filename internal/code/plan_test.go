@@ -351,13 +351,13 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, false, 1, false, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
@@ -384,6 +384,7 @@ func registeredStatements() map[string]statement {
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		"repo row":            {repoRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"repo remotes":        {remotesSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
@@ -469,13 +470,15 @@ func registeredStatements() map[string]statement {
 		"ref hold version": {refHoldVersionSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// THE REF LIFECYCLE: rule 4b's rows of an expiry's refs, driven from
 		// the list, with a seek of each live-change index; the step's keyset
-		// page over its partial index, oldest first; and the page's
-		// repositories by their key.
+		// page over its partial index, oldest first, each row it reads
+		// sought in both live-change indexes so a live change's branches are
+		// skipped (M4-D32); and the page's repositories by their key.
 		"expiry refs": {expiryRefsSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j",
 			refsKey + " (repo_id=? AND ref=?)", "code_changes_open_idx (repo_id=? AND source_ref=?)",
 			"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
 		"expiry listing": {expiryListingSQL, []any{100, -1, "", "", MaxCommandsPerPush},
-			[]string{"code_refs_expiry_idx (at>=? AND at<=?)"}},
+			[]string{"code_refs_expiry_idx (at>=? AND at<=?)", "code_changes_open_idx (repo_id=? AND source_ref=?)",
+				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
 		"expiry repos": {expiryReposSQL, []any{`["repo-1","repo-2"]`}, []string{"SCAN json_each AS j",
 			repoKey + " (id=?)"}},
 		// code_refs_near_limit's reading: the candidates by a keyset walk of
@@ -621,6 +624,10 @@ func registeredStatements() map[string]statement {
 		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// A FAILED CHECK A PERSON'S CI REPORTED finds the live change at
+		// its head on its target (checkswriter.go's headChangeIn).
+		"live change at head": {liveChangeAtHeadSQL, []any{"repo-1", "refs/heads/main", oid("head-1-3")},
+			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
 		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —
 		// driven from the list of its branches, and from the list of the
 		// targets and heads its commands set: one seek of an index partial on
@@ -640,8 +647,8 @@ func registeredStatements() map[string]statement {
 		// the reviewers a write names, driven from the list of their handles,
 		// one seek of the key a handle; how many reviewers a change asks,
 		// counted over the reviewers' key; the change's repository, which the
-		// apply holds a record to; a withdrawn ask and a resolved thread
-		// written back by their keys.
+		// apply holds a record to; and a resolved thread written back by its
+		// key (an ask withdrawn is moved with the rest, "move asks").
 		"conversation":        {conversationSQL, []any{"repo-1-change-000001"}, []string{conversationKey + " (change_id=?)"}},
 		"comment":             {commentSQL, []any{"comment-1"}, []string{commentKey + " (id=?)"}},
 		"change's repository": {changeRepoSQL, []any{"repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
@@ -651,17 +658,31 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=? AND reviewer=?)"}},
 		"reviewers asked": {reviewersAskedSQL, []any{"repo-1-change-000001", MaxReviewersPerChange + 1},
 			[]string{reviewerKey + " (change_id=?)"}},
-		"withdraw reviewer": {withdrawReviewerSQL, []any{string(ReviewerWithdrawn), 3000, "repo-1-change-000001",
-			"seat-0"}, []string{reviewerKey + " (change_id=? AND reviewer=?)"}},
+		// A CHANGE'S ASKS MOVED: those in one state, by the reviewers' key's
+		// prefix — a settling's decide; a list of them moved from one state
+		// to another, driven from the list of their handles, one seek of the
+		// key a handle; and the waiting and the ended counted onto the
+		// conversation's row by its key, each a range of the reviewers' key.
+		"asks in state": {asksInStateSQL, []any{"repo-1-change-000001", string(ReviewerRequested), MaxAsksSettled},
+			[]string{reviewerKey + " (change_id=?)"}},
+		"move asks": {moveAsksSQL, []any{string(ReviewerReviewed), 3000, "repo-1-change-000001",
+			string(ReviewerRequested), `["seat-0","seat-2"]`}, []string{"SCAN json_each AS j",
+			reviewerKey + " (change_id=? AND reviewer=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"count asks": {countAsksSQL, []any{"repo-1-change-000001"},
+			[]string{conversationKey + " (change_id=?)", reviewerKey + " (change_id=?)"}},
 		"resolve thread": {resolveThreadSQL, []any{true, "seat-0", "agent", "comment-1", "repo-1-change-000001"},
 			[]string{commentKey + " (id=?)"}},
 		// A CHANGE'S REVIEWS AND FINDINGS: a finding by its key — a decide's
-		// and an answer's; a raiser's standing findings, driven from the list
-		// of the standing states, one seek of the raiser's index a state; a
+		// and an answer's; the findings an answer names, driven from the list
+		// of their ids, one seek of the key an id; a raiser's standing
+		// findings, driven from the list of the standing states, one seek of
+		// the raiser's index a state; a
 		// reviewer's standing verdict, by their participant row's key; and a
 		// review's supersession, driven from the list of the findings' ids,
 		// one seek of the key an id.
 		"finding": {findingSQL, []any{"finding-1"}, []string{findingKey + " (id=?)"}},
+		"findings among": {findingsAmongSQL, []any{`["finding-1","finding-2"]`},
+			[]string{"SCAN json_each AS j", findingKey + " (id=?)"}},
 		"answer finding": {answerFindingSQL, []any{string(FindingResolved), "", "seat-0", "agent", "", 3000,
 			"finding-1"}, []string{findingKey + " (id=?)"}},
 		"standing findings": {standingFindingsSQL, []any{"repo-1-change-000001", "seat-0", "agent", standingStates},
@@ -679,13 +700,26 @@ func registeredStatements() map[string]statement {
 		// repository's due rechecks, the same index's range joined to its
 		// target's row and its mergeability by their keys, sorted by when the
 		// merge was recorded (sortingStatements says why).
-		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
+		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000), int64(5000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
 				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
 				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+		// THE ASKS DUE A SETTLING: the repositories holding an ended change
+		// whose asks still wait, after a cursor, walking the index partial on
+		// a waiting ask in its order, each change's state and its
+		// repository's by their keys; one repository's such changes, the
+		// same index's range; and its live changes holding asks their end
+		// left, the live changes' index's range, each conversation by its
+		// key.
+		"due asked repositories": {dueAskedReposSQL, []any{"", MaxSnapshotItems},
+			[]string{askedKey + " (repo_id>?)", changeKey + " (id=?)", repoKey + " (id=?)"}},
+		"ended asks": {endedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
+			[]string{askedKey + " (repo_id=?)", changeKey + " (id=?)"}},
+		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
+			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000)},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
 				conversationKey + " (change_id=?)",
@@ -694,14 +728,20 @@ func registeredStatements() map[string]statement {
 			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				mergeabilityKey + " (change_id=?)"}},
 		// A CHANGE'S MERGEABILITY: its row by its key, a decide's and an
-		// apply's, and a read's whole; and a refresh's readiness written
-		// back by the same key.
+		// apply's, and a read's whole; a refresh's readiness written back by
+		// the same key; and the readiness of the changes a record ended
+		// cleared, driven from the list of their ids, a seek of the key an
+		// element.
 		"mergeability": {mergeabilitySQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
-		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
+		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, 7000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
+			"repo-1-change-000001", 2, 1_762_000_000_000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"clear readiness": {clearReadinessSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
 		// attempt at the commit for the change's target, a range of
 		// code_checks' key.
@@ -711,9 +751,10 @@ func registeredStatements() map[string]statement {
 		// standing verdicts that approve, the standing asks and the
 		// mergeabilities of a page of changes, each driven from the list of
 		// their ids, one seek of a key an element; the facts of a list of
-		// (change, revision) pairs, one seek of their key a pair; and one
-		// change's standing blockers, the oldest raised first, a seek of the
-		// partial index that holds them alone.
+		// (change, revision) pairs, one seek of their key a pair; the cut of
+		// each of a list of changes, a walk of the partial index that holds
+		// their standing blockers alone; and the standing blockers of a list
+		// of (change, cut) bounds, a range of that index up to each cut.
 		"readiness counters": {readinessCountersSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"readiness authors": {readinessAuthorsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
@@ -745,7 +786,9 @@ func registeredStatements() map[string]statement {
 		// target's live entries after a seq, a repository's from the top and
 		// after a place, and every repository's the same way, each in its
 		// index's order; the active repositories holding one, grouped on the
-		// index's leading column; a target's trains by
+		// index's leading column; the merge rate's enqueues of a target,
+		// its live entries over code_queue_live_idx and the repository's
+		// entries ended since over code_queue_ended_idx; a target's trains by
 		// code_candidates_train_idx; its landings above a place and its
 		// green row by their keys, and a repository's green rows; and a purge
 		// part's bounded deletes and the purge's whole ones, each by its
@@ -778,6 +821,12 @@ func registeredStatements() map[string]statement {
 			50}, []string{"code_queue_live_idx (repo_id>=?)"}},
 		"queue due repositories": {queueDueReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_queue_live_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"a target's live entries enqueued since": {enqueuedLiveSQL, []any{"repo-1", "refs/heads/main", 1000,
+			MergeRateScan}, []string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
+		"a repository's entries ended since": {enqueuedEndedSQL, []any{"repo-1", 1000, "refs/heads/main", 1000,
+			MergeRateScan}, []string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
+		"a repository's ejections": {ejectedSQL, []any{"repo-1", 1000, "", "", MaxEjectionsShown},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
@@ -802,11 +851,82 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)"}},
 		"purge all greens": {purgeAllGreenSQL, []any{"repo-1"},
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
+		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
+		// key, driven from the list; an entry put in a candidate, ejected and
+		// landed by its key; a target's train abandoned — its testing entries
+		// over code_queue_live_idx, its candidates over
+		// code_candidates_train_idx — a train's landed candidates and its
+		// candidates at a record's position over the same; a train's pack's
+		// counters by the repository's key; a landing record's tip, a landing
+		// by its key, broken by it, and the landings between a green row and
+		// a landing counted and marked over the key's range; and the queue's
+		// history — ended entries counted and removed over
+		// code_queue_ended_idx, a target's landings below its green read and
+		// removed over the key's range — and the sweep's listing, a walk of
+		// the repositories by their key, two seeks each.
+		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		// THE ENTRIES A PUSH EJECTED, which its committer announces
+		// (decide_queue.go's announcePushEjections).
+		"entries a push ejected": {pushEjectedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`,
+			1000, "ejected", "head_moved"},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
+		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"land an entry": {landEntrySQL, []any{1, 1000, oid("m"), "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"abandon a train's entries": {resetTrainSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"abandon a train's candidates": {dropTrainSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"a train's landed candidates": {dropLandedSQL, []any{"repo-1", "refs/heads/main", "train-1", 2},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=? AND train=? AND ordinal<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"a train at a position": {trainAtSQL, []any{"repo-1", "refs/heads/main", "train-1", 1000},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=? AND train=?)"}},
+		"a train's pack's counters": {queuePackCountersSQL, []any{1, 100, 1, 1000, "repo-1"},
+			[]string{repoKey + " (id=?)"}},
+		"a landing record's tip": {landingTipSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=?)"}},
+		"who pushed a failed head": {headPusherSQL, []any{"change-1", 2},
+			[]string{revisionKey + " (change_id=? AND n=?)"}},
+		"a landing": {landingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"a landing broken": {landingBrokenSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"a broken landing announced": {landingNamedSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"break a landing": {brokenLandingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"landings a green marks": {landingsGreenedSQL, []any{"repo-1", "refs/heads/main", 1000, 2000, 2001},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)"}},
+		"mark landings green": {greenLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 2000},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"ended entries before": {endedBeforeSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, QueueSweepRows},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"landings below green": {landingsBelowSQL, []any{"repo-1", "refs/heads/main", 1000, QueueSweepRows + 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
+		"sweep landings": {sweepLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, 2},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"queue sweep listing": {queueSweepDueSQL, []any{"", 1000, retentionPage},
+			[]string{repoKey + " (id>?)", "code_queue_ended_idx (repo_id=? AND ended_at<?)",
+				"sqlite_autoindex_code_green_1 (repo_id=?)",
+				"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
 		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit"],["repo-1","` +
 			oid("c") + `","refs/heads/main","lint"]]`}, []string{"SCAN json_each AS j",
 			checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
-			[]string{blockersKey + " (change_id=?)"}},
+		"blocker cuts": {blockerCutsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=?)"}},
+		"standing blockers": {standingBlockersSQL,
+			[]any{`[["repo-1-change-000001",3000],["repo-1-change-000002",9223372036854775807]]`},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=? AND position<=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the
@@ -944,14 +1064,15 @@ func registeredStatements() map[string]statement {
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
 		// notices newest first, every filter bound; each change the page
-		// names by its key and its body by its own; each one's open agent
-		// findings, a range of the raiser index; the person's marks by their
-		// key; and where one notice of theirs sits, by the notice's key.
+		// names is changesByIDSQL's row (its readiness the listing's
+		// statements), its description by the body's key; each one's open
+		// agent findings, a range of the raiser index; the person's marks by
+		// their key; and where one notice of theirs sits, by the notice's key.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
 			"exclude", "[]", "[]", 50},
 			[]string{"code_notifications_inbox_idx (recipient=? AND log_seq>? AND log_seq<?)"}},
-		"the changes an inbox page names": {noticeChangesSQL, []any{`["repo-1-change-000001"]`},
-			[]string{"SCAN json_each AS j", changeKey + " (id=?)", bodyKey + " (change_id=?)"}},
+		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
 		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
 			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
 		"a person's code marks": {personMarksSQL, []any{"founder"},
@@ -1029,6 +1150,31 @@ func registeredStatements() map[string]statement {
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
+		// THE WEEKLY ARM of the same listing, least recently expunged first
+		// up to an instant, from its start and after a cursor's row.
+		"expunge weekly": {expungeWeeklySQL, []any{2, MaxSnapshotItems},
+			[]string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
+		"expunge weekly after": {expungeWeeklyAfterSQL, []any{2, 1, 1, "repo-1", MaxSnapshotItems},
+			[]string{"code_repos_expunge_due_idx (expunged_at>=? AND expunged_at<=?)"}},
+		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
+		// listing, by name over code_repos_search_idx.
+		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
+			[]string{"code_repos_search_idx (search=? AND name>?)"}},
+		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0118's
+		// indexes): the repositories being imported by id, the push mirrors
+		// by id and the pull mirrors least recently synced first — each a
+		// keyset page, its partial predicate repeated verbatim.
+		"imports due": {importsDueSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_repos_importing_idx (id>?)"}},
+		"push mirrors due": {pushMirrorsSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_repos_mirror_to_idx (id>?)"}},
+		"pull mirrors due": {pullMirrorsSQL, []any{0, 0, "", MaxSnapshotItems},
+			[]string{"code_repos_mirrored_idx (mirror_synced_at>=?)"}},
+		// AN IMPORT'S AND A MIRROR'S APPLY: the repository's row by its key.
+		"remote state":  {remoteStateSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"import seq":    {importSeqSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"import done":   {importDoneSQL, []any{1, "", "", "", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"mirror synced": {mirrorSyncedSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// A REPOSITORY'S CHECKS': the join's read of one row by its whole
 		// key, and its log's by the same; the oldest rows past a cutoff —
 		// the horizon's, a sweep's decide's and a purge part's — weighed by
@@ -1098,6 +1244,8 @@ func registeredStatements() map[string]statement {
 				checkTargetsKey + " (repo_id=? AND target_ref=?)",
 				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"touched paths": {touchedPathsSQL, []any{"repo-1-change-000001", 1, "refs/heads/main"},
+			[]string{factsKey + " (change_id=? AND n=?)"}},
 		"head attempts": {headAttemptsSQL, []any{"repo-1", oid("c"), "refs/heads/main"},
 			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
 		"stale checks": {staleChecksSQL, []any{"repo-1-change-000001", oid("c"), "refs/heads/main", "repo-1"},
@@ -1109,6 +1257,19 @@ func registeredStatements() map[string]statement {
 		"due check targets": {dueCheckTargetsSQL, []any{"repo-1", 1000, MaxSnapshotItems},
 			[]string{checkTargetsKey + " (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
+		// A PROTECTED TARGET'S TIP WORK (tipwork.go): the repositories, and
+		// one repository's targets, holding a landing neither green nor
+		// broken, by the index partial on exactly those rows, each repository
+		// tested by its key; a target's window above its green, a range of
+		// the landings' key, and its newest, the key read backwards.
+		"due tip repositories": {dueTipReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_landings_unjudged_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_landings_unjudged_idx (repo_id=?)"}},
+		"tip landings": {tipLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, MaxTipLandings + 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
+		"newest landing": {newestLandingSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=?)"}},
 		// THE HOME'S DISPATCHES (checksdispatch.go): a target's reading and
 		// a head's dispatch, each by its whole key — the join's read and the
 		// decide's — and a purge's, by the repository's prefix of each key.
@@ -1126,6 +1287,31 @@ func registeredStatements() map[string]statement {
 			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
 		"expunge tips after": {expungeTipsAfterSQL, []any{"repo-1", 100, 3, "refs/heads/x", "abc", MaxSnapshotItems},
 			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
+		// AND WHAT ROWS HOLD IN FLIGHT (M6-D2), each phase from its start and
+		// after a place in its index's order: the live changes over
+		// code_changes_open_idx, then each one's revisions by their key; the live entries
+		// over the index partial on the live states; the candidates over
+		// code_candidates_train_idx; and the green rows by their key.
+		"live change tips": {liveChangeTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=?)"}},
+		"live change tips from": {liveChangeTipsFromSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref>=?)"}},
+		"live change tips after": {liveChangeTipsAfterSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)"}},
+		"change revision tips": {changeRevisionTipsSQL, []any{"c-1", 2, MaxSnapshotItems},
+			[]string{revisionKey + " (change_id=? AND n>?)"}},
+		"queue tips": {queueTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_queue_live_idx (repo_id=?)"}},
+		"queue tips after": {queueTipsAfterSQL, []any{"repo-1", "refs/heads/main", 1000, MaxSnapshotItems},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref>=?)"}},
+		"candidate tips": {candidateTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_candidates_train_idx (repo_id=?)"}},
+		"candidate tips after": {candidateTipsAfterSQL, []any{"repo-1", "refs/heads/main", "train-1", 2,
+			MaxSnapshotItems}, []string{"code_candidates_train_idx (repo_id=? AND target_ref>=?)"}},
+		"green tips": {greenTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		"green tips after": {greenTipsAfterSQL, []any{"repo-1", "refs/heads/main", MaxSnapshotItems},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=? AND target_ref>?)"}},
 	}
 	return out
 }
@@ -1273,34 +1459,17 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		// THE WEEKLY EXPUNGE'S LISTING, least recently expunged first over
-		// the repositories an expunge may be due in, its partial predicate
-		// repeated verbatim.
-		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
-			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
-			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0102):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
-		// THE MERGE QUEUE'S INDEXES THEIR LATER READERS SEEK (replicated
-		// 0105): a repository's ended entries past the queue's horizon, the
-		// queue_sweep's, its partial predicate repeated verbatim; and a
-		// change's landings, a broken landing's authors' and the change
-		// page's. Nothing in this build ends a queue's history or reads a
-		// change's landings.
-		"code_queue_ended_idx": {`SELECT entry_id FROM code_queue INDEXED BY code_queue_ended_idx
-			WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
-			ORDER BY ended_at LIMIT ?`, []any{"repo-1", 1000, PurgePartRows},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0105):
+		// a change's landings, a broken landing's authors' and the change
+		// page's. Nothing in this build reads a change's landings.
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
-		"code_repos_search_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
-			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
-			[]any{string(SearchIndexed), "", MaxSnapshotItems},
-			[]string{"code_repos_search_idx (search=? AND name>?)"}},
 		// A PERSON'S CODE INBOX (replicated 0104), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications

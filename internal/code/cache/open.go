@@ -97,6 +97,17 @@ type Cache struct {
 	// too, so the share is held to both together (memoExcess) and a
 	// repository is never evicted for a page in flight.
 	memoBytes, memoStaged atomic.Int64
+	// codeIndexBytes is what every incarnation's code index holds, of
+	// heldBytes: a running total moved as memoBytes is, which the janitor
+	// holds to the indexes' share of the budget (CodeIndexShare, codeindex.go).
+	codeIndexBytes atomic.Int64
+	// placement is where this node keeps code indexes (Options.Placement),
+	// nil for nowhere; indexWanted is the repositories a round moved the refs
+	// of since the indexer last looked, under indexMu, and indexKicks its wake.
+	placement   *Placement
+	indexMu     sync.Mutex
+	indexWanted map[string]bool
+	indexKicks  chan struct{}
 	// droppingBytes is what every incarnation's dropping view holds, of
 	// heldBytes — the pack files an expunge's begin left dropping, which
 	// leave with its commit — a RUNNING TOTAL moved where an incarnation's
@@ -261,10 +272,10 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		midxPacks:    MidxPacks,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1), scrubKicks: make(chan struct{}, 1),
-		backfillKicks: make(chan struct{}, 1),
-		scrubs:        newScrubSlot(),
-		installer:     newLayerInstaller(FetchConcurrency),
-		entries:       map[string]*entry{}, idle: make(chan struct{}),
+		backfillKicks: make(chan struct{}, 1), indexKicks: make(chan struct{}, 1), placement: o.Placement,
+		scrubs:    newScrubSlot(),
+		installer: newLayerInstaller(FetchConcurrency),
+		entries:   map[string]*entry{}, idle: make(chan struct{}),
 	}
 	if o.knobs != nil && o.knobs.roundPacks > 0 {
 		c.roundPacks = o.knobs.roundPacks
@@ -455,6 +466,7 @@ func (c *Cache) index(b *boot) (int, error) {
 		// placed or read from here on.
 		memo := inc.derived[DerivedMemo]
 		c.memoBytes.Add(memo.Bytes)
+		c.codeIndexBytes.Add(inc.derived[DerivedCodeIndex].Bytes)
 		if cs := memo.Cohorts; len(cs) > 0 {
 			newest = max(newest, cs[len(cs)-1].N)
 		}
@@ -494,8 +506,9 @@ func (c *Cache) leave() {
 }
 
 // Start starts the cache's background work — the janitor, the maintainer, the
-// scrubber, the backfill of its indexes of pushes and the installer of
-// published layers (layers.go) — under ctx: each ends with ctx or with
+// scrubber, the backfill of its indexes of pushes, the installer of
+// published layers (layers.go) and the indexer of code indexes (codeindex.go)
+// — under ctx: each ends with ctx or with
 // [Cache.Stop], whichever comes first. A second call, or a call after Stop,
 // does nothing. A cache that is never started still opens, syncs, pins,
 // folds every delta's pushes into its indexes and installs a full round's
@@ -514,6 +527,7 @@ func (c *Cache) Start(ctx context.Context) {
 	go c.scrubber(ctx)
 	go c.backfiller(ctx)
 	go c.runInstaller(ctx)
+	go c.indexer(ctx)
 }
 
 // isStopped reports whether Stop has begun.

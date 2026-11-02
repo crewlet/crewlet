@@ -12,8 +12,13 @@ import {
   answeredRows,
   askContext,
   askQuestion,
+  changeCard,
+  changeGate,
+  classesLine,
   earlierOf,
   followThrough,
+  measuredLine,
+  findingsLine,
   inboxQuiet,
   inboxResources,
   inboxSelection,
@@ -170,6 +175,177 @@ describe("the rows", () => {
       ["change", "change:r-1"],
     ]);
     expect(rowName(rows[1]!, null)).toBe("web!42");
+  });
+});
+
+/** A code notice whole, as its card reads it from the composed notice's `extra`. */
+function codeExtra(extra: Partial<CodeInboxNotice> = {}): CodeInboxNotice {
+  const n = codeNotice("r-1", extra);
+  if (n.source !== "code") throw new Error("codeNotice composes a code notice");
+  return n.extra;
+}
+
+// THE INTENT-FIRST CARD: what the change is for — the work item it
+// implements, its description — then what stands in its way, the diff one
+// press away, every word of it the notice's own, with no question per card.
+describe("a code notice's gate (M5)", () => {
+  const HEAD = "f".repeat(40);
+  const answer = (
+    preconditions: {
+      kind: string;
+      state: string;
+      detail: string;
+      waits_on?: { handle: string; kind: string }[];
+    }[],
+    classes?: Record<string, unknown>,
+  ) =>
+    ({
+      change: {
+        repo: "web",
+        number: 42,
+        head: HEAD,
+        revision: 2,
+        readiness: { met: 0, total: preconditions.length, first: "", preconditions },
+      },
+      revisions: [
+        {
+          n: 1,
+          head: "e".repeat(40),
+          facts: { touched: ["a.go"], classes: { comment_only: [0], complete: true } },
+        },
+        {
+          n: 2,
+          head: HEAD,
+          facts: { touched: ["a.go", "b.go", "c.go"], ...(classes ? { classes } : {}) },
+        },
+      ],
+    }) as never;
+  const check = (name: string, state: string, extra: Record<string, unknown> = {}) => ({
+    repo_id: "id-web",
+    oid: HEAD,
+    target: "refs/heads/main",
+    name,
+    attempt: 1,
+    state,
+    ...extra,
+  });
+  const CHECKED = [{ kind: "check", state: "unmet", detail: "unit failed" }];
+
+  test("names what the head's required checks measured, in durations", () => {
+    const gate = changeGate(
+      answer(CHECKED),
+      [
+        check("unit", "failed", { required: true, duration_ms: 64_000 }),
+        check("lint", "passed", { duration_ms: 3_000 }),
+        check("e2e", "queued", { required: true }),
+      ] as never,
+      "jane",
+    );
+    expect(gate.measured?.map(measuredLine)).toEqual(["unit failed in 1m 4s", "e2e queued"]);
+  });
+
+  test("says the head revision's classes, never an earlier one's", () => {
+    expect(changeGate(answer(CHECKED), [], "jane").classes).toBe("");
+    expect(
+      changeGate(answer(CHECKED, { whitespace_only: [0, 1], complete: false }), [], "jane").classes,
+    ).toBe("Of the 3 paths it touches, 2 change only whitespace");
+    expect(classesLine({ whitespaceOnly: 0, commentOnly: 0, touched: 2, complete: true })).toBe(
+      "Every path it touches changes code",
+    );
+    expect(classesLine({ whitespaceOnly: 0, commentOnly: 1, touched: null, complete: true })).toBe(
+      "Of the paths it touches, 1 only comments; the rest change code",
+    );
+  });
+
+  test("names the human paths that wait on the reader, and no one else's", () => {
+    const human = {
+      kind: "human_approval",
+      state: "unmet",
+      waits_on: [{ handle: "jane", kind: "person" }],
+      detail:
+        "revision 2 touches .crewlet/**, which refs/heads/main holds to a person's approval: it waits on jane",
+    };
+    expect(changeGate(answer([human]), [], "jane").humanPaths).toBe(human.detail);
+    expect(changeGate(answer([human]), [], "ada").humanPaths).toBe("");
+  });
+
+  test("a change with no gate says nothing of one", () => {
+    const gate = changeGate(
+      answer([{ kind: "mergeable", state: "met", detail: "merges cleanly" }]),
+      [check("unit", "passed", { required: true, duration_ms: 1 })] as never,
+      "jane",
+    );
+    expect(gate).toEqual({ measured: null, classes: "", humanPaths: "" });
+    expect(changeGate(undefined, [], "jane")).toEqual({
+      measured: null,
+      classes: "",
+      humanPaths: "",
+    });
+  });
+});
+
+describe("a code notice's card", () => {
+  const change = {
+    title: "Retry the upload once",
+    state: "open",
+    work_item: { backend: "native", id: "item-7", key: "LEAD-7", project: "LEAD" },
+    body: "Uploads retried twice doubled the bill",
+    body_cut: true,
+    agent_findings: { nit: 3, brand_new: 1, blocker: 1, major: 0 },
+    readiness: { met: 3, total: 5, first: "web!42 waits on an approval from a reviewer" },
+  };
+
+  test("leads with the work item it implements, as the row's task", () => {
+    const n = codeExtra({ change });
+    const card = changeCard(n);
+    expect(card.item).toEqual({ id: "item-7" });
+    expect(card.itemKey).toBe("LEAD-7");
+    const row: InboxRow = { kind: "change", key: "change:r-1", at: n.at, notice: n };
+    expect(rowItem(row)).toEqual({ id: "item-7" });
+    expect(rowKey(row)).toBe("LEAD-7");
+    // A VENDOR'S ITEM is addressed by its key too, as a turn's is.
+    const jira = { ...change, work_item: { backend: "jira", id: "10042", key: "ENG-4" } };
+    expect(changeCard(codeExtra({ change: jira })).item).toEqual({ id: "10042", key: "ENG-4" });
+    expect(changeCard(codeExtra()).item).toBeNull();
+  });
+
+  test("carries the description, marked where the engine cut it", () => {
+    expect(changeCard(codeExtra({ change })).intent).toBe(
+      "Uploads retried twice doubled the bill…",
+    );
+    expect(changeCard(codeExtra({ change: { ...change, body_cut: false } })).intent).toBe(
+      "Uploads retried twice doubled the bill",
+    );
+    expect(changeCard(codeExtra()).intent).toBe("");
+  });
+
+  test("counts the open agent findings heaviest first, a weight it does not know last", () => {
+    const card = changeCard(codeExtra({ change }));
+    expect(card.findings).toEqual([
+      { severity: "blocker", count: 1 },
+      { severity: "nit", count: 3 },
+      { severity: "brand_new", count: 1 },
+    ]);
+    expect(findingsLine(card.findings)).toBe("Blocker 1 · Nit 3 · brand_new 1");
+    expect(findingsLine(changeCard(codeExtra()).findings)).toBe("");
+  });
+
+  test("says where a live change's merge stands, and nothing for one that merges nothing", () => {
+    expect(changeCard(codeExtra({ change })).readiness).toBe(
+      "web!42 waits on an approval from a reviewer",
+    );
+    const merged = { title: change.title, state: "merged", agent_findings: change.agent_findings };
+    expect(changeCard(codeExtra({ change: merged })).readiness).toBeNull();
+  });
+
+  test("opens the diff on the change's own page, in one press", () => {
+    expect(changeCard(codeExtra()).diff).toBe("#/code/repos/web/changes/42?tab=files");
+    expect(changeCard(codeExtra({ change_ref: "not a change" })).diff).toBeNull();
+  });
+
+  test("says why it reached the reader in the code host's own words", () => {
+    expect(changeCard(codeExtra({ reason: "review_requested" })).why).toBe("asked for your review");
+    expect(changeCard(codeExtra({ reason: "re_review" })).why).toBe("asked to look again");
   });
 });
 

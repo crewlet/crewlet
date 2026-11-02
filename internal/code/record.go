@@ -182,6 +182,37 @@ const (
 	// string(OpExpungeCommit)}, with the same companions. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
+	// OpImportChunk lands one chunk of a repository's import — packs fetched
+	// from the host it is imported from and the refs they let it set — as a
+	// push row `via import`, on the repository's own subject
+	// ([ImportChunk]), decided by its committer alone, in its turn.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// import_chunk", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpImportChunk)}, with the same companions. It is no gate.
+	OpImportChunk OpKind = "import_chunk"
+
+	// OpImportDone ends a repository's import, making it active
+	// ([ImportDone]), on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// import_done", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpImportDone)}, with the same companions. It is no gate.
+	OpImportDone OpKind = "import_done"
+
+	// OpMirrorSync moves a pull mirror onto its source as its home fetched
+	// it, as a push row `via mirror` ([MirrorSync]), on the repository's own
+	// subject, decided by its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// mirror_sync", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpMirrorSync)}, with the same companions. It is no gate.
+	OpMirrorSync OpKind = "mirror_sync"
+
 	// OpRename claims a new name for a tool-managed repository on that name's
 	// subject, leaving the old one redirecting to it ([Rename]).
 	//
@@ -364,6 +395,32 @@ const (
 	// string(OpMergeability)}, with the same companions. It is no gate.
 	OpMergeability OpKind = "mergeability"
 
+	// OpMergeabilityKept records a re-evaluation of a change's mergeability
+	// that found the outcome its row holds — a recheck of a moved target, a
+	// refresh of its readiness — by what it moved alone: the tip a recheck
+	// merged into, and the versions and the checks position a readiness was
+	// judged at ([MergeabilityKept]). Never asked for: the change writer
+	// forms it in place of the [OpMergeability] its home sent, on the
+	// change's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// mergeability_kept", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpMergeabilityKept)}, with the same companions. It is no gate.
+	OpMergeabilityKept OpKind = "mergeability_kept"
+
+	// OpAsks settles a change's asks for review with its lifecycle — ending
+	// the asks still waiting on a change that closed or merged, and asking
+	// again those its end left on one reopened ([AskSettle]) — on the
+	// change's own subject, written by the repository's committing data node
+	// for the home, which asks it and publishes nothing itself.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// asks", Since: 2, Path: []string{"op"}, Equals: string(OpAsks)}, with
+	// the same companions. It is no gate.
+	OpAsks OpKind = "asks"
+
 	// OpCheckQueued queues one attempt of one check of one commit, or records
 	// it skipped ([CheckQueued]), on the repository's CHECKS subject
 	// ([KindChecks]), its apply a join (checks.go).
@@ -404,9 +461,11 @@ const (
 	OpChecksSweep OpKind = "checks_sweep"
 
 	// OpCheckDispatched records a repository's home's reading of a target's
-	// checks file at its tip and the change heads it dispatched under it
-	// ([CheckDispatched]), on the repository's checks subject: what the
-	// home's due listing converges on (checksdispatch.go).
+	// checks file at its tip and the change heads it dispatched under it,
+	// with the attempts that dispatch queues at them ([CheckDispatched]), on
+	// the repository's checks subject: what the home's due listing converges
+	// on, and code_checks' rows the attempts make, each as a check_queued
+	// record's would (checksdispatch.go).
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
 	// a build without it has run, it takes {Name: "MutationRecord.Op
@@ -457,17 +516,84 @@ const (
 	// Since: 2, Path: []string{"op"}, Equals: string(OpMarks)}, with the
 	// same companions. It is no gate.
 	OpMarks OpKind = "marks"
+
+	// OpCandidate records a queue's TRAIN ([Candidate]): the
+	// candidates its home built of a target's live entries onto the target's
+	// tip, each a merge of a batch of them on the one before, and the pack
+	// their objects are stored in — on the repository's own subject, decided
+	// by its committer alone ([Committer.ProposeQueue]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// candidate", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCandidate)}, with the same companions. It is no gate.
+	OpCandidate OpKind = "candidate"
+
+	// OpEject puts live entries out of their queue ([Eject]) — a check failed
+	// on what they were tested in, their merge conflicted, their gate no
+	// longer holds — on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op eject",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpEject)}, with the
+	// same companions. It is no gate.
+	OpEject OpKind = "eject"
+
+	// OpLand lands a queue's entries on their target ([Land]) — a train's
+	// tested prefix — merging each change and moving the target in ONE
+	// record whose decide proves every entry's gate again with its enqueuer
+	// as the merger, on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op land",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpLand)}, with the same
+	// companions. It is no gate.
+	OpLand OpKind = "land"
+
+	// OpGreen moves a protected target's green row onto a landing whose
+	// required checks passed ([Green]), on the repository's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op green",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpGreen)}, with the
+	// same companions. It is no gate.
+	OpGreen OpKind = "green"
+
+	// OpBroken marks a landing above its target's green row broken, a
+	// required check of it having failed ([Broken]), on the repository's own
+	// subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// broken", Since: 2, Path: []string{"op"}, Equals: string(OpBroken)},
+	// with the same companions. It is no gate.
+	OpBroken OpKind = "broken"
+
+	// OpQueueSweep removes a repository's ended queue entries and its
+	// landings below their target's green row once they outlive
+	// [QueueHistory], where no record of its queues' own does ([QueueSweep])
+	// — the code-retention duty's, on the repository's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// queue_sweep", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpQueueSweep)}, with the same companions. It is no gate.
+	OpQueueSweep OpKind = "queue_sweep"
 )
 
-// OpKinds are the forty-three, in the order they are documented.
+// OpKinds are the fifty-four, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
-	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
+	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk, OpImportDone, OpMirrorSync, OpRename,
+	OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
+	OpMergeabilityKept, OpAsks,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
-	OpMarks,
+	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every
@@ -489,9 +615,12 @@ func ChangeOps() []OpKind {
 // what a [ConversationWrite] may be, each a record of its own on the change's
 // subject ([KindChange]), written by the repository's committing data node
 // ([ChangeWriter]) — a revision's facts and a change's mergeability, which the
-// repository's home git node asks, among them.
+// repository's home git node asks, among them, the record the writer keeps
+// such a mergeability by where its row holds the outcome already, and its
+// settling of the change's asks with the change's lifecycle.
 func ConversationOps() []OpKind {
-	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability}
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
+		OpMergeabilityKept, OpAsks}
 }
 
 // Valid reports whether an op off the wire is one this build knows.

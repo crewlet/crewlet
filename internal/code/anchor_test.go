@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -42,6 +43,8 @@ func TestReanchorFollowsHunks(t *testing.T) {
 		{"above and below", []code.Hunk{hunk(1, 1, 1, 3), hunk(9, 2, 11, 0)}, 3, 5, 5, 7, true},
 		{"above, then over it", []code.Hunk{hunk(0, 0, 1, 1), hunk(4, 1, 5, 2)}, 3, 5, 4, 6, false},
 		{"one line, moved", []code.Hunk{hunk(1, 0, 2, 1)}, 7, 7, 8, 8, true},
+		{"the last line a file holds, moved", []code.Hunk{hunk(0, 0, 1, 2)}, code.MaxAnchorLine, code.MaxAnchorLine,
+			code.MaxAnchorLine + 2, code.MaxAnchorLine + 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -62,7 +65,12 @@ func hunk(oldStart, oldLines, newStart, newLines int) code.Hunk {
 
 // A HUNK HEADER IS READ AS GIT WRITES IT: a count left out for one line, a
 // section heading after the closing marks, a pure insertion's and a pure
-// deletion's zero — and anything else is no header, never a hunk of zeros.
+// deletion's zero — and anything else is no header, never a hunk of zeros: a
+// sign, a leading zero, or a number past what an int holds, which would wrap
+// into a line no file has.
+//
+// Mutation: drop hunkNumber's bound on what an int holds — the past-an-int
+// row reads a wrapped number, red.
 func TestAHunkHeaderIsReadAsGitWritesIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -82,8 +90,11 @@ func TestAHunkHeaderIsReadAsGitWritesIt(t *testing.T) {
 		{"@@ -1, +1 @@", code.Hunk{}, false},
 		{"@@ -1 +1", code.Hunk{}, false},
 		{"+@@ -1 +1 @@", code.Hunk{}, false},
+		{"@@ -+1 +1 @@", code.Hunk{}, false},
+		{"@@ -0 +9223372036854775807 @@", hunk(0, 1, math.MaxInt64, 1), true},
+		{"@@ -1 +9223372036854775808 @@", code.Hunk{}, false},
 	} {
-		got, ok := code.ParseHunk(tc.line)
+		got, ok := code.ParseHunk([]byte(tc.line))
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("ParseHunk(%q) = %+v, %t; want %+v, %t", tc.line, got, ok, tc.want, tc.ok)
 		}

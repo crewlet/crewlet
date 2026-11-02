@@ -64,6 +64,9 @@ func init() {
 	events.Register[ChangeMerged]()
 	events.Register[ChangeOpened]()
 	events.Register[ReviewSubmitted]()
+	events.Register[CodeQueueEjected]()
+	events.Register[CodeTargetBroken]()
+	events.Register[CodeMirrorPushed]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -204,11 +207,16 @@ func (e CodeFetched) SummaryFor(actor string) string {
 // runner_lost — and an earlier ending replaces a later one of its kind, which
 // two writers of one repository across a failover can each record. The
 // replacing ending is announced too, naming in Replaces the ending it
-// replaced, so a day FILES IT AS A CORRECTION — the attempt moves from
-// Replaces to State — and counts each attempt once, under the ending its row
-// keeps. Replaces is the ending the replacing record's writer read on the row
-// when it decided; a failover's two writers recording the attempt's first
-// ending at once each read none, which is the one replacement announced
+// replaced, so a reader FILES IT AS A CORRECTION — the attempt moves from
+// Replaces to State — and a day counts each attempt once, by its key. A
+// failure the day counted (Owner, below) STAYS COUNTED when a correction
+// follows, even one to a pass: a day's figures only grow, joined by max
+// across its publications (internal/usage's CodeDay), so a figure a
+// correction lowered would survive only on a node that had not published it
+// yet — one day's figure would turn on when its node last published, not on
+// what happened. Replaces is the ending the replacing record's writer read on
+// the row when it decided; a failover's two writers recording the attempt's
+// first ending at once each read none, which is the one replacement announced
 // without it.
 //
 // # Why an event, beside the row
@@ -239,8 +247,10 @@ type CodeCheckFinished struct {
 	Attempt int    `json:"attempt"`
 
 	// Purpose is what the attempt was for (internal/code's CheckPurpose:
-	// head, candidate, tip, bisect); ChangeID a head check's change, and
-	// Target the branch the commit was checked for.
+	// head, candidate, tip, bisect; empty for a check a person's CI
+	// reported); ChangeID a head check's change, or the change a reported
+	// failure fails the head of (Owner, below), and Target the branch the
+	// commit was checked for.
 	Purpose  string `json:"purpose"`
 	ChangeID string `json:"change_id,omitempty"`
 	Target   string `json:"target"`
@@ -262,10 +272,48 @@ type CodeCheckFinished struct {
 	// ending: an event naming one is a correction, never a second ending
 	// (see the type's doc).
 	Replaces string `json:"replaces,omitempty"`
+
+	// Owner is the owner of the change whose head the attempt measured, on
+	// an ending that FAILS that head — failed, or errored past the home's own
+	// requeue (internal/code's checks_failed wake) — and empty on every
+	// other: a seat by its handle, or a person by the human seat they hold,
+	// OwnerKind which (internal/code's PartyKind: agent, person). A head check
+	// the engine ran names the change it was queued for; one a person's CI
+	// reported (Placement external) names no change of its own, so its
+	// failure names — in ChangeID too — the live change into Target whose
+	// head is OID when it was reported, the one its checks_failed wake tells.
+	Owner     string `json:"owner,omitempty"`
+	OwnerKind string `json:"owner_kind,omitempty"`
+
+	// Agent is the owner's agent id on such an ending — "" for a person, a
+	// seat the running company no longer has, and every ending that fails no
+	// head — and the day it names counts the failure once by its attempt
+	// (`checks_failed`, internal/store's usageCode), whatever the change and
+	// the attempt did since: a failure of a head the change moved past is
+	// still what its owner's code did, and one a correction replaced stays
+	// counted (the type's doc).
+	//
+	// `agent_id`, THE COLUMN THE EVENT STORE PROMOTES, because these records
+	// are not rare: every push of every change ends each check its file
+	// defines, passes and candidate, tip and bisect checks among them, and
+	// only an ending that fails a head names a seat. A day reads the column,
+	// so an ending naming none neither moves the day's fingerprint nor has its
+	// payload read, and its cost follows the failures a day counts rather than
+	// the checks a company runs. The column says what the event is ABOUT —
+	// the seat whose code failed, as a read of the log by a seat's agent id
+	// asks — never who acted: the actor is the node that wrote the ending
+	// (its Source).
+	Agent string `json:"agent_id,omitempty"`
 }
 
 // EventType is the "code_check_finished" wire type.
 func (CodeCheckFinished) EventType() string { return "code_check_finished" }
+
+// AgentID is the seat whose head the ending failed, "" for every other
+// ending: what the event is about. The actor chain reaches it only for an
+// ending published with no source, which its writer never publishes — the
+// actor is the node that wrote it.
+func (e CodeCheckFinished) AgentID() string { return e.Agent }
 
 // SummaryFor names the check, its attempt, the commit's first twelve digits,
 // the repository and how it ended.
@@ -499,4 +547,189 @@ func (e ReviewSubmitted) SummaryFor(actor string) string {
 		what += ", " + strconv.FormatInt(e.Findings, 10) + " findings"
 	}
 	return lead(actor, what)
+}
+
+// CodeQueueEjected records that a merge queue put an entry OUT (internal/code's
+// Eject): the change it held will not land through this enqueue — a required
+// check failed on what it was tested in, its merge onto what was before it
+// conflicted, its merge gate no longer holds with its enqueuer as the merger,
+// its head moved, or its fast-forward is none. Published ONCE an entry, by the
+// data node whose committer landed the eject record, on that record's apply —
+// or the push record that moved a queued change's head, which ends its entry
+// head_moved in its own apply and names no eject — never by an applier, which
+// every data node runs, and never for a retry its operation ledger collapsed
+// onto the record.
+//
+// # Fed, and stored
+//
+// An ejection is what the change's authors and its enqueuer act on — fix the
+// change, or enqueue it again — and a queue ejects few of what it lands, so it
+// joins the activity feed beside the merge it did not become, in the `system`
+// category. What it carries is what a reader acts on: which change, out of
+// which branch's queue, why, and the failed checks or the conflicted paths it
+// names.
+type CodeQueueEjected struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the eject applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// EntryID is the queue entry that was put out; ChangeID the change it
+	// held, Number its number on the repository — web!42's 42 — and Target
+	// the branch whose queue it was in.
+	EntryID  string `json:"entry_id"`
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+	Target   string `json:"target"`
+
+	// Reason is why (internal/code's EjectReasons: check_failed, conflict,
+	// gate_unmet, head_moved, not_fast_forward); Checks the required checks
+	// that failed, for check_failed, and Paths the conflicted paths, for
+	// conflict.
+	Reason string   `json:"reason"`
+	Checks []string `json:"checks,omitempty"`
+	Paths  []string `json:"paths,omitempty"`
+
+	// EnqueuedBy is who enqueued it — a seat by its handle, or a person by
+	// the human seat they hold — and EnqueuedByKind which (internal/code's
+	// PartyKind: agent, person).
+	EnqueuedBy     string `json:"enqueued_by"`
+	EnqueuedByKind string `json:"enqueued_by_kind"`
+
+	// Owner is the change's owner — a seat by its handle, or a person by the
+	// human seat they hold — and OwnerKind which; OwnerAgent is the owner's
+	// agent id, "" for a person or a seat the running company no longer has:
+	// the seat whose day counts the ejection once by its entry (`ejections`,
+	// internal/store's usageCode) — the change's, never the enqueuer's, who
+	// may be anybody that may merge it. Never `agent_id`, which the event
+	// store promotes.
+	Owner      string `json:"owner"`
+	OwnerKind  string `json:"owner_kind"`
+	OwnerAgent string `json:"owner_agent_id,omitempty"`
+}
+
+// EventType is the "code_queue_ejected" wire type.
+func (CodeQueueEjected) EventType() string { return "code_queue_ejected" }
+
+// SummaryFor names the change by its reference (web!42), the branch whose
+// queue put it out, and why.
+func (e CodeQueueEjected) SummaryFor(actor string) string {
+	what := "ejected " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " from " +
+		strings.TrimPrefix(e.Target, "refs/heads/") + "'s merge queue (" + e.Reason + ")"
+	switch {
+	case len(e.Checks) > 0:
+		what += ": " + strings.Join(e.Checks, ", ") + " failed"
+	case len(e.Paths) > 0:
+		what += ": " + strconv.Itoa(len(e.Paths)) + " paths conflicted"
+	}
+	return lead(actor, what)
+}
+
+// CodeTargetBroken records that a protected branch's tip checks found the
+// FIRST landing they failed on (internal/code's Broken, ADR-0091): a red tip
+// bisected over the branch's landing rows down to the landing whose commit the
+// named required checks failed on, the landing before it having passed them.
+// Published ONCE a landing, by the data node whose committer landed the broken
+// record, on that record's apply — never by an applier, which every data node
+// runs.
+//
+// # Fed, and stored
+//
+// A broken branch is what its team stops for — revert the landing or fix
+// forward — and a bisect names few, so it joins the activity feed beside the
+// merge or the push that broke it, in the `system` category. What it carries
+// is what a reader acts on: which branch, which landing and how it landed, the
+// change it landed and who landed it, and the checks it broke.
+type CodeTargetBroken struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the broken record applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// Target is the protected branch, Commit the landing's commit, and Kind
+	// how it landed (internal/code's LandingKinds: pre_land, direct,
+	// push).
+	Target string `json:"target"`
+	Commit string `json:"commit"`
+	Kind   string `json:"kind"`
+
+	// ChangeID is the change the landing landed and Number its number on the
+	// repository — web!42's 42 — each empty for a person's push that landed
+	// no change; LandedBy who landed it (its merger, or its pusher), by the
+	// seat they hold.
+	ChangeID string `json:"change_id,omitempty"`
+	Number   int64  `json:"number,omitempty"`
+	LandedBy string `json:"landed_by,omitempty"`
+
+	// Checks are the required checks that failed on Commit.
+	Checks []string `json:"checks"`
+}
+
+// EventType is the "code_target_broken" wire type.
+func (CodeTargetBroken) EventType() string { return "code_target_broken" }
+
+// CodeMirrorPushed records that a repository's home pushed it to its PUSH
+// MIRROR (internal/code/mirror, M6-D16): which refs it set at the other host
+// and onto what, which it deleted there, and which protected branches it held
+// back, each still waiting for a commit its required checks passed
+// (code_green). Published once a push that moved something, by the home git
+// node that pushed — the code log records no push to another host, so this is
+// the one durable account of what the company published, and when.
+//
+// # Stored, not fed
+//
+// A busy repository's mirror pushes as often as once a minute, and nobody acts
+// on a push that went where it was told to: it is kept in the event log for the
+// audit, out of the activity feed. A push that FAILED is no event: it is the
+// home's state, which code_mirror_failing raises once it outlasts the
+// mirror's refresh.
+type CodeMirrorPushed struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when it was pushed.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// URL is the repository at the other host — never a credential: the
+	// mirror's is a ${VAR} reference, resolved at the dial and sent in a
+	// header — and As the seat whose own identity there the push carried.
+	URL string `json:"url"`
+	As  string `json:"as"`
+
+	// Updated are the refs the push set at the other host, each
+	// "<ref> <oid>"; Deleted the refs it deleted there, which the repository
+	// no longer has; Waiting the protected branches it left where they were,
+	// none of whose commits newer than what the other host holds is green.
+	Updated []string `json:"updated,omitempty"`
+	Deleted []string `json:"deleted,omitempty"`
+	Waiting []string `json:"waiting,omitempty"`
+}
+
+// EventType is the "code_mirror_pushed" wire type.
+func (CodeMirrorPushed) EventType() string { return "code_mirror_pushed" }
+
+// SummaryFor names the repository, the other host and what moved there.
+func (e CodeMirrorPushed) SummaryFor(actor string) string {
+	what := "pushed " + e.RepoName + " to its mirror " + e.URL + ": " + strconv.Itoa(len(e.Updated)) +
+		" ref(s) set"
+	if len(e.Deleted) > 0 {
+		what += ", " + strconv.Itoa(len(e.Deleted)) + " deleted"
+	}
+	if len(e.Waiting) > 0 {
+		what += ", " + strconv.Itoa(len(e.Waiting)) + " waiting for green"
+	}
+	return lead(actor, what)
+}
+
+// SummaryFor names the branch, the landing — its change by reference
+// (web!42), or its commit — and the checks it broke.
+func (e CodeTargetBroken) SummaryFor(actor string) string {
+	landing := e.Commit
+	if len(landing) > 12 {
+		landing = landing[:12]
+	}
+	if e.ChangeID != "" {
+		landing = e.RepoName + "!" + strconv.FormatInt(e.Number, 10)
+	}
+	return lead(actor, "found "+strings.TrimPrefix(e.Target, "refs/heads/")+" broken by "+landing+": "+
+		strings.Join(e.Checks, ", ")+" failed")
 }

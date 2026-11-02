@@ -315,6 +315,23 @@ var contract = []Entry{
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"FINDING_CATEGORIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"CODE_PHRASES", ReadLiteral, "internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
+	{"CODE_ALARM_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryCodeAlarm"},
+	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CHECK_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"CHECK_PURPOSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"QUEUE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAQueue"},
+	{"CodeSearchAnswer", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchHit", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchCoverage", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+
+	// merge.ts
+	{"MERGE_METHODS", ReadLiteral, "internal/code.TestTheDashboardOffersEveryMergeMethod"},
+	{"MERGE_REFUSALS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
+	{"MERGE_CONFLICT", ReadScalar, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

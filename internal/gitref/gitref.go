@@ -2,13 +2,15 @@
 // SHARE: repository names, refs, branch names, protection patterns and object
 // ids, with their bounds — where the seats' own branches live ([SeatsRoot],
 // [ReservedSeatBranch]), which a push and a repository's default branch are
-// both judged by — and the GLOB OVER A REPOSITORY'S TREE PATHS ([PathGlob]),
-// which a path owner names its part of a tree by.
+// both judged by — the GLOB OVER A REPOSITORY'S TREE PATHS ([PathGlob]),
+// which a path owner names its part of a tree by, and the URL OF A REMOTE
+// REPOSITORY ([ParseRemoteURL]), which an import or a mirror dials.
 //
 // Configuration validates a document with it at `crewlet validate`, the code
-// domain decides a push with it, and the sandbox judges with it the branch a
+// domain decides a push with it, the sandbox judges with it the branch a
 // coding run names — the one a parked run records for its re-seed, and each
-// one a run's report says it delivered. Two copies of one grammar drift
+// one a run's report says it delivered — and the git process wrapper reads a
+// remote's URL with it before it hands git one to dial. Two copies of one grammar drift
 // (ADR-0008) — a name `crewlet validate` accepts and a push then refuses, or
 // the reverse, or a branch a run records that no ref can be — and the code
 // domain imports config, so the grammar lives below both. It imports nothing

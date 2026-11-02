@@ -154,6 +154,7 @@ var derivedTriggers = map[cache.Trigger]string{
 	cache.TriggerRound:      "a sync, before it answers",
 	cache.TriggerMaintainer: "the background indexing",
 	cache.TriggerBackfill:   "the backfill",
+	cache.TriggerIndexer:    "the indexer of code indexes",
 	cache.TriggerRead:       "a seat's read by object id",
 	cache.TriggerInstall:    "the install of the maintainer's published layers",
 }

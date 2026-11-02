@@ -212,7 +212,7 @@ func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, r
 	// the session's answer would refuse, while the check's re-syncs last.
 	repo, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name, Fresh: adm.fresh})
 	if !adm.linearizable && spent == nil && (errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(repo.Status, auth.GitFetch) || repo.ID != key.RepoID))) {
+		(err == nil && (refuses(repo, auth.GitFetch) || repo.ID != key.RepoID))) {
 		if spent = s.boxResync(adm); spent == nil {
 			adm.linearizable = true
 			repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,

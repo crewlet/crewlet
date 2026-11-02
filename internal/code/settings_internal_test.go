@@ -19,6 +19,9 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany, Search: SearchIndexed,
 		Protections: []Protection{{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectPersons}}},
 		PathOwners:  []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"web/**"}}},
+		MirrorFrom:  &MirrorSource{URL: "https://forge.example.com/a/web.git", Credential: "${A}"},
+		MirrorTo: &MirrorTarget{URL: "https://forge.example.com/b/web.git", Credential: "${B}", As: "dev",
+			Refs: []string{"refs/heads/main"}},
 		ConfigEpoch: 1,
 	}
 	variants := map[string]func(*RepoSettings){
@@ -39,6 +42,16 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"PathOwners": func(s *RepoSettings) {
 			s.PathOwners = []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"docs/**",
 				"web/**"}}}
+		},
+		// EACH MIRROR BY WHAT IT SAYS, never by its pointer: a credential
+		// moved to another variable, and a ref added to a push mirror's.
+		"MirrorFrom": func(s *RepoSettings) {
+			s.MirrorFrom = &MirrorSource{URL: s.MirrorFrom.URL, Credential: "${C}"}
+		},
+		"MirrorTo": func(s *RepoSettings) {
+			m := *s.MirrorTo
+			m.Refs = []string{"refs/heads/main", "refs/tags/*"}
+			s.MirrorTo = &m
 		},
 	}
 	ignored := map[string]bool{"ConfigEpoch": true}
@@ -74,5 +87,16 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	none.PathOwners, empty.PathOwners = nil, []PathOwner{}
 	if !none.equal(empty) {
 		t.Error("no path owners and an empty list of them compare unequal")
+	}
+	copied := base
+	from, to := *base.MirrorFrom, *base.MirrorTo
+	to.Refs = append([]string(nil), base.MirrorTo.Refs...)
+	copied.MirrorFrom, copied.MirrorTo = &from, &to
+	if !base.equal(copied) {
+		t.Error("the same mirrors read into new values compare unequal — every activation would re-record them")
+	}
+	none.MirrorFrom, none.MirrorTo = nil, nil
+	if none.equal(base) || base.equal(none) {
+		t.Error("settings with mirrors and settings with none compare equal")
 	}
 }

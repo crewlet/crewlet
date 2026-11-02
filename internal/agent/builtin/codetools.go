@@ -27,7 +27,8 @@ import (
 // the server rather than in a clone — code_list_repos, code_get_repo,
 // code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
 // and code_blame, and a repository's changes, code_list_changes and
-// code_get_change (codechanges.go) — each named for its authority row, and ONE
+// code_get_change (codechanges.go), and a search across every repository the
+// caller reads, code_search (codesearch.go) — each named for its authority row, and ONE
 // list ([CodeTools]) that a seat's registry and the operator catalogue both
 // take, so a schema, a default and a refusal's words are written once. The
 // code WRITES join the same list where the code host's writes are wired
@@ -128,12 +129,14 @@ const (
 	CodeBlameTool     = string(authz.ActionCodeBlame)
 )
 
-// CodeToolNames are the eleven, in the order a catalogue lists them: the
-// repositories, a ref, then the reads by object id — the history's last — and
-// a repository's changes ([ChangeToolNames]).
+// CodeToolNames are the twelve, in the order a catalogue lists them: the
+// repositories, a ref, then the reads by object id — the history's last — a
+// repository's changes ([ChangeToolNames]) and what a check of a commit said
+// (codechecks.go).
 func CodeToolNames() []string {
 	return append([]string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
-		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool}, ChangeToolNames()...)
+		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool},
+		append(ChangeToolNames(), CodeGetCheckFailuresTool)...)
 }
 
 // The listing pages. A repository row carries a description of up to a
@@ -206,6 +209,14 @@ type CodeDeps struct {
 	// never filed under a key nobody resolved.
 	Tasks TaskReader
 
+	// Closer is Worklet's writer FOR ONE ACTOR, which a
+	// merged change's step two closes its Worklet work item through
+	// (code_merge_change's `close_task`), as the caller who merged it — the
+	// tracker's rule that a writer acts as exactly one party. Set beside
+	// [CodeDeps.Tasks]; nil closes none, and a merge asked to close its item
+	// says it was not closed and why.
+	Closer func(actor Actor) WorkWriter
+
 	// Holder records a turn's hold on a scratch repository it names
 	// ([HoldRepo]), set wherever the tools are offered to seats and
 	// independently of Writer, because a seat that only reads still holds
@@ -214,6 +225,26 @@ type CodeDeps struct {
 	// rather than sent there unordered against an expiry in flight. An
 	// operator's call has no turn, and holds nothing either way.
 	Holder CodeHolder
+
+	// Logs is the fleet's object store as a check's kept log is read from
+	// ([CheckLogReader]): code_get_check_failures reads a failed run's log
+	// a page at a time through it. Nil reads no log page — the failures, the
+	// summary and the tail the check's row holds are still answered, and a
+	// call naming a log page is told this node reads none.
+	Logs CheckLogReader
+
+	// Searcher is the code search over the fleet's git nodes, which
+	// code_search asks (codesearch.go). Nil omits code_search and leaves the
+	// reads as they are: a surface that reads repositories one at a time and
+	// searches none. The engine wires it wherever it wires Code, so a seat
+	// that reads the company's code can search it.
+	Searcher CodeSearcher
+
+	// Placement is where a repository's work is placed — its maintainer and
+	// the nodes that may hold a copy — which a purge's answer names
+	// ([CodePlacement]). Nil names neither, and a purge's answer says so:
+	// its request is recorded all the same.
+	Placement CodePlacement
 
 	// Now is the clock a hold's idle threshold is read on, read after the
 	// hold is taken; nil is the wall clock.
@@ -232,9 +263,11 @@ func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil &&
 // CodeTools are the code tools a seat and an operator share: ONE list, so a
 // schema, a default and a refusal's words are written once, and nil where
 // deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
-// code. The reads first, which deliver nothing; then, where the code host's
-// writes are wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a
-// delivery to the code host's surface.
+// code. The reads first, which deliver nothing — the twelve
+// ([CodeToolNames]), then, where the search is wired ([CodeDeps.Searcher]),
+// code_search, a read across them all; then, where the code host's writes are
+// wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a delivery to
+// the code host's surface.
 func CodeTools(deps CodeDeps) []tools.Callable {
 	if !deps.serves() {
 		return nil
@@ -243,7 +276,10 @@ func CodeTools(deps CodeDeps) []tools.Callable {
 		&codeListRepos{deps: deps}, &codeGetRepo{deps: deps}, &codeResolve{deps: deps},
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
 		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
-		&codeListChanges{deps: deps}, &codeGetChange{deps: deps},
+		&codeListChanges{deps: deps}, &codeGetChange{deps: deps}, &codeGetCheckFailures{deps: deps},
+	}
+	if deps.Searcher != nil {
+		out = append(out, &codeSearch{deps: deps})
 	}
 	if deps.Writer != nil {
 		out = append(out, codeWriteTools(deps)...)
@@ -291,14 +327,15 @@ func codeCandidates(deps CodeDeps) []candidate {
 // a call can take away what somebody else made with nothing kept to undo it by
 // the same tool: a branch deleted (its commits stay in the repository, its
 // name and head only in the push history), a repository deleted (restorable
-// until its purge, then gone), and a finding dismissed — a reviewer's
-// blocker cleared, which nothing moves back. A commit moves a branch forward
+// until its purge, then gone), a finding dismissed — a reviewer's
+// blocker cleared, which nothing moves back — and a repository's unreachable
+// objects purged, which nothing brings back once the purge commits. A commit moves a branch forward
 // over its history, which keeps every earlier version; a setting, a
 // protection or what a change says is set back by the same tool, the record
 // of each change keeping what it replaced; and an archive, a close and a
 // draft are each undone by their opposite.
 func codeAnnotations(name string) (tools.Annotations, bool) {
-	for _, tool := range append(CodeToolNames(), CodeRepoReadersTool) {
+	for _, tool := range append(CodeToolNames(), CodeSearchTool, CodeRepoReadersTool) {
 		if tool == name {
 			return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 		}
@@ -306,7 +343,7 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 	if slices.Contains(CodeWrites(), name) {
 		destructive, idempotent := mcp.No, mcp.Yes
 		switch name {
-		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool:
+		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool, CodePurgeUnreachableTool:
 			destructive = mcp.Yes
 		case CodeReviewChangeTool, CodeCommentOnChangeTool:
 			idempotent = mcp.No
@@ -688,8 +725,10 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 // AND THE TURN'S HOLD on every seat's branch it resolved ([HoldRef]), taken
 // here — after the read whose answer a hold is decided from, and before the
 // answer goes back to whatever sends a request through it — so no caller can
-// read a ref for a turn and forget its hold. A hold that fails refuses the
-// call with nothing sent.
+// read a ref for a turn and forget its hold. Every key of the answer is taken
+// in ONE Take first ([takeRefHolds]): a call that resolves a comparison's two
+// seats' branches writes one compare-and-set on its run row, not two. A hold
+// that fails refuses the call with nothing sent.
 func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) (code.RefAnswer, *tools.Result) {
 
@@ -709,6 +748,16 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 		return code.RefAnswer{}, &r
 	}
 	noteRefsRead(turn, repo.ID, answer.Refs)
+	var held []string
+	for _, resolved := range answer.Refs {
+		if resolved.Missing == "" {
+			held = append(held, resolved.Ref)
+		}
+	}
+	if taking, err := takeRefHolds(ctx, turn, c.actor, repo, held); err != nil {
+		r := refHoldFailure(ctx, tool, repo, taking, err)
+		return code.RefAnswer{}, &r
+	}
 	for i := range answer.Refs {
 		resolved := &answer.Refs[i]
 		if resolved.Missing != "" {
@@ -723,10 +772,15 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	return answer, nil
 }
 
-// branch holds ref — the branch a write tool's call names, refs/heads/ and its
-// `branch`, or the source branch of the change a suggestions apply commits to —
-// for turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a write's branch
-// is held, which every engine write calls before its GitWrite.
+// branch holds refs — the branch a write tool's call names, refs/heads/ and its
+// `branch`, the source branch of the change a suggestions apply commits to, or
+// the source and the target of a change it opens — for turn BEFORE the write
+// is sent ([HoldRef]): THE ONE PLACE a write's branch is held, which every
+// engine write calls before its GitWrite. ALL OF A CALL'S BRANCHES AT ONCE:
+// one ref read for every branch it resolves, and one Take for every branch it
+// holds with no read ([takeRefHolds]), so a change between two seats' branches
+// pays one barrier and one compare-and-set on the turn's run row, not two of
+// each.
 // A WRITE IS HELD AS A READ IS, because only a write that MOVES the branch is
 // ordered against a deletion of it by its own head compare: one that moves
 // nothing — refused, a revert or a pick that conflicts, a no-op — appends no
@@ -743,24 +797,43 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 // branch this turn's read already confirmed — reads nothing here; its own
 // head compare decides it, unchanged.
 func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
-	ref string, existing bool) *tools.Result {
+	existing bool, refs ...string) *tools.Result {
 
-	if turn == nil || c.asker.Kind != code.PrincipalAgent || !code.Holdable(ref) ||
-		turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+	if turn == nil || c.asker.Kind != code.PrincipalAgent {
 		return nil
 	}
+	var held []string
+	for _, ref := range refs {
+		if code.Holdable(ref) && !slices.Contains(held, ref) &&
+			!turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+			held = append(held, ref)
+		}
+	}
+	if len(held) == 0 {
+		return nil
+	}
+	unread := held
 	if existing {
-		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, ref)
+		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, held...)
 		if refusal != nil {
 			return refusal
 		}
-		if answer.Refs[0].Missing == "" {
-			return nil
+		unread = nil
+		for i, resolved := range answer.Refs {
+			if resolved.Missing != "" {
+				unread = append(unread, held[i])
+			}
 		}
 	}
-	if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, ref, nil, statelog.Position{}, d.Now); err != nil {
-		r := refHoldFailure(ctx, tool, repo, ref, err)
+	if taking, err := takeRefHolds(ctx, turn, c.actor, repo, unread); err != nil {
+		r := refHoldFailure(ctx, tool, repo, taking, err)
 		return &r
+	}
+	for _, ref := range unread {
+		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, ref, nil, statelog.Position{}, d.Now); err != nil {
+			r := refHoldFailure(ctx, tool, repo, ref, err)
+			return &r
+		}
 	}
 	return nil
 }
@@ -1227,9 +1300,10 @@ func (t *codeListRepos) Parameters() map[string]any {
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{string(code.RepoStatusActive), string(code.RepoStatusArchived)},
-				"description": "Only the active repositories, or only the archived ones (read-only); " +
-					"both when left out.",
+				"enum": []string{string(code.RepoStatusImporting), string(code.RepoStatusActive),
+					string(code.RepoStatusArchived)},
+				"description": "Only those being imported, the active, or the archived (read-only); all three " +
+					"when left out.",
 			},
 			"cursor": codeCursorArg(),
 			"limit": map[string]any{
@@ -1296,11 +1370,11 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Fresh: seatRead}
 	switch status := code.RepoStatus(strings.TrimSpace(argString(args, "status"))); status {
 	case "":
-	case code.RepoStatusActive, code.RepoStatusArchived:
+	case code.RepoStatusImporting, code.RepoStatusActive, code.RepoStatusArchived:
 		q.Status = []code.RepoStatus{status}
 	default:
-		return failed(fmt.Sprintf("%s: `status` is %s or %s, not %q.", t.Name(), code.RepoStatusActive,
-			code.RepoStatusArchived, clip(string(status)))), nil
+		return failed(fmt.Sprintf("%s: `status` is %s, %s or %s, not %q.", t.Name(), code.RepoStatusImporting,
+			code.RepoStatusActive, code.RepoStatusArchived, clip(string(status)))), nil
 	}
 	q.Limit = argInt(args, "limit", defaultCodeRepoList)
 	if q.Limit < 1 || q.Limit > maxCodeRepoList {

@@ -42,14 +42,17 @@ import (
 //     least that bound old, and a copy that answers requests holds a
 //     position that old unless it lags by more than a whole read budget,
 //     which is the copy the first wait has already found.
-//   - NoQuorum is every log a node spent a barrier's whole budget on without
-//     the barrier committing — a log without a quorum rather than a slow one
-//     ([DefaultBarrierBudget]) — and a read on it appends NO SECOND barrier:
-//     it is refused `no_quorum` at once. Every node's barrier goes to the one
-//     log's leader, so through an election every node's waits out its whole
-//     budget alike; the one case a second barrier commits where the first did
-//     not — a member cut off from the log's leader while its peers and its
-//     asker still reach it — is answered with the refusal and its retry hint
+//   - Unconfirmed is every log a node spent a barrier's whole budget on
+//     without the barrier committing — a log without a quorum, or on one
+//     member a stalled write, rather than a slow one ([DefaultBarrierBudget])
+//     — and a read on it appends NO SECOND barrier: it is refused at once,
+//     `no_quorum` where several members store the log and `broker_stalled`
+//     where one does ([ReadIndex.unconfirmed]). Every node's barrier goes to
+//     the one log's leader, so through an election every node's waits out its
+//     whole budget alike, and behind one member's stalled write likewise; the
+//     one case a second barrier commits where the first did not — a member
+//     cut off from the log's leader while its peers and its asker still reach
+//     it — is answered with the refusal and its retry hint
 //     ([ElectionRetryHint]) rather than every read of every election paying
 //     a barrier's budget per data node.
 //
@@ -67,14 +70,15 @@ type Spent struct {
 	// bound for and did not reach.
 	Waited []Position `json:"waited,omitempty"`
 
-	// NoQuorum is every log on which a node's barrier ran its whole budget
-	// without committing.
-	NoQuorum []string `json:"no_quorum,omitempty"`
+	// Unconfirmed is every log on which a node's barrier ran its whole budget
+	// without committing — named for what is known, not for why: on one
+	// member it is no quorum that was missed.
+	Unconfirmed []string `json:"unconfirmed,omitempty"`
 }
 
 // IsZero reports whether s has paid for nothing.
 func (s Spent) IsZero() bool {
-	return len(s.Index) == 0 && len(s.Waited) == 0 && len(s.NoQuorum) == 0
+	return len(s.Index) == 0 && len(s.Waited) == 0 && len(s.Unconfirmed) == 0
 }
 
 // Merge is what a walk has paid for once a node has also paid for o: the read
@@ -84,9 +88,9 @@ func (s Spent) IsZero() bool {
 // barrier ran out on.
 func (s Spent) Merge(o Spent) Spent {
 	out := Spent{
-		Index:    slices.Clone(s.Index),
-		Waited:   slices.Clone(s.Waited),
-		NoQuorum: slices.Clone(s.NoQuorum),
+		Index:       slices.Clone(s.Index),
+		Waited:      slices.Clone(s.Waited),
+		Unconfirmed: slices.Clone(s.Unconfirmed),
 	}
 	for _, at := range o.Index {
 		if _, held := out.IndexOn(at.Stream); !held && !at.IsZero() {
@@ -105,9 +109,9 @@ func (s Spent) Merge(o Spent) Spent {
 			out.Waited[i] = at
 		}
 	}
-	for _, stream := range o.NoQuorum {
-		if stream != "" && !slices.Contains(out.NoQuorum, stream) {
-			out.NoQuorum = append(out.NoQuorum, stream)
+	for _, stream := range o.Unconfirmed {
+		if stream != "" && !slices.Contains(out.Unconfirmed, stream) {
+			out.Unconfirmed = append(out.Unconfirmed, stream)
 		}
 	}
 	return out
@@ -134,9 +138,9 @@ func (s Spent) WaitedFor(p Position) bool {
 	return false
 }
 
-// NoQuorumOn reports whether a node's barrier on stream ran its whole budget
-// without committing.
-func (s Spent) NoQuorumOn(stream string) bool { return slices.Contains(s.NoQuorum, stream) }
+// UnconfirmedOn reports whether a node's barrier on stream ran its whole
+// budget without committing.
+func (s Spent) UnconfirmedOn(stream string) bool { return slices.Contains(s.Unconfirmed, stream) }
 
 // spentKey carries what a read has paid for on the nodes asked before this one
 // ([WithSpent]).

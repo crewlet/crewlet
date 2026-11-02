@@ -25,6 +25,14 @@ import (
 // BEFORE that request is sent, so no request reaches a repository the expiry
 // could already be deciding about unheld.
 //
+// ONE WRITE A CALL, NOT ONE A KEY: [Holds.Take] takes every key it is handed
+// in one write through the attached writer — a call that resolves several
+// seats' branches (a comparison's base and head, a change's source and
+// target) pays one compare-and-set on its run row, not one each. A launch
+// resolves no repository (ADR-0086: a run checks out what it needs through
+// `code_checkout` once its row exists), so a launch takes no key of its own:
+// it writes the set it reads onto the row it opens ([Holds.Seal]).
+//
 // KEPT WHERE THE TURN LIVES: in this value, in the memory of the process
 // running the turn, which that node answers for when an expiry asks it (the
 // engine's crewlet.code.holds); and, once the turn has a run row, ALSO on the
@@ -112,21 +120,25 @@ func closed() chan struct{} {
 	return c
 }
 
-// Take adds key to the set and answers whether it was NEW. A new key is
-// written through the attached writer first, where there is one, and is NOT
-// added where that write fails: the error is returned, and the request it was
-// taken for is refused with nothing sent. While a launch's seal is in force,
-// Take waits for it to end — [Holds.Attach] or [Holds.Unseal] — bounded by
-// ctx, so a key taken in that window reaches the row the launch is opening.
-func (h *Holds) Take(ctx context.Context, key string) (bool, error) {
+// Take adds keys to the set, every one it does not hold yet in ONE write
+// through the attached writer where there is one — a call's every key in one
+// compare-and-set on its run row — and NONE of them where that write fails:
+// the error is returned, and the request they were taken for is refused with
+// nothing sent. The bound ([MaxHolds]) is judged over the whole call: a Take
+// that would carry the set past it adds none of its keys. While a launch's
+// seal is in force, Take waits for it to end — [Holds.Attach] or
+// [Holds.Unseal] — bounded by ctx, so a key taken in that window reaches the
+// row the launch is opening.
+func (h *Holds) Take(ctx context.Context, keys ...string) error {
 	if h == nil {
-		return false, ErrNoHolds
+		return ErrNoHolds
 	}
 	for {
 		h.mu.Lock()
-		if h.has[key] {
+		fresh := h.needs(keys)
+		if len(fresh) == 0 {
 			h.mu.Unlock()
-			return false, nil
+			return nil
 		}
 		seal := h.sealed
 		select {
@@ -140,52 +152,74 @@ func (h *Holds) Take(ctx context.Context, key string) (bool, error) {
 			case <-seal:
 				continue
 			case <-ctx.Done():
-				return false, ctx.Err()
+				return ctx.Err()
 			}
 		}
-		if len(h.keys) >= MaxHolds {
+		if len(h.keys)+len(fresh) > MaxHolds {
 			h.mu.Unlock()
-			return false, ErrHoldsFull
+			return ErrHoldsFull
 		}
 		if h.write == nil {
-			h.add(key)
+			// IN MEMORY: no row yet — the launch that opens one writes the
+			// set it reads onto it ([Holds.Seal]).
+			for _, key := range fresh {
+				h.add(key)
+			}
 			h.mu.Unlock()
-			return true, nil
+			return nil
 		}
 		h.mu.Unlock()
-		if taken, again, err := h.takeWritten(ctx, key); !again {
-			return taken, err
+		if again, err := h.takeWritten(ctx, keys); !again {
+			return err
 		}
 	}
 }
 
-// takeWritten takes key through the attached writer: WRITTEN BEFORE IT IS
-// HELD, one write at a time, so the set never holds a key the row was refused
-// — the row is the set's durable copy, and a key it does not hold is no hold
-// at all once this process is gone. again reports a set that changed under
-// the wait for the write's turn — a seal in force, the writer detached, the
-// set at its bound — which Take decides afresh.
-func (h *Holds) takeWritten(ctx context.Context, key string) (taken, again bool, err error) {
+// needs is the keys a Take of keys must add: the ones the set does not hold,
+// once each in their first order. Called under mu.
+func (h *Holds) needs(keys []string) (fresh []string) {
+	for i, key := range keys {
+		if !h.has[key] && !slices.Contains(keys[:i], key) {
+			fresh = append(fresh, key)
+		}
+	}
+	return fresh
+}
+
+// takeWritten takes keys through the attached writer: WRITTEN BEFORE THEY ARE
+// HELD, in one write, one write at a time, so the set never holds a key the
+// row was refused — the row is the set's durable copy, and a key it does not
+// hold is no hold at all once this process is gone. again reports a set that
+// changed under the wait for the write's turn — a seal in force, the writer
+// detached, the set at its bound — which Take decides afresh.
+func (h *Holds) takeWritten(ctx context.Context, keys []string) (again bool, err error) {
 	h.writing.Lock()
 	defer h.writing.Unlock()
 	h.mu.Lock()
 	write := h.write
+	fresh := h.needs(keys)
 	switch {
-	case h.has[key]:
+	case len(fresh) == 0:
 		h.mu.Unlock()
-		return false, false, nil
-	case write == nil || len(h.keys) >= MaxHolds:
+		return false, nil
+	case write == nil || len(h.keys)+len(fresh) > MaxHolds:
 		h.mu.Unlock()
-		return false, true, nil
+		return true, nil
 	}
 	h.mu.Unlock()
-	if err := write(ctx, []string{key}); err != nil {
-		return false, false, err
+	if err := write(ctx, fresh); err != nil {
+		return false, err
 	}
 	h.mu.Lock()
-	h.add(key)
-	h.mu.Unlock()
-	return true, false, nil
+	defer h.mu.Unlock()
+	for _, key := range fresh {
+		// A Take while no writer was attached (a Detach, then this write's
+		// turn) may have added it meanwhile: the set holds each key once.
+		if !h.has[key] {
+			h.add(key)
+		}
+	}
+	return false, nil
 }
 
 // add puts key in the set. Called under mu.

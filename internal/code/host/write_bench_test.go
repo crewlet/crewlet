@@ -76,25 +76,47 @@ func (s writeStore) backend(b *testing.B) objstore.Backend {
 	return s3Over(b, srv)
 }
 
-// writeFigures are what an arm's git node did for its writes, as it did them —
-// read from the git node's own seams, never from a fake: the host's per-stage
-// durations as it observes them (crewlet.code.host.write.duration, every
-// observation handed to a bound sink), each PUT at the object store the node
-// writes through (its timedObjects), and each engine write's proposal at the
-// estate the node proposes through (its timedEstate). A NEW SET EVERY ARM,
-// reset once its fixture is built, so a seeded branch is no sample.
+// writeFigures are what an arm's git node did for its writes and for the
+// person pushing beside them, as it did them — read from the git node's own
+// seams, never from a fake: the host's per-stage durations as it observes
+// them (crewlet.code.host.write.duration, every observation handed to a bound
+// sink), how long each take of the seat git-work share waited
+// (crewlet.code.seatwork.waits) and each sync of the copy took
+// (crewlet.code.cache.sync.duration), every request the node made of the
+// object store it writes through (its timedObjects), and each push's proposal
+// at the estate the node proposes through (its timedEstate). A NEW SET EVERY
+// ARM, reset once its fixture is built and compacted, so a seeded branch is
+// no sample.
+//
+// WHOSE A REQUEST TO THE OBJECT STORE WAS is read off the object it names,
+// the one thing the store sees: an object an engine write's proposal named is
+// the writes', one the person's push proposed is the person's, and any other
+// — a seed's pack, a compaction's output — is the node's own. And every
+// request, sync and proposal is stamped with the arm's PHASE when it was
+// made (alone, writes, compact, after), so what the person's push asked of
+// the store alone is never read as what it asked beside the writes.
 type writeFigures struct {
 	mu sync.Mutex
+	// phase is the arm's phase now: what every request is stamped with.
+	phase string
 	// stages is every observation of crewlet.code.host.write.duration, by
 	// its stage: sync, build, land and total.
 	stages map[string][]time.Duration
+	// shareWaits is every take of the seat git-work share an engine write's
+	// build made, granted or unready, as the share timed it.
+	shareWaits []time.Duration
+	// syncs is every completed sync of the copy, by phase and kind.
+	syncs map[string][]time.Duration
 	// puts is how long each object's last PUT took and putCalls how many
 	// PUTs it was given, by the object's name; engine is the names an
-	// engine write's proposal named — a person's push in a beside=push arm
-	// stores bundles too, which are not the writes'.
+	// engine write's proposal named, and person those the person's pushes
+	// proposed.
 	puts     map[string]time.Duration
 	putCalls map[string]int
 	engine   map[string]bool
+	person   map[string]bool
+	// calls is every request the node made of the object store, in order.
+	calls []objCall
 	// proposals is how long each engine write's proposal was in flight: the
 	// committer's batch, its record and the wait for its row, which the
 	// committer answers once its row applied (or pending, past its own
@@ -102,11 +124,28 @@ type writeFigures struct {
 	proposals []time.Duration
 	answered  map[string]time.Time
 	pending   int
+	// personProposals is how long each of the person's proposals was in
+	// flight, by phase.
+	personProposals map[string][]time.Duration
 	// packs is each engine write's pack bytes, as its proposal names them.
 	packs []int64
-	// getN counts the git node's GETs.
-	getN atomic.Int64
 }
+
+// objCall is one request the git node made of the object store: in which of
+// the arm's phases, which request, of which object, and how long the store
+// took to answer it.
+type objCall struct {
+	phase, op, name string
+	took            time.Duration
+}
+
+// The phases of an arm, which every request is stamped with.
+const (
+	phaseAlone   = "alone"
+	phaseWrites  = "writes"
+	phaseCompact = "compact"
+	phaseAfter   = "after"
+)
 
 // newWriteFigures is an empty set.
 func newWriteFigures() *writeFigures {
@@ -119,11 +158,22 @@ func newWriteFigures() *writeFigures {
 func (fig *writeFigures) reset() {
 	fig.mu.Lock()
 	defer fig.mu.Unlock()
-	fig.stages, fig.engine = map[string][]time.Duration{}, map[string]bool{}
+	fig.stages, fig.engine, fig.person = map[string][]time.Duration{}, map[string]bool{}, map[string]bool{}
+	fig.shareWaits, fig.syncs, fig.calls = nil, map[string][]time.Duration{}, nil
 	fig.puts, fig.putCalls = map[string]time.Duration{}, map[string]int{}
 	fig.proposals, fig.answered, fig.pending, fig.packs = nil, map[string]time.Time{}, 0, nil
-	fig.getN.Store(0)
+	fig.personProposals = map[string][]time.Duration{}
 }
+
+// enter stamps everything from now on with phase.
+func (fig *writeFigures) enter(phase string) {
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	fig.phase = phase
+}
+
+// sinceMs is a sink's observation, in milliseconds, as a duration.
+func sinceMs(ms float64) time.Duration { return time.Duration(ms * float64(time.Millisecond)) }
 
 // observe is the sink bound to the host's write durations: called under the
 // recorder's own lock, so it keeps nothing of attrs but the stage.
@@ -131,7 +181,88 @@ func (fig *writeFigures) observe(ms float64, attrs map[string]string) {
 	fig.mu.Lock()
 	defer fig.mu.Unlock()
 	stage := attrs["stage"]
-	fig.stages[stage] = append(fig.stages[stage], time.Duration(ms*float64(time.Millisecond)))
+	fig.stages[stage] = append(fig.stages[stage], sinceMs(ms))
+}
+
+// observeShare is the sink bound to the share's waits: an engine write's
+// build's, whatever their outcome — a seat's read takes its unit of the same
+// share, and no arm reads.
+func (fig *writeFigures) observeShare(ms float64, attrs map[string]string) {
+	if attrs["work"] != string(code.SeatWorkWrite) {
+		return
+	}
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	fig.shareWaits = append(fig.shareWaits, sinceMs(ms))
+}
+
+// observeSync is the sink bound to the copy's syncs, kept by phase and kind.
+func (fig *writeFigures) observeSync(ms float64, attrs map[string]string) {
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	key := fig.phase + "/" + attrs["kind"]
+	fig.syncs[key] = append(fig.syncs[key], sinceMs(ms))
+}
+
+// shares is every engine write's wait for the share, sorted.
+func (fig *writeFigures) shares() []time.Duration {
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	return inOrder(fig.shareWaits)
+}
+
+// owner is whose an object is: the writes', the person's or the node's own.
+func (fig *writeFigures) owner(name string) string {
+	switch {
+	case fig.engine[name]:
+		return "writes"
+	case fig.person[name]:
+		return "person"
+	}
+	return "node"
+}
+
+// requests is every request phase made of the store for objects of owner, by
+// request (PUT, GET, STAT, DELETE), each sorted by how long it took.
+func (fig *writeFigures) requests(phase, owner string) map[string][]time.Duration {
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	out := map[string][]time.Duration{}
+	for _, c := range fig.calls {
+		if c.phase == phase && fig.owner(c.name) == owner {
+			out[c.op] = append(out[c.op], c.took)
+		}
+	}
+	for op := range out {
+		out[op] = inOrder(out[op])
+	}
+	return out
+}
+
+// logPhase logs everything phase made of the store, by owner and request, and
+// every sync of the copy it waited for, with the person's proposals: what an
+// arm's report tells a slow push by.
+func (fig *writeFigures) logPhase(b *testing.B, phase string) {
+	b.Helper()
+	for _, owner := range []string{"writes", "person", "node"} {
+		for op, took := range fig.requests(phase, owner) {
+			b.Logf("%s: %d %s of the %s' objects, p50/p99 %.0f/%.0f ms", phase, len(took), op, owner,
+				quantile(took, 0.50), quantile(took, 0.99))
+		}
+	}
+	fig.mu.Lock()
+	defer fig.mu.Unlock()
+	for key, took := range fig.syncs {
+		if kind, ok := strings.CutPrefix(key, phase+"/"); ok {
+			took = inOrder(took)
+			b.Logf("%s: %d %s syncs of the copy, p50/p99 %.0f/%.0f ms", phase, len(took), kind,
+				quantile(took, 0.50), quantile(took, 0.99))
+		}
+	}
+	if took := inOrder(fig.personProposals[phase]); len(took) > 0 {
+		b.Logf("%s: %d of the person's proposals, p50/p99 %.0f/%.0f ms", phase, len(took), quantile(took, 0.50),
+			quantile(took, 0.99))
+	}
 }
 
 // stage is every observation of stage, sorted.
@@ -164,17 +295,26 @@ func inOrder(ds []time.Duration) []time.Duration {
 	return out
 }
 
-// timedObjects is the git node's object store with every PUT timed and
-// counted by the object's name and every GET counted.
+// timedObjects is the git node's object store with every request timed and
+// kept by the object it names (writeFigures.calls), and every PUT besides
+// counted by that name.
 type timedObjects struct {
 	objstore.Backend
 	fig *writeFigures
+}
+
+// called keeps one request of the store.
+func (o timedObjects) called(op, name string, took time.Duration) {
+	o.fig.mu.Lock()
+	defer o.fig.mu.Unlock()
+	o.fig.calls = append(o.fig.calls, objCall{phase: o.fig.phase, op: op, name: name, took: took})
 }
 
 func (o timedObjects) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	start := time.Now()
 	err := o.Backend.Put(ctx, name, r, m)
 	took := time.Since(start)
+	o.called("PUT", name, took)
 	o.fig.mu.Lock()
 	defer o.fig.mu.Unlock()
 	o.fig.putCalls[name]++
@@ -184,13 +324,32 @@ func (o timedObjects) Put(ctx context.Context, name string, r io.Reader, m objst
 	return err
 }
 
+// Get is timed to the store's answer — its first byte — and not to the last
+// byte its reader hands on, which its caller paces.
 func (o timedObjects) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
-	o.fig.getN.Add(1)
-	return o.Backend.Get(ctx, name, off, n)
+	start := time.Now()
+	rc, err := o.Backend.Get(ctx, name, off, n)
+	o.called("GET", name, time.Since(start))
+	return rc, err
 }
 
-// timedEstate is the git node's estate with every engine write's proposal
-// timed, and the pack it names kept.
+func (o timedObjects) Stat(ctx context.Context, name string) (objstore.Info, error) {
+	start := time.Now()
+	info, err := o.Backend.Stat(ctx, name)
+	o.called("STAT", name, time.Since(start))
+	return info, err
+}
+
+func (o timedObjects) Delete(ctx context.Context, name string) error {
+	start := time.Now()
+	err := o.Backend.Delete(ctx, name)
+	o.called("DELETE", name, time.Since(start))
+	return err
+}
+
+// timedEstate is the git node's estate with every push's proposal timed and
+// the pack it names kept as the writes' or the person's: an engine write's,
+// with its answer's instant, and the person's, by the arm's phase.
 type timedEstate struct {
 	host.Estate
 	fig *writeFigures
@@ -199,12 +358,16 @@ type timedEstate struct {
 func (e timedEstate) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
 	start := time.Now()
 	res, err := e.Estate.Propose(ctx, p)
-	if p.Via != code.ViaEngine {
-		return res, err
-	}
 	end := time.Now()
 	e.fig.mu.Lock()
 	defer e.fig.mu.Unlock()
+	if p.Via != code.ViaEngine {
+		e.fig.personProposals[e.fig.phase] = append(e.fig.personProposals[e.fig.phase], end.Sub(start))
+		if p.Pack != nil {
+			e.fig.person[p.Pack.Object.Name()] = true
+		}
+		return res, err
+	}
 	e.fig.proposals = append(e.fig.proposals, end.Sub(start))
 	e.fig.answered[p.PushID] = end
 	if err == nil && res.Outcome == statelog.OutcomePending {
@@ -283,8 +446,9 @@ func writeTools(b *testing.B, seam estate.CodeSeam) map[string]tools.SeatCallabl
 
 // writeFleet is a solo fleet of ONE git node over backend — its broker fsyncing
 // every write as a deployment's does (SyncAlways), its git node's estate and
-// object store timed into fig and its write durations handed to fig as the
-// host observes them — whose seats may land as many pushes a day as the
+// object store timed into fig and its write durations, its share's waits and
+// its copy's syncs handed to fig as the node observes them — whose seats may
+// land as many pushes a day as the
 // quota's ceiling admits, since an arm's writes are all one seat's.
 func writeFleet(b *testing.B, backend objstore.Backend, fig *writeFigures) *codetest.SoloFleet {
 	b.Helper()
@@ -297,8 +461,12 @@ func writeFleet(b *testing.B, backend objstore.Backend, fig *writeFigures) *code
 		WrapObjects: func(_ string, o objstore.Backend) objstore.Backend { return timedObjects{Backend: o, fig: fig} },
 	})
 	node := f.Nodes()[0]
-	if err := node.Metrics().BindHistogram(metrics.CodeHostWriteDuration, fig.observe); err != nil {
-		b.Fatal(err)
+	for name, sink := range map[string]func(float64, map[string]string){
+		metrics.CodeHostWriteDuration: fig.observe, metrics.CodeSeatworkWaits: fig.observeShare,
+		metrics.CodeCacheSyncDuration: fig.observeSync} {
+		if err := node.Metrics().BindHistogram(name, sink); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.Logf("the pool runs git %s; its read lane is %d slots, the seats' share %d units",
 		node.Pool().Version(), node.Pool().Slots(gitproc.ClassRead), node.Share().Units())
@@ -396,6 +564,24 @@ const (
 	// beside the writes are held to.
 	besideAlone = 20
 
+	// writesAUnitServes is how many writes asked at once ONE unit of the
+	// seat git-work share serves inside code.GitShareWait: the share's two
+	// seconds over the build's own git at its p99 on two cores — 0.24 s at
+	// the most for a hundred files at depth six (BenchmarkEngineCommit,
+	// doc.go), a one-file commit's far less — is eight, so the eighth write
+	// in line takes its unit before its wait ends. An arm asking no more at
+	// once than the share's units serve is held to answering none of them
+	// unready or busy: a refusal there is a write path that turns writes
+	// into refusals, never the share's bound at work.
+	writesAUnitServes = int(code.GitShareWait / (240 * time.Millisecond))
+
+	// compactPasses is the most passes of the compactor an arm runs at one
+	// pause before it gives up on a repository that is still due: one pass
+	// compacts each due repository once, and a repository past
+	// code.CompactTargetPacks may need a few — thirty-two is far past any a
+	// round of sixty-four writes leaves.
+	compactPasses = 32
+
 	// seedAtOnce is how many of an arm's branches are seeded at once: few
 	// enough that a one-unit share serves each inside its wait
 	// (code.GitShareWait) at any build this package measures, and seedTries
@@ -433,31 +619,57 @@ const (
 //     spreading its writes over the repositories in turn (repos=).
 //   - beside= nothing, or a person's `git push` of one commit to the first
 //     repository's main every besidePace, timed besideAlone times alone
-//     before the writes begin and then through every round.
+//     before the writes begin, then through every round, and besideAlone
+//     times alone again once they have stopped.
 //
-// Each arm reports, over the writes that applied: their p50 and p99 whole, as
-// the turn waited; what the tool added around its write (tool: the caller,
-// the arguments, the repository's resolution at the log's head and the
-// answer); the host's own stages (sync, build, land, total; the build holding
-// its unit of the seat git-work share, so its time includes the wait for one);
-// the bundle's PUT (upload), the proposal and the wait for its row (propose),
-// and what follows the answer of the proposal (adopt: the pack linked into
-// the copy and the answer's way back); PUTs and GETs a write; the writes
-// answered unready (unready/write) — at concurrency=64 the git node's share
-// holds half its read lane, and a write that waits past code.GitShareWait for
-// a unit is sent on, which with one git node is an answer the turn asks again;
-// the most writes the git node held at once (inflight-peak), which at
-// concurrency=64 is the write lane's whole width held with nothing queued for
-// a slot; and, beside=push, the person's push p50 and p99 alone, beside the
-// writes, and alone again after them (person-after: over the packs the
-// writes left, which nothing in an arm compacts).
+// THE REPOSITORIES ARE KEPT COMPACTED, as a home that keeps up keeps them:
+// once the seeds have landed and after every round, the git node's compactor
+// runs its passes (compact.Compactor.Poll) until one compacts nothing, so
+// every repository the next round writes holds fewer than
+// code.CompactMinMerge live packs and no round writes over the hundreds a
+// burst would otherwise leave. A pass runs between rounds, never beside one,
+// with the person's pushes held off for it, so neither the writes nor the
+// person is timed beside a compaction — and the person's pushes alone, beside
+// the writes and after them are all taken over a repository at that one pack
+// state, which is what lets the three be compared. (Production's home polls
+// once a minute, so a minute of such a burst would leave more packs between
+// its passes than an arm does; what some 400 of them cost a push, timed once
+// over the arm as it stood before it compacted, is in doc.go.)
+//
+// Each arm reports EVERY ANSWER a write's tool gave, as the turn waited for
+// it: answer-p50 and answer-p99 over all of them — applied, unready or busy,
+// since a turn waits for a refusal as long as it took and then makes a model
+// round and asks again — and unready-p99 over the unready ones; and, over the
+// writes that applied: their p50 and p99 whole; what the tool added around
+// its write (tool: the caller, the arguments, the repository's resolution at
+// the log's head and the answer); the host's own stages (sync, build, land,
+// total; the build holding its unit of the seat git-work share, so its time
+// includes the wait for one); the share's own wait for each write's build,
+// granted or unready (share-wait, as crewlet.code.seatwork.waits times it),
+// beside its budget, code.GitShareWait — estate.GitWriteAttempt's one term a
+// write can reach whole; the bundle's PUT (upload), the proposal and the wait
+// for its row (propose), and what follows the answer of the proposal (adopt:
+// the pack linked into the copy and the answer's way back); the object
+// store's PUTs and GETs of the writes' own objects a write (by the object
+// named: the person's are counted apart, and the node's own — a seed's, a
+// compaction's — apart again); the writes answered unready (unready/write) —
+// the git node's share holds half its read lane, and a write that waits past
+// code.GitShareWait for a unit is sent on, which with one git node is an
+// answer the turn asks again — and busy; the most writes the git node held at
+// once (inflight-peak), which at concurrency=64 is the write lane's whole
+// width held with nothing queued for a slot; and, beside=push, the person's
+// push p50 and p99 alone, beside the writes and after them, with what each
+// phase asked of the object store, by whose object and which request, every
+// sync of the copy it waited for and the person's proposals, logged.
 //
 // HELD by its own assertions: at the S3 fake's 200 ms first byte every arm's
-// whole write p99 is under a quarter of estate.GitWriteAttempt and its upload
-// p99 under a tenth of code.WriteUploadAllowance; and beside sixty-four
-// writes at once the person's push p99 is within twice its p99 alone — the
-// share leaves the person's scans their half of the read lane. This package's
-// doc.go carries the figures.
+// p99 over every answer and over the applied writes is under a quarter of
+// estate.GitWriteAttempt and its upload p99 under a tenth of
+// code.WriteUploadAllowance; an arm asking no more writes at once than the
+// share's units serve (writesAUnitServes a unit) answers none unready or
+// busy; and beside sixty-four writes at once the person's push p99 is within
+// twice its p99 alone — the share leaves the person's scans their half of the
+// read lane. This package's doc.go carries the figures.
 func BenchmarkEngineWrite(b *testing.B) {
 	codetest.Quiet(b)
 	for _, store := range writeStores {
@@ -497,11 +709,17 @@ type writeRig struct {
 	// apart.
 	created atomic.Int64
 
+	// quiet holds the person's pushes off while the compactor runs between
+	// rounds: a push takes it shared, a compaction whole.
+	quiet sync.RWMutex
+	// compacting is how long the arm's compactions took, which its rate of
+	// writes leaves out.
+	compacting time.Duration
+
 	mu sync.Mutex
-	// packs is how many live packs each repository holds — two a seeded
-	// branch, one an applied write that stored one — which nothing in an
-	// arm compacts.
-	packs []int
+	// answers is every write's whole time, whatever its tool answered, and
+	// refusedTook the unready ones'.
+	answers, refusedTook []time.Duration
 	// took is every applied write's whole time, and tool what its tool call
 	// added around its write; ended is when each write's answer reached its
 	// tool, by push id.
@@ -513,13 +731,12 @@ type writeRig struct {
 	failed        error
 }
 
-// newWriteRig builds arm's fleet, declares its repositories and seeds every
-// branch its writes will move.
+// newWriteRig builds arm's fleet, declares its repositories, seeds every
+// branch its writes will move and compacts what the seeds left.
 func newWriteRig(b *testing.B, arm writeArm) *writeRig {
 	b.Helper()
 	r := &writeRig{arm: arm, fig: newWriteFigures(), branches: map[[2]int]*writeBranchState{},
-		ended: map[string]time.Time{}, packs: make([]int, arm.repos),
-		seat: &org.Role{Name: codetest.FixtureAlice}}
+		ended: map[string]time.Time{}, seat: &org.Role{Name: codetest.FixtureAlice}}
 	r.f = writeFleet(b, arm.store.backend(b), r.fig)
 	r.node = r.f.Nodes()[0]
 	r.seam = r.f.Code(b)
@@ -558,7 +775,50 @@ func newWriteRig(b *testing.B, arm writeArm) *writeRig {
 		}
 	}
 	r.seed(b, todo)
+	r.compact(b)
+	r.fig.reset()
 	return r
+}
+
+// compact runs the git node's compactor as a home that keeps up would — pass
+// after pass until one compacts nothing — with the person's pushes held off
+// and every request it makes stamped as the compaction's, and adds how long
+// it took to what the arm's rate of writes leaves out. A pass that fails a
+// compaction fails the arm: what follows would be measured over packs no
+// production home leaves.
+func (r *writeRig) compact(b *testing.B) {
+	b.Helper()
+	r.quiet.Lock()
+	defer r.quiet.Unlock()
+	r.fig.mu.Lock()
+	was := r.fig.phase
+	r.fig.mu.Unlock()
+	r.fig.enter(phaseCompact)
+	defer r.fig.enter(was)
+	start := time.Now()
+	defer func() { r.compacting += time.Since(start) }()
+	for range compactPasses {
+		report, err := r.node.Compactor().Poll(b.Context())
+		switch {
+		case err != nil:
+			b.Fatalf("the compactor's pass: %v", err)
+		case report.Failed > 0:
+			b.Fatalf("the compactor's pass failed a compaction: %+v", report)
+		case report.Compacted == 0:
+			return
+		}
+	}
+	b.Fatalf("the compactor still compacted after %d passes", compactPasses)
+}
+
+// livePacks is how many live packs the arm's first repository holds now.
+func (r *writeRig) livePacks(b *testing.B) int {
+	b.Helper()
+	rows, err := r.f.Rows(b.Context(), r.names[0], codetest.Linearizable)
+	if err != nil {
+		b.Fatalf("the rows of %s: %v", r.names[0], err)
+	}
+	return len(rows.Packs)
 }
 
 // seed lands two commits on every branch of todo, seedAtOnce at a time, each
@@ -585,9 +845,6 @@ func (r *writeRig) seed(b *testing.B, todo []*writeBranchState) {
 					return
 				}
 				br.head = res.Commit
-				r.mu.Lock()
-				r.packs[br.repo]++
-				r.mu.Unlock()
 			}
 		})
 	}
@@ -596,7 +853,6 @@ func (r *writeRig) seed(b *testing.B, todo []*writeBranchState) {
 	for err := range errs {
 		b.Fatal(err)
 	}
-	r.fig.reset()
 }
 
 // landSeed asks w until it applies — again, the same write, a share's wait
@@ -654,28 +910,9 @@ func (r *writeRig) callOf(br *writeBranchState, i int) (tools.SeatCallable, map[
 }
 
 // round is one round of the arm: every worker's write asked at once and the
-// round waited for whole.
-//
-// NO ROUND TAKES A REPOSITORY PAST code.MaxPacksPerRepo: every write but a
-// create_branch stores a pack and nothing in an arm compacts, so a round that
-// could is refused the arm, naming the bound — at sixty-four writes a round
-// into one repository that is thirty rounds past the seeds — since its writes
-// would otherwise be refused compaction_behind and the arm would measure
-// refusals.
+// round waited for whole, and then the compactor's passes (compact), so no
+// round writes over more packs than a home that keeps up leaves.
 func (r *writeRig) round(b *testing.B, i int) {
-	reach := make([]int, r.arm.repos)
-	for k := range r.arm.concurrency {
-		reach[(k+i*r.arm.concurrency)%r.arm.repos]++
-	}
-	r.mu.Lock()
-	for repo, n := range reach {
-		if r.arm.kind != writeBranch && r.packs[repo]+n > code.MaxPacksPerRepo {
-			r.mu.Unlock()
-			b.Fatalf("round %d would take %s past code.MaxPacksPerRepo (%d live packs), which nothing compacts in "+
-				"this arm: run it for fewer rounds (-benchtime)", i, r.names[repo], code.MaxPacksPerRepo)
-		}
-	}
-	r.mu.Unlock()
 	var wg sync.WaitGroup
 	for k := range r.arm.concurrency {
 		br := r.branches[[2]int{k, (k + i*r.arm.concurrency) % r.arm.repos}]
@@ -685,9 +922,11 @@ func (r *writeRig) round(b *testing.B, i int) {
 	if r.failed != nil {
 		b.Fatal(r.failed)
 	}
+	r.compact(b)
 }
 
-// one is one write, timed from its tool's call to the tool's answer.
+// one is one write, timed from its tool's call to the tool's answer — every
+// answer the turn waits for, a refusal as much as a write that applied.
 func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 	tool, args := r.callOf(br, i)
 	call := &writeCall{}
@@ -706,10 +945,12 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 			br.ref, out.Output))
 	case unready(call.err):
 		r.unready++
+		r.answers, r.refusedTook = append(r.answers, end.Sub(start)), append(r.refusedTook, end.Sub(start))
 	case call.err != nil:
 		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s: %w", tool.Name(), br.ref, call.err))
 	case res.Command.Reason == code.RefusalBusy:
 		r.busy++
+		r.answers = append(r.answers, end.Sub(start))
 	case res.Outcome != statelog.OutcomeApplied || res.Refusal != "" || res.Commit == "":
 		r.failed = cmpOr(r.failed, fmt.Errorf("%s on %s answered %+v", tool.Name(), br.ref, res))
 	default:
@@ -719,12 +960,11 @@ func (r *writeRig) one(ctx context.Context, br *writeBranchState, i int) {
 				br.ref, res.Commit, out.Output))
 			return
 		}
-		r.took = append(r.took, end.Sub(start))
+		r.took, r.answers = append(r.took, end.Sub(start)), append(r.answers, end.Sub(start))
 		r.tool = append(r.tool, call.askedAt.Sub(start)+end.Sub(call.answerAt))
 		r.ended[res.PushID] = call.answerAt
 		if r.arm.kind != writeBranch {
 			br.head = res.Commit
-			r.packs[br.repo]++
 		}
 	}
 }
@@ -770,13 +1010,15 @@ func (r *writeRig) run(b *testing.B) {
 	var person *besidePusher
 	var alone []time.Duration
 	if r.arm.beside {
-		person = newBesidePusher(b, r.f, r.node)
+		person = newBesidePusher(b, r.f, r.node, &r.quiet)
+		r.fig.enter(phaseAlone)
+		b.Logf("alone: the repository holds %d live packs", r.livePacks(b))
 		var err error
 		if alone, err = person.paced(b.Context(), besideAlone); err != nil {
 			b.Fatal(err)
 		}
-		r.fig.reset()
 	}
+	r.fig.enter(phaseWrites)
 	watch, stopWatch := context.WithCancel(b.Context())
 	peak := watchInFlight(watch, r.node.Host())
 	pushing, stopPushing := context.WithCancel(b.Context())
@@ -793,13 +1035,14 @@ func (r *writeRig) run(b *testing.B) {
 		r.round(b, rounds)
 		rounds++
 	}
-	elapsed := time.Since(start)
+	elapsed := time.Since(start) - r.compacting
 	stopPushing()
 	stopWatch()
 	inFlight := peak()
 
 	r.mu.Lock()
 	took, tool, applied := inOrder(r.took), inOrder(r.tool), len(r.took)
+	answers, refused := inOrder(r.answers), inOrder(r.refusedTook)
 	asked := rounds * r.arm.concurrency
 	var adopt []time.Duration
 	r.fig.mu.Lock()
@@ -817,7 +1060,13 @@ func (r *writeRig) run(b *testing.B) {
 	}
 	adopt = inOrder(adopt)
 	uploads, puts := r.fig.uploads()
+	shares := r.fig.shares()
 	b.ReportMetric(float64(applied)/elapsed.Seconds(), "writes/s")
+	b.ReportMetric(quantile(answers, 0.50), "answer-p50-ms")
+	b.ReportMetric(quantile(answers, 0.99), "answer-p99-ms")
+	if len(refused) > 0 {
+		b.ReportMetric(quantile(refused, 0.99), "unready-p99-ms")
+	}
 	b.ReportMetric(quantile(took, 0.50), "p50-ms")
 	b.ReportMetric(quantile(took, 0.99), "p99-ms")
 	b.ReportMetric(quantile(tool, 0.50), "tool-p50-ms")
@@ -828,6 +1077,18 @@ func (r *writeRig) run(b *testing.B) {
 			b.ReportMetric(quantile(obs, 0.99), stage+"-p99-ms")
 		}
 	}
+	// Logged as well, since a benchmark that fails prints no metric.
+	b.Logf("%d writes asked, %d applied, %d unready, %d busy: every answer p50/p99 %.0f/%.0f ms, the applied "+
+		"%.0f/%.0f ms, the unready p99 %.0f ms", asked, applied, unready, busy, quantile(answers, 0.50),
+		quantile(answers, 0.99), quantile(took, 0.50), quantile(took, 0.99), quantile(refused, 0.99))
+	if len(shares) > 0 {
+		b.ReportMetric(quantile(shares, 0.50), "share-wait-p50-ms")
+		b.ReportMetric(quantile(shares, 0.99), "share-wait-p99-ms")
+		// Logged beside its budget, as M3-decisions M3-O43 asks of every
+		// term of the attempt.
+		b.Logf("the share's wait for a build: p50/p99 %.0f/%.0f ms of code.GitShareWait's %s, over %d takes",
+			quantile(shares, 0.50), quantile(shares, 0.99), code.GitShareWait, len(shares))
+	}
 	if len(uploads) > 0 {
 		b.ReportMetric(quantile(uploads, 0.50), "upload-p50-ms")
 		b.ReportMetric(quantile(uploads, 0.99), "upload-p99-ms")
@@ -837,18 +1098,31 @@ func (r *writeRig) run(b *testing.B) {
 	b.ReportMetric(quantile(adopt, 0.50), "adopt-p50-ms")
 	b.ReportMetric(quantile(adopt, 0.99), "adopt-p99-ms")
 	b.ReportMetric(float64(puts)/float64(applied), "puts/write")
-	b.ReportMetric(float64(r.fig.getN.Load())/float64(applied), "gets/write")
+	b.ReportMetric(float64(len(r.fig.requests(phaseWrites, "writes")["GET"]))/float64(applied), "gets/write")
+	b.ReportMetric(float64(len(r.fig.requests(phaseWrites, "node")["GET"]))/float64(applied), "node-gets/write")
 	b.ReportMetric(float64(unready)/float64(asked), "unready/write")
 	b.ReportMetric(float64(busy)/float64(asked), "busy/write")
 	b.ReportMetric(float64(pending)/float64(asked), "pending/write")
 	b.ReportMetric(float64(inFlight), "inflight-peak")
+	r.fig.logPhase(b, phaseWrites)
+	r.fig.logPhase(b, phaseCompact)
 	if r.arm.kind != writeBranch && packs != len(proposals) {
 		b.Errorf("%d of %d proposals named a pack: every %s's push carries one", packs, len(proposals), r.arm.kind)
 	}
+	if served := r.node.Share().Units() * writesAUnitServes; r.arm.concurrency <= served && unready+busy > 0 {
+		b.Errorf("%d of %d writes asked %d at once were answered unready and %d busy, where the share's %d "+
+			"units serve %d at once inside code.GitShareWait", unready+busy, asked, r.arm.concurrency, busy,
+			r.node.Share().Units(), served)
+	}
 
 	if r.arm.store.firstByte == 200*time.Millisecond {
-		if p99 := quantile(took, 0.99); p99 >= float64(estate.GitWriteAttempt/4)/float64(time.Millisecond) {
-			b.Errorf("the whole write's p99 is %.0f ms at a 200 ms first byte, past a quarter of "+
+		quarter := float64(estate.GitWriteAttempt/4) / float64(time.Millisecond)
+		if p99 := quantile(took, 0.99); p99 >= quarter {
+			b.Errorf("the applied writes' p99 is %.0f ms at a 200 ms first byte, past a quarter of "+
+				"estate.GitWriteAttempt (%s)", p99, estate.GitWriteAttempt)
+		}
+		if p99 := quantile(answers, 0.99); p99 >= quarter {
+			b.Errorf("the p99 of every write's answer is %.0f ms at a 200 ms first byte, past a quarter of "+
 				"estate.GitWriteAttempt (%s)", p99, estate.GitWriteAttempt)
 		}
 		if p99 := quantile(uploads, 0.99); p99 >= float64(code.WriteUploadAllowance/10)/float64(time.Millisecond) {
@@ -863,13 +1137,19 @@ func (r *writeRig) run(b *testing.B) {
 	if got.err != nil {
 		b.Fatal(got.err)
 	}
-	// AND ALONE AGAIN, once the writes have stopped: the repository then
-	// holds every pack the arm's writes added, which nothing in an arm
-	// compacts, so this tells a push slowed by the writes beside it from
-	// one slowed by the packs they left.
+	// AND ALONE AGAIN, once the writes have stopped, over the repository the
+	// last round's compaction left — the pack state the alone pushes and
+	// those beside the writes were taken at — so a push slower here than
+	// alone was slowed by something the writes left behind them on the node,
+	// which what this phase asked of the object store and its syncs name.
+	r.fig.enter(phaseAfter)
+	b.Logf("after: the repository holds %d live packs", r.livePacks(b))
 	after, err := person.paced(b.Context(), besideAlone)
 	if err != nil {
 		b.Fatal(err)
+	}
+	for _, phase := range []string{phaseAlone, phaseAfter} {
+		r.fig.logPhase(b, phase)
 	}
 	beside, after := inOrder(got.took), inOrder(after)
 	alone = inOrder(alone)
@@ -920,28 +1200,32 @@ type besideResult struct {
 }
 
 // besidePusher is a person pushing one commit at a time to an arm's first
-// repository's main, through the arm's git node.
+// repository's main, through the arm's git node — each push held off while
+// quiet is held whole, as the arm's compactions hold it.
 type besidePusher struct {
-	p    *codetest.Person
-	work string
-	url  string
-	n    int
+	p     *codetest.Person
+	work  string
+	url   string
+	n     int
+	quiet *sync.RWMutex
 }
 
 // newBesidePusher is ceo, with RepoName's main seeded from a work tree of
 // theirs.
-func newBesidePusher(b *testing.B, f *codetest.SoloFleet, node codetest.Node) *besidePusher {
+func newBesidePusher(b *testing.B, f *codetest.SoloFleet, node codetest.Node, quiet *sync.RWMutex) *besidePusher {
 	b.Helper()
 	p := codetest.NewPerson(b, f, "ceo")
 	work := p.Init()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "seed")
 	mustPush(b, p, work, repoURL(node), "main")
-	return &besidePusher{p: p, work: work, url: repoURL(node)}
+	return &besidePusher{p: p, work: work, url: repoURL(node), quiet: quiet}
 }
 
 // push makes one commit of one 4 KiB file, untimed, and answers how long its
-// push took the person's git.
+// push took the person's git — never beside a compaction of the arm's.
 func (bp *besidePusher) push(ctx context.Context) (time.Duration, error) {
+	bp.quiet.RLock()
+	defer bp.quiet.RUnlock()
 	bp.n++
 	file := filepath.Join(bp.work, "person", fmt.Sprintf("f%06d.bin", bp.n))
 	if err := os.MkdirAll(filepath.Dir(file), hostbox.DirMode); err != nil {

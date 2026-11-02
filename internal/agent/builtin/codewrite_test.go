@@ -48,11 +48,66 @@ type codeWrites struct {
 	changes    []code.ChangeProposal
 	converses  []code.ConversationWrite
 	marks      []code.MarkWrite
+	checks     []code.ChecksRequest
+	check      func(r code.ChecksRequest) (code.ChecksResult, error)
 	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
 	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
 	change     func(p code.ChangeProposal) (code.ChangeResult, error)
 	converse   func(w code.ConversationWrite) (code.ConversationResult, error)
+	queues     []code.QueueProposal
+	queue      func(p code.QueueProposal) (code.QueueResult, error)
+	expunges   []code.ExpungeProposal
+	expunge    func(p code.ExpungeProposal) (code.ExpungeResult, error)
 	before     func(what, repoID string)
+}
+
+// Expunge answers a purge request as its committer does: recorded, the
+// repository's open request its own id — and asked again under an id it
+// already holds, the SAME request at the same position, as the operation
+// ledger collapses it — unless a case answers otherwise.
+func (c *codeWrites) Expunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	c.mu.Lock()
+	c.expunges = append(c.expunges, p)
+	answer, before := c.expunge, c.before
+	at := len(c.expunges)
+	for i, earlier := range c.expunges[:len(c.expunges)-1] {
+		if earlier.Request != nil && p.Request != nil && earlier.Request.RequestID == p.Request.RequestID {
+			at = i + 1
+			break
+		}
+	}
+	c.mu.Unlock()
+	if before != nil {
+		before("expunge", p.RepoID())
+	}
+	if answer != nil {
+		return answer(p)
+	}
+	return code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeAt(uint64(40 + at)),
+		Request: p.Request.RequestID}, nil
+}
+
+// Queue answers a write of a target's queue — a dequeue — as applied, unless
+// a case answers otherwise.
+func (c *codeWrites) Queue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	c.mu.Lock()
+	c.queues = append(c.queues, p)
+	answer, before := c.queue, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("queue", p.RepoID())
+	}
+	if answer != nil {
+		return answer(p)
+	}
+	return code.QueueResult{Outcome: statelog.OutcomeApplied, State: code.QueueDequeued, Position: codeAt(17)}, nil
+}
+
+// queuesAsked is the queue writes the fake was asked, copied under its lock.
+func (c *codeWrites) queuesAsked() []code.QueueProposal {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.queues)
 }
 
 var (
@@ -94,7 +149,13 @@ func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	repo := siteDetail().RepoRef
 	if r.Kind == code.LifecycleCreate {
 		id, _ := code.RepoIDOf(r.OpID)
-		repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
+		// A CREATE THAT IMPORTS — its own import, or a pull mirror's first
+		// fetch — makes its repository importing, as the applier does.
+		status := code.RepoStatusActive
+		if r.Import != nil || r.Create.MirrorFrom != nil {
+			status = code.RepoStatusImporting
+		}
+		repo = code.RepoRef{ID: id, Name: r.Name, Status: status, Kind: r.Create.Kind,
 			Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
 			DefaultBranch: r.Create.DefaultBranch}
 	}
@@ -118,6 +179,34 @@ func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.Chan
 	}
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
 		Version: p.ExpectedVersion + 1, Position: codeAt(15)}, nil
+}
+
+// Checks answers a write of a repository's checks as applied, the attempt it
+// names queued — or running, or ended, as a report says — unless a case
+// answers otherwise.
+func (c *codeWrites) Checks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+	c.mu.Lock()
+	c.checks = append(c.checks, r)
+	answer, before := c.check, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("checks", r.RepoID())
+	}
+	if answer != nil {
+		return answer(r)
+	}
+	row := &code.CheckRow{CheckKey: r.Key(), State: code.CheckStateQueued}
+	if r.Report != nil {
+		row.State = r.Report.State
+	}
+	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: row}, nil
+}
+
+// checksAsked is every write of a repository's checks the case sent.
+func (c *codeWrites) checksAsked() []code.ChecksRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.checks)
 }
 
 // Mark answers a person's mark as applied.
@@ -160,10 +249,11 @@ func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationW
 }
 
 // writeDeps is codeDeps over host, with the code host's writes and the turn's
-// holds wired to writer.
+// holds wired to writer — and a code search finding nothing, so every code
+// tool a surface can offer is offered, as the engine offers them all.
 func writeDeps(host builtin.CodeReader, writer *codeWrites) builtin.CodeDeps {
 	deps := codeDeps(host)
-	deps.Writer, deps.Holder = writer, writer
+	deps.Writer, deps.Holder, deps.Searcher = writer, writer, &codeSearches{}
 	return deps
 }
 
@@ -323,7 +413,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want all eighteen writes or none", tier, withheld)
+			t.Errorf("tier %q withholds %v, want every code write or none", tier, withheld)
 		}
 		for _, repo := range repos {
 			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
@@ -441,7 +531,8 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // A CODE WRITE IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN (M3-decisions U40
 // (a)): the engine writes, the lifecycle request and a change's writes — an
 // open, its ask for review, an edit, a comment, a suggestions apply and its
-// findings' answer, and a rebase — a seat's call sends carry
+// findings' answer, a rebase, a merge, a dequeue and a revert — a seat's call
+// sends carry
 // whom its turn works for, for the git node and the data node that decide them
 // to judge beside the seat's own grant — none for a turn nobody woke, the
 // outcome of its own act or a person (who maintains every repository); the
@@ -457,8 +548,8 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // stranger's writes carry none, red; the ceiling's refusal answered as a
 // refusal rather than nobody's ceiling → the stranger's write is refused
 // before it is sent, red; the colleague left off the call's reads → red; the
-// lifecycle request, a change proposal, a conversation write or a rebase's
-// engine write left unstamped → red.
+// lifecycle request, a change proposal, a conversation write, a rebase's,
+// a merge's or a revert's engine write or a dequeue left unstamped → red.
 func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
@@ -499,15 +590,23 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 				{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."}},
 				{builtin.CodeApplySuggestionsTool, applyArgs(suggestedA)},
 				{builtin.CodeRebaseChangeTool, map[string]any{"change": "site!7", "expected_head": revHead(3)}},
+				{builtin.CodeMergeChangeTool, map[string]any{"change": "site!7", "expected_head": revHead(3),
+					"delete_branch": false}},
+				{builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"}},
+				{builtin.CodeRevertChangeTool, map[string]any{"change": "site!7"}},
 			} {
 				if got := callWrite(t, everyGrant(), reg, turn, call.tool, call.args); got.Failed {
 					t.Fatalf("%s answered %q", call.tool, got.Output)
 				}
 			}
 			writes, requests := writer.asked()
-			if len(writes) != 3 || len(requests) != 1 {
-				t.Fatalf("%d engine writes and %d lifecycle requests were sent, want a commit, an apply and a "+
-					"rebase, and one request", len(writes), len(requests))
+			if len(writes) != 5 || len(requests) != 1 {
+				t.Fatalf("%d engine writes and %d lifecycle requests were sent, want a commit, an apply, a "+
+					"rebase, a merge and a revert, and one request", len(writes), len(requests))
+			}
+			queues := writer.queuesAsked()
+			if len(queues) != 1 || !reflect.DeepEqual(queues[0].Ceiling, c.ceiling) {
+				t.Errorf("the dequeues sent are %+v, want one made for %+v", queues, c.ceiling)
 			}
 			for _, w := range writes {
 				if !reflect.DeepEqual(w.Ceiling, c.ceiling) {
@@ -678,46 +777,61 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	}
 }
 
-// A PROTECTION WITH NO DIRECT_PUSH IS A PERSONS RULE, as code.repos reads an
-// unset one: the call sets the pattern's whole rule, and every rule a record
-// may carry holds at least a seat's direct push, so a rule the call leaves
-// without one is sent as persons — never as a value the request's own
-// validation refuses (protect.rule.direct_push), which would refuse every
-// such call. A value the call states is sent as stated, and one the domain
-// does not know is refused as the call's own mistake, with nothing sent.
+// A PROTECT CALL SENDS ONLY THE PUSH CONTROLS IT NAMES: code_protect_branch
+// sends direct_push, allow_force and allow_delete each where the call names
+// it, a false flag as itself, and none it leaves out — the deciding data node
+// keeps every control left out as the pattern's rule holds it, or takes its
+// least on a new rule — so a call that changes only the gate, or nothing,
+// sends no control at all. A value the domain does not know, or a control of
+// another type than the schema's, is refused as the call's own mistake, with
+// nothing sent.
 //
-// Mutation: drop the default → the call left without direct_push is refused,
-// red.
-func TestAProtectionWithNoDirectPushIsAPersonsRule(t *testing.T) {
+// Mutation: send every control, defaulting each left out to its least — the
+// call naming none sends direct_push persons and both flags off, red.
+func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
 	turn := writerTurn(t)
+	none, persons, on, off := code.DirectNone, code.DirectPersons, true, false
 	for _, c := range []struct {
-		direct any
-		want   code.DirectPush
-	}{{nil, code.DirectPersons}, {"none", code.DirectNone}, {"persons", code.DirectPersons}} {
+		args map[string]any
+		want code.ProtectChange
+	}{
+		{map[string]any{}, code.ProtectChange{}},
+		{map[string]any{"checks": map[string]any{"add": []any{"unit"}}}, code.ProtectChange{
+			Gate: &code.GateChange{Checks: &code.ListChange[string]{Add: []string{"unit"}}}}},
+		{map[string]any{"direct_push": "none"}, code.ProtectChange{DirectPush: &none}},
+		{map[string]any{"direct_push": "persons", "allow_force": true}, code.ProtectChange{DirectPush: &persons,
+			AllowForce: &on}},
+		{map[string]any{"allow_delete": false}, code.ProtectChange{AllowDelete: &off}},
+	} {
 		args := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
-		if c.direct != nil {
-			args["direct_push"] = c.direct
-		}
-		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args)
-		if got.Failed {
-			t.Fatalf("a protection with direct_push %v answered %q", c.direct, got.Output)
+		maps.Copy(args, c.args)
+		if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args); got.Failed {
+			t.Fatalf("a protection naming %v answered %q", c.args, got.Output)
 		}
 		_, lifecycles := writer.asked()
-		sent := lifecycles[len(lifecycles)-1].Protect
-		if sent == nil || sent.Rule == nil || sent.Rule.DirectPush != c.want {
-			t.Errorf("a protection with direct_push %v sent %+v, want direct_push %s", c.direct, sent, c.want)
+		want := c.want
+		want.Pattern = "refs/heads/main"
+		if sent := lifecycles[len(lifecycles)-1].Protect; sent == nil || !reflect.DeepEqual(*sent, want) {
+			t.Errorf("a protection naming %v sent %+v, want %+v", c.args, sent, want)
 		}
 	}
-	_, before := writer.asked()
-	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool,
-		map[string]any{"repo": "site", "pattern": "refs/heads/main", "direct_push": "everyone"})
-	if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
-		len(after) != len(before) {
-		t.Errorf("a direct_push the domain does not know answered %q as %s, with %d requests sent", got.Output,
-			tools.RefusalOf(got), len(after)-len(before))
+	for name, args := range map[string]map[string]any{
+		"a direct_push the domain does not know": {"direct_push": "everyone"},
+		"an allow_force that is no boolean":      {"allow_force": "yes"},
+		"a control beside the rule's removal":    {"remove": true, "allow_delete": true},
+	} {
+		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
+		maps.Copy(call, args)
+		_, before := writer.asked()
+		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, call)
+		if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+			len(after) != len(before) {
+			t.Errorf("%s answered %q as %s, with %d requests sent", name, got.Output, tools.RefusalOf(got),
+				len(after)-len(before))
+		}
 	}
 }
 
@@ -798,9 +912,9 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 // A PROTECTION CHANGES ITS MERGE GATE A FIELD AT A TIME: code_protect_branch
 // sends each gate field a call names as a change the deciding data node
 // resolves against the gate its own rows hold — decoded by the domain's own
-// spelling of a change, so the schema takes every field a change names — no
-// change where the call names no gate field, and the gate's removal where it
-// says remove_gate. A field no change could take — a value the domain does
+// spelling of a change, so the schema takes every field a change names, a
+// list's as the items it adds and removes — no change where the call names no
+// gate field, and the gate's removal where it says remove_gate. A field no change could take — a value the domain does
 // not know, a field the landing lacks, a gate on a tag, remove_gate beside a
 // field or a field beside the rule's removal — is refused invalid with nothing
 // sent. The answer names the rule as it applied, its gate whole, and no other
@@ -811,7 +925,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	t.Parallel()
 	gate := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
-		Checks: []string{"lint", "unit"}, Landing: code.Landing{Policy: code.LandingPreLand, Depth: 2, Batch: 4},
+		Checks: []string{"lint", "unit"}, Landing: code.Landing{Depth: 2, Batch: 4},
 		DeleteSource: code.DeleteSeats}
 	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
 		// THE ROW AS THE CODE HOST ANSWERS IT, each rule as a push is held to
@@ -848,16 +962,18 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 
 	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{
 		"repo": "site", "pattern": "refs/heads/main", "direct_push": "none", "merge_by": "persons",
-		"checks": []any{"unit", "lint"}, "landing": map[string]any{"depth": 2}, "owners_approve": false,
+		"checks": map[string]any{"add": []any{"unit"}, "remove": []any{"e2e"}}, "landing": map[string]any{"depth": 2},
+		"owners_approve": false,
 	})
 	if got.Failed {
 		t.Fatalf("a protection changing four gate fields answered %q", got.Output)
 	}
 	persons, depth, off := code.MergeByPersons, 2, false
-	want := &code.GateChange{MergeBy: &persons, Checks: &[]string{"unit", "lint"},
+	want := &code.GateChange{MergeBy: &persons,
+		Checks:  &code.ListChange[string]{Add: []string{"unit"}, Remove: []string{"e2e"}},
 		Landing: &code.LandingChange{Depth: &depth}, OwnersApprove: &off}
 	if change := sent(); change == nil || !reflect.DeepEqual(change.Gate, want) ||
-		change.Rule == nil || change.Rule.DirectPush != code.DirectNone {
+		change.DirectPush == nil || *change.DirectPush != code.DirectNone {
 		t.Errorf("a protection changing four gate fields sent %+v, want direct_push none and the change %+v",
 			change, want)
 	}
@@ -890,9 +1006,10 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	for name, args := range map[string]map[string]any{
 		"an unknown merge_by":              {"merge_by": "everyone"},
 		"a field the landing lacks":        {"landing": map[string]any{"speed": 2}},
-		"a gate on a tag":                  {"pattern": "refs/tags/v*", "checks": []any{"unit"}},
-		"remove_gate beside a field":       {"remove_gate": true, "checks": []any{"unit"}},
-		"a gate beside the rule's removal": {"remove": true, "checks": []any{"unit"}},
+		"a list sent whole":                {"checks": []any{"unit"}},
+		"a gate on a tag":                  {"pattern": "refs/tags/v*", "checks": map[string]any{"add": []any{"unit"}}},
+		"remove_gate beside a field":       {"remove_gate": true, "checks": map[string]any{"add": []any{"unit"}}},
+		"a gate beside the rule's removal": {"remove": true, "checks": map[string]any{"add": []any{"unit"}}},
 	} {
 		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(call, args)
@@ -928,9 +1045,10 @@ func TestAnUnboundTokenWritesNothing(t *testing.T) {
 	reads, _, _ := host.asked()
 	writes, lifecycles := writer.asked()
 	changes, converses := writer.changesAsked()
-	if len(reads)+len(writes)+len(lifecycles)+len(changes)+len(converses) != 0 {
-		t.Errorf("an unbound token's writes sent %d reads, %d writes, %d requests and %d writes of changes",
-			len(reads), len(writes), len(lifecycles), len(changes)+len(converses))
+	checks := writer.checksAsked()
+	if len(reads)+len(writes)+len(lifecycles)+len(changes)+len(converses)+len(checks) != 0 {
+		t.Errorf("an unbound token's writes sent %d reads, %d writes, %d requests, %d writes of changes and "+
+			"%d of checks", len(reads), len(writes), len(lifecycles), len(changes)+len(converses), len(checks))
 	}
 }
 
@@ -982,6 +1100,9 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		code.RefusalRepoDeleted: tools.RefusalNotFound, code.RefusalBusy: tools.RefusalUnavailable,
 		code.RefusalUnavailable: tools.RefusalUnavailable, code.RefusalNotApplied: tools.RefusalUnavailable,
 		code.RefusalStoreFull: tools.RefusalStoreFull, code.RefusalNotPermitted: tools.RefusalForbidden,
+		// A PULL MIRROR is the repository's rule, as an archive is; an
+		// IMPORT clears with waiting, as a busy repository does.
+		code.RefusalRepoMirrored: tools.RefusalForbidden, code.RefusalRepoImporting: tools.RefusalUnavailable,
 	}
 	for _, refusal := range code.Refusals() {
 		writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
@@ -1138,7 +1259,21 @@ func holdingCall(name string) (map[string]any, bool) {
 			"resolution": "dismissed"},
 		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7.0, "findings": []any{suggestedA},
 			"expected_head": revHead(3)},
-		builtin.CodeRebaseChangeTool: {"repo": repo, "change": 7.0, "expected_head": revHead(3)},
+		builtin.CodeRebaseChangeTool:     {"repo": repo, "change": 7.0, "expected_head": revHead(3)},
+		builtin.CodeGetCheckFailuresTool: {"repo": repo, "sha": mainOID, "checked_for": "main", "name": "unit"},
+		builtin.CodeSearchTool:           {"repo": repo, "query": "needle"},
+		builtin.CodeRerunChecksTool: {"repo": repo, "sha": mainOID, "checked_for": "main",
+			"checks": []any{map[string]any{"name": "unit", "attempt": 1.0}}},
+		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
+		// sends one, so it holds nothing, as an operator's call holds nothing.
+		builtin.CodeReportCheckTool: nil,
+		// A PURGE IS A PERSON'S (TestOnlyAPersonPurges), likewise.
+		builtin.CodePurgeUnreachableTool: nil,
+		// AN IMPORT IS A PERSON'S (TestOnlyAPersonImports), likewise.
+		builtin.CodeImportRepoTool:    nil,
+		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7.0, "expected_head": revHead(3)},
+		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7.0},
+		builtin.CodeRevertChangeTool:  {"repo": repo, "change": 7.0},
 	}
 	args, ok := rows[name]
 	return args, ok

@@ -39,10 +39,12 @@ import (
 //     the default 128 KiB) report it up to a block apart ([sameSpaceLeft]).
 //
 // "One instant" is read, not assumed: the cache's volume is read before and
-// after the other, and a pair is judged APART only when the cache's reading
-// did not move across the other's — a pool that changed and changed back in
-// that window is the one shape that escapes. A volume that keeps moving is
-// read again, a few times, and then read as shared.
+// after the other, and a pair the space left could make one is judged APART
+// only when the cache's reading did not move across the other's — a pool that
+// changed and changed back in that window is the one shape that escapes. A
+// volume that keeps moving is read again, a few times, and then read as
+// shared. A pair one of whose filesystems has no blocks at all needs no
+// instant: no reading of space can make it one, so it is apart at once.
 //
 // # Uncertain is shared
 //
@@ -99,13 +101,22 @@ func sameVolumeBy(read func(dir string) (volumeStat, error), a, b string) bool {
 			return true
 		case before.fsid != [2]int32{} && before.fsid == other.fsid:
 			return true
+		case before.blocks == 0 || other.blocks == 0:
+			// A FILESYSTEM OF NO BLOCKS (proc, sysfs) holds no space, so
+			// the space left — the one reading the instant is for — cannot
+			// make the pair one: apart, whether or not the cache's volume
+			// moved. Asked after the instant, a cache volume written to
+			// between every pair of reads (any busy disk: a suite's other
+			// cases writing beside it) was read again until the reads ran
+			// out, and then judged to share with procfs.
+			return false
 		case before.avail != after.avail:
 			// THE CACHE'S VOLUME MOVED while the other was read, so the
 			// space left on each is not one instant's: read again. To the
 			// byte, since both readings are of one filesystem in one block.
 			continue
 		}
-		return before.blocks > 0 && other.blocks > 0 && sameSpaceLeft(before, other)
+		return sameSpaceLeft(before, other)
 	}
 	return true
 }

@@ -337,6 +337,51 @@ func TestPatternMatchAgreesWithItsRule(t *testing.T) {
 	}
 }
 
+// A PATTERN REACHES A SEAT'S NAMESPACE EXACTLY WHERE IT MATCHES A REF THERE:
+// PatternReachesSeats is held to MatchPattern itself over every pattern of up
+// to four components below refs/heads/ drawn from seats, a, *, s* (a glob
+// admitting seats) and ** — and the tags namespace, which reaches none —
+// against every ref a seat's namespace can hold of up to four components below
+// refs/heads/seats/, each a or seats: a pattern reaches it iff one of those
+// refs matches. Four components suffice for every pattern here, since a
+// pattern's non-** parts take one component each and ** may take none. So
+// refs/heads/** and refs/heads/*/*/* reach it, refs/heads/* and
+// refs/heads/seats/* — which match only reserved names no ref holds — do not.
+//
+// Mutation: answer true for any pattern whose part after refs/heads/ admits
+// seats, whatever follows — refs/heads/* reaches, red.
+func TestAPatternReachesASeatsNamespaceExactlyWhereItMatchesARefThere(t *testing.T) {
+	t.Parallel()
+	var seatRefs []string
+	for _, below := range sequences([]string{"a", "seats"}, 4) {
+		if len(below) >= 2 {
+			seatRefs = append(seatRefs, gitref.SeatsRoot+strings.Join(below, "/"))
+		}
+	}
+	for _, ns := range []string{"refs/heads/", "refs/tags/"} {
+		for _, p := range sequences([]string{"seats", "a", "*", "s*", "**"}, 4) {
+			pattern := ns + strings.Join(p, "/")
+			if !gitref.ValidPattern(pattern) {
+				t.Fatalf("%s is no pattern", pattern)
+			}
+			want := slices.ContainsFunc(seatRefs, func(ref string) bool { return gitref.MatchPattern(pattern, ref) })
+			if got := gitref.PatternReachesSeats(pattern); got != want {
+				t.Errorf("PatternReachesSeats(%s) = %v, and a ref of a seat's namespace matching it is %v",
+					pattern, got, want)
+			}
+		}
+	}
+	for pattern, want := range map[string]bool{
+		"refs/heads/main": false, "refs/heads/seats": false, "refs/heads/seats/ana": false,
+		"refs/heads/seats/ana/x": true, "refs/heads/release/*": false, "refs/tags/seats/a/b": false,
+		"not a pattern": false,
+	} {
+		if got := gitref.PatternReachesSeats(pattern); got != want {
+			t.Errorf("PatternReachesSeats(%s) = %v, want %v", pattern, got, want)
+		}
+	}
+}
+
 // TestAGlobComponentIsPathMatch holds one component's glob to path.Match,
 // which is how the rule reads it, over every glob of up to six bytes drawn
 // from a, b and * (none holding **, which ParsePattern refuses) against every

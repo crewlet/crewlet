@@ -215,7 +215,9 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // node and its commands, with the receiver's refusals that need no object;
 // every other field is ignored but its change ([Proposal.Change]), which the
 // receiver learns only from the options receive-pack hands its hook and asks
-// this again with before it proposes one: a change too wide for the entry
+// this again with before it proposes one — its title, where the options
+// named none, still to be filled in and measured at its longest
+// ([ChangeOption.measured]): a change too wide for the entry
 // beside the commands at their largest is answered to its pusher and left
 // out, so the push lands without it. The principal and the way are MEASURED
 // AS STAMPED, since every proposer stamps both before its work: no work adds
@@ -274,7 +276,8 @@ func (p Proposal) ValidateCommands() error {
 // field is spelled at its longest, the push id and the receive instant at
 // their longest spellings, and the push --atomic. The principal, its run among
 // it, the way and the change stay as their proposer stamped them: no work adds
-// to them, and [entryBound] measures the change's target at its longest.
+// to them, and [entryBound] measures the change's target, and a title its
+// receiver is still to fill in, at their longest.
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -660,12 +663,16 @@ const (
 // entryBound is the most bytes p's entry can take in a push record: the
 // entry encoded as proposed — a seat's carrying the day its decide stamps, at
 // its longest ([longestDay]), and its change as its decide would open it,
-// the target it stamps at its longest where the options named none
-// ([ChangeOption.measured]) — plus what deciding can add to each command,
-// plus the comma between it and the next entry.
+// the target it stamps, and a title its receiver is still to fill in, at
+// their longest where the options named none
+// ([ChangeOption.measured]), and an operator's landings as its decide would
+// stamp them, every branch it moves onto a commit a protected one, green
+// ([measuredLandings]) — plus what deciding can add to each command, plus the
+// comma between it and the next entry.
 func entryBound(p Proposal) (int, error) {
 	e := p.entryWith(p.Commands, longestDay)
 	e.Change = p.Change.measured()
+	e.Landings = measuredLandings(p.Principal, p.Commands)
 	b, err := json.Marshal(e)
 	if err != nil {
 		return 0, fmt.Errorf("encode the push's entry: %w", err)
@@ -673,9 +680,17 @@ func entryBound(p Proposal) (int, error) {
 	return len(b) + len(p.Commands)*commandResultBound + 1, nil
 }
 
-// rowBound is the most rows p's entry can make its record's apply touch: its
-// push row, its pack, [commandRows] for every command the receiver did not
-// refuse, and for a SEAT'S push the [seatDayRows] its day's count takes.
+// rowBound is the most rows p's entry can make its record's apply touch of what
+// its proposal alone says: its push row, its pack, [commandRows] for every
+// command the receiver did not refuse, and for a SEAT'S push the
+// [seatDayRows] its day's count takes. What only the repository's rows say —
+// the live changes its commands move ([changeBook]) and the landings it makes
+// on protected branches ([PushEntry.Landings]) — the decide counts from its
+// snapshot ([entryRows]), carrying an entry they take past the record's rows
+// to lead the next one and refusing one they take past a record of its own
+// (too_many_changes). Reserved here, a person's push would be charged two
+// landing rows for every branch it moves, protected or not, and three maximal
+// pushes of fast-forwards would no longer share a record.
 //
 // # A deletion keeps a row for the sweep so no record this committer forms removes
 //
@@ -710,11 +725,41 @@ func rowBound(p Proposal) int {
 	return rows
 }
 
+// landingRows is the most rows one landing a push makes on a protected branch
+// touches ([PushEntry.Landings]): its landing row, and the branch's green row.
+const landingRows = 2
+
+// measuredLandings is the landings an entry of principal's commands can carry
+// at its most, as [entryBound] encodes them: one for every command the
+// receiver did not refuse that moves a branch onto a commit, green — an
+// OPERATOR'S alone, since no seat's push moves a protected branch (a
+// protection takes a direct push of a person's at most, [ProtectionRefusal]),
+// so a seat's entry carries none. A few bytes a command, so the byte bound
+// reserves them where the row bound does not ([rowBound]).
+func measuredLandings(principal Principal, cmds []Command) []PushLanding {
+	if principal.Kind != PrincipalOperator {
+		return nil
+	}
+	var out []PushLanding
+	for i, c := range cmds {
+		if c.Result != ResultNG && lands(c) {
+			out = append(out, PushLanding{Command: i, Green: true})
+		}
+	}
+	return out
+}
+
+// lands reports a command that would land on its ref were a protection rule to
+// match it: one moving a branch onto a commit — never a deletion, which lands
+// nothing, nor a tag, which a merge gate never holds.
+func lands(c Command) bool { return strings.HasPrefix(c.Ref, branchPrefix) && c.New != ZeroOID }
+
 // entryRows is the most rows a DECIDED entry makes its record's apply touch
 // besides the changes its commands move: its push row, [commandRows] for every
 // command that applies, its pack, and for a seat's entry the [seatDayRows]
-// its day's count takes — [rowBound] of the commands its decide found ok,
-// which the decide admits an entry by and [withinRecord] holds the record to.
+// its day's count takes — [rowBound] of the commands its decide found ok —
+// and [landingRows] for each landing its decide stamped, which the decide
+// admits an entry by and [withinRecord] holds the record to.
 func entryRows(e PushEntry) int {
 	rows := 1
 	for _, c := range e.Commands {
@@ -728,7 +773,7 @@ func entryRows(e PushEntry) int {
 	if e.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
 	}
-	return rows
+	return rows + landingRows*len(e.Landings)
 }
 
 // seatDayRows is the most rows a seat's entry makes its record's apply touch

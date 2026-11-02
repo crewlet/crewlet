@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"go/build"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -39,25 +40,44 @@ const (
 // merged again, oldest first, as many as a read asks — answered at the floor a
 // read names, and the facts of each head. A revise takes its change's facts
 // off the list, a mergeability its merge, and a landing the whole change, as
-// the rows' own would; a change owing nothing more leaves the list.
+// the rows' own would; a change owing nothing more leaves the list. And each
+// repository's changes whose asks are due a settling, which a settling takes
+// off, as its counts would.
 type estate struct {
 	mu       sync.Mutex
 	due      map[string][]code.ChangeDue
 	rechecks map[string][]code.ChangeDue
+	unsettle map[string][]code.AskDue
+	settles  []code.AskSettle
 	owners   map[string][]code.PathOwner
 	facts    map[string]code.RevisionFactsAnswer
-	at       statelog.Position
-	floors   []statelog.Freshness
-	asked    []code.ChangesDueQuery
-	revises  []code.Revise
-	merges   []code.Mergeability
-	landings []code.ChangeLanded
-	changed  chan struct{}
+	// factsRead is how many times the facts of each head were read.
+	factsRead map[string]int
+	at        statelog.Position
+	// revisedAt is where a revise's record lands, e.at where it is zero;
+	// checkFloors is every floor one repository's check work was read at.
+	revisedAt   statelog.Position
+	checkFloors []statelog.Freshness
+	floors      []statelog.Freshness
+	asked       []code.ChangesDueQuery
+	revises     []code.Revise
+	merges      []code.Mergeability
+	landings    []code.ChangeLanded
+	// landRefusal and landErr are what every landing is answered while
+	// either is set — a refusal that decided nothing, or a call that failed —
+	// the change left on the list as its rows would leave it.
+	landRefusal code.ChangeRefusal
+	landErr     error
+	// recording, where set, runs as each mergeability is recorded: a case's
+	// slow change writer.
+	recording func()
+	changed   chan struct{}
 }
 
 func newEstate() *estate {
 	return &estate{due: map[string][]code.ChangeDue{}, rechecks: map[string][]code.ChangeDue{},
-		owners: map[string][]code.PathOwner{}, facts: map[string]code.RevisionFactsAnswer{},
+		unsettle: map[string][]code.AskDue{}, owners: map[string][]code.PathOwner{},
+		facts: map[string]code.RevisionFactsAnswer{}, factsRead: map[string]int{},
 		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
@@ -87,6 +107,20 @@ func (e *estate) owe(repo string, due code.ChangeDue) {
 	e.due[repo] = append(e.due[repo], due)
 }
 
+// owesSettling puts dues among repo's changes whose asks are due a settling.
+func (e *estate) owesSettling(repo string, dues ...code.AskDue) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.unsettle[repo] = append(e.unsettle[repo], dues...)
+}
+
+// settled is every settling of asks the home asked, in the order it asked.
+func (e *estate) settled() []code.AskSettle {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.settles)
+}
+
 // recheck puts due among repo's rechecks, after every recheck already there:
 // the order the rows name them in, the oldest merge first.
 func (e *estate) recheck(repo string, due code.ChangeDue) {
@@ -99,8 +133,12 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
-	case q.Kind == code.ReadChecksDue:
-		// THE CHECK WORK'S LISTING: these cases hold no change owing any.
+	case q.Kind == code.ReadChecksDue || q.Kind == code.ReadQueueDue:
+		// THE CHECK WORK'S AND THE QUEUE'S LISTINGS: these cases hold no
+		// change owing either.
+		if q.Kind == code.ReadChecksDue && q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
+			e.checkFloors = append(e.checkFloors, q.Fresh)
+		}
 		return code.ReadAnswer{Position: e.at}, nil
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
@@ -121,6 +159,11 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 				repos = append(repos, repo)
 			}
 		}
+		for repo, dues := range e.unsettle {
+			if len(dues) > 0 {
+				repos = append(repos, repo)
+			}
+		}
 		slices.Sort(repos)
 		return code.ReadAnswer{DueRepos: slices.Compact(repos), Position: e.at}, nil
 	}
@@ -128,7 +171,7 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	again := e.rechecks[repo]
 	again = slices.Clone(again[:min(len(again), q.ChangesDue.Rechecks)])
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), Rechecks: again, PathOwners: e.owners[repo],
-		Position: e.at}, nil
+		AskSettles: slices.Clone(e.unsettle[repo]), Position: e.at}, nil
 }
 
 func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -137,6 +180,7 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
 	}
+	e.factsRead[q.RevisionFacts.Head]++
 	f, ok := e.facts[q.RevisionFacts.Head]
 	if !ok || f.Target != q.RevisionFacts.Target {
 		return code.GitAnswer{}, code.ErrObjectNotFound
@@ -154,13 +198,28 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 	case w.Revise != nil:
 		e.revises = append(e.revises, *w.Revise)
 		e.done(w.Revise.RepoID, w.Revise.ChangeID, func(d *code.ChangeDue) { d.FactsDue = false })
+		if !e.revisedAt.IsZero() {
+			return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.revisedAt}, nil
+		}
 	case w.Mergeability != nil:
 		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
 		// alone: either leaves the change owing no refresh.
 		e.merges = append(e.merges, *w.Mergeability)
+		if e.recording != nil {
+			e.recording()
+		}
 		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) {
 			d.MergeDue, d.RefreshDue = false, false
 		})
+	case w.Asks != nil:
+		e.settles = append(e.settles, *w.Asks)
+		e.unsettle[w.Asks.RepoID] = slices.DeleteFunc(e.unsettle[w.Asks.RepoID], func(d code.AskDue) bool {
+			return d.ChangeID == w.Asks.ChangeID
+		})
+		select {
+		case e.changed <- struct{}{}:
+		default:
+		}
 	}
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.at}, nil
 }
@@ -170,6 +229,11 @@ func (e *estate) Checks(context.Context, code.ChecksRequest) (code.ChecksResult,
 	return code.ChecksResult{}, errors.New("a case owing no check work was asked a write of its checks")
 }
 
+// Queue is no write these cases' targets owe: they owe no tip work.
+func (e *estate) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
+	return code.QueueResult{}, errors.New("a case owing no tip work was asked a green or a broken record")
+}
+
 func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
 	if err := p.Validate(); err != nil {
 		return code.ChangeResult{}, err
@@ -177,6 +241,12 @@ func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeRe
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.landings = append(e.landings, *p.Landed)
+	switch {
+	case e.landErr != nil:
+		return code.ChangeResult{}, e.landErr
+	case e.landRefusal != "":
+		return code.ChangeResult{Refusal: e.landRefusal, Detail: "the case's committer decided nothing"}, nil
+	}
 	e.done(p.Landed.RepoID, p.Landed.ChangeID, func(d *code.ChangeDue) { d.FactsDue, d.MergeDue = false, false })
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.Landed.ChangeID, Position: e.at}, nil
 }
@@ -225,6 +295,18 @@ func (e *estate) wrote() ([]code.Revise, []code.ChangeLanded) {
 	defer e.mu.Unlock()
 	return slices.Clone(e.revises), slices.Clone(e.landings)
 }
+
+// listings is every listing of the change work asked so far, in the order it
+// was asked.
+func (e *estate) listings() []code.ChangesDueQuery {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.asked)
+}
+
+// noChart is a home holding no chart: its listings name none, so no change is
+// due a refresh for one.
+func noChart() int64 { return 0 }
 
 // merged is every mergeability asked so far.
 func (e *estate) merged() []code.Mergeability {
@@ -375,6 +457,12 @@ type stopped struct{}
 
 func (stopped) Stop() {}
 
+// units is a seat git-work share of so many units, as a loop sizes its own
+// reads by it.
+type units int
+
+func (u units) Units() int { return int(u) }
+
 // loopOn is node's loop over e, p and n, its backstop backstop, started, with
 // a recorder of its own; stopped when the case ends. Its cache and pool are
 // stand-ins no merge reaches ([unmerged]): every change its cases hold owes
@@ -383,8 +471,10 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 
 	t.Helper()
-	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, NodeID: node}, backstop)
+	return loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
+		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node,
+		Share: units(2)},
+		backstop)
 }
 
 // loopOver is a loop over o, with a recorder of its own, its backstop
@@ -409,7 +499,7 @@ func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop,
 // unmerged is the cache and the pool of a loop whose cases hold no change that
 // owes a merge: whatever reaches either is the case's failure, since nothing
 // the case holds asks one.
-type unmerged struct{ t *testing.T }
+type unmerged struct{ t testing.TB }
 
 func (u unmerged) Holds(string) bool {
 	u.t.Error("a loop whose changes owe no merge asked whether its cache holds a copy")
@@ -436,8 +526,46 @@ func changeID(repo string, n int64) string {
 	return repo[:len(repo)-2] + repo[len(repo)-1:] + string(rune('0'+n))
 }
 
+// unqueued is a home's merge queue seams where its cases queue nothing: a
+// chain built or a work item closed is a failure of the case.
+type unqueued struct{ t testing.TB }
+
+func (u unqueued) BuildChain(context.Context, code.ChainBuild) (code.ChainResult, error) {
+	u.t.Error("a loop whose targets queue nothing built a chain")
+	return code.ChainResult{}, errors.New("nothing is queued")
+}
+
+func (u unqueued) CloseWorkItem(context.Context, home.TaskClose) error {
+	u.t.Error("a loop whose targets queue nothing closed a work item")
+	return errors.New("nothing is queued")
+}
+
 // oid is a whole object id made of c.
 func oid(c string) string { return strings.Repeat(c, 40)[:40] }
+
+// observed is how many observations rec holds of the histogram name under
+// attrs, and their sum.
+func observed(rec *metrics.Recorder, name string, attrs metrics.Attrs) (uint64, float64) {
+	var (
+		n   uint64
+		sum float64
+	)
+	for _, s := range rec.Read() {
+		if s.Name != name {
+			continue
+		}
+		match := true
+		for k, v := range attrs {
+			if s.Attrs[k] != v {
+				match = false
+			}
+		}
+		if match {
+			n, sum = n+s.Count, sum+s.Sum
+		}
+	}
+	return n, sum
+}
 
 // counted is what rec counts of name under attrs.
 func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
@@ -544,6 +672,47 @@ func TestANudgeOnlyShortensTheWait(t *testing.T) {
 	}
 }
 
+// A REVISION'S FACTS SCHEDULE ITS CHECKS' DISPATCH: the change work's record
+// of a head revision's facts lands on the change's subject, which no watch
+// sees, and a head's checks are dispatched only once its facts are recorded —
+// so the home schedules the repository's check work at the facts' own
+// position the moment they are recorded, its listing read there, with the
+// backstop an hour away and no record on the repository told after them.
+//
+// Mutation: drop the change work's word that it recorded facts — the check
+// work is read at the nudge's position alone, and the head waits for the
+// backstop, red.
+func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	revised := statelog.Position{Stream: topics.CodeLogStream, Seq: 90}
+	e.revisedAt = revised
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	n := newNudges()
+	loopOn(t, "node-a", e, p, n, time.Hour)
+	e.waitReads(t, 1)
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+		Touched: []string{"a.go"}})
+	n.subject(t, repoA, 57)
+	e.waitDone(t, repoA, 10*time.Second)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mu.Lock()
+		floors := slices.Clone(e.checkFloors)
+		e.mu.Unlock()
+		if slices.ContainsFunc(floors, func(f statelog.Freshness) bool {
+			return f.Level == statelog.ReadSession && slices.Contains(f.Floors, revised)
+		}) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the repository's check work was read at %+v, never at the facts' position %s", floors,
+				revised)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A LOST NUDGE IS CAUGHT BY THE BACKSTOP: with no watch running at all — its
 // consumer cannot be made — a change due on a repository is found and worked
 // by the backstop's next pass; and a watch's GAP — it may have missed records
@@ -586,6 +755,73 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	}
 }
 
+// A WATCH THAT BEGINS AS THE LOOP STOPS IS STOPPED: a watch of the code log
+// that returns from its beginning once the loop's Stop has taken the watches
+// — before Stop has ended the loop's life, the window the case holds open
+// (home.BeginStop) — is stopped by the loop at once, before the pass that
+// follows reads its listing, never stored where nothing would stop it; and no
+// further watch is begun.
+//
+// Mutation: decide by the life's end rather than by stopped, and the watch is
+// stored, still running when the pass reads.
+func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
+	l, _ := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
+		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+		Share: units(2), NodeID: "node-a"}, time.Hour)
+	select {
+	case <-n.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop never began its watch")
+	}
+	home.BeginStop(l)
+	close(n.release)
+	e.waitReads(t, 1)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.begun) != 1 || !n.begun[0].stopped {
+		t.Fatalf("the loop began %d watches, the first stopped %t once its pass read; want the one watch "+
+			"that began as the loop stopped, stopped", len(n.begun), len(n.begun) > 0 && n.begun[0].stopped)
+	}
+}
+
+// slowWatch is a code log whose first watch returns only once the case
+// releases it, saying when it is entered; every watch it hands out records
+// whether it was stopped.
+type slowWatch struct {
+	mu      sync.Mutex
+	begun   []*stopWatch
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *slowWatch) Watch(context.Context, string, home.Nudged) (home.Watching, error) {
+	n.mu.Lock()
+	first := len(n.begun) == 0
+	w := &stopWatch{n: n}
+	n.begun = append(n.begun, w)
+	n.mu.Unlock()
+	if first {
+		close(n.entered)
+		<-n.release
+	}
+	return w, nil
+}
+
+// stopWatch is one watch of a slowWatch.
+type stopWatch struct {
+	n       *slowWatch
+	stopped bool
+}
+
+func (w *stopWatch) Stop() {
+	w.n.mu.Lock()
+	defer w.n.mu.Unlock()
+	w.stopped = true
+}
+
 // A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
 // head inside the target's tip — the target moved past it — the home asks the
 // committer for the landing, at the change's revision and head and the tip it
@@ -624,6 +860,85 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
 			r, matched, digest, measured.TipPosition)
 	}
+}
+
+// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
+// target holds, owing its facts and its merge, whose landing the committer
+// answers busy — or whose Change call fails before any answer — ends its
+// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
+// no more work on the change: no merge is asked of it (the loop's cache and
+// pool are stand-ins any use of which fails the case), and the landing is
+// asked once. A repository whose landings keep failing reads as failing,
+// never as healthy.
+//
+// Mutation: drop the landing's error on the facts branch of the change's step
+// (answer `true, nil` once a landing was asked), and both turns count worked.
+func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	for name, refuse := range map[string]func(*estate){
+		"the committer answers busy": func(e *estate) { e.landRefusal = code.ChangeRefusalBusy },
+		"the Change call fails": func(e *estate) {
+			e.landErr = errors.New("the router reached no committer")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEstate()
+			due := e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("a"),
+				HeadInTarget: true, Touched: []string{}})
+			e.mu.Lock()
+			e.due[repoA][0].MergeDue = true
+			refuse(e)
+			e.mu.Unlock()
+			logs := &lines{}
+			p := &placement{homes: map[string]string{repoA: "node-a"}}
+			_, rec := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: "node-a"},
+				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
+				Logger: slog.New(slog.NewTextHandler(logs, nil))},
+				time.Hour)
+			waitTurns(t, rec, 1)
+			assertTurnFailed(t, rec, logs)
+			if _, landings := e.wrote(); len(landings) != 1 || landings[0].ChangeID != due.ID {
+				t.Errorf("the turn asked the landings %+v, want change 1's once", landings)
+			}
+			if merged := e.merged(); len(merged) != 0 {
+				t.Errorf("the turn recorded %+v of a change it found landed, want nothing more of it", merged)
+			}
+		})
+	}
+}
+
+// assertTurnFailed fails t unless rec counts the change work's one turn
+// failed and none worked, and logs hold code_home_turn_failed.
+func assertTurnFailed(t *testing.T, rec *metrics.Recorder, logs *lines) {
+	t.Helper()
+	failed := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "failed"})
+	worked := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "worked"})
+	if failed != 1 || worked != 0 {
+		t.Errorf("the turn whose landing decided nothing counted failed=%d worked=%d, want failed=1", failed, worked)
+	}
+	if !strings.Contains(logs.String(), "code_home_turn_failed") {
+		t.Errorf("the turn whose landing decided nothing logged no code_home_turn_failed: %s", logs.String())
+	}
+}
+
+// lines is a log a case reads while the loop's goroutines write it.
+type lines struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // A HOME REFRESHES A READINESS WITHOUT A MERGE: a change owing only a refresh
@@ -675,6 +990,37 @@ func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	}
 }
 
+// A HOME NAMES THE CHART IT HOLDS in every listing of its change work, the
+// repositories' and its repository's due changes alike: the activation of
+// its node's chart, so a change whose stored readiness an earlier chart
+// judged is listed due a refresh (code.ChangesDueQuery.ChartEpoch).
+//
+// Mutation: leave the chart off the repository's listing → it names none,
+// red.
+func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
+	t.Parallel()
+	const chart = int64(1_762_000_060_000)
+	e := newEstate()
+	e.owe(repoA, code.ChangeDue{ID: changeID(repoA, 1), Number: 1, Revision: 1, Head: oid("b"),
+		SourceRef: "refs/heads/feature-b", TargetRef: "refs/heads/main", Tip: oid("1"),
+		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, RefreshDue: true})
+	loopOver(t, home.Options{Chart: func() int64 { return chart }, Estate: e,
+		Placement: asNode{placement: &placement{homes: map[string]string{repoA: "node-a"}}, node: "node-a"},
+		Nudges:    newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+		Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2)}, time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	listed := map[string]bool{}
+	for _, q := range e.listings() {
+		listed[q.RepoID] = true
+		if q.ChartEpoch != chart {
+			t.Errorf("the listing %+v names chart %d, want the node's, %d", q, q.ChartEpoch, chart)
+		}
+	}
+	if !listed[""] || !listed[repoA] {
+		t.Fatalf("the home asked the listings %+v, want the repositories' and repository A's", e.listings())
+	}
+}
+
 // THE HOME RECORDS THE CLASSES ITS GIT READ: what a revision's facts read
 // answered of its code — the trees of its base and its head, and its touched
 // paths' classes — rides the revise the home asks the change writer for, as
@@ -700,27 +1046,128 @@ func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 	}
 }
 
-// THE HOME IMPORTS NO QUERY, COMPACT, HOST OR CHECK RUNNER, and none of them
-// imports another or the home: internal/code/query, internal/code/compact,
-// internal/code/host, internal/code/home and internal/code/checkrun each
-// reach the others' work through the estate's router — the check runner's
-// sweep the home's loop through the loop's own Worker interface — so a step
-// is the same whichever node answers it, and no one of them can call
-// another's in process past the router's walk.
-func TestTheHomeImportsNoQueryCompactHostOrCheckRunner(t *testing.T) {
+// A HOME SETTLES THE ASKS ITS LISTING NAMES: a repository whose only due work
+// is a change's asks for review that no longer match its lifecycle — an ended
+// change's still waiting, a reopened change's its end left — is listed, and
+// its home asks the change's writer to settle each, naming the change and the
+// state its asks move to and no asker (the home's own write), nothing more:
+// the writer stamps the asks it moves from its own snapshot.
+//
+// Mutations: drop the settling from Work → no settling is asked, the
+// repository staying due; send the listing's state the other way → the
+// settlings name the wrong states.
+func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	ended := code.AskDue{ChangeID: changeID(repoA, 1), State: code.ReviewerEnded}
+	reopened := code.AskDue{ChangeID: changeID(repoA, 2), State: code.ReviewerRequested}
+	e.owesSettling(repoA, ended, reopened)
+	loopOn(t, "node-a", e, &placement{homes: map[string]string{repoA: "node-a"}}, newNudges(), time.Hour)
+	deadline := time.After(10 * time.Second)
+	for len(e.settled()) < 2 {
+		select {
+		case <-e.changed:
+		case <-deadline:
+			t.Fatalf("the home asked %d settlings in 10 s, want 2: %+v", len(e.settled()), e.settled())
+		}
+	}
+	want := []code.AskSettle{{RepoID: repoA, ChangeID: ended.ChangeID, State: code.ReviewerEnded},
+		{RepoID: repoA, ChangeID: reopened.ChangeID, State: code.ReviewerRequested}}
+	got := e.settled()
+	for i, w := range want {
+		if g := got[i]; g.RepoID != w.RepoID || g.ChangeID != w.ChangeID || g.State != w.State ||
+			len(g.Reviewers) != 0 {
+			t.Fatalf("the home asked the settlings %+v, want %+v", got, want)
+		}
+	}
+}
+
+// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY. A git node that ran its read's
+// budget of git out before a revision's patch id, or before its classes, says
+// so apart from a bound's omission: the commits did not decide it, the node's
+// moment did, so the home records no such facts — a revise takes a revision's
+// facts against a tip once, and an id omitted for a slow node would carry no
+// approval across the revision for good — and asks again on its next pass,
+// recording them once they are whole. An id omitted past its bound is final,
+// recorded as omitted on the first pass.
+//
+// Mutations: record facts that are not final — changes 1's and 2's are
+// recorded on the first pass, red; record the bound's omission as none —
+// change 3's id is not omitted, red.
+func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	touched := []string{"a.go"}
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchIDOmission: code.OmittedOutOfTime})
+	e.hold(repoA, 2, oid("b"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchID: oid("e"), ClassesOmission: code.OmittedOutOfTime})
+	e.hold(repoA, 3, oid("c"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchIDOmission: code.OmittedPastBound, Classes: code.RevisionClasses{Complete: true}})
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	loopOn(t, "node-a", e, p, newNudges(), 20*time.Millisecond)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mu.Lock()
+		again := e.factsRead[oid("a")] >= 2 && e.factsRead[oid("b")] >= 2
+		e.mu.Unlock()
+		if again {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the home never asked again for the facts its git node left short for time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	revises, _ := e.wrote()
+	if len(revises) != 1 || revises[0].ChangeID != changeID(repoA, 3) || !revises[0].PatchIDOmitted {
+		t.Fatalf("the home recorded %+v, want change 3's facts alone, its id omitted past its bound", revises)
+	}
+
+	// WHOLE AT LAST: the next pass records them, as they are.
+	e.mu.Lock()
+	for _, head := range []string{oid("a"), oid("b")} {
+		f := e.facts[head]
+		f.PatchID, f.PatchIDOmission, f.ClassesOmission = oid("e"), "", ""
+		f.Classes = code.RevisionClasses{Complete: true}
+		e.facts[head] = f
+	}
+	e.mu.Unlock()
+	e.waitDone(t, repoA, 10*time.Second)
+	revises, _ = e.wrote()
+	if len(revises) != 3 {
+		t.Fatalf("the home recorded %d revisions' facts, want the three changes': %+v", len(revises), revises)
+	}
+	for _, r := range revises[1:] {
+		if r.PatchIDOmitted || r.PatchID != oid("e") || !r.Classes.Complete {
+			t.Errorf("change %s's facts were recorded as %+v, want its id and its classes whole", r.ChangeID, r)
+		}
+	}
+}
+
+// THE HOME IMPORTS NO QUERY, COMPACT, HOST, CHECK RUNNER OR MIRRORS, and none
+// of them imports another or the home: internal/code/query,
+// internal/code/compact, internal/code/host, internal/code/home,
+// internal/code/checkrun and internal/code/mirror each reach the others' work
+// through the estate's router — the check runner's sweep and the mirrors the
+// home's loop through the loop's own Worker interface — so a step is the same
+// whichever node answers it, and no one of them can call another's in process
+// past the router's walk.
+func TestTheHomeImportsNoQueryCompactHostCheckRunnerOrMirrors(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/"
-	five := []string{"internal/code/query", "internal/code/compact", "internal/code/host", "internal/code/home",
-		"internal/code/checkrun"}
+	six := []string{"internal/code/query", "internal/code/compact", "internal/code/host", "internal/code/home",
+		"internal/code/checkrun", "internal/code/mirror"}
 	root := sourcetree.Root(t)
-	for _, pkg := range five {
+	for _, pkg := range six {
 		p, err := build.Default.ImportDir(filepath.Join(root, filepath.FromSlash(pkg)), 0)
 		if err != nil {
 			t.Fatalf("read %s: %v", pkg, err)
 		}
-		for _, other := range five {
+		for _, other := range six {
 			if other != pkg && slices.Contains(p.Imports, module+other) {
-				t.Errorf("%s imports %s: the five reach each other's work through the estate's router", pkg, other)
+				t.Errorf("%s imports %s: the six reach each other's work through the estate's router", pkg, other)
 			}
 		}
 	}

@@ -40,7 +40,7 @@ import (
 //     4b. a command of an EXPIRY entry ([ViaExpiry]) whose ref is no longer
 //     its seat's idle branch ([ExpiryRule]) is stale — pushed since it was
 //     listed, held by a live turn since, the repository's default branch, a
-//     live change's source or target, or last set by somebody else;
+//     live change's source (named) or target, or last set by somebody else;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted —
 //     and a rule that takes a person's push alone refuses everybody else's;
 //  6. a create beside a live ref above it or with a live ref below it
@@ -408,10 +408,22 @@ type decided struct {
 	change *ChangeAnswer
 }
 
+// batchMoves is what a round's record does to the live changes its entries
+// move, as its decide counted it in the model its apply writes from
+// ([changeBook]): the rows the apply writes about them
+// ([changeBook.rowCount]), and the changes whose live queue entry it ejects
+// because it moved their head ([changeBook.queueEnds]) — which no record of
+// the queue's names, so the committer that landed it announces each
+// ([Committer.announcePushEjections]).
+type batchMoves struct {
+	rows    int
+	ejected []string
+}
+
 // decideBatch is one round's decision over the rows tx holds, for the batch in
-// order: the entries of the record, every proposal's answer, the rows the
-// record's apply will write about the live changes its entries move
-// ([changeBook]), and the version the decision read. Pure over (the rows, the
+// order: the entries of the record, every proposal's answer, what the
+// record's apply will do to the live changes its entries move ([batchMoves]),
+// and the version the decision read. Pure over (the rows, the
 // batch, limits, retention, seats, now): retention is
 // code.deleted_retention_days on the deciding node's epoch, from which a
 // deleted repository's refusal names when its purge may begin; seats is that
@@ -428,7 +440,7 @@ type decided struct {
 // an agent nothing on a nil roster).
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
 	limits Limits, retention time.Duration, seats SeatRules, now time.Time, v *verdicts) (entries []PushEntry,
-	answers []decided, changeRows int, version int64, err error) {
+	answers []decided, moves batchMoves, version int64, err error) {
 
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -444,7 +456,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	landed, err := pushRowsIn(ctx, tx, ids)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	open := make([]int, 0, len(batch))
 	for i, p := range batch {
@@ -465,7 +477,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	var refused Refusal
 	var detail string
@@ -475,19 +487,21 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// ([RepoGone]): a deleted repository comes back when declared again,
 		// one being purged or purged never does.
 		if detail, err = goneDetail(ctx, tx, repoID, repo, found, retention); err != nil {
-			return nil, nil, 0, 0, err
+			return nil, nil, batchMoves{}, 0, err
 		}
 		refused = RefusalRepoDeleted
-	case repo.status == RepoStatusArchived:
-		refused = RefusalRepoArchived
-		detail = ArchivedDetail(repo.name, repo.managedBy)
+	default:
+		// ARCHIVED, BEING IMPORTED, OR A PULL MIRROR: each takes no push,
+		// whoever pushes — a person's included — in the sentence of what it
+		// is ([pushRepo.writeRefusal]).
+		refused, detail = repo.writeRefusal()
 	}
 	if refused != "" {
 		for _, i := range open {
 			answers[i].refused, answers[i].detail = refused, detail
 			answers[i].commands = refuseEvery(batch[i].Commands, refused, detail)
 		}
-		return nil, answers, 0, repo.version, nil
+		return nil, answers, batchMoves{}, repo.version, nil
 	}
 	// THE DROP EPOCH, before every rule of the push's own: a push checked
 	// against a copy at another epoch is refused whole, and the rest of the
@@ -506,31 +520,31 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
 		return batch[i].Principal.Kind.readsChart() || batch[i].Change != nil
 	}) {
-		return nil, nil, 0, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
 	}
 	stored, err := pushRulesIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// PARSED ONCE A BATCH, never once a command and rule (refusal.go), and
 	// again only in a round whose rules are not the ones parsed.
 	if err = v.under(stored); err != nil {
-		return nil, nil, 0, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
 	}
 	w, err := newWorking(ctx, tx, repoID, repo, batch, open, now)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// THE BRANCHES THE BATCH'S CHANGES PROPOSE INTO, where no command of it
 	// names them: an open is judged by its target's head as well as its
 	// source's, and the working state holds only the refs commands name.
 	if err := w.readTargets(ctx, tx, repoID, changeTargets(batch, open, repo)); err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// THE LIVE CHANGES THE BATCH'S BRANCHES CAN MOVE, and the authors its
 	// pushers are of them, read once a round — for every command the
@@ -543,7 +557,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	book, err := readChangeBook(ctx, tx, repoID, proposed, 0, 0)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// rows is what the record's entries make its apply write besides their
 	// changes' rows, as [withinRecord] counts it; carrying is set once a push
@@ -555,6 +569,10 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	// THE REPOSITORY AS A GRANT READS IT, from the round's own row: its
 	// owner and its visibility, which a seat's relation is judged on.
 	ref := repo.grantRef(repoID)
+	// THE GATES OF THE BRANCHES A PUSH LANDS ON, read once a round and only
+	// for a round with a landing, since a push is judged by its rules'
+	// push half alone ([pushRulesIn]).
+	landingGates := pushGates{repoID: repoID}
 	for _, i := range open {
 		if carrying {
 			answers[i].carried = true
@@ -588,6 +606,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// THE BOOK ITSELF and taken back where it does not fit ([bookTrial]):
 		// what an entry costs is what its own commands reach.
 		entry := p.entryWith(cmds, quota.day.Label)
+		// AND THE LANDINGS IT MAKES on a protected branch — a person's own
+		// push, their recorded override — stamped from this snapshot's rules,
+		// so the apply matches no pattern.
+		if entry.Landings, err = landingGates.landings(ctx, tx, v.rules, cmds); err != nil {
+			return nil, nil, batchMoves{}, 0, err
+		}
 		merged := len(book.writes.merged)
 		book.try()
 		book.move(entry)
@@ -611,7 +635,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			book.takeBack()
 			changeRows, moved := book.alone(entry)
 			if alone := recordRows(own + changeRows); alone > MaxRecordRows {
-				detail := tooManyChangesDetail(moved, alone)
+				detail := tooManyChangesDetail(moved, len(entry.Landings), alone)
 				answers[i].refused, answers[i].detail = RefusalTooManyChanges, detail
 				answers[i].commands = refuseEvery(p.Commands, RefusalTooManyChanges, detail)
 				continue
@@ -625,12 +649,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// already in it ([routingRoom]).
 		routings, routeErr := room.route(ctx, tx, book, entry, book.writes.merged[merged:], opened)
 		if routeErr != nil {
-			return nil, nil, 0, 0, routeErr
+			return nil, nil, batchMoves{}, 0, routeErr
 		}
 		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
 			MaxRecordRows-recordRows(rows+own+book.rowCount()))
 		if fitErr != nil {
-			return nil, nil, 0, 0, fitErr
+			return nil, nil, batchMoves{}, 0, fitErr
 		}
 		if !fits {
 			book.takeBack()
@@ -646,7 +670,8 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		answers[i].inRecord, answers[i].change = true, change
 		entries = append(entries, entry)
 	}
-	return entries, answers, book.rowCount(), repo.version, nil
+	ejected, _, _ := book.queueEnds()
+	return entries, answers, batchMoves{rows: book.rowCount(), ejected: ejected}, repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding
@@ -790,6 +815,9 @@ type pushRepo struct {
 	// purge requested: a request forms its record whatever is open.
 	dropEpoch int64
 	expungeID string
+	// importSeq is how many of its import's chunks have landed: what an
+	// import's chunk and its end are decided in their turn by.
+	importSeq int64
 	// owner and visibility are what a seat's grant on the repository is
 	// judged by ([GrantOf]): its relation through the owner, and the row
 	// visibility decides.
@@ -801,12 +829,33 @@ type pushRepo struct {
 	// defaultBranch is its default branch, by name ("main"): what a push's
 	// change proposes into where its options name no target ([pushOpen]).
 	defaultBranch string
+	// mirrored is a pull mirror ([RepoRef.Mirrored]), which takes no push
+	// and no change of its own.
+	mirrored bool
 }
 
 // grantRef is the repository id names as a grant reads it: its name, which a
 // refusal names, its owner and its visibility.
 func (r pushRepo) grantRef(id string) RepoRef {
 	return RepoRef{ID: id, Name: r.name, Owner: r.owner, Visibility: r.visibility}
+}
+
+// writeRefusal is the refusal its STATUS gives every write that would move a
+// ref of the live repository r — a push's every command, a change's every
+// write — with its sentence, or "" where it takes them: an archived repository
+// is read-only, one being imported takes nothing until its import is done, and
+// a pull mirror moves only by its syncs. One judgement for the push decide and
+// the change decide, in this order, so both refuse one repository alike.
+func (r pushRepo) writeRefusal() (Refusal, string) {
+	switch {
+	case r.status == RepoStatusArchived:
+		return RefusalRepoArchived, ArchivedDetail(r.name, r.managedBy)
+	case r.status == RepoStatusImporting:
+		return RefusalRepoImporting, ImportingDetail(r.name)
+	case r.mirrored:
+		return RefusalRepoMirrored, MirroredDetail(r.name, r.managedBy)
+	}
+	return "", ""
 }
 
 // pushRepoIn reads a repository's row for a decide.
@@ -816,7 +865,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
 		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
-		&r.owner.Ref, &visibility, &managed, &r.defaultBranch)
+		&r.owner.Ref, &visibility, &managed, &r.defaultBranch, &r.mirrored, &r.importSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -1000,27 +1049,34 @@ func expiryRowsIn(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo,
 	out := map[string]ExpiryRow{}
 	for rows.Next() {
 		var ref string
-		var at int64
+		var at, source int64
 		var row ExpiryRow
-		if err := rows.Scan(&ref, &row.Target, &row.Seat, &at, &row.Held, &row.Change); err != nil {
+		if err := rows.Scan(&ref, &row.Target, &row.Seat, &at, &row.Held, &source, &row.ChangeTarget); err != nil {
 			return nil, err
 		}
 		row.At, row.Default = store.DecodeTime(at), ref == branchPrefix+repo.defaultBranch
+		if source > 0 {
+			// THE SNAPSHOT'S NAME of the repository, as the change's number
+			// is the snapshot's: a rename since the page names it as it is now.
+			row.OpenChange = ChangeRef(repo.name, source)
+		}
 		out[ref] = row
 	}
 	return out, rows.Err()
 }
 
 // expiryRefsSQL is rule 4b's row of each ref of a list (?2) in the repository
-// ?1: code_refs' key, driven from the list, and an EXISTS seek of the live
-// changes by source (code_changes_open_idx) and by target
-// (code_changes_target_idx, its leading two columns), the live states spelled
-// as both indexes are partial on them, unqualified (no other table here has
-// a state). Registered in plan_test.go.
+// ?1: code_refs' key, driven from the list; the NUMBER of the live change the
+// ref is the source of (0 for none — a repository numbers its changes from 1),
+// one seek of code_changes_open_idx and a read of that one row, since the
+// sentence keeping the branch names the change; and an EXISTS seek of the
+// live changes by target (code_changes_target_idx, its leading two columns).
+// The live states are spelled as both indexes are partial on them,
+// unqualified (no other table here has a state). Registered in plan_test.go.
 const expiryRefsSQL = `SELECT r.ref, r.target, r.seat, r.at, r.held_position,
-		EXISTS (SELECT 1 FROM code_changes AS s INDEXED BY code_changes_open_idx
-			WHERE s.repo_id = ?1 AND s.source_ref = r.ref AND ` + liveChanges + `)
-		OR EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
+		COALESCE((SELECT s.number FROM code_changes AS s INDEXED BY code_changes_open_idx
+			WHERE s.repo_id = ?1 AND s.source_ref = r.ref AND ` + liveChanges + `), 0),
+		EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
 			WHERE t.repo_id = ?1 AND t.target_ref = r.ref AND ` + liveChanges + `)
 	FROM json_each(?2) AS j CROSS JOIN code_refs AS r
 	WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT)`
@@ -1756,7 +1812,9 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch FROM code_repos
+		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch, mirror_from != '',
+		import_seq
+		FROM code_repos
 		WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	// seatDaysSQL is each named seat's pushes counted on one company day: ONE

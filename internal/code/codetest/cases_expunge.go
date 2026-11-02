@@ -102,7 +102,7 @@ func (s *expungeScene) branchGone(p *Person, work, branch string) string {
 func (s *expungeScene) purge() code.ExpungeResult {
 	s.c.T.Helper()
 	res, err := s.c.Fleet.Expunge(s.c.Ctx, code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: s.id,
-		RequestID: statelog.NewOpID(time.Now(), "code_purge_unreachable"), By: personAt("ceo")}})
+		RequestID: statelog.NewOpID(time.Now(), ""), By: personAt("ceo")}})
 	if err != nil {
 		s.c.T.Fatalf("the purge of %s: %v", s.name, err)
 	}

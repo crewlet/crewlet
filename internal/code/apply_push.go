@@ -120,7 +120,15 @@ import (
 // the rows they touch counted in the record's before any horizon takes what
 // is left ([countSeatDays]).
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
-	return a.landPushes(ctx, tx, at, p, 0)
+	return a.landPushes(ctx, tx, at, p, recordPacks{}, 0)
+}
+
+// recordPacks is packs a record lands beside its pushes' own, each of kind:
+// an import chunk's or a mirror sync's, several to one push, which its push
+// row names none of.
+type recordPacks struct {
+	packs []PackRef
+	kind  PackKind
 }
 
 // landPushes is the one apply of pushes ([Applier.applyPush]) — a push
@@ -130,7 +138,11 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 // move of its target is a push in every sense the history, the counters, the
 // tombstones and the changes it moves read — never a second spelling of what
 // a push does to a repository (ADR-0008).
-func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch,
+//
+// extra is packs the record lands beside its entries' own ([recordPacks]),
+// written and counted with them — and with nothing, where every entry was
+// applied already.
+func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch, extra recordPacks,
 	spent int) (int, error) {
 
 	ids := make([]string, 0, len(p.Pushes))
@@ -207,6 +219,12 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		// A WHOLLY REDELIVERED BATCH writes nothing at all.
 		return 0, nil
 	}
+	for _, k := range extra.packs {
+		packRows = append(packRows, k)
+		packKinds = append(packKinds, extra.kind)
+		packBytes += k.Size
+		packObjects += k.Objects
+	}
 
 	refs := make([]string, 0, len(final))
 	for ref := range final {
@@ -233,6 +251,14 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		return 0, err
 	}
 	rows += changed
+
+	// THE LANDINGS ON PROTECTED BRANCHES its decide stamped, before any
+	// horizon too: their rows are the record's own ([entryRows]).
+	landedRows, err := writePushLandings(ctx, tx, at, p.RepoID, pushRows)
+	if err != nil {
+		return 0, err
+	}
+	rows += landedRows
 
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
@@ -291,17 +317,20 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// A PUSH'S PACK DATES ITS CONTENT FROM ITS OWN POSITION ([PackRow.Content]):
 	// what a push brings reaches the repository here — a base a thin pack was
 	// completed with among it, which a ref reached when the push was checked —
-	// so a purge requested before it asks nothing about it.
+	// so a purge requested before it asks nothing about it. And it ARRIVED
+	// at the record's broker instant ([PackRow.Arrived]): an expunge on its
+	// maintainer's schedule keeps it whole for code.PruneGrace after that.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position,
+			arrived_at) VALUES `,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(packRows), func(i int) []any {
 			k := packRows[i]
 			return []any{p.RepoID, k.PackID, k.Object.String(), string(k.Hash), k.Size,
 				k.IndexBytes, k.ReverseBytes, k.GitChecksum, k.Objects, string(packKinds[i]), at.packed,
-				at.packed}
+				at.packed, at.at()}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the packs at %s: %w", at.position, err)
 	}
@@ -393,7 +422,8 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 
 // packKind is what added e's pack, as its code_packs row names it: a merge
 // record's push its merge's pack ([PackMerge]), and every other push its own
-// ([PackPush]).
+// ([PackPush]). A land record's pushes carry none: what they land is their
+// train's pack, which its candidate record added ([PackCandidate]).
 func (e PushEntry) packKind() PackKind {
 	if e.Via == ViaMerge {
 		return PackMerge

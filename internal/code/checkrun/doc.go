@@ -44,6 +44,19 @@
 // check, and the next node of the attempt's order claims it a stagger later. A
 // remote (e2b) cell runs on another machine and is not counted here.
 //
+// # Remote cells under the company's caps
+//
+// A remote cell's box is billed to the company's account with its provider,
+// so it is bounded company-wide (code.checks.remote): at most max_running at
+// once, each holding one of that many leased slots ([RemoteSlots]), and at
+// most box_hours_per_day of box time started in a UTC day, charged a minute at
+// a time to the fleet's shared counter. A runner takes its slot and its first
+// minute BEFORE it claims, so a check the caps hold back is claimed by nobody
+// and waits queued; a walk held back once tries no further remote check, a
+// store that cannot say starts none, and a running box whose slot lapsed
+// takes one again, past the cap where it must, so it is counted again.
+// remote.go argues each choice.
+//
 // # What a check's box holds
 //
 // No coding agent, no model's sign-in, no subscription login, none of

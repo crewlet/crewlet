@@ -76,25 +76,6 @@ func ApprovalCounts() []Approvals { return []Approvals{ApprovalsNone, ApprovalsO
 // [MergeBy].
 func (a Approvals) Valid() bool { return slices.Contains(ApprovalCounts(), a) }
 
-// LandingPolicy is how a gated target's queue lands a change.
-type LandingPolicy string
-
-const (
-	// LandingPreLand tests each change merged on the target before it lands:
-	// the speculative queue, candidates of batches, a red batch bisected.
-	LandingPreLand LandingPolicy = "pre_land"
-	// LandingPostLand lands changes ahead of their checks, which then run on
-	// the target's newest tip, a red tip bisected over the landings.
-	LandingPostLand LandingPolicy = "post_land"
-)
-
-// LandingPolicies is the closed set, the default first.
-func LandingPolicies() []LandingPolicy { return []LandingPolicy{LandingPreLand, LandingPostLand} }
-
-// Valid reports a value this build knows; empty is none of them, as for
-// [MergeBy].
-func (p LandingPolicy) Valid() bool { return slices.Contains(LandingPolicies(), p) }
-
 // DeleteSource is whether a merge deletes its change's source branch in the
 // record that merges it.
 type DeleteSource string
@@ -181,12 +162,12 @@ type MergeGate struct {
 	// DeleteSource is whether a merge deletes its source branch in the same
 	// record.
 	DeleteSource DeleteSource `json:"delete_source"`
-	// AutoRevert lets an enqueuer consent, at the enqueue, to the revert of
-	// a landing that breaks the target.
-	AutoRevert bool `json:"auto_revert,omitempty"`
 	// AgentsEditChecks lets a change to `.crewlet/**` — where a repository's
-	// checks are defined — merge on a seat's approval where the rule requires
-	// checks, which otherwise waits for a person's.
+	// checks are defined ([ChecksDirGlob]) — merge on a seat's approval where
+	// the rule requires checks, which otherwise waits for a person's: a rule
+	// with Checks and without it holds that glob as a human path its record
+	// never lists, added where the gate is combined ([GateRulesOf], U44).
+	// Turning it on is a loosening ([MergeGate.LoosenedBy]).
 	AgentsEditChecks bool `json:"agents_edit_checks,omitempty"`
 }
 
@@ -199,13 +180,13 @@ type HumanPath struct {
 	Unless []ChangeClass `json:"unless,omitempty"`
 }
 
-// Landing is how a gated target's queue lands a change: its policy, how many
-// candidates it tests at once (1..[MaxQueueDepth]) and how many changes one
-// candidate takes (1..[MaxQueueBatch]).
+// Landing is how a gated target's queue lands a change — every change tested
+// merged on the target before it lands: how many candidates it tests at once
+// (1..[MaxQueueDepth]) and how many changes one candidate takes
+// (1..[MaxQueueBatch]).
 type Landing struct {
-	Policy LandingPolicy `json:"policy"`
-	Depth  int           `json:"depth"`
-	Batch  int           `json:"batch"`
+	Depth int `json:"depth"`
+	Batch int `json:"batch"`
 }
 
 // RuleGate is one branch rule's merge gate, named by the rule's pattern: how
@@ -246,7 +227,7 @@ func (g MergeGate) Equal(o MergeGate) bool {
 		slices.Equal(g.ApprovalsUnless, o.ApprovalsUnless) &&
 		slices.EqualFunc(g.HumanPaths, o.HumanPaths, HumanPath.Equal) &&
 		slices.Equal(g.Checks, o.Checks) && g.Landing == o.Landing && g.OwnersApprove == o.OwnersApprove &&
-		g.DeleteSource == o.DeleteSource && g.AutoRevert == o.AutoRevert && g.AgentsEditChecks == o.AgentsEditChecks
+		g.DeleteSource == o.DeleteSource && g.AgentsEditChecks == o.AgentsEditChecks
 }
 
 // Equal reports two human paths the same: their glob and their classes.
@@ -315,8 +296,6 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 		return "merge_by", fmt.Sprintf("%q is not one of %s", g.MergeBy, words.Or(MergeBys()))
 	case !g.Approvals.Valid():
 		return "approvals", fmt.Sprintf("%q is not one of %s", g.Approvals, words.Or(ApprovalCounts()))
-	case !g.Landing.Policy.Valid():
-		return "landing.policy", fmt.Sprintf("%q is not one of %s", g.Landing.Policy, words.Or(LandingPolicies()))
 	case g.Landing.Depth < 1 || g.Landing.Depth > MaxQueueDepth:
 		return "landing.depth", fmt.Sprintf("%d is outside 1..%d", g.Landing.Depth, MaxQueueDepth)
 	case g.Landing.Batch < 1 || g.Landing.Batch > MaxQueueBatch:
@@ -347,9 +326,8 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 	}
 	for k, name := range g.Checks {
 		switch {
-		case !config.ValidCodeCheckName(name):
-			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not a check's name: a lowercase letter "+
-				"or digit, then up to %d more of them, '.', '_' and '-'", name, MaxCheckNameBytes-1)
+		case checkInvalid(name) != "":
+			return fmt.Sprintf("checks[%d]", k), checkInvalid(name)
 		case k > 0 && g.Checks[k-1] >= name:
 			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not after %q — a gate's checks are "+
 				"sorted and each named once", name, g.Checks[k-1])
@@ -365,18 +343,37 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 func classesInvalid(at string, list []ChangeClass) (field, why string) {
 	for k, c := range list {
 		field := fmt.Sprintf("%s[%d]", at, k)
-		switch {
-		case c == ChangeClassNoCodeChange:
-			return field, "no_code_change is a revision's class, never a path's: an approval already carries " +
-				"across a revision that changed nothing, so it has nothing to exempt"
-		case !slices.Contains(PathClasses(), c):
-			return field, fmt.Sprintf("%q is not one of %s", c, words.Or(PathClasses()))
-		case k > 0 && list[k-1] >= c:
+		if why := classInvalid(c); why != "" {
+			return field, why
+		}
+		if k > 0 && list[k-1] >= c {
 			return field, fmt.Sprintf("%q is not after %q — the classes are sorted and each named once", c,
 				list[k-1])
 		}
 	}
 	return "", ""
+}
+
+// classInvalid is why c is no class that exempts a change, or "": a PATH
+// class, no_code_change named for why it is none.
+func classInvalid(c ChangeClass) string {
+	switch {
+	case c == ChangeClassNoCodeChange:
+		return "no_code_change is a revision's class, never a path's: an approval already carries " +
+			"across a revision that changed nothing, so it has nothing to exempt"
+	case !slices.Contains(PathClasses(), c):
+		return fmt.Sprintf("%q is not one of %s", c, words.Or(PathClasses()))
+	}
+	return ""
+}
+
+// checkInvalid is why name is no check's name, or "".
+func checkInvalid(name string) string {
+	if config.ValidCodeCheckName(name) {
+		return ""
+	}
+	return fmt.Sprintf("%q is not a check's name: a lowercase letter or digit, then up to %d more of them, "+
+		"'.', '_' and '-'", name, MaxCheckNameBytes-1)
 }
 
 // LoosenedBy is every way g — the gate a protect request leaves a rule with —
@@ -388,12 +385,11 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 // field, so a change that tightens one field and opens another loosens by the
 // one it opens:
 //
-//   - merge_by and approvals loosen LOWERED, and landing.policy moved from
-//     pre_land to post_land, where a target's checks hold its newest tip and
-//     never the landing. FAIL CLOSED, as a rule's direct_push is judged: a
-//     value this build does not know ranks above every value it does, so a
-//     move away from one is a lowering, and a move to one is judged a
-//     loosening, since nothing here says what it lets through ([lowered]);
+//   - merge_by and approvals loosen LOWERED. FAIL CLOSED, as a rule's
+//     direct_push is judged: a value this build does not know ranks above
+//     every value it does, so a move away from one is a lowering, and a move
+//     to one is judged a loosening, since nothing here says what it lets
+//     through ([lowered]);
 //   - approvals_unless loosens by each class it adds: one more kind of
 //     change that merges with no approval;
 //   - human_paths loosens by each glob it drops and by each class it adds to
@@ -404,9 +400,8 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 //     that erred would make a loosening a seat may make;
 //   - checks loosens by each required check it drops;
 //   - owners_approve loosens turned off, as a merge then waits for no path
-//     owner; auto_revert turned on, as a queue may then revert a landing on its
-//     enqueuer's consent alone; and agents_edit_checks turned on, as a seat's
-//     approval then stands for a change to the checks themselves;
+//     owner; and agents_edit_checks turned on, as a seat's approval then
+//     stands for a change to the checks themselves;
 //   - landing.depth, landing.batch and delete_source are NEUTRAL: how fast a
 //     queue lands and what a merge tidies after it, never what a merge is held
 //     to.
@@ -443,15 +438,8 @@ func (g MergeGate) LoosenedBy(old MergeGate) []string {
 	if dropped := notIn(old.Checks, g.Checks); len(dropped) > 0 {
 		opens = append(opens, fmt.Sprintf("drops %s from checks", words.And(dropped)))
 	}
-	if lowered(landingStrictness(), old.Landing.Policy, g.Landing.Policy) {
-		opens = append(opens, fmt.Sprintf("moves landing.policy from %s to %s", old.Landing.Policy,
-			g.Landing.Policy))
-	}
 	if old.OwnersApprove && !g.OwnersApprove {
 		opens = append(opens, "turns owners_approve off")
-	}
-	if g.AutoRevert && !old.AutoRevert {
-		opens = append(opens, "turns auto_revert on")
 	}
 	if g.AgentsEditChecks && !old.AgentsEditChecks {
 		opens = append(opens, "turns agents_edit_checks on")
@@ -478,12 +466,6 @@ func lowered[T comparable](order []T, from, to T) bool {
 	return !slices.Contains(order, to) || rank(to) < rank(from)
 }
 
-// landingStrictness is the landing policies, the loosest first — the order a
-// policy is judged lowered in ([MergeGate.LoosenedBy]): post_land lands a
-// change before its checks run, and pre_land lands only a change they passed
-// on. Not [LandingPolicies]' order, which is the default first.
-func landingStrictness() []LandingPolicy { return []LandingPolicy{LandingPostLand, LandingPreLand} }
-
 // notIn is every value of list that of does not hold, in list's order.
 func notIn[T comparable](list, of []T) []T {
 	var out []T
@@ -497,16 +479,15 @@ func notIn[T comparable](list, of []T) []T {
 
 // defaultGate is the gate a rule with none takes where a protect request's
 // change names some of a gate's fields ([GateChange]): every other field its
-// default — writers, none, pre_land at depth 4 and batch 4, seats — each read
+// default — writers, none, a queue at depth 4 and batch 2, seats — each read
 // from the ONE PLACE config applies it ([config.CodeProtection.Gate]), so a
 // gate a tool forms and a gate a declaration forms default alike.
 func defaultGate() MergeGate {
 	landing := config.CodeLanding{}.Resolved()
 	return MergeGate{
-		MergeBy:   MergeBy(config.CodeMergeBy("").Resolved()),
-		Approvals: Approvals(config.CodeApprovals("").Resolved()),
-		Landing: Landing{Policy: LandingPolicy(landing.Policy), Depth: landing.Depth,
-			Batch: landing.Batch},
+		MergeBy:      MergeBy(config.CodeMergeBy("").Resolved()),
+		Approvals:    Approvals(config.CodeApprovals("").Resolved()),
+		Landing:      Landing{Depth: landing.Depth, Batch: landing.Batch},
 		DeleteSource: DeleteSource(config.CodeDeleteSource("").Resolved()),
 	}
 }
@@ -518,9 +499,14 @@ func defaultGate() MergeGate {
 // requests changing two fields of one gate at once would each send the
 // other's field as it had read it, and the later record would undo the
 // earlier change — an approval it required, a check it added — unseen. Each
-// field it names REPLACES that field, a list as a list; every field it leaves
-// nil is kept as the rule's gate has it, or takes its default where the rule
-// has none ([defaultGate]), so naming one field forms a gate, as a declaration
+// scalar it names REPLACES that field; each LIST it names is changed item by
+// item ([ListChange], [HumanPathsChange]), for the same reason one level down:
+// requiring one more check is the commonest edit a gate takes, and a list
+// sent whole is one formed from a read made elsewhere, so two requests each
+// adding a check would each drop the other's — silently for a person, and as
+// a refused "drops" for a seat that only added. Every field it leaves nil is
+// kept as the rule's gate has it, or takes its default where the rule has
+// none ([defaultGate]), so naming one field forms a gate, as a declaration
 // naming one does. Remove takes the gate away and names no field.
 //
 // A REQUEST IS NO RECORD, so this type takes no versionedFields row: the
@@ -534,26 +520,158 @@ type GateChange struct {
 	Remove    bool       `json:"remove,omitempty"`
 	MergeBy   *MergeBy   `json:"merge_by,omitempty"`
 	Approvals *Approvals `json:"approvals,omitempty"`
-	// ApprovalsUnless, HumanPaths and Checks are each the field's whole new
-	// list, in any order — the resolution puts it in the one a record carries
-	// ([CanonicalGate]) — and an empty one names none.
-	ApprovalsUnless *[]ChangeClass `json:"approvals_unless,omitempty"`
-	HumanPaths      *[]HumanPath   `json:"human_paths,omitempty"`
-	Checks          *[]string      `json:"checks,omitempty"`
+	// ApprovalsUnless, HumanPaths and Checks each change the field's list
+	// item by item; the resolution puts what it leaves in the one order a
+	// record carries ([CanonicalGate]).
+	ApprovalsUnless *ListChange[ChangeClass] `json:"approvals_unless,omitempty"`
+	HumanPaths      *HumanPathsChange        `json:"human_paths,omitempty"`
+	Checks          *ListChange[string]      `json:"checks,omitempty"`
 	// Landing changes the landing a field at a time.
 	Landing          *LandingChange `json:"landing,omitempty"`
 	OwnersApprove    *bool          `json:"owners_approve,omitempty"`
 	DeleteSource     *DeleteSource  `json:"delete_source,omitempty"`
-	AutoRevert       *bool          `json:"auto_revert,omitempty"`
 	AgentsEditChecks *bool          `json:"agents_edit_checks,omitempty"`
+}
+
+// ListChange is a gate change's change to one of the gate's lists of values —
+// its exempting classes or its required checks: values ADDED beside those it
+// holds and values REMOVED from them, applied by the decide to the list its
+// snapshot holds ([ListChange.applyTo]), so a value added that the list holds
+// already is added as nothing and one removed that it does not hold is
+// removed as nothing.
+type ListChange[T ~string] struct {
+	Add    []T `json:"add,omitempty"`
+	Remove []T `json:"remove,omitempty"`
+}
+
+// invalid is where c, the gate's field at, is no change and why, or two empty
+// strings: a value at least, at most limit in each list — a list longer than
+// the field may hold adds or removes nothing a record could carry — each a
+// value valid holds of the field (its why, or ""), each once in its list, and
+// none both added and removed, which is two requests rather than one.
+func (c ListChange[T]) invalid(at string, limit int, valid func(T) string) (field, why string) {
+	if len(c.Add) == 0 && len(c.Remove) == 0 {
+		return at, "a change adds or removes one at least"
+	}
+	for _, l := range []struct {
+		name   string
+		values []T
+	}{{"add", c.Add}, {"remove", c.Remove}} {
+		if len(l.values) > limit {
+			return at + "." + l.name, fmt.Sprintf("%d, past the %d the field may hold", len(l.values), limit)
+		}
+		for k, v := range l.values {
+			item := fmt.Sprintf("%s.%s[%d]", at, l.name, k)
+			if why := valid(v); why != "" {
+				return item, why
+			}
+			if slices.Contains(l.values[:k], v) {
+				return item, fmt.Sprintf("%q is listed twice", v)
+			}
+			if l.name == "remove" && slices.Contains(c.Add, v) {
+				return item, fmt.Sprintf("%q is added by the same change; ask one or the other", v)
+			}
+		}
+	}
+	return "", ""
+}
+
+// applyTo is list — the field as the gate holds it — with c applied: a copy,
+// never list's own array, which is the snapshot's row; nil where nothing is
+// left, as a gate that names none encodes it.
+func (c ListChange[T]) applyTo(list []T) []T {
+	out := slices.DeleteFunc(slices.Clone(list), func(v T) bool { return slices.Contains(c.Remove, v) })
+	for _, v := range c.Add {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// HumanPathsChange is a gate change's change to its human paths, keyed by
+// glob: each entry Put sets that glob's entry — added, or its unless replaced
+// where the gate has the glob — and each glob Remove names is taken away,
+// applied by the decide to the human paths its snapshot holds
+// ([HumanPathsChange.applyTo]).
+type HumanPathsChange struct {
+	Put    []HumanPath `json:"put,omitempty"`
+	Remove []string    `json:"remove,omitempty"`
+}
+
+// invalid is where c is no change and why, or two empty strings: an entry at
+// least, at most [MaxHumanPaths] in each list, every glob one gitref reads and
+// each once, every unless of path classes each once, and no glob both put and
+// removed.
+func (c HumanPathsChange) invalid() (field, why string) {
+	if len(c.Put) == 0 && len(c.Remove) == 0 {
+		return "human_paths", "a change puts or removes a glob at least"
+	}
+	globs := make([]string, len(c.Put))
+	for i, h := range c.Put {
+		globs[i] = h.Glob
+	}
+	for _, l := range []struct {
+		name  string
+		globs []string
+	}{{"put", globs}, {"remove", c.Remove}} {
+		if len(l.globs) > MaxHumanPaths {
+			return "human_paths." + l.name, fmt.Sprintf("%d, past the %d a gate may name", len(l.globs),
+				MaxHumanPaths)
+		}
+		for k, glob := range l.globs {
+			at := fmt.Sprintf("human_paths.%s[%d]", l.name, k)
+			if l.name == "put" {
+				at += ".glob"
+			}
+			switch _, err := gitref.ParsePathGlob(glob); {
+			case err != nil:
+				return at, fmt.Sprintf("%q is not a path glob: %v", glob, err)
+			case slices.Contains(l.globs[:k], glob):
+				return at, fmt.Sprintf("%q is listed twice", glob)
+			case l.name == "remove" && slices.Contains(globs, glob):
+				return at, fmt.Sprintf("%q is put by the same change; ask one or the other", glob)
+			}
+		}
+	}
+	for k, h := range c.Put {
+		for i, class := range h.Unless {
+			at := fmt.Sprintf("human_paths.put[%d].unless[%d]", k, i)
+			if why := classInvalid(class); why != "" {
+				return at, why
+			}
+			if slices.Contains(h.Unless[:i], class) {
+				return at, fmt.Sprintf("%q is listed twice", class)
+			}
+		}
+	}
+	return "", ""
+}
+
+// applyTo is paths — the gate's, as its snapshot holds them — with c applied:
+// a copy, nil where nothing is left.
+func (c HumanPathsChange) applyTo(paths []HumanPath) []HumanPath {
+	out := slices.DeleteFunc(slices.Clone(paths), func(h HumanPath) bool {
+		return slices.Contains(c.Remove, h.Glob) ||
+			slices.ContainsFunc(c.Put, func(put HumanPath) bool { return put.Glob == h.Glob })
+	})
+	for _, h := range c.Put {
+		out = append(out, HumanPath{Glob: h.Glob, Unless: slices.Clone(h.Unless)})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // LandingChange is a gate change's change to the landing: each field it
 // leaves nil is kept.
 type LandingChange struct {
-	Policy *LandingPolicy `json:"policy,omitempty"`
-	Depth  *int           `json:"depth,omitempty"`
-	Batch  *int           `json:"batch,omitempty"`
+	Depth *int `json:"depth,omitempty"`
+	Batch *int `json:"batch,omitempty"`
 }
 
 // gateChangeField is one field a [GateChange] names, by the name a request
@@ -571,7 +689,7 @@ func (c GateChange) fields() []gateChangeField {
 		{"approvals_unless", c.ApprovalsUnless != nil}, {"human_paths", c.HumanPaths != nil},
 		{"checks", c.Checks != nil}, {"landing", c.Landing != nil},
 		{"owners_approve", c.OwnersApprove != nil}, {"delete_source", c.DeleteSource != nil},
-		{"auto_revert", c.AutoRevert != nil}, {"agents_edit_checks", c.AgentsEditChecks != nil},
+		{"agents_edit_checks", c.AgentsEditChecks != nil},
 	}
 }
 
@@ -602,11 +720,13 @@ func (c GateChange) named() []string {
 // invalid is where c is no change a request may carry and why — field a path
 // below the request's gate, "" for the change whole — or two empty strings: a
 // removal naming no field, or a change naming one at least, a landing's
-// change one of its own at least; and each field it names one a record may
+// change one of its own at least, each list's change an item at least, each
+// item a value the list may hold and named once ([ListChange.invalid],
+// [HumanPathsChange.invalid]); and each field it names one a record may
 // carry, judged on the gate it forms on a rule with none ([defaultGate]),
-// since a field refused there is refused whatever gate it changes. The gate's
-// whole weight is left to the decide, which alone reads what the change keeps
-// of the rule's gate.
+// since a field refused there is refused whatever gate it changes. A list's
+// length and the gate's whole weight are left to the decide, which alone
+// reads what the change keeps of the rule's gate.
 func (c GateChange) invalid() (field, why string) {
 	named := c.named()
 	switch {
@@ -618,13 +738,33 @@ func (c GateChange) invalid() (field, why string) {
 	case len(named) == 0:
 		return "", "a change of the gate names one of its fields at least, or removes it"
 	case c.Landing != nil && *c.Landing == (LandingChange{}):
-		return "landing", "a change of the landing names its policy, depth or batch at least"
+		return "landing", "a change of the landing names its depth or batch at least"
+	}
+	// EACH LIST'S CHANGE ON ITS OWN, naming the item its caller sent: the
+	// gate a change forms on a rule with none holds what it adds, and nothing
+	// of what it removes.
+	if l := c.ApprovalsUnless; l != nil {
+		if field, why := l.invalid("approvals_unless", len(PathClasses()), classInvalid); why != "" {
+			return field, why
+		}
+	}
+	if l := c.HumanPaths; l != nil {
+		if field, why := l.invalid(); why != "" {
+			return field, why
+		}
+	}
+	if l := c.Checks; l != nil {
+		if field, why := l.invalid("checks", MaxRequiredChecks, checkInvalid); why != "" {
+			return field, why
+		}
 	}
 	return c.applyTo(defaultGate()).fieldsInvalid()
 }
 
-// applyTo is base with every field c names put in it, in the one form a
-// record carries a gate in ([CanonicalGate]). Remove is its caller's to read.
+// applyTo is base with every field c names put in it — a scalar replaced, a
+// list changed item by item — in the one form a record carries a gate in
+// ([CanonicalGate]), sharing no array with base. Remove is its caller's to
+// read.
 func (c GateChange) applyTo(base MergeGate) MergeGate {
 	g := base
 	if c.MergeBy != nil {
@@ -634,18 +774,15 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 		g.Approvals = *c.Approvals
 	}
 	if c.ApprovalsUnless != nil {
-		g.ApprovalsUnless = *c.ApprovalsUnless
+		g.ApprovalsUnless = c.ApprovalsUnless.applyTo(base.ApprovalsUnless)
 	}
 	if c.HumanPaths != nil {
-		g.HumanPaths = *c.HumanPaths
+		g.HumanPaths = c.HumanPaths.applyTo(base.HumanPaths)
 	}
 	if c.Checks != nil {
-		g.Checks = *c.Checks
+		g.Checks = c.Checks.applyTo(base.Checks)
 	}
 	if l := c.Landing; l != nil {
-		if l.Policy != nil {
-			g.Landing.Policy = *l.Policy
-		}
 		if l.Depth != nil {
 			g.Landing.Depth = *l.Depth
 		}
@@ -658,9 +795,6 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 	}
 	if c.DeleteSource != nil {
 		g.DeleteSource = *c.DeleteSource
-	}
-	if c.AutoRevert != nil {
-		g.AutoRevert = *c.AutoRevert
 	}
 	if c.AgentsEditChecks != nil {
 		g.AgentsEditChecks = *c.AgentsEditChecks

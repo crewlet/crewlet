@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -605,4 +607,111 @@ func TestAnExpungesTipsLeaveOutWhatAPurgeTook(t *testing.T) {
 		t.Fatalf("the finish keeping the grace answered %s, %v; want applied", out, err)
 	}
 	x.fresh()
+}
+
+// AN OPEN CHANGE'S OLD REVISION SURVIVES A PURGE (M6-D2): a change opened at
+// one commit and force-pushed to another holds two revisions, and its
+// reviewers compare them — an interdiff of revision 1 and 2 reads both trees —
+// though no ref reaches the first any more and a purge keeps no drop. The
+// purge's scan walks from what rows hold in flight too, so its expunge keeps
+// the first revision's commit while it drops a leaked commit nothing names: a
+// cache rebuilt from the rows alone passes git fsck, holds both revisions, and
+// diffs one against the other.
+//
+// Mutation: drop the revisions' phase from the `expunge_tips` read, and the
+// purge drops the first revision's commit: the rebuilt cache lacks it and the
+// interdiff fails.
+func TestAnOpenChangesOldRevisionSurvivesAPurge(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	base := x.push(4 << 10)
+	first := x.p.Commit(x.work, map[string]string{"retry.txt": "retry once\n"}, "retry the upload")
+	if res := x.p.PushArgs(x.c.Ctx, x.work, []string{"-o", "change"}, x.c.URL(0),
+		"HEAD:refs/heads/feature"); !res.OK("refs/heads/feature") {
+		t.Fatalf("the push opening a change: %s", res)
+	}
+	x.p.Git().Run(t, x.work, "reset", "--hard", base)
+	second := x.p.Commit(x.work, map[string]string{"retry.txt": "retry twice\n"}, "retry the upload twice")
+	x.c.MustPush(x.p, x.work, "+HEAD:refs/heads/feature")
+	x.p.Git().Run(t, x.work, "reset", "--hard", base)
+	leaked := x.leak("secret")
+	if !x.liveHold(first) || !x.liveHold(leaked) {
+		t.Fatalf("the premise: the first revision %s and the leak %s are live before the purge", first, leaked)
+	}
+
+	x.purge()
+	c, _, _ := x.compactorOf(nil)
+	x.served(c)
+	if x.liveHold(leaked) {
+		t.Errorf("a live pack still holds the leaked commit %s after the purge", leaked)
+	}
+	if !x.liveHold(first) {
+		t.Errorf("the purge dropped the first revision %s of an open change", first)
+	}
+	dir := x.fresh()
+	for _, oid := range []string{first, second} {
+		if !x.holds(dir, oid) {
+			t.Errorf("a cache rebuilt from the rows lacks revision commit %s", oid)
+		}
+	}
+	if out, stderr, err := x.p.Git().Try(t, "", nil, "--git-dir="+dir, "diff", first, second); err != nil ||
+		!strings.Contains(out, "retry twice") {
+		t.Fatalf("the interdiff of revision 1 and 2 after the purge: %v\n%s%s", err, out, stderr)
+	}
+}
+
+// A MERGE BUILT AFTER AN EXPUNGE CARRIES ITS EPOCH AND LANDS (M6-D4): once a
+// purge has run, its repository's drop epoch counts the expunge, and the
+// committer refuses `expunging` a merge whose builder's copy held another
+// epoch. The builder proposes the epoch of the copy its landing pinned, so a
+// change merged after the expunge lands on its first build, with no rebuild —
+// on the whole path: a person's merge through the git node's code host, built
+// in the cache the expunge left, its record decided by the data node's
+// committer.
+//
+// Mutation: propose the merge at drop epoch 0, as a builder that dropped its
+// copy's epoch would, and every build is refused expunging until the merge is
+// answered expunging.
+func TestAMergeBuiltAfterAnExpungeCarriesItsEpoch(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.push(4 << 10)
+	x.p.Commit(x.work, map[string]string{"fix.txt": "fixed\n"}, "fix the upload")
+	if res := x.p.PushArgs(x.c.Ctx, x.work, []string{"-o", "change"}, x.c.URL(0),
+		"HEAD:refs/heads/feature"); !res.OK("refs/heads/feature") {
+		t.Fatalf("the push opening a change: %s", res)
+	}
+	x.purge()
+	c, _, _ := x.compactorOf(nil)
+	x.served(c)
+	if epoch := x.rows().Repo.DropEpoch; epoch < 1 {
+		t.Fatalf("the premise: the repository is at drop epoch %d after a purge, want the expunge counted", epoch)
+	}
+
+	// THE FIXTURE CHART'S PERSON, whose seat signs the merge's commit.
+	pat := code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin(codetest.FixturePat),
+		Seat: codetest.FixturePat}
+	ans, err := x.fleet.Code(t).Read(x.c.Ctx, code.ReadQuery{Kind: code.ReadChanges, Asker: pat,
+		Repo: codetest.RepoName, Fresh: codetest.Linearizable})
+	if err != nil {
+		t.Fatalf("read the changes: %v", err)
+	}
+	i := slices.IndexFunc(ans.Changes, func(ch code.ChangeSummary) bool {
+		return ch.SourceRef == "refs/heads/feature" && ch.State.Live()
+	})
+	if i < 0 {
+		t.Fatalf("no live change heads refs/heads/feature: %+v", ans.Changes)
+	}
+	ch := ans.Changes[i]
+	res, err := x.node().Host().Write(x.c.Ctx, code.EngineWrite{Kind: code.WriteMergeChange,
+		RepoID: x.rows().Repo.ID, Principal: pat, OpID: statelog.NewOpID(time.Now(), ""),
+		Fresh: codetest.Linearizable, Ref: "refs/heads/main", ExpectedHead: ch.Head, Change: ch.Number,
+		Method: code.MergeMethodMerge, Override: "merged past its gate to hold the expunge's epoch"})
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Merge == nil || res.Merge.Refusal != "" {
+		t.Fatalf("the merge after the expunge answered %+v %v (%+v), want it applied", res, err, res.Merge)
+	}
+	if res.Merge.Recomputes != 0 {
+		t.Errorf("the merge after the expunge was built %d times again, want none: its first build carried "+
+			"the epoch its copy held", res.Merge.Recomputes)
+	}
 }

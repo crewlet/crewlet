@@ -63,7 +63,12 @@
 // parameters are bound by its instantiation, a generic function's by its
 // explicit type arguments or by unifying each parameter's type with its
 // argument's, as the compiler infers them, and a generic method's by the
-// receiver it is selected on.
+// receiver it is selected on. A PARAMETER NOTHING BINDS is reported as one
+// ([World.Param]) — a function's, a type's, and a generic method's
+// receiver's, which the parser gives no object (go.dev/issue/50956) and which
+// is found by the method whose receiver declares it, shadowing any package
+// type of its name — so a gate can pass a value that is whatever an
+// instantiation makes it rather than refuse it as a type it cannot resolve.
 //
 // # Three answers, never two
 //

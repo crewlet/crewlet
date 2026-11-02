@@ -678,7 +678,7 @@ A run works on a change when one of its checkouts names one — a repository's `
 | Field | What it is | Left out |
 |---|---|---|
 | `target` | The branch the change proposes the run's branch into, resolved at the checkout, which must exist and be another branch than the run's | The repository's default branch, as it was at the checkout |
-| `title` | The change's title, one line of at most 256 bytes | The subject of the commit the run delivered its branch at — as `git push -o change` titles its change — else the branch's name |
+| `title` | The change's title, one line of at most 256 bytes | The subject of the commit the run delivered its branch at — as `git push -o change` titles its change — else the branch's name made one line, else `commit` and the commit's short id: an ask is never left unopened for its title |
 | `draft` | Open it as a draft, not yet asking to be merged | Open, asking to be merged |
 
 **At the collection, once, by the seat.** A box could open a change itself with `git push -o change` ([Code Host](code-host.md)), but a coding agent pushes as it goes, and a change opened at its first push asks its reviewers to read work in progress. So the engine opens it once the run is done — and only for a run that **finished**: it succeeded, and stopped on no question. A run that did not succeed is told it opened none and why, so the turn decides whether half the work is worth a review (`code_open_change`); a run that parks on a question opens none, and the run that carries on after the answer keeps the ask, so the run that finishes the work opens it. The change is opened as the seat the run is for — its owner and first author — from the branch's head as the push record left it, into the resolved target, carrying the work item the run was charged to and naming the turn and the run that opened it: the open a `code_open_change` of the same turn would make, decided by the repository's committer. Its operation is a step of the launch's own, derived from the launch's id and the instant it began, so a collection retried — on this node or another, after a restart — asks the same open and opens nothing twice, and names the change as the one it opened. A branch that already heads a live change — the run's own `git push -o change`, or anybody's — opens no other: the run is told that change.
@@ -813,6 +813,7 @@ These names are **reserved** as the code host's are: `code.checks.env`, `role.sa
 
 **How long it runs** is its file's `timeout_seconds`, held to the company's `code.checks.max_timeout_seconds` — unset, 50 minutes: a box on E2B's smallest plan lives an hour, and a check's box is given ten minutes past its timeout for its setup, so a check at the default fits the shortest remote session. A company running its checks in containers, or on a larger plan, raises it as far as six hours, the most any checks file may ask ([Configuration → Code](../getting-started/configuration.md#code)).
 
+**How many run** is bounded per cell: a `container` box on a git node by that node's `git.max_checks`, and an `e2b` box company-wide, by `code.checks.remote` — at most `max_running` at once (unset, 16) and `box_hours_per_day` hours of them in a UTC day (unset, 192). A check either cap holds back waits queued, claimed by nobody, until there is room ([What a check costs](code-host.md#what-a-check-costs)).
 
 ---
 

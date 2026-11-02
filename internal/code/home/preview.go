@@ -29,9 +29,10 @@ type PreviewOptions struct {
 	// NodeID is this node, which a refusal about the node names.
 	NodeID string
 	// Cache is the node's git cache and Git its pool, as the home's own
-	// merges use them.
-	Cache Cache
-	Git   Pool
+	// merges use them — and the cache's memo, which a decided preview is
+	// kept in, and the pool's git version, which keys it.
+	Cache PreviewCache
+	Git   PreviewPool
 	// Share is the node's ONE seat git-work share (code.NewGitShare over the
 	// pool's read lane), a unit of which every preview's merge holds, as a
 	// read by object id's git does: the node's seat reads, its engine
@@ -54,6 +55,24 @@ type PreviewOptions struct {
 	Metrics *metrics.Recorder
 	Logger  *slog.Logger
 	Now     func() time.Time
+}
+
+// PreviewCache is the node's git cache as a preview reaches it —
+// internal/code/cache's *Cache satisfies it: what the home's merges use
+// ([Cache]), and the pinned copy's MEMO, which a decided preview is answered
+// from the next time the same two commits are previewed (MemoGet), and kept
+// in once it is merged (Memo).
+type PreviewCache interface {
+	Cache
+	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
+	Memo(s cache.Synced) *cache.MemoBatch
+}
+
+// PreviewPool runs a preview's git — internal/code/gitproc's *Pool satisfies
+// it — and says which git it runs, which a memoized preview is keyed by.
+type PreviewPool interface {
+	Pool
+	Version() gitproc.Version
 }
 
 // Previews answers a git node's MERGE PREVIEWS — what merging one commit into
@@ -86,7 +105,12 @@ type PreviewOptions struct {
 //     sync that cannot be answered in time is unready as a read's is.
 //  5. A deleted or purging repository is code.ErrRepoNotFound, and the
 //     asker's grant — and the grant of the seat it reads for — is judged
-//     from the copy's row and this node's chart (code.JudgeRead).
+//     from the copy's row and this node's chart (code.JudgeRead). A preview
+//     of two commits this copy has merged before is then answered from the
+//     copy's MEMO with no git run — no scratch, no cat-file, no unit of the
+//     share — as a read by object id's page is (internal/code/cache's
+//     memo.go): a merge is a function of the two ids and the git that ran
+//     it, which key it ([previewMemoKey]). Step 8 records it all the same.
 //  6. Both commits are found in the copy with ONE `cat-file --batch-check`,
 //     a commit it lacks being code.ErrObjectNotFound and an id of another
 //     kind code.ErrInvalid. No refusal of steps 5 and 6 is concluded from a
@@ -96,7 +120,9 @@ type PreviewOptions struct {
 //     lane under ONE unit of the node's seat git-work share and within one
 //     read's git (gitproc.ReadDeadline) — so a preview is answered inside a
 //     git read's attempt (estate.GitReadAttempt) — a merge that runs out of
-//     it answering `unknown`, as the home records an undecided merge.
+//     it answering `unknown`, as the home records an undecided merge. A
+//     DECIDED merge is kept in the copy's memo for step 5's next look; an
+//     `unknown` one never, since asked again it may finish.
 //  8. A preview answered of a `visibility: unit` repository is recorded as
 //     its asker's read ([PreviewReadKind]).
 //
@@ -233,15 +259,7 @@ type previewing struct {
 
 // preview is MergePreview's work, under the context Stop cuts.
 func (p *Previews) preview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-	began := p.now()
 	pv := &previewing{p: p, q: q}
-	outcome := mergeFailed
-	defer func() {
-		if p.o.Metrics != nil {
-			p.o.Metrics.Observe(metrics.CodeHomeMergeDuration, p.now().Sub(began),
-				metrics.Attrs{"work": workPreview, "outcome": outcome})
-		}
-	}()
 	if err := pv.judgeable(); err != nil {
 		return code.MergePreviewAnswer{}, err
 	}
@@ -260,7 +278,6 @@ func (p *Previews) preview(ctx context.Context, q code.MergePreviewQuery) (code.
 	if err != nil {
 		return code.MergePreviewAnswer{}, err
 	}
-	outcome = string(m.state)
 	a := code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: m.state,
 		Conflicts: m.conflicts.Paths, ConflictsOmitted: m.conflicts.Omitted, Position: pv.synced.Position}
 	if err := pv.audit(ctx, a); err != nil {
@@ -373,6 +390,11 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 	if _, err := code.JudgeRead(q.Asker, q.CeilingSeat, repo, pv.roster); err != nil {
 		return merged{}, false, err
 	}
+	// THE MEMO FIRST, once the grant has judged the preview and before any
+	// git runs ([previewMemoKey]).
+	if m, ok := pv.recall(); ok {
+		return m, true, nil
+	}
 	// ITS OWN SCRATCH, a fresh id a preview: what the merge writes leaves
 	// with it, and no two previews — nor a preview and the home's own merge
 	// of the same two commits — share one.
@@ -398,13 +420,108 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 		return merged{}, true, err
 	}
 	defer release()
-	m, err := mergeIn(ctx, p.o.Git, sc, q.Base, q.Head, gitproc.ClassRead, p.gitBudget)
+	m, err := pv.mergeTimed(ctx, sc)
 	if err != nil && code.AnswerDue(ctx) {
 		return merged{}, true, pv.unready(code.UnreadyShare, fmt.Sprintf("%s could not merge before the "+
 			"preview's answer fell due, its asker's attempt spent; another git node answers meanwhile",
 			p.o.NodeID))
 	}
+	if err == nil {
+		pv.memoize(m)
+	}
 	return m, true, err
+}
+
+// previewMemoFormat names what a memoized preview holds — a previewMemo as
+// JSON — and is the first part of its key, so an entry of another shape, a
+// read's page among them (internal/code/query's own format), is never read
+// as one.
+const previewMemoFormat = "merge_preview/1"
+
+// previewMemo is a decided preview as the memo keeps it: what [mergeIn]
+// answered, and nothing the node or the moment stamps on the answer — its
+// repository and the copy's position are the preview's own.
+type previewMemo struct {
+	State            code.MergeState `json:"state"`
+	Conflicts        []string        `json:"conflicts,omitempty"`
+	ConflictsOmitted int64           `json:"conflicts_omitted,omitempty"`
+}
+
+// previewMemoKey is the key a preview of the same two commits is memoized
+// under on the pinned copy (cache.NewMemoKey): its format, the git the merge
+// ran — a merge is git's algorithm over the two commits, which a git build may
+// decide otherwise — and the two whole ids, base then head.
+//
+// A FUNCTION OF THE TWO IDS ALONE, so never stale, as every answer the memo
+// keeps is (internal/code/cache's memo.go): an object id names one object for
+// ever, the merge base is git's every one, and the memo is the copy's —
+// kept only where the merge found both commits in this incarnation, which
+// loses an object only with its history, and that drops the memo whole. So a
+// hit is answered with no git run, the copy not asked again whether it holds
+// the two.
+func (pv *previewing) previewMemoKey() cache.MemoKey {
+	return cache.NewMemoKey(previewMemoFormat, pv.p.o.Git.Version().String(), pv.q.Base, pv.q.Head)
+}
+
+// recall is the memo's preview of the two commits on the pinned copy, or
+// none: no entry, or one this build cannot read, which the merge then answers
+// and memoizes over.
+func (pv *previewing) recall() (merged, bool) {
+	body, ok := pv.p.o.Cache.MemoGet(pv.synced, pv.previewMemoKey())
+	if !ok {
+		return merged{}, false
+	}
+	var e previewMemo
+	if err := json.Unmarshal(body, &e); err != nil || !e.State.Decided() {
+		return merged{}, false
+	}
+	return merged{state: e.State, conflicts: code.ConflictsHeld{Paths: e.Conflicts,
+		Omitted: e.ConflictsOmitted}}, true
+}
+
+// memoize keeps m, the merge of the two commits, in the pinned copy's memo —
+// a DECIDED merge alone: one that ran out of its time (`unknown`) is the
+// node's moment, never the commits', and asked again may finish. A memo that
+// cannot be written is a slower preview next time, never a failed one.
+func (pv *previewing) memoize(m merged) {
+	if !m.state.Decided() {
+		return
+	}
+	body, err := json.Marshal(previewMemo{State: m.state, Conflicts: m.conflicts.Paths,
+		ConflictsOmitted: m.conflicts.Omitted})
+	if err != nil {
+		return
+	}
+	b := pv.p.o.Cache.Memo(pv.synced)
+	if b == nil {
+		return
+	}
+	b.Put(pv.previewMemoKey(), body)
+	b.Place(func(int) []byte { return nil })
+}
+
+// mergeTimed is step 7's merge ([mergeIn]) of the preview's two commits in sc,
+// in the read lane within one read's git, observed on
+// crewlet.code.home.merge.duration under `work` preview — ITS MERGE-TREE
+// ALONE, since only a preview that reached it merged anything: one refused
+// before it (behind its configuration, holding no chart, not held, not
+// permitted, a commit absent, an id of no commit) is a read's refusal and no
+// merge, and its sync and its wait for a unit of the share are the cache's
+// and the share's. `failed` is a merge-tree that failed, or that its asker's
+// attempt ended first.
+func (pv *previewing) mergeTimed(ctx context.Context, sc *cache.Scratch) (merged, error) {
+	p := pv.p
+	began := p.now()
+	m, err := mergeIn(ctx, p.o.Git, sc, pv.q.Base, pv.q.Head, gitproc.ClassRead, p.gitBudget)
+	if p.o.Metrics != nil {
+		outcome := mergeFailed
+		if err == nil {
+			outcome = string(m.state)
+		}
+		p.o.Metrics.Observe(metrics.CodeHomeMergeDuration, p.now().Sub(began),
+			metrics.Attrs{"work": workPreview, "outcome": outcome})
+	}
+	return m, err
 }
 
 // commits is step 6: the preview's two ids found in the copy — ONE `cat-file

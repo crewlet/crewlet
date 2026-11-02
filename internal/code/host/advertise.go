@@ -227,9 +227,10 @@ func exitedByItself(err error) bool {
 // for a push a principal whose grant as its admission judged it
 // (admission.grant) lets it push nothing — a token bound to nobody, or a box
 // whose run was given the repository to read or whose seat pushes nothing
-// there: code.Grant.MayPush — or an archived repository — and records a push
-// that ends here through its request's record (a fetch's is nil, and records
-// nothing). It reports whether it answered.
+// there: code.Grant.MayPush — or a repository that takes no push, archived,
+// being imported or a pull mirror ([Server.statusRefusal]) — and records a
+// push that ends here through its request's record (a fetch's is nil, and
+// records nothing). It reports whether it answered.
 func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push bool, adm admission,
 	repo code.RepoRef, audit *pushAudit) bool {
 
@@ -242,8 +243,12 @@ func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push 
 		words, refusal = s.goneSentence(repo), AuditRefusal(code.RefusalRepoDeleted)
 	case push && !adm.grant.MayPush():
 		words, refusal = adm.grant.PushRefusal(), grantRefusal(adm.principal())
-	case push && repo.Status == code.RepoStatusArchived:
-		words, refusal = code.ArchivedDetail(repo.Name, repo.ManagedBy), AuditRefusal(code.RefusalRepoArchived)
+	case push:
+		reason, sentence := s.statusRefusal(repo)
+		if reason == "" {
+			return false
+		}
+		words, refusal = sentence, AuditRefusal(reason)
 	default:
 		return false
 	}

@@ -31,6 +31,8 @@ type CodeServer interface {
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
+	ProposeImport(ctx context.Context, p code.ImportProposal) (code.SyncResult, error)
+	ProposeMirrorSync(ctx context.Context, p code.MirrorSyncProposal) (code.SyncResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 	ProposeMerge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
@@ -113,6 +115,36 @@ var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
 		return res, ranNothing(err)
 	}).keyedBy(code.ExpungeProposal.RepoID).answeredOn(laneProposals)
 
+// opCodeImport is one step of a repository's import — a chunk its home
+// fetched, or the import's end — asked of the repository's COMMITTER exactly
+// as an expunge record is: an IDEMPOTENT write, by its Seq's precondition
+// rather than its id (a chunk landed answers its second asking stale, and its
+// home reads the rows), so an unanswered one is asked of the repository's
+// runner-up as it stands. On the proposals lane, because it waits in the
+// repository's one queue beside its pushes. No actor: an import is the
+// engine's own, recorded as the deciding node's system work.
+var opCodeImport = define("code.import", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.ImportProposal) (code.SyncResult, error) {
+		if b.Code == nil {
+			return code.SyncResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeImport(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.ImportProposal.RepoID).answeredOn(laneProposals)
+
+// opCodeMirrorSync is one sync of a pull mirror its home fetched, asked of the
+// repository's COMMITTER as an import's step is: idempotent by its commands'
+// old values, which a sync landed falsifies, so its second asking is answered
+// stale. No actor: a sync is the engine's own.
+var opCodeMirrorSync = define("code.mirror_sync", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.MirrorSyncProposal) (code.SyncResult, error) {
+		if b.Code == nil {
+			return code.SyncResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeMirrorSync(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.MirrorSyncProposal.RepoID).answeredOn(laneProposals)
+
 // opCodeChange is a write of a change's lifecycle — an open, an edit, a draft's
 // state, a retarget, a close or a reopen — asked of the repository's COMMITTER
 // exactly as a push's is: an IDEMPOTENT write keyed by its operation id, which
@@ -143,23 +175,28 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 	judgesGrant(code.ChangeProposal.JudgesChart)
 
 // opCodeQueue is a write of a target's MERGE QUEUE — an enqueue of a change,
-// decided by its merge gate, or a dequeue of an entry — asked of the
-// repository's COMMITTER exactly as a change's write is: an IDEMPOTENT write
-// keyed by its operation id, which its asker minted once and the domain's
-// operation ledger collapses (an enqueue's entry id is derived from it, so no
-// retry queues a change twice), so an unanswered one is asked of the
-// repository's runner-up with the same id. On the proposals lane, because it
-// waits in the repository's one queue beside its pushes. No actor: the asker
-// travels inside the proposal, checked by its Validate on the node that
-// decides, which records it as who enqueued or dequeued.
+// decided by its merge gate, or a dequeue of an entry, and the queue's own
+// records its repository's home asks: a train, an ejection, a landing, a
+// green and a broken landing — asked of the repository's COMMITTER exactly as
+// a change's write is: an IDEMPOTENT write keyed by its operation id, which
+// its asker minted once and the domain's operation ledger collapses (an
+// enqueue's entry id, a train's and a landing's ids are derived from it, so no
+// retry queues a change or lands a train twice), so an unanswered one is
+// asked of the repository's runner-up with the same id. On the proposals
+// lane, because it waits in the repository's one queue beside its pushes. No
+// actor: the asker travels inside the proposal, checked by its Validate on
+// the node that decides, which records it as who enqueued or dequeued — and
+// the queue's own records name none, a landing landing each change as its
+// enqueuer.
 //
-// A WRITE THE CHART JUDGES — every enqueue, whoever asks, since its merge
-// gate counts each approval by who may approve the change, each owner's by
-// the lead chain above it and a seat's merge authority by its grant; and a
-// seat's dequeue, whose grant says whether it may take an entry out — is
-// declared so (code.QueueProposal.JudgesChart, the committer's own rule), and
-// a node behind the company's configuration answers none of it
-// ([op.judgesGrant]), even asked last; a person's dequeue consults no chart.
+// A WRITE THE CHART JUDGES — every enqueue and every landing, whoever asks,
+// since the merge gate each judges counts each approval by who may approve
+// the change, each owner's by the lead chain above it and a seat's merge
+// authority by its grant; and a seat's dequeue, whose grant says whether it
+// may take an entry out — is declared so (code.QueueProposal.JudgesChart, the
+// committer's own rule), and a node behind the company's configuration
+// answers none of it ([op.judgesGrant]), even asked last; a person's dequeue
+// and the queue's other records consult no chart.
 var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, p code.QueueProposal) (code.QueueResult, error) {
 		if b.Code == nil {
@@ -206,9 +243,11 @@ var opCodeMerge = define("code.merge", opIdempotentWrite, codeDomain, false,
 // operation ledger collapses (a comment's id is derived from it, so no retry
 // says it twice), so an unanswered one is asked of the repository's runner-up
 // with the same id. On the proposals lane, because it holds its answer slot
-// while it waits for its change's turn on that node. No actor: the asker
-// travels inside the write, checked by its Validate on the node that decides,
-// which records it as who wrote it.
+// while it waits for its change's turn on that node — its share of the lane
+// the change writer's own node-wide count, past which the writer answers busy
+// at once ([proposalAnswers]). No actor: the asker travels inside the write,
+// checked by its Validate on the node that decides, which records it as who
+// wrote it.
 //
 // A WRITE THE CHART JUDGES — a seat's, an ask of reviewers by anybody, since
 // each reviewer is judged by the chart, and the home's own record of a
@@ -264,10 +303,19 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 // the domain's operation ledger collapses, so an unanswered one is asked of the
 // repository's runner-up with the same id. On the proposals lane, because it
 // holds its answer slot while it waits for its repository's turn on that node
-// — a wait the writer bounds (code.ChecksWritesPerRepo, ChecksWritesPerNode),
-// answering a write past it busy at once, and the lane's width holds
-// ([proposalAnswers]). No actor: every write is the engine's own, and names no
-// principal.
+// — its share of the lane the checks writer's own node-wide count, past which
+// the writer answers busy at once ([proposalAnswers]). No actor: the engine's
+// own writes name no principal, and a principal's — a rerun a seat or a person
+// asks for, a person's CI's report — travels inside the request, checked by its
+// Validate on the node that decides, which records it as who asked.
+//
+// A SEAT'S RERUN JUDGES ITS GRANT from the deciding node's chart — whether it
+// may write the repository or wrote the change the check judges, and
+// whoever its turn works for — so it is declared so
+// (code.ChecksRequest.JudgesChart, the writer's own rule), and a node behind
+// the company's configuration answers none of it ([op.judgesGrant]), even
+// asked last; a person's rerun and report, and the engine's own records,
+// consult no chart.
 var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, r code.ChecksRequest) (code.ChecksResult, error) {
 		if b.Code == nil {
@@ -275,45 +323,50 @@ var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 		}
 		res, err := b.Code.PublishChecks(ctx, r)
 		return res, ranNothing(err)
-	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals)
+	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals).
+	judgesGrant(code.ChecksRequest.JudgesChart)
 
 // proposalAnswers is how many proposals a data node answers at once, on the
-// lane they have to themselves ([laneProposals]): 2 112, THE MOST ONE
-// REPOSITORY'S COMMITTER HOLDS — a full queue (code.CommitterInbox) and the
-// batch in flight ahead of it (code.MaxPushesPerRecord); a compaction's
-// proposal takes a place of that same queue, so the figure counts it already
-// — BESIDE THE MOST THE NODE'S TWO OTHER WRITERS ON THE LANE HOLD: its checks
-// writer's (code.ChecksWritesPerNode) and its change writer's
-// (code.ConversationWritesPerNode). A proposal holds its slot while it waits in
-// its repository's queue and its batch runs, so a lane as narrow as
-// [queue.ConcurrentAnswers] would cut a burst to one repository off at
-// sixty-four, the rest waiting unseen in the broker's buffer behind them; as
-// wide as a whole queue, the bound a burst meets is the committer's own,
-// which answers at once — busy past a repository's count or bytes or the
-// node's (code.CommitterNodeBytes), and busy the moment a queued push's
-// attempt runs short — so a slot is held for long only by a push the
-// committer is deciding or will decide inside its asker's attempt. A check
-// write and a conversation write hold their slots while they wait for their
-// repository's or change's turn, so each writer answers a write past its own
-// bounds busy at once as well, and the lane holds both writers' whole bounds
-// beside the committer's queue: a burst of one repository's machine-made
-// check writes — a home queuing a target's checks for every waiting head, a
-// fleet's runners claiming at once — once held every slot, and the node's
-// pushes waited unseen behind it.
+// lane they have to themselves ([laneProposals]): 3 136, EVERY ANSWER THE
+// NODE'S CODE HALF HOLDS AT ONCE, summed over the three that answer on it —
+// what its committer holds across every repository
+// (code.CommitterNodeProposals: one repository's full queue and the batch in
+// flight ahead of it, 1 088), what its change writer holds across every change
+// (code.ChangeWriterNodeWrites, 1 024) and what its checks writer holds across
+// every repository (code.ChecksWriterNodeWrites, 1 024). A request holds its
+// slot for as long as its component holds it — a push while it waits in its
+// repository's queue and its batch runs, a write of a change's conversation or
+// of a repository's checks while it waits for its key's turn and its publish
+// runs — so each component refuses busy AT ONCE past its own node-wide count,
+// and past its bytes (code.CommitterNodeBytes, code.ChangeWriterNodeBytes,
+// code.ChecksWriterNodeBytes) and its per-key bounds before that, and a slot is
+// held for long only by a write its component is deciding or will decide
+// inside its asker's attempt. With the lane as wide as the three counts
+// together, the bound a burst meets is always its component's own, answered at
+// once — never the registration's, past which a request waits unseen in the
+// broker's buffer for a slot — and no component's burst holds a slot another's
+// request needs: a burst of comments on one change, written faster than the
+// change's single flight drains, or queued behind a publish an election holds,
+// is refused busy once its writer is full while every push, compaction and
+// change routed to the node is still answered. The lane's slots are shared by
+// SUMMING the shares rather than by a registration each, so a request finds
+// its slot on the one subject its operation is declared on. A request also
+// holds a slot while the serving node waits for its asker's floor (bounded by
+// statelog.ReadBudget) and while it is refused, each briefly.
 //
-// What a slot costs is a goroutine and the proposal it carries, a kilobyte or
-// two for an ordinary push: a full lane of them is a few megabytes. The
-// largest push the code domain admits weighs about a mebibyte
-// (code.EntryRoom: some six hundred commands at the longest ref JSON spells
-// six times over — a thousand at the longest plain ref, and a full list of
-// the commits it introduced, weigh about 440 KiB), and those the committer
-// bounds by their bytes, so a full lane
-// of large ones holds what code.CommitterNodeBytes admits and answers the
+// What a slot costs is a goroutine and the request it carries, a kilobyte or
+// two for an ordinary push or comment: a full lane of them is some tens of
+// megabytes of stacks. The largest push the code domain admits weighs about a
+// mebibyte (code.EntryRoom: some six hundred commands at the longest ref JSON
+// spells six times over — a thousand at the longest plain ref, and a full list
+// of the commits it introduced, weigh about 440 KiB), and so does the largest
+// write of a conversation (code.MaxConversationBytes, a review with its
+// findings), and those their components bound by their bytes, so a full lane
+// of large ones holds what each component's node bytes admit and answers the
 // rest busy at once. And every proposal is a push some receiving node's
 // receive-pack holds open while it waits, so what reaches the lane at once is
 // bounded by the fleet's transfer lanes as well.
-const proposalAnswers = code.CommitterInbox + code.MaxPushesPerRecord + code.ChecksWritesPerNode +
-	code.ConversationWritesPerNode
+const proposalAnswers = code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites
 
 // opCodeResolve is a repository by its name: the host's admission of every git
 // request.
@@ -364,24 +417,37 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // requested; a repository's checks — a change's, a commit's, the
 // repository's newest ended first, or every readable repository's since a
 // moment — and one attempt whole, each held to the grant on its repository;
-// the change heads a repository's home owes a dispatch of their checks
-// (checks_due); the live entries of a repository's merge queues — of one
+// one attempt by its key (check_box), the read a check's box's admission
+// makes on every request the box sends to /box/git/ or /box/code/
+// (internal/code/host's checkadmit.go); the attempts waiting for a runner,
+// oldest queued first (checks_queued), and those runners hold
+// (checks_running); the change heads a repository's home owes a dispatch of
+// their checks (checks_due); the live entries of a repository's merge queues — of one
 // target, or of every readable repository — with their trains, a target's
 // landings above its green and a repository's green rows, each held to the
 // grant on its repository; and the repositories holding a live entry, or one
-// repository's entries, which its home's queue works from (queue_due). A
-// seat's read on a node that holds no chart is that node's
-// code.ErrNotServing — it ran nothing — so the walk asks the next.
+// repository's entries, which its home's queue works from (queue_due); and
+// a repository's push mirror with the green rows it publishes, read in one
+// snapshot by the home that pushes it (mirror_push). A seat's read on a
+// node that holds no chart is that node's code.ErrNotServing — it ran
+// nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.JudgeRead) — and the
 // grant of the seat it reads for, which rides only beside a seat's asker
 // (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
-// person's or a token's consults no chart, and a `run_pushes` page, an
-// `introduced` page and the `compaction_due`, `publication_due`,
-// `expunge_due`, `changes_due`, `checks_due` and `queue_due` listings name no
-// asker at all, so each is answered there as a last resort.
+// person's or a token's consults no chart, and the engine's own reads name no
+// asker at all — a `run_pushes` page, an `introduced` page, a
+// `branch_changes` read, a repository's `expunge_tips`, the `compaction_due`,
+// `publication_due`, `expunge_due`, `imports_due`, `mirrors_due`, `indexed`,
+// `changes_due`, `checks_due`, `checks_queued`, `checks_running` and
+// `queue_due` listings, a check's box's admission's `check_box` and a push
+// mirror's `mirror_push` — so each is answered there as a last resort: a
+// check's box's admission among them, which a node behind the company's
+// configuration may therefore answer, since the attempt's row it reads is the
+// box's authority and no chart judges it. A push mirror's read is the home's,
+// which judges the seat it pushes as itself (code.MirrorSeatRefusal).
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

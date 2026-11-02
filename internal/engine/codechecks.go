@@ -25,11 +25,12 @@ import (
 // seam, the router's git orders, the current sandbox catalogue and epoch read
 // at every walk and attempt, the code host's check tokens and this node's
 // CREWLET_BOX_GIT_URL, its container cells git.max_checks of this machine's
-// cores, nudged by a watch on this node's own code log. The runner is BUILT
-// here and STARTED with the native half's duties beside the home's loop
-// ([Engine.startNativeDuties]), for that loop's reasons; it is stopped FIRST
-// in the code host's one bounded stop, before the home's loop and the host its
-// boxes clone from ([native.stopCodeHost]).
+// cores, its remote cells held to the company's caps on the coordination
+// store (code.checks.remote), nudged by a watch on this node's own code log.
+// The runner is BUILT here and STARTED with the native half's duties beside
+// the home's loop ([Engine.startNativeDuties]), for that loop's reasons; it is
+// stopped FIRST in the code host's one bounded stop, before the home's loop
+// and the host its boxes clone from ([native.stopCodeHost]).
 //
 // A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK: a check's box clones its
 // commit from the code host at that address and has no other way to reach
@@ -58,6 +59,9 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 		NodeID: nodeID, Estate: seam, Order: e.router, Boxes: e.checkBoxes, Company: e.checkCompany,
 		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL,
 		Slots: boot.Git.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
+		// THE COMPANY'S REMOTE CAPS are the coordination store's: a slot
+		// leased for each remote box, its minutes on the fleet's counter.
+		Leases: e.backends.Coord, Minutes: e.backends.Fleet,
 		Nudges: checkNudges{nudges: codeNudges{log: codeLog.log, runner: codeLog.runner}}, Metrics: e.metrics,
 	}
 	// A FAILED RUN'S LOG goes to the fleet's object store, which the code

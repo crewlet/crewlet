@@ -362,6 +362,164 @@ func TestTheExpungeListingNamesTheExpungesOwed(t *testing.T) {
 	}
 }
 
+// listExpunges is every page of n's `expunge_due` listing asked with q, read
+// at stale, each page of the reader's own size: the candidates in the order
+// served, and the cursor every page but the last ended at.
+func listExpunges(t *testing.T, n *node, q code.ReadQuery) ([]code.ExpungeCandidate, []string) {
+	t.Helper()
+	q.Kind, q.Fresh = code.ReadExpungeDue, statelog.Freshness{Level: statelog.ReadStale}
+	var (
+		out     []code.ExpungeCandidate
+		cursors []string
+	)
+	for page := 0; ; page++ {
+		got, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("list page %d: %v", page, err)
+		}
+		out = append(out, got.Expunge...)
+		if got.Next == "" {
+			return out, cursors
+		}
+		cursors = append(cursors, got.Next)
+		q.Cursor = got.Next
+	}
+}
+
+// THE EXPUNGE LISTING'S WEEKLY ARM FOLLOWS ITS OPEN ARM: asked with an
+// instant (ReadQuery.ExpungedBefore), the `expunge_due` listing serves every
+// repository with an expunge open or a purge requested first, by id, and then
+// every OTHER active or archived repository last expunged at or before the
+// instant — never expunged here — least recently expunged first and the id
+// breaking a tie, each repository once and a deleted one in neither, paged one
+// row at a time across both arms. Asked without one it serves the open arm
+// alone, as the purge's maintainer always asked it; a weekly arm's cursor
+// without the instant, and the instant on any other read, are refused.
+//
+// Mutation: drop the weekly arm's "nothing open" residual, and a repository
+// owing a purge is listed twice; keyset the weekly arm on expunged_at alone,
+// and a page of one row skips every repository never expunged but the first.
+func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	requested, _ := packedRepo(t, n, "requested", 1)
+	ask := purgeOf(requested)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &ask})
+	requireExpunged(t, res, err)
+	expunging, ids := packedRepo(t, n, "expunging", 2)
+	b := beginFor(n, expunging, 1, ids, 1, 1)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	var idle []string
+	for _, name := range []string{"idle-a", "idle-b", "idle-c"} {
+		id, _ := packedRepo(t, n, name, 1)
+		idle = append(idle, id)
+	}
+	gone, _ := packedRepo(t, n, "gone", 1)
+	if _, err := n.store.DeleteRepo(ctx, n.activate(t2), gone); err != nil {
+		t.Fatalf("delete %s: %v", gone, err)
+	}
+	n.drain()
+
+	code.SetPageLimits(n.reader, 1, 1<<20)
+	listed, cursors := listExpunges(t, n, code.ReadQuery{ExpungedBefore: time.Now()})
+	var got []string
+	for _, cand := range listed {
+		got = append(got, cand.ID)
+	}
+	want := slices.Concat(sorted(requested, expunging), sorted(idle...))
+	if !slices.Equal(got, want) {
+		t.Fatalf("the listing with its weekly arm named %v, want the open arm %v then the weekly arm %v",
+			got, sorted(requested, expunging), sorted(idle...))
+	}
+	for _, cand := range listed[2:] {
+		if cand.Open != "" || cand.Request != "" || cand.LivePacks != 1 || cand.LiveBytes == 0 ||
+			cand.Version.IsZero() || !cand.ExpungedAt.IsZero() {
+			t.Errorf("the weekly arm names %+v, want nothing open, its one live pack, its bytes and version, "+
+				"never expunged", cand)
+		}
+	}
+
+	open, _ := listExpunges(t, n, code.ReadQuery{})
+	if len(open) != 2 {
+		t.Errorf("the listing without an instant named %d repositories, want the open arm's 2", len(open))
+	}
+	weekly := cursors[len(cursors)-1]
+	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadExpungeDue, Cursor: weekly,
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrBadCursor) {
+		t.Errorf("the weekly arm's cursor %q without its instant answered %v, want ErrBadCursor", weekly, err)
+	}
+	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadCompactionDue, ExpungedBefore: time.Now(),
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrInvalid) ||
+		!strings.Contains(err.Error(), "expunged_before") {
+		t.Errorf("a compaction listing naming an instant answered %v, want ErrInvalid naming expunged_before", err)
+	}
+}
+
+// A SCRATCH REPOSITORY IS EXPUNGED LIKE A PROJECT: a push is refused
+// repo_size on a repository's live bytes whatever its kind, so the weekly
+// arm of the `expunge_due` listing names a seat's scratch repository beside
+// a project, with its live packs; an expunge of it begins and commits as a
+// project's does; and once committed the weekly arm leaves it out until the
+// instant it was expunged at, while the project, never expunged, stays.
+//
+// Mutation: hold the weekly arm to projects (`AND kind = 'project'`), and the
+// scratch repository is never listed.
+func TestAScratchRepositoryIsExpungedLikeAProject(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	project, _ := packedRepo(t, n, "web", 2)
+	scratch := n.made(agent("dev"), "dev.spike", seatOwned("dev"))
+	ids := pushPacks(t, n, scratch, 2)
+	n.drain()
+	weekly := func(before time.Time) map[string]code.ExpungeCandidate {
+		t.Helper()
+		listed, _ := listExpunges(t, n, code.ReadQuery{ExpungedBefore: before})
+		out := map[string]code.ExpungeCandidate{}
+		for _, cand := range listed {
+			out[cand.ID] = cand
+		}
+		return out
+	}
+
+	got := weekly(time.Now())
+	if cand, ok := got[scratch]; !ok || cand.LivePacks != 2 || cand.Name != "dev.spike" {
+		t.Fatalf("the weekly arm names the scratch repository as %+v (listed %t), want dev.spike with its 2 "+
+			"live packs", cand, ok)
+	}
+	if _, ok := got[project]; !ok {
+		t.Fatal("the weekly arm does not name the project beside the scratch repository")
+	}
+
+	b := beginFor(n, scratch, 1, ids, 1, 1)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	cm := commitFor(n, b, 0)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Commit: &cm})
+	requireExpunged(t, res, err)
+	n.drain()
+	if got := n.livePacks(scratch); !slices.Equal(got, []string{b.Add[0].PackID}) {
+		t.Fatalf("after its expunge the scratch repository holds %v, want only the kept pack", got)
+	}
+
+	got = weekly(time.Now().Add(-time.Hour))
+	if _, ok := got[scratch]; ok {
+		t.Error("the weekly arm names the scratch repository its expunge has just committed in")
+	}
+	if _, ok := got[project]; !ok {
+		t.Error("the weekly arm no longer names the project, never expunged")
+	}
+	if cand, ok := weekly(time.Now().Add(time.Hour))[scratch]; !ok || cand.ExpungedAt.IsZero() {
+		t.Errorf("past its expunge's instant the weekly arm names the scratch repository as %+v (listed %t), "+
+			"want it, with when it was expunged", cand, ok)
+	}
+}
+
 // A REPOSITORY MID-EXPUNGE IS LISTED FOR NO PUBLICATION: rule 6g refuses every
 // publication between an expunge's begin and its commit, so the publication
 // due listing leaves out a repository with an expunge open — however many of
@@ -477,7 +635,8 @@ func TestAnExpungesTipsAreWhatItsDropsLeftSinceItsInstant(t *testing.T) {
 		t.Fatalf("the tips in pages of two are %v, want %v", tips, want)
 	}
 
-	early := fmt.Sprintf("%d:2:%s:refs/heads/dropped-000000", store.EncodeTime(since.Add(-time.Hour)), oidOf("x"))
+	early := fmt.Sprintf("drops:%d:2:%s:refs/heads/dropped-000000", store.EncodeTime(since.Add(-time.Hour)),
+		oidOf("x"))
 	if _, err := read(repo, early); !errors.Is(err, code.ErrBadCursor) {
 		t.Errorf("a cursor from before the instant: %v, want ErrBadCursor", err)
 	}
@@ -542,5 +701,59 @@ func TestAnUnstoredExpungeIsCheckedAsItWillBeStored(t *testing.T) {
 	asked := purgeOf(begin.RepoID)
 	if err := (code.ExpungeProposal{Request: &asked}).ValidateUnstored(); !errors.Is(err, code.ErrInvalidProposal) {
 		t.Errorf("ValidateUnstored of a request: %v, want ErrInvalidProposal", err)
+	}
+}
+
+// A REPOSITORY'S DETAIL SAYS WHERE ITS PURGE STANDS, from its own row: none
+// before anything is asked; the purge a person asked for, and where its
+// record landed, once it is; the expunge its maintainer opened to serve it
+// while that is open; and, once its commit lands, the request served, the
+// commit's instant and what it dropped — what a person who asked for a purge
+// reads to know it is done.
+//
+// Mutation: leave the detail's expunge block unread, or read the open
+// expunge into the request → red.
+func TestARepositorysDetailSaysWhereItsPurgeStands(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	c, _ := committerOn(t, n, n.pub)
+	detail := func() code.ExpungeState {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "web"})
+		if err != nil {
+			t.Fatalf("read web's detail: %v", err)
+		}
+		return a.Repo.Expunge
+	}
+	if got := detail(); got != (code.ExpungeState{}) {
+		t.Fatalf("a repository never purged details its expunge as %+v, want none", got)
+	}
+
+	ask := purgeOf(repo)
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Request: &ask})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Request != ask.RequestID || got.Requested != res.Position || got.Open != "" ||
+		!got.ExpungedAt.IsZero() {
+		t.Fatalf("a purge asked details as %+v, want request %s at %s and nothing open", got, ask.RequestID,
+			res.Position)
+	}
+
+	b := beginFor(n, repo, 1, ids, 1, 1)
+	b.RequestID, b.Grace = ask.RequestID, 0
+	res, err = c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Open != b.ExpungeID || got.Request != ask.RequestID {
+		t.Fatalf("a purge being served details as %+v, want expunge %s open for request %s", got, b.ExpungeID,
+			ask.RequestID)
+	}
+
+	commit := commitFor(n, b, 0)
+	res, err = c.ProposeExpunge(t.Context(), code.ExpungeProposal{Commit: &commit})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Open != "" || got.Request != "" || got.ExpungedAt.IsZero() ||
+		got.DroppedObjects != 1 || got.DroppedBytes <= 0 {
+		t.Fatalf("a purge served details as %+v, want nothing open or asked, and its commit's instant and "+
+			"the one object it dropped", got)
 	}
 }

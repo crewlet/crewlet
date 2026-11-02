@@ -82,7 +82,7 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	// memory.
 	running := turnctx.NewHolds(nil)
 	for _, key := range []string{"repo-b", refB} {
-		if _, err := running.Take(t.Context(), key); err != nil {
+		if err := running.Take(t.Context(), key); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -250,7 +250,8 @@ func (s *execCounter) ExecContext(ctx context.Context, query string, args ...any
 // moves fails here too.
 //
 // Mutation: write each moved change with a statement of its own, and the
-// record of 999 issues a statement a change; leave state out of changeMerged
+// record of 999 issues a statement a change, or clear the ended changes'
+// readiness a statement a change; leave state out of changeMerged
 // or changeStateMoved, and the merged or the closed change stays open; leave
 // head_oid out of changeHeadMoved, and no change is at its second revision's
 // head.
@@ -300,18 +301,19 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 				return n
 			}
 			// THE MOVED CHANGES' ROWS — the n-2 whose heads it moved, the one
-			// it merged and the one it closed, each kind its own write — AND
-			// THE REVISIONS: the pusher is an author of each already, and the
-			// record opens none.
+			// it merged and the one it closed, each kind its own write — THE
+			// REVISIONS, and the two ended changes' stored readiness cleared
+			// in one statement: the pusher is an author of each already, and
+			// the record opens none.
 			want := chunks(n-2, changeColumns) + chunks(1, changeColumns) + chunks(1, changeColumns) +
-				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at")
+				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at") + 1
 			if issued != want {
 				t.Errorf("the record's changes took %d statements, want %d: a statement a chunk of each kind "+
-					"of write and of each table", issued, want)
+					"of write and of each table, and one for the ended changes' readiness", issued, want)
 			}
-			if written != counted || written != n+n-2 {
-				t.Errorf("the write answered %d rows, its book counted %d, want %d: every change and every "+
-					"revision", written, counted, n+n-2)
+			if written != counted || written != n+n-2+2 {
+				t.Errorf("the write answered %d rows, its book counted %d, want %d: every change, every "+
+					"revision and the stored readiness of each change it ended", written, counted, n+n-2+2)
 			}
 			for state, count := range map[string]int{"open": n - 2, "closed": 1, "merged": 1} {
 				if got := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND state = ?`, repo,

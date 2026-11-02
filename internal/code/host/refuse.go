@@ -22,7 +22,8 @@ import (
 //
 // EVERY ANSWER IS IDENTIFIED BY WHAT FAILED, NEVER BY ELIMINATION. The code
 // log's sentence — "the code log could not be read here", the node cut off
-// from the fleet — is for the code log's own failure alone, marked where it
+// from the fleet or a single member's broker stalled — is for the code log's
+// own failure alone, marked where it
 // is met (cache.ErrLogRead, errLogRead); the object store's failure is its
 // own (cache.ErrStoreRead); and what nothing names — this node's disk, a
 // process that could not start, a failure no case foresaw — is said to be

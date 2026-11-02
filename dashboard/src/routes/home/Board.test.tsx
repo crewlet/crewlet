@@ -207,7 +207,7 @@ describe("at rest", () => {
   test("Home draws the board it shipped with, with Edit Home and New task", async () => {
     mount();
     await settle();
-    expect(blocks()).toHaveLength(7);
+    expect(blocks()).toHaveLength(8);
     expect(screen.getByRole("region", { name: "The company at a glance" })).toBeTruthy();
     for (const title of [
       /^Needs your decision/,
@@ -216,6 +216,7 @@ describe("at rest", () => {
       "Tokens by team",
       "Projects",
       "Recent activity",
+      "Code waiting on a person",
     ]) {
       expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     }
@@ -367,7 +368,7 @@ describe("Edit Home", () => {
     fireEvent.click(within(ask).getByRole("button", { name: "Discard changes" }));
     await settle();
     expect(notes()).toBe(0);
-    expect(blocks()).toHaveLength(7);
+    expect(blocks()).toHaveLength(8);
     expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
   });
 

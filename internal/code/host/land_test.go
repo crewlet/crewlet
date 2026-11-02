@@ -320,6 +320,90 @@ func TestALandingRefusesARepositoryThatTakesNoPush(t *testing.T) {
 	}
 }
 
+// A PULL MIRROR REFUSES EVERY PUSH, and so does a repository being imported:
+// each moves only by what the code host fetches from another host — a
+// mirror's syncs, an import's chunks — so a person's git push is refused at
+// its advertisement, naming the source, and a builder's landing before its
+// bundle is stored, each with the domain's one sentence for the state
+// (code.MirroredDetail, code.ImportingDetail). A fetch is served throughout:
+// a mirror is a repository to read.
+//
+// Mutation: drop the mirror arm from the host's statusRefusal — the landing
+// stores a bundle and asks the committer, and the advertisement admits the
+// push, red; drop the importing arm — the same for the import.
+func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	node := c.Fleet.Nodes()[0]
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	first := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	mirrored := codetest.Settings()
+	mirrored.MirrorFrom = &code.MirrorSource{URL: "https://forge.example.com/acme/web.git",
+		Credential: "${FORGE_TOKEN}"}
+	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: mirrored})
+	if row := c.Rows().Repo; !row.Mirrored || row.Status != code.RepoStatusActive {
+		t.Fatalf("the repository after its mirror_from is %s mirrored=%v, want an active pull mirror",
+			row.Status, row.Mirrored)
+	}
+	head := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+	want := code.MirroredDetail(codetest.RepoName, code.ManagedConfig)
+	res := p.Push(c.Ctx, work, c.URL(0), "main")
+	if res.Err == nil || !strings.Contains(res.Stderr+res.Stdout, want) {
+		t.Errorf("a person's push to a pull mirror printed %s, want it refused saying %q", res, want)
+	}
+
+	stored := len(objects(t, c))
+	l, _ := scratchFor(t, c, p, "ceo", work, head)
+	if !l.Synced.Repo.Mirrored {
+		t.Fatalf("the synced row says no pull mirror")
+	}
+	l.Commands = []code.Command{{Ref: "refs/heads/landed", Old: code.ZeroOID, New: head}}
+	got, err := host.Land(c.Ctx, node.Host(), l)
+	if err != nil {
+		t.Fatalf("land a push to a pull mirror: %v", err)
+	}
+	for _, cmd := range got.Commands {
+		if cmd.Result != code.ResultNG || cmd.Reason != code.RefusalRepoMirrored || cmd.Detail != want {
+			t.Errorf("%s came to %s %s %q, want repo_mirrored %q", cmd.Ref, cmd.Result, cmd.Reason, cmd.Detail, want)
+		}
+	}
+	if got.Outcome != types.AuditRefused || got.Refusal != host.AuditRefusal(code.RefusalRepoMirrored) {
+		t.Errorf("the landing came to %s (%s), want refused repo_mirrored", got.Outcome, got.Refusal)
+	}
+	if n := len(objects(t, c)) - stored; n != 0 {
+		t.Errorf("a push to a pull mirror stored %d objects", n)
+	}
+	if got := p.LsRemote(c.URL(0), 2)["refs/heads/main"]; got != first {
+		t.Errorf("a fetch of the pull mirror reads main at %q, want %s: a mirror is read as any repository", got,
+			first)
+	}
+
+	// AN IMPORT: a repository code.repos declares filled from another host
+	// is importing from its create, and refuses a push as a mirror does.
+	imported := codetest.Settings()
+	c.Fleet.Declare(t, code.Declared{Name: "imported", Settings: imported,
+		Import: &code.ImportSource{URL: "https://forge.example.com/acme/api.git"}})
+	stored = len(objects(t, c))
+	res = p.Push(c.Ctx, work, node.URL()+"/git/imported", "main")
+	if want := code.ImportingDetail("imported"); res.Err == nil || !strings.Contains(res.Stderr+res.Stdout, want) {
+		t.Errorf("a person's push to a repository being imported printed %s, want it refused saying %q", res,
+			want)
+	}
+	// REFUSED BEFORE ITS BUNDLE IS STORED, by the code host itself: the
+	// committer would refuse it too, from the rows, but only once a bundle
+	// the push never needed is in the object store.
+	if n := len(objects(t, c)) - stored; n != 0 {
+		t.Errorf("a push to a repository being imported stored %d objects", n)
+	}
+	if rows, err := c.Fleet.Rows(c.Ctx, "imported", codetest.Linearizable); err != nil {
+		t.Fatalf("the rows of imported: %v", err)
+	} else if rows.Repo.Status != code.RepoStatusImporting || len(rows.Refs) != 0 {
+		t.Errorf("imported is %s holding %d refs, want importing and empty", rows.Repo.Status, len(rows.Refs))
+	}
+}
+
 // A LANDING THAT CANNOT FINISH IS THE PUSH'S, NEVER THE HOOK'S: a step of the
 // landing that fails — here the one after the bundle's upload, so the bundle IS
 // stored — fails the push in the engine's words and is logged

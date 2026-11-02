@@ -22,8 +22,9 @@ import (
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
 // it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its seven accessors —
-// principal, share, refs, boxFloor, resyncKey, floorWords and engineCommitter — and a box's nil check
+// three ran but through the admission's own fields and its eight accessors —
+// principal, share, refs, objects, boxFloor, resyncKey, floorWords and
+// engineCommitter — and a box's nil check
 // where its pushes raise the run's floor and are left out of the operator
 // audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
@@ -137,7 +138,7 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(ref.Status, op) || (ref.Redirect != "" && op == auth.GitPush))) {
+		(err == nil && (refuses(ref, op) || (ref.Redirect != "" && op == auth.GitPush))) {
 		adm.linearizable = true
 		ref, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
@@ -269,9 +270,29 @@ func (a admission) principal() code.Principal {
 // barrier, and the run's SESSION at its floor for a box, which pays no
 // barrier because its floor already holds everything it was shown
 // (boxadmit.go, "A box reads at its run's floor"). A check's box is shown no
-// ref (admission.noRefs), so what it syncs at is its check's session, which
-// holds the commit it fetches.
+// ref (admission.noRefs), so no read of its names one: what its fetch syncs
+// at is [admission.objects].
 func (a admission) refs() statelog.Freshness { return a.fresh }
+
+// objects is the freshness a fetch's wants are first looked for at — the sync
+// that serves a fetch by id (fetch.go). STALE for a person and a coding box:
+// an object id has no level, and a want the copy lacks is what the one sync
+// at the log's head is for. A CHECK'S BOX's at its admission's freshness, its
+// check's SESSION: the position its attempt was queued at, which the push of
+// its commit precedes, so the copy it is served from holds the commit and
+// every blob of its tree. Synced stale instead, a git node whose cache had
+// not converged since that push — most of them, on a fleet of several git
+// nodes, since a cache syncs on demand and a balancer spreads boxes — lacked
+// the commit, and every check's box it served paid a barrier on the code log
+// that its session would have spared — and that the code log's day does not
+// price (internal/worklet's codeLogDay counts its git clients' barriers, a
+// push's, a person's read and CI's, and none of a box's).
+func (a admission) objects() statelog.Freshness {
+	if a.check != nil {
+		return a.fresh
+	}
+	return statelog.Freshness{Level: statelog.ReadStale}
+}
 
 // boxFloor is the run a box's ref answers raise the floor of and the floor
 // its admission read, and false for a person's request, which has none.
@@ -428,15 +449,18 @@ func grantRefusal(p code.Principal) AuditRefusal {
 	return AuditRefusal(code.RefusalNotPermitted)
 }
 
-// refuses reports whether a repository in status refuses op.
-func refuses(status code.RepoStatus, op auth.GitOp) bool {
-	switch status {
+// refuses reports whether repo, as a read found it, refuses op: a deleted or
+// purging one every op, and an archived one, one being imported and a pull
+// mirror a push — each the refusal a stale read is confirmed by a
+// linearizable one before it is answered.
+func refuses(repo code.RepoRef, op auth.GitOp) bool {
+	switch repo.Status {
 	case code.RepoStatusDeleted, code.RepoStatusPurging:
 		return true
-	case code.RepoStatusArchived:
+	case code.RepoStatusArchived, code.RepoStatusImporting:
 		return op == auth.GitPush
 	}
-	return false
+	return repo.Mirrored && op == auth.GitPush
 }
 
 // gone reports a deleted or purging repository: one that answers nothing.
@@ -462,8 +486,9 @@ func (s *Server) identityUnknown(w http.ResponseWriter, r *http.Request, name st
 }
 
 // unavailable answers a request the code log could not be read for here — a
-// linearizable read refused (no quorum, a copy out of service), or no data
-// node answered — 503 with Retry-After, logged.
+// linearizable read refused (no quorum, a single member's stalled write, a
+// copy out of service), or no data node answered — 503 with Retry-After,
+// logged.
 func (s *Server) unavailable(w http.ResponseWriter, r *http.Request, name string, err error) {
 	if s.ended(w, r, name, err) {
 		return

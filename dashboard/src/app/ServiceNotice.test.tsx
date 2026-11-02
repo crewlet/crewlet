@@ -133,11 +133,11 @@ test("each hidden place says why it is not here", () => {
   expect(noticeText("tracker", ["artifacts", "new", "design"])).toMatch(
     /^A new design is made by an agent working a task/,
   );
-  expect(noticeText("tracker", ["me"])).toBe(
-    "My work is part of Worklet, which is not in use here.",
-  );
-  // A PLACE ONLY ONE SECTION OF WHICH READS WORKLET IS NAMED BY THAT SECTION,
-  // never by its workspace: Settings is not part of Worklet.
+  // A PLACE ONLY SOME SECTIONS OF WHICH READ WORKLET IS NAMED BY THE SECTION
+  // ITS ADDRESS SHOWS: My work at #/me is its Queue, and its Reviews tab is
+  // the code host's, so the workspace as a whole is not part of Worklet.
+  expect(noticeText("tracker", ["me"])).toBe("Queue is part of Worklet, which is not in use here.");
+  // Settings likewise is not part of Worklet, only its Expensive tasks.
   expect(noticeText("tracker", ["settings", "spend", "tasks"])).toBe(
     "Expensive tasks is part of Worklet, which is not in use here.",
   );

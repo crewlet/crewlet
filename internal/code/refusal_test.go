@@ -43,8 +43,8 @@ func TestEveryRefusalHasItsSentence(t *testing.T) {
 				"about a push never is", r, r.Recorded())
 		}
 	}
-	if len(seen) != 28 {
-		t.Errorf("%d refusal codes, and the closed set is twenty-eight", len(seen))
+	if len(seen) != 30 {
+		t.Errorf("%d refusal codes, and the closed set is thirty", len(seen))
 	}
 	if unknown := code.Refusal("something_new"); unknown.Valid() || unknown.Recorded() ||
 		unknown.Sentence() != "something_new" {

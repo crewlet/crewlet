@@ -3,6 +3,7 @@ package config_test
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -601,11 +602,6 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			}(),
 			path: "code.repos[0].protect[0].checks", kind: "out_of_range", says: []string{"33", "32"},
 		},
-		"a landing policy nobody knows": {
-			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {policy: on_green}}")),
-			path: "code.repos[0].protect[0].landing.policy", kind: "unknown_value",
-			says: []string{"on_green", `"pre_land" or "post_land"`},
-		},
 		"a queue past its depth": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {depth: 9}}")),
 			path: "code.repos[0].protect[0].landing.depth", kind: "out_of_range", says: []string{"1..8", "4"},
@@ -616,7 +612,8 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		},
 		"a batch past its bound": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {batch: 9}}")),
-			path: "code.repos[0].protect[0].landing.batch", kind: "out_of_range", says: []string{"1..8", "4"},
+			path: "code.repos[0].protect[0].landing.batch", kind: "out_of_range",
+			says: []string{"1..8", "default " + strconv.Itoa(config.CodeDefaultQueueBatch)},
 		},
 		"a source branch's fate nobody knows": {
 			doc:  codeRepos(rule("{branch: main, delete_source: always}")),
@@ -636,6 +633,54 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		"a merge floor with nothing hosting code": {
 			doc:  codeChart + "code:\n  merge_by_floor: persons\n",
 			path: "code.merge_by_floor", kind: "conflict", says: []string{"code.native"},
+		},
+		// A REPOSITORY'S MIRRORS AND ITS IMPORT: each URL read by the rule its
+		// dial reads it by, each credential one whole ${VAR}, a push mirror's
+		// seat one that reads what it publishes and its refs off the seats'
+		// own branches, and no combination that would do nothing.
+		"a pull mirror over plain http": {
+			doc:  codeRepos(web + "      mirror_from: {url: 'http://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].mirror_from.url", kind: "shape", says: []string{"https"},
+		},
+		"a credential written as the token": {
+			doc: codeRepos(web + "      mirror_from: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: ghp_0123456789abcdef}\n"),
+			path: "code.repos[0].mirror_from.credential", kind: "shape",
+			says: []string{"one whole ${VAR} reference", "crewlet secrets set"},
+		},
+		"a credential with text around its reference": {
+			doc: codeRepos(web + "      import: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: 'Bearer ${FORGE_TOKEN}'}\n"),
+			path: "code.repos[0].import.credential", kind: "shape", says: []string{"one whole ${VAR} reference"},
+		},
+		"a push mirror with no credential": {
+			doc:  codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', as: swe}\n"),
+			path: "code.repos[0].mirror_to.credential", kind: "missing", says: []string{"a push authenticates"},
+		},
+		"a push mirror as no seat": {
+			doc: codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: nobody}\n"),
+			path: "code.repos[0].mirror_to.as", kind: "unknown_value", says: []string{`"nobody"`, "swe"},
+		},
+		"a push mirror as a seat that does not read it": {
+			doc: codeRepos(web + "      visibility: unit\n      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: sre}\n"),
+			path: "code.repos[0].mirror_to.as", kind: "conflict", says: []string{"seat sre does not read web"},
+		},
+		"a push mirror of the seats' own branches": {
+			doc: codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: swe, refs: ['refs/heads/**']}\n"),
+			path: "code.repos[0].mirror_to.refs[0]", kind: "conflict", says: []string{"refs/heads/seats/"},
+		},
+		"an import beside a pull mirror": {
+			doc: codeRepos(web + "      mirror_from: {url: 'https://forge.example.com/acme/web.git'}\n" +
+				"      import: {url: 'https://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].import", kind: "conflict", says: []string{"second source"},
+		},
+		"an archived pull mirror": {
+			doc: codeRepos(web + "      archived: true\n" +
+				"      mirror_from: {url: 'https://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].mirror_from", kind: "conflict", says: []string{"takes no sync"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -758,7 +803,7 @@ func TestAGateOnATagRuleIsRefused(t *testing.T) {
 	for field, value := range map[string]string{
 		"merge_by": "persons", "approvals": "one", "approvals_unless": "[comment_only]",
 		"human_paths": "[{glob: 'deploy/**'}]", "checks": "[unit]", "landing": "{depth: 2}",
-		"owners_approve": "true", "delete_source": "none", "auto_revert": "true", "agents_edit_checks": "true",
+		"owners_approve": "true", "delete_source": "none", "agents_edit_checks": "true",
 	} {
 		_, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" +
 			"      protect:\n        - {branch: main}\n        - {tag: 'v*', " + field + ": " + value + "}\n")))
@@ -771,8 +816,32 @@ func TestAGateOnATagRuleIsRefused(t *testing.T) {
 	}
 }
 
+// A GATE NAMES NO LANDING POLICY AND NO REVERT CONSENT: a branch's queue tests
+// every change before it lands, and nothing reverts a landing on its own, so
+// `landing.policy` and `auto_revert` are no settings — each refused as the
+// one unknown field it is, at its line, by the loader's rule for any key the
+// schema does not define, rather than accepted and never acted on.
+//
+// Mutation: give CodeLanding a `policy` field, or CodeProtection an
+// `auto_revert` one, again — the document is accepted, red.
+func TestAGateNamesNoLandingPolicyAndNoRevertConsent(t *testing.T) {
+	t.Parallel()
+	for path, rule := range map[string]string{
+		"code.repos[0].protect[0].landing.policy": "{branch: main, checks: [unit], landing: {policy: pre_land}}",
+		"code.repos[0].protect[0].auto_revert":    "{branch: main, checks: [unit], auto_revert: true}",
+	} {
+		_, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" +
+			"      protect:\n        - " + rule + "\n")))
+		problems := config.Problems(err)
+		if !errors.Is(err, config.ErrUnknownField) || len(problems) != 1 || problems[0].Path != path ||
+			problems[0].Kind != "unknown_field" {
+			t.Errorf("%s: err = %v, problems = %+v, want the one unknown_field at %s", rule, err, problems, path)
+		}
+	}
+}
+
 // A GATE IS FORMED BY ANY OF ITS FIELDS, THE REST RESOLVED — writers, none,
-// pre_land at depth 4 and batch 4, seats — in one place (CodeProtection.Gate),
+// a queue at depth 4 and batch 2, seats — in one place (CodeProtection.Gate),
 // which the reconcile records and the gate's bound weighs; and a rule that
 // sets none of them has no gate.
 func TestAGateResolvesItsDefaults(t *testing.T) {
@@ -781,18 +850,17 @@ func TestAGateResolvesItsDefaults(t *testing.T) {
 		t.Fatalf("a rule setting no gate field has the gate %+v", *g)
 	}
 	defaults := config.CodeGate{MergeBy: config.CodeMergeByWriters, Approvals: config.CodeApprovalsNone,
-		Landing: config.CodeLanding{Policy: config.CodeLandingPreLand, Depth: config.CodeDefaultQueueDepth,
-			Batch: config.CodeDefaultQueueBatch}, DeleteSource: config.CodeDeleteSeats}
+		Landing:      config.CodeLanding{Depth: config.CodeDefaultQueueDepth, Batch: config.CodeDefaultQueueBatch},
+		DeleteSource: config.CodeDeleteSeats}
 	for name, tc := range map[string]struct {
 		rule config.CodeProtection
 		want func(*config.CodeGate)
 	}{
-		"merge_by":    {config.CodeProtection{MergeBy: config.CodeMergeByPersons}, func(g *config.CodeGate) { g.MergeBy = config.CodeMergeByPersons }},
-		"approvals":   {config.CodeProtection{Approvals: config.CodeApprovalsOne}, func(g *config.CodeGate) { g.Approvals = config.CodeApprovalsOne }},
-		"checks":      {config.CodeProtection{Checks: []string{"unit"}}, func(g *config.CodeGate) { g.Checks = []string{"unit"} }},
-		"a depth":     {config.CodeProtection{Landing: config.CodeLanding{Depth: 2}}, func(g *config.CodeGate) { g.Landing.Depth = 2 }},
-		"a policy":    {config.CodeProtection{Landing: config.CodeLanding{Policy: config.CodeLandingPostLand}}, func(g *config.CodeGate) { g.Landing.Policy = config.CodeLandingPostLand }},
-		"auto_revert": {config.CodeProtection{AutoRevert: true}, func(g *config.CodeGate) { g.AutoRevert = true }},
+		"merge_by":  {config.CodeProtection{MergeBy: config.CodeMergeByPersons}, func(g *config.CodeGate) { g.MergeBy = config.CodeMergeByPersons }},
+		"approvals": {config.CodeProtection{Approvals: config.CodeApprovalsOne}, func(g *config.CodeGate) { g.Approvals = config.CodeApprovalsOne }},
+		"checks":    {config.CodeProtection{Checks: []string{"unit"}}, func(g *config.CodeGate) { g.Checks = []string{"unit"} }},
+		"a depth":   {config.CodeProtection{Landing: config.CodeLanding{Depth: 2}}, func(g *config.CodeGate) { g.Landing.Depth = 2 }},
+		"a batch":   {config.CodeProtection{Landing: config.CodeLanding{Batch: 8}}, func(g *config.CodeGate) { g.Landing.Batch = 8 }},
 		"delete_source": {config.CodeProtection{DeleteSource: config.CodeDeleteNone},
 			func(g *config.CodeGate) { g.DeleteSource = config.CodeDeleteNone }},
 		"agents_edit_checks": {config.CodeProtection{AgentsEditChecks: true},
@@ -856,9 +924,9 @@ func TestAGateIsBoundedByItsBytes(t *testing.T) {
 }
 
 // A MERGE GATE FIELD THAT DOES NOTHING IS WARNED, NEVER REFUSED, at that field:
-// owners_approve where the repository names no path owners, landing and
-// auto_revert where the rule requires no checks — only a branch whose merges
-// wait for checks has a queue — and approvals_unless beside approvals: none.
+// owners_approve where the repository names no path owners, landing where the
+// rule requires no checks — only a branch whose merges wait for checks has a
+// queue — and approvals_unless beside approvals: none.
 // Each is silent once the field beside it is set.
 func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 	t.Parallel()
@@ -869,10 +937,8 @@ func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 	}{
 		"owners_approve and no path owners": {rule: "owners_approve: true", warns: "owners_approve"},
 		"owners_approve and path owners":    {rule: "owners_approve: true", beside: owned},
-		"a landing and no checks":           {rule: "landing: {policy: post_land}", warns: "landing"},
-		"a landing and checks":              {rule: "landing: {policy: post_land}, checks: [unit]"},
-		"auto_revert and no checks":         {rule: "auto_revert: true", warns: "auto_revert"},
-		"auto_revert and checks":            {rule: "auto_revert: true, checks: [unit]"},
+		"a landing and no checks":           {rule: "landing: {depth: 2}", warns: "landing"},
+		"a landing and checks":              {rule: "landing: {depth: 2}, checks: [unit]"},
 		"approvals_unless and no approval":  {rule: "approvals_unless: [comment_only]", warns: "approvals_unless"},
 		"approvals_unless and an approval":  {rule: "approvals: one, approvals_unless: [comment_only]"},
 	} {
@@ -894,6 +960,122 @@ func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 		case len(found) != 1 || found[0].Path != "code.repos[0].protect[0]."+tc.warns ||
 			found[0].Kind != config.WarningAdvisory || !strings.Contains(found[0].Message, tc.warns):
 			t.Errorf("%s: warned %+v, want one advisory at code.repos[0].protect[0].%s", name, found, tc.warns)
+		}
+	}
+}
+
+// A QUEUE'S CAPACITY IS ITS ROUNDS OVER A SPAN (M5-D28): ⌊depth × batch ×
+// over / round⌋, exact — PLAN's 576 and 1 152 a day at depths 4 and 8 with
+// ten-minute checks and one change a candidate, a product floored once rather
+// than a count of whole rounds (three candidates of seven minutes land 25 an
+// hour, not 24), a round of no length unbounded, a product past the int range
+// its top, and a queue of no depth, no batch or no span nothing.
+//
+// Mutation: floor over/round before multiplying → 24, red; return 0 for a
+// round of no length → red; drop the overflow guard → Div64 panics, red.
+func TestAQueuesCapacityIsItsRoundsOverASpan(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	for _, tc := range []struct {
+		depth, batch int
+		round, over  time.Duration
+		want         int
+	}{
+		{4, 1, 10 * time.Minute, day, 576},
+		{8, 1, 10 * time.Minute, day, 1_152},
+		{4, 2, 10 * time.Minute, time.Hour, 48},
+		{3, 1, 7 * time.Minute, time.Hour, 25},
+		{1, 1, 6 * time.Hour, day, 4},
+		{1, 1, 0, time.Hour, math.MaxInt},
+		{8, 8, time.Nanosecond, math.MaxInt64, math.MaxInt},
+		{0, 4, time.Minute, time.Hour, 0},
+		{4, 0, time.Minute, time.Hour, 0},
+		{4, 4, time.Minute, 0, 0},
+	} {
+		if got := config.LandingCapacity(tc.depth, tc.batch, tc.round, tc.over); got != tc.want {
+			t.Errorf("LandingCapacity(%d, %d, %s, %s) = %d, want %d", tc.depth, tc.batch, tc.round, tc.over,
+				got, tc.want)
+		}
+	}
+}
+
+// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a merge queue
+// that cannot land one change a day for every seat that may merge into its
+// branch is advised at the rule's landing, from the configured depth, batch
+// and code.checks.max_timeout_seconds — `crewlet validate` observes no rate.
+// Who may merge is counted through the chart: every human seat, and each
+// full_access agent seat that writes the repository — the owning unit's lead
+// and every seat of its subtree, a child unit's included, never a review seat
+// nor one outside it — under the stricter of the rule's merge_by and
+// code.merge_by_floor. Here five may merge, against a queue of one candidate
+// of one change at six-hour rounds, four a day: warned; a queue of two
+// candidates, the fifty-minute default rounds, merge_by maintainers or a
+// maintainers floor (two may merge) and merge_by persons (the founder alone)
+// are each silent.
+//
+// Mutation: count the unit's own seats and not its subtree's → four, silent,
+// red; count a review seat → six named, red; read the rule's merge_by and not
+// the floor → the floor's case warns, red; count the agent seats under
+// merge_by persons → the persons case warns, red.
+func TestValidateWarnsAQueueSlowerThanItsWriters(t *testing.T) {
+	t.Parallel()
+	const chart = `name: Acme
+roles:
+  - {name: Founder, handle: founder, kind: human}
+units:
+  - name: Engineering
+    id: eng
+    lead: lead
+    roles:
+      - {name: Lead, handle: lead, code: {access: full_access}}
+      - {name: Dev A, handle: dev-a, code: {access: full_access}}
+      - {name: Dev B, handle: dev-b, code: {access: review}}
+    children:
+      - name: Web
+        id: web-team
+        roles:
+          - {name: Dev C, handle: dev-c, code: {access: full_access}}
+          - {name: Dev D, handle: dev-d, code: {access: full_access}}
+  - name: Ops
+    id: ops
+    roles:
+      - {name: Ops, handle: ops, code: {access: full_access}}
+code:
+  native: true
+`
+	const slow = "{branch: main, checks: [unit], landing: {depth: 1, batch: 1}"
+	for name, tc := range map[string]struct {
+		code, rule string
+		warns      bool
+	}{
+		"slower than its writers":   {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + "}", warns: true},
+		"two candidates a round":    {code: "  checks: {max_timeout_seconds: 21600}\n", rule: "{branch: main, checks: [unit], landing: {depth: 2, batch: 1}}"},
+		"the default rounds":        {rule: slow + "}"},
+		"merged by its maintainers": {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + ", merge_by: maintainers}"},
+		"merged by persons alone":   {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + ", merge_by: persons}"},
+		"a maintainers floor":       {code: "  checks: {max_timeout_seconds: 21600}\n  merge_by_floor: maintainers\n", rule: slow + "}"},
+	} {
+		doc := chart + tc.code + "  repos:\n    - name: web\n      owner: {unit: eng}\n      protect:\n        - " +
+			tc.rule + "\n"
+		c, err := config.ParseCompany([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: refused: %v", name, err)
+		}
+		var found []config.Warning
+		for _, w := range c.Warnings() {
+			if strings.Contains(w.Message, "that may merge") {
+				found = append(found, w)
+			}
+		}
+		switch {
+		case !tc.warns && len(found) != 0:
+			t.Errorf("%s: warned %+v, want nothing", name, found)
+		case !tc.warns:
+		case len(found) != 1 || found[0].Path != "code.repos[0].protect[0].landing" ||
+			found[0].Kind != config.WarningAdvisory || !strings.Contains(found[0].Message, "at most 4 change(s)") ||
+			!strings.Contains(found[0].Message, "the 5 seat(s) that may merge"):
+			t.Errorf("%s: warned %+v, want one advisory at code.repos[0].protect[0].landing naming 4 a day "+
+				"against 5 seats", name, found)
 		}
 	}
 }
@@ -959,10 +1141,9 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
             - glob: .crewlet/**
             - {glob: "deploy/**", unless: [comment_only]}
           checks: [unit, lint, e2e.linux]
-          landing: {policy: post_land, depth: 8, batch: 1}
+          landing: {depth: 8, batch: 1}
           owners_approve: true
           delete_source: none
-          auto_revert: true
           agents_edit_checks: true
         - branch: release/*
           direct_push: none
@@ -995,6 +1176,56 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 		if strings.HasPrefix(w.Path, "code.") {
 			t.Errorf("a declaration protecting every default branch warned: %s: %s", w.Path, w.Message)
 		}
+	}
+}
+
+// A REPOSITORY'S MIRRORS AND ITS IMPORT ARE ACCEPTED as declared, each
+// credential kept as the ${VAR} reference it was written as — Tier B is never
+// resolved at its parse, and the code log records the reference — and a push
+// mirror's seat accepted where the chart lets it read the repository. A pull
+// mirror's protect list is warned, at it, since a mirror takes no push for a
+// rule to hold.
+//
+// Mutation: drop the pull mirror's arm from codeWarnings — nothing is
+// warned, red.
+func TestARepositorysMirrorsAreAccepted(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(codeRepos(`    - name: web
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      mirror_to:
+        url: https://forge.example.com/acme/web.git
+        credential: ${FORGE_TOKEN}
+        as: swe
+        refs: [refs/heads/main, 'refs/tags/v*']
+    - name: api
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      import: {url: 'https://forge.example.com/acme/api.git', credential: '${FORGE_TOKEN}'}
+    - name: upstream
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      mirror_from: {url: 'https://forge.example.com/upstream/lib.git'}
+`)))
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	repos := c.Code.Repos
+	if got := repos[0].MirrorTo.Credential; got != "${FORGE_TOKEN}" {
+		t.Errorf("mirror_to.credential reads %q, want the reference as written", got)
+	}
+	if got := repos[1].Import.Credential; got != "${FORGE_TOKEN}" {
+		t.Errorf("import.credential reads %q, want the reference as written", got)
+	}
+	var warned []config.Warning
+	for _, w := range c.Warnings() {
+		if strings.HasPrefix(w.Path, "code.") {
+			warned = append(warned, w)
+		}
+	}
+	if len(warned) != 1 || warned[0].Path != "code.repos[2].protect" ||
+		!strings.Contains(warned[0].Message, "pull mirror") {
+		t.Errorf("warned %+v, want the one at code.repos[2].protect naming the pull mirror", warned)
 	}
 }
 

@@ -148,6 +148,19 @@ var changeToolNeeds = map[string]code.Access{
 	// git node's and the committer's — and, in a turn a colleague woke, the
 	// colleague's too, on that git node (code.EngineWrite.Ceiling).
 	CodeRebaseChangeTool: code.AccessRead,
+	// A merge and a dequeue are decided from the deciding node's own chart —
+	// who may merge into the target is its gate's merge_by (M5-D2), who may
+	// take an entry out its enqueuer, its change's owner, a maintainer or a
+	// person — so read, the least access at which it may admit the call. In
+	// a turn somebody woke each carries the turn's ceiling, held to that
+	// same relation for the requester where it is decided (the git node for
+	// a merge, the committer for a dequeue), never to an access alone.
+	CodeMergeChangeTool:   code.AccessRead,
+	CodeDequeueChangeTool: code.AccessRead,
+	// A revert creates a branch — a full_access seat's own namespace — and
+	// opens a change in that push's record, so its rule is the push's, the
+	// git node's and the committer's, as a rebase's: read.
+	CodeRevertChangeTool: code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,
@@ -418,11 +431,15 @@ const (
 	partReviews changePart = "reviews"
 	// partComments is its comments, a thread at a time.
 	partComments changePart = "comments"
+	// partChecks is its head's checks, checked for its target: each
+	// attempt in a line, its summary fenced (codechecks.go).
+	partChecks changePart = "checks"
 )
 
 // changeParts is the closed set, in the order a description names them.
 func changeParts() []changePart {
-	return []changePart{partSummary, partReadiness, partFiles, partDiff, partFindings, partReviews, partComments}
+	return []changePart{partSummary, partReadiness, partFiles, partDiff, partFindings, partReviews, partComments,
+		partChecks}
 }
 
 // Valid reports a part this build answers.
@@ -441,7 +458,8 @@ func (t *codeGetChange) Description() string {
 	return "One change, a `part` at a time: `summary` (its row, description, authors, counts, revisions), " +
 		"`merge_readiness` (each precondition, whom it waits on, who clears each blocker), `files` and `diff` " +
 		"(a revision's files and a file's patch from its base, or with `since_revision` what changed since), " +
-		"`findings` (placed in the revision asked about), `reviews`, `comments`. Its writers' text arrives " +
+		"`findings` (placed in the revision asked about), `reviews`, `comments`, `checks` (its head's). Its " +
+		"writers' text arrives " +
 		"fenced. A change's diff, findings and what changed since your review are read here — history in a " +
 		"sandbox is for building, not for answering questions."
 }
@@ -591,6 +609,8 @@ func (t *codeGetChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return g.reviews(ctx, call.cursor)
 	case partComments:
 		return g.comments(ctx, call.cursor)
+	case partChecks:
+		return g.checks(ctx, call.cursor)
 	}
 	return g.summary(ctx, call.cursor)
 }

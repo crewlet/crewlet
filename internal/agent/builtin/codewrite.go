@@ -109,16 +109,18 @@ const (
 
 // CodeWrites are the write tools, in the order a catalogue lists them: the
 // branch's five, then the repository's five, then a repository's changes'
-// ([ChangeWrites], codechangewrite.go). Read by [Register]'s delivery switch,
+// ([ChangeWrites], codechangewrite.go), its checks' ([CheckWrites]), and M6's
+// purge and import ([PurgeWrites], [ImportWrites]). Read by [Register]'s delivery switch,
 // [codeAnnotations] and every test that holds the writes apart from the reads.
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, ChangeWrites()...)
+		CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
+		ImportWrites()...)...)
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
-// tier is never offered: all ten where the tier caps the seat below write
+// tier is never offered: every one where the tier caps the seat below write
 // ([code.Tier.Cap]) — read_only, which is also an unset tier, review, and a
 // value no build writes, which caps at nothing — and none at full_access.
 //
@@ -154,13 +156,22 @@ func CodeWritesWithheld(tier code.Tier) []string {
 // the repository's home git node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
 // committer, its conversation of the change writer beside it — and a person's
-// marks over their own code notices, asked of any data node.
+// marks over their own code notices, asked of any data node — and a write of
+// a repository's checks, a rerun or a report, asked of its checks writer
+// beside the committer.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
+	Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
+	// Queue asks the repository's committer to decide one write of a
+	// target's merge queue — a dequeue, here (code.QueueProposal).
+	Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
+	// Expunge asks the repository's committer to record a person's purge
+	// request (code.ExpungeProposal), which its maintainer then serves.
+	Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 }
 
 // codeWriteTools are the writes over deps, in [CodeWrites]' order.
@@ -176,7 +187,8 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeRestoreRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeProtectBranchTool},
-	}, changeWriteTools(deps)...)
+	}, append(append(changeWriteTools(deps), checkWriteTools(deps)...), &codePurgeUnreachable{deps: deps},
+		&codeImportRepo{deps: deps})...)
 }
 
 // ---- who writes ------------------------------------------------------------ //
@@ -453,7 +465,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE BRANCH'S HOLD, before the write is sent: a write naming its head
 	// is held as a read is, and a branch it creates with no read.
-	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.Ref, w.ExpectedHead != ""); refusal != nil {
+	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.ExpectedHead != "", w.Ref); refusal != nil {
 		return *refusal, nil
 	}
 	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)
@@ -726,9 +738,9 @@ func (t *codeRepoWrite) Description() string {
 	case CodeRestoreRepoTool:
 		return "Restore a deleted repository as it was."
 	}
-	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`). A call " +
-		"sets direct_push, allow_force and allow_delete whole; a merge gate field changes that field alone, " +
-		"the rest of the branch's gate kept (`remove_gate` drops it)."
+	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`). Each " +
+		"field changes that field alone, the rest of the rule kept (a new rule: direct_push persons, no " +
+		"force or delete, no gate); `remove_gate` drops the merge gate."
 }
 
 // ownerShape is how an owner argument is spelled, as the read tools answer
@@ -769,7 +781,7 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 			"description": "refs/heads/<glob> or refs/tags/<glob>; `*` within a name, `**` across them."}
 		props["direct_push"] = map[string]any{"type": "string",
 			"enum":        []string{string(code.DirectPersons), string(code.DirectNone)},
-			"description": "A person's alone (also when left out), or nobody's."}
+			"description": "A person's alone, or nobody's."}
 		props["allow_force"] = map[string]any{"type": "boolean"}
 		props["allow_delete"] = map[string]any{"type": "boolean"}
 		props["remove"] = map[string]any{"type": "boolean"}
@@ -789,18 +801,27 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 func gateParams(props map[string]any) {
 	enum := func(values []string) map[string]any { return map[string]any{"type": "string", "enum": values} }
 	list := func(item map[string]any) map[string]any { return map[string]any{"type": "array", "items": item} }
+	object := func(fields map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": fields}
+	}
+	// A LIST CHANGES ITEM BY ITEM ([code.ListChange], [code.HumanPathsChange]):
+	// what it adds and what it removes, never the list whole.
+	change := func(item map[string]any) map[string]any {
+		return object(map[string]any{"add": list(item), "remove": list(item)})
+	}
 	classes := list(enum(spelled(code.PathClasses())))
 	props["merge_by"] = enum(spelled(code.MergeBys()))
 	props["approvals"] = enum(spelled(code.ApprovalCounts()))
-	props["approvals_unless"] = classes
-	props["human_paths"] = list(map[string]any{"type": "object", "properties": map[string]any{
-		"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}})
-	props["checks"] = list(map[string]any{"type": "string"})
-	props["landing"] = map[string]any{"type": "object", "properties": map[string]any{
-		"policy": enum(spelled(code.LandingPolicies())),
-		"depth":  map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}}}
+	props["approvals_unless"] = change(enum(spelled(code.PathClasses())))
+	props["human_paths"] = object(map[string]any{
+		"put": list(map[string]any{"type": "object", "properties": map[string]any{
+			"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}}),
+		"remove": list(map[string]any{"type": "string"})})
+	props["checks"] = change(map[string]any{"type": "string"})
+	props["landing"] = object(map[string]any{
+		"depth": map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}})
 	props["delete_source"] = enum(spelled(code.DeleteSources()))
-	for _, flag := range []string{"owners_approve", "auto_revert", "agents_edit_checks"} {
+	for _, flag := range []string{"owners_approve", "agents_edit_checks"} {
 		props[flag] = map[string]any{"type": "boolean"}
 	}
 }
@@ -896,22 +917,25 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 			tool, clip(pattern)))
 		return code.LifecycleRequest{}, &r
 	}
-	change := code.ProtectChange{Pattern: pattern}
-	if !argBool(args, "remove") {
-		// A DIRECT_PUSH LEFT OUT IS PERSONS, as code.repos reads an unset
-		// one: every rule holds at least a seat's direct push, so no value
-		// of it means "anyone who may write" — what a ref no rule matches
-		// already means — and a rule carrying none is one no record may
-		// carry, refused by the request's own validation. Like allow_force
-		// and allow_delete left out, it is the rule's least: the call sets
-		// the pattern's push controls whole.
-		direct := cmp.Or(strings.TrimSpace(argString(args, "direct_push")), string(code.DirectPersons))
-		change.Rule = &code.Protection{PushRule: code.PushRule{Pattern: pattern, DirectPush: code.DirectPush(direct),
-			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}}
+	// EACH PUSH CONTROL THE CALL NAMES, and only those: the deciding data
+	// node keeps every control left out as the pattern's rule holds it in the
+	// snapshot it decides in — or its least, persons and off, on a pattern no
+	// rule holds yet ([code.ProtectChange]) — so a call that requires a check
+	// leaves a frozen branch frozen. Decoded by the code host's own spelling,
+	// sent beside a removal too, so the request's own validation refuses the
+	// two together rather than this tool dropping what its caller said.
+	controls := map[string]any{}
+	for _, field := range code.ProtectControlFields() {
+		if v, ok := args[field]; ok {
+			controls[field] = v
+		}
 	}
-	// THE MERGE GATE AS A CHANGE, never whole, sent beside a removal too, so
-	// the request's own validation refuses the two together rather than this
-	// tool dropping what its caller said.
+	var change code.ProtectChange
+	if err := decodeArg(controls, &change); err != nil {
+		r := failed(fmt.Sprintf("%s: a push control is not as the schema says: %v.", tool, err))
+		return code.LifecycleRequest{}, &r
+	}
+	change.Pattern, change.Remove = pattern, argBool(args, "remove")
 	gate, refusal := gateChangeArg(tool, args)
 	if refusal != nil {
 		return code.LifecycleRequest{}, refusal
@@ -1168,10 +1192,32 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 
 // ---- refusals, in the classes every surface renders ------------------------ //
 
+// HostRefusal is a refusal the code host answered, as the cause beneath a
+// tool's class: the host's own word for it and its sentence.
+//
+// THE WORD TRAVELS AS A VALUE, never only inside the sentence. A class says
+// what a caller does next — read again, wait, ask somebody else — and several
+// of the host's refusals share one: a change whose head moved and a train
+// whose base moved are both stale_version, a target still moving and a full
+// queue both conflict. A person's surface that answers each in its own words
+// (the change page's merge controls: "somebody pushed to it since you loaded
+// it", "its target is still moving") reads the word through the act route's
+// `refusal` field (operator.Fail), rather than parsing a sentence written for
+// a model.
+type HostRefusal struct {
+	// Refusal is the host's word: a code.MergeRefusal, a code.WriteRefusal,
+	// a code.ChangeRefusal and their like.
+	Refusal string
+	// Detail is the host's sentence about it.
+	Detail string
+}
+
+func (r *HostRefusal) Error() string { return fmt.Sprintf("code: %s: %s", r.Refusal, r.Detail) }
+
 // writeRefusalError is a refusal the code host answered, as the cause beneath
-// a tool's class: its code and its sentence.
+// a tool's class ([HostRefusal]).
 func writeRefusalError(refusal, detail string) error {
-	return fmt.Errorf("code: %s: %s", refusal, detail)
+	return &HostRefusal{Refusal: refusal, Detail: detail}
 }
 
 // pushClass is the class a refused push's code is answered in — chosen by
@@ -1179,16 +1225,18 @@ func writeRefusalError(refusal, detail string) error {
 // own sentence for `invalid` and `forbidden` alone:
 //
 //   - a rule of the repository refusing the caller — the grant, a protection,
-//     the seat's daily quota, a read-only repository, its bounds — is
-//     FORBIDDEN, the sentence naming the rule and, for the quota, when the
-//     day turns; never budget_exhausted, which is the company's token budget;
+//     the seat's daily quota, a read-only repository or a pull mirror, its
+//     bounds — is FORBIDDEN, the sentence naming the rule and, for the quota,
+//     when the day turns; never budget_exhausted, which is the company's
+//     token budget;
 //   - a branch the engine's names refuse, or a pack past what one push may
 //     store, is INVALID: the fix is another call;
 //   - a head that moved is STALE_VERSION, a repository gone NOT_FOUND, a store
 //     with no room STORE_FULL;
-//   - what waiting clears — a busy or compacting repository, an expunge that
-//     began, a log or a store that refused, a push applied nowhere — is
-//     UNAVAILABLE, the same call again being the same write;
+//   - what waiting clears — a busy or compacting repository, one being
+//     imported, an expunge that began, a log or a store that refused, a push
+//     applied nowhere — is UNAVAILABLE, the same call again being the same
+//     write;
 //   - and what no engine write can be answered — an --atomic push, a tag moved,
 //     a push of more changes than a record holds, a commit claiming the
 //     engine's committer (forged_committer, which only a coding box's pack is
@@ -1197,8 +1245,8 @@ func writeRefusalError(refusal, detail string) error {
 func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	switch r {
 	case code.RefusalNotPermitted, code.RefusalProtectedForce, code.RefusalProtectedDelete,
-		code.RefusalProtectedDirect, code.RefusalPushQuota, code.RefusalRepoArchived, code.RefusalRepoSize,
-		code.RefusalRepoRefs, code.RefusalBlobTooLarge, code.RefusalRefConflict:
+		code.RefusalProtectedDirect, code.RefusalPushQuota, code.RefusalRepoArchived, code.RefusalRepoMirrored,
+		code.RefusalRepoSize, code.RefusalRepoRefs, code.RefusalBlobTooLarge, code.RefusalRefConflict:
 		return tools.RefusalForbidden, true
 	case code.RefusalReservedRef, code.RefusalBadRef, code.RefusalPackTooLarge:
 		return tools.RefusalInvalid, true
@@ -1209,7 +1257,7 @@ func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	case code.RefusalStoreFull:
 		return tools.RefusalStoreFull, true
 	case code.RefusalBusy, code.RefusalCompactionBehind, code.RefusalUploadExpired, code.RefusalExpunging,
-		code.RefusalUnavailable, code.RefusalNotApplied:
+		code.RefusalRepoImporting, code.RefusalUnavailable, code.RefusalNotApplied:
 		return tools.RefusalUnavailable, true
 	}
 	return "", false

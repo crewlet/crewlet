@@ -292,7 +292,7 @@ function Narrowing({ label, value, clear }: { label: string; value: string; clea
 }
 
 /** The grid of changes, as every listing of them draws it. */
-function ChangesGrid({
+export function ChangesGrid({
   rows,
   onLoadMore,
   loadedNote,

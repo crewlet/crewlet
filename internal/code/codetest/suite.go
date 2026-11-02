@@ -13,6 +13,11 @@ import (
 // RepoName is the repository every case declares.
 const RepoName = "acme"
 
+// ExternalBase is the deployment's address every git node's host is told, as
+// the engine tells its own `api.external_url`: the base the line git prints
+// for a push's change links the change's page on.
+const ExternalBase = "https://crewlet.example.com"
+
 // Settings are what every case declares RepoName with: main, protected
 // `direct_push: persons`, owned by the unit ENG, and indexed for search — what
 // a declaration leaving search unset is recorded with.
@@ -117,6 +122,7 @@ func cases() []suiteCase {
 		{"F36_ASeatPastItsQuotaIsRefused", aSeatPastItsQuotaIsRefused},
 		{"F37_ASeatsPushToAPersonsBranchIsRefused", aSeatsPushToAPersonsBranchIsRefused},
 		{"F38_AnEngineWriteCrashedAtEveryPointIsOnePush", anEngineWriteCrashedAtEveryPointIsOnePush},
+		{"F54_ARenamedRepositoryRedirectsAndIsReleased", aRenamedRepositoryRedirectsAndIsReleased},
 		{"F43_ABoxPushesAndFetchesItsGrants", aBoxPushesAndFetchesItsGrants},
 		{"F44_AnEndedRunIsRefused", anEndedRunIsRefused},
 		{"F45_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherNode},

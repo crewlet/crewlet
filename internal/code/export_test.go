@@ -11,6 +11,11 @@ import (
 // Quiet is quiet, for this package's external benchmarks.
 var Quiet = quiet
 
+// RoutingNoticeRows is the notice rows one routing of the gate's records is
+// charged — the bound a check ending's routing is held to beside the rows its
+// apply writes.
+const RoutingNoticeRows = routingNoticeRows
+
 // ChangeCeilingRefusal is why a seat's write of a change may not be made for
 // whoever c is, for the case that judges the requester ceiling of a change's
 // writes apart from the decides that reach it.
@@ -27,6 +32,11 @@ func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
 // the cases that read a snapshot across several pages without seeding tens of
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
 func SetPageLimits(r *Reader, rows, bytes int) { r.pageRows, r.pageBytes = rows, bytes }
+
+// SetTipWindow has r read at most landings landings above a target's green
+// for its tip work — the cases that reach a window's bound without landing
+// MaxTipLandings pushes.
+func SetTipWindow(r *Reader, landings int) { r.tipWindow = landings }
 
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
@@ -187,18 +197,39 @@ func ChangeWriterHolders(w *ChangeWriter, changeID string) int { return w.flight
 // its turn on w.
 func ChecksWriterHolders(w *ChecksWriter, repoID string) int { return w.flights.holders(repoID) }
 
-// SetChecksWriterBounds bounds w's writes waiting at perRepo of one
-// repository's and perNode in all, so a case reaches a bound with a handful of
-// writes rather than hundreds.
-func SetChecksWriterBounds(w *ChecksWriter, perRepo, perNode int) {
-	w.flights.perKey, w.flights.perNode = perRepo, perNode
+// SetChangeWriterBounds has w admit at most key writes of one change, node of
+// every change and bytes of their weight, rather than its constants — the
+// cases that fill a node's share without a thousand writes or sixty-four
+// maximal reviews. Writes already held stay held.
+func SetChangeWriterBounds(w *ChangeWriter, key, node, bytes int) {
+	w.flights.setBounds(key, node, bytes)
 }
 
-// SetChangeWriterBounds bounds w's writes waiting at perChange of one change's
-// and perNode in all.
-func SetChangeWriterBounds(w *ChangeWriter, perChange, perNode int) {
-	w.flights.perKey, w.flights.perNode = perChange, perNode
+// SetChecksWriterBounds is [SetChangeWriterBounds] for a checks writer, a
+// repository's check writes in place of a change's conversation.
+func SetChecksWriterBounds(w *ChecksWriter, key, node, bytes int) {
+	w.flights.setBounds(key, node, bytes)
 }
+
+// setBounds is a test's bounds in place of f's constants, under its lock.
+func (f *flights) setBounds(key, node, bytes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bounds.key, f.bounds.node, f.bounds.bytes = key, node, bytes
+}
+
+// SetCommitterNodeProposals has c hold at most n proposals across its
+// repositories, rather than CommitterNodeProposals — the case that fills a
+// node's count across two repositories without a thousand pushes. Set before
+// c's first proposal.
+func SetCommitterNodeProposals(c *Committer, n int) { c.nodeProposals = n }
+
+// ConversationWeight is what cw weighs in its writer's node bytes: the bytes
+// its record carries as the writer stamps it.
+func ConversationWeight(cw ConversationWrite) (int, error) { return cw.measure() }
+
+// ChecksWeight is what r weighs in its writer's node bytes.
+func ChecksWeight(r ChecksRequest) (int, error) { return r.weight() }
 
 // StandingStates is the list of states a raiser's standing findings are read
 // by, as the decide's statement is driven from it.
@@ -224,6 +255,13 @@ func RowBound(p Proposal) int { return rowBound(p) }
 
 // RecordRows is the row bound of a record whose entries bound rows rows.
 func RecordRows(rows int) int { return recordRows(rows) }
+
+// LandRecordRows is the most rows a land record of n entries makes its apply
+// write but the changes its pushes move.
+func LandRecordRows(n int) int { return landRecordRows(n) }
+
+// QueueScope is the scope p's record names.
+func QueueScope(p QueueProposal) []string { return p.scope() }
 
 // MergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons.

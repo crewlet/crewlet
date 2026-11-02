@@ -429,6 +429,7 @@ const (
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
 	KindCodeCommitBusy         Kind = "code_commit_busy"
 	KindCodeChecksBacklog      Kind = "code_checks_backlog"
+	KindCodeMergeRateOver      Kind = "code_merge_rate_over_capacity"
 	KindCodeRefsNearLimit      Kind = "code_refs_near_limit"
 
 	// The model kinds, each about ONE model entry ([PerEntryKinds]).
@@ -437,6 +438,7 @@ const (
 	KindLLMSignInRefused         Kind = "llm_sign_in_refused"
 	KindLLMLimit                 Kind = "llm_limit"
 	KindLLMLimitWaiting          Kind = "llm_limit_waiting"
+	KindCodeMirrorFailing        Kind = "code_mirror_failing"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -857,6 +859,34 @@ type Reading struct {
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
 
+	// CodeMergeRateOver is how many merge queues this node is the home of
+	// were asked to land more changes within the merge rate's window than
+	// they can land in it: their enqueues within CodeMergeRateWindow — live
+	// or ended — past the queue's own capacity over it, depth × batch
+	// changes a round at the mean round its trains took (config's
+	// LandingCapacity). CodeMergeRateOverTarget is the one asked furthest
+	// past its capacity, by its branch and its repository's name,
+	// CodeMergeRateOverAsked its enqueues within the window,
+	// CodeMergeRateOverCapacity what it can land in it and
+	// CodeMergeRateOverRound the mean round it was priced at.
+	// CodeMergeRateWindow is the window itself — internal/code's
+	// MergeRateWindow — handed in by the node that measured over it, since
+	// this framework imports no code-host package and the detail names it.
+	//
+	// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): the
+	// depth and the batch its gate lands under and the rounds its home
+	// timed, judged by the home's queue worker, so the alarm fires at any
+	// count and never at a rate of its own. Raised by the repository's HOME
+	// git node, the one node that builds and times its trains. All zero on
+	// a node that is home to no queue — no git role, or a company that hosts
+	// no code — and on one whose every queue keeps up.
+	CodeMergeRateOver         int
+	CodeMergeRateOverTarget   string
+	CodeMergeRateOverAsked    int
+	CodeMergeRateOverCapacity int
+	CodeMergeRateOverRound    time.Duration
+	CodeMergeRateWindow       time.Duration
+
 	// CodeRefsNearLimit is how many active repositories, as this node's rows
 	// hold them, set refs so fast that they reach the most live refs a
 	// repository may hold within the ref lifecycle's window unless refs are
@@ -885,6 +915,29 @@ type Reading struct {
 	CodeRefsNearLimitRecent int
 	CodeRefsLimit           int
 	CodeRefsWindow          time.Duration
+
+	// CodeMirrorFailing is how many mirrors of repositories this node is
+	// home to — a pull mirror's syncs from its source, a push mirror's
+	// pushes to its target, each the git node that runs them — have not been
+	// brought level for longer than their own refresh promise:
+	// code.MirrorInterval, how often a home brings a mirror level, plus
+	// internal/code/mirror's AttemptDeadline, the grace an attempt in flight
+	// is given beyond it (internal/code/mirror's Mirrors.AlarmReading).
+	// CodeMirrorFailingRepo is the one failing longest, by its repository's
+	// name, and CodeMirrorFailingFor how long since it was last brought
+	// level — or since this node first tried it, where it never has been
+	// here.
+	//
+	// THE MIRROR'S OWN PROMISE IS THE THRESHOLD (ADR-0015): a mirror tried
+	// every interval and failing every time is exactly a mirror more than an
+	// interval and its grace behind, so the alarm fires at any count. Raised
+	// by the home alone, from its own memory of its attempts, so a home that
+	// moved stops counting what it no longer runs. All zero on a node that is
+	// home to no mirror, and on one whose every mirror was brought level
+	// within the promise.
+	CodeMirrorFailing     int
+	CodeMirrorFailingRepo string
+	CodeMirrorFailingFor  time.Duration
 
 	// Models is each configured model entry's condition across the fleet,
 	// and ModelsAt the instant it was gathered, which the expiry and the
@@ -1923,6 +1976,41 @@ var table = []rule{
 			"docs/concepts/code-host.md.",
 	},
 	{
+		// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): how
+		// many changes its depth and batch land at the mean round its home
+		// timed its trains at, over the window its enqueues are counted in.
+		// This framework imports no code-host package, so the home's queue
+		// worker judges each queue against its own capacity and the rule
+		// fires at any count — never at a rate of its own, which would fire
+		// on every deep queue's ordinary day and never on a depth-one queue
+		// with hour-long checks. Raised by each queue's home git node, the
+		// one node that builds its trains and so the one that times them.
+		kind: KindCodeMergeRateOver,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d merge queue(s) this node is home to were asked to land more changes in "+
+					"the last %s than they can land in it — the furthest, %s, %d enqueue(s) against %d at "+
+					"its mean round of %s — so their waiting entries grow for as long as the asking lasts",
+					r.CodeMergeRateOver, spoken(r.CodeMergeRateWindow), r.CodeMergeRateOverTarget,
+					r.CodeMergeRateOverAsked, r.CodeMergeRateOverCapacity, spoken(r.CodeMergeRateOverRound)),
+				r.CodeMergeRateOver > 0
+		},
+		remedy: "A merge queue lands at most depth × batch changes a " +
+			"round, a round as long as its candidates' slowest required " +
+			"check takes, so a branch asked faster than that falls further " +
+			"behind every round: each change waits a round longer for every " +
+			"round's worth ahead of it, and once 1 024 changes wait the " +
+			"queue refuses the next enqueue `queue_full`. Raise the rule's `landing.depth` (at " +
+			"most 8) or `landing.batch` (at most 8) to land more a round, " +
+			"make the required checks faster — `crewlet.code.checks.duration` " +
+			"says how long each takes — or require fewer of them on this " +
+			"branch, and spread the work over more branches or " +
+			"repositories, each of which has a queue of its own. Nothing is " +
+			"lost meanwhile: every waiting entry lands in its turn or is " +
+			"ejected naming why. `crewlet validate` gives the same judgment " +
+			"from the configured figures at the longest a check may run. " +
+			"See docs/concepts/code-host.md.",
+	},
+	{
 		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
 		// refs a repository may hold, at which the push decide refuses a
 		// create repo_refs, and the ref lifecycle's window, after which it
@@ -2043,6 +2131,39 @@ var table = []rule{
 		remedy: modelRemedy("Seats are not working. Add a fallback entry to their chain " +
 			"(a model on another sign-in), raise the plan, or wait for the reset the " +
 			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
+	},
+	{
+		// A mirror that has not been brought level for longer than its own
+		// refresh promise — the interval its home brings it level at, and
+		// the grace an attempt in flight is given — so the other host holds
+		// what the company published that long ago, or the repository what
+		// its source held. This framework imports no code-host package, so
+		// the home judges each mirror at the promise and the rule fires at
+		// any count (ADR-0015). A node's condition, raised by the home that
+		// runs the mirror and by no other node.
+		kind: KindCodeMirrorFailing,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d mirror(s) of repositories this node is home to have not been brought "+
+					"level for longer than their refresh (the longest: %s, %s)",
+					r.CodeMirrorFailing, r.CodeMirrorFailingRepo, spoken(r.CodeMirrorFailingFor)),
+				r.CodeMirrorFailing > 0
+		},
+		remedy: "Read the node's `code_mirror_attempt_failed` lines for the " +
+			"repository: each names the attempt (`sync` from a pull " +
+			"mirror's source, `push` to a push mirror's target) and why it " +
+			"failed. A host that " +
+			"cannot be reached, or whose address is private while Tier A's " +
+			"git.import_allow_private is off, is the network's or the " +
+			"configuration's to mend; a credential the other host refuses is " +
+			"the variable the mirror's `credential` names, set with `crewlet " +
+			"secrets set`; a ref the other host rejects is a protection or a " +
+			"hook there refusing a force-push or a deletion the mirror needs; " +
+			"a seat named by `as` that no longer reads the repository is " +
+			"refused before any push: name another in the repository's " +
+			"mirror_to. A mirror is tried a minute after a failure, longer " +
+			"after each one in a row, and at least once an interval, and the " +
+			"alarm clears once it is brought level. See docs/concepts/code-host.md, " +
+			"\"Mirrors and imports\".",
 	},
 }
 

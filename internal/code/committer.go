@@ -182,11 +182,14 @@ import (
 // CommitterInboxBytes of entries; past either a push is refused busy AT
 // ONCE, never blocked — sixteen full records waiting behind one in flight is
 // a repository taking pushes faster than one node commits them. And the node
-// holds at most CommitterNodeBytes of proposals across every repository, from
-// each one's queueing to its caller's answer: a node commits for every
-// repository rendezvous ranks it first for, and per-repository bounds alone
-// let a thousand of the largest pushes from as many repositories hold about a
-// gibibyte of entries (EntryRoom each), and as much again decoded. A proposal
+// holds at most CommitterNodeProposals proposals and CommitterNodeBytes of
+// them across every repository, from each one's queueing to its caller's
+// answer: a node commits for every repository rendezvous ranks it first for,
+// and per-repository bounds alone let a thousand of the largest pushes from
+// as many repositories hold about a gibibyte of entries (EntryRoom each), and
+// as much again decoded — and small pushes to a few repositories hold more
+// answer slots of the estate's proposal lane than it has, the rest waiting
+// unseen in the broker's buffer rather than refused. A proposal
 // waits in the queue only while its asker's attempt still holds a batch and
 // its answer — one asked with no deadline, a whole CommitBudget — and is
 // refused busy past it, withdrawn as it waits ([Committer.await]) or refused
@@ -278,6 +281,12 @@ type SeatRules struct {
 	// Zone is the company's clock (its timezone, ADR-0018), which the day a
 	// seat's pushes are counted on is cut by: nil is UTC.
 	Zone *time.Location
+	// Epoch is the activation Roster is of (configplane.ActivationStamp, Unix
+	// milliseconds): what a [Mergeability] stamps the readiness it judges by
+	// Roster with ([Mergeability.ChartEpoch]), so the home re-judges a change
+	// whose stored answer an older chart judged. 0 is a chart of no known
+	// activation, which no home re-judges anything for.
+	Epoch int64
 }
 
 // Committer is this node's group commit of pushes, a goroutine a repository
@@ -302,9 +311,10 @@ type Committer struct {
 	// wall clock's monotonic reading, never Now (the decide's clock, which a
 	// caller may pin), and a test's own (export_test.go).
 	clock func() time.Time
-	// nodeBytes is CommitterNodeBytes, and a test's smaller value
-	// (export_test.go).
-	nodeBytes int
+	// nodeBytes is CommitterNodeBytes, and nodeProposals
+	// CommitterNodeProposals; each a test's smaller value (export_test.go).
+	nodeBytes     int
+	nodeProposals int
 	// formedInRound, when set, is told how many protection verdicts each
 	// decide round formed inside the publisher's snapshot — a test's
 	// (export_test.go), which holds a round under the rules the formation
@@ -329,10 +339,12 @@ type Committer struct {
 	repos map[string]*repoCommitter
 	// held is the entryBound of every proposal this node holds, across its
 	// repositories, from its queueing until its caller has its answer —
-	// queued or in a batch. A caller that leaves before its answer releases
-	// its push while a batch that took it still runs, which is at most one
-	// batch a repository for at most a CommitBudget.
+	// queued or in a batch — and holding how many proposals those are. A
+	// caller that leaves before its answer releases its push while a batch
+	// that took it still runs, which is at most one batch a repository for at
+	// most a CommitBudget.
 	held     int
+	holding  int
 	stopped  bool
 	stopping chan struct{}
 	wg       sync.WaitGroup
@@ -361,6 +373,7 @@ type queued struct {
 	p          Proposal
 	compaction *CompactionProposal
 	expunge    *ExpungeProposal
+	remote     *remoteWrite
 	change     *ChangeProposal
 	queueWrite *QueueProposal
 	merge      *MergeProposal
@@ -402,6 +415,8 @@ func (q *queued) repoID() string {
 		return q.compaction.Compaction.RepoID
 	case q.expunge != nil:
 		return q.expunge.RepoID()
+	case q.remote != nil:
+		return q.remote.repoID()
 	case q.change != nil:
 		return q.change.RepoID()
 	case q.queueWrite != nil:
@@ -417,6 +432,8 @@ const (
 	kindPush       = "push"
 	kindCompaction = "compaction"
 	kindExpunge    = "expunge"
+	kindImport     = "import"
+	kindMirrorSync = "mirror_sync"
 	kindChange     = "change"
 	kindQueue      = "merge_queue"
 	kindMerge      = "merge"
@@ -429,6 +446,8 @@ func (q *queued) kind() string {
 		return kindCompaction
 	case q.expunge != nil:
 		return kindExpunge
+	case q.remote != nil:
+		return q.remote.kind()
 	case q.change != nil:
 		return kindChange
 	case q.queueWrite != nil:
@@ -443,7 +462,8 @@ func (q *queued) kind() string {
 // expunge record's, a change's, a queue's write or a merge, each a record of
 // its own op — never gathered with pushes.
 func (q *queued) alone() bool {
-	return q.compaction != nil || q.expunge != nil || q.change != nil || q.queueWrite != nil || q.merge != nil
+	return q.compaction != nil || q.expunge != nil || q.remote != nil || q.change != nil || q.queueWrite != nil ||
+		q.merge != nil
 }
 
 // judgedByChart reports a proposal whose decide reads the chart — a seat's
@@ -506,6 +526,8 @@ func (q *queued) again() string {
 		return "the next pass plans again"
 	case q.expunge != nil:
 		return q.expunge.again()
+	case q.remote != nil:
+		return q.remote.again()
 	case q.change != nil, q.queueWrite != nil, q.merge != nil:
 		return changeAgain
 	}
@@ -560,6 +582,7 @@ type answered struct {
 	res     ProposeResult
 	compact CompactResult
 	expunge ExpungeResult
+	remote  SyncResult
 	change  ChangeResult
 	queue   QueueResult
 	merge   MergeResult
@@ -598,7 +621,8 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
 		seatRules: o.SeatRules, current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs,
 		metrics: o.Metrics, log: o.Logger,
-		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, queueEntries: MaxQueueEntries, clock: time.Now,
+		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, nodeProposals: CommitterNodeProposals,
+		queueEntries: MaxQueueEntries, clock: time.Now,
 		repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
 	if c.now == nil {
@@ -612,8 +636,9 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 }
 
 // Propose decides one push in the next batch of its repository and answers
-// what became of it. A full queue, or a node holding its bytes
-// ([CommitterNodeBytes]), answers busy at once; a push whose caller's
+// what became of it. A full queue, or a node holding its count or its bytes
+// ([CommitterNodeProposals], [CommitterNodeBytes]), answers busy at once; a
+// push whose caller's
 // DEADLINE leaves too little for a batch and its answer ([CommitBudget] and
 // [ReplyMargin]) answers busy undecided — at once, or the moment that is so
 // while it waits — and one whose caller has no deadline answers busy once it
@@ -724,6 +749,8 @@ func (c *Committer) busy(q *queued, reason busyReason, refusal string) answered 
 		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.expunge != nil:
 		return answered{expunge: ExpungeResult{Refusal: RefusalBusy, Detail: refusal}}
+	case q.remote != nil:
+		return answered{remote: SyncResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.change != nil:
 		return answered{change: ChangeResult{ChangeID: q.change.ChangeID(), Refusal: ChangeRefusalBusy,
 			Detail: refusal}}
@@ -754,7 +781,7 @@ func (c *Committer) countBusy(repoID, kind string, reason busyReason, n int) {
 // goroutine when it has none, and counts it held until [Committer.release].
 // It answers why it did not: a sentence, and the bound a full one met —
 // [busyQueue] for the repository's count or bytes, [busyNode] for the node's
-// bytes — or none for a committer that is stopping.
+// count or bytes — or none for a committer that is stopping.
 //
 // THE SEND IS UNDER mu, which is what makes the idle exit race-free: a
 // goroutine leaves the map only under mu and only with an empty queue, so a
@@ -765,9 +792,13 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	if c.stopped {
 		return "the committer is stopping", ""
 	}
-	if c.held+q.bytes > c.nodeBytes {
-		// BEFORE A GOROUTINE IS STARTED for a repository this node may
-		// hold nothing of.
+	// BEFORE A GOROUTINE IS STARTED for a repository this node may hold
+	// nothing of.
+	switch {
+	case c.holding >= c.nodeProposals:
+		return fmt.Sprintf("%d proposals are held across this node's repositories, the most it holds "+
+			"(CommitterNodeProposals)", c.holding), busyNode
+	case c.held+q.bytes > c.nodeBytes:
 		return fmt.Sprintf("%d bytes of pushes are held across this node's repositories, and %d "+
 			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), busyNode
 	}
@@ -786,10 +817,25 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	case rc.inbox <- q:
 		rc.queued += q.bytes
 		c.held += q.bytes
+		c.holding++
 		return "", ""
 	default:
 		return fmt.Sprintf("%d pushes are queued for this repository on this node, the most "+
 			"it holds", len(rc.inbox)), busyQueue
+	}
+}
+
+// Close refuses every new proposal [ErrNotServing] and answers every queued
+// one the same, leaving the batches in flight to run — the first half of
+// [Committer.Stop], which a teardown stopping several writers under one bound
+// takes for all of them before it drains any (internal/engine's
+// stopTogether). Safe to call more than once.
+func (c *Committer) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stopped {
+		c.stopped = true
+		close(c.stopping)
 	}
 }
 
@@ -800,12 +846,7 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 // batches are cancelled and answered from what their publish returned. Safe
 // to call more than once.
 func (c *Committer) Stop(ctx context.Context) {
-	c.mu.Lock()
-	if !c.stopped {
-		c.stopped = true
-		close(c.stopping)
-	}
-	c.mu.Unlock()
+	c.Close()
 	done := make(chan struct{})
 	go func() {
 		c.wg.Wait()
@@ -867,6 +908,8 @@ func (c *Committer) run(rc *repoCommitter) {
 			c.compact(rc.repoID, first)
 		case first.expunge != nil:
 			c.expunge(rc.repoID, first)
+		case first.remote != nil:
+			c.remote(rc.repoID, first)
 		case first.change != nil:
 			c.change(rc.repoID, first)
 		case first.queueWrite != nil:
@@ -897,7 +940,8 @@ func (c *Committer) run(rc *repoCommitter) {
 //
 // A COMPACTION, AN EXPUNGE RECORD, A CHANGE'S OR A QUEUE'S WRITE OR A MERGE
 // IS NEVER GATHERED: a record carries one op, and each is a record of its own
-// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, the ops
+// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk,
+// OpImportDone, OpMirrorSync, the ops
 // ChangeOps lists, OpEnqueue, OpDequeue and OpMerge). Met behind pushes, it
 // ends the batch and is carried to be decided alone, after them and before
 // anything queued behind it, so a repository's proposals still land in the
@@ -972,12 +1016,13 @@ func (c *Committer) admit(q *queued) bool {
 	return true
 }
 
-// release takes q's bytes off what the node holds, once its caller has left
-// [Committer.Propose].
+// release takes q and its bytes off what the node holds, once its caller has
+// left [Committer.Propose].
 func (c *Committer) release(q *queued) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.held -= q.bytes
+	c.holding--
 }
 
 // dequeued takes q's bytes off rc's queue.
@@ -1016,6 +1061,9 @@ func (c *Committer) refuseQueued(rc *repoCommitter, carried []*queued) {
 type round struct {
 	entries []PushEntry
 	answers []decided
+	// ejected is the changes whose live queue entry the round's record ejects
+	// by moving their head ([batchMoves]).
+	ejected []string
 }
 
 // commit publishes one batch as ONE record and answers every proposal in it —
@@ -1065,7 +1113,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 	// THE OPERATION ID IS MINTED ONCE A BATCH, stable across its rounds, by
 	// the wall clock: the ledger judges what an id's mint instant vouches for
 	// against its own sweeps, never against the decide's clock.
-	opID := statelog.NewOpID(time.Now(), "code.push")
+	opID := statelog.NewOpID(time.Now(), "code_push")
 	limits, retention := c.limits(), c.retention()
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
@@ -1085,7 +1133,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			last = round{}
 			now := c.now()
 			formed := verdicts.formed
-			entries, answers, changeRows, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
+			entries, answers, moves, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
 				retention, seats, now, &verdicts)
 			if c.formedInRound != nil {
 				c.formedInRound(verdicts.formed - formed)
@@ -1093,7 +1141,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			last = round{entries: entries, answers: answers}
+			last = round{entries: entries, answers: answers, ejected: moves.ejected}
 			if len(entries) == 0 {
 				return statelog.Decision{Version: version}, nil
 			}
@@ -1102,7 +1150,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := withinRecord(decision, entries, changeRows); err != nil {
+			if err := withinRecord(decision, entries, moves.rows); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision.Version = version
@@ -1119,6 +1167,14 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 		q.answer <- answers[i]
 	}
 	c.announceOpened(repoID, pushOpenings(answers))
+	// A QUEUED CHANGE WHOSE HEAD THE RECORD MOVED left its queue in the
+	// record's own apply, which no queue record names: announced once, from
+	// this node, once the record applied here — never for a record the
+	// ledger collapsed this batch onto, whose own batch announced it.
+	if err == nil && res.Outcome == statelog.OutcomeApplied && !res.Position.IsZero() && !res.Collapsed &&
+		len(last.ejected) > 0 {
+		c.announcePushEjections(repoID, last.ejected, res.Position)
+	}
 	return carried
 }
 

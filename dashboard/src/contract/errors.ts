@@ -65,25 +65,17 @@ export type QueryErrorCode =
  * told to sign in again, never to set anything.
  *
  * THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
- * which means "show the engine's own words". Those are the four classes whose
+ * which means "show the engine's own words". Those are the five classes whose
  * words say what to change (`invalid`), whom to ask (`forbidden`), the state
  * that refused the change (`conflict`: a room archived, an item in the trash,
- * or a write that lost its race and may be made again), or what is already
- * there (`exists`). The engine answers them as a `detail` worded for a person,
- * or, where nobody has worded that refusal for one yet, with no detail and its
- * code's own `message` (ADR-0060): never the tool's sentence, which is written
- * for a model and names the next call, its arguments and record ids. One fixed
- * sentence for every `conflict` ended "retry", which re-trying an archived
- * room's post never changes.
- *
- * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
- * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
- * with a `detail`, which it writes only in a person's words (ADR-0060), is
- * shown in that `detail`, as a coding run's question somebody already
- * answered names who did and a spent token budget names whose it was; and a
- * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
- * gives way to the engine's own sentence for the code where the answer
- * carries no `Retry-After`, since the engine said waiting won't change it.
+ * or a write that lost its race and may be made again), every precondition of
+ * a merge gate a change does not meet yet and who clears it (`not_ready`), or
+ * what is already there (`exists`). The engine answers them as a `detail`
+ * worded for a person, or, where nobody has worded that refusal for one yet,
+ * with no detail and its code's own `message` (ADR-0060): never the tool's
+ * sentence, which is written for a model and names the next call, its
+ * arguments and record ids. One fixed sentence for every `conflict` ended
+ * "retry", which re-trying an archived room's post never changes.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
@@ -122,6 +114,7 @@ export const ACT_ERRORS = {
   forbidden: null,
   stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
   conflict: null,
+  not_ready: null,
   exists: null,
   already_answered: "Somebody has already answered it.",
   reassignment_budget:

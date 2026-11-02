@@ -25,11 +25,23 @@ func laterReading(tip, at, heldTip, heldAt int64) bool {
 	return heldAt == 0 || tip > heldTip || (tip == heldTip && at > heldAt)
 }
 
-// applyCheckDispatched joins a dispatch into its target's row and each of its
-// heads' rows, answering the rows it wrote.
+// applyCheckDispatched joins a dispatch into each of its attempts' rows — as a
+// check_queued record of each joins its one ([queuedPart], M5-D18) — and into
+// its target's row and each of its heads' rows, answering the rows it wrote.
 func applyCheckDispatched(ctx context.Context, tx *sql.Tx, at applyContext, d CheckDispatched) (int, error) {
 	tip, recorded := d.TipPosition.Packed(), store.EncodeTime(at.brokerAt)
 	rows := 0
+	for _, a := range d.Attempts {
+		if a.RepoID != d.RepoID {
+			return 0, fmt.Errorf("code: the dispatch at %s of repository %s carries an attempt of %s — no "+
+				"writer forms it", at.position, d.RepoID, a.RepoID)
+		}
+		joined, err := joinCheck(ctx, tx, at, a.CheckKey, queuedPart(a, at))
+		if err != nil {
+			return 0, err
+		}
+		rows += joined
+	}
 	heldTip, heldAt, err := readingIn(ctx, tx, readCheckTargetSQL, d.RepoID, d.Target)
 	if err != nil {
 		return 0, fmt.Errorf("code: read target %s's checks file at %s: %w", d.Target, at.position, err)

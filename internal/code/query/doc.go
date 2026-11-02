@@ -84,7 +84,11 @@
 // A read's argument lists carry fixed options and validated whole ids —
 // `--disambiguate=` an abbreviation's validated digits, the one option
 // argument a read builds, and numbers the server formats: a history's
-// `--max-age=` and `--skip=`, a blame's `-L` range. A PATH is data: it
+// `--max-age=` and `--skip=`, a blame's `-L` range. A search's text reaches
+// git only as the ONE argument of `-e` — the plan's alternation of its
+// strings, escaped (codeindex.Plan.Grep) — which git reads as a pattern
+// whatever it spells, and its ref after `--end-of-options`, held to the ref
+// grammar before (search.go). A PATH is data: it
 // reaches git on a standard input — `git cat-file --batch-check -Z`'s, which
 // resolves `<id>:<path>` to the id of the tree or file it names, so every
 // later process is handed that id, and `git diff-pairs -z`'s, which reads back
@@ -95,18 +99,20 @@
 // (`:(literal)<path>`, log.go) and a blame's as itself, blame taking a path
 // rather than a pathspec (blame.go). Never `log --stdin`, which reads a path
 // a line at a time and takes a carriage return off its end. A diff's paths are
-// filtered here, over git's whole raw answer, and so are an interdiff's
-// touched paths, each a file's whole name, so no option can hide in one:
-// `--output=x` is a file's name there like any other. A re-anchoring's
+// filtered here, over git's whole raw answer, and an interdiff's touched
+// paths are each a file's whole name, looked up at both heads as
+// `<head>:<path>` lines of one cat-file's standard input (interdiff.go), so no
+// option can hide in one: `--output=x` is a file's name there like any other. A re-anchoring's
 // diff-pairs is handed no path at all, its pairs numbered (anchor.go).
 // TestAPathReachesGitOnlyAsData holds every argument list a read runs to its
 // template, a history's and a blame's path the one argument after `--`.
 // diff-tree, diff-pairs, rev-list, log and blame each take `--output`, which
 // creates the file it names in the repository they run in: the writers gate
 // (cache.TestNothingButSyncWritesACache) argues each of this package's
-// run-time arguments — whole ids, `-M`, the formatted numbers and the paths
-// after `--` — in its allowance, and the template test is what keeps an
-// `--output` out.
+// run-time arguments — whole ids, `-M`, the formatted numbers, the paths
+// after `--` and a search's pattern — in its allowance, and the template
+// test is what keeps an `--output` (and git grep's `--open-files-in-pager`,
+// which runs a program) out.
 //
 // # The share: half the read lane, around a read's long git only
 //

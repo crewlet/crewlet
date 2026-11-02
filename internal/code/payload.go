@@ -203,6 +203,15 @@ const (
 // TestEveryDeclaredSearchModeIsOneTheDomainRecords) are read against.
 func SearchModes() []SearchMode { return []SearchMode{SearchIndexed, SearchGrep} }
 
+// IndexHolders is how many git nodes keep a `search: indexed` repository's
+// code index: the first IndexHolders of its rendezvous order over the live
+// git nodes (estate.Router.GitOrder), so a search has a runner-up holding a
+// built index when the first is gone or still building (M6-D12). Two, not
+// one: a single holder's restart would send every search of its
+// repositories to git grep until it rebuilt; not three, because every holder
+// pays the index's bytes against its cache budget and its build's cat-file.
+const IndexHolders = 2
+
 // Valid reports a mode this build knows. EMPTY IS NOT ONE, for [Visibility]'s
 // reason: whoever forms a record applies its default first — the
 // configuration indexed, a tool grep.
@@ -286,6 +295,21 @@ func (r CommandResult) Valid() bool { return slices.Contains(CommandResults(), r
 type RepoStatus string
 
 const (
+	// RepoStatusImporting is being filled from another host — an import, or
+	// a pull mirror's first fetch from its source ([CreateRepo.status]) — and
+	// takes no write until its import is done: no push, no change, no
+	// archive and no expunge ([RefusalRepoImporting]). It is fetched, listed
+	// and renamed, its settings change and it is deleted as an active one is;
+	// the compactor, the publisher and the expunge pass it by.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this status — none of the domain is on main —
+	// and while that is so, every build that meets a record making one reads
+	// it. Once a build without it has run, a create that imports takes the
+	// rows CreateRepo.Import names (mirror.go), since only such a create
+	// makes a repository importing — a build without the status would apply
+	// it as an active repository, and take its pushes.
+	RepoStatusImporting RepoStatus = "importing"
 	// RepoStatusActive takes pushes.
 	RepoStatusActive RepoStatus = "active"
 	// RepoStatusArchived is read-only.
@@ -298,9 +322,18 @@ const (
 	RepoStatusPurging RepoStatus = "purging"
 )
 
-// RepoStatuses is the closed set.
+// RepoStatuses is the closed set, in the order a repository's life reaches
+// them.
 func RepoStatuses() []RepoStatus {
-	return []RepoStatus{RepoStatusActive, RepoStatusArchived, RepoStatusDeleted, RepoStatusPurging}
+	return []RepoStatus{RepoStatusImporting, RepoStatusActive, RepoStatusArchived, RepoStatusDeleted,
+		RepoStatusPurging}
+}
+
+// live reports a status a repository is in use in: importing, active or
+// archived — listed, fetched and kept, where a deleted one waits for its
+// purge and a purging one is going.
+func (s RepoStatus) live() bool {
+	return s == RepoStatusImporting || s == RepoStatusActive || s == RepoStatusArchived
 }
 
 // Valid reports a value this build knows.
@@ -325,12 +358,11 @@ const (
 	// squashed commit and the trees and blobs the merge wrote — which its
 	// merge record adds ([Merge]).
 	PackMerge PackKind = "merge"
-	// PackCandidate is the pack a speculative queue's candidate is recorded
-	// with (M5): no record of this build writes one.
+	// PackCandidate is the pack a queue's train is recorded with —
+	// the commits its candidates built of their entries, and the trees and
+	// blobs their merges wrote — which its candidate record adds
+	// ([Candidate]).
 	PackCandidate PackKind = "candidate"
-	// PackLand is the pack a post-land lane's landing records (M5): no
-	// record of this build writes one.
-	PackLand PackKind = "land"
 	// PackExpunge is a pack an expunge's begin keeps: what of its inputs a
 	// ref reached, live.
 	PackExpunge PackKind = "expunge"
@@ -340,14 +372,20 @@ const (
 	// PackRescue is a pack an expunge's commit keeps of its dropping packs:
 	// what a push that landed before its begin made reachable again, live.
 	PackRescue PackKind = "rescue"
+	// PackImport is a pack an import's chunk lands ([ImportChunk]): objects
+	// the repository's home fetched from the host it is imported from.
+	PackImport PackKind = "import"
+	// PackMirror is a pack a pull mirror's sync lands ([MirrorSync]):
+	// objects its home fetched from the repository it follows.
+	PackMirror PackKind = "mirror"
 )
 
 // PackKinds is the closed set, in the order the records that write them were
 // added — the merge's three among them, which the merge records extend, so
 // one list names every kind code_packs may hold.
 func PackKinds() []PackKind {
-	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackLand, PackExpunge, PackCruft,
-		PackRescue}
+	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackExpunge, PackCruft, PackRescue,
+		PackImport, PackMirror}
 }
 
 // Valid reports a kind this build knows.
@@ -620,6 +658,12 @@ type RepoSettings struct {
 	// such a build would apply settings without their path owners, and a
 	// node running it would hold none of the rows every other node holds.
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
+	// MirrorFrom makes it a PULL MIRROR of a repository at another host, and
+	// MirrorTo a PUSH MIRROR to one; nil for none, and neither on a scratch
+	// repository. Only a person or the configuration sets either (mirror.go,
+	// whose head states the record format's condition for both).
+	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
+	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
 	// ConfigEpoch is the activation these settings came from
 	// (configplane.ActivationStamp), which the activation fence and the
 	// reconcile's lifecycle rules compare.
@@ -688,6 +732,27 @@ func (s RepoSettings) Validate() error {
 	if why := pathOwnersInvalid(s.PathOwners); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
+	// A SCRATCH REPOSITORY TAKES NO MIRROR: it is its seat's own experiment,
+	// and a mirror dials another host for it, or publishes it there. And an
+	// ARCHIVED one is no pull mirror: it takes no sync, so its source would
+	// never move it.
+	switch {
+	case s.Kind == RepoScratch && (s.MirrorFrom != nil || s.MirrorTo != nil):
+		return fmt.Errorf("%w: mirror: a scratch repository takes no mirror — it is its seat's own", ErrInvalid)
+	case s.MirrorFrom != nil && s.Archived:
+		return fmt.Errorf("%w: mirror_from: an archived repository takes no sync, so a pull mirror is "+
+			"never archived — remove mirror_from to keep it as it stands", ErrInvalid)
+	}
+	if s.MirrorFrom != nil {
+		if why := s.MirrorFrom.invalid(); why != "" {
+			return fmt.Errorf("%w: mirror_from.%s", ErrInvalid, why)
+		}
+	}
+	if s.MirrorTo != nil {
+		if why := s.MirrorTo.invalid(); why != "" {
+			return fmt.Errorf("%w: mirror_to.%s", ErrInvalid, why)
+		}
+	}
 	return nil
 }
 
@@ -701,7 +766,18 @@ func (s RepoSettings) equal(o RepoSettings) bool {
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
 		s.Archived == o.Archived && s.Visibility == o.Visibility && s.Search == o.Search &&
 		slices.EqualFunc(s.Protections, o.Protections, Protection.Equal) &&
-		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal)
+		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal) &&
+		equalPointed(s.MirrorFrom, o.MirrorFrom, func(a, b MirrorSource) bool { return a == b }) &&
+		equalPointed(s.MirrorTo, o.MirrorTo, MirrorTarget.equal)
+}
+
+// equalPointed compares two optional values: both absent, or both present and
+// equal by eq.
+func equalPointed[T any](a, b *T, eq func(T, T) bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return eq(*a, *b)
 }
 
 // status is the status settings put an active repository in.
@@ -724,6 +800,62 @@ type CreateRepo struct {
 	RepoID   string       `json:"repo_id"`
 	Name     string       `json:"name"`
 	Settings RepoSettings `json:"settings"`
+	// Import fills the repository from another host as it is created
+	// ([ImportSource]) — read by its create alone, so a declaration naming one
+	// for a repository that exists is not read again — and nil for none: a
+	// pull mirror ([RepoSettings.MirrorFrom]) is imported from its own
+	// source, and takes none beside it. Only a person or the configuration
+	// names one (mirror.go, whose head states the record format's condition).
+	Import *ImportSource `json:"import,omitempty"`
+}
+
+// importInvalid is why the create's import — its own, or its pull mirror's
+// first fetch — is none a record carries, or "": none on a scratch repository,
+// none beside a pull mirror, which is imported from its source, and none into
+// an archived repository, which takes nothing an import lands.
+func (p CreateRepo) importInvalid() string {
+	switch i := p.Import; {
+	case i == nil:
+		return ""
+	case p.Settings.Kind == RepoScratch:
+		return "import: a scratch repository takes no import — it is its seat's own"
+	case p.Settings.MirrorFrom != nil:
+		return "import: a pull mirror is imported from its mirror_from when it is created, so an import " +
+			"beside it is a second source"
+	case p.Settings.Archived:
+		return "import: an import fills an active repository, and an archived one takes nothing — archive " +
+			"it once its import is done"
+	default:
+		if why := i.invalid(); why != "" {
+			return "import." + why
+		}
+	}
+	return ""
+}
+
+// status is the status the create makes its repository: IMPORTING where it
+// imports — its own import, or a pull mirror's first fetch from its source —
+// and otherwise what its settings say.
+func (p CreateRepo) status() RepoStatus {
+	if p.Import != nil || p.Settings.MirrorFrom != nil {
+		return RepoStatusImporting
+	}
+	return p.Settings.status()
+}
+
+// importSource is what the create's import fetches, as code_repos.import_source
+// records it: its own import, or its pull mirror's source — FIXED AT THE
+// CREATE, so a mirror_from a settings change moves while the import runs is the
+// next sync's to follow — and nil where it imports nothing.
+func (p CreateRepo) importSource() *ImportSource {
+	switch {
+	case p.Import != nil:
+		i := *p.Import
+		return &i
+	case p.Settings.MirrorFrom != nil:
+		return &ImportSource{URL: p.Settings.MirrorFrom.URL, Credential: p.Settings.MirrorFrom.Credential}
+	}
+	return nil
 }
 
 // SettingsRecord replaces a repository's settings whole.
@@ -944,6 +1076,30 @@ type PushEntry struct {
 	// "push", Path: []string{"mutation", "pushes", "routing"}} in
 	// versionedFields, with the companions concerns.go names.
 	Routing []ChangeRouting `json:"routing,omitempty"`
+	// Landings is every LANDING the entry makes on a protected branch: each
+	// ok command that moves a branch a protection rule matches onto a
+	// commit — a person's own push under direct_push persons, their recorded
+	// override (ADR-0089), since no seat's push moves a protected branch —
+	// in command order, STAMPED BY ITS DECIDE from the rules its snapshot
+	// holds, so the record's apply writes the branch's landing row, and its
+	// green row where the branch's gate requires no check, without matching
+	// a rule itself. None for an entry that lands on no protected branch.
+	//
+	// BASE FORMAT, under the condition queuerecords.go's head states: once
+	// a build without it has run, it takes {Name: "PushEntry.Landings",
+	// Since: 2, Op: "push", Path: []string{"mutation", "pushes",
+	// "landings"}} in versionedFields — such a build would apply the push
+	// and write no landing, and the branch's tip checks would never judge
+	// what it landed.
+	Landings []PushLanding `json:"landings,omitempty"`
+}
+
+// PushLanding is one landing a push entry makes on a protected branch: the
+// place of its command among the entry's, and whether it is green as it lands —
+// the branch's gate requiring no check, so the branch's green row moves to it.
+type PushLanding struct {
+	Command int  `json:"command"`
+	Green   bool `json:"green,omitempty"`
 }
 
 // Principal is who acts on a repository: an operator credential and the
@@ -1592,6 +1748,106 @@ type ExpungeCommit struct {
 	Add []PackRef `json:"add,omitempty"`
 }
 
+// ImportChunk lands one chunk of a repository's import ([CreateRepo.Import],
+// and a pull mirror's first fill): packs its home fetched from the other
+// host, and the refs they let it set — each a command whose Old is the ref as
+// the repository holds it after the chunks before — as ONE push row `via
+// import` ([ViaImport]) by the engine's own account, a code_ref_drops row for
+// every command that leaves an object ([leavesObject]), and the repository's
+// import_seq moved to Seq. Decided by the repository's committer
+// ([Committer.ProposeImport]) ONLY IN ITS TURN: the repository importing and
+// its import_seq one below Seq, so a chunk asked twice, or after its import
+// moved on, is refused stale rather than landed again.
+//
+// Every field is in the base format, under the condition [OpImportChunk]
+// states.
+type ImportChunk struct {
+	RepoID string `json:"repo_id"`
+	// ChunkID is minted afresh for every attempt — a bare UUIDv7
+	// (statelog.NewOpID with no name) — and is the record's operation id,
+	// its push row's push id and what each pack's id is derived from
+	// ([DeriveOutputPackID]). Its idempotence is Seq's precondition, never
+	// the id: a chunk built again after a refusal is another attempt, whose
+	// packs are its own.
+	ChunkID string `json:"chunk_id"`
+	// Node is the git node that fetched it, for whoever reads the log.
+	Node string `json:"node"`
+	// Seq is the chunk's place in the import, from 1: the repository's
+	// import_seq once it lands.
+	Seq int64 `json:"seq"`
+	// Packs are the bundles it lands, kind import, each at most MaxPackBytes
+	// whole, at most [MaxImportPacks] — none for a chunk whose refs the
+	// packs of the chunks before it already hold.
+	Packs []PackRef `json:"packs,omitempty"`
+	// Commands are the refs it sets, at most [MaxImportRefs], each decided
+	// ok by its committer or the chunk refused whole. A command's Forced is
+	// its builder's, which read the history it fetched.
+	Commands []Command `json:"commands,omitempty"`
+}
+
+// ImportDone ends a repository's import: the repository is active from its
+// record on, with imported_at its record's instant, import_error why the
+// import ended short ("" for none) and, where DefaultBranch is set, its
+// default branch moved there — the source's HEAD branch, which its builder
+// names only when the default branch the repository declares is absent from
+// what it imported (M6.md §2.3). Decided by the repository's committer
+// ([Committer.ProposeImport]) only while the repository is importing at
+// import_seq Seq: its last chunk's.
+//
+// Every field is in the base format, under the condition [OpImportDone]
+// states.
+type ImportDone struct {
+	RepoID string `json:"repo_id"`
+	// Node is the git node that ended it.
+	Node string `json:"node"`
+	// Seq is how many chunks landed — the repository's import_seq — 0 for an
+	// import that landed none.
+	Seq int64 `json:"seq"`
+	// DefaultBranch is the branch, by name ("main"), the repository's
+	// default moves to, "" to keep the one it declares.
+	DefaultBranch string `json:"default_branch,omitempty"`
+	// Error is why the import ended short — a permanent refusal: a blob past
+	// code.limits.max_blob_bytes, the repository past
+	// code.limits.repo_max_bytes — in one sentence, "" for an import that
+	// landed whole. The repository keeps what landed.
+	Error string `json:"error,omitempty"`
+}
+
+// MirrorSync moves a PULL MIRROR ([RepoSettings.MirrorFrom]) onto its source
+// as its home last fetched it: packs of what the source holds and the
+// repository did not, and the refs moved to the source's — each a command
+// whose Old is the ref as the home's copy held it — as ONE push row `via
+// mirror` ([ViaMirror]) by the engine's own account, a code_ref_drops row for
+// every command that leaves an object, and mirror_synced_at moved to the
+// record's instant. Decided by the repository's committer
+// ([Committer.ProposeMirrorSync]): refused stale where a ref it names moved
+// since its home read it — its next round reads them again — and
+// `expunging`, recorded nowhere, where the repository's drop epoch is not the
+// one its home's copy held: its packs were cut against objects an expunge may
+// since have left dropping (M6-D4).
+//
+// Every field is in the base format, under the condition [OpMirrorSync]
+// states.
+type MirrorSync struct {
+	RepoID string `json:"repo_id"`
+	// SyncID is minted afresh for every round — a bare UUIDv7 — and is the
+	// record's operation id, its push row's push id and what each pack's id
+	// is derived from ([DeriveOutputPackID]).
+	SyncID string `json:"sync_id"`
+	// Node is the git node that fetched it.
+	Node string `json:"node"`
+	// DropEpoch is the repository's drop epoch as its home's copy held it
+	// when it cut the packs (cache.Synced.DropEpoch).
+	DropEpoch int64 `json:"drop_epoch"`
+	// Packs are the bundles it lands, kind mirror, at most [MaxImportPacks].
+	Packs []PackRef `json:"packs,omitempty"`
+	// Commands are the refs it moves, at most [MaxImportRefs]; Forced is its
+	// builder's, as an import chunk's is.
+	Commands []Command `json:"commands,omitempty"`
+	// FetchedAt is when its home fetched the source, by the home's clock.
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
 // Activated raises the activation fence to a configuration activation.
 //
 // PINNED AT [GateRecordVersion] FOR EVER, as every gate is: a node that
@@ -1668,6 +1924,12 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ExpungeBegin](rec)
 	case kind == KindRepo && op == OpExpungeCommit:
 		return decodePayload[ExpungeCommit](rec)
+	case kind == KindRepo && op == OpImportChunk:
+		return decodePayload[ImportChunk](rec)
+	case kind == KindRepo && op == OpImportDone:
+		return decodePayload[ImportDone](rec)
+	case kind == KindRepo && op == OpMirrorSync:
+		return decodePayload[MirrorSync](rec)
 	case kind == KindRepo && op == OpChangeOpen:
 		return decodePayload[ChangeOpen](rec)
 	case kind == KindRepo && op == OpChangeEdit:
@@ -1688,6 +1950,18 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Enqueue](rec)
 	case kind == KindRepo && op == OpDequeue:
 		return decodePayload[Dequeue](rec)
+	case kind == KindRepo && op == OpCandidate:
+		return decodePayload[Candidate](rec)
+	case kind == KindRepo && op == OpEject:
+		return decodePayload[Eject](rec)
+	case kind == KindRepo && op == OpLand:
+		return decodePayload[Land](rec)
+	case kind == KindRepo && op == OpGreen:
+		return decodePayload[Green](rec)
+	case kind == KindRepo && op == OpBroken:
+		return decodePayload[Broken](rec)
+	case kind == KindRepo && op == OpQueueSweep:
+		return decodePayload[QueueSweep](rec)
 	case kind == KindChange && op == OpReviewers:
 		return decodePayload[ReviewerRequest](rec)
 	case kind == KindChange && op == OpComment:
@@ -1702,6 +1976,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Revise](rec)
 	case kind == KindChange && op == OpMergeability:
 		return decodePayload[Mergeability](rec)
+	case kind == KindChange && op == OpMergeabilityKept:
+		return decodePayload[MergeabilityKept](rec)
+	case kind == KindChange && op == OpAsks:
+		return decodePayload[AskSettle](rec)
 	case kind == KindChecks && op == OpCheckQueued:
 		return decodePayload[CheckQueued](rec)
 	case kind == KindChecks && op == OpCheckStarted:

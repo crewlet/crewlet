@@ -193,6 +193,18 @@ const (
 	CodeBlame = "code_blame"
 	// CodeGetChange reads a change: its diff, its findings, its reviews.
 	CodeGetChange = "code_get_change"
+	// CodeSearch searches the company's code across its repositories.
+	CodeSearch = "code_search"
+	// CodeMergeChange merges a change, or enqueues it where its branch
+	// lands through the merge queue.
+	CodeMergeChange = "code_merge_change"
+	// CodeRevertChange opens, and may merge, the change that reverts a
+	// merged one.
+	CodeRevertChange = "code_revert_change"
+	// CodeGetCheckFailures reads what a failed check of a commit reported.
+	CodeGetCheckFailures = "code_get_check_failures"
+	// CodeRerunChecks runs a commit's errored checks again.
+	CodeRerunChecks = "code_rerun_checks"
 	// CodeCheckout checks a repository out into a coding run's box, which
 	// the code host's refusals send a run to: offered on the executor run's
 	// surface of its own, beside [AskAndWait], and named by no authority row

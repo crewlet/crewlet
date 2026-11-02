@@ -462,7 +462,7 @@ describe("the section tabs fold what does not fit into More", () => {
     test("a strip with room for every tab draws no More", async () => {
       lay(2000);
       mount(["me"]);
-      await waitFor(() => expect(drawn()).toHaveLength(7));
+      await waitFor(() => expect(drawn()).toHaveLength(8));
       expect(screen.queryByRole("button", { name: /^More sections of / })).toBeNull();
     });
   });

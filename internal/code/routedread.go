@@ -31,10 +31,11 @@ import (
 //
 // # An empty answer is two facts, told apart by the horizon
 //
-// Every record about a change carries its routing ([ChangeRouting]), so a
-// change whose records list nobody is one of two things: its routings
-// resolved to nobody — every concern was the record's own actor — or its
-// notices were swept, or never written, past their horizon. They send a
+// Every record about a change says whom it concerns — its routing
+// ([ChangeRouting]), or none where it concerns nobody — so a change whose
+// records list nobody is one of two things: its records concerned nobody, or
+// only their own actors, or its notices were swept, or never written, past
+// their horizon. They send a
 // reader to two different places, and [routing.DeliveryOf] is the rule that
 // tells them apart, dated by the change's opening — its oldest record —
 // against [RoutedPage.RetainedFrom]: the instant from which every notice is
@@ -147,7 +148,8 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 // records reached ([RoutedPage.Delivery]): a page after a cursor continues a
 // listing whose first page held records, and every other page is
 // [routing.DeliveryOf] over the change — held, since the read found it;
-// announced, since every record about a change carries its routing — dated by
+// announced, since every record about a change says whom it concerns, a
+// routing or none for nobody — dated by
 // its opening against the page's horizon.
 func routedDelivery(p *RoutedPage, later bool) routing.Delivery {
 	if later {

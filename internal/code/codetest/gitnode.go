@@ -416,7 +416,8 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		DeletedRetention: func() time.Duration { return deletedRetention },
 		Roster:           roster, Signer: signer, Share: n.share, Resyncs: n.resyncs, Current: g.o.Current,
 		Boxes:  host.Boxes{Tokens: g.o.BoxTokens, Runs: g.o.Runs, Checks: g.o.CheckTokens},
-		NodeID: n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
+		NodeID: n.id, ExternalBase: ExternalBase, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics,
+		Logger: g.o.Logger,
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)
 	}

@@ -170,7 +170,9 @@ func (f *fakeLog) create(id, name string) {
 	f.repos[id] = &fakeRepo{
 		ref: code.RepoRef{
 			ID: id, Name: name, Status: code.RepoStatusActive, ManagedBy: code.ManagedConfig,
-			DefaultBranch: "main",
+			// Searched by index, as a declared repository is by default: a
+			// row always names its mode.
+			DefaultBranch: "main", Search: code.SearchIndexed,
 		},
 		refs: map[string]fakeRef{},
 	}
@@ -584,10 +586,26 @@ func (f *fakeLog) read(ctx context.Context, q code.ReadQuery, loud bool) (code.R
 	if err := ctx.Err(); err != nil {
 		return code.ReadAnswer{}, err
 	}
+	if q.Kind == code.ReadIndexed {
+		// THE INDEXER'S LISTING, as code_repos_search_idx answers it: the
+		// active and archived repositories searched by index, by name, in
+		// one page.
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var out code.ReadAnswer
+		for _, r := range f.repos {
+			if r.ref.Search == code.SearchIndexed && r.ref.Name > q.Cursor &&
+				(r.ref.Status == code.RepoStatusActive || r.ref.Status == code.RepoStatusArchived) {
+				out.Indexed = append(out.Indexed, code.IndexedRepo{ID: r.ref.ID, Name: r.ref.Name})
+			}
+		}
+		slices.SortFunc(out.Indexed, func(a, b code.IndexedRepo) int { return strings.Compare(a.Name, b.Name) })
+		return out, nil
+	}
 	in := q.Introduced
 	switch {
 	case q.Kind != code.ReadIntroduced || in == nil:
-		return code.ReadAnswer{}, fmt.Errorf("%w: the fake log answers introduced reads alone, not %q",
+		return code.ReadAnswer{}, fmt.Errorf("%w: the fake log answers introduced and indexed reads alone, not %q",
 			code.ErrInvalid, q.Kind)
 	case q.Fresh.Level == statelog.ReadSession && q.Fresh.Floor(topics.CodeLogStream).IsZero():
 		return code.ReadAnswer{}, fmt.Errorf("%w: a session read with no floor", code.ErrBadLevel)

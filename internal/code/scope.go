@@ -55,11 +55,12 @@ func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id 
 // change's subject names BOTH paths ([ChangeWriter]): its decide reads what
 // the repository's records write — the change's row, the repository's status
 // — so a record of the repository's this node could not decode leaves the
-// conversation's decide reading stale rows, and the scope probe must find it.
-// A MERGEABILITY names the repository's checks too ([ChecksPath]): the
-// readiness it stamps judges the merge gate, which reads them ([JudgeGate]),
-// beside the position of its head's checks it was judged at
-// ([Mergeability.ChecksPosition]).
+// conversation's decide reading stale rows, and the scope probe must find it;
+// and the deletion gate reads the repository the record is about off this
+// scope, never the payload ([gatedRepo]). A MERGEABILITY names the
+// repository's checks too ([ChecksPath]): the readiness it stamps judges the
+// merge gate, which reads them ([JudgeGate]), beside the position of its
+// head's checks it was judged at ([Mergeability.ChecksPosition]).
 func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" + id }
 
 // ChecksPath is one repository's checks: every row a record on its checks

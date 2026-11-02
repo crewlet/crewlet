@@ -733,6 +733,19 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
 	}
 
+	// AND THE REVIEWER WAS TOLD WHAT THE RUN PUSHED, from that record: the
+	// executor's report the resumed turn files (internal/sandbox's runReport)
+	// names the branch the row created, at its commit — read by the
+	// coordinator's collect through the engine's own reader of the run's push
+	// rows, the first page linearizable and every later one at session from
+	// its launch position — and the reviewer judges the run on that report.
+	// Never the box's own report, which says "Pushed the fix." whatever it did.
+	told := "Pushed to this company's code host (its push record):\n- web " + branch + " created at " +
+		push.Commands[0].New[:12]
+	if !n.model.sawText(told) {
+		t.Errorf("no model request carried the run's push as its record names it, %q; %s", told, n.diagnose())
+	}
+
 	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
 	// each asked as a literal of the pushed commit's whole message.
 	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.LaunchID,

@@ -566,7 +566,7 @@
               "type": "string"
             }
           ],
-          "description": "The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation) and the request spools' allowance. Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."
+          "description": "The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation), the request spools' allowance and the revision facts' patch spools (512 MiB). Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."
         },
         "import_allow_private": {
           "anyOf": [

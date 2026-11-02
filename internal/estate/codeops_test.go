@@ -37,11 +37,8 @@ func (f *fakeNode) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 	hold := f.holdProposals
 	f.mu.Unlock()
 	if hold != nil {
-		f.proposing.Add(1)
-		select {
-		case <-hold:
-		case <-ctx.Done():
-			return code.ProposeResult{}, ctx.Err()
+		if err := waitHeld(ctx, hold, &f.proposing); err != nil {
+			return code.ProposeResult{}, err
 		}
 	}
 	f.mu.Lock()
@@ -70,6 +67,19 @@ func (f *fakeNode) ProposeCompaction(_ context.Context, p code.CompactionProposa
 	f.codeSeq++
 	return code.CompactResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
+// ProposeImport is a committer that answers every import record applied —
+// which node a record is routed to is all its callers here read.
+func (f *fakeNode) ProposeImport(context.Context, code.ImportProposal) (code.SyncResult, error) {
+	f.note("code.import")
+	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+// ProposeMirrorSync is a committer that answers every sync applied.
+func (f *fakeNode) ProposeMirrorSync(context.Context, code.MirrorSyncProposal) (code.SyncResult, error) {
+	f.note("code.mirror_sync")
+	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // ProposeExpunge is a committer that commits every expunge record it is given
@@ -135,9 +145,18 @@ func (f *fakeNode) ProposeMerge(_ context.Context, p code.MergeProposal) (code.M
 
 // Converse is a change writer that writes every write of a change's
 // conversation it is given at the next position on the code log — or refuses
-// every one with codeErr.
-func (f *fakeNode) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+// every one with codeErr; and, while holdConversations is set, writes nothing
+// until it is closed.
+func (f *fakeNode) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
 	f.note("code.conversation")
+	f.mu.Lock()
+	hold := f.holdConversations
+	f.mu.Unlock()
+	if hold != nil {
+		if err := waitHeld(ctx, hold, &f.conversing); err != nil {
+			return code.ConversationResult{}, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.conversations = append(f.conversations, w)
@@ -166,9 +185,18 @@ func (f *fakeNode) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, e
 
 // PublishChecks is a checks writer that writes every write of a repository's
 // checks it is given at the next position on the code log — or refuses every
-// one with codeErr.
-func (f *fakeNode) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+// one with codeErr; and, while holdChecks is set, writes nothing until it is
+// closed.
+func (f *fakeNode) PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
 	f.note("code.checks")
+	f.mu.Lock()
+	hold := f.holdChecks
+	f.mu.Unlock()
+	if hold != nil {
+		if err := waitHeld(ctx, hold, &f.checking); err != nil {
+			return code.ChecksResult{}, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks = append(f.checks, r)
@@ -554,6 +582,7 @@ type codeAnswers struct {
 	git       code.GitAnswer
 	compacted code.CompactResult
 	expunged  code.ExpungeResult
+	synced    code.SyncResult
 	changed   code.ChangeResult
 	queued    code.QueueResult
 	merged    code.MergeResult
@@ -598,6 +627,16 @@ func (d *codeDesk) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	held, err := d.took(p)
 	return held.compacted, err
+}
+
+func (d *codeDesk) ProposeImport(_ context.Context, p code.ImportProposal) (code.SyncResult, error) {
+	held, err := d.took(p)
+	return held.synced, err
+}
+
+func (d *codeDesk) ProposeMirrorSync(_ context.Context, p code.MirrorSyncProposal) (code.SyncResult, error) {
+	held, err := d.took(p)
+	return held.synced, err
 }
 
 func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
@@ -787,8 +826,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: []code.ChangeClass{
 					code.ChangeClassCommentOnly}}},
 				Checks:  []string{"lint", "unit"},
-				Landing: code.Landing{Policy: code.LandingPostLand, Depth: 2, Batch: 3}, OwnersApprove: true,
-				DeleteSource: code.DeleteNone, AutoRevert: true, AgentsEditChecks: true}}},
+				Landing: code.Landing{Depth: 2, Batch: 3}, OwnersApprove: true,
+				DeleteSource: code.DeleteNone, AgentsEditChecks: true}}},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
 			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
@@ -888,7 +927,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Queue: []code.QueueRow{{RepoID: ref.ID, Repo: "app", EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 				TargetRef: "refs/heads/main", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42,
 				Place: 2, Seq: at, HeadOID: "7777777777777777777777777777777777777777",
-				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true, AutoRevert: true,
+				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true,
 				EnqueuedBy: code.Party{Handle: "founder", Kind: code.PartyPerson}, EnqueuedOperator: "op-founder",
 				State: code.QueueTesting, Train: "019a0c2e-0000-7000-8000-0000000000f2",
 				CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
@@ -979,6 +1018,43 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
+	// AN IMPORT'S CHUNK AND END AND A PULL MIRROR'S SYNC, every field of
+	// each and of the answer.
+	forced := code.Command{Ref: "refs/heads/main", Old: "1111111111111111111111111111111111111111",
+		New: "2222222222222222222222222222222222222222", Forced: true}
+	tagged := code.Command{Ref: "refs/tags/v1", Old: code.ZeroOID, New: "3333333333333333333333333333333333333333"}
+	for name, p := range map[string]any{
+		"a chunk": code.ImportProposal{Chunk: &code.ImportChunk{RepoID: ref.ID,
+			ChunkID: "019a0c2e-0000-7000-8000-0000000000f0", Node: "git-a", Seq: 3,
+			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f1", "cccccccccccccccccccccccccccccccccccccccc")},
+			Commands: []code.Command{forced, tagged}}},
+		"an end": code.ImportProposal{Done: &code.ImportDone{RepoID: ref.ID, Node: "git-a", Seq: 3,
+			DefaultBranch: "trunk", Error: "a blob past max_blob_bytes"}},
+		"a sync": code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: ref.ID,
+			SyncID: "019a0c2e-0000-7000-8000-0000000000f2", Node: "git-a", DropEpoch: 4,
+			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f3", "dddddddddddddddddddddddddddddddddddddddd")},
+			Commands: []code.Command{forced}, FetchedAt: created}},
+	} {
+		d.mu.Lock()
+		d.synced = code.SyncResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+			Detail: "its home reads the repository again at its next round", Position: at}
+		d.mu.Unlock()
+		var got code.SyncResult
+		var err error
+		switch p := p.(type) {
+		case code.ImportProposal:
+			got, err = seam.Import(ctx, p)
+		case code.MirrorSyncProposal:
+			got, err = seam.MirrorSync(ctx, p)
+		}
+		if err != nil || !reflect.DeepEqual(got, d.synced) {
+			t.Errorf("%s = (%+v, %v), want %+v", name, got, err, d.synced)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, p) {
+			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
+		}
+	}
+
 	// A CHANGE'S SEVEN WRITES, every field of each — the fields the committer
 	// stamps among them, which cross whole whoever set them — and every
 	// field of the answer.
@@ -1028,7 +1104,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"an enqueue": {Enqueue: &code.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
 			HeadOID: "7777777777777777777777777777777777777777", Method: code.MergeMethodSquash,
-			DeleteSource: true, CloseTask: true, AutoRevert: true, Principal: seat}},
+			DeleteSource: true, CloseTask: true, Principal: seat}},
 		"a dequeue": {Dequeue: &code.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
 	} {
@@ -1118,9 +1194,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			OwnersDigest:    "4444444444444444444444444444444444444444444444444444444444444444",
 			Asked:           []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}},
 			SkippedOwners: []code.SkippedOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "reader"},
-				Handle: "reader", Why: code.SkipBelowReview}},
-			ReReview:     []code.Reviewer{{Handle: "cto", Kind: code.PartyAgent}},
-			LeadFallback: &code.Reviewer{Handle: "cto", Kind: code.PartyAgent}}},
+				Handle: "reader", Why: code.SkipBelowReview}}}},
 		"a change's mergeability": {Mergeability: &code.Mergeability{RepoID: ref.ID, ChangeID: item.ChangeID,
 			Revision: 3, HeadOID: "9999999999999999999999999999999999999999", TargetRef: "refs/heads/main",
 			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at, State: code.MergeConflict,
@@ -1249,6 +1323,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		// THE WEEKLY ARM'S INSTANT: dropped on the wire, the maintainer would
+		// be answered the open arm alone, and no expunge on its schedule
+		// would ever begin.
+		{Kind: code.ReadExpungeDue, ExpungedBefore: created, Cursor: "weekly:0:" + ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// THE HOME'S DUE CHANGE WORK, of every repository and of one, each
 		// with the instant its refresh is paced by, and the rechecks one
 		// repository's asks.
@@ -1430,19 +1509,20 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
 		Rule: &code.Protection{PushRule: ref.Protections[0], Gate: &code.MergeGate{
 			MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne, Checks: []string{"lint"},
-			Landing:      code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+			Landing:      code.Landing{Depth: 4, Batch: 4},
 			DeleteSource: code.DeleteSeats, OwnersApprove: true}},
 		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
 	d.mu.Unlock()
 	desc, branch, vis, search := "the app, renamed", "trunk", code.VisibilityUnit, code.SearchIndexed
 	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
-	// A GATE CHANGE OF EVERY FIELD, a list emptied and a flag turned off
-	// among them: an empty list and a false flag are changes, which must
-	// cross as themselves and never as fields left out.
-	mergeBy, approvals, policy, depth := code.MergeByMaintainers, code.ApprovalsOne, code.LandingPostLand, 2
+	// A PROTECT CHANGE OF EVERY CONTROL AND GATE FIELD, a list's items added
+	// and removed and a flag turned off among them: a false flag is a change,
+	// which must cross as itself and never as a field left out.
+	mergeBy, approvals, depth := code.MergeByMaintainers, code.ApprovalsOne, 2
 	classes := []code.ChangeClass{code.ChangeClassCommentOnly}
+	removed := []code.ChangeClass{code.ChangeClassWhitespaceOnly}
 	humanPaths := []code.HumanPath{{Glob: "deploy/**", Unless: classes}}
-	noChecks, deleteSource, on, off := []string{}, code.DeleteNone, true, false
+	direct, deleteSource, on, off := code.DirectPersons, code.DeleteNone, true, false
 	op := "019a0c2e-0000-7000-8000-0000000000f0.code_test"
 	for name, r := range map[string]code.LifecycleRequest{
 		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
@@ -1458,15 +1538,17 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 					Remove: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
 				}}},
 		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
-				PushRule: code.PushRule{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
-					DirectPush: code.DirectPersons}}, Gate: &code.GateChange{MergeBy: &mergeBy,
-				Approvals: &approvals, ApprovalsUnless: &classes, HumanPaths: &humanPaths, Checks: &noChecks,
-				Landing:       &code.LandingChange{Policy: &policy, Depth: &depth, Batch: &depth},
-				OwnersApprove: &on, DeleteSource: &deleteSource, AutoRevert: &off, AgentsEditChecks: &on}}},
+			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", AllowForce: &on, AllowDelete: &off,
+				DirectPush: &direct, Gate: &code.GateChange{MergeBy: &mergeBy, Approvals: &approvals,
+					ApprovalsUnless: &code.ListChange[code.ChangeClass]{Add: classes, Remove: removed},
+					HumanPaths:      &code.HumanPathsChange{Put: humanPaths, Remove: []string{"web/**"}},
+					Checks:          &code.ListChange[string]{Remove: []string{"lint"}},
+					Landing:         &code.LandingChange{Depth: &depth, Batch: &depth},
+					OwnersApprove:   &on, DeleteSource: &deleteSource, AgentsEditChecks: &off}}},
 		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Rule: &code.Protection{
-				PushRule: code.PushRule{DirectPush: code.DirectNone}}, Gate: &code.GateChange{Remove: true}}},
+			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Gate: &code.GateChange{Remove: true}}},
+		"a rule's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Remove: true}},
 		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
 		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
 			Seen: at},

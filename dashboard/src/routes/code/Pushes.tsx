@@ -110,6 +110,10 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
   git: "git push",
   engine: "built by the engine",
   merge: "a change merged",
+  expiry: "an idle seat branch expired",
+  queue: "a merge queue landed it",
+  import: "imported from another host",
+  mirror: "synced from the repository it mirrors",
 };
 
 export function Pushes() {
@@ -355,7 +359,14 @@ function PushedBy({
   const seat = push.actor_seat || (push.actor_kind === "agent" ? push.actor : "");
   if (!seat) {
     return (
-      <span className="mono" title="A credential bound to no seat">
+      <span
+        className="mono"
+        title={
+          push.actor_kind === "system"
+            ? "The engine's own account"
+            : "A credential bound to no seat"
+        }
+      >
         {push.actor}
       </span>
     );

@@ -2,7 +2,9 @@ package code
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -70,8 +72,9 @@ const (
 	MergedViaDirect MergedVia = "direct"
 )
 
-// MergedVias is the closed set, in the order the ways were added.
-func MergedVias() []MergedVia { return []MergedVia{MergedViaPush, MergedViaDirect} }
+// MergedVias is the closed set, in the order the ways were added: a merge
+// queue's ([MergedViaQueue]) after a merge record's.
+func MergedVias() []MergedVia { return []MergedVia{MergedViaPush, MergedViaDirect, MergedViaQueue} }
 
 // Valid reports a value this build knows.
 func (m MergedVia) Valid() bool { return slices.Contains(MergedVias(), m) }
@@ -132,6 +135,14 @@ const (
 	// ChangeRefusalRepoArchived is a write to an archived repository, which
 	// is read-only: a change on it is read and written nothing.
 	ChangeRefusalRepoArchived ChangeRefusal = "repo_archived"
+	// ChangeRefusalRepoImporting is a write to a repository being imported
+	// from another host, which takes none until its import is done
+	// ([ImportingDetail]).
+	ChangeRefusalRepoImporting ChangeRefusal = "repo_importing"
+	// ChangeRefusalRepoMirrored is a write to a PULL MIRROR, which moves only
+	// by its syncs from its source ([MirroredDetail]) — every write but a
+	// close and a landing, neither of which moves a ref.
+	ChangeRefusalRepoMirrored ChangeRefusal = "repo_mirrored"
 	// ChangeRefusalChangeNotFound is a write naming a change the repository
 	// does not hold.
 	ChangeRefusalChangeNotFound ChangeRefusal = "change_not_found"
@@ -196,7 +207,8 @@ const (
 // ChangeRefusals is every code, in this order.
 func ChangeRefusals() []ChangeRefusal {
 	return []ChangeRefusal{
-		ChangeRefusalRepoDeleted, ChangeRefusalRepoArchived, ChangeRefusalChangeNotFound,
+		ChangeRefusalRepoDeleted, ChangeRefusalRepoArchived, ChangeRefusalRepoImporting,
+		ChangeRefusalRepoMirrored, ChangeRefusalChangeNotFound,
 		ChangeRefusalNotPermitted, ChangeRefusalStale, ChangeRefusalSameRef, ChangeRefusalNoSource,
 		ChangeRefusalNoTarget, ChangeRefusalNoDifference, ChangeRefusalChangeExists, ChangeRefusalChangeClosed,
 		ChangeRefusalChangeMerged, ChangeRefusalAmbiguousSource, ChangeRefusalBadOption, ChangeRefusalBusy,
@@ -250,7 +262,9 @@ type ChangeOpen struct {
 	// Mentions is the handles the change's title and body name, as its
 	// asker resolved them against the chart it acts in, at most
 	// [MaxMentions]; the committer holds them to its own chart, and each
-	// is told ([ReasonMention]).
+	// is told ([ReasonMention]). THE ASKER'S, never the record's: the
+	// committer holds them into the routing's mentions, their one copy,
+	// and takes them off the record it appends (withRouting).
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER from its snapshot and chart; an asker sends none.
@@ -379,15 +393,64 @@ func OpenChangeID(opID string) string {
 // bang and its number — web!42.
 func ChangeRef(repo string, number int64) string { return fmt.Sprintf("%s!%d", repo, number) }
 
+// changeAddress is the dashboard's address of a change, its route's own
+// placeholders standing for the repository's name and the change's number.
+//
+// ONE SPELLING, WRITTEN AS THE ROUTE: dashboard/src/app/links.test.ts reads
+// every string literal of the engine's Go for a dashboard address and holds
+// it to the router the dashboard runs, filling `{name}` and `{n}` from the
+// same table its route table is filled from — so a change page moved or
+// renamed fails that suite here, rather than leaving git printing a link to
+// a Not Found under every push that opened a change.
+const changeAddress = "#/code/repos/{name}/changes/{n}"
+
+// ChangeAddress is the dashboard's address of change number on repo — the
+// fragment its shell routes (`#/code/repos/web/changes/42`), the page the
+// change's name (web!42) is the short form of. The name is path-escaped,
+// which the dashboard's router undoes, so the address names the repository
+// whatever its grammar comes to admit.
+func ChangeAddress(repo string, number int64) string {
+	return strings.NewReplacer("{name}", url.PathEscape(repo), "{n}", strconv.FormatInt(number, 10)).
+		Replace(changeAddress)
+}
+
+// DeliveredTitle is the title of a change opened from branch, a branch's
+// short name, without a title of its own: subject — the subject of head, the
+// commit its branch was delivered at, "" where it could not be read — made a
+// title ([AsTitle]); where that is none (a commit with no message, a subject in
+// another encoding, one never read), the branch's name made one the same
+// way; and where even that is none, "commit" and head's abbreviated id.
+// ALWAYS A TITLE — [TitleProblem] finds nothing in it — because neither of
+// its openers is refused for its title: a push's options (internal/code/host),
+// whose change never fails its push, and a coding run's ask at its
+// collection (internal/engine), never left unopened for its title. ONE RULE
+// for both, so a change opened either way from one commit takes one title.
+//
+// THE BRANCH'S NAME IS MADE A TITLE TOO, never taken raw: a name git and
+// gitref.ValidRef accept may hold what a title may not — a C1 control
+// character such as U+0085, which both admit from U+0080 up and a title
+// refuses as a line break, or more bytes than [MaxChangeTitleBytes] — and a
+// name of nothing but such characters is no title at all, which is what the
+// commit's id is for.
+func DeliveredTitle(subject, branch, head string) string {
+	if title := AsTitle(subject); title != "" {
+		return title
+	}
+	if title := AsTitle(branch); title != "" {
+		return title
+	}
+	return "commit " + head[:min(len(head), 7)]
+}
+
 // AsTitle is s made a change's title, or "" where it cannot be one: valid
 // UTF-8 — a subject in another encoding is no title — on one line, every run
 // of spaces and control characters one space, and past [MaxChangeTitleBytes]
 // cut on a rune boundary with a marker: a title nobody wrote is a preview of
-// the subject, which its commit keeps whole. What an open that names no title
-// of its own is titled from — the subject of the commit its branch was
-// delivered at — for a push's options (internal/code/host) and for a coding
-// run's ask at its collection (internal/engine): ONE RULE for both, so a
-// change opened either way from one commit takes one title.
+// the subject, which its commit keeps whole. Exported for the one other title
+// the engine writes rather than a person, a revert_change's "Revert
+// <repo>!<n>" (internal/code/host), whose repository name has no bound of its
+// own below the title's; a change opened from a delivered branch takes
+// [DeliveredTitle], which never answers "".
 func AsTitle(s string) string {
 	if !utf8.ValidString(s) {
 		return ""

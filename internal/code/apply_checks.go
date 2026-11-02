@@ -63,7 +63,10 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case CheckStarted:
 		return joinCheck(ctx, tx, at, p.CheckKey, startedPart(p))
 	case CheckFinished:
-		return applyCheckFinished(ctx, tx, at, p)
+		// A FAILED HEAD'S NOTICES beside its ending: its routing, stamped by
+		// the checks writer, names whom it concerns.
+		n, err := applyCheckFinished(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, repoID, payload, n, err)
 	case ChecksSweep:
 		return applyChecksSweep(ctx, tx, at, p)
 	case CheckDispatched:

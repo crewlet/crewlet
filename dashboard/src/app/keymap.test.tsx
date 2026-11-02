@@ -205,12 +205,13 @@ describe("the legend", () => {
   });
 
   // A KEY TO A PLACE THE COMPANY DOES NOT RUN IS NOT LISTED: the jumps to
-  // Worklet and My work, and the project switcher, where it runs no Worklet.
+  // Worklet and My work, and the project switcher, where it runs no Worklet
+  // and hosts no code (My work stays for its Reviews where it hosts code).
   test("leaves out the keys to a service the company does not run", () => {
     render(
       <LayerHost>
         <KeyLegend
-          runs={{ tracker: false, knowledge: true, chat: true, code: true }}
+          runs={{ tracker: false, knowledge: true, chat: true, code: false }}
           onClose={() => {}}
         />
       </LayerHost>,
@@ -221,6 +222,24 @@ describe("the legend", () => {
     expect(has("project")).toBe(false);
     expect(has("go.doclet")).toBe(true);
     expect(has("go.inbox")).toBe(true);
+  });
+
+  // MY WORK'S JUMP IS A KEY WHERE ITS ROW IS: where the company tracks work elsewhere
+  // but the engine hosts the code, My work is a row for its Reviews, and `g m`
+  // is listed with it. Mutation: list a jump by the service it names, and
+  // `g m` is listed in a company offered no My work, or missing from this one.
+  test("lists My work's jump where only the code host runs", () => {
+    render(
+      <LayerHost>
+        <KeyLegend
+          runs={{ tracker: false, knowledge: true, chat: true, code: true }}
+          onClose={() => {}}
+        />
+      </LayerHost>,
+    );
+    const has = (id: string) => document.querySelector(`[data-key-row="${id}"]`) !== null;
+    expect(has("go.me")).toBe(true);
+    expect(has("go.worklet")).toBe(false);
   });
 
   test("draws a key in words a screen reader can say", () => {

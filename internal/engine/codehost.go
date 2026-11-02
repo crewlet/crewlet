@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/config"
@@ -301,11 +302,14 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 
 	// 6. THE CACHE, which takes over the layout's claim — its rows read
 	// through the router, and its indexes' backfill paced by the fleet's
-	// live git and data nodes as the router's placements count them.
+	// live git and data nodes as the router's placements count them. Its
+	// code indexes are kept for the repositories this node is among the
+	// first code.IndexHolders of, in the router's git order (M6-D12).
 	seam := e.router.Code()
 	c, err := cache.Open(ctx, cache.Options{
 		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam, Fleet: e.codeFleet,
-		Limits: e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
+		Placement: &cache.Placement{Node: nodeID, Order: e.router.GitOrder},
+		Limits:    e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
 	})
 	if err != nil {
 		return codeHostParts{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)
@@ -370,13 +374,17 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// refuses its bridged calls by too).
 	// A CHECK'S BOX by its check's token (checkTokens) and its attempt's row,
 	// which the host reads through the router's code seam like every row.
+	// And the deployment's address a person reaches it at (externalBase),
+	// on which the line git prints for a push's change links that change's
+	// page: this node serves git on its API listener, which
+	// `api.external_url` is required beside.
 	h, err := host.New(host.Options{
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
 		Audit: e.auditGit, Fetched: e.recordCodeRead,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
 		Roster: e.codeRoster, Signer: codeSigner{e: e}, Share: share, Resyncs: resyncs, Current: e.admits,
 		Boxes:  host.Boxes{Tokens: e.boxTokens, Checks: e.checkTokens, Runs: e.codeBoxRuns(log)},
-		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
+		NodeID: nodeID, ExternalBase: e.externalBase, Timing: host.Production, Metrics: e.metrics,
 	})
 	if err != nil {
 		c.Stop(context.WithoutCancel(ctx))
@@ -424,9 +432,12 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// 10. THE HOME'S CHANGE WORK (internal/code/home): every live change's
 	// facts read and recorded, its merge into its target recorded, or the
 	// change landed, and its head's checks queued from its target's checks
-	// file, by the repository's HOME git node — listing and asking
-	// through the router's code seam, whose writes raise this node's floors
-	// past what they landed, asking the router who is home, nudged by a watch
+	// file, and its merge queue's trains built (on the host itself, h),
+	// tested and landed — each landed change's work item closed as its
+	// enqueuer (codequeue.go) — by the repository's HOME git node — listing
+	// and asking through the router's code seam, whose writes raise this
+	// node's floors past what they landed, asking the router who is home,
+	// nudged by a watch
 	// on this node's own code log, each record's position read as this node's
 	// applier numbers the log, and merging over this node's cache in a scratch
 	// beside it, in the pool's maintenance lane. BUILT here beside the
@@ -437,13 +448,32 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// Stopped BEFORE the compactor, first in the one bounded stop
 	// ([native.stopCodeHost]): its facts reads are answered by this node's git
 	// reads, and its merges read the cache, which that stop ends after it.
+	var (
+		homeEstate codehome.Estate = seam
+		chains     codehome.Chains = h
+	)
+	if e.homeSeams != nil {
+		homeEstate, chains = e.homeSeams(homeEstate, chains)
+	}
 	homeLoop, err := codehome.New(codehome.Options{
-		Estate: seam, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
-		Cache: c, Git: pool, NodeID: nodeID, Metrics: e.metrics,
+		Estate: homeEstate, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
+		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), Share: share, NodeID: nodeID,
+		Chart: e.codeChartEpoch, Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: build the home's change work: %w", err)
+	}
+
+	// 10b. THE IMPORTS AND PULL MIRRORS (internal/code/mirror), a worker of
+	// the loop just built (codemirrors.go): a repository's home fetching it
+	// from the host its rows name, its chunks and syncs landed through its
+	// committer. Started by the loop's turns, stopped after the loop in the
+	// one bounded stop.
+	mirrors, err := e.buildMirrors(nodeID, boot, c, pool, objects, homeLoop)
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the imports and mirrors: %w", err)
 	}
 
 	// 11. THE CHECKS (internal/code/checkrun): this node's runner of the
@@ -469,8 +499,22 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
+
+	// 13. ITS SEARCHES, answered for the fleet (codesearch.go) through the
+	// git reads above, each as the asker its signed request names — and
+	// withdrawn before the host stops, with the status answerer.
+	withdrawSearch, err := e.serveCodeSearch(context.WithoutCancel(ctx), nodeID, reads)
+	if err != nil {
+		if werr := withdraw(context.WithoutCancel(ctx)); werr != nil {
+			log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", werr)
+		}
+		homeLoop.Stop(context.WithoutCancel(ctx))
+		compactor.Stop(context.WithoutCancel(ctx))
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: serve code searches on %s: %w", topics.CodeSearch, err)
+	}
 	return codeHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, checks: checks, withdrawStatus: withdraw}, nil
+		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
 }
 
 // codeNudges is this node's own code log as the home's change work watches it
@@ -570,8 +614,10 @@ type codeHostParts struct {
 	size           codeCacheSize
 	compactor      *codecompact.Compactor
 	home           *codehome.Loop
+	mirrors        *mirror.Mirrors
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
+	withdrawSearch queue.Unsubscribe
 }
 
 // codeReading fills the reading's code half at now from this node's
@@ -587,7 +633,11 @@ type codeHostParts struct {
 // repositories this node maintains sit at the pack bound, every push carrying
 // objects into them refused until a compaction lands
 // ([codecompact.Compactor.AlarmReading]), which raise code_compaction_behind on
-// the node that compacts them.
+// the node that compacts them — and from its mirrors: how many mirrors of the
+// repositories this node is home to have not been brought level within their
+// own refresh promise, and the one failing longest
+// ([mirror.Mirrors.AlarmReading]), which raise code_mirror_failing on that
+// home.
 //
 // THE CACHE JUDGED, LOGGED, COUNTED AND GAUGED EVERY REFUSAL, AND NOTHING READ
 // IT INTO A READING, so the alarm the cache's docs, the alarm reference and
@@ -651,6 +701,17 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 	n.gitCache.AlarmReading(out)
 	if n.compactor != nil {
 		n.compactor.AlarmReading(out)
+	}
+	if n.home != nil {
+		// THE MERGE RATE, from the queues this node is home to: only the
+		// home builds a queue's trains, so only it times their rounds.
+		n.home.AlarmReading(out)
+	}
+	if n.mirrors != nil {
+		// THE MIRRORS THIS NODE IS HOME TO, from its own memory of their
+		// attempts: a push to another host is no record, so only the home
+		// that pushes knows whether it can (M6-D16).
+		n.mirrors.AlarmReading(out)
 	}
 }
 
@@ -726,9 +787,9 @@ type codeCacheSize struct {
 	budget  int64
 	derived bool
 
-	// room is the space the cache can use: free plus held, less broker and
-	// spools. What a derived budget is a share of, and what an explicit one
-	// is compared with.
+	// room is the space the cache can use: free plus held, less broker,
+	// spools and patches. What a derived budget is a share of, and what an
+	// explicit one is compared with.
 	room int64
 
 	free int64
@@ -748,6 +809,11 @@ type codeCacheSize struct {
 	spools    int64
 	transfers int
 
+	// patches is what the revision facts' patch spools may hold on the
+	// cache's volume, outside its budget too: [query.PatchSpoolAllowance],
+	// a fixed count of patches at their bound, which no setting moves.
+	patches int64
+
 	dedicated bool
 }
 
@@ -766,7 +832,7 @@ func (s codeCacheSize) cacheBudget() config.CacheBudget {
 func (s codeCacheSize) log(ctx context.Context, dir string) {
 	attrs := []any{"dir", dir, "bytes", s.budget, "derived", s.derived, "room", s.room,
 		"free", s.free, "held", s.held, "broker", s.broker, "spools", s.spools,
-		"transfers", s.transfers, "dedicated", s.dedicated}
+		"transfers", s.transfers, "patches", s.patches, "dedicated", s.dedicated}
 	switch {
 	case s.derived && s.budget < config.GitCacheMaxBytesFloor:
 		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
@@ -776,8 +842,9 @@ func (s codeCacheSize) log(ctx context.Context, dir string) {
 	case !s.derived && s.budget > s.room:
 		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
 			"git.cache_max_bytes is more than the cache's volume has room for beside what "+
-				"is already there, the broker's limit and the request spools, so the cache "+
-				"fills the volume before it evicts anything: lower git.cache_max_bytes, or "+
+				"is already there, the broker's limit, the request spools and the revision "+
+				"facts' patch spools, so the cache fills the volume before it evicts "+
+				"anything: lower git.cache_max_bytes, or "+
 				"give git.cache_dir a volume of its own")...)
 	default:
 		log.InfoContext(ctx, "code_cache_sized", attrs...)
@@ -802,7 +869,13 @@ func (s codeCacheSize) log(ctx context.Context, dir string) {
 //     claimed, and the two together could fill the volume the store lives on.
 //     Bytes the broker STORES are not free and so not counted twice; LESS
 //   - the request SPOOLS' allowance ([host.SpoolAllowance]), which lives on
-//     this volume and never in the budget.
+//     this volume and never in the budget; LESS
+//   - the revision facts' PATCH SPOOLS ([query.PatchSpoolAllowance]): the
+//     query server spools at most query.MaxPatchSpools patches of at most
+//     query.MaxPatchIDDiffBytes each on this volume, outside the budget as
+//     every spool is — bounded per node rather than per read, since per read
+//     they grew with the seat share, half the read lane, and took the store's
+//     headroom on the shared layout.
 //
 // DEDICATED where the cache's volume holds none of this node's other disk — the
 // store, the replicated estate, the snapshots, the broker's streams — which
@@ -832,7 +905,7 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 		return codeCacheSize{}, fmt.Errorf("engine: size the code cache at %s: %w", layout.Dir, err)
 	}
 	size := codeCacheSize{free: f, held: layout.Held, spools: host.SpoolAllowance(transfers),
-		transfers: transfers, dedicated: true}
+		transfers: transfers, patches: query.PatchSpoolAllowance, dedicated: true}
 	for _, tenant := range cacheVolumeTenants(boot) {
 		if v.same(layout.Dir, tenant) {
 			size.dedicated = false
@@ -852,7 +925,7 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 			size.broker = f
 		}
 	}
-	size.room = f + layout.Held - size.broker - size.spools
+	size.room = f + layout.Held - size.broker - size.spools - size.patches
 	size.budget, size.derived = boot.Git.CacheBudget(size.room, size.dedicated)
 	if size.derived && size.budget <= 0 {
 		return codeCacheSize{}, size.noRoom(layout.Dir, boot.Stream.StoreMaxBytes)
@@ -867,7 +940,8 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 // sizes the spools. declared is stream.store_max_bytes as written, 0 where the
 // broker derived its own limit.
 func (s codeCacheSize) noRoom(dir string, declared int64) error {
-	tenants := fmt.Sprintf("its %d transfers' request spools may hold %d bytes", s.transfers, s.spools)
+	tenants := fmt.Sprintf("its %d transfers' request spools may hold %d bytes and its revision facts' "+
+		"patch spools %d", s.transfers, s.spools, s.patches)
 	if s.broker > 0 {
 		var limit string
 		switch {
@@ -1002,12 +1076,20 @@ func (n *native) stopCodeHost(ctx context.Context) {
 		if n.home != nil {
 			n.home.Stop(ctx)
 		}
+		if n.mirrors != nil {
+			n.mirrors.Stop(ctx)
+		}
 		if n.compactor != nil {
 			n.compactor.Stop(ctx)
 		}
 		if n.withdrawCodeStatus != nil {
 			if err := n.withdrawCodeStatus(ctx); err != nil {
 				log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", err)
+			}
+		}
+		if n.withdrawCodeSearch != nil {
+			if err := n.withdrawCodeSearch(ctx); err != nil {
+				log.WarnContext(ctx, "code_search_answerer_not_withdrawn", "error", err)
 			}
 		}
 		if n.mergePreviews != nil {

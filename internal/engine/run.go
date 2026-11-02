@@ -29,8 +29,11 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -487,6 +490,12 @@ type Engine struct {
 	// compactor the router's code seam as it is ([Engine.buildCodeHost]).
 	compactorEstate func(codecompact.Estate) codecompact.Estate
 
+	// homeSeams is Options.homeSeams, kept for the same reason: nil — every
+	// engine New builds outside this package's tests — hands the home's
+	// change work the router's code seam and the code host's chain builder
+	// as they are ([Engine.buildCodeHost]).
+	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+
 	// committerPublisher is Options.committerPublisher, kept because a
 	// runtime the first apply that hosts code starts builds its committer
 	// too: nil — every engine New builds outside this package's tests —
@@ -503,6 +512,12 @@ type Engine struct {
 	// company's runs do, nil for the double's own demonstration. Kept
 	// because every apply builds the catalogue again.
 	fakePlay fakePlayer
+
+	// mirrorSeams is Options.mirrorSeams, kept for the same reason: nil —
+	// every engine New builds outside this package's tests — builds a git
+	// node's mirrors with the one outbound dial and the wall clock
+	// ([Engine.buildMirrors]).
+	mirrorSeams func(mirror.Options) mirror.Options
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -990,6 +1005,11 @@ type Engine struct {
 	// on its record, from the run's launch to the turn's end. See
 	// runsteer.go and ADR-0067.
 	runSteers *runSteers
+	// codeSearchWire is this node's code search scatter envelopes, both
+	// halves, and codeSearchLocal the answerer its own searches are handed
+	// to where it has no broker. See codesearch.go.
+	codeSearchWire  *codesearch.Wire
+	codeSearchLocal atomic.Pointer[codesearch.Server]
 
 	// presenceWire seals this node's presence frames and opens its peers',
 	// and presence is the hub that holds its rooms. See presence.go.
@@ -1315,6 +1335,17 @@ type Options struct {
 	// packs into it.
 	compactorEstate func(codecompact.Estate) codecompact.Estate
 
+	// homeSeams stands between a git node's home change work and the
+	// router's code seam it reads and records through and the code host's
+	// chain builder it builds its trains with ([codehome.Options.Estate],
+	// [codehome.Options.Chains]), nil for none. UNEXPORTED for cacheDisk's
+	// reason (export_test.go): the knob exists only so a case whose subject is
+	// the merge-rate alarm a running node raises can show the queue worker a
+	// queue asked past its capacity, and record its train, without the
+	// changes, the passed checks and the hour of rounds a real queue needs to
+	// fall behind.
+	homeSeams func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)
+
 	// committerPublisher stands between a data node's committer and the code
 	// log's write authority it publishes through
 	// ([code.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
@@ -1331,6 +1362,15 @@ type Options struct {
 	// condition the node has no way to produce on demand, and watch the
 	// refused completion come back when it clears.
 	resumeGate func(sandbox.TurnGate) sandbox.TurnGate
+
+	// mirrorSeams stands between a git node's mirrors and the options they
+	// are built with ([mirror.Options]), nil for none. UNEXPORTED for
+	// cacheDisk's reason (export_test.go): the knob exists only so a case
+	// whose subject is the mirror alarm a running node raises can show the
+	// mirrors a target that refuses every dial and a clock it moves, rather
+	// than wait the half hour of failed pushes a real mirror takes to
+	// outlast its refresh.
+	mirrorSeams func(mirror.Options) mirror.Options
 }
 
 // New assembles an engine.
@@ -1416,6 +1456,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and any node reads: sealed there, in domains of its own, for the reason
 	// the scatter's are (runsteer.go).
 	steerSeals, err := newSteerSeals(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
+	// And a code search, which every git node carries out as the asker it
+	// names (codesearch.go).
+	codeSearchWire, err := newCodeSearchWire(recordKeyring(opts.Bootstrap))
 	if err != nil {
 		return nil, err
 	}
@@ -1630,6 +1676,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// sandbox runtime: a node with no runtime of its own — ingress only —
 		// still files a person's note on a run another node launched.
 		runSteers:           newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue),
+		codeSearchWire:      codeSearchWire,
 		presenceWire:        presenceWire,
 		relayWire:           relayWire,
 		answers:             answers,
@@ -1642,9 +1689,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		cacheDisk:           opts.cacheDisk,
 		gitMemory:           opts.gitMemory,
 		compactorEstate:     opts.compactorEstate,
+		homeSeams:           opts.homeSeams,
 		committerPublisher:  opts.committerPublisher,
 		fakePlay:            opts.fakePlay,
 		plans:               plans,
+		mirrorSeams:         opts.mirrorSeams,
 		usageEvery:          opts.usageEvery,
 		resumeGate:          opts.resumeGate,
 		sandboxSeats:        map[string]bool{},

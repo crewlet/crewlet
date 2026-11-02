@@ -470,6 +470,32 @@ recently in one rename a copy that holds it, whatever it holds — about 0.7 s o
 the janitor's at 10 000 copies, measured — and is due again only once a
 sixteenth more has been kept.
 
+**What code search costs a git node.** A repository searched by index keeps
+a trigram index of its default branch's tip on the first two git nodes of its
+order ([Code search](code-host.md#code-search)), and a search of many
+repositories is one question every git node answers its share of. Measured on
+two E-cores of a Core Ultra 7 265U, over a tip of 120 000 files — 1.96 GiB of
+real source, this repository's own tree in rotated copies:
+
+| | Measured |
+|---|---|
+| Building the index | 78 seconds of one core a gigabyte of source, the first time; a later tip reads only its new blobs |
+| The index on disk | 0.147 bytes a byte of source — 0.29 GiB for those 120 000 files, about 0.45 of a copy that holds its tip and no history (the source deflated as a pack holds it is 0.327 bytes a byte) |
+| A build's memory | 120 MiB at its peak for each segment of 256 MiB of source it writes |
+| A search | 11 ms at the median and 417 ms at the 99th percentile, its lookups and the confirmation of its candidates' lines up to its 500 hits |
+
+So a git node's indexes take at most a third of its cache's budget — what a
+cache full of indexed copies with no history holds of them, 31% — and past
+that they are dropped, least recently used first, before any repository is
+evicted, since a dropped index is built again from the blobs the copy already
+holds. Segments are merged as each is written, each kept more than twice the
+next, so an index keeps a handful of them (three for that tip) and each blob is
+written a logarithmic number of times. A search costs its node a lookup of a
+few lists and a read of the candidates' lines, never a walk of the tree: the
+repositories it names are divided among the git nodes that hold their
+indexes, each searching its own share at once, so adding git nodes divides a
+company-wide search rather than repeating it.
+
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes where its code tools built it, naming the
@@ -510,9 +536,9 @@ and an index of each coding run's pushes, where the report of [what a run
 pushed](code-sandbox.md#what-a-run-pushed-is-reported-for-it) scans its
 repositories' pushes since its launch instead — some 40 to 100 bytes a push
 each, 1.8 to 4.5 GB each at 250 000 pushes a day. The
-code log, which keeps only the trim's window of records, takes 1 555 bytes
+code log, which keeps only the trim's window of records, takes 1 604 bytes
 for a seat's coding box's push in a record of its own (1 481 where the engine
-builds it for a tool) and about 970 for each of a burst group commit holds
+builds it for a tool) and about 1 020 for each of a burst group commit holds
 together, the merges of the packs those pushes add
 43 to 108 bytes a push more — the more a merge takes at once, the less —
 and the sweeps that remove the rows a merge retired, a day later, up to 44
@@ -530,8 +556,8 @@ before a box's push was measured, the push rows were 369 MB and 30.8 GB. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Retired pack rows, at most | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 410 MB | about 3 200, 2.0 MB | about 36 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 34.2 GB | about 269 000, 164 MB | 1.8 to 3.0 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 410 MB | about 3 200, 2.0 MB | about 37 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 34.2 GB | about 269 000, 164 MB | 1.9 to 3.1 GB |
 
 The live pack rows are not a column, because they follow the repositories and
 not the pushes: some 29 KB a repository at fifty, 29 MB for every thousand,
@@ -547,10 +573,14 @@ counts them on a line of their own for a company that hosts code, and every
 data node's snapshot volume holds about 4.2 times them, as it does the rest of
 its estate. The code log's column is its push, compaction and sweep records
 alone; each linearizable read a git client makes — an advertisement, a push's
-sync, a fetch's ls-refs — appends a 176-byte barrier beside them, which is why the
-log's ceiling is derived at two thirds of the mutation log's rather than from
-its pushes alone
-([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).
+sync, a fetch's ls-refs — appends a 176-byte barrier beside them, and the
+changes those pushes revise append their opens, reviews, comments, merges and
+every revision's facts and mergeability — several times the push records'
+bytes — which is why the log's ceiling is derived from the mutation log's
+rather than from its pushes alone, and why a company whose seats open changes
+sets it to the ratio the two logs' `bytes_per_day` show
+([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized),
+[what the code log's reservation costs](../guides/replication.md#what-the-code-logs-reservation-costs)).
 The push records fit the ceiling a first boot derives from 50 GiB free or more
 ([the code log's reservation](../guides/replication.md#what-the-code-logs-reservation-costs)),
 and a push's bytes are never on the log — they are the object store's.
@@ -688,10 +718,12 @@ flowchart TD
   and what a node is behind on is a row it has not committed or a record it
   has not been handed yet. Or it stalled, it holds a record it cannot decode,
   it was evicted, or it lost its broker or its quorum: the next data node is
-  asked, and the refusal is the answer only where none does better. The three
+  asked, and the refusal is the answer only where none does better. The four
   refusals that hold for every node alike — the log is full (`log_full`), the
   broker refused to store the barrier on the log every node appends to
-  (`broker_refused`: a sealed stream, a store with no resources left), the
+  (`broker_refused`: a sealed stream, a store with no resources left), the one
+  member a log is stored on did not complete the barrier's write in time
+  (`broker_stalled`: every node's barrier waits on that member's disk), the
   fleet is in a capacity window (`maintenance`) — are answered at once, from
   the first node that gives them. Asking the next node costs a question and
   nothing more: it is handed what the read already paid for — the barrier the

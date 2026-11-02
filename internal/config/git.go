@@ -25,7 +25,7 @@ type Git struct {
 	// CacheMaxBytes is the cache's byte budget: what it evicts down to,
 	// least recently used first. Unset derives it at boot (CacheBudget) from
 	// what the engine measures of the cache's volume.
-	CacheMaxBytes int64 `yaml:"cache_max_bytes,omitempty" json:"cache_max_bytes,omitempty" js:"min=1073741824;max=70368744177664" desc:"The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation) and the request spools' allowance. Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."`
+	CacheMaxBytes int64 `yaml:"cache_max_bytes,omitempty" json:"cache_max_bytes,omitempty" js:"min=1073741824;max=70368744177664" desc:"The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation), the request spools' allowance and the revision facts' patch spools (512 MiB). Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."`
 
 	// MaxProcesses is the size of the git pool's READ lane — one core a
 	// slot — and twice its MAINTENANCE lane's. Passed RAW to the pool,
@@ -158,7 +158,8 @@ func (g Git) CacheDirFor(storePath string) string {
 // volume's free space PLUS what the cache already holds, LESS what the volume's
 // other BOUNDED tenants may still write there — an embedded broker sharing the
 // volume, up to the store limit its server enforces, and the code host's
-// request spools, up to their allowance. Free space excludes the cache's own
+// request spools, up to their allowance, and the revision facts' patch spools,
+// up to theirs (query.PatchSpoolAllowance). Free space excludes the cache's own
 // files, and a budget derived from it alone shrank at every restart of a warm
 // node, whose first janitor pass then evicted the difference — warm
 // repositories downloaded again, a GET a push, for no change in the disk. And

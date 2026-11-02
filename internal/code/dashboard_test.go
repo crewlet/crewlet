@@ -10,6 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DASHBOARD KNOWS EVERY STATE A REPOSITORY CAN BE IN, in the engine's
@@ -310,5 +312,159 @@ func TestEveryCodeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 			t.Errorf("CODE_PHRASES phrases %q, which the engine never records — a renamed reason "+
 				"leaves exactly this behind", key)
 		}
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY ALARM THE CODE HOST RAISES, and no other.
+//
+// Settings › Code lists, of each node's alarms (the fleet's node rows), the
+// ones `CODE_ALARM_KINDS` (`contract/code.ts`) names: a kind the code host
+// grew that the list lacks is an alarm that page never shows an
+// administrator, and one the list keeps that the table dropped is a filter
+// for nothing. The code host's kinds are the table's `code_` block, which
+// statelog declares under one heading ("The code host's"); read from the
+// client's own source, both ways, in `statelog.Kinds()`' sorted order, so a
+// kind added on one side lands at the one place the other is checked for it.
+//
+// Mutation: drop a kind from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "CODE_ALARM_KINDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	if len(got) == 0 {
+		t.Fatal("CODE_ALARM_KINDS reads as empty, so this gate certifies nothing")
+	}
+	var want []string
+	for _, k := range statelog.Kinds() {
+		if strings.HasPrefix(string(k), "code_") {
+			want = append(want, string(k))
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CODE_ALARM_KINDS is %v, want the alarm table's code kinds, in order: %v",
+			got, want)
+	}
+}
+
+// THE DASHBOARD STATES THE CODE POLICY'S DEFAULTS AS THE ENGINE APPLIES THEM.
+//
+// Settings › Code says what an unset `code.scratch.idle_days`,
+// `code.scratch.max_per_seat` and `code.identity_domain` read as, from
+// `CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT` and
+// `CODE_IDENTITY_DOMAIN` (`contract/code.ts`): a default moved in the engine
+// and not there is a page telling an administrator a policy nothing enforces.
+//
+// Mutation: change any of the three on either side, and this fails.
+func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for _, c := range []struct{ name, want string }{
+		{"CODE_SCRATCH_IDLE_DAYS", strconv.Itoa(config.DefaultCodeScratchIdleDays)},
+		{"CODE_SCRATCH_MAX_PER_SEAT", strconv.Itoa(config.DefaultCodeScratchMaxPerSeat)},
+		{"CODE_IDENTITY_DOMAIN", config.DefaultCodeIdentityDomain},
+	} {
+		got, err := clientsource.Scalar(tree, c.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("the dashboard's %s is %q, want the engine's default %q", c.name, got, c.want)
+		}
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
+// commit for, in the engine's order.
+//
+// The Checks section's facets, its histogram's bars and every checks tab key
+// on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`): a state the
+// engine grew that the list lacks is an attempt no facet can narrow to, and
+// one the list keeps that the engine dropped is a facet the engine refuses
+// as a `state` it does not know ([code.CheckState.Valid]). Both ways, in
+// order.
+//
+// Mutation: drop a state or a purpose from either side, or reorder the
+// dashboard's, and this fails.
+func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(code.CheckStates())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
+	}
+	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(code.CheckPurposes())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHECK_PURPOSES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY STATE OF A QUEUE'S ENTRY, in the engine's order.
+//
+// The Queue section draws an entry's state in words keyed on `QUEUE_STATES`
+// (`contract/checks.ts`): a state the engine grew that the list lacks is
+// drawn as its raw word, and one the list keeps that the engine dropped is
+// words for nothing it records. Both ways, in order.
+//
+// Mutation: drop a state from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryStateOfAQueue(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "QUEUE_STATES"), spelledOut(code.QueueStates())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's QUEUE_STATES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY MERGE REFUSAL, in the engine's order, and no
+// other.
+//
+// A change page's merge controls answer a refused merge, enqueue or override
+// in words of their own, keyed on the code host's word the act route names
+// beside the class (`refusal`, builtin.HostRefusal) and listed in
+// `MERGE_REFUSALS` (`contract/merge.ts`), whose sentences the compiler holds
+// complete over that list. A refusal the engine grew that the list lacks is
+// one the controls answer only in its class's general words — "changed by
+// somebody else" for a target that is still moving — and one the list keeps
+// that the engine dropped is a sentence nobody will ever read. Both ways, in
+// order.
+//
+// Mutation: drop a refusal from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryMergeRefusal(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "MERGE_REFUSALS"), spelledOut(code.MergeRefusals())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's MERGE_REFUSALS is %v, want the engine's, in order: %v", got, want)
+	}
+	// A MERGE'S BUILD answers a change that does not merge cleanly in the
+	// write's own word, which the controls name too.
+	conflict, err := clientsource.Scalar(clientsource.Tree(t), "MERGE_CONFLICT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict != string(code.WriteConflict) {
+		t.Errorf("the dashboard's MERGE_CONFLICT is %q, want the engine's %q", conflict, code.WriteConflict)
+	}
+}
+
+// THE DASHBOARD OFFERS EVERY WAY A CHANGE MERGES, in the engine's order, and
+// no other.
+//
+// The merge controls' method choice is `MERGE_METHODS` (`contract/merge.ts`),
+// sent as code_merge_change's `method`: a method the engine grew that the
+// list lacks is one no person can choose, and one the list keeps that the
+// engine dropped is a merge refused `invalid` on every press. Both ways, in
+// order — the first is the engine's default, which the controls open on.
+//
+// Mutation: drop a method from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardOffersEveryMergeMethod(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "MERGE_METHODS"), spelledOut(code.MergeMethods())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's MERGE_METHODS is %v, want the engine's, in order: %v", got, want)
 	}
 }

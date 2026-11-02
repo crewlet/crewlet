@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE CONVERSATION'S APPLIES: every record on a change's own subject
@@ -16,10 +18,11 @@ import (
 //
 // THE SUBJECT GUARD: a record on one change's subject may write only that
 // change's conversation — its payload names the subject's change — and the
-// change is the repository's its payload names, or the record is one no
-// correct writer forms, an error rather than a skip: a record about one
-// repository's change that named another would escape that repository's
-// deletion gate, which [Applier.Gated] reads off the payload.
+// change is the repository's its payload names, which is the one its scope
+// names, or the record is one no correct writer forms, an error rather than a
+// skip: a record about one repository's change that named another would
+// escape that repository's deletion gate, which [Applier.Gated] reads off the
+// scope.
 //
 // EVERY OTHER GUARD IS A SKIP, never a refusal that would stop the log on every
 // node: a record whose change has no row — a repository's purge removed it, and
@@ -58,6 +61,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID, changeID = p.RepoID, p.ChangeID
 	case Mergeability:
 		repoID, changeID = p.RepoID, p.ChangeID
+	case MergeabilityKept:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case AskSettle:
+		repoID, changeID = p.RepoID, p.ChangeID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a change (the record at %s)",
 			at.record.Op, at.position)
@@ -66,6 +73,11 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("code: the record at %s arbitrated change.%s and its payload names change %s — a "+
 			"record on one change's subject may write only that change's conversation", at.position,
 			at.record.Subject.ID, changeID)
+	}
+	if scoped, _ := scopedRepo(at.record.Scope.Set()); scoped != repoID {
+		return 0, fmt.Errorf("code: the record at %s names repository %s in its payload and %q in its scope — "+
+			"a record no writer forms, which the deletion gate judges by the repository its scope names",
+			at.position, repoID, scoped)
 	}
 	var held string
 	err = tx.QueryRowContext(ctx, changeRepoSQL, changeID).Scan(&held)
@@ -103,6 +115,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyRevise(ctx, tx, at, p)
 	case Mergeability:
 		rows, counts, err = applyMergeability(ctx, tx, at, p)
+	case MergeabilityKept:
+		rows, err = applyMergeabilityKept(ctx, tx, at, p)
+	case AskSettle:
+		rows, err = applyAsks(ctx, tx, at, p)
 	}
 	if err != nil || rows == 0 {
 		return 0, err
@@ -113,19 +129,43 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
 		return 0, err
 	}
+	if movesAsks(payload) {
+		// THE ASKS COUNTED AGAIN FROM THE CHANGE'S OWN, never moved by a
+		// delta: what waits and what ended are each a range of the
+		// reviewers' key a change's distinct reviewers bound, and a count
+		// read off them stays the rows' whatever this record's ups and downs.
+		if _, err := tx.ExecContext(ctx, countAsksSQL, changeID); err != nil {
+			return 0, fmt.Errorf("code: count change %s's asks at %s: %w", changeID, at.position, err)
+		}
+	}
 	return a.noticed(ctx, tx, at, repoID, payload, rows+1, nil)
 }
 
 // movesReadiness reports a record whose apply moves what the change's
 // readiness reads ([ReadinessOf]): an ask for review — whom an approval waits
-// on — a review — its verdict and its blockers — an answer to findings — its
-// blockers — and a revision's facts — the patch ids an approval is carried
-// by. A comment, a thread's resolution and a mergeability move none of it: a
-// mergeability that moved code_conversations.readiness_version would make
-// its own change due a refresh again at every refresh, for ever.
+// on — a review — its verdict and its blockers, and the ask it answers — an
+// answer to findings — its blockers — a revision's facts — the patch ids an
+// approval is carried by, and the asks it opens again — and a settling of the
+// asks with the change's lifecycle. A comment, a thread's resolution and a
+// mergeability move none of it: a mergeability that moved
+// code_conversations.readiness_version would make its own change due a
+// refresh again at every refresh, for ever.
 func movesReadiness(payload any) bool {
 	switch payload.(type) {
-	case ReviewerRequest, Review, FindingResolve, Revise:
+	case ReviewerRequest, Review, FindingResolve, Revise, AskSettle:
+		return true
+	}
+	return false
+}
+
+// movesAsks reports a record whose apply moves an ask's state
+// (code_reviewers): an ask for review, a review — which answers its
+// reviewer's own — a revision's facts — whose path owners it asks and whose
+// reviewers on request_changes it asks to look again — and a settling of the
+// asks with the change's lifecycle.
+func movesAsks(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Review, Revise, AskSettle:
 		return true
 	}
 	return false
@@ -163,7 +203,7 @@ func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID,
 // not carry ([supersededBy], the decide's own rule over the same rows):
 // moving the conversation's counters by all of it, its changes_requested by
 // the reviewer's standing verdict before this one and after.
-func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (int, conversationCounts, error) {
+func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (int, conversationCounts, error) {
 	by, kind := r.By.party()
 	if by == "" {
 		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "its reviewer names no seat")
@@ -226,17 +266,29 @@ func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (in
 		}
 		rows += len(ids)
 	}
+	// EVERY FINDING AND EVERY TEXT, A COLLECTION EACH, through as few
+	// multi-row statements as the engine's bind limit allows — one each for
+	// the widest review — never a statement a row: this runs in the code
+	// domain's one applier on every data node, which the pushes queue behind.
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addFindingsSQL, findingValuesSQL,
+		`ON CONFLICT (id) DO NOTHING`, len(r.Findings), func(i int) []any {
+			f := r.Findings[i]
+			return []any{f.ID, r.ChangeID, r.ReviewID, by, string(kind), r.Revision, f.CommitOID, f.Path,
+				f.BlobOID, string(f.Side), f.LineStart, f.LineEnd, string(f.Severity), string(f.Category),
+				string(FindingOpen), at.packed}
+		}); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("code: write review %s's findings at %s: %w", r.ReviewID,
+			at.position, err)
+	}
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addFindingTextsSQL, `(?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (change_id, finding_id) DO NOTHING`, len(r.Findings), func(i int) []any {
+			f := r.Findings[i]
+			return []any{r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body, f.Suggestion}
+		}); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("code: write review %s's findings' texts at %s: %w",
+			r.ReviewID, at.position, err)
+	}
 	for _, f := range r.Findings {
-		if _, err := tx.ExecContext(ctx, addFindingSQL, f.ID, r.ChangeID, r.ReviewID, by, string(kind), r.Revision,
-			f.CommitOID, f.Path, f.BlobOID, string(f.Side), f.LineStart, f.LineEnd, string(f.Severity),
-			string(f.Category), string(FindingOpen), at.packed); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: write finding %s at %s: %w", f.ID, at.position, err)
-		}
-		if _, err := tx.ExecContext(ctx, addFindingTextSQL, r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body,
-			f.Suggestion); err != nil {
-			return 0, conversationCounts{}, fmt.Errorf("code: write finding %s's text at %s: %w", f.ID,
-				at.position, err)
-		}
 		counts.openFindings++
 		if f.Severity == SeverityBlocker {
 			counts.openBlockers++
@@ -256,7 +308,15 @@ func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (in
 	if err != nil {
 		return 0, conversationCounts{}, err
 	}
-	return rows + 1 + mentioned, counts, nil
+	// THE REVIEW ANSWERS ITS REVIEWER'S OWN ASK, whatever its verdict: the
+	// review they were asked for is given, so the change waits on them no
+	// longer — until somebody asks again, or a later revision asks them to
+	// look again where their verdict asks for changes (applyRevise).
+	answered, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerRequested, ReviewerReviewed, []string{by})
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + 1 + mentioned + answered, counts, nil
 }
 
 // addMentioned makes everybody a record's routing names as mentioned a
@@ -264,7 +324,7 @@ func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (in
 // or moves (concerns.go) — each a person or a seat as the routing says, and
 // answers the rows it wrote. A participant already there stays as it was: a
 // mention moves nobody's standing verdict.
-func addMentioned(ctx context.Context, tx *sql.Tx, at applyContext, changeID string, r *ChangeRouting) (int,
+func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeID string, r *ChangeRouting) (int,
 	error) {
 
 	if r == nil {
@@ -300,13 +360,20 @@ func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr Fi
 		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "who answered names no seat")
 		return n, conversationCounts{}, err
 	}
+	// EVERY FINDING IT ANSWERS READ IN ONE STATEMENT, driven from their list;
+	// each answer written by its key, its values its own.
+	ids := make([]string, len(fr.Findings))
+	for i, a := range fr.Findings {
+		ids[i] = a.FindingID
+	}
+	held, err := findingsAmong(ctx, tx, ids)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
 	var counts conversationCounts
 	rows := 0
 	for _, a := range fr.Findings {
-		f, found, err := findingIn(ctx, tx, a.FindingID)
-		if err != nil {
-			return 0, conversationCounts{}, err
-		}
+		f, found := held[a.FindingID]
 		if !found || f.changeID != fr.ChangeID || !f.state.Stands() || f.state == a.Resolution {
 			continue
 		}
@@ -338,30 +405,32 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 	if by == "" {
 		return conversationNotApplied(ctx, at, p.RepoID, p.ChangeID, "who asked names no seat")
 	}
-	rows := 0
 	for _, r := range p.Request {
 		if !r.Kind.Valid() {
 			return 0, fmt.Errorf("code: the ask for review at %s names reviewer %q of kind %q, which no writer "+
 				"stamps", at.position, r.Handle, r.Kind)
 		}
-		if _, err := tx.ExecContext(ctx, askReviewerSQL, p.ChangeID, r.Handle, string(r.Kind),
-			string(ReviewerAsked), string(ReviewerRequested), by, string(byKind), p.Note, at.packed); err != nil {
-			return 0, fmt.Errorf("code: ask %s of change %s at %s: %w", r.Handle, p.ChangeID, at.position, err)
-		}
-		if _, err := tx.ExecContext(ctx, addParticipantSQL, p.ChangeID, r.Handle, string(r.Kind),
-			at.packed); err != nil {
-			return 0, fmt.Errorf("code: add %s to change %s at %s: %w", r.Handle, p.ChangeID, at.position, err)
-		}
-		rows += 2
 	}
-	for _, h := range p.Withdraw {
-		res, err := tx.ExecContext(ctx, withdrawReviewerSQL, string(ReviewerWithdrawn), at.packed, p.ChangeID, h)
-		if err != nil {
-			return 0, fmt.Errorf("code: withdraw %s from change %s at %s: %w", h, p.ChangeID, at.position, err)
-		}
-		n, _ := res.RowsAffected()
-		rows += int(n)
+	// THE REVIEWERS ASKED AND THEIR PARTICIPANT ROWS, A COLLECTION EACH, and
+	// the withdrawals in one statement driven from their list: as few
+	// statements as the engine's bind limit allows, never one a reviewer.
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, askReviewersSQL, `(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		askReviewersConflictSQL, len(p.Request), func(i int) []any {
+			r := p.Request[i]
+			return []any{p.ChangeID, r.Handle, string(r.Kind), string(ReviewerAsked), string(ReviewerRequested), by,
+				string(byKind), p.Note, at.packed}
+		}); err != nil {
+		return 0, fmt.Errorf("code: ask change %s's reviewers at %s: %w", p.ChangeID, at.position, err)
 	}
+	if err := addParticipants(ctx, tx, at, p.ChangeID, p.Request); err != nil {
+		return 0, err
+	}
+	rows := 2 * len(p.Request)
+	withdrawn, err := moveAsks(ctx, tx, at, p.ChangeID, ReviewerRequested, ReviewerWithdrawn, p.Withdraw)
+	if err != nil {
+		return 0, err
+	}
+	rows += withdrawn
 	// AN ASK THAT MOVED NOTHING still moves the conversation: its decide
 	// found something to move, and a record on the change's subject is one
 	// version of it whatever its rows.
@@ -434,34 +503,86 @@ func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t Thre
 	return 1, nil
 }
 
+// applyAsks settles a change's asks with its lifecycle ([AskSettle]): each ask
+// the record names moves to its state from the one the other direction leaves
+// — a waiting ask to ended, an ended one to requested — where the change still
+// stands, as this transaction reads its row, where the record's decide found
+// it: closed or merged for an end, live for an ask again. A change its
+// repository's records moved since — reopened before its end landed, ended
+// again before its ask again — keeps its asks as they are, and the record is
+// one version of the conversation and nothing else: the decide found
+// something to move, and the home's next pass reads the rows again.
+func applyAsks(ctx context.Context, tx *sql.Tx, at applyContext, a AskSettle) (int, error) {
+	row, found, err := changeRowIn(ctx, tx, a.ChangeID)
+	if err != nil || !found {
+		return 0, err
+	}
+	from, ends := ReviewerEnded, a.State == ReviewerEnded
+	if ends {
+		from = ReviewerRequested
+	}
+	if ends == row.state.Live() {
+		return 1, nil
+	}
+	moved, err := moveAsks(ctx, tx, at, a.ChangeID, from, a.State, a.Reviewers)
+	if err != nil {
+		return 0, err
+	}
+	return max(moved, 1), nil
+}
+
+// queryer is what an apply of a change's conversation issues its statements
+// through: a *sql.Tx, and in a test one that counts them
+// (TestTheWidestReviewAppliesInAFixedNumberOfStatements).
+type queryer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// addParticipants writes each of reviewers a participant of changeID where the
+// change holds none of them, at the record's position, as one collection.
+func addParticipants(ctx context.Context, tx store.Execer, at applyContext, changeID string,
+	reviewers []Reviewer) error {
+
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables, addParticipantsSQL, `(?, ?, ?, ?)`,
+		`ON CONFLICT (change_id, handle) DO NOTHING`, len(reviewers), func(i int) []any {
+			return []any{changeID, reviewers[i].Handle, string(reviewers[i].Kind), at.packed}
+		}); err != nil {
+		return fmt.Errorf("code: add change %s's reviewers as its participants at %s: %w", changeID, at.position,
+			err)
+	}
+	return nil
+}
+
+// moveAsks moves each ask of changeID handles names that is in state from to
+// state to, at the record's position, in one statement driven from the list of
+// the handles, and answers how many moved.
+func moveAsks(ctx context.Context, tx store.Execer, at applyContext, changeID string, from, to ReviewerState,
+	handles []string) (int, error) {
+
+	if len(handles) == 0 {
+		return 0, nil
+	}
+	list, err := jsonList(handles)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, moveAsksSQL, string(to), at.packed, changeID, string(from), list)
+	if err != nil {
+		return 0, fmt.Errorf("code: move change %s's asks %s to %s at %s: %w", changeID, from, to, at.position,
+			err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // conversationNotApplied logs a record on a change's subject that applies as
 // nothing, and answers that it wrote no row.
 func conversationNotApplied(ctx context.Context, at applyContext, repoID, changeID, why string) (int, error) {
 	applyLog.WarnContext(ctx, "code_conversation_not_applied", "repo", repoID, "change", changeID,
 		"op", string(at.record.Op), "op_id", at.record.OpID, "position", at.position.String(), "why", why)
 	return 0, nil
-}
-
-// changeRepoOf is the repository a change-subject record's payload names, read
-// off the record's body — what the deletion gate drops it by ([gatedRepo]). A
-// body this build cannot decode, or one naming no repository, answers false:
-// such a record is DEFERRED rather than applied, and the deferral is
-// reprocessed by a build that reads it, whose gate then runs properly.
-func changeRepoOf(body []byte) (string, bool) {
-	record, err := Decode(body)
-	if err != nil || len(record.Mutation) == 0 {
-		return "", false
-	}
-	// EVERY PAYLOAD ON A CHANGE'S SUBJECT NAMES ITS REPOSITORY under one key,
-	// so the gate reads that key alone rather than knowing every op: an op a
-	// later record adds is gated by its repository the day it lands.
-	var named struct {
-		RepoID string `json:"repo_id"`
-	}
-	if err := json.Unmarshal(record.Mutation, &named); err != nil || named.RepoID == "" {
-		return "", false
-	}
-	return named.RepoID, true
 }
 
 // The conversation's writes, and the reads that find the rows they write: the
@@ -499,13 +620,14 @@ const (
 			verdict, findings, turn_id, model, summary_bytes, position, at, summary)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`
-	addFindingSQL = `INSERT INTO code_findings (id, change_id, review_id, raiser, raiser_kind, revision,
-			commit_oid, path, blob_oid, side, line_start, line_end, severity, category, state, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO NOTHING`
-	addFindingTextSQL = `INSERT INTO code_finding_texts (change_id, finding_id, bytes, title, body, suggestion)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (change_id, finding_id) DO NOTHING`
+	// addFindingsSQL and addFindingTextsSQL are a review's findings and their
+	// texts, each a collection store.InsertRows writes, findingValuesSQL a
+	// finding's row.
+	addFindingsSQL = `INSERT INTO code_findings (id, change_id, review_id, raiser, raiser_kind, revision,
+			commit_oid, path, blob_oid, side, line_start, line_end, severity, category, state, position) VALUES `
+	findingValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	addFindingTextsSQL = `INSERT INTO code_finding_texts (change_id, finding_id, bytes, title, body, suggestion)
+		VALUES `
 	supersedeFindingsSQL = `UPDATE code_findings SET state = ?, resolution_note = '', resolved_by = ?,
 			resolved_by_kind = ?, resolved_commit = '', resolved_position = ?
 		WHERE rowid IN (SELECT f.rowid FROM json_each(?) AS j CROSS JOIN code_findings AS f
@@ -513,17 +635,37 @@ const (
 	answerFindingSQL = `UPDATE code_findings SET state = ?, resolution_note = ?, resolved_by = ?,
 			resolved_by_kind = ?, resolved_commit = ?, resolved_position = ?
 		WHERE id = ?`
-	askReviewerSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
-			requested_by_kind, note, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (change_id, reviewer) DO UPDATE SET reviewer_kind = excluded.reviewer_kind,
-			reason = excluded.reason, state = excluded.state, requested_by = excluded.requested_by,
-			requested_by_kind = excluded.requested_by_kind, note = excluded.note, position = excluded.position`
-	withdrawReviewerSQL = `UPDATE code_reviewers INDEXED BY ` + reviewersKey + ` SET state = ?, position = ?
-		WHERE change_id = ? AND reviewer = ? AND state = 'requested'`
+	// askReviewersSQL and askReviewersConflictSQL are an ask's reviewers, a
+	// collection store.InsertRows writes, each asked again where the change
+	// held an ask of them in any state.
+	askReviewersSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
+			requested_by_kind, note, position) VALUES `
+	askReviewersConflictSQL = `ON CONFLICT (change_id, reviewer) DO UPDATE SET
+			reviewer_kind = excluded.reviewer_kind, reason = excluded.reason, state = excluded.state,
+			requested_by = excluded.requested_by, requested_by_kind = excluded.requested_by_kind,
+			note = excluded.note, position = excluded.position`
+	// moveAsksSQL moves a change's asks named in a list from one state to
+	// another, driven from the list, one seek of the reviewers' key a handle
+	// — the key NAMED ([reviewersKey] says why) — as supersedeFindingsSQL
+	// drives a review's supersessions.
+	moveAsksSQL = `UPDATE code_reviewers SET state = ?1, position = ?2
+		WHERE rowid IN (SELECT r.rowid FROM json_each(?5) AS j
+			CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
+			WHERE r.change_id = ?3 AND r.reviewer = CAST(j.value AS TEXT) AND r.state = ?4)`
+	// countAsksSQL counts a change's asks that wait and those its end left
+	// onto its conversation's row, each a range of the reviewers' key.
+	countAsksSQL = `UPDATE code_conversations SET
+			asked = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'requested'),
+			ended = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'ended')
+		WHERE change_id = ?1`
 	addParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES (?, ?, ?, ?)
 		ON CONFLICT (change_id, handle) DO NOTHING`
-	addCommentSQL = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, finding_id, author,
+	// addParticipantsSQL is reviewers as a change's participants, a collection
+	// store.InsertRows writes, each where the change holds none of them.
+	addParticipantsSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES `
+	addCommentSQL      = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, finding_id, author,
 			author_kind, author_operator_id, anchor, turn_id, body_bytes, position, at, body)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`

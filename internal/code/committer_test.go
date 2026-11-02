@@ -799,6 +799,60 @@ func TestANodeFullOfBytesIsBusy(t *testing.T) {
 	eventually(t, "every answered push released", func() bool { return code.CommitterHeld(c) == 0 })
 }
 
+// A NODE FULL OF PROPOSALS IS BUSY, whichever repository the next push is
+// for: small pushes never meet the node's bytes, and each repository's queue
+// holds CommitterInbox of them, so the node bounds their COUNT across its
+// repositories too — the committer's share of the estate's proposal lane,
+// which the lane is sized by — refusing busy at once past it, the refusal
+// saying the node is full rather than the repository; and every push it held
+// is released as its caller leaves.
+//
+// Mutation: drop the node's count, and the push past it queues behind the
+// held batch.
+func TestANodeFullOfProposalsIsBusy(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	web, api := repoOn(t, n, "web"), repoOn(t, n, "api")
+	gate := newGate(n.pub)
+	c, rec := committerOn(t, n, gate)
+	code.SetCommitterNodeProposals(c, 3)
+
+	// A BATCH HELD ON EACH REPOSITORY and one push queued behind web's: the
+	// node holds three, each repository far under its own queue's count.
+	var held []<-chan answer
+	for i, repo := range []string{web, api} {
+		held = append(held, proposeAsync(t.Context(), c, proposal(repo,
+			update("refs/heads/lead", code.ZeroOID, oidOf("L")))))
+		eventually(t, "a lead's publish reaching the gate", func() bool { return gate.calls.Load() == int32(i+1) })
+	}
+	held = append(held, proposeAsync(t.Context(), c, proposal(web,
+		update("refs/heads/next", code.ZeroOID, oidOf("N")))))
+	eventually(t, "a push queued behind web's batch", func() bool { return code.CommitterQueued(c, web) == 1 })
+
+	busy := await(t, proposeAsync(t.Context(), c, proposal(api, update("refs/heads/more", code.ZeroOID,
+		oidOf("M")))))
+	switch {
+	case busy.err != nil:
+		t.Fatalf("the push past the node's count: %v", busy.err)
+	case busy.res.Answer.Refused != code.RefusalBusy:
+		t.Fatalf("the push past the node's count answered %+v, want busy", busy.res.Answer)
+	case !strings.Contains(busy.res.Answer.Detail, "3 proposals are held across this node's repositories, "+
+		"the most it holds (CommitterNodeProposals)"):
+		t.Fatalf("the push past the node's count was refused %q, which does not say the node was full",
+			busy.res.Answer.Detail)
+	}
+	requireOnePlacement(t, busy.res.Answer)
+	if got := pushesBusy(rec, "node"); got != 1 {
+		t.Fatalf("the busy counter reads %d pushes refused for the node, want 1", got)
+	}
+
+	gate.open()
+	for _, ch := range held {
+		requireOK(t, await(t, ch))
+	}
+	eventually(t, "every answered push released", func() bool { return code.CommitterHeld(c) == 0 })
+}
+
 // fakeClock is a clock a case moves by hand.
 type fakeClock struct {
 	mu sync.Mutex

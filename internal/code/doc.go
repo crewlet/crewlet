@@ -203,7 +203,8 @@
 // asked again of the repository's runner-up is the write that landed. Every
 // record names the repository's path and the change's in its scope, since its
 // decide reads the repository's rows; the deletion gate reads the repository
-// off its payload ([gatedRepo]); its apply is pure over the record — a
+// off that scope ([gatedRepo]), which the apply holds the payload's to; its
+// apply is pure over the record — a
 // reviewer's kind, stamped from the chart by the writer, rides it
 // (apply_conversation.go) — and keeps the conversation's counters (its
 // comments, reviews, open findings, standing blockers and requests for
@@ -259,9 +260,11 @@
 // one change by [LoadGateFacts]) and the gate the rules matching the target
 // combine into, the strictest of each term ([GateRulesOf]) — M4's
 // preconditions, the approval only where the gate asks one, and the gate's
-// own: a person's approval of a change touching its human paths, one approval
+// own: a person's approval of a change touching its human paths — among them,
+// on a gate requiring checks, the checks' own directory ([ChecksDirGlob])
+// unless the rule sets agents_edit_checks (U44) — one approval
 // from somebody on every touched path owner's lead chain (the head revision's
-// RECORDED match, no glob matched in a judgment), the checks a pre_land gate
+// RECORDED match, no glob matched in a judgment), the checks the gate
 // requires passed on the head commit, and the merger's authority where a
 // merger is named.
 //
@@ -296,8 +299,9 @@
 //
 // # A change wakes the seats its records concern
 //
-// Every record about a change carries whom it concerns, stamped by its writer
-// (concerns.go); the applier writes a notice row for each (apply_notices.go),
+// Every record about a change that concerns anybody carries whom it concerns,
+// stamped by its writer (concerns.go), and one that concerns nobody carries no
+// routing at all; the applier writes a notice row for each (apply_notices.go),
 // which a person's code inbox reads, and the code log's own fleet-wide
 // consumer, [FeedGroup], derives a WAKE for each seat among them (feed.go,
 // wake.go) — never the writer's goroutine (ADR-0012). The log's trim waits on
@@ -357,6 +361,19 @@
 // and a repository's home finds the attempts whose runner is gone by a
 // `checks_running` read ([ReadChecksRunning]) — both the engine's own, each
 // claim and ending they lead to decided again by the checks writer.
+//
+// A CHECK IS A MEASUREMENT OF A COMMIT, DEFINED BY THE TARGET BRANCH AND RUN
+// WHERE NO AUTHOR CAN REACH IT (ADR-0091): a head's checks are defined by the
+// checks file at its target's tip, and a protected branch's TIP checks by the
+// file at the base of its first landing above its green row — never by the
+// commit measured, which may have rewritten the file. Every landing a record
+// did not prove lies above its target's green until a tip passes, and the
+// repository's home owes the target its tip work (tipwork.go: a `checks_due`
+// read's [ReadAnswer.DueTips], listed by code_landings_unjudged_idx): the
+// newest landing dispatched, coalesced; the green row moved onto it on pass
+// ([Green]); a red tip's failed checks bisected over the landing rows down to
+// the first landing they failed on, recorded broken ([Broken]) and announced
+// once as code_target_broken.
 //
 // # Group commit
 //
@@ -595,11 +612,13 @@
 // carries the company day its quota counted it on ([PushEntry.Day]),
 // nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
 // and about 893 in a burst. A seat's CODING BOX's push of the commit takes
-// 175.0 bytes more than a person's (push=box): its principal names, beside
+// 224.0 bytes more than a person's (push=box): its principal names, beside
 // the run the engine's write names, the coding run that pushed — the
-// launch's id, a UUID — and the coding agent the box ran (`claude-code`),
-// and its way is `git`; so 1 555 bytes alone in its record and about 967 in
-// a burst, the most a seat's push takes of the log, at which the code log's
+// launch's id, a UUID — the coding agent the box ran (`claude-code`) and
+// the identity of the work item its run was launched for (a Worklet task's
+// UUID, [RunProvenance.WorkID], 49 of those bytes), and its way is `git`;
+// so 1 604 bytes alone in its record and about 1 016 in a burst (the
+// person's 792 and the same 224), the most a seat's push takes of the log, at which the code log's
 // day prices every one of the reference company's (internal/worklet's
 // codeLogDay). The compactions that merge the pushes' packs add
 // their own records, MEASURED a push (internal/code/compact's steady arms,
@@ -616,11 +635,13 @@
 // merges is swept together, a record for every [RetireSweepRows] of its rows
 // whatever pushes they came from. The log keeps the trim's window of records
 // rather than the history, so the reference company's 3 000 pushes a day,
-// every one a seat's and priced as its coding box's, hold about 33 MB of it
+// every one a seat's and priced as its coding box's, hold about 34 MB of it
 // over the default seven-day min_age, and the records that merge their packs
 // and sweep what those merges retired at most about 3.2 MB beside them —
-// about 36 MB, about a thirtieth of the log's 1 GiB floor — and the bytes of
-// a push's pack are never on it: a record names its bundle.
+// about 37 MB, under a twenty-fifth of the log's 1 GiB floor — and the bytes
+// of a push's pack are never on it: a record names its bundle. The records
+// of the changes those pushes revise come beside them, several times their
+// bytes (config's DerivedCodeLogNumerator has the day).
 //
 // # The activation fence
 //
@@ -1000,12 +1021,16 @@
 // the rules whole beside the row, as it reads the path owners
 // ([protectionsIn]): the lifecycle decides and the reconcile.
 //
-// A TOOL CHANGES A GATE A FIELD AT A TIME ([GateChange]): a protect request
-// names the fields it replaces, and the lifecycle decide puts them in the gate
-// its own snapshot holds for the pattern, every other field kept — or
-// defaulted, on a rule with none — since a gate whole is one a caller could
-// form only from a read made elsewhere, and two requests changing two fields
-// at once would each undo the other's. A seat's change is weighed field by
+// A TOOL CHANGES A RULE A CONTROL AT A TIME AND A GATE A FIELD AT A TIME
+// ([ProtectChange], [GateChange]): a protect request names the push controls
+// and gate scalars it replaces and the items it adds to or removes from a
+// gate's lists ([ListChange], [HumanPathsChange]), and the lifecycle decide
+// puts them in the rule its own snapshot holds for the pattern, every other
+// control, field and item kept — or at its least or default, on a pattern
+// with no rule or a rule with no gate — since a rule, a gate or a list whole
+// is one a caller could form only from a read made elsewhere, and two
+// requests changing two of them at once — two checks added — would each undo
+// the other's. A seat's change is weighed field by
 // field ([MergeGate.LoosenedBy]): it raises a field and only a person lowers
 // one. The decide judges and resolves against the rules it reads whole beside
 // the row, which alone carry a gate, and the request's answer names the
@@ -1025,8 +1050,10 @@
 // for good: [RepoSettings.Validate] refuses its index, and a settings change
 // asking for one is refused not_permitted naming why, a person's included. The
 // rows carry the mode in code_repos.search, beside code_repos_search_idx over
-// the active and archived repositories by mode and then name — the walk of
-// whatever lists the indexed ones. This package records the mode, serves it and
+// the active and archived repositories by mode and then name — the walk of the
+// [ReadIndexed] listing, by which a git node's indexer finds the repositories
+// whose code index it may keep, the first [IndexHolders] of each one's git
+// order (internal/code/cache). This package records the mode, serves it and
 // lets a maintainer change it; it indexes and searches nothing.
 //
 // # What this package does not do
@@ -1087,9 +1114,10 @@
 //     update or a deletion records the object it moved its ref off
 //     (code_ref_drops, one row an object, keyed by its record's broker
 //     instant and position), because no ref names that object any more and
-//     dropping a repository's unreachable objects must keep what such a push
-//     left for the grace — history force-pushed away or deleted stays
-//     fetchable by its id. A push record forgets its repository's drops past
+//     the maintainer's weekly expunge must keep what such a push left for the
+//     grace — history force-pushed away or deleted stays fetchable by its id
+//     until a person's purge, which keeps no grace, or an expunge after it
+//     takes it. A push record forgets its repository's drops past
 //     the grace, oldest first by instant, with whatever its rows leave of
 //     [MaxRecordRows] once the tombstones have had theirs: after them, since
 //     a drop forgotten late costs a row where a tombstone's room taken costs
@@ -1346,7 +1374,8 @@
 // deletion leaves the history behind it in the repository's packs — so an
 // EXPUNGE is the one rewrite that drops objects, in two records of their own
 // on the repository's subject, each decided alone by its committer in its one
-// queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is:
+// queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is
+// (ADR-0092):
 //
 //   - its BEGIN ([ExpungeBegin]) rewrites some live packs — a full pack among
 //     them — into packs holding what a ref reached at its maintainer's scan,
@@ -1385,10 +1414,20 @@
 // outputs after it, and a purge's cycle takes the live packs that date from
 // before the request it serves. While an expunge is open, a second begin is
 // stale and so is a publication (publication.go's rule 6g); a compaction of
-// live packs is decided as ever. The repository's maintainer finds the
-// expunges it owes by the [ReadExpungeDue] listing — the active and archived
+// live packs is decided as ever. A pack row also names WHEN its newest
+// content arrived ([PackRow.Arrived], replicated 0123): a push's and a queue
+// merge's pack its record's broker instant, and every rewrite's output the
+// latest of the rows it retires — the record's own instant where it retires
+// none — so the maintainer's own expunge keeps every pack that arrived within
+// [PruneGrace] whole by a column, never a position, which says nothing of
+// time. The repository's maintainer finds the expunges it owes by the
+// [ReadExpungeDue] listing, in two arms: first the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
-// code_repos_expunging_idx (replicated 0087), the engine's own read — and
+// code_repos_expunging_idx (replicated 0087); then, asked with
+// [ReadQuery.ExpungedBefore], every other active or archived repository of
+// any kind last expunged at or before that instant or never, least recently
+// expunged first, one seek of code_repos_expunge_due_idx (the same
+// migration) — the engine's own read, its maintainer's weekly schedule — and
 // reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
 // objects the repository's ref drops left since an instant, one covering seek
 // of code_ref_drops' key, which replicated 0084 led with the instant for it;

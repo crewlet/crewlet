@@ -737,7 +737,8 @@ func Catalogue() []Instrument {
 				"refusal's own code — `not_permitted`, `stale`, `change_exists`, " +
 				"`no_source`, `no_target`, `same_ref`, `no_difference`, " +
 				"`change_closed`, `change_merged`, `change_not_found`, " +
-				"`repo_archived`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`repo_archived`, `repo_importing`, `repo_mirrored`, " +
+				"`repo_deleted`, `busy`, `not_applied`, " +
 				"`unavailable` — which decided nothing; `handed_on`, one this " +
 				"node decided nothing of for a reason about itself (stopping, " +
 				"no chart to judge a seat by, behind the company's " +
@@ -753,20 +754,30 @@ func Catalogue() []Instrument {
 			Shows: "Writes of a target's merge queue this node's committer was " +
 				"asked to decide, by `op` (`enqueue`, a change put in its " +
 				"target's queue through its merge gate, and `dequeue`, an " +
-				"entry taken out at a principal's ask) and what became of each, " +
-				"by `outcome`: `applied`, its record landed and its entry's row " +
-				"says so; `pending` and `unknown`, its record was appended and " +
-				"is not yet known here to have applied; a refusal's own code — " +
-				"`gate_unmet`, `already_queued`, `queue_full`, `no_queue`, " +
-				"`no_auto_revert`, `head_moved`, `stale`, `change_not_open`, " +
-				"`change_draft`, `change_not_found`, `not_queued`, " +
-				"`not_permitted`, `repo_archived`, `repo_deleted`, `busy`, " +
-				"`not_applied`, `unavailable` — which decided nothing; " +
-				"`handed_on`, one this node decided nothing of for a reason " +
-				"about itself, which the estate asks the repository's runner-up; " +
-				"and `failed`, any other error. `gate_unmet` climbing is askers " +
-				"queueing changes before their gate is met; `queue_full`, a " +
-				"queue landing slower than it is fed.",
+				"entry taken out at a principal's ask; and the queue's own " +
+				"records its home asks: `candidate`, a train built onto the " +
+				"target's tip, `eject`, entries put out, `land`, entries " +
+				"landed with every one's gate proved again, `green` and " +
+				"`broken`, a landing its tip checks passed or failed) and what " +
+				"became of each, by `outcome`: `applied`, its record landed and " +
+				"the rows it wrote say so; `pending` and `unknown`, its record " +
+				"was appended and is not yet known here to have applied; a " +
+				"refusal's own code — `gate_unmet`, `already_queued`, " +
+				"`queue_full`, `no_queue`, `head_moved`, " +
+				"`stale`, `target_moved`, `change_not_open`, `change_draft`, " +
+				"`change_not_found`, `not_queued`, `not_permitted`, " +
+				"`not_green`, `not_red`, `no_landing`, `record_full`, " +
+				"`upload_expired`, `repo_size`, `compaction_behind`, " +
+				"`repo_archived`, `repo_importing`, `repo_mirrored`, " +
+				"`expunging`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`unavailable` — which decided nothing; `handed_on`, one this " +
+				"node decided nothing of for a reason about itself, which the " +
+				"estate asks the repository's runner-up; and `failed`, any " +
+				"other error. `gate_unmet` climbing is askers queueing changes " +
+				"before their gate is met, or, on `land`, gates that stop " +
+				"holding between an enqueue and its landing; `queue_full`, a " +
+				"queue landing slower than it is fed; `target_moved` on " +
+				"`candidate` and `land`, a branch moving under its queue.",
 		},
 		{
 			Name: CodeMergeOutcomes, Kind: KindCounter, Unit: UnitCount,
@@ -781,7 +792,8 @@ func Catalogue() []Instrument {
 				"`target_moved`, `head_moved`, `stale`, `queue_target`, " +
 				"`not_person`, `source_refused`, `upload_expired`, `repo_size`, " +
 				"`compaction_behind`, `change_not_open`, `change_draft`, " +
-				"`change_not_found`, `repo_archived`, `repo_deleted`, `busy`, " +
+				"`change_not_found`, `repo_archived`, `repo_importing`, " +
+				"`repo_mirrored`, `expunging`, `repo_deleted`, `busy`, " +
 				"`not_applied`, `unavailable` — which decided nothing; " +
 				"`handed_on`, one this node decided nothing of for a reason " +
 				"about itself, which the estate asks the repository's runner-up; " +
@@ -792,9 +804,10 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
-			Shows: "Attempts of checks this node's checks writer queued — each a " +
-				"record on its repository's checks subject that applied here, " +
-				"counted once, by the node that published it — by `purpose`: " +
+			Shows: "Attempts of checks this node's checks writer queued — each by a " +
+				"record on its repository's checks subject that applied here (a " +
+				"head's dispatch record carries all of its own), counted once, by " +
+				"the node that published it — by `purpose`: " +
 				"`head`, a change's head; `candidate`, a merge queue's candidate; " +
 				"`tip`, a protected branch's tip; `bisect`, a landing between a " +
 				"green tip and a red one. A head recorded skipped at its dispatch " +
@@ -849,6 +862,22 @@ func Catalogue() []Instrument {
 				"a fleet whose container cells are too few for its checks.",
 		},
 		{
+			Name: CodeChecksRemoteCapped, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Walks of this git node's check runner that left a remote " +
+				"(e2b) check queued rather than start its box — one a walk, " +
+				"since a walk held back once tries no further remote check — by " +
+				"`reason`: `max_running`, the company's " +
+				"`code.checks.remote.max_running` boxes already run; " +
+				"`box_hours_per_day`, the UTC day's " +
+				"`code.checks.remote.box_hours_per_day` are spent; `unknown`, " +
+				"the coordination store could not say, which starts nothing. " +
+				"`max_running` climbing while code_checks_backlog stands is a " +
+				"company whose remote cap is below its checks; " +
+				"`box_hours_per_day` is its remote checks waiting for the next " +
+				"UTC midnight.",
+		},
+		{
 			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"placement"},
 			Shows: "How long the checks this git node's runner ran took, from " +
@@ -867,10 +896,13 @@ func Catalogue() []Instrument {
 				"was asked to decide — each a record on the change's own " +
 				"subject, never in the repository's committer queue — by `op` " +
 				"(`reviewers`, `comment`, `thread_resolve`, `review`, " +
-				"`finding_resolve`, and two its repository's home git node " +
-				"asks: `revise`, a revision's facts it read, and " +
+				"`finding_resolve`, and three its repository's home git node " +
+				"asks: `revise`, a revision's facts it read, " +
 				"`mergeability`, whether the change's head revision merges " +
-				"into its target's tip) and what became of each, by " +
+				"into its target's tip, and `asks`, the change's asks for " +
+				"review settled with its lifecycle — ended once it closed or " +
+				"merged, asked again once it is reopened) and what became of " +
+				"each, by " +
 				"`outcome`: " +
 				"`applied`, its record landed and the change's conversation " +
 				"holds it; `unchanged`, it asked for what the conversation " +
@@ -886,8 +918,10 @@ func Catalogue() []Instrument {
 				"a target the change has moved from; facts no later than the " +
 				"facts it holds, or matched against path owners changed since; " +
 				"a merge into a tip before the one its mergeability is of, or " +
-				"into the same tip once decided — which " +
-				"decided nothing; `handed_on`, one this node decided nothing of " +
+				"into the same tip once decided; a settling of asks for a " +
+				"change that moved since its home read it, or holds no such " +
+				"ask — which decided nothing; `handed_on`, one this node " +
+				"decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +
 				"or a reviewer by, behind the company's configuration), which " +
 				"the estate asks the repository's runner-up; and `failed`, any " +
@@ -907,8 +941,12 @@ func Catalogue() []Instrument {
 				"maintainer built, which it plans again at its next pass; " +
 				"`change`, a write of a change's lifecycle, which its asker " +
 				"sends again; `merge_queue`, an enqueue or a dequeue of a " +
-				"target's merge queue, which its asker sends again; and `merge`, " +
-				"a change's merge, which its builder asks again. `reason` is " +
+				"target's merge queue, which its asker sends again; `merge`, " +
+				"a change's merge, which its builder asks again; `import`, a " +
+				"chunk or the end of a repository's import from another host, " +
+				"which its home reads the repository and proposes again at its " +
+				"next round; and `mirror_sync`, a pull mirror's sync, which its " +
+				"home fetches and builds again at its next round. `reason` is " +
 				"one of five causes, each pointing at " +
 				"a different remedy. Three are a BACKLOG, which raises " +
 				"`code_commit_busy` on the committer's node: `queue`, a " +
@@ -949,7 +987,10 @@ func Catalogue() []Instrument {
 				"a minute — or a change whose head its target holds landed; " +
 				"`check_runners`: its running checks whose runner left its git " +
 				"order, or ran past its check's timeout and a setup's grace, " +
-				"ended `errored runner_lost`) and " +
+				"ended `errored runner_lost`; `mirrors`: its import or its pull " +
+				"mirror's sync STARTED, on a goroutine of its own, since a fetch " +
+				"from another host outlives a turn — `crewlet.code.import.chunks` " +
+				"and `crewlet.code.mirror.runs` count what each came to) and " +
 				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +
@@ -994,19 +1035,26 @@ func Catalogue() []Instrument {
 			Shows: "One merge of a change's head into its target's tip on this " +
 				"git node — `git merge-tree --write-tree` in a scratch of its " +
 				"own, never in a cache — by `work`: `mergeability`, the home's " +
-				"own, recorded on the change, its ancestry asked first and its " +
-				"merge given thirty seconds of the maintenance lane; or " +
-				"`preview`, a comparison's merge preview a person or a seat " +
-				"asked, given a read's ten seconds of the read lane under a " +
-				"unit of the node's seat git-work share. `outcome`: `clean`, " +
-				"`conflict`, `unknown` — the merge ran out of its time and " +
-				"decided nothing, which a change's home records and asks " +
-				"again ten minutes on — `landed`, the home's ancestry finding " +
-				"the head inside its target, the change landed with no merge " +
-				"run, and `failed`, a merge that could not run (a busy lane, a " +
-				"copy that would not sync). `unknown` climbing is changes past " +
-				"what a merge decides in its time; `failed` climbing on the " +
-				"`mergeability` work, a home whose maintenance lane is full.",
+				"own, its ancestry asked first and its merge given thirty " +
+				"seconds of the maintenance lane, timed from the copy's sync to " +
+				"the ancestry's or the merge's answer — never the record of it " +
+				"on the change or the landing, which are the change writer's " +
+				"and the committer's; or `preview`, a comparison's merge " +
+				"preview a person or a seat asked, given a read's ten seconds " +
+				"of the read lane under a unit of the node's seat git-work " +
+				"share, its merge-tree alone timed: a preview refused before " +
+				"it (not held, not permitted, a commit absent), or answered " +
+				"from the node's memo of the same two commits, is no merge, and " +
+				"is not observed. `outcome`: `clean`, `conflict`, `unknown` — " +
+				"the merge ran out of its time and decided nothing, which a " +
+				"change's home records and asks again ten minutes on — " +
+				"`landed`, the home's ancestry finding the head inside its " +
+				"target, the change landed with no merge run, and `failed`, a " +
+				"merge that could not run (a copy that would not sync, a busy " +
+				"lane, git failing) or a preview's merge its asker's attempt " +
+				"ended first. `unknown` climbing is changes past what a merge " +
+				"decides in its time; `failed` climbing on the `mergeability` " +
+				"work, a home whose maintenance lane is full.",
 		},
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,
@@ -1141,15 +1189,20 @@ func Catalogue() []Instrument {
 			Name: CodeExpungeRuns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Expunges this node ran as the MAINTAINER of their " +
-				"repositories — a person's purge served, or an expunge left open " +
-				"finished from its rows — each one cycle: a scan of what a ref " +
+				"repositories — a person's purge served, a repository its weekly " +
+				"listing names judged, or an expunge left open finished from its " +
+				"rows — each one cycle: a scan of what a ref " +
 				"reaches, a build sorting some live packs into kept and dropping " +
 				"ones, their begin, a rescue of what a push revived meanwhile and " +
 				"their commit — by `outcome`. `applied`: its commit landed, and " +
 				"what no ref reached left the repository's live packs. `pending`, " +
 				"`unknown`: a record was appended and is not yet known to have " +
 				"applied — the next pass reads the rows and finishes it. " +
-				"`not_due`: nothing was left to rewrite. `stale`: a compaction, a " +
+				"`not_due`: nothing was left to rewrite — a purge already served, " +
+				"every live pack arrived within the two weeks' grace the weekly " +
+				"expunge keeps whole, or what no ref reaches is a quarter of the " +
+				"live bytes or less, or under 64 MiB — each but a served purge leaving the " +
+				"repository unscanned on this node for a week. `stale`: a compaction, a " +
 				"publication or a purge moved an input first, or the expunge was " +
 				"finished elsewhere. `busy`: no maintenance slot or memory room " +
 				"was free, another build of the repository was running on the " +
@@ -1266,7 +1319,11 @@ func Catalogue() []Instrument {
 				"of the node's index of which push introduced each commit, " +
 				"which no git reads, held to its own SHA-256 trailer — a run " +
 				"a previous process left before anything first reads it, " +
-				"behind the serving, and every run by a scrub; `idx`, `rev`: a " +
+				"behind the serving, and every run by a scrub; " +
+				"`codeindex-segment`, `codeindex-tip`: a segment and a tip " +
+				"map of a repository's code index, which no git reads " +
+				"either, held to their own SHA-256 trailers by a scrub; " +
+				"`idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
 				"`pack`, the pack itself, read only by a scrub), `outcome` " +
 				"(`sound`; `damaged` — a derived file dropped to be written " +
@@ -1584,6 +1641,106 @@ func Catalogue() []Instrument {
 				"less what is being cut; falling to nothing at once is a " +
 				"history restored or recreated under the node, which drops " +
 				"every answer read from it.",
+		},
+		{
+			Name: CodeIndexBuilds, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Looks this node's indexer took at the code index of a " +
+				"`search: indexed` repository — each one every minute, and one " +
+				"whose refs a round moved at once — by `outcome`. `built`: the " +
+				"index now answers for the " +
+				"default branch's tip, only the blobs the tip brought read. " +
+				"`current`: it already did, or another build stored first. " +
+				"`none`: the repository keeps no index here — its search is " +
+				"grep, its default branch names no commit, or this node is not " +
+				"among the first two git nodes of its order, which keep it " +
+				"(an index this node kept then dropped), so on a fleet of more " +
+				"than two git nodes most looks are `none`. " +
+				"`failed`: the copy could not be synced or read, and the next " +
+				"look tries again (`code_cache_index_failed` says why). A " +
+				"steady `built` on a quiet company is an index the share keeps " +
+				"trimming: see `crewlet.code.index.bytes`.",
+		},
+		{
+			Name: CodeIndexBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds of code indexes — the " +
+				"trigram segments and tip maps of the repositories searched by " +
+				"index that it holds — part of `crewlet.code.cache.bytes`. Held " +
+				"to a third of the cache's budget before any repository is " +
+				"evicted, by dropping the index of the copy used least recently " +
+				"whole; the indexer builds a dropped one again at its next look, " +
+				"so a gauge pinned at the third is a node keeping more " +
+				"indexes than its budget holds.",
+		},
+		{
+			Name: CodeSearchQueries, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"via"},
+			Shows: "Code searches this node asked, by `via`: `index` and `grep`, " +
+				"a search of one repository read through its code index or with " +
+				"git grep; `scatter`, a search of several, asked of every git " +
+				"node holding them at once. A steady `grep` share of " +
+				"one-repository searches of indexed repositories is indexes that " +
+				"do not keep up with the pushes: see `crewlet.code.index.builds`.",
+		},
+		{
+			Name: CodeSearchDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"via"},
+			Shows: "How long a code search this node asked took, from its " +
+				"asking to its answer, by `via` as `crewlet.code.search.queries`. " +
+				"A scatter takes one round, or two where a git node did not " +
+				"answer the first, each at most 9 s: a scatter near 9 s is a git " +
+				"node that did not answer, which its answer's coverage names.",
+		},
+		{
+			Name: CodeSearchCoverage, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Repositories a code search this node asked did not search, " +
+				"or searched more slowly, by `reason`, as the last git node " +
+				"asked for it answered: `not_answering`, a git node that did " +
+				"not answer for it; `building`, its index being built, with no " +
+				"other git node in its order to ask; `stale`, a node behind the " +
+				"log or the company's configuration; `not_permitted`, a grant the " +
+				"answering node's chart refused; `no_ref`, no such ref in it; " +
+				"`grep_not_named`, a `search: grep` repository an unfiltered " +
+				"search leaves out; `not_indexed`, an indexed repository read " +
+				"with git grep. A steady `not_answering` is a git node to look " +
+				"at; `grep_not_named` alone is a company's choice.",
+		},
+		{
+			Name: CodeImportChunks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "The chunks this node, as a repository's home, proposed " +
+				"of an import from another host, by `outcome`: `applied`, the " +
+				"chunk's packs and refs landed; `ended`, refused for a limit " +
+				"the source is past (`repo_size`, `repo_refs`, `ref_conflict`, " +
+				"`pack_too_large`), which ends the import with its error; and " +
+				"`failed`, refused for anything else — a busy committer, rows " +
+				"that moved — or not seen applied, the import tried again from " +
+				"its rows a minute later and longer after each failure in a " +
+				"row. `failed` climbing on one node with no `applied` beside it " +
+				"is an import that cannot make progress: its " +
+				"`code_mirror_attempt_failed` lines say why.",
+		},
+		{
+			Name: CodeMirrorRuns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"dir", "outcome"},
+			Shows: "One attempt to bring a mirror level with the other host, " +
+				"by `dir` (`pull`: a pull mirror's sync from its source, run " +
+				"by its home every 15 minutes; `push`: a push mirror's push to " +
+				"its target, run by its home at most once a minute while the " +
+				"repository moves and every 15 minutes while it is idle) and " +
+				"`outcome`: `synced`, a sync landed what the source moved; " +
+				"`pushed`, a push moved refs at the target; `current`, the " +
+				"source moved nothing, or the target already held every " +
+				"covered ref as it should; `failed`, the other host " +
+				"unreachable, its credential refused, a ref it rejected, a " +
+				"push mirror's seat that no longer reads the repository, or a " +
+				"step refused or not seen applied — the mirror tried again a " +
+				"minute later, and longer after each failure in a row, up to " +
+				"its interval. A mirror whose other host went away shows as " +
+				"`failed` four times an hour, every one with its " +
+				"`code_mirror_attempt_failed` line, and raises " +
+				"`code_mirror_failing` once it has gone half an hour.",
 		},
 		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,
@@ -1968,30 +2125,37 @@ func Catalogue() []Instrument {
 			Shows: "Seat git work running at once on this git node, of half its " +
 				"read lane: the units of the node's seat git-work share held " +
 				"now — server-side reads of a repository by object id running " +
-				"their git, and the builds of engine writes, a seat's or a " +
-				"person's commit made through a tool. The share is half of " +
+				"their git, the engine's own among them, and the builds of " +
+				"engine writes, a seat's or a person's commit made through a " +
+				"tool. The share is half of " +
 				"`git.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
-				"a fetch's check of its wants. Pinned at the share while " +
-				"`crewlet.code.seatwork.waits{outcome=unready}` climbs is a " +
-				"node whose seats ask more git than half its cores, and sends " +
-				"the rest to another git node.",
+				"a fetch's check of its wants. Pinned at the share while the " +
+				"count of `crewlet.code.seatwork.waits{outcome=unready}` " +
+				"climbs is a node whose seats ask more git than half its " +
+				"cores, and sends the rest to another git node.",
 		},
 		{
-			Name: CodeSeatworkWaits, Kind: KindCounter, Unit: UnitCount,
+			Name: CodeSeatworkWaits, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome", "work"},
-			Shows: "Every unit of this git node's seat git-work share asked " +
-				"for, by `outcome` — `granted`, taken within two seconds; " +
-				"`unready`, none free in two seconds, answered so the asker " +
-				"is served by another git node — and by `work` (`read`: a " +
-				"server-side read of a repository by object id; `write`: the " +
-				"build of an engine write, a commit made through a tool). One " +
-				"whose " +
-				"caller went away while it waited is not counted. `unready` " +
-				"is a node at its share for whole seconds: more git nodes, or " +
-				"more cores and a wider `git.max_processes`, which widens the " +
-				"share with the lane.",
+			Shows: "How long every unit of this git node's seat git-work " +
+				"share asked for waited, by `outcome` — `granted`, taken " +
+				"within two seconds; `unready`, none free in two seconds, " +
+				"answered so the asker is served by another git node, its " +
+				"wait the whole two — and by `work` (`read`: a seat's or a " +
+				"person's server-side read of a repository by object id; " +
+				"`write`: the build of an engine write, a commit made through " +
+				"a tool; `engine`: the engine's own read — a revision's facts " +
+				"or a checks file a repository's home reads, or a read made " +
+				"for a check). One whose " +
+				"caller went away while it waited is not counted. The wait " +
+				"is a whole term of the attempt a seat's read or write is " +
+				"given on one git node, so the `granted` tail nearing two " +
+				"seconds is a node about to send its seats' work on; the " +
+				"`unready` count is a node at its share for whole seconds: " +
+				"more git nodes, or more cores and a wider " +
+				"`git.max_processes`, which widens the share with the lane.",
 		},
 		// ---- the code host ---------------------------------------------
 		{

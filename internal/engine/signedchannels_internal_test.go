@@ -15,7 +15,8 @@ import (
 // EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN —
 // the estate service, the fleet broker's membership, a note to a running turn,
 // a read of a box asked of its host, a box's tool call relayed to the process
-// holding its session, and the Dashboard Assistant's replays and stops — and
+// holding its session, the Dashboard Assistant's replays and stops, and a
+// code search — and
 // none of them in a state log's. So does a person's answer to a parked run,
 // sealed onto the run's row and handed to the resumed run as their words, and
 // a note to a turn whose coding run is out, sealed onto the run's row with the
@@ -61,6 +62,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	searchWire, err := newCodeSearchWire(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
 	presenceWire, err := newPresenceWire(ring)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +100,7 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		"the assistant's replay":       pair(assistant.replays.Domains()),
 		"the assistant's stop":         pair(assistant.stops.Domains()),
 		"the live relay":               pair(liveWire.Domains()),
+		"a code search":                pair(searchWire.Domains()),
 	} {
 		claim(domains[0], name+"'s requests")
 		claim(domains[1], name+"'s replies")
@@ -108,7 +114,7 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	note, seat := notes.Domains()
 	claim(note, "a note on a run record")
 	claim(seat, "a run record's seat anchor")
-	if len(owner) != len(registeredDomains())+23 {
+	if len(owner) != len(registeredDomains())+25 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }

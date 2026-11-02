@@ -91,7 +91,7 @@ const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
 		       duration_hist, last_ended_at, reads_elided,
-		       changes_opened, reviews_given, findings_received
+		       changes_opened, reviews_given, findings_received, checks_failed, ejections
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -153,7 +153,8 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
-				&code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived); {
+				&code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived, &code.ChecksFailed,
+				&code.Ejections); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -399,7 +400,8 @@ func joinCode(d, a *CodeDay) *CodeDay {
 	}
 	return codeDayOf(CodeDay{ChangesOpened: max(dc.ChangesOpened, ac.ChangesOpened),
 		ReviewsGiven: max(dc.ReviewsGiven, ac.ReviewsGiven), FindingsReceived: max(dc.FindingsReceived,
-			ac.FindingsReceived)})
+			ac.FindingsReceived), ChecksFailed: max(dc.ChecksFailed, ac.ChecksFailed),
+		Ejections: max(dc.Ejections, ac.Ejections)})
 }
 
 // joinTurns joins a seat's turn figures.

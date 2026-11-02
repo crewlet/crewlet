@@ -49,6 +49,9 @@ type Reader struct {
 	// MaxPageBytes, and a test's smaller values (export_test.go).
 	pageRows  int
 	pageBytes int
+	// tipWindow bounds the landings one target's tip work reads above its
+	// green: MaxTipLandings, and a test's smaller value (export_test.go).
+	tipWindow int
 }
 
 // ReaderOptions configure a reader.
@@ -85,7 +88,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 			"without it every read level is a label rather than a guarantee")
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
-		pageBytes: MaxPageBytes}
+		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
@@ -284,8 +287,9 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 		active                                            int64
 	)
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind,
-		&owners, &v.ref.Owner.Ref, &visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted,
-		&active, &v.ref.Refs, &v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes,
+		&owners, &v.ref.Owner.Ref, &visibility, &search, &v.ref.Mirrored, &v.ref.DefaultBranch,
+		&v.ref.Description, &deleted, &active, &v.ref.Refs, &v.branches, &v.tags, &v.tombstones,
+		&v.ref.LivePacks, &v.ref.LiveBytes,
 		&v.ref.LiveObjects, &v.ref.DropEpoch, &v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes,
 		&v.lastPushAt, &v.createdAt)
 	switch {
@@ -904,9 +908,11 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 			p              PackRow
 			object, hash   string
 			added, content int64
+			arrived        int64
 		)
 		if err := rows.Scan(&p.PackID, &p.Part, &object, &hash, &p.Size, &p.IndexBytes,
-			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content); err != nil {
+			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content,
+			&arrived); err != nil {
 			return false, fmt.Errorf("code: read a pack: %w", err)
 		}
 		k, err := objstore.ParseKey(object)
@@ -914,6 +920,11 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 			return false, fmt.Errorf("code: pack %s names %q: %w", p.PackID, object, err)
 		}
 		p.Object, p.Hash, p.Added, p.Content = k, objstore.Hash(hash), unpacked(added), unpacked(content)
+		// ZERO IS NEVER: the column's default, and no record's broker
+		// instant.
+		if arrived != 0 {
+			p.Arrived = store.DecodeTime(arrived)
+		}
 		out.Packs = append(out.Packs, p)
 		served++
 		cur.After = key(p)
@@ -1486,12 +1497,29 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// from the committer's own snapshot.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeDue(ctx, tx, q, &out) }
+	case ReadImportsDue:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
+		// same reason: every chunk and end its home lands is decided again
+		// from the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.importsDue(ctx, tx, q, &out) }
+	case ReadMirrorsDue:
+		// A SET READ OF THE DOMAIN, for the same reason: every sync is
+		// decided again from the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorsDue(ctx, tx, q, &out) }
 	case ReadChangesDue:
 		// A SET READ, of the domain or of the one repository
 		// (changesdue.go): every record the home asks after it is decided
 		// again from its writer's own snapshot.
 		query = q.changesDueQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changesDue(ctx, tx, q, &out) }
+	case ReadIndexed:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is: the
+		// indexer reads each repository it lists from its own copy, and a
+		// mode a deferred record changed is read again at the next poll.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.indexed(ctx, tx, q, &out) }
 	case ReadChecks:
 		// A SET READ, of the repository it names or of the domain for the
 		// window (checksread.go).
@@ -1560,6 +1588,14 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// refuses, and the maintainer asks another node.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.ExpungeTips.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeTips(ctx, tx, q, &out) }
+	case ReadMirrorPush:
+		// A POINT READ OF THE REPOSITORY, as an `expunge_tips` read is: a
+		// record this node deferred on it may move a green row or the push
+		// mirror itself, and an answer past it would publish a commit its
+		// checks never passed, or to a target the repository no longer
+		// names — so such a read refuses, and the home asks another node.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.MirrorPush.RepoID)}}, false)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorPush(ctx, tx, q, &out) }
 	case ReadBranchChanges:
 		// A POINT READ OF THE REPOSITORY, as a `run_pushes` read is: a
 		// record this node deferred on it may open or close a change on one
@@ -1609,12 +1645,20 @@ func (q ReadQuery) validate() error {
 		return q.validatePublicationDue()
 	case ReadExpungeDue:
 		return q.validateExpungeDue()
+	case ReadImportsDue:
+		return q.validateBareListing("an imports_due read lists every repository being imported")
+	case ReadMirrorsDue:
+		return q.validateBareListing("a mirrors_due read lists every repository with a mirror")
 	case ReadChangesDue:
 		return q.validateChangesDue()
+	case ReadIndexed:
+		return q.validateIndexed()
 	case ReadChecksDue:
 		return q.validateChecksDue()
 	case ReadExpungeTips:
 		return q.validateExpungeTips()
+	case ReadMirrorPush:
+		return q.validateMirrorPush()
 	case ReadBranchChanges:
 		return q.validateBranchChanges()
 	case ReadCheckBox:
@@ -1654,6 +1698,9 @@ func (q ReadQuery) validate() error {
 	case q.ChecksRunning != nil:
 		return fmt.Errorf("%w: checks_running: only a checks_running read names the repository whose running "+
 			"checks it reads", ErrInvalid)
+	case q.MirrorPush != nil:
+		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
+			"it reads", ErrInvalid)
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
@@ -1664,6 +1711,9 @@ func (q ReadQuery) validate() error {
 			ErrInvalid)
 	case q.ExpungeTips != nil:
 		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
+	case !q.ExpungedBefore.IsZero():
+		return fmt.Errorf("%w: expunged_before: only an expunge_due read lists the repositories last expunged "+
+			"before an instant", ErrInvalid)
 	case q.BranchChanges != nil:
 		return fmt.Errorf("%w: branch_changes: only a branch_changes read names the branches whose live "+
 			"changes it answers", ErrInvalid)
@@ -1830,8 +1880,13 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.ChecksRunning != nil:
 		return refused("checks_running", "only a checks_running read names the repository whose running "+
 			"checks it reads")
+	case q.MirrorPush != nil:
+		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
+	case !q.ExpungedBefore.IsZero():
+		return refused("expunged_before", "only an expunge_due read lists the repositories last expunged "+
+			"before an instant")
 	case q.Target != "":
 		return refused("target", "only a queue, a landings or a green read names a branch's queue")
 	case q.QueueDue != nil:
@@ -1908,6 +1963,7 @@ func (q ReadQuery) validateRunPushes() error {
 	}{
 		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
 		{"introduced", q.Introduced != nil}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -1916,7 +1972,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1957,6 +2013,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -1965,7 +2022,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1997,6 +2054,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -2005,7 +2063,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2018,13 +2076,27 @@ func (q ReadQuery) validatePublicationDue() error {
 // validateExpungeDue is [ReadQuery.validate] for an `expunge_due` read: the
 // engine's own — a repository's maintainer polling for the expunges it owes —
 // so it names NO asker, for the `compaction_due` read's reason, and nothing
-// else at all: no repository, no filter, no range, no floor and no limit,
-// since its partial index holds exactly the repositories it lists and a page
-// is MaxSnapshotItems of them.
+// but its cursor and the instant its weekly arm lists from
+// ([ReadQuery.ExpungedBefore]): no repository, no filter, no range, no floor
+// and no limit, since its two partial indexes hold exactly the repositories
+// it lists and a page is MaxSnapshotItems of them.
 func (q ReadQuery) validateExpungeDue() error {
+	bare := q
+	bare.ExpungedBefore = time.Time{}
+	return bare.validateBareListing("an expunge_due read lists every repository with an expunge open or a " +
+		"purge requested, then every one last expunged before its expunged_before")
+}
+
+// validateBareListing is [ReadQuery.validate] for a duty listing that names
+// nothing but its page — `expunge_due`, `imports_due`, `mirrors_due`: the
+// engine's own, so NO asker, and no repository, filter, range, floor or
+// limit, since its partial index holds exactly the repositories it lists and
+// a page is MaxSnapshotItems of them. lists is the sentence a refusal says
+// what it lists in.
+func (q ReadQuery) validateBareListing(lists string) error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
-		return refused("asker", "an expunge_due read is the engine's own, which no principal makes")
+		return refused("asker", fmt.Sprintf("a %s read is the engine's own, which no principal makes", q.Kind))
 	}
 	for _, f := range []struct {
 		field string
@@ -2033,6 +2105,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -2041,12 +2114,24 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
-			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
-				"purge requested, a page of MaxSnapshotItems at a time, and names nothing else")
+			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
 		}
+	}
+	return nil
+}
+
+// validateIndexed is [ReadQuery.validate] for an `indexed` read: the
+// engine's own — a git node's indexer listing the repositories it may keep
+// an index of — so it names NO asker, for an `introduced` read's reason, and
+// nothing but its cursor: exactly what an `expunge_due` read names, whose
+// rule it is held to.
+func (q ReadQuery) validateIndexed() error {
+	if err := q.validateExpungeDue(); err != nil {
+		return fmt.Errorf("%w (an indexed read is held to the same: it lists the repositories searched "+
+			"by index, a page of MaxSnapshotItems at a time, after its cursor)", err)
 	}
 	return nil
 }
@@ -2087,13 +2172,79 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
 				"page of MaxSnapshotItems at a time, and names nothing else")
 		}
 	}
+	return nil
+}
+
+// validateMirrorPush is [ReadQuery.validate] for a `mirror_push` read: the
+// engine's own — a repository's home reading the push mirror it pushes and
+// the green rows it publishes — so it names NO asker, for an `expunge_tips`
+// read's reason; it names its repository by id and nothing else: no cursor
+// and no limit, since a repository holds one push mirror and at most one
+// green row a protected branch.
+func (q ReadQuery) validateMirrorPush() error {
+	in := q.MirrorPush
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a mirror_push read is the engine's own, which no principal makes")
+	case in == nil:
+		return refused("mirror_push", "a mirror_push read names the repository whose push mirror it reads")
+	case !canonicalUUID(in.RepoID):
+		return refused("mirror_push.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
+			"lowercase spelling", in.RepoID))
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"expunge_tips", q.ExpungeTips != nil}, {"cursor", q.Cursor != ""},
+		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"branch_changes", q.BranchChanges != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a mirror_push read answers one repository's push mirror and green rows, "+
+				"and names nothing else")
+		}
+	}
+	return nil
+}
+
+// mirrorPush serves a `mirror_push` read ([ReadMirrorPush]): the repository's
+// push mirror as its row holds it — none where it has none, or where the
+// repository is gone — and every green row of it, from one snapshot. Each a
+// seek of a primary key, through statements other reads already run
+// (remotesSQL, repoNameSQL, greensSQL): a home asks it once an attempt.
+func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	id := q.MirrorPush.RepoID
+	remotes, err := remotesIn(ctx, tx, id)
+	if err != nil || remotes.to == nil {
+		return err
+	}
+	c := MirrorCandidate{ID: id, To: remotes.mirrorTo()}
+	if err := tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
+		return fmt.Errorf("code: read repository %s's name: %w", id, err)
+	}
+	green, err := greenRowsIn(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	out.Mirrors, out.Green = []MirrorCandidate{c}, green
 	return nil
 }
 
@@ -2136,6 +2287,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"cursor", q.Cursor != ""}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -2143,7 +2295,8 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers one repository's branches' live changes in "+
@@ -2257,7 +2410,10 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	out *ReadAnswer) error {
 	statuses := q.Status
 	if len(statuses) == 0 {
-		statuses = []RepoStatus{RepoStatusActive, RepoStatusArchived}
+		// THE REPOSITORIES IN USE: one being imported is listed beside the
+		// active and the archived — it is fetched, and fills as its import
+		// lands — and only the deleted and the purging wait to be asked for.
+		statuses = []RepoStatus{RepoStatusImporting, RepoStatusActive, RepoStatusArchived}
 	}
 	names := make([]string, len(statuses))
 	for i, s := range statuses {
@@ -2286,7 +2442,8 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			head                                              sql.NullString
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind, &owners, &v.ref.Owner.Ref,
-			&visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active, &v.ref.Refs,
+			&visibility, &search, &v.ref.Mirrored, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active,
+			&v.ref.Refs,
 			&v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt,
 			&head); err != nil {
 			_ = rows.Close()
@@ -2425,6 +2582,15 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
+	// AND WHERE ITS EXPUNGES STAND, from the row an expunge's apply reads
+	// ([expungeStateIn]): a person who asked for a purge reads its progress
+	// here — the request open until its maintainer serves it, and what the
+	// last commit dropped.
+	state, err := expungeStateIn(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	out.Repo.Expunge = state.view()
 	return nil
 }
 
@@ -3014,32 +3180,72 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 	return rows.Err()
 }
 
-// expungeDue serves one page of an `expunge_due` read: the active and archived
-// repositories with an expunge open or a purge requested and not served, BY
-// ID, each with the expunge, the request and its position, when the
-// repository was last expunged, its live packs, bytes and objects, and the
-// version its row was read at.
+// expungeDue serves one page of an `expunge_due` read, in two ARMS, the
+// first served whole before the second:
 //
-// ONE WALK of code_repos_expunging_idx (replicated 0087), its partial
-// predicate repeated verbatim, which holds exactly the repositories with an
-// expunge open or a request waiting — a handful in a fleet of any size, every
-// one of which its maintainer finishes or serves before it plans anything
-// else — keyset on the id after a cursor. A deleted or purging repository's
-// stays out: its open expunge waits for its restore, or goes with its purge.
-// A FULL LISTING, never a delta from the last poll's, for the compaction's
-// listing's reason.
+//  1. OPEN: the active and archived repositories with an expunge open or a
+//     purge requested and not served, BY ID — ONE WALK of
+//     code_repos_expunging_idx (replicated 0087), its partial predicate
+//     repeated verbatim, which holds exactly those repositories, a handful in
+//     a fleet of any size, every one of which its maintainer finishes or
+//     serves before it plans anything else — keyset on the id after a cursor;
+//  2. WEEKLY, asked by [ReadQuery.ExpungedBefore]: every OTHER active or
+//     archived repository — every kind, a scratch one as much as a project,
+//     since a push is refused repo_size on live bytes whoever's they are —
+//     last expunged at or before the instant, or never, LEAST RECENTLY
+//     EXPUNGED FIRST — ONE SEEK of code_repos_expunge_due_idx (replicated
+//     0087), its partial predicate repeated verbatim, bounded above by the
+//     instant, keyset on (expunged_at, id) after a cursor. A repository the
+//     first arm listed is left out of the second, so each is listed once.
+//
+// Each with the expunge, the request and its position, when the repository
+// was last expunged, its live packs, bytes and objects, and the version its
+// row was read at. A deleted or purging repository's stays out of both: its
+// open expunge waits for its restore, or goes with its purge. A FULL LISTING,
+// never a delta from the last poll's, for the compaction's listing's reason.
 func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
-	// THE CURSOR IS THE LAST ID SERVED, and "" before the first: every id
-	// is a UUID, past "" in byte order, so one statement serves every page.
-	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
+	weekly, after, ok := cutExpungeCursor(q.Cursor)
+	if !ok || (weekly && q.ExpungedBefore.IsZero()) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 	}
-	rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
-	if err != nil {
-		return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	if !weekly {
+		rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
+		if err != nil {
+			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+		}
+		full, err := scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, _ int64) string { return c.ID })
+		if err != nil || full || q.ExpungedBefore.IsZero() {
+			return err
+		}
+	}
+	before := store.EncodeTime(q.ExpungedBefore)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if after == nil {
+		rows, err = tx.QueryContext(ctx, expungeWeeklySQL, before, r.pageRows-pg.rows)
+	} else {
+		rows, err = tx.QueryContext(ctx, expungeWeeklyAfterSQL, before, after.at, after.at, after.id,
+			r.pageRows-pg.rows)
+	}
+	if err != nil {
+		return fmt.Errorf("code: list the repositories an expunge may be due in: %w", err)
+	}
+	_, err = scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, expunged int64) string {
+		return weeklyCursor(expunged, c.ID)
+	})
+	return err
+}
+
+// scanExpungeDue reads one arm's rows of an `expunge_due` page into out,
+// counting each against pg; full reports a page that took its last row, its
+// cursor named by next.
+func scanExpungeDue(rows *sql.Rows, pg *page, out *ReadAnswer,
+	next func(c ExpungeCandidate, expunged int64) string) (full bool, err error) {
+
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			c                            ExpungeCandidate
@@ -3047,7 +3253,7 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &c.Open, &c.Request, &requested, &expunged, &c.LivePacks,
 			&c.LiveBytes, &c.LiveObjects, &version); err != nil {
-			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+			return false, fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
 		}
 		if c.Request != "" {
 			c.Requested = unpacked(requested)
@@ -3060,6 +3266,116 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		c.Version = unpacked(version)
 		out.Expunge = append(out.Expunge, c)
 		if pg.add(c.encodedBytes()) {
+			out.Next = next(c, expunged)
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
+}
+
+// weeklyPrefix opens an `expunge_due` cursor in its WEEKLY arm: the last
+// row's expunged_at, encoded, and its id — "weekly:<at>:<id>". A cursor in
+// the open arm is the last id served, a UUID, which never opens so.
+const weeklyPrefix = "weekly:"
+
+// weeklyCursor is the cursor after a weekly-arm row last expunged at expunged
+// (encoded) of id.
+func weeklyCursor(expunged int64, id string) string {
+	return weeklyPrefix + strconv.FormatInt(expunged, 10) + ":" + id
+}
+
+// expungeAfter is a weekly-arm cursor read back: the row it names.
+type expungeAfter struct {
+	at int64
+	id string
+}
+
+// cutExpungeCursor reads an `expunge_due` cursor: "" or a repository id in the
+// open arm (weekly false), or a weekly-arm cursor and the row it names; ok is
+// false for a cursor no page answered.
+func cutExpungeCursor(cursor string) (weekly bool, after *expungeAfter, ok bool) {
+	rest, isWeekly := strings.CutPrefix(cursor, weeklyPrefix)
+	if !isWeekly {
+		return false, nil, cursor == "" || validRepoID("cursor", cursor) == nil
+	}
+	at, id, found := strings.Cut(rest, ":")
+	n, err := strconv.ParseInt(at, 10, 64)
+	if !found || err != nil || n < 0 || validRepoID("cursor", id) != nil {
+		return true, nil, false
+	}
+	return true, &expungeAfter{at: n, id: id}, true
+}
+
+// indexed serves one page of an `indexed` read ([ReadIndexed]): the active
+// and archived repositories searched by index, by name after the cursor —
+// ONE SEEK of code_repos_search_idx (replicated 0102), its partial predicate
+// repeated verbatim, which holds exactly the repositories a git node's
+// indexer may keep an index of. A FULL LISTING, never a delta from the last
+// poll's, for the compaction's listing's reason.
+func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	// THE CURSOR IS THE LAST NAME SERVED, and "" before the first: a name
+	// is never empty, so one statement serves every page.
+	if q.Cursor != "" && !ValidName(q.Cursor) {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, indexedSQL, string(SearchIndexed), q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories searched by index: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var c IndexedRepo
+		if err := rows.Scan(&c.ID, &c.Name); err != nil {
+			return fmt.Errorf("code: list the repositories searched by index: %w", err)
+		}
+		out.Indexed = append(out.Indexed, c)
+		if pg.add(2 + field("id", stringBytes(c.ID), true) + field("name", stringBytes(c.Name), false)) {
+			out.Next = c.Name
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// importsDue serves one page of an `imports_due` read: the repositories being
+// imported, BY ID, each with its source, how many of its chunks have landed
+// and the version its row was read at — ONE WALK of code_repos_importing_idx
+// (replicated 0118), its partial predicate repeated verbatim, which holds
+// exactly the repositories being imported, keyset on the id after a cursor.
+// A FULL LISTING, never a delta from the last poll's, for the compaction's
+// listing's reason.
+func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, importsDueSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories being imported: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c       ImportCandidate
+			source  string
+			version int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &source, &c.Seq, &version); err != nil {
+			return fmt.Errorf("code: list the repositories being imported: %w", err)
+		}
+		// AN IMPORTING REPOSITORY NAMES ITS SOURCE: its create's import or
+		// its pull mirror's, fixed at the create. One that names none is a
+		// row no apply of this build writes, listed with none, which its
+		// home ends rather than fetching from nowhere.
+		if src, err := remoteOf[ImportSource](source); err != nil {
+			return fmt.Errorf("code: list the repositories being imported: %s: %w", c.ID, err)
+		} else if src != nil {
+			c.Source = *src
+		}
+		c.Version = unpacked(version)
+		out.Imports = append(out.Imports, c)
+		if pg.add(c.encodedBytes()) {
 			out.Next = c.ID
 			break
 		}
@@ -3067,15 +3383,140 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	return rows.Err()
 }
 
+// mirrorsDue serves one page of a `mirrors_due` read: every push mirror BY ID —
+// one walk of code_repos_mirror_to_idx, the repositories still live — then
+// every active pull mirror LEAST RECENTLY SYNCED FIRST, by its last sync's
+// instant and then its id — one walk of code_repos_mirrored_idx (replicated
+// 0118) — each partial predicate repeated verbatim, keyset after a cursor that
+// names its arm: `t:<id>` in the push mirrors', `f:<instant>:<id>` in the
+// pull mirrors'. A page that ends the push arm with room left goes on into
+// the pull arm's first rows.
+func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	arm, after, at, ok := cutMirrorsCursor(q.Cursor)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	if arm == "t" {
+		full, err := r.pushMirrors(ctx, tx, after, &pg, out)
+		if err != nil || full {
+			return err
+		}
+		after, at = "", -1
+	}
+	rows, err := tx.QueryContext(ctx, pullMirrorsSQL, at, at, after, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the pull mirrors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			c       MirrorCandidate
+			from    string
+			synced  int64
+			version int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
+			return fmt.Errorf("code: list the pull mirrors: %w", err)
+		}
+		if c.From, err = remoteOf[MirrorSource](from); err != nil {
+			return fmt.Errorf("code: list the pull mirrors: %s: %w", c.ID, err)
+		}
+		// ZERO IS NEVER: the column's default, and no record's instant.
+		if synced != 0 {
+			c.SyncedAt = store.DecodeTime(synced)
+		}
+		c.Version = unpacked(version)
+		out.Mirrors = append(out.Mirrors, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = fmt.Sprintf("f:%d:%s", synced, c.ID)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// pushMirrors serves the push mirrors' arm of a `mirrors_due` page after the
+// id after, and reports a page it filled — whose cursor it set.
+func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *page, out *ReadAnswer) (
+	bool, error) {
+
+	rows, err := tx.QueryContext(ctx, pushMirrorsSQL, after, r.pageRows)
+	if err != nil {
+		return false, fmt.Errorf("code: list the push mirrors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			c  MirrorCandidate
+			to string
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &to); err != nil {
+			return false, fmt.Errorf("code: list the push mirrors: %w", err)
+		}
+		if c.To, err = remoteOf[MirrorTarget](to); err != nil {
+			return false, fmt.Errorf("code: list the push mirrors: %s: %w", c.ID, err)
+		}
+		out.Mirrors = append(out.Mirrors, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = "t:" + c.ID
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
+}
+
+// cutMirrorsCursor reads a `mirrors_due` cursor: "" is the push arm's first
+// row; `t:<id>` the push arm after id; `f:<instant>:<id>` the pull arm after
+// the mirror synced at instant (store.EncodeTime, 0 for never) whose id is
+// id. ok is false for anything else.
+func cutMirrorsCursor(cursor string) (arm, after string, at int64, ok bool) {
+	switch {
+	case cursor == "":
+		return "t", "", 0, true
+	case strings.HasPrefix(cursor, "t:"):
+		id := strings.TrimPrefix(cursor, "t:")
+		return "t", id, 0, validRepoID("cursor", id) == nil
+	case strings.HasPrefix(cursor, "f:"):
+		instant, id, cut := strings.Cut(strings.TrimPrefix(cursor, "f:"), ":")
+		n, err := strconv.ParseInt(instant, 10, 64)
+		if !cut || err != nil || n < 0 || validRepoID("cursor", id) != nil {
+			return "", "", 0, false
+		}
+		return "f", id, n, true
+	}
+	return "", "", 0, false
+}
+
 // expungeTips serves one page of an `expunge_tips` read ([ReadExpungeTips]):
-// the object each of the repository's ref drops left whose record's broker
-// instant is at or after the query's — ONE SEEK of code_ref_drops' key
-// (replicated 0084 led it with the instant for this read), a covering one, in
-// the key's order, keyset after the last drop the page read. Each object is
-// answered once a page: one force-pushed away again and again is one tip
-// however many drops name it, and a later page naming it again costs its
-// reader a map lookup. A repository with no row — purged — is
-// [ErrRepoNotFound].
+// the objects an expunge of the repository keeps beside its refs (M6-D2), in
+// five phases, each ONE SEEK of a named index in its order, keyset after the
+// last row the page read:
+//
+//  1. DROPS: the object each of the repository's ref drops left whose
+//     record's broker instant is at or after the query's — code_ref_drops'
+//     key, a covering seek (replicated 0084 led it with the instant for this
+//     read).
+//  2. REVISIONS: the head of every revision of every DRAFT OR OPEN change —
+//     code_changes_open_idx, then each change's revisions by their key — the
+//     force-pushed-away heads a reviewer still compares (an interdiff of
+//     revision 1 and 2 reads both).
+//  3. QUEUE: the head of every LIVE queue entry, waiting or testing —
+//     code_queue_live_idx, partial on exactly those.
+//  4. CANDIDATES: the tip of every candidate — code_candidates_train_idx; a
+//     candidate is rows and a pack, never a ref (M5-D12), and its tip reaches
+//     every commit its train built, the one a landing moves the target onto.
+//  5. GREEN: every protected target's green row — the table's key — what a
+//     mirror and a deploy follow.
+//
+// The phases after the first are what rows hold IN FLIGHT, kept whatever the
+// query's instant: a purge, which keeps no drop, still keeps them, or it would
+// drop the tip a pending landing moves its target onto, or the revisions an
+// open change's reviewers compare. A closed or merged change's revisions, an
+// ended entry and a landed train's candidates are history, and nothing is kept
+// for them. Each object is answered once a page: one many rows name is one tip,
+// and a later page naming it again costs its reader a map lookup. A repository
+// with no row — purged — is [ErrRepoNotFound].
 //
 // NEVER HELD TO A GRANT: the engine reads what its own expunge keeps, and the
 // objects leave this node only to the maintainer that keeps them.
@@ -3089,76 +3530,301 @@ func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 		return fmt.Errorf("code: read repository %s: %w", in.RepoID, err)
 	}
 	since := store.EncodeTime(in.Since)
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	switch c, ok := cutTipsCursor(q.Cursor); {
-	case q.Cursor != "" && (!ok || c.at < since):
-		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-	case q.Cursor == "":
-		rows, err = tx.QueryContext(ctx, expungeTipsSQL, in.RepoID, since, r.pageRows)
-	default:
-		rows, err = tx.QueryContext(ctx, expungeTipsAfterSQL, in.RepoID, c.at, c.position, c.ref, c.old,
-			r.pageRows)
+	from := tipsCursor{phase: tipsDrops}
+	if q.Cursor != "" {
+		c, ok := cutTipsCursor(q.Cursor)
+		if !ok || (c.phase == tipsDrops && c.at < since) {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+		from = c
 	}
-	if err != nil {
-		return fmt.Errorf("code: read %s's ref drops: %w", name, err)
-	}
-	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
 	answered := map[string]bool{}
-	for rows.Next() {
-		var c tipsCursor
-		if err := rows.Scan(&c.at, &c.position, &c.ref, &c.old); err != nil {
-			return fmt.Errorf("code: read %s's ref drops: %w", name, err)
+	phases := tipsPhases()
+	for i := slices.Index(phases, from.phase); i < len(phases); i++ {
+		phase := phases[i]
+		var after *tipsCursor
+		if phase == from.phase && q.Cursor != "" {
+			after = &from
 		}
-		// A ROW READ COUNTS whether or not its object was answered already:
-		// the page is held to what it reads as well as to what it sends.
-		size := 0
-		if !answered[c.old] {
-			answered[c.old] = true
-			out.Tips = append(out.Tips, c.old)
-			size = stringBytes(c.old) + 1
+		full, err := r.tipsOf(ctx, tx, phase, in.RepoID, since, after, &pg, answered, out)
+		if err != nil {
+			return fmt.Errorf("code: read the objects %s's expunge keeps (%s): %w", name, phase, err)
 		}
-		if pg.add(size) {
-			out.Next = c.String()
-			break
+		if full {
+			return nil
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
-// tipsCursor is one ref drop's place in its key's order — the instant as the
-// column stores it, the position, the ref and the object — and an
-// `expunge_tips` page's cursor, "<at>:<position>:<old>:<ref>": the ref last,
-// since a ref may hold every character but a colon (git's ref rules), which
-// the integers and the object id hold none of.
+// tipsOf reads one phase of an `expunge_tips` page into out — from its start,
+// or after the row after names — counting every row read against pg, whether
+// or not its object was answered already on the page, since the page is held
+// to what it reads as well as to what it sends. full reports a page that took
+// its last row, its cursor that row's place.
+func (r *Reader) tipsOf(ctx context.Context, tx *sql.Tx, phase tipsPhase, repoID string, since int64,
+	after *tipsCursor, pg *page, answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	if phase == tipsRevisions {
+		return r.revisionTips(ctx, tx, repoID, after, pg, answered, out)
+	}
+	var rows *sql.Rows
+	switch phase {
+	case tipsDrops:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, expungeTipsSQL, repoID, since, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, expungeTipsAfterSQL, repoID, after.at, after.position, after.ref,
+				after.old, r.pageRows)
+		}
+	case tipsQueue:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, queueTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, queueTipsAfterSQL, repoID, after.ref, after.position, r.pageRows)
+		}
+	case tipsCandidates:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, candidateTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, candidateTipsAfterSQL, repoID, after.ref, after.id, after.position,
+				r.pageRows)
+		}
+	case tipsGreen:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, greenTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, greenTipsAfterSQL, repoID, after.ref, r.pageRows)
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		c := tipsCursor{phase: phase}
+		var oid string
+		switch phase {
+		case tipsDrops:
+			err = rows.Scan(&c.at, &c.position, &c.ref, &c.old)
+			oid = c.old
+		case tipsQueue:
+			err = rows.Scan(&c.ref, &c.position, &oid)
+		case tipsCandidates:
+			err = rows.Scan(&c.ref, &c.id, &c.position, &oid)
+		case tipsGreen:
+			err = rows.Scan(&c.ref, &oid)
+		}
+		if err != nil {
+			return false, err
+		}
+		if tipAnswered(c, oid, pg, answered, out) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// revisionTips is the revisions phase of an `expunge_tips` page
+// ([Reader.tipsOf]): the live changes in their source branch's order over
+// code_changes_open_idx, a page's worth at a time, then each one's revisions
+// by their key — TWO SEEKS RATHER THAN ONE JOIN, because the store's planner
+// sorts a join's rows by an inner table's column however its indexes order
+// them, and a page would sort every live revision of the repository. A branch
+// heads one live change at a time (decideOpen's change_exists), so the source
+// branch orders the changes and the revision a change's rows; the cursor
+// names the change too, because the branch may head ANOTHER change by the
+// next page — the one it named closed and a new one opened on the branch
+// between two pages. The cursor's change is read again from the revision
+// after its own, and every other one, a new change on the cursor's branch
+// included, from its first: resuming a new change at the number its
+// predecessor reached would skip its first revisions.
+func (r *Reader) revisionTips(ctx context.Context, tx *sql.Tx, repoID string, after *tipsCursor, pg *page,
+	answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	q, args := liveChangeTipsSQL, []any{repoID, r.pageRows}
+	if after != nil {
+		q, args = liveChangeTipsFromSQL, []any{repoID, after.ref, r.pageRows}
+	}
+	for {
+		batch, err := liveChangesOf(ctx, tx, q, args...)
+		if err != nil {
+			return false, err
+		}
+		for _, ch := range batch {
+			from := int64(0)
+			if after != nil && ch.id == after.id {
+				from = after.position
+			}
+			if full, err := r.changeRevisionTips(ctx, tx, ch, from, pg, answered, out); full || err != nil {
+				return full, err
+			}
+		}
+		if len(batch) < r.pageRows {
+			return false, nil
+		}
+		q, args = liveChangeTipsAfterSQL, []any{repoID, batch[len(batch)-1].ref, r.pageRows}
+	}
+}
+
+// liveChangeTip is one live change a revisions phase reads: its id and its
+// source branch.
+type liveChangeTip struct{ id, ref string }
+
+// liveChangesOf is the live changes q names, read whole and closed before
+// their revisions are read, so no two statements are open at once on tx.
+func liveChangesOf(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]liveChangeTip, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []liveChangeTip
+	for rows.Next() {
+		var c liveChangeTip
+		if err := rows.Scan(&c.id, &c.ref); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// changeRevisionTips answers the heads of ch's revisions after revision from
+// into out, in their number's order, as [Reader.tipsOf] answers a row.
+func (r *Reader) changeRevisionTips(ctx context.Context, tx *sql.Tx, ch liveChangeTip, from int64, pg *page,
+	answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	rows, err := tx.QueryContext(ctx, changeRevisionTipsSQL, ch.id, from, r.pageRows)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		c := tipsCursor{phase: tipsRevisions, ref: ch.ref, id: ch.id}
+		var oid string
+		if err := rows.Scan(&c.position, &oid); err != nil {
+			return false, err
+		}
+		if tipAnswered(c, oid, pg, answered, out) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// tipAnswered answers oid into out unless the page answered it already, and
+// counts its row against pg whether or not it did — the page is held to what
+// it reads as well as to what it sends — reporting a page that took its last
+// row, its cursor c.
+func tipAnswered(c tipsCursor, oid string, pg *page, answered map[string]bool, out *ReadAnswer) bool {
+	size := 0
+	if !answered[oid] {
+		answered[oid] = true
+		out.Tips = append(out.Tips, oid)
+		size = stringBytes(oid) + 1
+	}
+	if pg.add(size) {
+		out.Next = c.String()
+		return true
+	}
+	return false
+}
+
+// tipsPhase is one phase of an `expunge_tips` read ([Reader.expungeTips]): the
+// table whose rows name what an expunge keeps.
+type tipsPhase string
+
+const (
+	// tipsDrops is the ref drops since the read's instant (code_ref_drops).
+	tipsDrops tipsPhase = "drops"
+	// tipsRevisions is every revision head of a live change (code_revisions).
+	tipsRevisions tipsPhase = "revisions"
+	// tipsQueue is every live queue entry's head (code_queue).
+	tipsQueue tipsPhase = "queue"
+	// tipsCandidates is every candidate's tip (code_candidates).
+	tipsCandidates tipsPhase = "candidates"
+	// tipsGreen is every target's green row (code_green).
+	tipsGreen tipsPhase = "green"
+)
+
+// tipsPhases is the phases in the order a read serves them.
+func tipsPhases() []tipsPhase {
+	return []tipsPhase{tipsDrops, tipsRevisions, tipsQueue, tipsCandidates, tipsGreen}
+}
+
+// tipsCursor is one row's place in its phase's index order, and an
+// `expunge_tips` page's cursor, "<phase>:" then the phase's key:
+//
+//   - drops "<at>:<position>:<old>:<ref>" — the instant as the column stores
+//     it, the record's position, the object and the ref;
+//   - revisions "<n>:<change>:<source_ref>", the revision, the live change's
+//     id and its source;
+//   - queue "<seq>:<target_ref>", a live entry's target and its place;
+//   - candidates "<ordinal>:<train>:<target_ref>";
+//   - green "<target_ref>".
+//
+// The ref LAST in each, since a ref may hold every character but a colon
+// (git's ref rules), which the integers, the object ids, a change's id and a
+// train's id hold none of. position is a drop's record position, a revision's
+// number, an entry's seq or a candidate's ordinal; ref the ref each phase is
+// keyed by; id a revision's change or a candidate's train.
 type tipsCursor struct {
+	phase        tipsPhase
 	at, position int64
 	ref, old     string
+	id           string
 }
 
 // String is c as a cursor.
 func (c tipsCursor) String() string {
-	return strconv.FormatInt(c.at, 10) + ":" + strconv.FormatInt(c.position, 10) + ":" + c.old + ":" + c.ref
+	p := string(c.phase) + ":"
+	switch c.phase {
+	case tipsDrops:
+		return p + strconv.FormatInt(c.at, 10) + ":" + strconv.FormatInt(c.position, 10) + ":" + c.old + ":" + c.ref
+	case tipsRevisions, tipsCandidates:
+		return p + strconv.FormatInt(c.position, 10) + ":" + c.id + ":" + c.ref
+	case tipsGreen:
+		return p + c.ref
+	}
+	return p + strconv.FormatInt(c.position, 10) + ":" + c.ref
 }
 
 // cutTipsCursor reads a [tipsCursor].
 func cutTipsCursor(s string) (tipsCursor, bool) {
-	parts := strings.SplitN(s, ":", 4)
-	if len(parts) != 4 || parts[2] == "" || parts[3] == "" {
+	phase, rest, ok := strings.Cut(s, ":")
+	c := tipsCursor{phase: tipsPhase(phase)}
+	if !ok || !slices.Contains(tipsPhases(), c.phase) {
 		return tipsCursor{}, false
 	}
-	at, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
+	fields := map[tipsPhase]int{tipsDrops: 4, tipsRevisions: 3, tipsQueue: 2, tipsCandidates: 3, tipsGreen: 1}
+	parts := strings.SplitN(rest, ":", fields[c.phase])
+	if len(parts) != fields[c.phase] || slices.Contains(parts, "") {
 		return tipsCursor{}, false
 	}
-	position, err := strconv.ParseInt(parts[1], 10, 64)
+	c.ref = parts[len(parts)-1]
+	if c.phase == tipsGreen {
+		return c, true
+	}
+	n := 0
+	if c.phase == tipsDrops {
+		at, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return tipsCursor{}, false
+		}
+		c.at, n = at, 1
+		c.old = parts[2]
+	}
+	position, err := strconv.ParseInt(parts[n], 10, 64)
 	if err != nil || position < 0 {
 		return tipsCursor{}, false
 	}
-	return tipsCursor{at: at, position: position, old: parts[2], ref: parts[3]}, true
+	c.position = position
+	if c.phase == tipsRevisions || c.phase == tipsCandidates {
+		c.id = parts[1]
+	}
+	return c, true
 }
 
 // publishCursor is "<published_at>/<id>", the instant as the column stores it:
@@ -3410,9 +4076,9 @@ type RepoLife struct {
 const lifePage = 1_000
 
 // WalkLives hands visit every repository a reconcile of code.repos acts on —
-// active, archived or deleted; a purge's is the code-retention duty's — in
-// name order, a page of [lifePage] at a time, each page one STALE read of
-// this node's rows. A visit's error ends the walk with it.
+// importing, active, archived or deleted; a purge's is the code-retention
+// duty's — in name order, a page of [lifePage] at a time, each page one STALE
+// read of this node's rows. A visit's error ends the walk with it.
 //
 // THE RECONCILE'S OWN READ, because the listing a surface reads is the wrong
 // shape for it: [Reader.Read]'s repositories carry the head (a join of
@@ -3598,10 +4264,11 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 // driver's planner is held to the index each is written for.
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, search,
-		default_branch, description, deleted_at, last_activity_at, refs, branches, tags, tombstones, live_packs,
+		mirror_from != '', default_branch, description, deleted_at, last_activity_at, refs, branches, tags,
+		tombstones, live_packs,
 		live_bytes, live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes,
 		last_push_at, created_at FROM code_repos WHERE id = ?`
-	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position`
+	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position, arrived_at`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
 	packsFullAfterSQL = `SELECT ` + packColumns + ` FROM code_packs INDEXED BY ` + packsKey + `
@@ -3654,7 +4321,8 @@ const (
 		AND position <= ? AND (position < ? OR push_id < ?)
 		ORDER BY position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
-		r.search, r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs, r.live_packs,
+		r.search, r.mirror_from != '', r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs,
+		r.live_packs,
 		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
@@ -3718,7 +4386,7 @@ const (
 	// beside the OR is what keeps the index's range seek, which a bare OR of
 	// the two terms would give up.
 	livesSQL = `SELECT id, name, status, managed_by FROM code_repos
-		WHERE name > ? AND status IN ('active', 'archived', 'deleted')
+		WHERE name > ? AND status IN ('importing', 'active', 'archived', 'deleted')
 		ORDER BY name LIMIT ?`
 	duePurgingSQL = `SELECT id, name, deleted_at FROM code_repos
 		WHERE status = 'purging' AND deleted_at >= ? AND (deleted_at > ? OR id > ?)
@@ -3763,10 +4431,44 @@ const (
 		ORDER BY published_at, id LIMIT ?`
 	// THE EXPUNGES OWED, by id over code_repos_expunging_idx — its partial
 	// predicate repeated verbatim — after the cursor, "" from its start.
-	expungeDueSQL = `SELECT id, name, expunge_id, expunge_request, expunge_request_position, expunged_at,
-		live_packs, live_bytes, live_objects, version FROM code_repos INDEXED BY code_repos_expunging_idx
+	expungeDueSQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunging_idx
 		WHERE (expunge_id != '' OR expunge_request != '') AND status IN ('active', 'archived') AND id > ?
 		ORDER BY id LIMIT ?`
+	// THE EXPUNGES THE WEEKLY ARM ASKS ABOUT, least recently expunged first
+	// over code_repos_expunge_due_idx — its partial predicate repeated
+	// verbatim — up to the instant, from its start or after the cursor's
+	// (expunged_at, id); the repositories the open arm lists are left out.
+	expungeWeeklySQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunge_due_idx
+		WHERE status IN ('active', 'archived') AND expunged_at <= ? AND expunge_id = '' AND expunge_request = ''
+		ORDER BY expunged_at, id LIMIT ?`
+	expungeWeeklyAfterSQL = `SELECT ` + expungeDueColumns + ` FROM code_repos
+		INDEXED BY code_repos_expunge_due_idx
+		WHERE status IN ('active', 'archived') AND expunged_at <= ? AND expunged_at >= ?
+			AND (expunged_at > ? OR id > ?) AND expunge_id = '' AND expunge_request = ''
+		ORDER BY expunged_at, id LIMIT ?`
+	expungeDueColumns = `id, name, expunge_id, expunge_request, expunge_request_position, expunged_at,
+		live_packs, live_bytes, live_objects, version`
+	// THE REPOSITORIES SEARCHED BY INDEX, by name over code_repos_search_idx
+	// — its partial predicate repeated verbatim — after the cursor, "" from
+	// its start.
+	indexedSQL = `SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
+		WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`
+	// THE IMPORTS OWED, by id over code_repos_importing_idx — its partial
+	// predicate repeated verbatim — after the cursor, "" from its start.
+	importsDueSQL = `SELECT id, name, import_source, import_seq, version FROM code_repos
+		INDEXED BY code_repos_importing_idx WHERE status = 'importing' AND id > ? ORDER BY id LIMIT ?`
+	// THE PUSH MIRRORS, by id over code_repos_mirror_to_idx, the live
+	// repositories among them — an importing one has nothing to push yet,
+	// and a deleted one is going.
+	pushMirrorsSQL = `SELECT id, name, mirror_to FROM code_repos INDEXED BY code_repos_mirror_to_idx
+		WHERE mirror_to != '' AND status IN ('active', 'archived') AND id > ? ORDER BY id LIMIT ?`
+	// THE PULL MIRRORS, least recently synced first over
+	// code_repos_mirrored_idx, keyset after (instant, id): the instant seeks
+	// the index, and the id breaks a tie inside one instant.
+	pullMirrorsSQL = `SELECT id, name, mirror_from, mirror_synced_at, version FROM code_repos
+		INDEXED BY code_repos_mirrored_idx WHERE mirror_from != '' AND status = 'active'
+			AND mirror_synced_at >= ? AND (mirror_synced_at > ? OR id > ?)
+		ORDER BY mirror_synced_at, id LIMIT ?`
 	// AN EXPUNGE'S TIPS: a repository's ref drops from an instant, in the
 	// order of code_ref_drops' key, which leads with the instant — the first
 	// page from the instant, a later one after the last drop read.
@@ -3776,6 +4478,43 @@ const (
 		WHERE repo_id = ?1 AND at >= ?2
 		AND (at > ?2 OR position > ?3 OR (position = ?3 AND (ref > ?4 OR (ref = ?4 AND old > ?5))))
 		ORDER BY at, position, ref, old LIMIT ?6`
+	// AN EXPUNGE'S IN-FLIGHT TIPS (M6-D2), each phase from its start and
+	// after a place, in its index's order: every revision head of a live
+	// change, the changes over code_changes_open_idx and each one's revisions
+	// by their key; every live entry's head over code_queue_live_idx, partial on the
+	// live states; every candidate's tip over code_candidates_train_idx; and
+	// every green row by its key.
+	//
+	// A live change's revisions are TWO seeks, never a join (revisionTips
+	// says why): the live changes from the repository's first, from the
+	// cursor's branch, or after a batch's last, then one change's revisions
+	// after a number, by their key.
+	liveChangeTipsSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?2`
+	liveChangeTipsFromSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND source_ref >= ?2 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?3`
+	liveChangeTipsAfterSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND source_ref > ?2 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?3`
+	changeRevisionTipsSQL = `SELECT n, head_oid FROM code_revisions WHERE change_id = ?1 AND n > ?2
+		ORDER BY n LIMIT ?3`
+	queueTipsSQL = `SELECT target_ref, seq, head_oid FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ?1 AND state IN ('waiting', 'testing') ORDER BY target_ref, seq LIMIT ?2`
+	queueTipsAfterSQL = `SELECT target_ref, seq, head_oid FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ?1 AND state IN ('waiting', 'testing') AND target_ref >= ?2
+			AND (target_ref > ?2 OR seq > ?3)
+		ORDER BY target_ref, seq LIMIT ?4`
+	candidateTipsSQL = `SELECT target_ref, train, ordinal, tip_oid
+		FROM code_candidates INDEXED BY code_candidates_train_idx
+		WHERE repo_id = ?1 ORDER BY target_ref, train, ordinal LIMIT ?2`
+	candidateTipsAfterSQL = `SELECT target_ref, train, ordinal, tip_oid
+		FROM code_candidates INDEXED BY code_candidates_train_idx
+		WHERE repo_id = ?1 AND target_ref >= ?2
+			AND (target_ref > ?2 OR train > ?3 OR (train = ?3 AND ordinal > ?4))
+		ORDER BY target_ref, train, ordinal LIMIT ?5`
+	greenTipsSQL = `SELECT target_ref, commit_oid FROM code_green WHERE repo_id = ?1
+		ORDER BY target_ref LIMIT ?2`
+	greenTipsAfterSQL = `SELECT target_ref, commit_oid FROM code_green WHERE repo_id = ?1 AND target_ref > ?2
+		ORDER BY target_ref LIMIT ?3`
 	// A SNAPSHOT'S LAYERS PHASE: every part of a repository's chain, in its
 	// key's order, joined to its layer (layersOfSQL) in Go.
 	layerPartsOfSQL = `SELECT layer_id, part, object, hash, size FROM code_layer_parts

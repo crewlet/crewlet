@@ -30,23 +30,25 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. SIX exist, the
+	// configuration REFUSES it rather than answers it last. SEVEN exist, the
 	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a git
 	// node; host.Options.Roster, an engine write a git node builds;
 	// code.CommitterOptions.SeatRules, a seat's push on the committer that
 	// decides it; code.ChangeWriterOptions.SeatRules, a seat's write of a
 	// change's conversation, and every reviewer an ask names, on the change
-	// writer beside it; and code.StoreOptions.SeatRules, a tool's lifecycle
+	// writer beside it; code.ChecksWriterOptions.SeatRules, a seat's rerun of
+	// a check on the checks writer beside them; and code.StoreOptions.SeatRules, a tool's lifecycle
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
 	// refused there by its own gate, code.StoreOptions.Current, and by the
 	// estate's declaration on code.lifecycle. The git node's own gates,
 	// query.Options.Current and host.Options.Current, refuse a seat's read
 	// and a seat's write there themselves (unready, behind_config) rather
-	// than judging them; the committer's and the change writer's,
-	// code.CommitterOptions.Current and code.ChangeWriterOptions.Current,
-	// refuse such a write there as a node that ran nothing, so the
+	// than judging them; the committer's, the change writer's and the checks
+	// writer's, code.CommitterOptions.Current, code.ChangeWriterOptions.Current
+	// and code.ChecksWriterOptions.Current, refuse such a write there as a
+	// node that ran nothing, so the
 	// repository's next committing node decides it, even when this node is
 	// asked last; a data node refuses a seat's read of the rows by the
 	// operation's own declaration (the estate's op.judgesGrant on code.read
@@ -227,10 +229,16 @@ var classified = map[string]struct {
 	"code.ChecksWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
 	"code.ChecksWriterOptions.NodeID":    {seamNone, "the deciding node"},
 	"code.ChecksWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
-	"code.ChecksWriterOptions.Events":    {seamNone, "the node's event stream an applied ending is announced on"},
-	"code.ChecksWriterOptions.Now":       {seamNone, "the decide's clock"},
-	"code.ChecksWriterOptions.Metrics":   {seamNone, "the node's instruments"},
-	"code.ChecksWriterOptions.Logger":    {seamNone, "where a failed write is reported"},
+	"code.ChecksWriterOptions.SeatRules": {seamGrant, "the chart a seat's rerun is judged by — whether it " +
+		"may write the repository, and whoever its turn works for"},
+	"code.ChecksWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+		"a seat's rerun behind it is handed to the repository's next committing node, decided nowhere here"},
+	"code.ChecksWriterOptions.Events": {seamNone, "the node's event stream an applied ending is announced on"},
+	"code.ChecksWriterOptions.AgentIDs": {seamNone, "the agent id an ending that fails a change's head names " +
+		"the change's owner by in its announcement, read once its answer is handed back — no decide reads it"},
+	"code.ChecksWriterOptions.Now":     {seamNone, "the decide's clock"},
+	"code.ChecksWriterOptions.Metrics": {seamNone, "the node's instruments"},
+	"code.ChecksWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
 
 	"code.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
@@ -296,7 +304,9 @@ var classified = map[string]struct {
 	"host.Options.Boxes": {seamNone, "a coding box's run tokens, the keyring's, and its run's rows, " +
 		"coordination state; neither is an epoch's value — the box's grant reaches the epoch only " +
 		"through Roster"},
-	"host.Options.NodeID":  {seamNone, "this node's name, which a proposal and a refusal name"},
+	"host.Options.NodeID": {seamNone, "this node's name, which a proposal and a refusal name"},
+	"host.Options.ExternalBase": {seamNone, "the deployment's address a change's link is printed on: " +
+		"Tier A's api.external_url, fixed at boot, never an epoch's value"},
 	"host.Options.Timing":  {seamNone, "the host's scaled waits"},
 	"host.Options.Faults":  {seamNone, "the suite's fault script, nil in production"},
 	"host.Options.Logger":  {seamNone, "where the host logs"},

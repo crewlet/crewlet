@@ -2,6 +2,7 @@
 
 export { Audit } from "./Audit.tsx";
 export { Backups } from "./Backups.tsx";
+export { CodeSettings } from "./Code.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { FileStoragePage } from "./FileStorage.tsx";
 export { Fleet, NodePeek } from "./Fleet.tsx";

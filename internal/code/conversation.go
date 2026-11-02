@@ -36,7 +36,7 @@ import (
 // head revision merges into its target (code_mergeability, [Mergeability]).
 // Only a repository's purge removes them,
 // behind the deletion gate that drops every record about a purged repository
-// ([Applier.Gated] reads a change record's repository off its payload).
+// ([Applier.Gated] reads a change record's repository off its scope).
 //
 // # Who clears a blocker (S40)
 //
@@ -74,13 +74,14 @@ const (
 	// ConversationRefusalChangeNotFound is a write naming a change the
 	// repository does not hold.
 	ConversationRefusalChangeNotFound ConversationRefusal = "change_not_found"
-	// ConversationRefusalNotPermitted is a write its asker may not make: a
-	// comment by one who reads nothing of the repository, an ask for review
-	// by one who neither wrote the change nor reviews the repository, a
-	// thread resolved by one who neither started it nor wrote the change nor
-	// maintains the repository, nor is a person — and an ask of a reviewer
-	// who may not review it: a seat below review on the repository, or an
-	// author of the change, whose review counts for nothing.
+	// ConversationRefusalNotPermitted is a write its asker may not make: any
+	// write by a seat that reads nothing of the repository — whatever it
+	// wrote, raised or started on the change while it did — an ask for
+	// review by one who neither wrote the change nor reviews the repository,
+	// a thread resolved by one who neither started it nor wrote the change
+	// nor maintains the repository, nor is a person — and an ask of a
+	// reviewer who may not review it: a seat below review on the repository,
+	// or an author of the change, whose review counts for nothing.
 	ConversationRefusalNotPermitted ConversationRefusal = "not_permitted"
 	// ConversationRefusalNoReviewer is an ask of a reviewer the chart does
 	// not hold: no seat by that handle.
@@ -158,20 +159,44 @@ func ConversationRefusals() []ConversationRefusal {
 // Valid reports a code this build knows.
 func (r ConversationRefusal) Valid() bool { return slices.Contains(ConversationRefusals(), r) }
 
-// ReviewerState is where an ask of a reviewer is (code_reviewers.state).
+// ReviewerState is where an ask of a reviewer is (code_reviewers.state). An
+// ask WAITS — its reviewer's review is owed — only while it is requested:
+// what the listing of the changes waiting on a reviewer walks, what a change's
+// readiness waits on, and what a change's bound on its asks counts
+// ([MaxReviewersPerChange]). Every other state is the ask answered, ended or
+// taken back, kept so the change says who was once asked.
 type ReviewerState string
 
 const (
-	// ReviewerRequested is a reviewer the change asks for a review.
+	// ReviewerRequested is a reviewer the change waits on for a review.
 	ReviewerRequested ReviewerState = "requested"
 	// ReviewerWithdrawn is a reviewer whose ask was withdrawn: kept, so the
 	// change says who was once asked, and asked again by a request naming
 	// them.
 	ReviewerWithdrawn ReviewerState = "withdrawn"
+	// ReviewerReviewed is a reviewer whose review answered the ask — settled
+	// by the review's own record. Asked again by a request naming them, and
+	// by a later revision's first facts where their standing verdict asks
+	// for changes ([ChangeRouting.ReReview]): the change is theirs to look at
+	// again.
+	//
+	// BASE FORMAT, under the condition [KindChange] states: a value only an
+	// apply writes, from the records' own ops, so a build that knows the ops
+	// knows the value.
+	ReviewerReviewed ReviewerState = "reviewed"
+	// ReviewerEnded is a reviewer whose ask was still waiting when the change
+	// closed or merged — settled by the change's own [AskSettle] record, which
+	// asks it again if the change is reopened.
+	//
+	// BASE FORMAT, under the condition [KindChange] states, as
+	// [ReviewerReviewed].
+	ReviewerEnded ReviewerState = "ended"
 )
 
 // ReviewerStates is the closed set, in this order.
-func ReviewerStates() []ReviewerState { return []ReviewerState{ReviewerRequested, ReviewerWithdrawn} }
+func ReviewerStates() []ReviewerState {
+	return []ReviewerState{ReviewerRequested, ReviewerWithdrawn, ReviewerReviewed, ReviewerEnded}
+}
 
 // Valid reports a state this build knows.
 func (s ReviewerState) Valid() bool { return slices.Contains(ReviewerStates(), s) }
@@ -293,7 +318,9 @@ type Comment struct {
 	// Mentions is the handles its body names, as its asker resolved them
 	// against the chart it acts in, at most [MaxMentions]; the writer holds
 	// them to its own chart, and each is told ([ReasonMention]) and joins
-	// the change's participants.
+	// the change's participants. THE ASKER'S, never the record's: the
+	// writer holds them into the routing's mentions, their one copy, and
+	// takes them off the record it appends (withRouting).
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// WRITER from its snapshot and chart; an asker sends none.
@@ -509,6 +536,40 @@ type FindingResolve struct {
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
+// AskSettle settles a change's asks for review with its LIFECYCLE ([OpAsks]):
+// every ask still waiting on a change that closed or merged is ENDED — nobody
+// owes the review of a change that will not merge — and every ask its end left
+// waiting is ASKED AGAIN once the change is reopened. The change's lifecycle is
+// its repository's records, which write nothing of its conversation (a table
+// is written by the records of one subject), so its home git node finds a
+// change whose asks no longer match its state from the rows (the
+// `changes_due` read's [ReadAnswer.AskSettles]) and asks the change's writer
+// for this record on the change's own subject. The home's own write, which no
+// principal asks.
+//
+// Every field is in the base format, under the condition [OpAsks] states.
+type AskSettle struct {
+	RepoID   string `json:"repo_id"`
+	ChangeID string `json:"change_id"`
+	// State is the state the change's asks move to, as its home read the
+	// change: ended, for a closed or merged change's waiting asks;
+	// requested, for a reopened change's ended ones. The decide holds it to
+	// the change's state in its own snapshot.
+	State ReviewerState `json:"state"`
+	// Reviewers is the asks the record moves, by handle, at most
+	// [MaxAsksSettled]. STAMPED BY THE WRITER from its snapshot; the home
+	// sends none.
+	Reviewers []string `json:"reviewers,omitempty"`
+}
+
+// MaxAsksSettled is the most asks one [AskSettle] moves: every ask a change can
+// hold waiting at once — those asked by name or as path owners
+// ([MaxReviewersPerChange]) and those a revision's facts ask to look again
+// ([MaxReReviewers]). A change holding more — only a reopened change asked
+// again beside the asks its end left, can — is settled over more than one
+// record, each its home's next, since the change stays due until none is left.
+const MaxAsksSettled = MaxReviewersPerChange + MaxReReviewers
+
 // ReviewID is the id of the review a write under opID gives, DERIVED from the
 // write's operation id as [CommentID] derives a comment's, so a review asked
 // again is the review that landed.
@@ -584,9 +645,9 @@ func findingProblem(f Finding) string {
 		return "path: " + validGitPath(f.Path, false)
 	case !f.Side.Valid():
 		return fmt.Sprintf("side: %q is not one of %s", f.Side, words.Or(Sides()))
-	case f.LineStart < 1 || f.LineEnd < f.LineStart:
-		return fmt.Sprintf("lines %d to %d: a finding's lines count from 1, the last at or past the first",
-			f.LineStart, f.LineEnd)
+	case f.LineStart < 1 || f.LineEnd < f.LineStart || f.LineEnd > MaxAnchorLine:
+		return fmt.Sprintf("lines %d to %d: a finding's lines count from 1, the last at or past the first "+
+			"and at most %d, the most lines a file holds", f.LineStart, f.LineEnd, MaxAnchorLine)
 	case !gitref.ValidOID(f.CommitOID):
 		return fmt.Sprintf("commit_oid: %q is not a whole object id", f.CommitOID)
 	case !gitref.ValidOID(f.BlobOID):

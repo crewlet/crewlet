@@ -127,6 +127,12 @@ const (
 	// the change's repository, as every read of the repository's rows is.
 	ActionCodeListChanges Action = "code_list_changes"
 	ActionCodeGetChange   Action = "code_get_change"
+	// ActionCodeSearch is the tool `code_search`: the lines matching a
+	// search across every repository the asker may read, each repository
+	// judged by the grant its answering git node derives. The question of
+	// the same name, on REST and the socket, is decided by ActionCodeRead,
+	// the dotted verb every code question is decided by.
+	ActionCodeSearch Action = "code_search"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
 	// the operator tool `code_repo_readers` and the query registry's
 	// question of the same name, on `GET /code/repos/{name}/readers` and
@@ -185,6 +191,32 @@ const (
 	// And its commits rebased onto its target: an engine write of its source,
 	// a forced push of it, judged as every engine write is.
 	ActionCodeRebaseChange Action = "code_rebase_change"
+	// And it merged into its target, or put in its target's queue where the
+	// target's gate requires a check — its merge authority, its gate and a
+	// person's override judged by the committer from its own chart (M5-D2,
+	// M5-D7) — and taken out of that queue again.
+	ActionCodeMergeChange   Action = "code_merge_change"
+	ActionCodeDequeueChange Action = "code_dequeue_change"
+	// And a merged change reverted by a change of its own, opened by the
+	// push of its revert's branch (M5-D25), judged as every engine write is.
+	ActionCodeRevertChange Action = "code_revert_change"
+	// A commit's CHECKS: what a check that failed said — its failures, its
+	// summary, its tail and pages of its log — read by the repository's
+	// grant; an attempt run again, decided by the repository's checks writer
+	// from its own chart (a seat reruns only what its infrastructure ended,
+	// on a repository it may write or a change it wrote); and a person's own
+	// CI reporting a check of a commit, a person's alone.
+	ActionCodeGetCheckFailures Action = "code_get_check_failures"
+	ActionCodeRerunChecks      Action = "code_rerun_checks"
+	ActionCodeReportCheck      Action = "code_report_check"
+	// ActionCodePurgeUnreachable is a person's purge of a repository's
+	// unreachable objects: a request its maintainer serves by expunging
+	// every object no ref reaches.
+	ActionCodePurgeUnreachable Action = "code_purge_unreachable"
+	// ActionCodeImportRepo is a person's create of a project repository
+	// filled from one at another host, once or kept in step as a pull
+	// mirror.
+	ActionCodeImportRepo Action = "code_import_repo"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -1045,6 +1077,11 @@ var rules = map[Action]rule{
 	// read of one such change is refused `not_permitted`.
 	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// A SEARCH IS A READ OF EVERY REPOSITORY IT COVERS, on the same footing:
+	// admitted for every principal, and judged per repository where it is
+	// answered — a repository the asker may not read is never searched, and
+	// one a repo: filter names is refused `not_permitted`.
+	ActionCodeSearch: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
 	// every principal and the repository decides — an engine write by the
 	// grant's ref rule and the protections, a lifecycle request by the one
@@ -1083,6 +1120,46 @@ var rules = map[Action]rule{
 	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
 	// AND ITS REBASE, on the same footing.
 	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS MERGE AND ITS DEQUEUE, decided per repository by its
+	// committer — who may merge into the target is the gate's merge_by, an
+	// override is a person's alone — so neither human-only nor asking a
+	// proof here: a seat merges a change its gate lets it merge.
+	ActionCodeMergeChange:   {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeDequeueChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND ITS REVERT, a branch the caller may create and the change its push
+	// opens, on the footing of every engine write.
+	ActionCodeRevertChange: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
+	// each decided per repository in the tool and by the checks writer from
+	// its chart, on the same footing — a seat reads what failed and reruns
+	// what its infrastructure ended. A REPORT is a person's own CI's, and so
+	// human-only: a seat runs no CI of its own, and a report it could send
+	// would be a check result nobody ran (M5-D24); for the same reason no
+	// assistant carries one, since it ran no CI either (the human-only list,
+	// [assistantNever]).
+	ActionCodeGetCheckFailures: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	ActionCodeRerunChecks:      {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionCodeReportCheck: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A PURGE OF A REPOSITORY'S UNREACHABLE OBJECTS IS A PERSON'S, and a
+	// fresh proof of who they are: it drops history no ref reaches, which
+	// nothing brings back — the purge of a leaked secret is its use — so
+	// never an agent's, whose say-so would have a model erase what the
+	// company's code held, and a step-up as every purge is
+	// ([ActionWorkPurge]). EVERYBODY at the gate, since who maintains the
+	// repository is its grant, which the tool judges once it is read.
+	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	// AN IMPORT IS A PERSON'S (U49 a), on the footing of every create: it
+	// has the code host DIAL ANOTHER HOST for the company — once, or for
+	// good as a pull mirror — which a model's say-so would point at any URL
+	// a page it read named, so never an agent's; and the deciding data node
+	// refuses a seat's create carrying an import or a mirror again, whatever
+	// its grant. EVERYBODY at the gate and no step-up: every person
+	// maintains every repository (ADR-0081) and may create a project for any
+	// owner the chart holds, and an import, like a create, takes nothing
+	// away — a mistaken one is deleted as any repository is.
+	ActionCodeImportRepo: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the
@@ -1879,6 +1956,8 @@ const (
 	tellKnowledge = "Asking the knowledge base's own model would spend outside this " +
 		"conversation's budget, so Ask Crewlet searches the pages itself instead."
 	tellReady = "Only an open artifact reports that it has finished drawing."
+	tellCheck = "A check result is reported by the CI that ran the check, with its own token: " +
+		"Ask Crewlet runs no CI."
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
@@ -1933,6 +2012,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
+		"no CI, so its report would be a result nobody ran", tellCheck},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and

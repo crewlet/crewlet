@@ -1417,7 +1417,7 @@ and a data node in the mode answers "not here" to the writes a stateless node
 still in normal mode routes to it. Its reads are still served — a project
 file's download among them — at every level but `linearizable`, which proves
 the log's end by appending a barrier to it and is refused
-[`maintenance`](consistency.md#the-fourteen-refusals). The operator gestures
+[`maintenance`](consistency.md#the-fifteen-refusals). The operator gestures
 that append a record are refused the same way: an eviction and a readmission
 answer `409 not_publishing`, and a reanchor `409 reanchor_refused` naming the
 mode. None of them is what a window needs — a participant that will not
@@ -2731,7 +2731,7 @@ which:
 - **[Replication](replication.md)** — the two regimes, the write outcomes and
   what the design does not promise.
 - **[Read consistency](consistency.md)** — what a full log costs, the
-  fourteen read refusals and every write refusal.
+  fifteen read refusals and every write refusal.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
 - **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
   flags and refusals.

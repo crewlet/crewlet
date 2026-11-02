@@ -158,9 +158,10 @@ func TestAReviewIsAnnouncedOnceOnItsReviewerAndOwner(t *testing.T) {
 	}
 }
 
-// A WRITER THAT ANNOUNCES NAMES ITS SEATS: a committer or a change writer handed
-// an event stream and no way to resolve a seat's agent id is refused, since
-// every opening and review it announced would be counted on no seat's day.
+// A WRITER THAT ANNOUNCES NAMES ITS SEATS: a committer, a change writer or a
+// checks writer handed an event stream and no way to resolve a seat's agent
+// id is refused, since every opening, review, ejection and failed head check
+// it announced would be counted on no seat's day.
 func TestAnAnnouncingWriterResolvesItsSeats(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -175,5 +176,55 @@ func TestAnAnnouncingWriterResolvesItsSeats(t *testing.T) {
 		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false }, Events: &announced{}}
 	if _, err := code.NewChangeWriter(wo); err == nil {
 		t.Fatal("a change writer announcing with no AgentIDs was built")
+	}
+	co := code.ChecksWriterOptions{Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false }, Events: &announced{}}
+	if _, err := code.NewChecksWriter(co); err == nil {
+		t.Fatal("a checks writer announcing with no AgentIDs was built")
+	}
+}
+
+// A FAILED HEAD CHECK IS ANNOUNCED ON ITS OWNER'S SEAT: the ending of a check
+// of dev's change's head that fails it names dev — the change's owner, by the
+// agent id its day is filed under — and so does an errored attempt past the
+// home's own requeue; an ending that passes, and an errored one the home
+// queues again, name nobody, since no day counts them (`checks_failed`). A
+// failure a person's CI reports of that head names dev and the change too,
+// though its row names no change: it is the failure its checks_failed wake
+// tells dev of, and the gate holds the merge on it alike.
+//
+// Mutations: name the owner on every head ending — the passing one names dev,
+// red; name no owner for a reported ending (drop applied's arm reading the
+// routing) — the CI's failure counts on nobody, red.
+func TestAFailedHeadCheckIsAnnouncedOnItsOwnersSeat(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _, stream, _ := checksWriterOn(t, n)
+	key := func(name string, attempt int) code.CheckKey {
+		return code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: name, Attempt: attempt}
+	}
+	runCheck(t, w, key("unit", 1), change, 1, code.CheckStateFailed, code.CheckReasonExit)
+	runCheck(t, w, key("lint", 1), change, 1, code.CheckStatePassed, code.CheckReasonExit)
+	for attempt := 1; attempt <= code.AutoRequeueAttempts; attempt++ {
+		runCheck(t, w, key("e2e", attempt), change, 1, code.CheckStateErrored, code.CheckReasonRunnerLost)
+	}
+	for name, state := range map[string]code.CheckState{"ci": code.CheckStateFailed,
+		"ci-lint": code.CheckStatePassed} {
+		res, err := w.Publish(t.Context(), reporting(key(name, 1), state, "https://ci.example.com/1"))
+		requireChecked(t, name+" reported", res, err)
+	}
+	waitAnnouncedOf(t, stream, "code_check_finished", 4+code.AutoRequeueAttempts)
+	for _, ev := range stream.of("code_check_finished") {
+		p := ev.Data.(*types.CodeCheckFinished)
+		fails := p.State == "failed" || p.Attempt == code.AutoRequeueAttempts
+		owned := p.Owner == "dev" && p.OwnerKind == "agent" && p.Agent == "agent-dev" && p.ChangeID == change
+		if owned != fails || (!fails && p.Owner+p.Agent != "") {
+			t.Errorf("%s attempt %d (%s, %s) names owner %q, agent %q of change %q: want dev's seat and "+
+				"%s named exactly where the ending fails the head", p.Name, p.Attempt, p.State, p.Placement,
+				p.Owner, p.Agent, p.ChangeID, change)
+		}
 	}
 }

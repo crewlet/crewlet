@@ -3,7 +3,6 @@ package query_test
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -118,7 +117,7 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 	blob := strings.TrimSpace(x.git("rev-parse", atBound+":huge.txt"))
 	for i := range code.MaxReanchors {
 		anchors = append(anchors, code.LineAnchor{ID: fmt.Sprintf("%02d%s", i, strings.Repeat("<", 62)),
-			Path: "huge.txt", Side: code.SideNew, BlobOID: blob, Start: math.MaxInt - 1, End: math.MaxInt - 1})
+			Path: "huge.txt", Side: code.SideNew, BlobOID: blob, Start: code.MaxAnchorLine, End: code.MaxAnchorLine})
 	}
 	if a := mustRead(t, s, reanchorQ(repo, code.ReanchorQuery{Head: atBound, Anchors: anchors})); encoded(t, a) > limit {
 		t.Errorf("the re-anchoring of %d anchors encodes to %d bytes, past %d", len(anchors), encoded(t, a), limit)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -48,8 +49,22 @@ type RepoRef struct {
 	// reads of the repository ([GrantOf]).
 	Visibility Visibility `json:"visibility"`
 	// Search is how code search reads it ([SearchMode]).
-	Search        SearchMode `json:"search"`
-	DefaultBranch string     `json:"default_branch"`
+	Search SearchMode `json:"search"`
+	// Mirrored is a PULL MIRROR ([RepoSettings.MirrorFrom]): it moves only
+	// by its syncs, so a push and a change's every write are refused
+	// repo_mirrored — what the code host's admission and an engine write's
+	// landing read of it before the committer is asked. Never the mirror's
+	// URL or credential, which no row a read serves carries.
+	//
+	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
+	// it is read from the row a record wrote. AS A STATED CONDITION, as the
+	// mirror's own fields are (mirror.go): no build that carries the code
+	// domain has run without it — none of the domain is on main — so every
+	// node a code host asks answers it; were one without it ever to run
+	// first, a host reading its answer would take a pull mirror's push to the
+	// committer, which refuses it there, recorded, from the rows.
+	Mirrored      bool   `json:"mirrored,omitempty"`
+	DefaultBranch string `json:"default_branch"`
 	// Description is what the repository says about itself, a line whoever
 	// created or last changed it chose: somebody's words (ADR-0040).
 	Description string `json:"description,omitempty" untrusted:"name"`
@@ -260,6 +275,16 @@ type PackRow struct {
 	// moves past the request without judging anything. A read's answer,
 	// never a record's field: no versionedFields row.
 	Content statelog.Position `json:"content"`
+	// Arrived is the broker instant the pack's NEWEST content arrived at:
+	// nothing in it reached the repository after it. A push's pack and a
+	// merge's arrived at their own record; every rewrite's output — a
+	// compaction's, an expunge's, a rescue — at the latest of the packs it
+	// replaced, since moving content brings none (replicated 0123). An
+	// expunge on its maintainer's schedule keeps a pack that arrived within
+	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
+	// a pack a cache adopted before a round served its row. A read's
+	// answer, never a record's field: no versionedFields row.
+	Arrived time.Time `json:"arrived,omitzero"`
 }
 
 // Ref is the PackRef a cache installs and [CheckBundle] reads.
@@ -510,17 +535,41 @@ const (
 	// repository's idle clock, and refuse its row's via as a way it does not
 	// know (scanPush).
 	ViaExpiry PushVia = "expiry"
+	// ViaQueue is a push a LAND RECORD lands ([Land]), one for each change a
+	// merge queue landed: its target moved from what the change before it
+	// left onto the commit the queue built of it — and, where it deletes its
+	// source, the source deleted — naming the change's ENQUEUER, since the
+	// queue never acts on its own account. No proposal of a push names it: a
+	// landing is decided through each change's gate.
+	//
+	// BASE FORMAT, under the condition queuerecords.go's head states.
+	ViaQueue PushVia = "queue"
+	// ViaImport is the push an IMPORT CHUNK lands ([ImportChunk]): the refs
+	// it sets, onto objects its home fetched from the host the repository is
+	// imported from, by the engine's own account ([PrincipalSystem]) —
+	// written by the chunk's own apply. No proposal of a push names it.
+	//
+	// BASE FORMAT, under the condition [OpImportChunk] states.
+	ViaImport PushVia = "import"
+	// ViaMirror is the push a PULL MIRROR'S SYNC lands ([MirrorSync]): the
+	// refs it moves onto its source's, by the engine's own account —
+	// written by the sync's own apply. No proposal of a push names it.
+	//
+	// BASE FORMAT, under the condition [OpMirrorSync] states.
+	ViaMirror PushVia = "mirror"
 )
 
 // PushVias is the closed set, in its documented order.
-func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry} }
+func PushVias() []PushVia {
+	return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry, ViaQueue, ViaImport, ViaMirror}
+}
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
 
 // proposedVias is the ways a push PROPOSAL may name — git's, the engine's and
-// the ref expiry's — in [PushVias]' order: a merge's push is written by its
-// record alone ([ViaMerge]).
+// the ref expiry's — in [PushVias]' order: a merge's push and a landing's are
+// written by their records alone ([ViaMerge], [ViaQueue]).
 func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaExpiry} }
 
 // proposed reports a way a push proposal may name ([proposedVias]).
@@ -661,6 +710,15 @@ type ChangesDueQuery struct {
 	// whose mergeability is oldest first, 0 to MaxSnapshotItems; none past
 	// its first page, and none without a repository.
 	Rechecks int `json:"rechecks,omitempty"`
+	// ChartEpoch is the activation of the chart the asking home holds
+	// (configplane.ActivationStamp), 0 for none: a change whose stored
+	// readiness an EARLIER chart judged ([Mergeability.ChartEpoch]) is due a
+	// refresh, so a chart apply re-judges every live change once — the one
+	// input of a readiness no record of the log moves. Never negative.
+	//
+	// BASE FORMAT, under the condition [OpMergeability] states: a field of a
+	// read between this build's nodes, which no record carries.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
 // ChangeDue is one live change a `changes_due` read names, its target a live
@@ -708,12 +766,34 @@ type ChangeDue struct {
 	Checks *CheckWork `json:"checks,omitempty"`
 }
 
+// AskDue is one change whose asks for review its home owes a settling
+// ([AskSettle]): the change, and the state its asks move to — ended for a
+// closed or merged change's asks still waiting, requested for a reopened
+// change's asks its end left.
+type AskDue struct {
+	ChangeID string        `json:"change_id"`
+	State    ReviewerState `json:"state"`
+}
+
+// MaxAskSettlesPerRead is the most changes one `changes_due` read names whose
+// asks are due a settling ([ReadAnswer.AskSettles]), on its first page: what
+// one pass of the repository's home settles at most — SIXTY-FOUR, the figure
+// a pass's merges are held to (internal/code/home's MergeabilityPerPass),
+// here records of a few hundred bytes each, so a repository whose changes end
+// faster than its home's passes settle them is settled at that pace, the rest
+// at the next pass, since each stays due until it is settled.
+const MaxAskSettlesPerRead = 64
+
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
 // coding run is given — each costs a clone before its coding agent starts,
 // inside its setup budget, and a run that needs more is a task to split — so a
 // read of a run's pushes scans at most this many repositories' pushes above its
 // launch. The bound a run's repositories are held to where they are granted
-// may not pass it: a run given more could not be read whole.
+// (sandbox.MaxRunRepos) may not pass it: a run given more could not be read
+// whole, and a refused read reaches the run only as the sentence that its
+// pushes were unread — so internal/engine's
+// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
+// other, the one package that imports both.
 const MaxRunRepos = 8
 
 // RefQuery resolves refs of one repository — EVERY ONE IN ONE READ: one
@@ -882,17 +962,47 @@ const (
 	ReadPublicationDue ReadKind = "publication_due"
 	// ReadExpungeDue is the active and archived repositories with an
 	// expunge open or a purge requested, by id, each with what its
-	// maintainer finishes or serves it by: the listing a repository's
-	// maintainer polls for the expunges it owes. The engine's own read, as
+	// maintainer finishes or serves it by — and, asked with
+	// [ReadQuery.ExpungedBefore], then every other active or archived
+	// repository last expunged at or before that instant or never, least
+	// recently expunged first, whose maintainer judges whether an expunge
+	// is due on its own schedule: the listing a repository's maintainer
+	// polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
 	// ReadExpungeTips is the objects one repository's expunge keeps beside
-	// its refs ([ReadQuery.ExpungeTips]): the object each forced or deleting
-	// command left since an instant (code_ref_drops) — what the expunge's
-	// grace keeps reachable — in the order the drops' key holds them. The
-	// engine's own read, which no principal makes: a repository's maintainer
-	// reads it at its scan and at its rescue (internal/code/compact).
+	// its refs ([ReadQuery.ExpungeTips]), in phases: the object each forced
+	// or deleting command left since an instant (code_ref_drops) — what the
+	// expunge's grace keeps reachable — in the order the drops' key holds
+	// them; then, whatever the instant, what rows hold IN FLIGHT (M6-D2):
+	// every revision head of a draft or open change, every live queue
+	// entry's head, every candidate's tip and every green row, so a purge
+	// keeps the commit a landing moves its target onto and the revisions an
+	// open change's reviewers compare. The engine's own read, which no
+	// principal makes: a repository's maintainer reads it at its scan and at
+	// its rescue (internal/code/compact).
 	ReadExpungeTips ReadKind = "expunge_tips"
+	// ReadImportsDue is the repositories being imported, by id, each with
+	// its source and how many of its chunks have landed
+	// ([ImportCandidate]): the listing a repository's home polls for the
+	// imports it owes. The engine's own read, as `compaction_due` is.
+	ReadImportsDue ReadKind = "imports_due"
+	// ReadMirrorsDue is the repositories with a mirror ([MirrorCandidate]):
+	// every push mirror, by id, then the active pull mirrors LEAST RECENTLY
+	// SYNCED FIRST — so a home that syncs every MirrorInterval reads pages
+	// until one is synced within it, and no further — the listing a
+	// repository's home polls for the mirrors it keeps. The engine's own
+	// read, as `compaction_due` is.
+	ReadMirrorsDue ReadKind = "mirrors_due"
+	// ReadMirrorPush is ONE repository's push mirror as its home pushes it
+	// ([MirrorPushQuery]): the push mirror its row holds now, as the one
+	// candidate of [ReadAnswer.Mirrors] — none where it has none — and
+	// every green row of the repository ([ReadAnswer.Green]), read in ONE
+	// snapshot, so the target a push dials and the green commits it
+	// publishes are one version's. The engine's own read, as
+	// `expunge_tips` is: a push mirror's seat is judged by its home before
+	// each push ([MirrorSeatRefusal]), never as the asker of a read.
+	ReadMirrorPush ReadKind = "mirror_push"
 	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
 	// heads ([BranchChangesQuery]), in the order the query names the
 	// branches, a branch heading none left out. The engine's own read, as
@@ -907,10 +1017,17 @@ const (
 	// mergeability against the branch it merges into, or whose mergeability
 	// is due again, by id; with one, the first two kinds of that repository,
 	// by source branch, each with its target's tip as the rows hold it
-	// ([ChangeDue]), beside the repository's path owners, and the third
-	// oldest first. The engine's own read, as `compaction_due` is: what its
+	// ([ChangeDue]), beside the repository's path owners where a change of
+	// the page owes its facts, and the third oldest first. The engine's own read, as `compaction_due` is: what its
 	// home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
+	// ReadIndexed is the active and archived repositories searched by index
+	// ([SearchIndexed]), BY NAME, each by its id and name, a page of
+	// MaxSnapshotItems after the [ReadQuery.Cursor] — the last name a page
+	// served, "" from the start: the listing a git node's indexer polls for
+	// the repositories whose code index it may keep (M6-D12). The engine's
+	// own read, as `compaction_due` is.
+	ReadIndexed ReadKind = "indexed"
 	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
 	// grant: one repository's, newest ended first and every attempt not yet
 	// ended after them; one change's of it, or one commit's, by commit, name
@@ -1008,8 +1125,8 @@ const (
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadBranchChanges,
-		ReadChangesDue,
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
+		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
@@ -1028,8 +1145,8 @@ type ReadQuery struct {
 	// would be a reader nobody named, and an optional asker is a hole any
 	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
 	// and on the duty listings `compaction_due`, `publication_due`,
-	// `expunge_due`, `changes_due` and `checks_due`, which no principal
-	// makes: an asker there would be judged by nothing.
+	// `expunge_due`, `changes_due`, `checks_due` and `indexed`, which no
+	// principal makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the handle of the seat the asking seat's turn is acting
 	// FOR — the colleague whose ask woke it — and "" for a read made for its
@@ -1246,6 +1363,26 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// MirrorPush is a `mirror_push` read's repository: REQUIRED for that
+	// kind, refused on every other. An estate request's field and no
+	// record's, so it takes no versionedFields row: a node of a build that
+	// predates the kind refuses the read as a kind it does not know
+	// (ErrInvalid) — the push waits for another attempt, never answered as
+	// a repository with no green row.
+	MirrorPush *MirrorPushQuery `json:"mirror_push,omitempty"`
+	// ExpungedBefore asks an `expunge_due` read for its WEEKLY ARM beside
+	// its open one: after every repository with an expunge open or a purge
+	// requested, every other active or archived repository — a scratch one
+	// as much as a project — last expunged at or before it, or never,
+	// least recently expunged first; the maintainer asks from its clock
+	// less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
+	// other kind. An estate request's field and no record's, so it takes
+	// no versionedFields row: under the code domain's stated condition (no
+	// build of main carries internal/code while it is unmerged) every node
+	// that serves the read reads it; were the domain to reach main first, a
+	// node of a build that predates it would answer the open arm alone,
+	// which delays an expunge on the schedule and drops no object.
+	ExpungedBefore time.Time `json:"expunged_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repository and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1319,22 +1456,42 @@ type ReadAnswer struct {
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
 	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
+	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
+	// read's.
+	Imports []ImportCandidate `json:"imports,omitempty"`
+	Mirrors []MirrorCandidate `json:"mirrors,omitempty"`
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
-	// the same snapshot — what its home matches the touched paths against —
-	// and, on its first page, Rechecks: the changes whose merge is due again,
+	// the same snapshot — what its home matches the touched paths against,
+	// so answered only beside a change owing its facts — and, on its first
+	// page, Rechecks: the changes whose merge is due again,
 	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
 	// read answers in the same two fields — its repositories in DueRepos, one
 	// repository's heads owing their checks work in DueChanges, each with what
 	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
 	// repository's first page, DueTargets: its target branches due a reading
-	// of their checks file again.
-	DueRepos   []string         `json:"due_repos,omitempty"`
+	// of their checks file again, and DueTips: its protected targets owing
+	// tip work ([TipDue], tipwork.go).
+	DueRepos []string `json:"due_repos,omitempty"`
+	// Indexed is an `indexed` listing's page of repositories, by name.
+	Indexed    []IndexedRepo    `json:"indexed,omitempty"`
 	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
 	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`
+	DueTips    []TipDue         `json:"due_tips,omitempty"`
 	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
 	PathOwners []PathOwner      `json:"path_owners,omitempty"`
+	// AskSettles is, on the first page of one repository's `changes_due`
+	// read, its changes whose asks for review no longer match the change's
+	// state — an ended change's asks still waiting, a reopened change's asks
+	// its end left — at most [MaxAskSettlesPerRead], each with the state its
+	// asks move to, which its home settles ([AskSettle]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, as [ChangeDue.RefreshDue]
+	// is, under the condition it states: a home of a build without it would
+	// settle no change's asks, and the listing of the changes waiting on a
+	// reviewer still keeps a live change alone.
+	AskSettles []AskDue `json:"ask_settles,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one
 	// attempt as its row stands, or none where the rows hold no such attempt
 	// — and Check a `check` read's one attempt whole. A `checks_running`
@@ -1346,19 +1503,27 @@ type ReadAnswer struct {
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
-	// page, in the order of the drops that name them — an object a later
-	// page names again is one more drop left, which its reader keeps once.
+	// page, in the order of the rows that name them — the drops first, then
+	// the revisions, the queue's entries, its candidates and the green rows
+	// — and an object a later page names again is one more row naming it,
+	// which its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
 	// change, in the query's order, a branch heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
-	// Queue is a page of a `queue` or a `queue_due` read's live entries, in
-	// queue order; Trains a `queue` read's candidates of the trains testing
-	// the targets its page reaches; Landings a page of a `landings` read; and
-	// Green the target's green row a `landings` read starts above, or a
-	// `green` read's rows.
+	// DueQueue is a `queue_due` read's page of one repository: one target's
+	// queue work ([QueueDue]), the target the next page's cursor; nil past
+	// the last.
+	DueQueue *QueueDue `json:"due_queue,omitempty"`
+	// Queue is a page of a `queue` read's live entries, in queue order;
+	// Trains a `queue` read's candidates of the trains testing the targets
+	// its page reaches; Ejected, on a named repository's first page, the
+	// entries its queues put out lately ([EjectedRow]), newest first;
+	// Landings a page of a `landings` read; and Green the target's green
+	// row a `landings` read starts above, or a `green` read's rows.
 	Queue    []QueueRow     `json:"queue,omitempty"`
 	Trains   []CandidateRow `json:"trains,omitempty"`
+	Ejected  []EjectedRow   `json:"ejected,omitempty"`
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
@@ -1370,9 +1535,18 @@ type ReadAnswer struct {
 	Level    statelog.ReadLevel `json:"level"`
 }
 
+// IndexedRepo is one repository an `indexed` read lists: its id, which its
+// git order and its copy are keyed by, and its name, which the listing's
+// cursor is.
+type IndexedRepo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
 // open on it and the purge requested of it, whichever it holds — what its
-// maintainer finishes or serves first — when it was last expunged, its live
+// maintainer finishes or serves first — or neither, a repository of the
+// listing's weekly arm, when it was last expunged, its live
 // packs, bytes and objects — which a cycle's inputs are cut from, and the last
 // of which places the repository's maintenance on the node that compacts and
 // publishes it too, by its maintenance's charge (internal/code/compact) — and
@@ -1400,11 +1574,50 @@ type ExpungeCandidate struct {
 	Version     statelog.Position `json:"version"`
 }
 
+// ImportCandidate is one repository an `imports_due` read lists: a repository
+// being imported, its source — a URL and a ${VAR} reference, never a secret —
+// how many of its chunks have landed (the next is Seq+1) and the version its
+// row was read at.
+type ImportCandidate struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Source  ImportSource      `json:"source"`
+	Seq     int64             `json:"seq"`
+	Version statelog.Position `json:"version"`
+}
+
+// MirrorCandidate is one repository a `mirrors_due` read lists: its pull
+// mirror's source (From) or its push mirror's target (To) — a repository
+// with both is listed once in each arm, each naming its own — and, for a pull
+// mirror, when its last sync landed, zero for never, and the version its row
+// was read at: the floor its home syncs its copy at before it fetches, as an
+// import's candidate carries its own, since a copy synced at no floor could
+// still be the one its import left, importing.
+//
+// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so Version takes no
+// versionedFields row; as a stated condition, as [CheckWork]'s: no build that
+// carries the code domain has run without it.
+type MirrorCandidate struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	From     *MirrorSource     `json:"from,omitempty"`
+	To       *MirrorTarget     `json:"to,omitempty"`
+	SyncedAt time.Time         `json:"synced_at,omitzero"`
+	Version  statelog.Position `json:"version,omitzero"`
+}
+
+// MirrorPushQuery is a `mirror_push` read's repository, by id
+// ([ReadMirrorPush]).
+type MirrorPushQuery struct {
+	RepoID string `json:"repo_id"`
+}
+
 // ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the
 // instant from which the drops it lists were left: every code_ref_drops row
 // of the repository whose record's broker instant is at or after Since. An
 // expunge keeping a grace asks from its scan's instant less the grace; one
 // serving a purge, which keeps nothing a drop left, from its scan's instant.
+// What rows hold in flight is listed whatever Since is ([ReadExpungeTips]).
 type ExpungeTipsQuery struct {
 	RepoID string    `json:"repo_id"`
 	Since  time.Time `json:"since"`
@@ -1500,8 +1713,8 @@ type ExpungeResult struct {
 	// added, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale, repo_deleted,
-	// upload_expired, pack_too_large, busy, not_applied or unavailable —
-	// and Detail its one sentence.
+	// repo_importing, upload_expired, pack_too_large, busy, not_applied or
+	// unavailable — and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
 	// Position is where its record landed — for one asked again under its
@@ -1513,6 +1726,42 @@ type ExpungeResult struct {
 	// repository's open request from its record on — until a later request
 	// widens it, or a commit serves it. Empty for a begin and a commit.
 	Request string `json:"request,omitempty"`
+}
+
+// ImportProposal is what a repository's home hands its committer to land one
+// step of an import ([Committer.ProposeImport]): EXACTLY ONE of a chunk and
+// the import's end, each decided alone as a record of its own op.
+type ImportProposal struct {
+	Chunk *ImportChunk `json:"chunk,omitempty"`
+	Done  *ImportDone  `json:"done,omitempty"`
+}
+
+// MirrorSyncProposal is what a pull mirror's home hands its committer to land
+// one sync ([Committer.ProposeMirrorSync]).
+type MirrorSyncProposal struct {
+	Sync MirrorSync `json:"sync"`
+}
+
+// SyncResult is what became of one import chunk, one import's end or one
+// mirror sync.
+type SyncResult struct {
+	// Outcome is applied, pending or unknown for a proposal whose record was
+	// appended, and empty for one refused with none. A chunk's and a sync's
+	// applied is answered only from the rows the record applied — its push
+	// row — never from the decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// Refusal is why it was refused with no record — stale (a sync of a
+	// repository that follows no source among its causes), repo_deleted,
+	// repo_importing (a sync of a mirror not yet imported), repo_archived,
+	// expunging, ref_conflict, repo_refs, repo_size, upload_expired,
+	// pack_too_large, busy, not_applied or unavailable — and Detail its one
+	// sentence.
+	Refusal Refusal `json:"refusal,omitempty"`
+	Detail  string  `json:"detail,omitempty"`
+	// Position is where its record landed and, for a not_applied or
+	// repo_deleted refusal the log made after the append, where that record
+	// lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
 }
 
 // ChangeProposal is one write of a change's lifecycle as its asker hands it to
@@ -1679,6 +1928,12 @@ type ConversationWrite struct {
 	// [Mergeability]).
 	Revise       *Revise       `json:"revise,omitempty"`
 	Mergeability *Mergeability `json:"mergeability,omitempty"`
+	// Asks settles the change's asks with its lifecycle, which the home asks
+	// with NO Asker too ([AskSettle]).
+	//
+	// AN ESTATE REQUEST'S FIELD: what it carries rides the code log as the
+	// [OpAsks] record, under the condition that op states.
+	Asks *AskSettle `json:"asks,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.
@@ -1754,6 +2009,15 @@ type ChecksRequest struct {
 	// estate request's field, no record's: the record it asks for takes its
 	// op's versionedFields row, under the subject's stated condition.
 	Dispatched *CheckDispatched `json:"dispatched,omitempty"`
+	// Asker, Rerun and Report are a PRINCIPAL'S write — a rerun a seat or a
+	// person asks for, a person's CI's report — decided into one of the
+	// records above by the asker's standing (checkasks.go): the asker is a
+	// seat, or a person through a credential bound to their human seat, and
+	// is zero on every record the engine asks for itself. Estate request
+	// fields, no record's.
+	Asker  Principal      `json:"asker,omitzero"`
+	Rerun  *CheckRerun    `json:"rerun,omitempty"`
+	Report *CheckReported `json:"report,omitempty"`
 }
 
 // ChecksResult is what became of one write of a repository's checks.
@@ -1798,6 +2062,14 @@ type ChecksResult struct {
 // the one attempt ([CheckDetail]): its definition, its tail and its failures.
 type CheckRow struct {
 	CheckKey
+	// Repo is its repository's name, which every read a person or a seat
+	// asks — a listing and a `check` — names, so a reader links the attempt
+	// to its repository, change and commit, each addressed by name; a box
+	// admission's read ([ReadCheckBox]) addresses the row by id and leaves it
+	// out. AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
+	// row, under M3-O84 §2 item 5's stated condition: no build carrying the
+	// code domain has answered a listing without it.
+	Repo    string       `json:"repo,omitempty"`
 	State   CheckState   `json:"state"`
 	Purpose CheckPurpose `json:"purpose,omitempty"`
 	// ChangeID and Revision are a head check's change and revision;
@@ -1870,15 +2142,46 @@ type CheckQuery struct {
 	OID string `json:"oid,omitempty"`
 	// Target, Name and Attempt are the one attempt a `check` read is of —
 	// the branch it was checked for, the check and the attempt — REQUIRED
-	// there and refused on a `checks` read.
+	// there. A `checks` read refuses a Target and an Attempt, and takes a
+	// Name as a NARROWING: the attempts of the check of that name alone.
 	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
+	// State narrows a `checks` read to the attempts in one state; refused on
+	// a `check` read, which names its one attempt whatever its state.
+	//
+	// A NARROWING TESTED ON THE ROWS A PAGE READ, as Name's is, and never a
+	// seek: every shape of the listing walks the one index its own order
+	// leads (code_checks' key, code_checks_finished_idx,
+	// code_checks_recent_idx), and an index per state or per name would be
+	// one more write on every check's every transition for a filter a person
+	// applies to a page. So a narrowed page is the rows it READ, never the
+	// rows it kept, and may be short — or empty with a cursor — as a window
+	// a reader reads little of is.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row — and neither does Name's use as a narrowing. AS A
+	// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code
+	// domain has run without them — none of the domain is on main, so no
+	// image and no release serves a code read. A build that predated them
+	// would refuse a listing naming a Name and decode and ignore a State,
+	// answering the wider listing; so were such a build ever to run first,
+	// a narrowed listing would move to a kind of its own, which such a build
+	// refuses as a kind it does not know, rather than ride a field it
+	// ignores.
+	State CheckState `json:"state,omitempty"`
 	// Since bounds a `checks` read of EVERY repository — the window, which
 	// names no repository — to the attempts that ended at or after it; zero
 	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
 	// repository, whose listing is its own attempts newest ended first.
 	Since time.Time `json:"since,omitzero"`
+}
+
+// keeps reports whether row is one a `checks` listing narrowed by c keeps:
+// of the check c names, where it names one, and in the state it names, where
+// it names one.
+func (c CheckQuery) keeps(row CheckRow) bool {
+	return (c.Name == "" || row.Name == c.Name) && (c.State == "" || row.State == c.State)
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
@@ -1967,6 +2270,33 @@ type RepoDetail struct {
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
+	// Expunge is where the repository's expunges stand ([ExpungeState]):
+	// the one open, the purge a person asked for and not yet served, and the
+	// last one committed — the repository's own row, read with the rest of
+	// it, so a person who asked for a purge reads its progress here.
+	Expunge ExpungeState `json:"expunge,omitzero"`
+}
+
+// ExpungeState is a repository's expunges as its row holds them (code_repos,
+// written by the expunge's three records alone): zero for a repository never
+// expunged, with no expunge open and no purge asked of it.
+type ExpungeState struct {
+	// Open is the expunge begun and not yet committed — its id — and ""
+	// for none: while it is open, objects no ref reached at its scan are
+	// still served, and no new push may rely on them.
+	Open string `json:"open,omitempty"`
+	// Request is the purge a person asked for and its maintainer has not yet
+	// served — its id — and Requested where its record landed: it is served
+	// once no pack holds content from before that position. "" and zero for
+	// none.
+	Request   string            `json:"request,omitempty"`
+	Requested statelog.Position `json:"requested,omitzero"`
+	// ExpungedAt is the last commit's broker instant, zero for a repository
+	// never expunged, and DroppedObjects and DroppedBytes what that commit
+	// took out of the repository's live packs.
+	ExpungedAt     time.Time `json:"expunged_at,omitzero"`
+	DroppedObjects int64     `json:"dropped_objects,omitempty"`
+	DroppedBytes   int64     `json:"dropped_bytes,omitempty"`
 }
 
 // ChangeRow is a change as its row holds it (code_changes): every column, as
@@ -2142,8 +2472,9 @@ type RoutedPage struct {
 	// none is, `nobody` for a change opened since RetainedFrom, every one of
 	// whose notices would still be kept, and `swept` for one opened before
 	// it, whose notices a sweep was entitled to take and the applier never
-	// to write. Every record about a change carries its routing, so its
-	// records always announced: `quiet` and `unknown` are never this read's.
+	// to write. Every record about a change says whom it concerns — its
+	// routing, or none for nobody — so its records always announced:
+	// `quiet` and `unknown` are never this read's.
 	Delivery routing.Delivery `json:"delivery"`
 	// RetainedFrom is the instant from which every notice is kept, a seat's
 	// and a person's alike: the read's instant less [SeatNoticeHorizon], the
@@ -2394,6 +2725,15 @@ const MaxTouchedBytes = 48 << 10
 // at most, placed by one read.
 const MaxReanchors = 64
 
+// MaxAnchorLine is the last line an anchor's range may name: the most lines a
+// blob holds — a line a byte — at the largest blob code.limits.max_blob_bytes
+// lets any push carry, its ceiling (config.CodeMaxPushBytesCeiling, 1 GiB).
+// A range past it is no file's lines, and a placing moves a range by at most
+// the lines its new file holds, so a range within it is moved within what an
+// int holds rather than wrapped into a line no file has and reported where it
+// was.
+const MaxAnchorLine = int(config.CodeMaxPushBytesCeiling)
+
 // maxAnchorIDBytes bounds an anchor's id: an opaque name the caller gives
 // each anchor and reads its answer back by — a finding's, a UUID's 36
 // characters. 64 bytes leave room for another naming and keep a
@@ -2521,6 +2861,11 @@ const (
 	// string would replace an invalid byte of, which the parse must see as
 	// git holds it.
 	GitChecksFile GitReadKind = "checks_file"
+	// GitSearch is the lines of a commit a code search matches — the
+	// default branch's tip through the repository's code index where its git
+	// node keeps one, and otherwise git grep — at most MaxSearchHits of
+	// them, in one answer with no next page (search.go).
+	GitSearch GitReadKind = "search"
 )
 
 // GitReadKinds is the closed set.
@@ -2531,7 +2876,7 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile}
+		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitSearch}
 }
 
 // Valid reports a kind this build answers.
@@ -2569,6 +2914,17 @@ func (k GitReadKind) Unstampable() bool {
 // held to no grant and is recorded as nobody's read — the git node's one test
 // of all three.
 func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
+
+// SeatWork is the unit of the answering node's seat git-work share q's git
+// takes ([GitShare.Take]): the engine's own ([SeatWorkEngine]) for a read the
+// engine makes on its own account, a seat's read ([SeatWorkRead]) for every
+// other.
+func (q GitQuery) SeatWork() SeatWork {
+	if q.EnginesOwn() {
+		return SeatWorkEngine
+	}
+	return SeatWorkRead
+}
 
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
@@ -2671,6 +3027,7 @@ type GitQuery struct {
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
+	Search        *SearchQuery        `json:"search,omitempty"`
 }
 
 // ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
@@ -2823,7 +3180,7 @@ type LineAnchor struct {
 	PathB64 string `json:"path_b64,omitempty"`
 	Side    Side   `json:"side"`
 	// BlobOID is the blob the lines were read in, whole, and Start and End
-	// the range, 1-based and inclusive.
+	// the range, 1-based and inclusive, ending at MaxAnchorLine at most.
 	BlobOID string `json:"blob_oid"`
 	Start   int    `json:"start"`
 	End     int    `json:"end"`
@@ -3065,7 +3422,7 @@ func (q GitQuery) Validate() error {
 		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
-		{GitChecksFile, q.ChecksFile != nil}} {
+		{GitChecksFile, q.ChecksFile != nil}, {GitSearch, q.Search != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3102,6 +3459,8 @@ func (q GitQuery) Validate() error {
 		return q.Blame.validate()
 	case GitChecksFile:
 		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
+	case GitSearch:
+		return q.Search.validate()
 	}
 	return q.Compare.validate()
 }
@@ -3305,9 +3664,9 @@ func (q ReanchorQuery) validate() error {
 		case a.Side == SideOld && q.Base == "":
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)
-		case a.Start < 1 || a.End < a.Start:
-			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, and end is at or after "+
-				"start", ErrInvalid, field, a.Start, a.End)
+		case a.Start < 1 || a.End < a.Start || a.End > MaxAnchorLine:
+			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
+				"start, and no file holds a line past %d", ErrInvalid, field, a.Start, a.End, MaxAnchorLine)
 		}
 		ids[a.ID] = true
 		if _, err := GitPath(field+".path", a.Path, a.PathB64, false); err != nil {
@@ -3484,6 +3843,7 @@ type GitAnswer struct {
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
+	Search        *SearchAnswer        `json:"search,omitempty"`
 }
 
 // ChecksFileAnswer is what a commit holds at [ChecksFilePath]: nothing (no
@@ -3634,12 +3994,21 @@ type RevisionFactsAnswer struct {
 	// lines with the same lines around them, wherever the base put them — a
 	// rebase that moved nothing near them keeps it — and another for any
 	// changed byte, whitespace included. Empty for a revision that changes
-	// nothing, and where PatchIDOmitted: an empty id equals nothing.
+	// nothing, and where PatchIDOmission says why none was taken: an empty id
+	// equals nothing.
 	PatchID string `json:"patch_id,omitempty"`
-	// PatchIDOmitted is a change whose diff the git node did not identify:
-	// one past the bound on a diff it identifies, or one whose diff ran out
-	// what was left of the read's budget of git.
-	PatchIDOmitted bool `json:"patch_id_omitted,omitempty"`
+	// PatchIDOmission is why the git node took no id of a diff that is not
+	// empty, "" where it took one or there was none to take: the diff is past
+	// the bound on one it identifies (OmittedPastBound, final), or it or its
+	// id ran out what was left of the read's budget of git
+	// (OmittedOutOfTime, not final — [RevisionFactsAnswer.Final]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
+	// row (the record carries [Revise.PatchIDOmitted], the final omission
+	// alone). AS A STATED CONDITION, as [ReadQuery.Push]'s: no build that
+	// carries the code domain has run with the bool this replaced — none of
+	// the domain is on main — so no home reads an answer it cannot.
+	PatchIDOmission FactsOmission `json:"patch_id_omission,omitempty"`
 	// Touched is every file the change touches — every path the diff from
 	// the base to Head changes, in git's order — unless TouchesAll: the
 	// change touches more than a list holds ([MaxTouchedPaths],
@@ -3654,11 +4023,52 @@ type RevisionFactsAnswer struct {
 	// what the read's budget of git left — incomplete past either, and where
 	// the revision touches all.
 	Classes RevisionClasses `json:"classes,omitzero"`
+	// ClassesOmission is why Classes are not complete, "" where they are:
+	// past a bound — MaxClassedBytes, or a revision that touches all, whose
+	// paths no list names (OmittedPastBound, final) — or out of what the
+	// read's budget of git left (OmittedOutOfTime, not final). An estate
+	// answer's field under PatchIDOmission's stated condition.
+	ClassesOmission FactsOmission `json:"classes_omission,omitempty"`
 	// HeadInTarget is Head reachable from Target: the change is in its
 	// target already, merged by whatever moved the target there. Its change
 	// is then nothing: no id, no path, no tree.
 	HeadInTarget bool `json:"head_in_target,omitempty"`
 }
+
+// Final reports facts that are a function of their two commits alone, as
+// every git node answers them: nothing in them left out for want of time. A
+// fact left out past a bound is final, the same on every node at every load;
+// one the read's budget of git ran out before is a measure of the node that
+// read it at that moment, so facts holding one are RECORDED BY NOBODY and
+// asked again — never kept as though the commits were unidentifiable, which
+// would cost every approval carried by the id a re-review exactly when the
+// fleet is busiest.
+func (f *RevisionFactsAnswer) Final() bool {
+	return f.PatchIDOmission != OmittedOutOfTime && f.ClassesOmission != OmittedOutOfTime
+}
+
+// FactsOmission is why a revision's facts left out a part they may leave out
+// — its patch id, or classes of its paths — "" for none. A closed set
+// ([FactsOmissions]).
+type FactsOmission string
+
+const (
+	// OmittedPastBound is a part past a bound of its own: a diff past the
+	// bound on one whose id is taken, Go past the bound a classification
+	// lexes, a revision that touches all. What the bound measures is the two
+	// commits', so every git node omits the part alike: FINAL.
+	OmittedPastBound FactsOmission = "past_bound"
+	// OmittedOutOfTime is a part the read's budget of git ran out before:
+	// what the node could do in its budget at that moment — slower under
+	// load, quicker on a node beside it — so NOT FINAL ([RevisionFactsAnswer.Final]).
+	OmittedOutOfTime FactsOmission = "out_of_time"
+)
+
+// FactsOmissions is the closed set.
+func FactsOmissions() []FactsOmission { return []FactsOmission{OmittedPastBound, OmittedOutOfTime} }
+
+// Valid reports an omission this build knows.
+func (o FactsOmission) Valid() bool { return slices.Contains(FactsOmissions(), o) }
 
 // ReanchorAnswer places every anchor of the query, in its order.
 type ReanchorAnswer struct {

@@ -177,10 +177,10 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 }
 
 // fenceRepository registers the string at path in the answer as text read
-// out of a repository, from src, by [provenance.Repository]: naming nobody, at
-// the least trust. Never [foreignRead.fence], whose rule is a hosted
-// surface's, which reads a text nobody named as a colleague's. Empty text is
-// not fenced.
+// out of a repository, or printed by a check of one of its commits, from src,
+// by [provenance.Repository]: naming nobody, at the least trust. Never
+// [foreignRead.fence], whose rule is a hosted surface's, which reads a text
+// nobody named as a colleague's. Empty text is not fenced.
 func (r *foreignRead) fenceRepository(path fieldPath, src provenance.Source, text string) {
 	if text == "" {
 		return

@@ -38,9 +38,9 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 
 // Addressed implements [notify.Prompt]: the reasons that ask something of
 // whoever hears them ([Reason.Addressed]) — a mention, an ask to review or to
-// look again, a request for changes, a conflict, a reply to a finding, a
-// change ready to merge. Everything else is news a seat may absorb in
-// silence.
+// look again, a request for changes, a failed check, a broken target, a
+// conflict, a removal from the queue, a reply to a finding, a change ready to
+// merge. Everything else is news a seat may absorb in silence.
 func (Prompt) Addressed(n notify.Inbound) bool { return Reason(n.Metadata[MetaVia]).Addressed() }
 
 // PartitionKey implements [notify.Prompt]: the change, by its id.
@@ -76,10 +76,12 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 		Key: metadata[MetaWorkKey], Project: metadata[MetaWorkProject]}, true
 }
 
-// WakesActor implements [notify.Prompt]: never. No code reason is news to
+// WakesActor implements [notify.Prompt]: only a check's ending, whose one
+// reason is a failed check of a change's head — news to the head's pusher,
+// its actor, above all ([Reason.WakesActor]). No other code record is news to
 // whoever made the change — a reviewer knows their review, a pusher their
 // merge — which the routing already holds to ([Concern.Hears]).
-func (Prompt) WakesActor(notify.Inbound) bool { return false }
+func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == string(OpCheckFinished) }
 
 // Provenance implements [notify.Prompt]: the change text the wake carries, on
 // the engine's own code host, by the writer its record names (stamped by
@@ -134,12 +136,21 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 		return "You were asked to review change " + ref + "."
 	case ReasonChangesRequested:
 		return "A reviewer asked for changes on your change " + ref + "."
+	case ReasonChecksFailed:
+		return "A check of your change " + ref + "'s head failed."
+	case ReasonTargetBroken:
+		return "Change " + ref + " broke the branch it landed on: a check its target requires fails on it."
 	case ReasonConflicted:
 		return "Your change " + ref + " no longer merges cleanly into its target."
+	case ReasonDequeued:
+		return "Change " + ref + " left its target's merge queue without landing."
 	case ReasonFindingReplied:
 		return "Somebody answered a finding you raised on change " + ref + "."
 	case ReasonReadyToMerge:
-		return "Your change " + ref + " is ready to merge."
+		// NOT "your change": the wake reaches the authors who may merge it,
+		// and where none may, the lead of the repository's owner, whose change
+		// it is not.
+		return "Change " + ref + " is ready to merge: every precondition its target's gate asks is met."
 	case ReasonMerged:
 		return "Your change " + ref + " was merged."
 	case ReasonReviewSubmitted:
@@ -174,12 +185,35 @@ func wakeHandling(reason Reason) string {
 			"finding with `" + toolname.CodeResolveFinding + "` and say what you did with `" +
 			toolname.CodeCommentOnChange + "`. " +
 			"Disagree in a comment rather than by pushing past it."
+	case ReasonChecksFailed:
+		return "Read what failed with `" + toolname.CodeGetCheckFailures + "`, then fix it on the change's source branch, " +
+			"which makes its next revision and runs its checks again. A check its infrastructure ended " +
+			"(errored) runs again with `" + toolname.CodeRerunChecks + "`; one the code failed runs again only once the " +
+			"code changes."
+	case ReasonTargetBroken:
+		return "Get the branch green again, whichever way is faster: read what failed with " +
+			"`" + toolname.CodeGetCheckFailures + "`, then revert the change with `" + toolname.CodeRevertChange + "` — one write that " +
+			"opens \"Revert <repo>!<n>\" into the same target, and with `merge` also merges it as its gate " +
+			"allows — or open a change that fixes it forward. Say which on the change with " +
+			"`" + toolname.CodeCommentOnChange + "`, so the others it woke do not do it twice."
+	case ReasonDequeued:
+		return "Read why with `" + toolname.CodeGetChange + "`: its `merge_readiness` names what no longer holds. Fix that " +
+			"on the change, then queue it again with `" + toolname.CodeMergeChange + "` from the head you read " +
+			"(`expected_head`) — or, where it is not yours to queue, say on it with `" + toolname.CodeCommentOnChange + "` " +
+			"that it is ready to queue again."
 	case ReasonMention, ReasonThread, ReasonFindingReplied:
 		return "Answer on the change with `" + toolname.CodeCommentOnChange + "`, in the thread you are answering, " +
 			"so the answer sits beside the question."
 	case ReasonReadyToMerge:
-		return "Every precondition of its merge is met. Say so to whoever merges it — where the work " +
-			"item it implements is tracked, or on the change with `" + toolname.CodeCommentOnChange + "`."
+		// THE WAKE REACHES WHOEVER MAY MERGE IT (M5-D26): its authors whom the
+		// gate lets merge it, else the owning unit's lead — so it offers the
+		// merge, and the lead's way out where the gate or the lead says the
+		// merge is somebody else's.
+		return "You hear it because you may merge it, or — where none of its authors may — because you " +
+			"lead the unit that owns the repository. Merge it with `" + toolname.CodeMergeChange + "` from the head you " +
+			"read (`expected_head`): on a target whose gate requires a check that puts it in the queue, " +
+			"which merges it once its checks pass. Where the gate does not let you merge it, or it is " +
+			"better somebody else's to merge, say who should on the change with `" + toolname.CodeCommentOnChange + "`."
 	case ReasonLeadFallback:
 		return "Ask somebody who may review it with `" + toolname.CodeRequestReview + "`, or review it " +
 			"yourself with `" + toolname.CodeReviewChange + "`."

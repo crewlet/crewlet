@@ -150,6 +150,16 @@ const (
 	// names, after which the same request lands.
 	RefusalConflict Refusal = "conflict"
 
+	// RefusalNotReady — a change does not yet meet its target's merge gate:
+	// the sentence names every unmet precondition and who it waits on, and
+	// a ready_to_merge wake follows once the last of them is met. Nothing
+	// about the call was wrong, which tells it from [RefusalInvalid]; and
+	// neither the same call made again nor a re-read clears it, which tells
+	// it from [RefusalStaleVersion] and [RefusalConflict]: the change's
+	// reviewers, its checks or its author clear it, and the caller waits for
+	// the wake rather than asking again (M5-D31).
+	RefusalNotReady Refusal = "not_ready"
+
 	// RefusalExists — the object this call would create already exists, or
 	// a name, a title, a label, an address or an id the call gives an object
 	// is another object's already: a COLLISION, which the sentence names the
@@ -250,7 +260,7 @@ const (
 // lists them.
 var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
-	RefusalStaleVersion, RefusalConflict, RefusalExists,
+	RefusalStaleVersion, RefusalConflict, RefusalNotReady, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalQuotaExceeded, RefusalNotesFull, RefusalNotesSpent,
 	RefusalNotRunning, RefusalBudgetExhausted,

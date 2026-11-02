@@ -118,7 +118,8 @@ func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	// every plan of its copy since has passed by.
 	c.expireStagedLayers()
 	c.listMemos(ctx)
-	trimmed := c.trimMemo(ctx, ticked)
+	trimmed := c.trimCodeIndexes(ctx)
+	trimmed = c.trimMemo(ctx, ticked) || trimmed
 	if c.evictToBudget(ctx) > 0 || trimmed {
 		c.emptyTrash(ctx)
 	}
@@ -208,8 +209,12 @@ func (c *Cache) memoExcess() int64 {
 // trim's to give back, never a repository's: one evicted for a page a read is
 // still cutting, or for pages the memo holds past its share, costs a cold sync
 // of every pack it holds — a GET each from the object store — for bytes the
-// memo was never entitled to, and the trim then takes the pages anyway.
-func (c *Cache) overBudget() int64 { return c.total() - c.memoExcess() - c.maxBytes }
+// memo was never entitled to, and the trim then takes the pages anyway. The
+// code indexes' excess over their share (codeIndexExcess) is theirs to give
+// back likewise, for the same reason.
+func (c *Cache) overBudget() int64 {
+	return c.total() - c.memoExcess() - c.codeIndexExcess() - c.maxBytes
+}
 
 // evictToBudget evicts repositories, least recently used first, while an
 // eviction is due (overBudget), and answers how many. Only an EVICTABLE
@@ -359,6 +364,7 @@ func (c *Cache) setGauges() {
 	c.metrics.Set(metrics.CodeCacheBytes, float64(c.total()), nil)
 	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheMemoBytes, float64(c.memoBytes.Load()), nil)
+	c.metrics.Set(metrics.CodeIndexBytes, float64(c.codeIndexBytes.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheDroppingBytes, float64(c.droppingBytes.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheChained, float64(c.chainedRepos.Load()), nil)
 }

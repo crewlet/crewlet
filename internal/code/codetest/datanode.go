@@ -75,6 +75,11 @@ type DataOptions struct {
 	// false is a node confirmed behind it, which decides neither; nil is
 	// current.
 	Current func() bool
+	// Clock is the fleet's clock as a case moves it (Shape.Clock): what the
+	// node's lifecycle stores decide by, and the broker's instant on every
+	// record its applier applies past a move; nil is the wall clock, moved
+	// by nothing.
+	Clock *Clock
 }
 
 // DataNode is one data node's code domain, composed as the engine composes it
@@ -223,6 +228,9 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
 	}
 	var applier statelog.Applier = code.NewApplier(nil)
+	if d.o.Clock != nil {
+		applier = d.o.Clock.wrap(applier)
+	}
 	if d.o.WrapApplier != nil {
 		applier = d.o.WrapApplier(applier)
 	}
@@ -275,7 +283,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		return pub
 	}
 	pub := publisher(d.o.ID)
-	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, signer, reserve,
+	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, p.log.Members, signer, reserve,
 		code.EncodeBarrier, gen, nil)
 	if err != nil {
 		t.Fatalf("codetest: %s: build the read index: %v", d.o.ID, err)
@@ -339,6 +347,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 		Retention: func() time.Duration { return deletedRetention },
+		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the checks writer: %v", d.o.ID, err)
 	}
@@ -348,13 +357,22 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the marks writer: %v", d.o.ID, err)
 	}
+	// THE LIFECYCLE STORE DECIDES A TOOL'S REQUEST as the engine's does: by
+	// the committer's chart and posture, and by the scratch policy of a
+	// company that sets none — so a lifecycle request the fleet's routing asks
+	// is decided here, as a data node of the fleet decides it, rather than
+	// refused as one by a node that decides none.
+	var now func() time.Time
+	if d.o.Clock != nil {
+		now = d.o.Clock.Now
+	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
-		NodeID: d.o.ID}); err != nil {
+		NodeID: d.o.ID, Now: now, SeatRules: seatRules, Current: d.o.Current, Policy: scratchPolicy}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
 	}
 	if d.o.Operator != "" {
 		if p.operator, err = code.NewStore(code.StoreOptions{Publisher: publisher(d.o.Operator),
-			DB: p.estate.Reader(), NodeID: d.o.Operator}); err != nil {
+			DB: p.estate.Reader(), NodeID: d.o.Operator, Now: now}); err != nil {
 			t.Fatalf("codetest: %s: build the operator's lifecycle store: %v", d.o.ID, err)
 		}
 	}
@@ -380,7 +398,7 @@ func (d *DataNode) Served() code.Served {
 		return code.Served{}
 	}
 	return code.Served{Committer: p.committer, ChangeWriter: p.changes, ChecksWriter: p.checks, Reader: p.reader,
-		Marks: p.marks}
+		Store: p.lifecycle, Marks: p.marks}
 }
 
 // Store is the node's lifecycle store, publishing under its own id.

@@ -80,6 +80,11 @@ type landing struct {
 	// none. The change they ask for is read from them here (askChange), and
 	// what becomes of it is never a refusal of the push.
 	PushOptions []string
+	// Change is the change the push opens as its BUILDER formed it, in
+	// place of any its options ask for — a revert_change's "Revert
+	// <repo>!<n>" (write.go) — and nil for every other: made ready,
+	// proposed and answered as an option's change is (askedChange).
+	Change *code.ChangeOption
 	// Principal is who pushes.
 	Principal code.Principal
 	// Via is how the builder built the push's pack — the relay's is
@@ -193,7 +198,8 @@ func unchecked(err error) error {
 //     builder can judge a push against rules other than its own synced row's.
 //  3. BLOBS, over the push's own pack (largestBlob) — only while anything is
 //     left to decide, and refusing only what is: a refusal that came first
-//     is the one the person has to act on.
+//     is the one the person has to act on. For a coding box's push the same
+//     pass spools the pack's commits for step 8 (packCommits).
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
 //  6. THE SIZE: a bundle past code.MaxPackBytes is refused before its upload.
@@ -226,10 +232,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	cmds := slices.Clone(l.Commands)
 	result := pushResult{commands: len(cmds)}
-	// THE CHANGE THE OPTIONS ASK FOR, read once, before anything is decided
-	// — never a refusal of the push — and carried on every answer the
-	// landing gives (done), for the line its pusher reads of it.
-	ask := askChange(l.PushOptions, l.Commands)
+	// THE CHANGE THE OPTIONS — OR THE BUILDER — ASK FOR, read once, before
+	// anything is decided — never a refusal of the push — and carried on
+	// every answer the landing gives (done), for the line its pusher reads
+	// of it, or the engine write's answer.
+	ask := l.askedChange()
 	done := func(out landed) landed {
 		out.Change = ask
 		return out
@@ -278,6 +285,9 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		ref *code.PackRef
 		// idx is the pack's index, whose ids the scans of the pack read.
 		idx string
+		// commits is a coding box's pack's commits, as the blob scan spools
+		// them for step 8; nil for any other push.
+		commits *packCommits
 	)
 	if hasPack {
 		// The push's ONE stored object, laid out from its scratch's three
@@ -292,7 +302,14 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 	if ref != nil && undecided(cmds) {
-		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes)
+		if l.EngineCommitter != "" {
+			if commits, err = newPackCommits(s.o.Cache); err != nil {
+				return landed{}, unchecked(err)
+			}
+			defer commits.close()
+		}
+		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes,
+			commits)
 		if berr != nil {
 			return landed{}, unchecked(berr)
 		}
@@ -358,9 +375,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// nothing, whatever its commands came to: the pack is stored whole or not
 	// at all, so a commit of it that only a refused update reaches, or that
 	// none does, would be the repository's as surely as one a landed update
-	// reaches.
+	// reaches. Its commits are those step 3's pass spooled: a push reaches
+	// here only where that pass read the whole index, every push it ended
+	// early having been refused whole by step 5.
 	if ref != nil && l.EngineCommitter != "" {
-		detail, refused, ferr := s.forged(ctx, &l, idx, ref.PackBytes())
+		detail, refused, ferr := s.forged(ctx, &l, commits, ref.PackBytes())
 		if ferr != nil {
 			return landed{}, unchecked(ferr)
 		}
@@ -389,8 +408,14 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	proposed, named := recordedCommands(cmds)
 	// AND THE CHANGE THE OPTIONS ASK FOR, made ready for the proposal now
 	// that the push is to be proposed (readyChange): answered here, and left
-	// out, where it has no source by now or no room in the push's record.
-	change := s.readyChange(ctx, &l, &ask, cmds, proposed)
+	// out, where it has no source by now or no room in the push's record —
+	// its title, where the options named none, filled in beside the upload
+	// (titleChange).
+	change := s.readyChange(&l, &ask, cmds, proposed)
+	var title func(context.Context)
+	if change != nil {
+		title = s.titleChange(&l, change, cmds[ask.source])
+	}
 	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
 		return code.Proposal{
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
@@ -398,10 +423,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
 		}
 	}
-	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,
+	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref, title,
 		func(introduced []string, count int, unstored *code.PackRef) error {
 			if l.Merge != nil {
-				return mergeCarrying(*l.Merge, unstored).ValidateUnstored()
+				return mergeCarrying(*l.Merge, unstored, l.Synced.DropEpoch).ValidateUnstored()
 			}
 			return s.checkProposal(proposal(introduced, count, unstored))
 		})
@@ -461,7 +486,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		perr   error
 	)
 	if l.Merge != nil {
-		merged, perr = s.o.Estate.Merge(ctx, mergeCarrying(*l.Merge, ref))
+		merged, perr = s.o.Estate.Merge(ctx, mergeCarrying(*l.Merge, ref, l.Synced.DropEpoch))
 	} else {
 		res, perr = s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
 	}
@@ -653,9 +678,16 @@ func (s *Server) behind(ctx context.Context, l *landing) (string, bool) {
 // one, named by no row, which the collector removes after its grace as it
 // does a refused push's. A refusal that must store nothing is decided before
 // this step, never here (land's steps 6 to 8).
+//
+// title, where it is not nil, fills in the title of the change the push
+// proposes (titleChange): it too refuses nothing — the title falls back to
+// the branch's name and the commit's id — so it runs beside the upload as
+// the listing does, and validate is asked only once it has written, so the
+// check and the proposal carry the title. Every return waits for it, so a
+// caller reads the change it wrote.
 func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []string, packPath string,
-	ref *code.PackRef, validate func([]string, int, *code.PackRef) error) (introduced []string, count int,
-	stored, err error) {
+	ref *code.PackRef, title func(context.Context), validate func([]string, int, *code.PackRef) error) (
+	introduced []string, count int, stored, err error) {
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -667,21 +699,34 @@ func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []strin
 		copied := *ref
 		unstored = &copied
 	}
+	var titled sync.WaitGroup
+	if title != nil {
+		titled.Go(func() { title(ctx) })
+	}
+	defer titled.Wait()
 	check := func() error {
+		titled.Wait()
 		if verr := validate(introduced, count, unstored); verr != nil {
 			cancel(errInvalidProposal)
 			return &invalidProposal{err: verr}
 		}
 		return nil
 	}
+	// BESIDE THE UPLOAD: the listing where there are commits to list, and
+	// the check after it — after the title too, where there is one to read,
+	// so a push with nothing to list still starts its upload while its
+	// change's title is read. With neither, the check answers before the
+	// upload starts, at no cost to it.
 	var listing sync.WaitGroup
-	if len(news) > 0 && ref != nil {
+	if ref != nil && (len(news) > 0 || title != nil) {
 		packBytes := unstored.PackBytes()
 		listing.Go(func() {
-			if introduced, count, err = s.introduced(ctx, l.Scratch, l.objects(), news,
-				packBytes); err != nil {
-				cancel(errListingFailed)
-				return
+			if len(news) > 0 {
+				if introduced, count, err = s.introduced(ctx, l.Scratch, l.objects(), news,
+					packBytes); err != nil {
+					cancel(errListingFailed)
+					return
+				}
 			}
 			err = check()
 		})
@@ -735,10 +780,11 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 
 // forged is land's step 8 for a coding box's push: the sentence its every
 // command still standing is refused forged_committer with, and refused true,
-// where the push's pack (idx, its index) holds a commit committed as the
-// engine (l.EngineCommitter, committedAs) that the repository does not
-// already hold — the first such, by the pack's index order — or more such
-// commits than one push is checked for (maxEngineCommits); refused false for a
+// where the push's pack (commits, its commits as the blob scan spooled them)
+// holds a commit committed as the engine (l.EngineCommitter, committedAs) that
+// the repository does not already hold — the first such, by the pack's index
+// order — or more such commits than one push is checked for
+// (maxEngineCommits); refused false for a
 // pack whose every such commit the repository holds, and for one holding none,
 // which asks the repository nothing.
 //
@@ -758,10 +804,10 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 // commit is absent. What it holds, it holds by a landed push or an engine
 // write, never by a box's pack this step refused — so a box cannot make a
 // commit held by a push of its own first.
-func (s *Server) forged(ctx context.Context, l *landing, idx string, packBytes int64) (detail string,
+func (s *Server) forged(ctx context.Context, l *landing, commits *packCommits, packBytes int64) (detail string,
 	refused bool, err error) {
 
-	found, pastBound, err := s.committedAs(ctx, l.Scratch, idx, packBytes, l.EngineCommitter)
+	found, pastBound, err := s.committedAs(ctx, l.Scratch, commits, packBytes, l.EngineCommitter)
 	if err != nil || len(found) == 0 {
 		return "", false, err
 	}
@@ -808,14 +854,20 @@ func undecided(cmds []code.Command) bool {
 // statusRefusal is the refusal a repository's row gives every push, with its
 // sentence, or "" for a repository that takes pushes: deleted or purging
 // (repo_deleted, the domain's own sentence for the state — which names the
-// purge by the CURRENT epoch's retention, so a method), or archived
-// (repo_archived).
+// purge by the CURRENT epoch's retention, so a method), archived
+// (repo_archived), being imported (repo_importing) or a pull mirror
+// (repo_mirrored) — each in the domain's one sentence for it, the one its
+// push decide refuses with from the rows.
 func (s *Server) statusRefusal(repo code.RepoRef) (code.Refusal, string) {
 	switch {
 	case gone(repo.Status):
 		return code.RefusalRepoDeleted, s.goneSentence(repo)
 	case repo.Status == code.RepoStatusArchived:
 		return code.RefusalRepoArchived, code.ArchivedDetail(repo.Name, repo.ManagedBy)
+	case repo.Status == code.RepoStatusImporting:
+		return code.RefusalRepoImporting, code.ImportingDetail(repo.Name)
+	case repo.Mirrored:
+		return code.RefusalRepoMirrored, code.MirroredDetail(repo.Name, repo.ManagedBy)
 	}
 	return "", ""
 }

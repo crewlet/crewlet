@@ -93,6 +93,13 @@ var QUERY_TIMEOUT_MS = 1e4;
 * `min_position` per listed domain this tab has written (`protocol/session.ts`),
 * which the engine holds each half of the answer to. Listed under one, the
 * half on the other log would be drawn from before the tab's own write there.
+*
+* `code_search` IS DELIBERATELY ABSENT: it answers at the tip it names — each
+* repository searched at the commit its git node holds, named in the answer's
+* `tips`, and a hit's file read at that commit — so it takes no floor, and the
+* engine refuses `read_level=session` and `min_position` on it
+* (`internal/api/queries.TestCodeSearchIsNotASessionQuery`). Listed here, a
+* code write would scatter a search to every git node only to be refused.
 */
 var SESSION_QUERIES = {
 	tracker: [
@@ -156,6 +163,10 @@ var SESSION_QUERIES = {
 		"code_diff",
 		"code_compare",
 		"code_commit",
+		"code_queue",
+		"code_checks",
+		"code_check",
+		"code_check_log",
 		"inbox"
 	]
 };
@@ -4343,6 +4354,32 @@ var ACTIONS = {
 		apps: [],
 		refreshes: [],
 		scope: "person"
+	},
+	code_merge_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_head",
+			"method",
+			"delete_branch",
+			"close_task",
+			"override_reason"
+		],
+		domain: "code",
+		apps: [],
+		refreshes: [],
+		scope: "person"
+	},
+	code_rerun_checks: {
+		args: [
+			"repo",
+			"change",
+			"all_failed"
+		],
+		domain: "code",
+		apps: [],
+		refreshes: [],
+		scope: "person"
 	}
 };
 //#endregion
@@ -4366,25 +4403,17 @@ var ACTIONS = {
 * told to sign in again, never to set anything.
 *
 * THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
-* which means "show the engine's own words". Those are the four classes whose
+* which means "show the engine's own words". Those are the five classes whose
 * words say what to change (`invalid`), whom to ask (`forbidden`), the state
 * that refused the change (`conflict`: a room archived, an item in the trash,
-* or a write that lost its race and may be made again), or what is already
-* there (`exists`). The engine answers them as a `detail` worded for a person,
-* or, where nobody has worded that refusal for one yet, with no detail and its
-* code's own `message` (ADR-0060): never the tool's sentence, which is written
-* for a model and names the next call, its arguments and record ids. One fixed
-* sentence for every `conflict` ended "retry", which re-trying an archived
-* room's post never changes.
-*
-* TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
-* (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
-* with a `detail`, which it writes only in a person's words (ADR-0060), is
-* shown in that `detail`, as a coding run's question somebody already
-* answered names who did and a spent token budget names whose it was; and a
-* sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
-* gives way to the engine's own sentence for the code where the answer
-* carries no `Retry-After`, since the engine said waiting won't change it.
+* or a write that lost its race and may be made again), every precondition of
+* a merge gate a change does not meet yet and who clears it (`not_ready`), or
+* what is already there (`exists`). The engine answers them as a `detail`
+* worded for a person, or, where nobody has worded that refusal for one yet,
+* with no detail and its code's own `message` (ADR-0060): never the tool's
+* sentence, which is written for a model and names the next call, its
+* arguments and record ids. One fixed sentence for every `conflict` ended
+* "retry", which re-trying an archived room's post never changes.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -4411,6 +4440,7 @@ var ACT_ERRORS = {
 	forbidden: null,
 	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
 	conflict: null,
+	not_ready: null,
 	exists: null,
 	already_answered: "Somebody has already answered it.",
 	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
@@ -4562,6 +4592,7 @@ function writeFailed(err) {
 		sentence: sentenceOf(code, err, detail, retryable),
 		detail,
 		hint: err.hint,
+		hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
 		grants: err.grants,
 		reason: err.reason,
 		retryable,
@@ -4591,6 +4622,7 @@ var WORDED_FOR_A_PERSON = /* @__PURE__ */ new Set([
 	"forbidden",
 	"stale_version",
 	"conflict",
+	"not_ready",
 	"exists",
 	"already_answered",
 	"reassignment_budget",

@@ -82,7 +82,7 @@ func (s *Store) RetireSweep(ctx context.Context, repoID string, now time.Time) (
 	// THE WALL CLOCK, as every op id of this domain is minted: its instant is
 	// judged against the ledger's watermark, never against the decide's
 	// clock, which a caller may have set anywhere.
-	opID := statelog.NewOpID(time.Now(), "code.retire_sweep")
+	opID := statelog.NewOpID(time.Now(), "code_retire_sweep")
 	at := s.now()
 	var swept SweepResult
 	result, err := s.publisher.Publish(ctx, statelog.Request{

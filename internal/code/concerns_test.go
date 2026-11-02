@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -41,19 +42,24 @@ func heard(concerns []code.Concern) []string {
 // the list's order, one handle in every role hears under the first reason
 // alone, and across the routings of one record (a push's) a handle hears
 // under its strongest reason, whichever change offered it. Addressed is the
-// six asks and re_review; the default primary reasons are another list.
+// nine asks and re_review; the default primary reasons are another list. The
+// gate's own reasons sit where M5-D26 puts them — a failed check after a
+// request for changes, a broken target right after it, a removal from the
+// queue after a conflict — each naming the handles the gate adds: an
+// enqueuer, the owning unit's lead.
 //
 // Mutation: swap two reasons in code.Reasons, or offer a role under another
 // reason, and the order or the reason a handle hears under is wrong.
 func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 	t.Parallel()
-	want := []code.Reason{"mention", "review_requested", "changes_requested", "conflicted", "finding_replied",
-		"ready_to_merge", "merged", "review_submitted", "re_review", "thread", "watcher", "lead_fallback"}
+	want := []code.Reason{"mention", "review_requested", "changes_requested", "checks_failed", "target_broken",
+		"conflicted", "dequeued", "finding_replied", "ready_to_merge", "merged", "review_submitted", "re_review",
+		"thread", "watcher", "lead_fallback"}
 	if got := code.Reasons(); !slices.Equal(got, want) {
 		t.Fatalf("the reasons are %v, want D11's precedence %v", got, want)
 	}
-	asks := []code.Reason{"mention", "review_requested", "changes_requested", "conflicted", "finding_replied",
-		"ready_to_merge", "re_review"}
+	asks := []code.Reason{"mention", "review_requested", "changes_requested", "checks_failed", "target_broken",
+		"conflicted", "dequeued", "finding_replied", "ready_to_merge", "re_review"}
 	for _, r := range code.Reasons() {
 		if !r.Valid() {
 			t.Errorf("%q is listed and not valid", r)
@@ -62,8 +68,10 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			t.Errorf("%q addressed = %v, want %v", r, r.Addressed(), slices.Contains(asks, r))
 		}
 	}
-	if code.Reason("dequeued").Valid() || code.Reason("checks_failed").Valid() {
-		t.Error("a reason the gate produces is declared before any record produces it")
+	for _, r := range code.Reasons() {
+		if r.WakesActor() != (r == code.ReasonChecksFailed) {
+			t.Errorf("%q wakes its actor = %v: only a failed check is news to who made it", r, r.WakesActor())
+		}
 	}
 	unaddressed := 0
 	for _, r := range code.DefaultPrimaryReasons {
@@ -84,19 +92,28 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 		r := &code.ChangeRouting{ChangeID: "c-1", Mentions: []string{"m"}, Requested: []string{"rq"},
 			PathOwners: []string{"po"}, Raisers: []string{"rs"}, ReadyFor: []string{"rf"},
 			ReReview: []string{"rr"}, ThreadParticipants: []string{"tp"}, Watchers: []string{"w"},
-			LeadFallback: "lead", Authors: []string{"a"}}
+			LeadFallback: "lead", Authors: []string{"a"}, Enqueuer: "e", Lead: "l"}
 		set(r)
 		return r
 	}
 	for name, tc := range map[string]struct {
 		set     func(r *code.ChangeRouting)
 		authors code.Reason
+		// gate is each handle the gate adds beside the ten, as
+		// "handle:reason".
+		gate []string
 	}{
 		"changes requested": {func(r *code.ChangeRouting) { r.Verdict = code.VerdictRequestChanges },
-			code.ReasonChangesRequested},
-		"conflicted":       {func(r *code.ChangeRouting) { r.Conflicted = true }, code.ReasonConflicted},
-		"merged":           {func(r *code.ChangeRouting) { r.Merged = true }, code.ReasonMerged},
-		"review submitted": {func(r *code.ChangeRouting) { r.Verdict = code.VerdictApprove }, code.ReasonReviewSubmitted},
+			code.ReasonChangesRequested, nil},
+		"conflicted": {func(r *code.ChangeRouting) { r.Conflicted = true }, code.ReasonConflicted, nil},
+		"merged":     {func(r *code.ChangeRouting) { r.Merged = true }, code.ReasonMerged, nil},
+		"review submitted": {func(r *code.ChangeRouting) { r.Verdict = code.VerdictApprove },
+			code.ReasonReviewSubmitted, nil},
+		"checks failed": {func(r *code.ChangeRouting) { r.ChecksFailed = true }, code.ReasonChecksFailed, nil},
+		"target broken": {func(r *code.ChangeRouting) { r.Broken = true }, code.ReasonTargetBroken,
+			[]string{"l:target_broken"}},
+		"dequeued": {func(r *code.ChangeRouting) { r.Dequeued = true }, code.ReasonDequeued,
+			[]string{"e:dequeued"}},
 	} {
 		got := code.Concerns([]*code.ChangeRouting{every(tc.set)})
 		last := -1
@@ -109,9 +126,13 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			if c.Handle == "a" && c.Reason != tc.authors {
 				t.Errorf("%s: the authors hear %s, want %s", name, c.Reason, tc.authors)
 			}
+			if (c.Handle == "e" || c.Handle == "l") && !slices.Contains(tc.gate, c.Handle+":"+string(c.Reason)) {
+				t.Errorf("%s: %s hears %s, want %v", name, c.Handle, c.Reason, tc.gate)
+			}
 		}
-		if len(got) != 10 {
-			t.Errorf("%s: %d concerns (%v), want one for each of the ten handles", name, len(got), heard(got))
+		if len(got) != 10+len(tc.gate) {
+			t.Errorf("%s: %d concerns (%v), want one for each of the ten handles and %v", name, len(got),
+				heard(got), tc.gate)
 		}
 	}
 
@@ -122,6 +143,7 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			*list = []string{"x"}
 		}
 		r.LeadFallback, r.Merged, r.Conflicted, r.Verdict = "x", true, true, code.VerdictRequestChanges
+		r.Enqueuer, r.Lead, r.ChecksFailed, r.Broken, r.Dequeued = "x", "x", true, true, true
 	})
 	if got := heard(code.Concerns([]*code.ChangeRouting{one})); !slices.Equal(got, []string{"x:mention"}) {
 		t.Fatalf("one handle in every role hears %v, want once, as mentioned", got)
@@ -147,8 +169,16 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 // raiser an answer replies to; and the participants a close tells. Nobody hears
 // of their own write.
 //
+// AND ONLY A RECORD WITH AN AUDIENCE: a revision's facts that ask nobody, and
+// a comment that mentions only a handle the chart does not hold, outside any
+// thread, concern nobody — so each carries no routing at all, and no mention
+// beside it, and its apply writes no notice. The routing is the ONE copy of a
+// record's mentions: every record here carries none of its asker's.
+//
 // Mutation: stamp no routing on one of the decides, or read the watchers off
-// another role, and the walk fails at that record.
+// another role, and the walk fails at that record; stamp a routing whatever
+// the audience, and the facts carry one, red; keep the asker's mentions on the
+// record, and the comment carries them, red.
 func TestEveryChangeRecordCarriesItsRouting(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -204,9 +234,29 @@ func TestEveryChangeRecordCarriesItsRouting(t *testing.T) {
 			r.ThreadParticipants, heard(code.Concerns([]*code.ChangeRouting{r})))
 	}
 
+	// NO AUDIENCE, NO ROUTING: facts that ask nobody — plat-lead is asked
+	// already, so no lead is fallen back to — and a comment whose one
+	// mention the chart lacks, outside any thread.
+	unheard := func(what string, p statelog.Position) {
+		t.Helper()
+		if routings := routingAt(t, n, p); len(routings) != 0 {
+			t.Fatalf("the %s, which concerns nobody, carries the routing %+v", what, routings[0])
+		}
+		if body := string(n.recordAt(p).Mutation); strings.Contains(body, `"mentions"`) ||
+			strings.Contains(body, `"routing"`) {
+			t.Fatalf("the %s, which concerns nobody, recorded %s; want no routing and no mention", what, body)
+		}
+		if got := noticesOf(t, n, p); len(got) != 0 {
+			t.Fatalf("the %s, which concerns nobody, wrote the notices %v", what, got)
+		}
+	}
 	facts := converse(t, w, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
-	if r := one("revise", facts.Position); r.Actor != "" {
-		t.Fatalf("the home's revise names %q as its actor, want nobody", r.Actor)
+	unheard("revise", facts.Position)
+	aside := saying(repo, change, ada, "", "Retrying twice, @nobody-here?")
+	aside.Comment.Mentions = []string{"nobody-here"}
+	unheard("comment mentioning nobody the chart holds", converse(t, w, aside).Position)
+	if body := string(n.recordAt(said.Position).Mutation); strings.Count(body, `"mentions"`) != 1 {
+		t.Fatalf("the comment mentioning reader recorded %s; want its mentions in its routing alone", body)
 	}
 
 	reviewed := converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
@@ -279,13 +329,17 @@ func TestAPushThatMovesNoChangeConcernsNobody(t *testing.T) {
 // subjects, the repository's and the change's, either of which may complete
 // it. Neither announces it, whichever lands last: decided from two snapshots,
 // a pair that land at once each see the other unapplied, so a transition both
-// complete would be seen by neither. The home's refresh that follows stores
-// the answer going from not ready to ready, and its record alone tells the
-// owner; a merge of a later tip that finds it ready still tells nobody.
+// complete would be seen by neither. Nor does a check of its head that
+// passes, on a third subject, the repository's checks (M5-D26). The home's
+// refresh that follows stores the answer going from not ready to ready, and
+// its record alone tells whoever may merge it — dev, its author, under a gate
+// any writer merges by; a merge of a later tip that finds it ready still
+// tells nobody.
 //
 // Mutation: announce from a review that completes the readiness (judge it in
 // decideReview) → the first case's review carries ready_for; from a lifecycle
-// record → the second case's undraft does.
+// record → the second case's undraft does; from a passing check's ending →
+// the check's record does.
 func TestReadyToMergeIsAnnouncedOnlyByAMergeabilityRecord(t *testing.T) {
 	t.Parallel()
 	for _, approvalLast := range []bool{true, false} {
@@ -299,6 +353,7 @@ func TestReadyToMergeIsAnnouncedOnlyByAMergeabilityRecord(t *testing.T) {
 		requireChanged(t, opened, err)
 		change := opened.ChangeID
 		w, _ := writerOn(t, n, n.pub)
+		cw, _, _, _ := checksWriterOn(t, n)
 		converse(t, w, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
 		merged := converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
 		if stored := n.storedReadiness(change); stored.ready {
@@ -321,7 +376,9 @@ func TestReadyToMergeIsAnnouncedOnlyByAMergeabilityRecord(t *testing.T) {
 		} else {
 			completing = []statelog.Position{approve(), undraft()}
 		}
-		for _, p := range append(completing, merged.Position) {
+		checked := runCheck(t, cw, code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "unit",
+			Attempt: 1}, change, 1, code.CheckStatePassed, code.CheckReasonExit)
+		for _, p := range append(completing, merged.Position, checked) {
 			for _, r := range routingAt(t, n, p) {
 				if len(r.ReadyFor) != 0 {
 					t.Fatalf("approval last %v: the record at %s announces web!1 ready to %v", approvalLast, p,

@@ -242,12 +242,13 @@ var valveCases = []fleetCase{{
 		}
 	},
 }, {
-	// THE WIDEST WINDOW IS COUNTED, and one past it is an error: a backend
+	// THE RATE STORE'S WIDEST WINDOW IS ONE COUNT, and one past it is
+	// counted too, in the store that keeps windows up to a day: a backend
 	// that kept a window shorter than its caller counts over would restart
 	// the count mid-window (the Dashboard Assistant's turn rate is per
-	// minute), and one that took a wider window and reaped it would pass
-	// far more than the caller asked for.
-	name: "the widest window is counted and one past it is refused",
+	// minute), and one that refused a window it can keep would turn a
+	// caller's rate into an error.
+	name: "the rate store's widest window is one count, and one past it is counted too",
 	fn: func(h *fleetHarness) {
 		at := h.now().Truncate(coord.MaxRateWindow)
 		if !h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at) {
@@ -256,8 +257,64 @@ var valveCases = []fleetCase{{
 		if h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at.Add(coord.MaxRateWindow-time.Second)) {
 			h.t.Fatal("a later instant in the widest window got its own count")
 		}
-		if ok, err := h.f.Allow(h.ctx, "assistant.turn:q", 1, coord.MaxRateWindow+time.Second, at); err == nil {
-			h.t.Fatalf("a window past coord.MaxRateWindow was counted (ok %v) rather than refused", ok)
+		wider := coord.MaxRateWindow + time.Second
+		start := h.now().Truncate(wider)
+		if !h.allow("assistant.turn:q", 1, wider, start) {
+			h.t.Fatal("the first call in a window just past coord.MaxRateWindow was refused")
+		}
+		if h.allow("assistant.turn:q", 1, wider, start.Add(wider-time.Second)) {
+			h.t.Fatal("a window just past coord.MaxRateWindow restarted its count mid-window")
+		}
+	},
+}, {
+	// The remote check cells' box-time cap counts box-minutes in a DAY'S
+	// window (internal/code/checkrun). A backend that kept a window only
+	// as long as the valve's seconds would forget the day's count between
+	// two charges an hour apart and hand the day back its whole allowance.
+	// The window is the UTC day: midnight to midnight.
+	name: "a day's window is one count from one UTC midnight to the next",
+	fn: func(h *fleetHarness) {
+		midnight := h.now().Truncate(24 * time.Hour)
+		if midnight.Hour() != 0 || midnight.Minute() != 0 {
+			h.t.Fatalf("a day's window starts at %s, not at a UTC midnight", midnight)
+		}
+		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight) {
+			h.t.Fatal("the day's first charge was refused")
+		}
+		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(23*time.Hour)) {
+			h.t.Fatal("a charge late in the day was refused with room left")
+		}
+		if h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(24*time.Hour-time.Second)) {
+			h.t.Fatal("a third charge in the day passed a limit of two: the day's count was forgotten")
+		}
+		if !h.allow("code-checks-remote-minutes", 2, 24*time.Hour, midnight.Add(24*time.Hour)) {
+			h.t.Fatal("the next day inherited the previous one's count")
+		}
+	},
+}, {
+	// A window's record is its name, its width and its start, so a name
+	// counted at two widths keeps two counts — at the instant both windows
+	// start at as much as at any other.
+	name: "one name counted at two widths keeps two counts",
+	fn: func(h *fleetHarness) {
+		midnight := h.now().Truncate(24 * time.Hour)
+		if !h.allow("seat:ceo", 1, time.Second, midnight) {
+			h.t.Fatal("the second-wide window's first call was refused")
+		}
+		if !h.allow("seat:ceo", 1, 24*time.Hour, midnight) {
+			h.t.Fatal("the day-wide window shares the second-wide window's count")
+		}
+	},
+}, {
+	// No backend keeps a window past coord.MaxCounterWindow until it
+	// closes, so counting one would restart it mid-window: an error, which
+	// a caller cannot mistake for room or for a full window.
+	name: "a window longer than a day is refused",
+	fn: func(h *fleetHarness) {
+		ok, err := h.f.Allow(h.ctx, "too-long", 1, coord.MaxCounterWindow+time.Hour, h.now())
+		if err == nil || ok {
+			h.t.Fatalf("Allow over a %s window = (%v, %v), want an error", coord.MaxCounterWindow+time.Hour,
+				ok, err)
 		}
 	},
 }, {

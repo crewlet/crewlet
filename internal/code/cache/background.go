@@ -187,7 +187,39 @@ func expungeCharge(inputs, objects int64, limits code.Limits) int64 {
 // pushes once code.MaxPacksPerRepo gathers. The window follows the epoch's
 // limits, so the charge does too.
 func (c *Cache) MaintenanceCharge(n int64, limits code.Limits) int64 {
-	return max(c.publicationCharge(n, 0, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
+	return c.mw.maintenanceCharge(n, limits)
+}
+
+// PlacementCharge is [Cache.MaintenanceCharge] over the declarations this
+// build ships ([DerivedFiles]), for a node that opens no cache: the charge a
+// repository of n live objects is placed by, as every node running this
+// build computes it — so a node with no cache of its own (an ingress node
+// answering a person's purge) names the maintainer the maintainers' own loops
+// place the repository's maintenance on. An error is the shipped
+// declarations lacking a write the maintainer's plan takes, which every
+// cache's Open refuses as well.
+func PlacementCharge(n int64, limits code.Limits) (int64, error) {
+	mw, err := shippedWrites()
+	if err != nil {
+		return 0, fmt.Errorf("cache: the charge a repository is placed by: %w", err)
+	}
+	return mw.maintenanceCharge(n, limits), nil
+}
+
+// shippedWrites are the maintainer's writes of the declarations this build
+// ships, read once, through the image Open builds them into, so a declaration
+// set Open refuses is refused here too rather than charged.
+var shippedWrites = sync.OnceValues(func() (maintWrites, error) {
+	im, err := newImage(DerivedFiles())
+	if err != nil {
+		return maintWrites{}, err
+	}
+	return newMaintWrites(im)
+})
+
+// maintenanceCharge is [Cache.MaintenanceCharge] over mw's declared writes.
+func (mw maintWrites) maintenanceCharge(n int64, limits code.Limits) int64 {
+	return max(mw.publicationCharge(n, 0, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
 }
 
 // publishCharge is a publication's charge for its multi-pack-index layer and
@@ -245,7 +277,7 @@ func (c *Cache) AdmitPublication(s Synced, base int, layerObjects, repackObjects
 			ErrInvalid, layerObjects, base, repackObjects)
 	}
 	adm, err := c.admitBackground(s, stepPublishWork, func(objects int64) int64 {
-		return c.publicationCharge(objects, base, layerObjects, repackObjects, limits)
+		return c.mw.publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	})
 	if err == nil {
 		s.entry.mu.Lock()
@@ -262,11 +294,11 @@ func (c *Cache) AdmitPublication(s Synced, base int, layerObjects, repackObjects
 // filters as the maintainer's own graph does, so it is charged that write's
 // fixed part, read from the graph's declaration (Write.BaseBytes,
 // GraphBaseBytes) as every declared figure is.
-func (c *Cache) publicationCharge(objects int64, base int, layerObjects, repackObjects int64,
+func (mw maintWrites) publicationCharge(objects int64, base int, layerObjects, repackObjects int64,
 	limits code.Limits) int64 {
 
 	mem := max(publishCharge(objects, base),
-		chargeOver(layerObjects, GraphLayerBytesPerObject, objects)+c.mw.all[c.mw.index(c.mw.graph)].BaseBytes)
+		chargeOver(layerObjects, GraphLayerBytesPerObject, objects)+mw.all[mw.index(mw.graph)].BaseBytes)
 	if repackObjects > 0 {
 		mem = max(mem, chargeOver(repackObjects, CompactBytesPerObject, objects)+CompactWindowBytes(limits))
 	}
@@ -315,7 +347,7 @@ func (a *Admission) RechargePublication(s Synced, base int, layerObjects, repack
 	s.entry.mu.Lock()
 	objects := s.inc.objects
 	s.entry.mu.Unlock()
-	mem := c.publicationCharge(objects, base, layerObjects, repackObjects, limits)
+	mem := c.mw.publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	switch c.maint.recharge(&a.mem, mem, c.maintMemory) {
 	case admitted:
 		s.entry.mu.Lock()

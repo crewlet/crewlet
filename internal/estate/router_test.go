@@ -80,6 +80,11 @@ type fakeNode struct {
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
 
+	// waits counts the floor waits this node began with time left to spend —
+	// a wait for a floor it is behind, run to its end — and none of a floor a
+	// node asked before it already waited out, which is waited for no time.
+	waits int
+
 	// behindConfig is a node the control plane has confirmed behind the
 	// company's configuration — shed or stuck ([Backend.Current] false).
 	behindConfig bool
@@ -168,6 +173,26 @@ type fakeNode struct {
 	// rooms is this node's chat, nil for a company whose chat is not the
 	// engine's own — see chat_test.go.
 	rooms *chatDesk
+	// holdConversations and holdChecks, when set, are a change writer and a
+	// checks writer whose publishes are held the same way, each write
+	// counted in conversing or checking as it arrives — a write waiting its
+	// key's turn behind a publish an election holds.
+	holdConversations chan struct{}
+	conversing        atomic.Int32
+	holdChecks        chan struct{}
+	checking          atomic.Int32
+}
+
+// waitHeld waits inside a held component until hold is closed, counting the wait
+// in arrived as it begins, and answers the asker's context ending first.
+func waitHeld(ctx context.Context, hold <-chan struct{}, arrived *atomic.Int32) error {
+	arrived.Add(1)
+	select {
+	case <-hold:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeNode) note(op string) {
@@ -424,6 +449,9 @@ func (f *fakeNode) halves() Backend {
 			f.floors = append(f.floors, at)
 			behind, abandoned, release := f.behind, f.abandoned, f.release
 			behind = behind || (f.behindOn != "" && at.Stream == f.behindOn)
+			if behind && ctx.Err() == nil {
+				f.waits++
+			}
 			f.mu.Unlock()
 			switch {
 			case abandoned:
@@ -3615,7 +3643,8 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
-	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
+	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeImport.spec,
+		opCodeMirrorSync.spec, opCodeChange.spec,
 		opCodeQueue.spec, opCodeMerge.spec, opCodeConversation.spec, opCodeMark.spec, opCodeChecks.spec,
 		opCodeResolve.spec,
 		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
@@ -3656,6 +3685,12 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Expunge(ctx, code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("expunge: %v", err)
+	}
+	if _, err := seam.Import(ctx, code.ImportProposal{Done: &code.ImportDone{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := seam.MirrorSync(ctx, code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("mirror sync: %v", err)
 	}
 	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("change: %v", err)

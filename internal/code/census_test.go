@@ -39,7 +39,7 @@ func TestABarrierCostsTheCodeLogWhatTheCensusSays(t *testing.T) {
 			}
 			// SIGNED AS EVERY BARRIER A NODE APPENDS IS, since the frame is
 			// part of what the log stores and so of what a barrier costs it.
-			index, err := statelog.NewReadIndex(code.Domain{}, spec, log, testSigner(t), reserve,
+			index, err := statelog.NewReadIndex(code.Domain{}, spec, log, log.Members, testSigner(t), reserve,
 				code.EncodeBarrier, func() uint32 { return generation }, nil)
 			if err != nil {
 				t.Fatalf("build the read index: %v", err)

@@ -3,9 +3,9 @@ package code
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -34,8 +34,10 @@ import (
 //     (code_mergeability.checks_position) an attempt at its head commit for
 //     its target was queued or ended past since — THE CHECK TERM: a finished
 //     head check, a requeue (code_checks' key, one seek of the commit and the
-//     target) — which the home
-//     records over the merge the row holds, running none;
+//     target) — or by a chart EARLIER than the one the home holds
+//     ([ChangesDueQuery.ChartEpoch]) — THE CHART TERM: who may approve and
+//     who maintains the repository are the chart's, which no record moves —
+//     which the home records over the merge the row holds, running none;
 //   - and a RECHECK of that merge — the change's mergeability is of its head
 //     revision against its branch, and its target has moved past the tip it
 //     merged into since, or the merge was undecided — once the mergeability
@@ -43,9 +45,28 @@ import (
 //     clock less its refresh, so a target that moves on every push asks its
 //     changes' merges again at the home's pace, never at its own.
 //
+// And a change, LIVE OR ENDED, owes its home a SETTLING OF ITS ASKS for
+// review with its lifecycle ([AskSettle]) where its asks no longer match its
+// state: an ended change whose asks still wait (code_conversations.asked),
+// which nobody owes a review any more, and a live one holding asks its end
+// left (code_conversations.ended), reopened since — on an active repository
+// whatever its target, since the settling reads no branch. The change's
+// lifecycle is its repository's records, which write nothing of its
+// conversation, so this is how an ask stops waiting when its change ends:
+// the listing of the changes waiting on a reviewer walks the waiting asks
+// alone, and holds an ended change's only until its home settles them.
+//
 // Every record the home makes takes its change off the list by its own row,
-// so the rows are the work list and nothing else is: a merge and a refresh
-// each store the versions they judged the readiness at.
+// so the rows and the home's chart are the work list and nothing else is: a
+// merge and a refresh each store the versions and the chart they judged the
+// readiness at, and a settling moves the counts its change is found by. A
+// chart apply makes every live change of a home's repositories due ONE
+// refresh, recorded at its next pass — a record a change, which the decide
+// stores whether or not the answer moved, since the row must say the later
+// chart judged it — and a refresh decided by a committing node behind that
+// chart is judged by its own, or refused superseded where nothing else
+// moved, so a home ahead of its repositories' committer finds the change due
+// again at its next pass until the committer has applied the activation too.
 //
 // A CHANGE ON AN ARCHIVED OR A DELETED REPOSITORY IS NOBODY'S WORK: every write
 // of it would be refused (repo_archived, repo_deleted), and listed it would be
@@ -60,9 +81,10 @@ import (
 // and grouped on its leading column, so a page is read in index order and
 // never sorted; with one ([ChangesDueQuery]) it pages that repository's
 // changes owing their facts, their merge or a refresh by source branch, the
-// same index's range, each with its target's tip from code_refs' key, and the
-// repository's path owners beside them, read in the same snapshot as the
-// changes they are matched for — and on its FIRST PAGE the changes owing a
+// same index's range, each with its target's tip from code_refs' key, and —
+// on a page naming a change owing its facts, and no other — the repository's
+// path owners beside them, read in the same snapshot as the changes they are
+// matched for — and on its FIRST PAGE the changes owing a
 // recheck, at most as many as the home asks ([ChangesDueQuery.Rechecks]), THE
 // OLDEST MERGE FIRST. Every change a page names is checked against its facts'
 // key, its mergeability's and its conversation's, one seek of each a change.
@@ -76,6 +98,24 @@ import (
 // branch of it (code_changes_open_idx), so MaxRefsPerRepo bounds it — since no
 // index orders a repository's changes by when their merge was recorded
 // without one written by the records of two subjects.
+//
+// MEASURED (BenchmarkChangesDue: 1 000 repositories of 10 live changes each,
+// every one's facts and merge held and nothing due, beside ONE repository of
+// 10 000 live changes behind a moved target; -benchtime 3x and one count on
+// the runner's two E-cores of a Core Ultra 7 265U, the machine loaded;
+// 2026-11-01): a backstop pass's listing of the repositories, every page, is
+// 215 ms — some 10 µs a live change of the company, each checked by its facts'
+// key, its mergeability's and its conversation's; that repository's due
+// changes, every page, 168 ms; and its first page asking 64 rechecks, the
+// oldest merge first, 226 ms — the one sort, of every change behind the moved
+// target, some 58 ms of it. EVERY GIT NODE LISTS EVERY REPOSITORY once a
+// Backstop (internal/code/home), so a fleet of G git nodes asks its data nodes
+// G × 215 ms of reads a minute at this size — about 1 % of one core for three
+// — and a busy repository's home pays its 226 ms once a turn, a nudge's or a
+// pass's. Both grow with the live changes, the walk being
+// code_changes_open_idx whole: a pass's listing nearing a tenth of a Backstop
+// (6 s, some 600 000 live changes at this rate) is what moves it off the walk
+// of every live change.
 //
 // READ STALE BY DEFAULT, as every duty listing is: a change listed a moment
 // behind the head costs a record the decide refuses superseded, and one a
@@ -113,6 +153,9 @@ func (q ReadQuery) validateChangesDue() error {
 	case d.RepoID == "" && d.Rechecks != 0:
 		return refused("changes_due.rechecks", "the listing of repositories names the repositories alone, and a "+
 			"repository's read its rechecks")
+	case d.ChartEpoch < 0:
+		return refused("changes_due.chart_epoch", fmt.Sprintf("%d; a chart's activation is a Unix millisecond, "+
+			"or 0 for a home holding none", d.ChartEpoch))
 	}
 	for _, f := range []struct {
 		field string
@@ -125,9 +168,10 @@ func (q ReadQuery) validateChangesDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a changes_due read lists the repositories a home owes change work in, or "+
@@ -165,30 +209,66 @@ func (r *Reader) dueRepos(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 	if q.Cursor != "" && !canonicalUUID(q.Cursor) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 	}
-	rows, err := tx.QueryContext(ctx, dueReposSQL, q.Cursor, r.pageRows,
-		store.EncodeTime(q.ChangesDue.RecheckBefore))
+	// TWO WALKS, MERGED: the live changes owing their facts, their merge, a
+	// refresh, a recheck or the asks their end left, by
+	// code_changes_open_idx; and the ended changes whose asks still wait, by
+	// code_conversations_asked_idx — each in its index's order, at most a
+	// page of repositories after the cursor, so the first page's worth of the
+	// two merged is the first page's worth of their union.
+	live, err := reposOf(ctx, tx, dueReposSQL, q.Cursor, r.pageRows, store.EncodeTime(q.ChangesDue.RecheckBefore),
+		q.ChangesDue.ChartEpoch)
 	if err != nil {
-		return fmt.Errorf("code: list the repositories change work is due in: %w", err)
+		return err
 	}
-	defer func() { _ = rows.Close() }()
+	ended, err := reposOf(ctx, tx, dueAskedReposSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return err
+	}
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("code: list the repositories change work is due in: %w", err)
-		}
+	for _, id := range mergeSorted(live, ended) {
 		out.DueRepos = append(out.DueRepos, id)
 		if pg.add(stringBytes(id) + 1) {
 			out.Next = id
 			break
 		}
 	}
-	return rows.Err()
+	return nil
+}
+
+// reposOf is the repository ids query answers, bound to args.
+func reposOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+	}
+	var ids []string
+	if err := eachID(rows, func(id string) { ids = append(ids, id) }); err != nil {
+		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+	}
+	return ids, nil
+}
+
+// mergeSorted is the union of two ascending lists of distinct ids, ascending
+// and each id once.
+func mergeSorted(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	for len(a) > 0 || len(b) > 0 {
+		switch {
+		case len(b) == 0 || (len(a) > 0 && a[0] < b[0]):
+			out, a = append(out, a[0]), a[1:]
+		case len(a) == 0 || b[0] < a[0]:
+			out, b = append(out, b[0]), b[1:]
+		default:
+			out, a, b = append(out, a[0]), a[1:], b[1:]
+		}
+	}
+	return out
 }
 
 // dueChanges serves a page of a repository's changes owing their facts or
 // their merge, by source branch, after the cursor — the last source branch a
-// page named — beside the repository's path owners, and on its first page the
+// page named — beside the repository's path owners where one of them owes its
+// facts — and on its first page the
 // changes owing a recheck, oldest merge first: none at all, and no owners, for
 // a repository that is not active or not there.
 func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
@@ -205,28 +285,44 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
+	// THE OWNERS RIDE ONLY A PAGE NAMING A CHANGE OWING ITS FACTS — the one
+	// thing its home matches them against — read last, in the same snapshot
+	// as the changes they are matched for. Most reads a nudge makes name
+	// none, and owners at their bound would cost every such read a quarter
+	// of a mebibyte read, encoded and, answered from another node, shipped
+	// for nothing. Their ROOM is their bound ([MaxPathOwnersBytes], which a
+	// write is held to), reserved before the changes are read, so a page
+	// that turns out to need them always fits them.
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - MaxPathOwnersBytes}
+	if err := dueChangesPage(ctx, tx, q, &pg, r.pageRows, out); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(out.DueChanges, func(c ChangeDue) bool { return c.FactsDue }) {
+		return nil
+	}
 	owners, err := pathOwnersIn(ctx, tx, repoID)
 	if err != nil {
 		return err
 	}
-	// THE OWNERS RIDE EVERY PAGE, so every page's changes are matched against
-	// the owners read beside them; their bytes come off the page's budget.
-	ownersBytes := 0
-	if len(owners) > 0 {
-		encoded, err := json.Marshal(owners)
-		if err != nil {
-			return fmt.Errorf("code: measure repository %s's path owners: %w", repoID, err)
-		}
-		ownersBytes = len(encoded)
-	}
 	out.PathOwners = owners
-	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - ownersBytes}
-	if q.Cursor == "" && q.ChangesDue.Rechecks > 0 {
-		if err := dueRechecks(ctx, tx, q, &pg, out); err != nil {
+	return nil
+}
+
+// dueChangesPage is a page of a repository's due changes into out — its asks
+// due a settling and its rechecks first, on its first page — within pg.
+func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, pageRows int, out *ReadAnswer) error {
+	repoID := q.ChangesDue.RepoID
+	if q.Cursor == "" {
+		if err := dueAskSettles(ctx, tx, repoID, pg, out); err != nil {
 			return err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, r.pageRows)
+	if q.Cursor == "" && q.ChangesDue.Rechecks > 0 {
+		if err := dueRechecks(ctx, tx, q, pg, out); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch)
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 	}
@@ -248,6 +344,44 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		}
 	}
 	return rows.Err()
+}
+
+// dueAskSettles is a repository's changes whose asks its home owes a settling
+// ([ReadAnswer.AskSettles]), at most [MaxAskSettlesPerRead] — counted against
+// the first page's budget, which they ride: its ENDED changes holding an ask
+// still waiting, each found through code_conversations_asked_idx, which holds
+// the changes with a waiting ask and never the repository's history; and its
+// LIVE changes holding an ask their end left, each found on the walk of the
+// repository's live changes, its conversation's counters read by their key.
+func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out *ReadAnswer) error {
+	// EACH STATEMENT SPELLED AT ITS CALL, a constant the read-index gate
+	// follows to its registered plan.
+	due := func(rows *sql.Rows, err error, state ReviewerState) error {
+		if err == nil {
+			err = eachID(rows, func(id string) {
+				d := AskDue{ChangeID: id, State: state}
+				out.AskSettles = append(out.AskSettles, d)
+				// COUNTED, NEVER A REASON TO STOP, as a recheck is: a few
+				// dozen rows at most, and the page serves its changes after
+				// them.
+				pg.add(stringBytes(id) + len(d.State) + 32)
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("code: list repository %s's asks due a settling: %w", repoID, err)
+		}
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, endedAsksSQL, repoID, MaxAskSettlesPerRead)
+	if err := due(rows, err, ReviewerEnded); err != nil {
+		return err
+	}
+	left := MaxAskSettlesPerRead - len(out.AskSettles)
+	if left <= 0 {
+		return nil
+	}
+	rows, err = tx.QueryContext(ctx, reopenedAsksSQL, repoID, left)
+	return due(rows, err, ReviewerRequested)
 }
 
 // dueRechecks is a repository's changes owing a recheck of their merge, the
@@ -289,6 +423,14 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 //     order and grouped on its leading column, each repository's state by its
 //     key — a change due its facts, its merge, a refresh, or a recheck of its
 //     merge recorded at or before ?3;
+//   - the repositories holding an ended change whose asks for review still
+//     wait, after a cursor, walking code_conversations_asked_idx — which holds
+//     the changes with a waiting ask alone, never a repository's history — in
+//     its order and grouped on its leading column, each change's state and
+//     its repository's by their keys; and, in the walk above, a live change
+//     holding asks its end left, its conversation's counters by their key;
+//   - one repository's ended changes whose asks still wait, and its live
+//     changes holding asks their end left (endedAsksSQL, reopenedAsksSQL);
 //   - one repository's state by its key;
 //   - one repository's changes owing their facts, their merge or a refresh
 //     after a source branch, the index's range, each saying which it owes;
@@ -308,22 +450,49 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 // what the listing of repositories asks of every live change it walks, where a
 // repository's own read asks the two halves of it apart. A REFRESH IS DUE
 // where that mergeability's readiness was judged at versions the change's row
-// or its conversation have moved past, or at a position its head's checks
-// have moved past — [refreshDue], its conversation's readiness version read
-// by the conversations' key, its head's attempts for its target by
-// code_checks' (repo_id, commit_oid, target_ref) prefix.
+// or its conversation have moved past, at a position its head's checks have
+// moved past, or by a chart earlier than the home's, ?4 — [refreshDue], its
+// conversation's readiness version read by the conversations' key, its head's
+// attempts for its target by code_checks' (repo_id, commit_oid, target_ref)
+// prefix, its chart off the row. Both statements that ask it bind the home's
+// chart as ?4.
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
-			AND EXISTS (SELECT 1 FROM code_refs AS t INDEXED BY ` + refsKey + `
+			AND (EXISTS (SELECT 1 FROM code_refs AS t INDEXED BY ` + refsKey + `
 				WHERE t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
 					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
 						OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 							WHERE ` + mergeHeld + `)
 						OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)))
+				OR EXISTS (SELECT 1 FROM code_conversations AS v WHERE v.change_id = c.id AND v.ended > 0))
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = c.repo_id AND r.status = 'active')
 		GROUP BY c.repo_id ORDER BY c.repo_id LIMIT ?2`
+	dueAskedReposSQL = `SELECT v.repo_id FROM code_conversations AS v INDEXED BY ` + askedKey + `
+		WHERE v.repo_id > ?1 AND asked > 0
+			AND EXISTS (SELECT 1 FROM code_changes AS c WHERE c.id = v.change_id AND ` + endedChanges + `)
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = v.repo_id AND r.status = 'active')
+		GROUP BY v.repo_id ORDER BY v.repo_id LIMIT ?2`
+	// endedAsksSQL is one repository's ended changes whose asks still wait,
+	// at most ?2, by the index that holds the changes with a waiting ask —
+	// its partial predicate repeated verbatim, for changesWaitingSQL's reason
+	// — each change's state by its key; reopenedAsksSQL its live changes
+	// holding asks their end left, the live changes' index's range, each
+	// conversation's counters by their key.
+	endedAsksSQL = `SELECT v.change_id FROM code_conversations AS v INDEXED BY ` + askedKey + `
+		WHERE v.repo_id = ?1 AND asked > 0
+			AND EXISTS (SELECT 1 FROM code_changes AS c WHERE c.id = v.change_id AND ` + endedChanges + `)
+		ORDER BY v.change_id LIMIT ?2`
+	reopenedAsksSQL = `SELECT c.id FROM code_changes AS c INDEXED BY code_changes_open_idx
+		WHERE c.repo_id = ?1 AND ` + liveChanges + `
+			AND EXISTS (SELECT 1 FROM code_conversations AS v WHERE v.change_id = c.id AND v.ended > 0)
+		LIMIT ?2`
+	// askedKey is the index of a repository's changes holding an ask that
+	// waits, partial on asked > 0; endedChanges a change, c, that closed or
+	// merged.
+	askedKey      = "code_conversations_asked_idx"
+	endedChanges  = `c.state IN ('closed', 'merged')`
 	dueRepoSQL    = `SELECT status FROM code_repos WHERE id = ?`
 	dueChangesSQL = `SELECT c.id, c.number, c.revision, c.head_oid, c.source_ref, c.target_ref, t.target,
 			t.position,
@@ -361,12 +530,13 @@ const (
 	// refreshDue is a change's mergeability, m, as one its home owes a
 	// refresh of: of the change's head revision against its branch, its
 	// readiness judged at a version of the change's row, c, or of its
-	// conversation's readiness inputs, that each has moved past since — or at
+	// conversation's readiness inputs, that each has moved past since — at
 	// a position of its head's checks an attempt at the head commit for its
-	// target was queued or ended past since (Mergeability.ChecksPosition).
+	// target was queued or ended past since (Mergeability.ChecksPosition) —
+	// or by a chart earlier than the home's, ?4 (Mergeability.ChartEpoch).
 	refreshDue = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
-		AND (m.change_version < c.version OR m.readiness_version < (SELECT v.readiness_version
-			FROM code_conversations AS v WHERE v.change_id = c.id)
+		AND (m.change_version < c.version OR m.chart_epoch < ?4
+			OR m.readiness_version < (SELECT v.readiness_version FROM code_conversations AS v WHERE v.change_id = c.id)
 			OR EXISTS (SELECT 1 FROM code_checks AS k INDEXED BY ` + checksKey + `
 				WHERE k.repo_id = c.repo_id AND k.commit_oid = c.head_oid AND k.target_ref = c.target_ref
 					AND (k.queued_position > m.checks_position OR k.finished_position > m.checks_position)))`

@@ -312,8 +312,12 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadPublicationDue: {},
 		code.ReadExpungeDue:     {},
 		code.ReadExpungeTips:    {ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: t1}},
+		code.ReadImportsDue:     {},
+		code.ReadMirrorsDue:     {},
+		code.ReadMirrorPush:     {MirrorPush: &code.MirrorPushQuery{RepoID: id}},
 		code.ReadBranchChanges:  {BranchChanges: &code.BranchChangesQuery{RepoID: id, Refs: []string{mainRef}}},
 		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
+		code.ReadIndexed:        {},
 		code.ReadChecksDue:      {ChecksDue: &code.ChecksDueQuery{RefreshBefore: t1}},
 		code.ReadCheckBox: {CheckBox: &code.CheckKey{RepoID: id, OID: strings.Repeat("6", 40), Target: mainRef, Name: "unit",
 			Attempt: 1}},
@@ -481,7 +485,7 @@ func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 				t.Fatal(err)
 			}
 			record, err := code.Encode(code.MutationRecord{
-				RecordEnvelope: code.RecordEnvelope{OpID: statelog.NewOpID(time.Now(), "code.widest"),
+				RecordEnvelope: code.RecordEnvelope{OpID: statelog.NewOpID(time.Now(), "code_widest"),
 					Subject: tc.subject, Op: tc.op, CreatedAt: harnessAt,
 					Scope: code.Scope{code.NamePath(code.NameToken(name)), code.RepoPath(id)}},
 				Mutation: body, Actor: "node-a", ActorKind: code.ActorConfig,

@@ -1,10 +1,14 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // THE COMMITTER STOPS BEFORE THE ESTATE STOPS ANSWERING.
@@ -150,4 +154,88 @@ func teardownOrder(t *testing.T) map[string]int {
 		})
 	}
 	return at
+}
+
+// THE COMMITTER AND ITS WRITERS ARE CLOSED FIRST AND DRAINED TOGETHER, under
+// the teardown's one bound ([stopTogether]): while the committer drains a
+// batch a broker election holds, its sibling writer is already closed — a
+// write arriving then is answered not serving and taken to the runner-up,
+// never admitted and published on a node that is stopping — and the writer's
+// publish already in flight finishes inside the bound beside the committer's
+// drain, rather than being handed a context the committer's drain had spent.
+//
+// Mutation: stop them one after another, and the writer is still open while
+// the committer drains; close them first and still drain one after another,
+// and the writer's publish in flight is handed the context the committer's
+// drain spent.
+func TestTheCodeWritersAreClosedFirstAndDrainedTogether(t *testing.T) {
+	t.Parallel()
+	committer := &stoppingWriter{stuck: true, stopped: make(chan struct{})}
+	writer := &stoppingWriter{inFlight: make(chan struct{}), stopped: make(chan struct{})}
+	const bound = 2 * time.Second
+	done := make(chan struct{})
+	go func() {
+		stopTogether(t.Context(), bound, committer, writer)
+		close(done)
+	}()
+
+	// CLOSED WHILE THE COMMITTER'S BATCH IS STILL HELD.
+	deadline := time.Now().Add(bound / 2)
+	for !writer.closed.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the writer was still open %s into the teardown, while the committer drained", bound/2)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-committer.stopped:
+		t.Fatal("the committer's drain ended before its held batch was released or its bound spent")
+	default:
+	}
+
+	// ITS PUBLISH IN FLIGHT FINISHES, inside the bound, beside the drain.
+	close(writer.inFlight)
+	select {
+	case <-writer.stopped:
+	case <-time.After(bound):
+		t.Fatal("the writer's drain did not end once its publish in flight finished")
+	}
+	if writer.ended != nil {
+		t.Fatalf("the writer's publish in flight was cut short (%v): it was handed a spent context", writer.ended)
+	}
+
+	<-done
+	if !errors.Is(committer.ended, context.DeadlineExceeded) {
+		t.Fatalf("the committer's drain ended %v, want the teardown's bound spent on its held batch",
+			committer.ended)
+	}
+}
+
+// stoppingWriter is a writer as the teardown stops it ([closingWriter]): Close
+// marks it closed, and Stop closes it and drains — a stuck one until its
+// context ends, as a committer whose batch an election holds; another until
+// its publish in flight finishes or its context ends — recording how its
+// context stood as the drain ended.
+type stoppingWriter struct {
+	closed   atomic.Bool
+	stuck    bool
+	inFlight chan struct{}
+	stopped  chan struct{}
+	ended    error
+}
+
+func (w *stoppingWriter) Close() { w.closed.Store(true) }
+
+func (w *stoppingWriter) Stop(ctx context.Context) {
+	w.Close()
+	if w.stuck {
+		<-ctx.Done()
+	} else {
+		select {
+		case <-w.inFlight:
+		case <-ctx.Done():
+		}
+	}
+	w.ended = ctx.Err()
+	close(w.stopped)
 }

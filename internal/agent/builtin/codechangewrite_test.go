@@ -343,7 +343,8 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 // what is gone not found, and what waiting clears unavailable — never the
 // engine's own fault — each answered with the decide's own sentence.
 //
-// Mutation: drop change_exists from changeClass → red.
+// Mutation: drop change_exists from changeClass → red; answer repo_mirrored
+// unavailable, as an import's wait is → red.
 func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	want := map[code.ChangeRefusal]tools.Refusal{
@@ -353,6 +354,7 @@ func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 		code.ChangeRefusalChangeClosed: tools.RefusalConflict, code.ChangeRefusalChangeMerged: tools.RefusalConflict,
 		code.ChangeRefusalRepoDeleted: tools.RefusalNotFound, code.ChangeRefusalChangeNotFound: tools.RefusalNotFound,
 		code.ChangeRefusalBusy: tools.RefusalUnavailable, code.ChangeRefusalUnavailable: tools.RefusalUnavailable,
+		code.ChangeRefusalRepoMirrored: tools.RefusalForbidden, code.ChangeRefusalRepoImporting: tools.RefusalUnavailable,
 	}
 	for _, refusal := range code.ChangeRefusals() {
 		writer := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {

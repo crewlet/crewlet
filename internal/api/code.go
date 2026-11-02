@@ -129,6 +129,16 @@ type CodeSurface interface {
 	// none, on CodeReads' terms: the readers stand with the code reads.
 	RepoReaders() (builtin.ReadersDeps, error)
 
+	// CheckLogs is the object store a failed check's log is read from —
+	// the fleet's one, which the code host keeps its packs in — or why this
+	// node serves none, on CodeReads' terms.
+	CheckLogs() (queries.CheckLogs, error)
+
+	// CodeSearcher is the code search over the fleet's git nodes
+	// (engine.Engine.CodeSearch), or why this node serves none, on
+	// CodeReads' terms.
+	CodeSearcher() (queries.CodeSearcher, error)
+
 	// GitReads is the code domain's reads of a repository by object id,
 	// routed to its home git node (estate.CodeSeam's GitRead) — what a
 	// check's box's reads of its commit are answered from (boxcode.go) — or
@@ -175,6 +185,26 @@ func (c codeQuestions) RepoReaders() (builtin.ReadersDeps, error) {
 		return builtin.ReadersDeps{}, codeUnserved(why).question(why)
 	}
 	return readers, nil
+}
+
+// CheckLogs is the surface's object store for a check's log, or why there
+// is none, on CodeReads' terms ([unserved.question]).
+func (c codeQuestions) CheckLogs() (queries.CheckLogs, error) {
+	logs, why := c.surface.CheckLogs()
+	if why != nil {
+		return nil, codeUnserved(why).question(why)
+	}
+	return logs, nil
+}
+
+// CodeSearcher is the surface's code search, or why there is none, on
+// CodeReads' terms ([unserved.question]).
+func (c codeQuestions) CodeSearcher() (queries.CodeSearcher, error) {
+	searcher, why := c.surface.CodeSearcher()
+	if why != nil {
+		return nil, codeUnserved(why).question(why)
+	}
+	return searcher, nil
 }
 
 // notHosted is what a code route answers where the company hosts no code: ONE

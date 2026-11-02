@@ -149,6 +149,13 @@ const (
 	// reached nobody through either, and a reader auditing a transcript has
 	// to tell it from both. Every door labels it by one rule ([CodingRun]).
 	SourceCodingRun Source = "coding_run"
+	// SourceCheckLog is what a check of a commit said — its summary, the
+	// tail of its output, the failures its reports named and pages of its
+	// kept log: text the commit's code and its tests printed, or a person's
+	// CI sent, which names nobody a reader could weigh as a colleague, so it
+	// is read at [TrustExternal] naming no writer, as a repository's own
+	// text is.
+	SourceCheckLog Source = "check_log"
 )
 
 // Sources are every surface.
@@ -158,7 +165,7 @@ var Sources = []Source{
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
 	SourceA2AMessage, SourceCodingRun, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
-	SourceChangeDescription, SourceChangeReview, SourceChangeComment,
+	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 }
 
 // Valid reports whether s is one of [Sources].
@@ -831,8 +838,10 @@ type Label struct {
 
 // Repository is the label of text read out of one of the company's git
 // repositories (src is [SourceRepoFile], [SourceRepoPatch] or
-// [SourceRepoCommit]): THE ONE RULE for a repository's bytes, which every door
-// they reach a model through takes.
+// [SourceRepoCommit]), or printed by a check of one of its commits
+// ([SourceCheckLog]: what the commit's code and tests wrote, or a person's CI
+// sent): THE ONE RULE for a repository's bytes and what running them printed,
+// which every door they reach a model through takes.
 //
 // EXTERNAL, naming nobody, and never [TrustForHosted], although the engine
 // hosts the repository: the hosted rule vouches for whoever wrote a record

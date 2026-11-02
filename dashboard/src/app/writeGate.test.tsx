@@ -138,6 +138,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a finding's Apply suggestion, on the line the finding is on",
     suite: "routes/code/change/ChangePage.test.tsx",
   },
+  "routes/code/change/Merge.tsx": {
+    why:
+      "a change's merge controls — Merge or Add to queue, Override and its dialog, and " +
+      "Re-run checks — each a WriteButton held with the gate's sentence",
+    suite: "routes/code/change/ChangePage.test.tsx",
+  },
   "routes/code/commit/ComparePage.tsx": {
     why:
       "a comparison's Open change — one code_open_change of the branch compared into " +

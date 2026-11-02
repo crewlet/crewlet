@@ -232,7 +232,16 @@ func (r PackRow) encodedBytes() int {
 		field("kind", stringBytes(string(r.Kind)), false) +
 		field("state", stringBytes(string(r.State)), false) +
 		field("added", positionBytes(r.Added), false) +
-		field("content", positionBytes(r.Content), false)
+		field("content", positionBytes(r.Content), false) + arrivedBytes(r.Arrived)
+}
+
+// arrivedBytes is the length of a pack's `arrived` field: none where it is
+// zero, which omitzero leaves out.
+func arrivedBytes(t time.Time) int {
+	if t.IsZero() {
+		return 0
+	}
+	return field("arrived", timeBytes(t), false)
 }
 
 // encodedBytes is the length of the candidate's JSON encoding.
@@ -255,7 +264,7 @@ func (r CheckRow) encodedBytes() int {
 	for _, s := range []struct {
 		key, value string
 	}{
-		{"purpose", string(r.Purpose)}, {"change_id", r.ChangeID},
+		{"repo", r.Repo}, {"purpose", string(r.Purpose)}, {"change_id", r.ChangeID},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
@@ -422,6 +431,63 @@ func (c ExpungeCandidate) encodedBytes() int {
 		field("version", positionBytes(c.Version), false)
 }
 
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c ImportCandidate) encodedBytes() int {
+	return 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false) +
+		field("source", c.Source.encodedBytes(), false) +
+		field("seq", intBytes(c.Seq), false) +
+		field("version", positionBytes(c.Version), false)
+}
+
+// encodedBytes is the length of the source's JSON encoding.
+func (s ImportSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(s.URL), true)
+	if s.Credential != "" {
+		n += field("credential", stringBytes(s.Credential), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c MirrorCandidate) encodedBytes() int {
+	n := 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false)
+	if c.From != nil {
+		n += field("from", c.From.encodedBytes(), false)
+	}
+	if c.To != nil {
+		n += field("to", c.To.encodedBytes(), false)
+	}
+	if !c.SyncedAt.IsZero() {
+		n += field("synced_at", timeBytes(c.SyncedAt), false)
+	}
+	if !c.Version.IsZero() {
+		n += field("version", positionBytes(c.Version), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the source's JSON encoding.
+func (s MirrorSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(s.URL), true)
+	if s.Credential != "" {
+		n += field("credential", stringBytes(s.Credential), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the target's JSON encoding.
+func (t MirrorTarget) encodedBytes() int {
+	n := 2 + field("url", stringBytes(t.URL), true) +
+		field("credential", stringBytes(t.Credential), false) +
+		field("as", stringBytes(t.As), false)
+	if len(t.Refs) > 0 {
+		n += field("refs", stringsBytes(t.Refs), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the layer row's JSON encoding: its layer
 // whole, its parts and packs among them.
 func (r LayerRow) encodedBytes() int {
@@ -519,16 +585,12 @@ func (g MergeGate) encodedBytes() int {
 	if len(g.Checks) > 0 {
 		n += field("checks", stringsBytes(g.Checks), false)
 	}
-	n += field("landing", 2+field("policy", stringBytes(string(g.Landing.Policy)), true)+
-		field("depth", intBytes(int64(g.Landing.Depth)), false)+
+	n += field("landing", 2+field("depth", intBytes(int64(g.Landing.Depth)), true)+
 		field("batch", intBytes(int64(g.Landing.Batch)), false), false)
 	if g.OwnersApprove {
 		n += field("owners_approve", trueBytes, false)
 	}
 	n += field("delete_source", stringBytes(string(g.DeleteSource)), false)
-	if g.AutoRevert {
-		n += field("auto_revert", trueBytes, false)
-	}
 	if g.AgentsEditChecks {
 		n += field("agents_edit_checks", trueBytes, false)
 	}
@@ -577,8 +639,11 @@ func (r RepoRef) members() int {
 		field("owner", 2+field("kind", stringBytes(string(r.Owner.Kind)), true)+
 			field("ref", stringBytes(r.Owner.Ref), false), false) +
 		field("visibility", stringBytes(string(r.Visibility)), false) +
-		field("search", stringBytes(string(r.Search)), false) +
-		field("default_branch", stringBytes(r.DefaultBranch), false)
+		field("search", stringBytes(string(r.Search)), false)
+	if r.Mirrored {
+		n += field("mirrored", len("true"), false)
+	}
+	n += field("default_branch", stringBytes(r.DefaultBranch), false)
 	if r.Description != "" {
 		n += field("description", stringBytes(r.Description), false)
 	}

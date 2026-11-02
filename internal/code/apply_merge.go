@@ -23,18 +23,15 @@ import (
 // ledger would have collapsed, met again.
 
 // LandingKind is what landed a commit on a protected branch, as its landing
-// row says (code_landings.kind): a pre_land queue's landing of its tested
-// prefix, a post_land lane's, a change's direct merge, or a push. A named
-// string with a closed set, so a kind a later build records is a value.
+// row says (code_landings.kind): a queue's landing of its tested prefix, a
+// change's direct merge, or a push. A named string with a closed set, so a
+// kind a later build records is a value.
 type LandingKind string
 
 const (
-	// LandedPreLand is a pre_land queue's landing, each change tested merged
-	// on the branch before it landed (m5-q2's `land` record).
+	// LandedPreLand is a queue's landing, each change tested merged on the
+	// branch before it landed (m5-q2's `land` record).
 	LandedPreLand LandingKind = "pre_land"
-	// LandedPostLand is a post_land lane's landing, ahead of the checks the
-	// branch's tip then runs (m5-q2's `land` record).
-	LandedPostLand LandingKind = "post_land"
 	// LandedDirect is a change merged by a merge record ([Merge]), its gate
 	// held — or overridden by a person — from one snapshot.
 	LandedDirect LandingKind = "direct"
@@ -43,11 +40,9 @@ const (
 	LandedPush LandingKind = "push"
 )
 
-// LandingKinds is the closed set, in the order a branch's landing policies
-// read: its queue's two, then a direct merge and a push.
-func LandingKinds() []LandingKind {
-	return []LandingKind{LandedPreLand, LandedPostLand, LandedDirect, LandedPush}
-}
+// LandingKinds is the closed set: a branch's queue's, then a direct merge and
+// a push.
+func LandingKinds() []LandingKind { return []LandingKind{LandedPreLand, LandedDirect, LandedPush} }
 
 // Valid reports a kind this build knows.
 func (k LandingKind) Valid() bool { return slices.Contains(LandingKinds(), k) }
@@ -113,7 +108,8 @@ func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID,
 //     change's head) and its close on a deleted source would otherwise take
 //     the change for live, and merge or close it again.
 //  2. Its live queue entry ended, where a person's override merged a queued
-//     change directly: dequeued, as a landing of the change ends its entry.
+//     change directly: dequeued, as a landing of the change ends its entry;
+//     and its stored readiness cleared ([clearReadiness]).
 //  3. The target's landing row, where a rule protects it, and its green row,
 //     where its gate requires no check besides — what the decide stamped
 //     ([Merge.Protected], [Merge.Green]).
@@ -184,12 +180,18 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 	rows := 1
 
-	// 2 ITS LIVE QUEUE ENTRY, where it holds one.
+	// 2 ITS LIVE QUEUE ENTRY, where it holds one, and its stored readiness,
+	// where it holds an answer: a merged change waits on nobody.
 	ended, err := endLiveEntryOf(ctx, tx, at, m.ChangeID, QueueDequeued, EndMerged)
 	if err != nil {
 		return 0, err
 	}
 	rows += ended
+	cleared, err := clearReadiness(ctx, tx, []string{m.ChangeID})
+	if err != nil {
+		return 0, fmt.Errorf("%w (the merge at %s)", err, at.position)
+	}
+	rows += cleared
 
 	// 3 THE LANDING AND THE GREEN ROW, as the decide's snapshot judged the
 	// target.
@@ -209,7 +211,8 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 
 	// 4 THE PUSH, with what the rows above leave the record's horizons.
-	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: m.RepoID, Pushes: []PushEntry{m.push()}}, rows)
+	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: m.RepoID, Pushes: []PushEntry{m.push()}}, recordPacks{},
+		rows)
 	if err != nil {
 		return 0, err
 	}

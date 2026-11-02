@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -709,6 +710,72 @@ func partOf(t testing.TB, id string, n int) built {
 	return rec(t, RepoSubject(id), OpPurgePart, Scope{RepoPath(id)}, PurgePart{RepoID: id, Part: n})
 }
 
+// THE REMAINING COUNT WALKS A REPOSITORY'S FIRST CHANGES ALONE: every term of
+// the purge decide's bounded count that counts a change's dependents — its
+// revisions, authors, body and conversation, the tables most changes hold no
+// row of among them — is driven from the repository's first ?2 changes in
+// number order (firstChanges), never from every change it holds, so a
+// repository of many changes nobody discussed is counted by a walk of
+// PurgePartRows + 1 changes a term rather than all of them, every pass. And
+// the count still answers the decide exactly: a repository of PurgePartRows+1
+// changes nobody discussed forms a part on the changes' own term — and the
+// body of a change past them is never walked to, so it is not counted — and a
+// repository of a few changes is counted whole, every dependent row of them.
+//
+// Mutation: drive a term from every change of the repository again, its
+// LIMIT bounding the rows it finds and not the changes it walks → the
+// statement check names it; drop firstChanges' LIMIT, and every term walks
+// every change again → the body past the first PurgePartRows + 1 is counted.
+func TestTheRemainingCountWalksTheFirstChangesAlone(t *testing.T) {
+	t.Parallel()
+	terms := strings.Split(remainingSQL, "CROSS JOIN")
+	if len(terms) < 13 {
+		t.Fatalf("the remaining count joins %d tables to their changes, want every change's dependent "+
+			"table's, twelve and the conversations' bytes", len(terms)-1)
+	}
+	for i, before := range terms[:len(terms)-1] {
+		if !strings.HasSuffix(strings.TrimSpace(before), strings.TrimSpace(firstChanges)) {
+			t.Errorf("the remaining count's join %d is not driven from the repository's first changes "+
+				"(firstChanges): %s", i+1, strings.TrimSpace(terms[i+1])[:40])
+		}
+	}
+
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"), create(t, "repo-b", "b"))
+	remaining := func(repo string) int {
+		t.Helper()
+		var n int
+		var weighed int64
+		if err := e.db.Tx(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), remainingSQL, repo, PurgePartRows+1).Scan(&n, &weighed)
+		}); err != nil {
+			t.Fatalf("count %s's rows: %v", repo, err)
+		}
+		return n
+	}
+	before := remaining("repo-b")
+	e.seedChangeRows("repo-a", PurgePartRows+1, 0, 0, 0)
+	// ONE CHANGE PAST THE FIRST ?2, WITH A BODY: a term driven from every
+	// change reaches it and counts its body; one driven from the first ?2
+	// never walks that far.
+	e.exec(`INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
+			head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position)
+		VALUES ('repo-a-change-last', 'repo-a', ?, 'a change', 1, 'open', 'refs/heads/change-last',
+			'refs/heads/main', ?, 0, 'seat', 'agent', 0, 1, 1, 1)`, PurgePartRows+2, oid("l"))
+	e.exec(`INSERT INTO code_change_bodies (change_id, body) VALUES ('repo-a-change-last', 'b')`)
+	if got := remaining("repo-a") - before; got != PurgePartRows+1 {
+		t.Fatalf("a repository of %d changes nobody discussed and one past them with a body counts %d rows, "+
+			"want its changes' own term alone, %d: it forms a part, and the body of a change past the first "+
+			"PurgePartRows + 1 is never walked to", PurgePartRows+2, got, PurgePartRows+1)
+	}
+	// THREE CHANGES, each of two revisions, an author and a body: fifteen
+	// rows, every one counted.
+	e.seedChangeRows("repo-b", 3, 2, 1, 10)
+	if got := remaining("repo-b") - before; got != 3+6+3+3 {
+		t.Fatalf("three changes of two revisions, an author and a body each count %d rows, want 15", got)
+	}
+}
+
 // A PURGE PART IS BOUNDED AND IDEMPOTENT: it deletes exactly PurgePartRows
 // rows, pushes first, and only the next part deletes anything — a redelivered
 // or skipped one deletes nothing more.
@@ -992,6 +1059,52 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 	e.apply(purge)
 	if n := e.num(`SELECT COUNT(*) FROM code_deletions`); n != 1 {
 		t.Fatalf("%d markers after the purge applied again", n)
+	}
+}
+
+// A CHANGE'S RECORD IS GATED BY THE REPOSITORY ITS SCOPE NAMES: the deletion
+// gate reads the repository off the envelope the framework decoded — the
+// record's scope — and never decodes the payload, so a record whose payload
+// is no record at all is still dropped by the marker of the repository its
+// scope names; and the apply holds the payload's repository to the scope's,
+// refusing a record no writer forms whose two disagree — the gate judged it by
+// a repository it is not about.
+//
+// Mutation: read the gated repository off the payload again, and the record
+// whose payload decodes to nothing escapes the marker; drop the apply's
+// check, and the record naming two repositories applies.
+func TestAChangeRecordIsGatedByTheRepositoryItsScopeNames(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.exec(`INSERT INTO code_deletions (repo_id, at, version) VALUES ('repo-gone', 1, 1)`)
+	const change = "019a0c2e-0000-7000-8000-00000000c0de"
+	comment := Comment{RepoID: "repo-gone", ChangeID: change, CommentID: change, ThreadID: change,
+		By: Principal{Kind: PrincipalAgent, Seat: "dev"}, Body: "After the purge."}
+	gone := rec(t, ChangeSubject(change), OpComment, Scope{RepoPath("repo-gone"), ChangePath(change)}, comment)
+	env, err := Domain{}.Envelope(gone.payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := statelog.Record{Envelope: env, Payload: []byte("no record a build decodes"),
+		Position: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}, StoredAt: applyClock}
+	err = e.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		reason, gated, err := NewApplier(nil).Gated(t.Context(), tx, r)
+		if err == nil && (!gated || reason != statelog.ReasonDeleted) {
+			return fmt.Errorf("gated %v, %q; want dropped by the deletion marker", gated, reason)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a change's record whose scope names a purged repository: %v", err)
+	}
+
+	e.apply(create(t, "repo-a", "a"))
+	comment.RepoID = "repo-a"
+	elsewhere := rec(t, ChangeSubject(change), OpComment, Scope{RepoPath("repo-b"), ChangePath(change)}, comment)
+	if err := e.applyErr(elsewhere); err == nil || !strings.Contains(err.Error(),
+		"names repository repo-a in its payload and \"repo-b\" in its scope") {
+		t.Fatalf("a record naming one repository in its payload and another in its scope applied with %v, "+
+			"want refused as one no writer forms", err)
 	}
 }
 

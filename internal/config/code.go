@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/bits"
 	"slices"
 	"strings"
 	"sync"
@@ -105,10 +106,12 @@ const (
 
 	// CodeMaxHumanPaths is the most HUMAN PATHS one protection rule's merge
 	// gate names: the parts of a repository's tree a change touching which
-	// waits for a person's approval — `.crewlet/**`, `deploy/**`,
-	// `migrations/**`. A JUDGMENT: a gate keeps a person in front of a few
-	// directories, and thirty-two is past any rule's; it is one of the two
-	// lists a gate's bytes grow with ([CodeMaxGateBytes]).
+	// waits for a person's approval — `deploy/**`, `migrations/**`; a rule
+	// requiring checks holds `.crewlet/**` beside them without naming it
+	// (code.ChecksDirGlob), so it costs no entry. A JUDGMENT: a gate keeps a
+	// person in front of a few directories, and thirty-two is past any
+	// rule's; it is one of the two lists a gate's bytes grow with
+	// ([CodeMaxGateBytes]).
 	CodeMaxHumanPaths = 32
 
 	// CodeMaxRequiredChecks is the most checks one rule's merge gate
@@ -151,14 +154,28 @@ const (
 	// changes — the most one candidate's record names.
 	CodeMaxQueueBatch = 8
 
-	// CodeDefaultQueueBatch is an unset landing.batch: FOUR changes a
-	// candidate, PROVISIONAL. A batch of four is green 81 % of the time at
-	// the 5 % failure rate the depth is sized by, a red one's culprit is
-	// found in log₂ 4 = 2 more rounds, and it spends about 0.4 check runs a
-	// landed change against 1.05 unbatched; the queue's throughput
-	// benchmark, which lands with the queue that reads this, decides it on
-	// measurement.
-	CodeDefaultQueueBatch = 4
+	// CodeDefaultQueueBatch is an unset landing.batch: TWO changes a
+	// candidate at most, measured by internal/code/home's
+	// BenchmarkQueueThroughput and held there by a test: the batch whose
+	// changes land soonest from their arrival, at p99, at the 5 % failure
+	// rate and the default depth under saturating arrivals (2 000 rounds,
+	// seed 0):
+	//
+	//	batch  p99 rounds from arrival  check runs a landed change
+	//	1      364, growing unbounded   1.29
+	//	2      17                       0.89
+	//	4      23                       0.78
+	//	8      44                       0.63
+	//
+	// One never catches up: every red candidate costs a round a saturated
+	// queue has no slack for. Past two, a bigger batch is red more often and
+	// a red FIRST candidate stalls the whole train while it is bisected
+	// (every candidate behind it holds the culprit), so the p99 a change
+	// waits grows faster than the checks it saves shrink. Four, the figure
+	// the design estimated, waits a third longer than two for 12 % fewer
+	// check runs; eight, the bound, stays for a company that prices checks
+	// above latency.
+	CodeDefaultQueueBatch = 2
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
 	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
@@ -196,9 +213,66 @@ const (
 	// no check requires none on its branches.
 	CodeMinCheckMaxTimeout = time.Minute
 
+	// CodeDefaultRemoteMaxRunning is an unset code.checks.remote.max_running:
+	// SIXTEEN remote (e2b) check boxes at once, company-wide. PROVISIONAL
+	// (U45 a), derived rather than measured: a full round of a merge queue at
+	// its depth of four candidates, each running two required checks, is
+	// eight boxes, doubled for the head checks of the changes waiting beside
+	// it — sixteen, inside the twenty sandboxes E2B's Hobby plan runs at once,
+	// so the company's own cap refuses a box before the provider does and a
+	// check waits queued rather than failing to get one. A company on a larger
+	// plan raises it to that plan's limit.
+	CodeDefaultRemoteMaxRunning = 16
+
+	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running
+	// takes: 1 024 boxes at once, the bound git.max_checks holds a node's
+	// container cells to — past any provider's concurrency a company buys,
+	// and each one a lease the runner scans for a free one among.
+	CodeMaxRemoteMaxRunning = 1_024
+
+	// CodeDefaultRemoteBoxHoursPerDay is an unset
+	// code.checks.remote.box_hours_per_day: 192 hours of remote (e2b) box
+	// time a UTC day, company-wide. PROVISIONAL (U45 a), derived: one
+	// protected branch's queue saturated all day at ten-minute checks is 144
+	// rounds a day, each four candidates running two checks for a sixth of
+	// an hour — 144 × 4 × 2 × ⅙ = 192 box-hours. What a company pays for a
+	// day it cannot exceed by more than the boxes already running when the
+	// cap is reached run on to their own ends.
+	CodeDefaultRemoteBoxHoursPerDay = 192
+
+	// CodeMaxRemoteBoxHoursPerDay is the most
+	// code.checks.remote.box_hours_per_day takes: 100 000 hours, the most
+	// boxes CodeMaxRemoteMaxRunning can run in a day (24 576 hours) four
+	// times over — a bound on a typo, never on a company.
+	CodeMaxRemoteBoxHoursPerDay = 100_000
+
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
+
+	// CodeMaxRemoteURLBytes is the longest URL a repository's mirror or its
+	// import names: ONE KIBIBYTE, the bound a description is held to
+	// ([CodeMaxDescriptionBytes]), because every create, settings change and
+	// restore carries a repository's mirrors whole as it carries its
+	// description — and far past any forge's repository URL, a host and an
+	// owner/name path a few dozen bytes long.
+	CodeMaxRemoteURLBytes = 1_024
+
+	// CodeMaxCredentialRefBytes is the longest credential a mirror or an
+	// import names — the whole ${NAME} reference, which is all a record ever
+	// carries of one: 128 bytes, twice the longest seat handle
+	// (iam.MaxLogin, 64) a provisioner's variable is named after beside its
+	// vendor's prefix. A JUDGMENT, which bounds what a settings record carries
+	// rather than any name a person writes.
+	CodeMaxCredentialRefBytes = 128
+
+	// CodeMaxMirrorRefs is the most ref patterns a push mirror names: as many
+	// as its repository carries protection rules ([CodeMaxProtections]), so
+	// a mirror may name every protected pattern of its repository — the
+	// "protected branches only" a forge's own mirror offers — and, like a
+	// rule, every pattern is asked about every ref a round of the mirror
+	// compares.
+	CodeMaxMirrorRefs = 64
 
 	// CodeMaxRepos is the most repositories one document may declare: a
 	// typo guard on code.repos, two orders of magnitude past the reference
@@ -267,7 +341,7 @@ const (
 	// some thirty-three times that, which no seat working as intended meets,
 	// and it caps what a seat pushing in a loop costs the code log at a
 	// thousand push records a day — a seat's push alone in its record is
-	// at most 1 555 bytes, from its coding box (internal/code's
+	// at most 1 604 bytes, from its coding box (internal/code's
 	// BenchmarkPushLogBytes, its push=box arm; 1 481 where the engine builds
 	// it for a tool), so about 1.6 MB a day — rather than without bound.
 	DefaultCodePushesPerSeatDay = 1_000
@@ -464,6 +538,70 @@ type CodeChecks struct {
 	// ([CodeDefaultCheckMaxTimeout]); else [CodeMinCheckMaxTimeout] to
 	// [CodeCheckTimeoutCeiling], in seconds.
 	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup."`
+
+	// Remote caps the checks the company runs in REMOTE (e2b) cells, whose
+	// boxes run on a provider's machines and are billed by the company's
+	// account there — company-wide, however many git nodes run checks.
+	// Container cells are each git node's own, bounded by its Tier A
+	// git.max_checks instead.
+	Remote CodeChecksRemote `yaml:"remote,omitempty" json:"remote,omitzero"`
+}
+
+// CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes
+// the company runs at once, and how many hours of them it starts in a UTC day
+// (internal/code/checkrun's RemoteSlots). A check either would take past its
+// cap waits QUEUED — claimed by no node — until a box ends or the day turns
+// over, and then runs. Every field unset is a valid block, its defaults
+// PROVISIONAL (U45 a).
+//
+// THE EPOCH'S, read at every walk of a runner's queue, so a revision moving
+// either cap holds from its activation.
+type CodeChecksRemote struct {
+	// MaxRunning is how many remote check boxes run at once, company-wide.
+	// A POINTER because 0 is a setting — no check runs remotely, each one
+	// naming e2b waiting queued — and unset is the default
+	// ([CodeDefaultRemoteMaxRunning]).
+	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
+
+	// BoxHoursPerDay is how many hours of remote box time the company starts
+	// in a UTC day, each box charged a minute at a time from its start to
+	// its end. A POINTER for MaxRunning's reason: 0 starts none, and unset
+	// is the default ([CodeDefaultRemoteBoxHoursPerDay]).
+	BoxHoursPerDay *int `yaml:"box_hours_per_day,omitempty" json:"box_hours_per_day,omitempty" js:"min=0;max=100000" desc:"How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks."`
+}
+
+// Resolved is code.checks.remote with its defaults applied — THE ONE PLACE
+// they are applied, read by a check runner at every walk: the boxes the
+// company runs at once and the box-minutes it starts in a UTC day.
+func (r CodeChecksRemote) Resolved() (maxRunning, minutesPerDay int) {
+	maxRunning, hours := CodeDefaultRemoteMaxRunning, CodeDefaultRemoteBoxHoursPerDay
+	if r.MaxRunning != nil {
+		maxRunning = *r.MaxRunning
+	}
+	if r.BoxHoursPerDay != nil {
+		hours = *r.BoxHoursPerDay
+	}
+	return maxRunning, hours * 60
+}
+
+// zero is a block that sets nothing.
+func (r CodeChecksRemote) zero() bool { return r.MaxRunning == nil && r.BoxHoursPerDay == nil }
+
+// validate holds code.checks.remote's rules at path: each cap inside its
+// bounds.
+func (r CodeChecksRemote) validate(path Path) error {
+	var p problems
+	if n := r.MaxRunning; n != nil && (*n < 0 || *n > CodeMaxRemoteMaxRunning) {
+		p.add(at(path, "max_running"), ErrOutOfRange,
+			"%d is outside 0..%d remote check boxes at once, or unset for the default %d",
+			*n, CodeMaxRemoteMaxRunning, CodeDefaultRemoteMaxRunning)
+	}
+	if n := r.BoxHoursPerDay; n != nil && (*n < 0 || *n > CodeMaxRemoteBoxHoursPerDay) {
+		p.add(at(path, "box_hours_per_day"), ErrOutOfRange,
+			"%d is outside 0..%d hours of remote check boxes a day, or unset for the default %d",
+			*n, CodeMaxRemoteBoxHoursPerDay, CodeDefaultRemoteBoxHoursPerDay)
+	}
+	return p.err()
 }
 
 // MaxTimeout is code.checks.max_timeout_seconds as a duration, its default
@@ -478,7 +616,8 @@ func (k CodeChecks) MaxTimeout() time.Duration {
 
 // zero is a block that sets nothing.
 func (k CodeChecks) zero() bool {
-	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0
+	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0 &&
+		k.Remote.zero()
 }
 
 // validate holds code.checks' own rules at path: each cell one a check runs in
@@ -528,6 +667,7 @@ func (k CodeChecks) validate(path Path) error {
 				"the default %d", s, int(CodeMinCheckMaxTimeout/time.Second), int(CodeCheckTimeoutCeiling/time.Second),
 			int(CodeDefaultCheckMaxTimeout/time.Second))
 	}
+	p.wrap(k.Remote.validate(at(path, "remote")))
 	return p.err()
 }
 
@@ -691,6 +831,45 @@ type CodeRepo struct {
 	// touching them asks for a review. They GRANT NOTHING — who may read and
 	// push is the chart's and the tier's, whatever a path owner names.
 	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
+	// MirrorFrom makes the repository a PULL MIRROR of a repository at
+	// another host, MirrorTo a PUSH MIRROR to one, and Import fills it from
+	// one when it is created. Only a person or this document sets any of the
+	// three (U49): a pull mirror and an import dial another host, and a push
+	// mirror sends the company's code to one. Each credential is a ${VAR}
+	// reference and nothing else, recorded as the reference and resolved
+	// only when the remote is dialed.
+	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there when it is created, then moves only by the code host's syncs from it, and takes no push and no change of its own."`
+	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."`
+	Import     *CodeImportSource `yaml:"import,omitempty" json:"import,omitempty" desc:"Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."`
+}
+
+// IdentityKey is the repository's name, which code.repos holds unique: what a
+// redaction's restore matches a repository's credentials by, since a mirror's
+// or an import's credential is masked wherever a read surface finds one that
+// is not a reference — and restored by position, a reordered code.repos would
+// hand one repository's credential to another.
+func (r CodeRepo) IdentityKey() string { return r.Name }
+
+// CodeMirrorSource is the repository a pull mirror follows ([CodeRepo.MirrorFrom]).
+type CodeMirrorSource struct {
+	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+}
+
+// CodeMirrorTarget is the repository a push mirror pushes to
+// ([CodeRepo.MirrorTo]).
+type CodeMirrorTarget struct {
+	URL        string   `yaml:"url" json:"url" js:"required" desc:"The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host, resolved from the secret store and then the environment when it dials, never a literal."`
+	As         string   `yaml:"as" json:"as" js:"required" desc:"The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot."`
+	Refs       []string `yaml:"refs,omitempty" json:"refs,omitempty" desc:"The refs it pushes, at most 64 patterns of refs/heads/<glob> and refs/tags/<glob>, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/."`
+}
+
+// CodeImportSource is the repository a repository is filled from when it is
+// created ([CodeRepo.Import]).
+type CodeImportSource struct {
+	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodePathOwner is one owner of a repository's paths: exactly one of a unit or
@@ -815,7 +994,6 @@ type CodeProtection struct {
 	Landing          CodeLanding       `yaml:"landing,omitempty" json:"landing,omitzero" desc:"How the branch's queue lands a change: each field its default when unset."`
 	OwnersApprove    bool              `yaml:"owners_approve,omitempty" json:"owners_approve,omitempty" desc:"Make the repository's path owners gating: a change waits for one counted approval from somebody eligible for every owned glob it touches."`
 	DeleteSource     CodeDeleteSource  `yaml:"delete_source,omitempty" json:"delete_source,omitempty" js:"enum=seats|none" desc:"Whether a merge deletes its change's source branch in the record that merges it: seats (unset), a branch in a seat's own namespace, or none."`
-	AutoRevert       bool              `yaml:"auto_revert,omitempty" json:"auto_revert,omitempty" desc:"Let whoever queues a change consent, when it does, to reverting a landing that breaks the branch."`
 	AgentsEditChecks bool              `yaml:"agents_edit_checks,omitempty" json:"agents_edit_checks,omitempty" desc:"Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's."`
 }
 
@@ -827,19 +1005,18 @@ type CodeHumanPath struct {
 	Unless []CodeChangeClass `yaml:"unless,omitempty" json:"unless,omitempty" js:"enum=whitespace_only|comment_only" desc:"The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once."`
 }
 
-// CodeLanding is how a gated branch's queue lands a change. An unset field
-// takes its default ([CodeLanding.Resolved]); the queue lands only where the
-// rule requires checks.
+// CodeLanding is how a gated branch's queue lands a change: the queue tests
+// each change merged on the branch before it lands, and these two fields are
+// its throughput. An unset field takes its default ([CodeLanding.Resolved]);
+// the queue lands only where the rule requires checks.
 type CodeLanding struct {
-	Policy CodeLandingPolicy `yaml:"policy,omitempty" json:"policy,omitempty" js:"enum=pre_land|post_land" desc:"pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip."`
-	Depth  int               `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
-	Batch  int               `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 4."`
+	Depth int `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
+	Batch int `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 2."`
 }
 
 // Resolved is the landing with its defaults applied — THE ONE PLACE they are
 // applied ([CodeProtection.Gate] reads it).
 func (l CodeLanding) Resolved() CodeLanding {
-	l.Policy = l.Policy.Resolved()
 	if l.Depth == 0 {
 		l.Depth = CodeDefaultQueueDepth
 	}
@@ -847,6 +1024,43 @@ func (l CodeLanding) Resolved() CodeLanding {
 		l.Batch = CodeDefaultQueueBatch
 	}
 	return l
+}
+
+// LandingCapacity is the most changes a merge queue lands over a span:
+// ⌊depth × batch × over / round⌋ (M5-D28). Each round tests depth candidates
+// at once, each taking at most batch waiting changes, and lands its green
+// prefix — at most depth × batch changes — once its checks finish, so a round
+// lasting round lands that many at most every round. A queue asked to land
+// more than this in a span falls behind for as long as the asking lasts:
+// its waiting entries grow, and a change waits rounds longer for every
+// round's worth of changes ahead of it.
+//
+// THE ONE FORMULA both judgments of a queue's rate read — `crewlet
+// validate`'s advisory, at code.checks.max_timeout_seconds and over a day,
+// and code_merge_rate_over_capacity, at the round its home observed and over
+// internal/code's MergeRateWindow — so the threshold the alarm borrows is the
+// queue's own capacity and never a number of the alarm's (ADR-0015).
+//
+// Exact in integers, never rounded through a float: depth × batch × over is
+// taken as a 128-bit product before the division. A round of zero or less
+// lands without bound, and a product past the int range answers the range's
+// top; a depth, batch or span under one lands nothing.
+func LandingCapacity(depth, batch int, round, over time.Duration) int {
+	if depth < 1 || batch < 1 || over <= 0 {
+		return 0
+	}
+	if round <= 0 {
+		return math.MaxInt
+	}
+	hi, lo := bits.Mul64(uint64(depth)*uint64(batch), uint64(over))
+	if hi >= uint64(round) {
+		return math.MaxInt
+	}
+	q, _ := bits.Div64(hi, lo, uint64(round))
+	if q > math.MaxInt {
+		return math.MaxInt
+	}
+	return int(q)
 }
 
 // CodeGate is a protection rule's merge gate RESOLVED — every field its value
@@ -865,7 +1079,6 @@ type CodeGate struct {
 	Landing          CodeLanding       `json:"landing"`
 	OwnersApprove    bool              `json:"owners_approve,omitempty"`
 	DeleteSource     CodeDeleteSource  `json:"delete_source"`
-	AutoRevert       bool              `json:"auto_revert,omitempty"`
 	AgentsEditChecks bool              `json:"agents_edit_checks,omitempty"`
 }
 
@@ -880,7 +1093,7 @@ func (g CodeGate) EncodedBytes() int {
 
 // Gate is the rule's merge gate RESOLVED: nil where the rule sets none of its
 // fields, and otherwise every field its value or its default — writers, none,
-// pre_land at depth 4 and batch 4, seats. THE ONE PLACE those defaults are
+// a queue at depth 4 and batch 2, seats. THE ONE PLACE those defaults are
 // applied, read by the engine's reconcile, which records it, and by the
 // gate's bound here, so the gate validated is the gate recorded.
 func (rule CodeProtection) Gate() *CodeGate {
@@ -891,8 +1104,7 @@ func (rule CodeProtection) Gate() *CodeGate {
 		MergeBy: rule.MergeBy.Resolved(), Approvals: rule.Approvals.Resolved(),
 		ApprovalsUnless: rule.ApprovalsUnless, HumanPaths: rule.HumanPaths, Checks: rule.Checks,
 		Landing: rule.Landing.Resolved(), OwnersApprove: rule.OwnersApprove,
-		DeleteSource: rule.DeleteSource.Resolved(), AutoRevert: rule.AutoRevert,
-		AgentsEditChecks: rule.AgentsEditChecks,
+		DeleteSource: rule.DeleteSource.Resolved(), AgentsEditChecks: rule.AgentsEditChecks,
 	}
 }
 
@@ -909,7 +1121,7 @@ func (rule CodeProtection) gateFields() []string {
 		{"approvals_unless", len(rule.ApprovalsUnless) > 0}, {"human_paths", len(rule.HumanPaths) > 0},
 		{"checks", len(rule.Checks) > 0}, {"landing", rule.Landing != CodeLanding{}},
 		{"owners_approve", rule.OwnersApprove}, {"delete_source", rule.DeleteSource != ""},
-		{"auto_revert", rule.AutoRevert}, {"agents_edit_checks", rule.AgentsEditChecks},
+		{"agents_edit_checks", rule.AgentsEditChecks},
 	} {
 		if f.set {
 			set = append(set, f.name)
@@ -1019,33 +1231,6 @@ func (a CodeApprovals) Resolved() CodeApprovals {
 		return CodeApprovalsNone
 	}
 	return a
-}
-
-// CodeLandingPolicy is how a gated branch's queue lands a change.
-type CodeLandingPolicy string
-
-const (
-	// CodeLandingPreLand tests each change merged on the branch before it
-	// lands — what unset reads as.
-	CodeLandingPreLand CodeLandingPolicy = "pre_land"
-	// CodeLandingPostLand lands changes ahead of their checks, which then run
-	// on the branch's newest tip.
-	CodeLandingPostLand CodeLandingPolicy = "post_land"
-)
-
-// CodeLandingPolicies is the closed set, the default first.
-var CodeLandingPolicies = []CodeLandingPolicy{CodeLandingPreLand, CodeLandingPostLand}
-
-// Valid reports a value this build knows. Unset is valid: it reads as
-// pre_land.
-func (l CodeLandingPolicy) Valid() bool { return l == "" || slices.Contains(CodeLandingPolicies, l) }
-
-// Resolved is the value with its default applied: unset is pre_land.
-func (l CodeLandingPolicy) Resolved() CodeLandingPolicy {
-	if l == "" {
-		return CodeLandingPreLand
-	}
-	return l
 }
 
 // CodeDeleteSource is whether a merge deletes its change's source branch.
@@ -1419,7 +1604,193 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 		first[pattern] = k
 	}
 	validatePathOwners(&p, at(path, "path_owners"), r.PathOwners, owners)
+	r.validateRemotes(&p, path, owners)
 	return p.err()
+}
+
+// validateRemotes holds the repository's mirrors and its import at path into
+// p: each URL a remote's, read by the one rule its dial reads it by
+// ([gitref.ParseRemoteURL]) and at most [CodeMaxRemoteURLBytes], and each
+// credential one whole ${VAR} reference ([validateCodeRemote]) — a push
+// mirror's required; a push mirror's seat one of the chart's that reads the
+// repository ([CodeRepo.validateMirrorSeat]) and its refs ([validateMirrorRefs]);
+// and none of the combinations that would do nothing: an import beside a pull
+// mirror, which is imported from its own source when it is created, and either
+// beside archived, which takes neither a sync nor an import.
+//
+// RUNNABLE, as an owner's rules are: the code domain refuses settings carrying
+// a URL no dial reads or a credential that is not a reference, so the
+// reconcile could not record one, and a push mirror whose seat the chart
+// lacks, or that does not read what it would publish, has nobody to push as.
+func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
+	if m := r.MirrorFrom; m != nil {
+		from := at(path, "mirror_from")
+		validateCodeRemote(p, from, m.URL, m.Credential, false)
+		switch {
+		case r.Import != nil:
+			p.add(at(path, "import"), ErrConflict,
+				"a pull mirror is imported from mirror_from when it is created, so import beside it is a "+
+					"second source: remove import")
+		case r.Archived:
+			p.add(from, ErrConflict,
+				"an archived repository takes no sync, so a pull mirror of it would never move: remove "+
+					"mirror_from to keep it as it stands, or archived to follow its source")
+		}
+	}
+	if i := r.Import; i != nil {
+		validateCodeRemote(p, at(path, "import"), i.URL, i.Credential, false)
+		if r.Archived && r.MirrorFrom == nil {
+			p.add(at(path, "import"), ErrConflict,
+				"an import fills an active repository, and an archived one takes nothing: leave archived "+
+					"unset until the import is done: import is read only when the repository is created, "+
+					"so remove it then, and archive the repository")
+		}
+	}
+	if m := r.MirrorTo; m != nil {
+		to := at(path, "mirror_to")
+		validateCodeRemote(p, to, m.URL, m.Credential, true)
+		r.validateMirrorSeat(p, at(to, "as"), m.As, owners)
+		validateMirrorRefs(p, at(to, "refs"), m.Refs)
+	}
+}
+
+// validateCodeRemote holds one remote at path into p: its URL present, at most
+// [CodeMaxRemoteURLBytes] and one the dial reads ([gitref.ParseRemoteURL]), and
+// its credential — required where needed — ONE WHOLE ${VAR} REFERENCE of at
+// most [CodeMaxCredentialRefBytes] and nothing else.
+//
+// A REFERENCE, NEVER A TOKEN: the code domain records the credential as it is
+// written, on every record of the repository's settings, which every data node
+// keeps and every backup carries — so a token written here would be a secret
+// at rest in the code log, and the reference is resolved only when the remote
+// is dialed, from the secret store and then the environment. The refusal never
+// quotes the value: a literal is a token.
+func validateCodeRemote(p *problems, path Path, url, credential string, needCredential bool) {
+	switch {
+	case strings.TrimSpace(url) == "":
+		p.add(at(path, "url"), ErrMissing, "the repository at the other host: an https URL")
+	case len(url) > CodeMaxRemoteURLBytes:
+		p.add(at(path, "url"), ErrOutOfRange, "%d bytes, past the %d a remote's URL may hold", len(url),
+			CodeMaxRemoteURLBytes)
+	default:
+		if _, err := gitref.ParseRemoteURL(url); err != nil {
+			p.add(at(path, "url"), ErrShape, "%v", err)
+		}
+	}
+	switch {
+	case credential == "" && needCredential:
+		p.add(at(path, "credential"), ErrMissing,
+			"a push authenticates: name the ${VAR} that holds the token, which the secret store or the "+
+				"environment answers when the code host dials")
+	case credential == "":
+	case len(credential) > CodeMaxCredentialRefBytes:
+		p.add(at(path, "credential"), ErrOutOfRange, "%d bytes, past the %d a credential's reference may hold",
+			len(credential), CodeMaxCredentialRefBytes)
+	case !wholeReference(credential):
+		p.add(at(path, "credential"), ErrShape,
+			"a credential is one whole ${VAR} reference and nothing else, never the token itself, which "+
+				"every record of the repository's settings would carry: put the token in the secret store "+
+				"(crewlet secrets set NAME) and write ${NAME}")
+	}
+}
+
+// validateMirrorSeat holds a push mirror's seat at path into p: a seat of the
+// chart, by its handle, that reads the repository ([CodeRepo.mirrorSeatReads]).
+func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *codeOwners) {
+	handle := strings.TrimSpace(as)
+	seat := owners.index.SeatByHandle(handle)
+	switch {
+	case handle == "":
+		p.add(path, ErrMissing,
+			"a push mirror pushes as a seat's own identity at the other host, never a bot: name the seat "+
+				"by its handle")
+	case seat == nil:
+		p.add(path, ErrUnknownValue, "%q is no seat's handle in this company; the seats are: %s", as,
+			owners.seats())
+	case !r.mirrorSeatReads(owners.index, seat):
+		p.add(path, ErrConflict,
+			"seat %s does not read %s, which only its owner's own seats and leads read (visibility: unit): "+
+				"a push mirror publishes only what the seat it pushes as reads: name a seat the chart "+
+				"relates to the owner, or a person's seat", handle, r.Name)
+	}
+}
+
+// mirrorSeatReads reports whether seat reads the repository r, as the code
+// domain grants a read (internal/code's GrantOf, ADR-0081): a PERSON'S seat
+// reads every repository, and an agent's every one visible to the company —
+// every tier this document can spell reads, so no tier narrows it — and one
+// visible to its owner's unit alone where the chart relates the seat to the
+// owner: a seat in the owning unit or a unit below it, a lead over it (the
+// effective lead of it or of a unit above it), or — owned by a seat — that
+// seat, or a lead over the unit holding it.
+//
+// THE DOMAIN'S RULE IN THE DOCUMENT'S TERMS, because config cannot import the
+// domain that imports it: the engine's
+// TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt holds the two to one
+// verdict over every relation a chart can give.
+func (r CodeRepo) mirrorSeatReads(x *org.Index, seat *org.Role) bool {
+	if seat.IsHuman() || r.Visibility.Resolved() == CodeVisibilityCompany {
+		return true
+	}
+	var over *org.Unit
+	switch unit, owner := strings.TrimSpace(r.Owner.Unit), strings.TrimSpace(r.Owner.Seat); {
+	case unit != "":
+		if over = x.UnitByRef(unit); over == nil {
+			return false
+		}
+		if slices.Contains(x.UnitChainFor(seat), over) {
+			return true
+		}
+	case owner != "":
+		if owner == seat.Handle() {
+			return true
+		}
+		holder := x.SeatByHandle(owner)
+		if holder == nil {
+			return false
+		}
+		over = x.UnitFor(holder)
+	}
+	for u := over; u != nil; u = x.Parent(u) {
+		if lead := x.EffectiveLead(u); lead != nil && lead.Handle() == seat.Handle() {
+			return true
+		}
+	}
+	return false
+}
+
+// validateMirrorRefs holds a push mirror's refs at path into p: at most
+// [CodeMaxMirrorRefs], each a protection pattern of gitref's grammar — under
+// refs/heads/ or refs/tags/ — that reaches no seat's own namespace
+// ([gitref.PatternReachesSeats]), and each once.
+//
+// NO SEAT'S BRANCHES LEAVE: refs/heads/seats/<handle>/ is where a seat's work
+// waits for a person, its experiments among it, and a mirror publishes what
+// the company merged, never what a seat has not yet offered — so a pattern
+// that could match one ref there is refused, refs/heads/** among them, while
+// refs/heads/*, which matches only top-level branches, is not.
+func validateMirrorRefs(p *problems, path Path, refs []string) {
+	if len(refs) > CodeMaxMirrorRefs {
+		p.add(path, ErrOutOfRange, "%d patterns, past the %d one push mirror may name", len(refs),
+			CodeMaxMirrorRefs)
+	}
+	first := make(map[string]int, len(refs))
+	for k, pattern := range refs {
+		entry := idx(path, k)
+		switch was, dup := first[pattern]; {
+		case !gitref.ValidPattern(pattern):
+			p.add(entry, ErrShape, "%q is not refs/heads/<glob> or refs/tags/<glob>", pattern)
+		case gitref.PatternReachesSeats(pattern):
+			p.add(entry, ErrConflict,
+				"%s reaches %s<handle>/, where each seat's own branches wait for a person, and a mirror "+
+					"publishes what the company merged: name the branches it pushes (refs/heads/*, or a "+
+					"family such as refs/heads/release/*)", pattern, gitref.SeatsRoot)
+		case dup:
+			p.add(entry, ErrConflict, "%s is named twice (first at refs[%d])", pattern, was)
+		default:
+			first[pattern] = k
+		}
+	}
 }
 
 // validatePathOwners holds a repository's path owners at path into p: at most
@@ -1769,10 +2140,6 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 		}
 	}
 	landing := at(path, "landing")
-	if !rule.Landing.Policy.Valid() {
-		p.add(at(landing, "policy"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.Landing.Policy, words.Or(CodeLandingPolicies), CodeLandingPreLand)
-	}
 	if d := rule.Landing.Depth; d < 0 || d > CodeMaxQueueDepth {
 		p.add(at(landing, "depth"), ErrOutOfRange, "%d is outside 1..%d candidates, or unset for the default %d",
 			d, CodeMaxQueueDepth, CodeDefaultQueueDepth)
@@ -1833,13 +2200,22 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 //     `release/*` warns about main and `**` does not. Located at the field to
 //     ADD, the repository's protect;
 //   - has a rule whose merge gate sets a field that does nothing as the rule
-//     stands ([idleGateFields]), located at that field.
+//     stands ([idleGateFields]), located at that field;
+//   - has a merge queue that cannot land one change a day for every seat
+//     that may merge into it ([Company.mergeRateWarnings]), located at the
+//     rule's landing.
 //
 // NOT AN ARCHIVED REPOSITORY'S BRANCH: it takes no push at all — the decide
 // refuses the whole push — so nobody can force-push or delete its branch, and
 // saying so would be false. Unarchiving one that still has no rule brings the
 // warning back with the revision that does it. Its visibility still warns:
 // an archived repository is still read.
+//
+// NOR A PULL MIRROR'S, for the same reason: it takes no push and no change of
+// its own (mirror_from), so its default branch moves only by the code host's
+// syncs. Its protect list is warned instead, located at it — every rule there
+// holds nothing, and a person reading it would believe it gates what it
+// cannot. Its visibility still warns: a mirror is read.
 //
 // THE CHART IS BUILT HERE, and only for a company that hosts code: no other
 // advisory reads one, and a company with no repositories would otherwise pay
@@ -1852,14 +2228,34 @@ func (c *Company) codeWarnings() []Warning {
 	out = append(out, c.directBoxWarnings()...)
 	o, _ := c.organization()
 	units := o.Index()
+	// EVERY HUMAN SEAT IS A PERSON WHO MAY MERGE: a person maintains every
+	// repository (ADR-0078), so the merge-rate advisory counts them on every
+	// queue — once, here, rather than once a rule.
+	persons := 0
+	for s := range o.AllRoles() {
+		if s.IsHuman() {
+			persons++
+		}
+	}
 	for i, r := range c.Code.Repos {
 		if w, ok := unitWithNoLead(units, i, r); ok {
 			out = append(out, w)
+		}
+		if r.MirrorFrom != nil {
+			if len(r.Protect) > 0 {
+				out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
+					"%s is a pull mirror (mirror_from): every ref moves by the code host's syncs from its "+
+						"source, and it takes no push and no change of its own, so no rule of its protect "+
+						"list holds anything (remove protect, or remove mirror_from to push to it here)",
+					r.Name)))
+			}
+			continue
 		}
 		out = append(out, idleGateFields(i, r)...)
 		if r.Archived {
 			continue
 		}
+		out = append(out, c.mergeRateWarnings(units, persons, i, r)...)
 		branch := r.ResolvedDefaultBranch()
 		ref := "refs/heads/" + branch
 		if !gitref.ValidBranch(branch) || gitref.ReservedSeatBranch(branch) {
@@ -1947,9 +2343,9 @@ func (c *Company) directBoxWarnings() []Warning {
 //
 //   - owners_approve on a repository that names no path owners: no change
 //     touches an owned path, so it waits for nobody's approval;
-//   - landing or auto_revert on a rule that requires no checks: only a branch
-//     whose merges wait for checks has a queue to land them, whose enqueuer
-//     consents to a revert — every merge into this one lands directly;
+//   - landing on a rule that requires no checks: only a branch whose merges
+//     wait for checks has a queue to land them — every merge into this one
+//     lands directly;
 //   - approvals_unless beside approvals: none, which exempts changes from
 //     approvals the rule never asks.
 //
@@ -1975,17 +2371,112 @@ func idleGateFields(i int, r CodeRepo) []Warning {
 			idle("landing", "and requires no checks: only a branch whose merges wait for checks has a queue "+
 				"to land them, so every merge into this one lands directly (require checks, or remove landing)")
 		}
-		if len(rule.Checks) == 0 && rule.AutoRevert {
-			idle("auto_revert", "and requires no checks: a revert is consented to when a change is queued, "+
-				"and only a branch whose merges wait for checks has a queue (require checks, or remove "+
-				"auto_revert)")
-		}
 		if len(rule.ApprovalsUnless) > 0 && rule.Approvals.Resolved() == CodeApprovalsNone {
 			idle("approvals_unless", "beside approvals: none, so it exempts changes from approvals the rule "+
 				"never asks (set approvals: one, or remove approvals_unless)")
 		}
 	}
 	return out
+}
+
+// codeMergeRateDay is the span `crewlet validate` prices a queue's capacity
+// over: a DAY, at one landing a seat — a seat that may merge and lands one
+// change a day is a quiet writer, so a queue that cannot keep up even with
+// that falls behind on an ordinary day (M5-D28).
+const codeMergeRateDay = 24 * time.Hour
+
+// mergeRateWarnings is a warning for every rule of code.repos[i], r, whose
+// branch has a merge queue — a merge gate requiring a check — that lands
+// fewer changes a day than the seats that may merge
+// into it, at one change a day each (M5-D28): [LandingCapacity] at the rule's
+// depth and batch, a round as long as code.checks.max_timeout_seconds — the
+// longest a check of the company may run, so the slowest round the company
+// allows — over [codeMergeRateDay]. Located at the rule's landing, the field
+// whose depth and batch raise it.
+//
+// `crewlet validate` CANNOT OBSERVE A RATE: it warns from what is configured,
+// and code_merge_rate_over_capacity, raised by the repository's home from the
+// enqueues it counts and the rounds it times, is the observed half.
+//
+// WHO MAY MERGE is counted through the chart's index ([seatsThatMayMerge]),
+// under the stricter of the rule's merge_by and code.merge_by_floor (M5-D2).
+func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo) []Warning {
+	var out []Warning
+	floor := c.Code.MergeByFloor.Resolved()
+	round := c.Code.Checks.MaxTimeout()
+	for k, rule := range r.Protect {
+		if rule.Branch == "" || rule.Tag != "" {
+			continue
+		}
+		g := rule.Gate()
+		if g == nil || len(g.Checks) == 0 {
+			continue
+		}
+		by := g.MergeBy
+		if slices.Index(CodeMergeBys, floor) > slices.Index(CodeMergeBys, by) {
+			by = floor
+		}
+		seats := seatsThatMayMerge(units, persons, r.Owner, by)
+		capacity := LandingCapacity(g.Landing.Depth, g.Landing.Batch, round, codeMergeRateDay)
+		if capacity >= seats {
+			continue
+		}
+		out = append(out, advisory(at(idx(at(idx(field("code.repos"), i), "protect"), k), "landing"),
+			fmt.Sprintf("%s's queue on %s lands at most %d change(s) a day (%d candidate(s) of up to %d "+
+				"change(s) a round, a round as long as the longest check may run (%s, "+
+				"code.checks.max_timeout_seconds)), fewer than the %d seat(s) that may merge into it "+
+				"(merge_by %s), at one change a day each, so its queue falls behind once they merge "+
+				"(raise landing.depth or landing.batch, or lower code.checks.max_timeout_seconds to what "+
+				"its checks take)", r.Name, rule.Branch, capacity, g.Landing.Depth, g.Landing.Batch, round,
+				seats, by)))
+	}
+	return out
+}
+
+// seatsThatMayMerge is how many seats may merge into a branch of a repository
+// owned by owner under merge authority by (M5-D2), counted through the chart's
+// index as the code host's grant rules relate a seat to a repository:
+//
+//   - every HUMAN seat, persons: a person maintains every repository;
+//   - under writers, every agent seat that WRITES the repository — owned by a
+//     unit, its effective lead and every seat of its subtree; owned by a seat,
+//     that seat — under maintainers, the one that MAINTAINS it, the unit's
+//     effective lead or the owning seat; under persons, none;
+//
+// each agent seat only at code.access full_access, the one tier past
+// review, which is where a seat's grant on any repository is capped.
+// An owner the chart does not resolve is validation's refusal and relates no
+// seat here.
+func seatsThatMayMerge(units *org.Index, persons int, owner CodeOwner, by CodeMergeBy) int {
+	n := persons
+	if by == CodeMergeByPersons {
+		return n
+	}
+	may := func(s *org.Role) bool { return s != nil && !s.IsHuman() && s.CodeAccess == TierFullAccess }
+	switch {
+	case strings.TrimSpace(owner.Unit) != "":
+		u := units.UnitByRef(strings.TrimSpace(owner.Unit))
+		if u == nil {
+			return n
+		}
+		lead := units.EffectiveLead(u)
+		if may(lead) {
+			n++
+		}
+		if by == CodeMergeByMaintainers {
+			return n
+		}
+		for _, s := range units.Members(u) {
+			if s != lead && may(s) {
+				n++
+			}
+		}
+	case owner.Seat != "":
+		if may(units.Role(owner.Seat)) {
+			n++
+		}
+	}
+	return n
 }
 
 // unitWithNoLead is the warning about code.repos[i], r, when it is

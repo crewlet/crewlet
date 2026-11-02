@@ -135,6 +135,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalForbidden:          {http.StatusForbidden, httpjson.CodeForbidden},
 	crewletmcp.RefusalStaleVersion:       {http.StatusConflict, httpjson.CodeStaleVersion},
 	crewletmcp.RefusalConflict:           {http.StatusConflict, httpjson.CodeConflict},
+	crewletmcp.RefusalNotReady:           {http.StatusConflict, httpjson.CodeNotReady},
 	crewletmcp.RefusalExists:             {http.StatusConflict, httpjson.CodeExists},
 	crewletmcp.RefusalAlreadyAnswered:    {http.StatusConflict, httpjson.CodeAlreadyAnswered},
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
@@ -197,6 +198,13 @@ func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 		if remedy := said.Remedy(); !remedy.IsZero() {
 			detail["remedy"] = remedy
 		}
+	}
+	// THE CODE HOST'S OWN WORD, beside the class: several of its refusals
+	// share one class, and a surface that answers each in its own words
+	// reads which one this was here ([builtin.HostRefusal]).
+	var host *builtin.HostRefusal
+	if errors.As(cause, &host) {
+		detail["refusal"] = host.Refusal
 	}
 	var unknown *builtin.UnknownOutcome
 	var refused *builtin.DecisionRefused

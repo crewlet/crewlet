@@ -263,26 +263,33 @@ func TestSeatActivityCarriesThePreviousWindowsTotals(t *testing.T) {
 }
 
 // A SEAT'S CHANGES AND REVIEWS ARE EVERY NODE'S DAYS, SUMMED: the changes it
-// opened, the reviews it gave and the findings its own changes received, over
-// the window and — asked for — the window before, each day counted in the one
-// it falls in.
+// opened, the reviews it gave, the findings its own changes received, the
+// checks that failed them and their ejections from a queue, over the window
+// and — asked for — the window before, each day counted in the one it falls
+// in.
 //
 // Mutation: sum only the window's rows into the previous totals, or leave the
 // code day out of the fold — the counts read zero, red.
 func TestSeatActivityCountsASeatsChangesAndReviews(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
-	f.seatCode("node-a", "2026-09-24", "lead", usage.CodeDay{ChangesOpened: 2, FindingsReceived: 5})
-	f.seatCode("node-b", "2026-09-25", "lead", usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 3})
-	f.seatCode("node-a", "2026-09-15", "lead", usage.CodeDay{ReviewsGiven: 4, FindingsReceived: 1})
+	f.seatCode("node-a", "2026-09-24", "lead", usage.CodeDay{ChangesOpened: 2, FindingsReceived: 5, ChecksFailed: 2})
+	f.seatCode("node-b", "2026-09-25", "lead", usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 3, ChecksFailed: 1,
+		Ejections: 1})
+	f.seatCode("node-a", "2026-09-15", "lead", usage.CodeDay{ReviewsGiven: 4, FindingsReceived: 1, Ejections: 2})
 
 	lead := seatRow(t, activityOf(t, f, map[string]any{"days": 7, "previous": true}), "lead")
 	if lead.ChangesOpened != 3 || lead.ReviewsGiven != 3 || lead.FindingsReceived != 5 {
 		t.Errorf("lead opened %d, reviewed %d and received %d findings; want both nodes' days in the window "+
 			"summed: 3, 3, 5", lead.ChangesOpened, lead.ReviewsGiven, lead.FindingsReceived)
 	}
-	if p := lead.Previous; p == nil || p.ChangesOpened != 0 || p.ReviewsGiven != 4 || p.FindingsReceived != 1 {
-		t.Errorf("previous = %+v, want the window before's 4 reviews and 1 finding", lead.Previous)
+	if lead.ChecksFailed != 3 || lead.Ejections != 1 {
+		t.Errorf("lead's changes failed %d checks and were ejected %d times; want both nodes' days summed: 3, 1",
+			lead.ChecksFailed, lead.Ejections)
+	}
+	if p := lead.Previous; p == nil || p.ChangesOpened != 0 || p.ReviewsGiven != 4 || p.FindingsReceived != 1 ||
+		p.ChecksFailed != 0 || p.Ejections != 2 {
+		t.Errorf("previous = %+v, want the window before's 4 reviews, 1 finding and 2 ejections", lead.Previous)
 	}
 }
 

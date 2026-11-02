@@ -542,18 +542,21 @@ sequenceDiagram
     N->>N: apply, write Sarah's notice, commit
     N->>S: inbox_changed {source, handle, unread_delta, subject, reason}
     S->>D: only to the sockets watching sarah-chen
-    D->>S: work_inbox (within half a second)
+    D->>S: inbox (within half a second)
 ```
 
-- **Every data node applies every tracker record**, and every node that
+- **Every data node applies every tracker and code record**, and every node that
   serves sockets is a data node (`ingress` requires `data`), so each hears
   every movement from its own applier, after the batch commits,
   and tells the sockets it holds. A person's browser can be connected to any
   of them. Each frame names the domain whose notices moved (`source`, the
-  tracker's being `tracker`), because the inbox's rules — what a mark, a
-  snooze and "read through here" mean — are one set every domain that keeps a
-  person's notices shares, while each keeps its notices and marks on its own
-  log.
+  tracker's being `tracker` and the code host's `code`), because the inbox's
+  rules — what a mark, a snooze and "read through here" mean — are one set
+  every domain that keeps a person's notices shares, while each keeps its
+  notices and marks on its own log. Whichever domain a frame names, the
+  dashboard re-reads the composed `inbox` question, the one that answers
+  every domain's notices: `work_inbox` answers the tracker's alone, and a
+  client re-reading it on a `code` frame never sees what moved.
 - **A node whose own copy is out of service keeps telling its sockets.** A
   copy that is wrong — an applier halted on a record it cannot read, rows
   below the log — goes out of service while the node stays in rotation, its
@@ -621,8 +624,11 @@ domains, and its `next_cursor` carries one position per domain — where that
 domain's notices on the page ended — so the next page resumes each exactly
 where it stopped. Each code notice carries what its change says at the read:
 its title and state, the work item it implements, the first kibibyte of its
-description and the findings seats raised that stand open on it, by
-severity.
+description, the findings seats raised that stand open on it, by severity,
+and — while it is open or a draft — where its merge stands: how many of its
+preconditions are met and the one sentence of the first that is not, judged
+for you at the read exactly as the change's own page judges it, so a notice
+never says "ready" past a review that has since asked for changes.
 
 **The queue is whoever signed in.** `#/inbox`, one click from the landing
 screen (Home), is the queue of the principal the request resolved to — a person

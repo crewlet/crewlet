@@ -108,9 +108,10 @@ export function noticeText(service: Service, path: readonly string[]): string {
     return "A new design is made by an agent working a task, and Worklet, where tasks live, is not in use here.";
   }
   // WORKLET'S OWN PAGES ARE THE SERVICE, so they name it once. Elsewhere the
-  // place is named as the reader knows it: the workspace where all of it
-  // reads Worklet (My work), else the one section that does (Settings ›
-  // Expensive tasks).
+  // place is named as the reader knows it: a workspace whose row reads
+  // Worklet by its name, else the section the address shows, since the
+  // workspace as a whole does not read it (My work's Queue, beside a Reviews
+  // tab that is the code host's; Settings › Expensive tasks).
   const row = workspaceRow(workspaceOf(path));
   if (row?.key === "worklet") return "Worklet is not in use here.";
   const label = (row?.service ? row.label : sectionOf(path)?.label) ?? "This page";

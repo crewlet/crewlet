@@ -294,14 +294,14 @@ const (
 	// QueueRequeue is an attempt the home queued again after its runner was
 	// lost, its box or its setup failed.
 	QueueRequeue QueueReason = "requeue"
-	// QueueReport is an attempt a person's own CI reported, which no runner
-	// of the engine runs.
-	QueueReport QueueReason = "report"
 )
 
-// QueueReasons is the closed set, in this order.
+// QueueReasons is the closed set, in this order. A person's CI queues
+// nothing: its report is the attempt's claim or its ending, which inserts
+// the row it names ([CheckReported]) — so no row a report made holds a queue,
+// and none is ever claimed by a runner of the engine's.
 func QueueReasons() []QueueReason {
-	return []QueueReason{QueueDispatch, QueueRerun, QueueRequeue, QueueReport}
+	return []QueueReason{QueueDispatch, QueueRerun, QueueRequeue}
 }
 
 // Valid reports a reason this build knows.
@@ -423,6 +423,17 @@ const (
 	// did not cause ([CheckReason.Requeued]) — and, for its dispatch, for any
 	// reason but its dispatch's own error ([CheckReasonDefsInvalid]).
 	CheckRefusalRerunGenuine CheckRefusal = "rerun_genuine"
+	// CheckRefusalNativeCheck is a check of a commit for its target that is
+	// the engine's and a person's CI's at once: a report of a check the
+	// engine queued at that commit, or a rerun of one a person's CI
+	// reports, which that CI runs again and reports. A check of a commit is
+	// one runner's or one CI's, so its rows say one thing of it.
+	CheckRefusalNativeCheck CheckRefusal = "native_check"
+	// CheckRefusalNotPermitted is a principal's write its grant does not
+	// admit: a seat's rerun of a check of a repository it may not write,
+	// of a change it is no author of — or one made for whoever woke its
+	// turn, who may not — and a report by anybody but a person.
+	CheckRefusalNotPermitted CheckRefusal = "not_permitted"
 	// CheckRefusalClaimed is a claim of an attempt another runner holds, or
 	// one that has ended — naming the runner that holds it
 	// ([ChecksResult.Holder]). A runner's refusal, never a tool's: the loser
@@ -444,7 +455,8 @@ const (
 func CheckRefusals() []CheckRefusal {
 	return []CheckRefusal{
 		CheckRefusalRepoDeleted, CheckRefusalRepoArchived, CheckRefusalNoSuchCheck, CheckRefusalNotFinished,
-		CheckRefusalAttemptsExhausted, CheckRefusalRerunGenuine, CheckRefusalClaimed,
+		CheckRefusalAttemptsExhausted, CheckRefusalRerunGenuine, CheckRefusalNativeCheck,
+		CheckRefusalNotPermitted, CheckRefusalClaimed,
 		CheckRefusalBusy, CheckRefusalNotApplied, CheckRefusalUnavailable,
 	}
 }
@@ -557,22 +569,22 @@ type CheckQueued struct {
 	// DefsOID is the blob of the checks file the definition was read from.
 	DefsOID string `json:"defs_oid,omitempty"`
 	// Def is the definition the attempt runs under, carried whole; nil only
-	// for an attempt a person's CI reports, which no runner of the engine
-	// runs.
+	// for an attempt errored at its dispatch ([CheckQueued.Invalid]).
 	Def *CheckDef `json:"def,omitempty"`
 	// Required reports a check the target's protection requires.
 	Required bool        `json:"required,omitempty"`
 	Reason   QueueReason `json:"reason"`
 	// By is who asked for the attempt: the seat or the person who asked for
-	// a rerun, the person whose CI reports it — and nobody for the engine's
-	// own dispatch and requeue, whose record names its node as its actor.
+	// a rerun — and nobody for the engine's own dispatch and requeue, whose
+	// record names its node as its actor.
 	By *Principal `json:"by,omitempty"`
 	// Skipped records the attempt skipped rather than queued: its change
 	// touched none of its paths ([CheckReasonPaths]).
 	Skipped bool `json:"skipped,omitempty"`
 	// Invalid records the attempt ERRORED at its dispatch rather than queued
 	// — a check the target's gate requires, which its checks file defines
-	// in no form that runs ([CheckReasonDefsInvalid]): the file unparsable,
+	// in no form that runs ([CheckReasonDefsInvalid]), at a change's head
+	// or at a protected target's tip (ADR-0091): the file unparsable,
 	// or something at its path that is no file — and says why, at most
 	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
 	// carries no definition, there being none that runs.
@@ -611,12 +623,13 @@ func (q CheckQueued) Validate() error {
 		return checkField("base", "%q is not a commit's whole id", q.Base)
 	case q.DefsOID != "" && (!gitref.ValidOID(q.DefsOID) || q.DefsOID == ZeroOID):
 		return checkField("defs_oid", "%q is not a blob's whole id", q.DefsOID)
-	case (q.Def == nil) != (q.Reason == QueueReport || q.Invalid != ""):
-		return checkField("def", "every attempt the engine runs carries its definition, and one a "+
-			"person's CI reports, or one errored at its dispatch for want of one, carries none")
-	case q.Invalid != "" && (q.Purpose != PurposeHead || q.Reason != QueueDispatch || q.Skipped || !q.Required):
-		return checkField("invalid", "only a change head's required check is errored at its dispatch, for a "+
-			"checks file defining it in no form that runs")
+	case (q.Def == nil) != (q.Invalid != ""):
+		return checkField("def", "every attempt the engine runs carries its definition, and one errored at "+
+			"its dispatch for want of one carries none")
+	case q.Invalid != "" && ((q.Purpose != PurposeHead && q.Purpose != PurposeTip) || q.Reason != QueueDispatch ||
+		q.Skipped || !q.Required):
+		return checkField("invalid", "only a change head's or a protected tip's required check is errored at "+
+			"its dispatch, for a checks file defining it in no form that runs")
 	case len(q.Invalid) > CheckSummaryBytes || !utf8.ValidString(q.Invalid):
 		return checkField("invalid", "%d bytes: at most %d of valid UTF-8 (code.CheckSummaryBytes)",
 			len(q.Invalid), CheckSummaryBytes)
@@ -627,12 +640,9 @@ func (q CheckQueued) Validate() error {
 			"did not touch")
 	case q.QueuedAt.IsZero():
 		return checkField("queued_at", "an attempt names the instant it was queued")
-	case (q.By != nil) != (q.Reason == QueueRerun || q.Reason == QueueReport):
-		return checkField("by", "a rerun names who asked for it and a report the person who sent it, and "+
-			"the engine's own dispatch and requeue name nobody")
-	case q.Reason == QueueReport && (q.By.Kind != PrincipalOperator || q.By.Seat == ""):
-		return checkField("by", "a check is reported by a person: a credential bound to the human seat "+
-			"they hold")
+	case (q.By != nil) != (q.Reason == QueueRerun):
+		return checkField("by", "a rerun names who asked for it, and the engine's own dispatch and requeue "+
+			"name nobody")
 	}
 	if q.Def != nil {
 		if err := q.Def.Validate(); err != nil {
@@ -743,6 +753,36 @@ type CheckFinished struct {
 	// FinishedAt is the instant the attempt ended, by its runner's clock or
 	// its reporter's writer's.
 	FinishedAt time.Time `json:"finished_at"`
+	// Routing is whom the record concerns ([ChangeRouting]): the authors of
+	// the live change whose current head the ending fails, and its actor —
+	// the head's pusher, or the person whose CI reported it — STAMPED BY THE
+	// CHECKS WRITER, nil for any other ending.
+	// Under the condition the checks subject states, it takes {Name:
+	// "CheckFinished.Routing", Since: 2, Op: "check_finished", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing *ChangeRouting `json:"routing,omitempty"`
+}
+
+// failsItsHead reports an ending that leaves its check failing until somebody
+// acts: a measurement that failed, or an error the home queues no next attempt
+// for — one its infrastructure did not cause ([CheckReason.Requeued]), or the
+// attempt the home's own requeue stops at ([AutoRequeueAttempts]).
+func (f CheckFinished) failsItsHead() bool { return failsAHead(f.State, f.Reason, f.Attempt) }
+
+// failsItsHead is [CheckFinished.failsItsHead] of the ending r keeps: whose
+// day an applied ending is counted on (checkswriter.go's announcement).
+func (r CheckRow) failsItsHead() bool { return failsAHead(r.State, r.Reason, r.Attempt) }
+
+// failsAHead reports an ending in state for reason, of attempt, that leaves a
+// check failing until somebody acts ([CheckFinished.failsItsHead]).
+func failsAHead(state CheckState, reason CheckReason, attempt int) bool {
+	switch state {
+	case CheckStateFailed:
+		return true
+	case CheckStateErrored:
+		return !reason.Requeued() || attempt >= AutoRequeueAttempts
+	}
+	return false
 }
 
 // Validate refuses an ending no writer forms.
@@ -788,6 +828,8 @@ func (f CheckFinished) Validate() error {
 			"seat they hold")
 	case f.FinishedAt.IsZero():
 		return checkField("finished_at", "an ending names the instant it ended")
+	case f.Routing != nil:
+		return stampedRouting("finished", f.Routing)
 	}
 	if f.Reporter != nil {
 		if err := f.Reporter.Validate(); err != nil {

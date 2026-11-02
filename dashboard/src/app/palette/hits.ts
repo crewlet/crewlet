@@ -21,6 +21,7 @@ import {
   pathShown,
   serviceShown,
   workspaceRow,
+  workspaceShown,
   type Destination,
   type ServicesRun,
   type SidebarPlace,
@@ -316,8 +317,14 @@ export function destinationHits(
   runs: ServicesRun,
 ): Hit[] {
   // A PLACE READING A SERVICE THE COMPANY DOES NOT RUN IS NO DESTINATION, as
-  // it is no row (`nav.ts`'s `serviceShown`).
-  const offered = DESTINATIONS.filter((d) => serviceShown(d, runs));
+  // it is no row (`nav.ts`'s `serviceShown`) — and a workspace's own entry is
+  // offered exactly where its row is (`workspaceShown`), because it opens
+  // where the row does: My work, whose landing section is Worklet's, is a
+  // row where only the code host runs, and its entry opens its Reviews.
+  const offered = DESTINATIONS.filter((d) => {
+    const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
+    return row ? workspaceShown(row, runs) : serviceShown(d, runs);
+  });
   const held = standing === null || standing.anonymous ? null : standing.grants;
   return rankedInTiers(offered, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => {
     // A WORKSPACE'S OWN ENTRY OPENS WHERE ITS ROW DOES ([landingPath]), and
@@ -330,7 +337,7 @@ export function destinationHits(
       id: `nav-${d.key}`,
       icon: d.icon,
       label: d.label,
-      hint: row ? rowHint(d.hint, row, standing) : lockedHint(d, standing),
+      hint: row ? rowHint(d.hint, row, standing, runs) : lockedHint(d, standing),
       go: () => nav.to(path),
     };
   });
@@ -378,18 +385,21 @@ export function destinationGroups(
 /**
  * What opens some part of a workspace, as its sidebar row is locked
  * (`workspaceOpen`): the workspace's own grants, else nothing where any
- * section is open to every reader, else any grant that opens one section.
+ * section the company runs is open to every reader, else any grant that opens
+ * one of those — so My work needs Worklet where its Reviews is not offered,
+ * and nothing where it is.
  */
-function workspaceNeeds(row: WorkspaceRow): readonly Grant[] | undefined {
+function workspaceNeeds(row: WorkspaceRow, runs: ServicesRun): readonly Grant[] | undefined {
   if (row.grants && row.grants.length > 0) return row.grants;
-  if (row.personal || row.sections.length === 0) return undefined;
-  if (row.sections.some((s) => s.personal || !s.grants || s.grants.length === 0)) return undefined;
-  return [...new Set(row.sections.flatMap((s) => s.grants ?? []))];
+  const sections = row.sections.filter((s) => serviceShown(s, runs));
+  if (row.personal || sections.length === 0) return undefined;
+  if (sections.some((s) => s.personal || !s.grants || s.grants.length === 0)) return undefined;
+  return [...new Set(sections.flatMap((s) => s.grants ?? []))];
 }
 
 /** A workspace's own entry's hint, and what opens its row where the reader lacks it ([workspaceNeeds]). */
-function rowHint(hint: string, row: WorkspaceRow, standing: Standing): string {
-  const needs = workspaceNeeds(row);
+function rowHint(hint: string, row: WorkspaceRow, standing: Standing, runs: ServicesRun): string {
+  const needs = workspaceNeeds(row, runs);
   if (standing === null || !needs || needs.length === 0) return hint;
   if (standing.anonymous) return `${hint} · needs sign-in`;
   return holdsAny(standing.grants, needs) ? hint : `${hint} · needs ${accessNames(needs)} access`;

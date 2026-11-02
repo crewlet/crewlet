@@ -201,8 +201,10 @@ func (e *estate) decidedRecord(b *testing.B, repo string, pushes []PushEntry) ([
 	ctx := context.Background()
 	if err := e.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		entries, answers, changeRows, _, err = decideBatch(ctx, tx, repo, batch, DefaultLimits(),
+		var moves batchMoves
+		entries, answers, moves, _, err = decideBatch(ctx, tx, repo, batch, DefaultLimits(),
 			DefaultDeletedRetention, SeatRules{}, applyClock, &verdicts{})
+		changeRows = moves.rows
 		return err
 	}); err != nil {
 		b.Fatalf("decide the record: %v", err)

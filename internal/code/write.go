@@ -88,12 +88,28 @@ const (
 	// holds its old head. At most [MaxRebaseCommits] commits, none a merge;
 	// the first that conflicts stops it, nothing stored.
 	WriteRebaseChange EngineWriteKind = "rebase_change"
+	// WriteRevertChange reverts a MERGED change ([EngineWrite.Change]) on a
+	// NEW branch ([EngineWrite.Ref], which must not exist) started at its
+	// target's tip: ONE commit undoing what the change's merge brought into
+	// its target — its merge_oid against the target it was merged onto,
+	// which is that commit's first parent for a merge commit (git's mainline
+	// 1) and for a squash, and the change's own range for a fast-forward,
+	// from the base its head revision recorded — landed as ONE PUSH whose
+	// record opens the change "Revert <repo>!<n>" into the same target
+	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
+	// not apply cleanly stops it, nothing stored, every conflicting path
+	// named. A write is no record (this file's doc), so the kind takes no
+	// versionedFields row; it crosses the estate's wire to the git node
+	// under the code domain's stated condition (M3-O84 §2 item 5: no build
+	// carrying the domain has run without it), and the push it lands opens
+	// its change through PushEntry.Change, under the condition its doc states.
+	WriteRevertChange EngineWriteKind = "revert_change"
 )
 
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange}
+		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange, WriteRevertChange}
 }
 
 // Valid reports a kind this build knows.
@@ -106,7 +122,7 @@ func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(
 // (internal/code/host's merge.go).
 func (k EngineWriteKind) Commits() bool {
 	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions ||
-		k == WriteRebaseChange
+		k == WriteRebaseChange || k == WriteRevertChange
 }
 
 // BuildDeadline is the git run time a write of the kind is given for its
@@ -239,12 +255,9 @@ type EngineWrite struct {
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
 	// too — and "" for a merge its gate holds.
 	Override string `json:"override,omitempty"`
-	// CloseTask and AutoRevert are what a merge_change onto a QUEUE TARGET
-	// records on its entry ([Enqueue]): whether its landing closes its work
-	// item, and the enqueuer's consent to a revert of a landing of it that
-	// breaks the target.
-	CloseTask  bool `json:"close_task,omitempty"`
-	AutoRevert bool `json:"auto_revert,omitempty"`
+	// CloseTask is what a merge_change onto a QUEUE TARGET records on its
+	// entry ([Enqueue]): whether its landing closes its work item.
+	CloseTask bool `json:"close_task,omitempty"`
 	// Home is whether this attempt was asked of the walk's EFFECTIVE HOME —
 	// stamped by the router's keyed git walk on every attempt
 	// ([GitQuery.Home]'s rule), never by a caller — the one node that may
@@ -329,6 +342,10 @@ type EngineWriteResult struct {
 	// change's build (a conflict, not_fast_forward, too_large) is Refusal's,
 	// as any write's is.
 	Merge *MergeAnswer `json:"merge,omitempty"`
+	// Change is the change a revert_change's push opened — or, beside an
+	// outcome, why it opened none ([PushChangeRefusals]) — and nil for every
+	// other kind, and for a revert refused before its push.
+	Change *ChangeAnswer `json:"change,omitempty"`
 }
 
 // MergeAnswer is what a merge_change came to beside an engine write's own
@@ -436,6 +453,11 @@ const (
 	// [MaxRebaseCommits] commits its target does not hold: a history that
 	// long is rebased in a coding box.
 	WriteTooManyCommits WriteRefusal = "too_many_commits"
+	// WriteNotMerged is a revert_change of a change that is not merged, or
+	// whose merge the rows cannot place yet — a fast-forward whose head
+	// revision's base its home has not recorded, or a target gone since — so
+	// there is nothing, or nothing yet, to revert.
+	WriteNotMerged WriteRefusal = "not_merged"
 )
 
 // WriteRefusals is the closed set.
@@ -443,7 +465,7 @@ func WriteRefusals() []WriteRefusal {
 	return []WriteRefusal{WriteConflict, WriteNothingChanged, WriteEditNotFound, WriteEditAmbiguous,
 		WriteEditBinary, WriteEditLineEndings, WritePathConflict, WriteNotFound, WriteNotAFile, WriteMergeCommit,
 		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap, WriteNotFastForward,
-		WriteTooManyCommits}
+		WriteTooManyCommits, WriteNotMerged}
 }
 
 // Valid reports a refusal this build knows.
@@ -586,8 +608,9 @@ const (
 	// PUT: objstore.MiBPace, one mebibyte at the pace floor every object
 	// transfer is held to. A write's bundle is a few kilobytes in the common
 	// case, and its one PUT a first byte's wait (BenchmarkEngineWrite: a p99
-	// of 221 ms against the S3 fake answering 200 ms late, sixty-four writes
-	// at once, under a hundredth of this); a larger one on a bucket at the floor is
+	// of 265 ms at the most against the S3 fake answering 200 ms late,
+	// sixty-four writes at once, under a hundredth of this); a larger one on a
+	// bucket at the floor is
 	// answered busy BEFORE its upload when the caller's deadline cannot hold
 	// it and the proposal after it (internal/code/host's deadline rule), so a
 	// slow bucket costs a refusal, never a PUT nobody proposes.
@@ -799,9 +822,10 @@ func (w EngineWrite) validSuggestions() error {
 		switch {
 		case !gitref.ValidOID(s.BlobOID) || s.BlobOID == ZeroOID:
 			return fmt.Errorf("%w: %s.blob_oid: %q is not a whole object id", ErrInvalid, at, s.BlobOID)
-		case s.LineStart < 1 || s.LineEnd < s.LineStart:
+		case s.LineStart < 1 || s.LineEnd < s.LineStart || s.LineEnd > MaxAnchorLine:
 			return fmt.Errorf("%w: %s: lines %d to %d: a finding's lines count from 1, the last at or past the "+
-				"first", ErrInvalid, at, s.LineStart, s.LineEnd)
+				"first and at most %d, the most lines a file holds", ErrInvalid, at, s.LineStart, s.LineEnd,
+				MaxAnchorLine)
 		}
 		if why := textProblem(s.Text, MaxSuggestionBytes, "suggestion"); why != "" {
 			return fmt.Errorf("%w: %s.text: %s", ErrInvalid, at, why)
@@ -839,8 +863,7 @@ func (w EngineWrite) validKind() error {
 	files := field{"files", len(w.Files) > 0}
 	suggestions := field{"suggestions", len(w.Suggestions) > 0}
 	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
-		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask},
-		{"auto_revert", w.AutoRevert}}
+		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
 	switch w.Kind {
 	case WriteMergeChange:
 		return w.validMerge(want(head), none(commit, files, base, message, suggestions))
@@ -851,6 +874,17 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		if err := none(append([]field{commit, files, base, message, suggestions}, merging[1:]...)...); err != nil {
+			return err
+		}
+		if w.Change < 1 {
+			return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+		}
+		return nil
+	case WriteRevertChange:
+		// A NEW BRANCH AT ITS TARGET'S TIP, which the git node reads: the
+		// caller names the change and the branch, and at most a message of
+		// its own in place of the engine's.
+		if err := none(append([]field{head, commit, files, base, suggestions}, merging[1:]...)...); err != nil {
 			return err
 		}
 		if w.Change < 1 {
@@ -906,9 +940,7 @@ func (w EngineWrite) validKind() error {
 // within [MaxOverrideReasonBytes] of valid text. A merge's message is the
 // engine's own — its change's reference and title — so it carries none, nor
 // files, a base or a commit; its Ref is its change's target and its
-// ExpectedHead its change's head. AutoRevert and CloseTask ride an enqueue,
-// and an override merges directly, so a consent beside an override is a
-// write asking two things.
+// ExpectedHead its change's head.
 func (w EngineWrite) validMerge(fields ...error) error {
 	for _, err := range fields {
 		if err != nil {
@@ -920,9 +952,6 @@ func (w EngineWrite) validMerge(fields ...error) error {
 		return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 	case !w.Method.Valid():
 		return fmt.Errorf("%w: method: %q is not one of %s", ErrInvalid, w.Method, words.Or(MergeMethods()))
-	case w.Override != "" && w.AutoRevert:
-		return fmt.Errorf("%w: auto_revert: an override merges the change directly, and a consent to a revert "+
-			"rides its entry in its target's queue", ErrInvalid)
 	}
 	if why := textProblem(w.Override, MaxOverrideReasonBytes, "merge's override reason"); why != "" {
 		return fmt.Errorf("%w: override: %s", ErrInvalid, why)

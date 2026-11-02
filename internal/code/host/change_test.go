@@ -3,10 +3,13 @@ package host_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -37,14 +40,37 @@ func remoteSaid(res codetest.Pushed, line string) bool {
 	return strings.Contains(res.Stderr, "remote: crewlet: "+line)
 }
 
+// remoteRest is the rest of the line git printed as `remote: crewlet: `
+// then prefix, trimmed of the padding git's sideband ends a remote line with,
+// and whether git printed one.
+func remoteRest(res codetest.Pushed, prefix string) (string, bool) {
+	for line := range strings.SplitSeq(res.Stderr, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "remote: crewlet: "+prefix); ok {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return "", false
+}
+
+// changePage is the address of change n of the case's repository's page,
+// as git is to print it: the deployment's base the host was told, the
+// dashboard's shell and the change's route — spelled out here rather than
+// built by the function under test.
+func changePage(n int64) string {
+	return fmt.Sprintf("%s/dashboard#/code/repos/%s/changes/%d", codetest.ExternalBase, codetest.RepoName, n)
+}
+
 // THE RELAY READS PUSH OPTIONS FROM PROC-RECEIVE: a push carrying `-o change`
 // and the options that shape it — beside an option of a forge's, read by
 // nobody — lands, and its change is opened from what receive-pack handed the
 // hook: titled, described and targeted as the options say, from the branch
-// the push set, its pusher its owner; and git prints which change it opened.
+// the push set, its pusher its owner; and git prints which change it opened,
+// linking its page. The branch's next push names the same change, revised,
+// and links the same page.
 //
-// Mutation: answer git's version block `version=1` alone, and git hands the
-// hook no option: no change opens.
+// Mutations: answer git's version block `version=1` alone, and git hands the
+// hook no option: no change opens; print the opened line with no link — red;
+// print the updated line with no link — red.
 func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -58,8 +84,8 @@ func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 	if !res.OK("refs/heads/feature") {
 		t.Fatalf("a push with options did not land: %s", res)
 	}
-	if !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
-		t.Fatalf("git printed no change opened: %s", res)
+	if link, ok := remoteRest(res, "change "+codetest.RepoName+"!1 opened: "); !ok || link != changePage(1) {
+		t.Fatalf("git printed no change opened linking %s (%q, %v): %s", changePage(1), link, ok, res)
 	}
 	got, ok := changeNumbered(t, c, 1)
 	if !ok {
@@ -70,6 +96,15 @@ func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 		got.OwnerKind != code.PartyPerson || got.State != code.ChangeStateOpen {
 		t.Fatalf("the change the push opened is %+v, want ceo's change from feature into release at %s, as its "+
 			"options say", got.ChangeRow, head)
+	}
+
+	p.Commit(work, map[string]string{"README.md": "three\n"}, "Retry the upload twice")
+	res = p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:refs/heads/feature")
+	if !res.OK("refs/heads/feature") {
+		t.Fatalf("the change's next push did not land: %s", res)
+	}
+	if link, ok := remoteRest(res, "change "+codetest.RepoName+"!1 updated: "); !ok || link != changePage(1) {
+		t.Fatalf("git printed no change updated linking %s (%q, %v): %s", changePage(1), link, ok, res)
 	}
 }
 
@@ -93,6 +128,80 @@ func TestAChangeAPushOpensIsTitledByItsHeadCommit(t *testing.T) {
 	if got == nil || got.Title != "Retry the upload once more" || got.State != code.ChangeStateDraft ||
 		got.TargetRef != "refs/heads/main" {
 		t.Fatalf("the change the push opened is %+v, want a draft titled by its head's subject into main", got)
+	}
+}
+
+// A PUSHED CHANGE IS TITLED WHATEVER ITS BRANCH IS NAMED: a commit with no
+// message titles its change by the branch's name, made a title — and a name
+// git accepts may hold U+0085, a C1 control character a title refuses as a
+// line break — so a push of such a commit to such a branch, asking for a
+// change, lands and opens it, never refusing the push for a title nobody
+// wrote.
+//
+// Mutation: title it by the branch's name raw (defaultTitle) — the receiver
+// refuses its own proposal and nothing of the push lands, red.
+func TestAPushedChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	p.Git().Run(t, work, "commit", "-q", "--allow-empty", "--allow-empty-message", "-m", "")
+	const branch = "refs/heads/a\u0085b"
+	res := p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:"+branch)
+	if !res.OK(branch) || !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
+		t.Fatalf("a push of a commit with no message to a branch holding U+0085, asking for a change: %s", res)
+	}
+	got, _ := changeNumbered(t, c, 1)
+	if got == nil || got.Title != "a b" || got.SourceRef != branch {
+		t.Fatalf("the change the push opened is %+v, want one from %q titled by its name, made a title", got,
+			branch)
+	}
+}
+
+// A PUSHED CHANGE'S TITLE IS READ BESIDE ITS UPLOAD: the subject a change is
+// titled by where its options name none is read by a git process, which a
+// busy read lane holds up to its slot wait — and the read refuses nothing,
+// so the push's bundle starts for the object store while it is still held,
+// and the change it opens carries the subject once it is read.
+//
+// Mutation: read the title before the upload (land: run titleChange's work
+// before introduceAndStore, handing it none) — no upload starts while the
+// read is held, red.
+func TestAPushedChangesTitleIsReadBesideItsUpload(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	titling, release := host.HoldGit(c.Fleet.Nodes()[0].Host(), "cat-file", "commit")
+	t.Cleanup(release)
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "Retry the upload")
+	uploading := make(chan struct{})
+	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Reached: uploading})
+
+	done := make(chan codetest.Pushed, 1)
+	go func() {
+		done <- p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:refs/heads/feature")
+	}()
+	reachedFirst(t, titling, done)
+	// Ten seconds is the wait the package's held-step cases give a step that
+	// should start at once: an upload that starts only once the read ends
+	// never starts while it is held, however long this waits.
+	select {
+	case <-uploading:
+	case res := <-done:
+		t.Fatalf("the push ended while its change's title was held: %s", res)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the push's upload did not start while its change's title was read")
+	}
+	release()
+	res := <-done
+	if !res.OK("refs/heads/feature") || !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
+		t.Fatalf("a push whose change's title was read beside its upload: %s", res)
+	}
+	if got, _ := changeNumbered(t, c, 1); got == nil || got.Title != "Retry the upload" {
+		t.Fatalf("the change the push opened is %+v, want it titled by its head's subject", got)
 	}
 }
 

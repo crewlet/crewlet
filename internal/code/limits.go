@@ -195,19 +195,26 @@ const (
 	// an unset stream.code_log_max_bytes derives beside a mutation log of
 	// the tracker's declared size (TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers),
 	// so the log the suites provision and the log a node creates are sized
-	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
-	// what this log takes a day at the reference company once seats push,
-	// each push priced as a coding box's, the most a seat's push takes:
-	// 3 000 pushes at the MEASURED 1 555 bytes a seat's coding box's push
-	// alone in its record (BenchmarkPushLogBytes), 4.7 MB, the compactions
-	// that merge their packs and the sweeps of what those retired at the
-	// MEASURED 108 and 44 bytes a push (internal/code/compact's steady arm
-	// at the floor), 0.5 MB, and its git clients' barriers at BarrierRecordBytes,
-	// 2.4–5.0 MB, against the tracker's measured 9.9 MB of records and
-	// 2.2 MB of barriers, every record in its signed frame.
+	// by one rule — config's DerivedCodeLogNumerator, which weighs the share
+	// against what it costs the logs beside it, since every node reserves
+	// this log whether or not the company hosts code, and prices what this
+	// log takes a day at the reference company, each push priced
+	// as a coding box's, the most a seat's push takes: 3 000 pushes at the
+	// MEASURED 1 604 bytes a seat's coding box's push alone in its record
+	// (BenchmarkPushLogBytes), 4.8 MB, the compactions that merge their
+	// packs and the sweeps of what those retired at the MEASURED 108 and 44
+	// bytes a push (internal/code/compact's steady arm at the floor),
+	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
+	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
+	// records, 14.2–90.6 MB (each MEASURED as its writer forms it,
+	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
+	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
+	// record in its signed frame. Two thirds is below that day: a company
+	// whose seats open changes sets its own ratio (DerivedCodeLogNumerator
+	// says how).
 	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and
-	// no barriers, which put the two logs on "the same order" rather than at
-	// the ratio a blocked trim fills both in the same time.
+	// no barriers, which put the two logs on "the same order" rather than
+	// weighing the share against what it costs the logs beside it.
 	CodeLogMaxBytes = (16 << 30) * config.DerivedCodeLogNumerator / config.DerivedCodeLogDenominator
 
 	// CodeLogDuplicates is the window the broker collapses a repeated
@@ -425,9 +432,11 @@ const (
 
 	// PruneGrace is how long a ref's DROP is kept — the object a forced
 	// update or a deletion moved a ref off, a code_ref_drops row — and so how
-	// long what only that object reached still counts as reachable to
-	// whatever drops a repository's unreachable objects: history force-pushed
-	// away or deleted stays fetchable by its id for that long after the drop.
+	// long what only that object reached still counts as reachable to the
+	// maintainer's weekly expunge: history force-pushed away or deleted stays
+	// fetchable by its id for that long after the drop — unless a person
+	// purges the repository's unreachable objects, which keeps no grace
+	// (ADR-0092).
 	//
 	// FOURTEEN DAYS, git's own gc.pruneExpire default (2.weeks.ago): the
 	// grace anybody who runs git expects a repository's unreachable objects
@@ -440,6 +449,42 @@ const (
 	// at the edge of fourteen days — a policy's edge, where RetireGrace's
 	// margin guards a read in flight.
 	PruneGrace = 14 * 24 * time.Hour
+
+	// ExpungeInterval is how often a repository's maintainer ASKS whether an
+	// expunge is due on its own schedule — every active or archived
+	// repository, scratch ones included, last expunged this long ago or never
+	// ([ReadQuery.ExpungedBefore]) — and how long a repository found not due
+	// is left unscanned after (internal/code/compact).
+	//
+	// SEVEN DAYS: "at most weekly", half of [PruneGrace], so an object a drop
+	// left is taken within a week of its grace ending, and a repository's
+	// whole history is walked for its share at most once a week however hot
+	// it is — the scan reads every object a ref reaches.
+	ExpungeInterval = 7 * 24 * time.Hour
+
+	// ExpungeShare is the share of a repository's live pack bytes past which
+	// its unreachable bytes make an expunge due on the maintainer's schedule:
+	// due once what no ref, no drop within the grace and no row in flight
+	// reaches is MORE than 1/ExpungeShare of them — a quarter.
+	//
+	// FOUR, A JUDGMENT: an expunge rewrites the packs it takes, and every git
+	// node holding the repository downloads the kept packs again, so below a
+	// quarter each git node downloads more than three kept bytes for every
+	// byte freed — a fleet-wide re-download to win back less than the
+	// repository grows by in a busy week. Unreachable bytes count against
+	// code.limits.repo_max_bytes (a push is refused repo_size on live bytes),
+	// so a quarter is also the most of a repository's quota garbage holds
+	// before it is taken back.
+	ExpungeShare = 4
+
+	// ExpungeMinBytes is the least a repository's unreachable bytes must be
+	// for an expunge to be due on the maintainer's schedule, whatever their
+	// share: 64 MiB, below which the fleet's re-download of the kept packs and
+	// the rewrite's own walk of the whole history cost more than the bytes
+	// they free. PROVISIONAL: BenchmarkExpunge (internal/code/compact,
+	// repo={100MB,1GB} × share={0.1,0.25,0.5}) prices a cycle's walk, build
+	// and re-download against the bytes it frees, and decides it.
+	ExpungeMinBytes = 64 << 20
 
 	// RefExpiry is a SEAT BRANCH'S IDLE WINDOW: how long a branch a seat set
 	// in its own namespace (code_refs.seat, [SeatNamespace]) goes unset
@@ -454,8 +499,10 @@ const (
 	// hold hundreds of dead branches against MaxRefsPerRepo. A deletion is
 	// restorable from its push row's Old while the push history keeps the row
 	// ([PushHistory], 181 days) and the repository still holds the commit —
-	// which its deletion's code_ref_drops row keeps for PruneGrace at least,
-	// as for every deletion. And it is code_refs_near_limit's window
+	// which its deletion's code_ref_drops row keeps from the weekly expunge
+	// for PruneGrace, as for every deletion, and from nothing after it nor
+	// from a person's purge, which keeps no grace (ADR-0092). And it is
+	// code_refs_near_limit's window
 	// ([NearLimit]): a repository whose live refs and the refs it set within
 	// it together reach MaxRefsPerRepo reaches the bound within it at that
 	// rate, or holds it already, and the lifecycle, which deletes nothing set within it, is not
@@ -467,6 +514,20 @@ const (
 	// description is one paragraph, riding every settings record and every
 	// listing row.
 	MaxDescriptionBytes = config.CodeMaxDescriptionBytes
+
+	// MaxRemoteURLBytes is config.CodeMaxRemoteURLBytes: the longest URL a
+	// repository's mirror or its import names, which every record of its
+	// settings carries as it carries the description.
+	MaxRemoteURLBytes = config.CodeMaxRemoteURLBytes
+
+	// MaxCredentialRefBytes is config.CodeMaxCredentialRefBytes: the longest
+	// ${NAME} reference a mirror or an import names its credential by — all
+	// a record carries of one.
+	MaxCredentialRefBytes = config.CodeMaxCredentialRefBytes
+
+	// MaxMirrorRefs is config.CodeMaxMirrorRefs: the most ref patterns a push
+	// mirror names, as many as a repository carries protection rules.
+	MaxMirrorRefs = config.CodeMaxMirrorRefs
 
 	// MaxChangeBodyBytes is the longest body — a change's description — a
 	// change carries: as long as a task's body in Worklet,
@@ -502,8 +563,10 @@ const (
 	// tracker's own bound on the people one item mentions (its MaxMentions),
 	// because a request is a mention that waits for an answer — and the
 	// readers who weigh a change's readiness read each requested reviewer's
-	// latest verdict, so the set they read is bounded by it too. A reviewer
-	// withdrawn no longer counts against it.
+	// latest verdict, so the set they read is bounded by it too. Only an ask
+	// still WAITING counts against it: one withdrawn, one its reviewer's
+	// review answered and one its change's end ended do not
+	// ([ReviewerState]).
 	MaxReviewersPerChange = 32
 
 	// MaxReviewNoteBytes is the longest note a request for review carries —
@@ -553,7 +616,12 @@ const (
 	// what one review's record rewrites when it supersedes them — 1 024
 	// narrow rows beside its own 64 findings and their texts, a third of
 	// [MaxRecordRows] — so a review is always one record however long a
-	// reviewer has followed a change.
+	// reviewer has followed a change. What that costs the decide and the
+	// apply together at the bound — a reviewer holding all of them, carrying
+	// half, superseding the rest and raising MaxFindingsPerReview more — is
+	// 24 ms (BenchmarkTheWidestReview, -benchtime 20x, one run, two cores of
+	// the test runner): its apply in the domain's one applier on every data
+	// node, its decide once in each compare-and-set round of its publish.
 	MaxStandingFindings = 1 << 10
 
 	// MaxRoutingBytes is the room every record of a change keeps for the
@@ -898,11 +966,11 @@ const (
 	// counts it so (busy.go's `waited`).
 	//
 	// A ROUTED burst reaches it too: the estate answers a node's proposals
-	// on a registration of their own whose concurrency is this queue and
-	// the batch ahead of it (internal/estate's proposalAnswers), so the
-	// bound a burst meets is this one, refused busy at once, never the
-	// registration's — past which a push would wait unseen in the broker's
-	// buffer for a slot.
+	// on a registration of their own, the committer's share of which is
+	// this queue and the batch ahead of it (CommitterNodeProposals; the
+	// lane is internal/estate's proposalAnswers), so the bound a burst
+	// meets is this one, refused busy at once, never the registration's —
+	// past which a push would wait unseen in the broker's buffer for a slot.
 	CommitterInbox = 1_024
 
 	// CommitterInboxBytes is the most one repository's queue may weigh, by
@@ -928,8 +996,9 @@ const (
 	// Each repository's queue is bounded on its own, and nothing else bound
 	// them together: a node is the committer of every repository rendezvous
 	// ranks it first for, and the estate answers its proposals on a
-	// registration of their own as wide as one repository's whole queue
-	// (CommitterInbox), so a thousand of the largest pushes at once — each
+	// registration of their own whose committer's share is one repository's
+	// whole queue (CommitterNodeProposals), so a thousand of the largest
+	// pushes at once — each
 	// one a receive-pack some receiving node holds open, from as many
 	// repositories — held about a gibibyte of entries on the committer, and
 	// as much again decoded. The largest entry this domain admits is
@@ -950,6 +1019,98 @@ const (
 	// four repositories' worth at once and are refused busy past it, and the
 	// client runs git push again.
 	CommitterNodeBytes = 4 * CommitterInboxBytes
+
+	// CommitterNodeProposals is the most proposals one node's committer HOLDS
+	// at once, by COUNT, across every repository — each from its queueing to
+	// its caller's answer, as CommitterNodeBytes counts them: ONE
+	// REPOSITORY'S FULL QUEUE AND THE BATCH IN FLIGHT AHEAD OF IT
+	// (CommitterInbox and MaxPushesPerRecord), 1 088. Past it a proposal is
+	// refused busy at once, as past the node's bytes.
+	//
+	// The node's bytes alone never bound the count: pushes of a kilobyte or
+	// two meet CommitterNodeBytes only past some forty thousand of them, and
+	// each repository's queue holds CommitterInbox, so small pushes to two
+	// repositories at once already held more than the estate answers on the
+	// lane its proposals have (internal/estate's proposalAnswers) — and those
+	// past the lane waited unseen in the broker's buffer for a slot, behind
+	// the very bursts a busy answer would have turned away. Bounded by count,
+	// the committer's share of that lane is this many, which the estate sizes
+	// the lane by beside the change writer's and the checks writer's shares
+	// (ChangeWriterNodeWrites, ChecksWriterNodeWrites), so a burst meets the
+	// committer's own refusal at once. One repository's burst is still taken
+	// whole; several repositories' together share it, refused busy past it as
+	// one repository's past its queue — what the lane's own bound did before,
+	// with the refusal said rather than the wait left unseen.
+	CommitterNodeProposals = CommitterInbox + MaxPushesPerRecord
+
+	// MaxChangeWritesWaiting is the most writes of ONE change's conversation
+	// one node's change writer holds at once — the one publishing and those
+	// waiting for its turn ([ChangeWriter]): SIXTY-FOUR. A change's widest
+	// burst is everybody it concerns writing at once — its reviewers
+	// (MaxReviewersPerChange) and as many again of its authors and the
+	// people talking on it — and that queue drains in well under a second
+	// on a healthy log: one change's single flight lands a write every 4.3 ms
+	// (BenchmarkAChangesWritesInTurn, -benchtime 64x, one run, on one
+	// embedded member and two cores of the test runner), so sixty-four drain
+	// in about 0.3 s, where the wait a write may make for its turn is up to a whole
+	// CommitBudget. Past it the change is written faster than its single
+	// flight lands them, or its publish is held — an election, or the
+	// publisher's wait on a lagging applier — and every write past it would
+	// only hold a slot of the node's proposal lane while it waited to be
+	// refused: so it is refused busy AT ONCE, undecided, and its asker sends
+	// it again. It keeps one hot change from taking more than a sixteenth of
+	// what the node's writer holds (ChangeWriterNodeWrites).
+	MaxChangeWritesWaiting = 64
+
+	// ChangeWriterNodeWrites is the most writes of changes' conversations one
+	// node's change writer holds at once, across every change: SIXTEEN
+	// CHANGES' widest bursts (MaxChangeWritesWaiting), 1 024 — what one
+	// repository's committer queue holds of pushes (CommitterInbox), for a
+	// node that writes the conversations of every repository it commits for.
+	// Past it a write is refused busy at once. It is the writer's SHARE of the
+	// estate's proposal lane (internal/estate's proposalAnswers, which sums
+	// the shares), so a burst of comments across a node's changes never
+	// holds the slots a push routed to the node needs.
+	ChangeWriterNodeWrites = 1_024
+
+	// ChangeWriterNodeBytes is the most the writes one node's change writer
+	// holds may weigh together, each by the bytes its record carries
+	// ([ConversationWrite.Validate]'s measure): SIXTY-FOUR OF THE WIDEST — a
+	// review with its findings at MaxConversationBytes — or some sixteen
+	// thousand ordinary comments, which meet ChangeWriterNodeWrites first.
+	// The committer's judgment of a node's memory (CommitterNodeBytes, 64
+	// records' worth of the largest entries), for the same exposure: without
+	// it, a full share of maximal reviews held about a gibibyte decoded,
+	// beside the raw requests the lane holds. Past it a write is refused busy
+	// at once.
+	ChangeWriterNodeBytes = 64 * MaxConversationBytes
+
+	// MaxCheckWritesWaiting is the most writes of ONE repository's checks one
+	// node's checks writer holds at once — the one publishing and those
+	// waiting for its turn ([ChecksWriter]): FOUR CHECKS FILES' WORTH
+	// (MaxChecksPerFile), 256. A repository's widest burst is every check of
+	// a commit claimed, its box named and ended — three writes each, a
+	// commit's file of MaxChecksPerFile checks among them landing together —
+	// beside the next commit's dispatches, and like a change's it drains in a
+	// fraction of the wait a write may make. Past it the repository's checks
+	// are written faster than its single flight lands them, or its publish is
+	// held, and a write is refused busy at once.
+	MaxCheckWritesWaiting = 4 * MaxChecksPerFile
+
+	// ChecksWriterNodeWrites is the most writes of repositories' checks one
+	// node's checks writer holds at once, across every repository: 1 024, as
+	// the change writer's (ChangeWriterNodeWrites) — four repositories'
+	// widest bursts. It is the checks writer's share of the estate's proposal
+	// lane, and past it a write is refused busy at once.
+	ChecksWriterNodeWrites = 1_024
+
+	// ChecksWriterNodeBytes is the most the writes one node's checks writer
+	// holds may weigh together, each by the bytes its record carries: the
+	// change writer's share of a node's memory (ChangeWriterNodeBytes) — some
+	// seven hundred of a check's largest endings (its summary, its output's
+	// tail and its failures at their bounds), while a claim or a dispatch of
+	// a kilobyte or two meets ChecksWriterNodeWrites first.
+	ChecksWriterNodeBytes = ChangeWriterNodeBytes
 
 	// CommitterIdle is how long a repository's committer goroutine waits
 	// with nothing queued before it exits and forgets the repository. A
@@ -1364,6 +1525,31 @@ const (
 	// there are; and thirty-two PUTs at once hold one first buffer of an S3
 	// part each (8 MiB), 256 MiB, on the maintainer that builds them.
 	MaxExpungeOutputs = 32
+
+	// MaxImportRefs is the most refs one import chunk sets and one mirror
+	// sync moves (M6-D19's thousand): MaxCommandsPerPush, the commands a push
+	// may carry, at most three rows each ([commandRows]) — so with
+	// MaxImportPacks packs and the record's own rows a chunk stays under
+	// MaxRecordRows, and an import of a repository holding a hundred thousand
+	// refs is a hundred chunks.
+	MaxImportRefs = MaxCommandsPerPush
+
+	// MaxImportPacks is the most packs one import chunk or mirror sync lands:
+	// MaxExpungeOutputs, for its reason — the packs a home cuts at
+	// CompactPackBytes are uploaded at once, each key minted as its upload
+	// begins, so the last lands within objstore.RecordWithin of the first
+	// however many there are, and thirty-two PUTs hold 256 MiB of S3 part
+	// buffers on the home that builds them.
+	MaxImportPacks = MaxExpungeOutputs
+
+	// MirrorInterval is how often a PULL MIRROR is synced from its source by
+	// its home (internal/code/mirror): FIFTEEN MINUTES, the refresh P8's
+	// decisions promise a mirror (M6-D16) — a constant of its own, never the
+	// retention's interval, which answers another question. A source asked
+	// four times an hour keeps a mirror a quarter of an hour behind at the
+	// most, for one negotiation that brings nothing where nothing moved;
+	// `mirrors_due` lists a mirror once its last sync is this old.
+	MirrorInterval = 15 * time.Minute
 )
 
 // expungeBeginRows is the most rows a begin of n inputs into m outputs — its

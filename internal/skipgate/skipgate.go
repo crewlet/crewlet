@@ -53,20 +53,26 @@
 // An [Environment] entry is only checked in the unlisted direction, since
 // whether it fires is a fact about the machine.
 //
-// # Stale means its test ran, never that its package did
+// # Stale means its test reported, never that its package ran
 //
 // An entry is judged only where this run says something about ITS TEST, and
-// that is decided by [coverage], from three facts: which tests STARTED (each
-// one's test2json `run` record), which packages PASSED, and whether the
-// command NARROWED the tests of the packages it named (a non-empty -run or
-// -skip). A test that started and did not skip is stale, whatever the command.
-// A test that never started is stale only on an unnarrowed run of its package
-// that passed, where every test started, so one that did not is a test that
-// was renamed or deleted. On a narrowed run it is a test the filter left out,
-// and in a package that failed it may be one a panic, -failfast or the timeout
-// never reached: neither says anything about the entry, and a failed package
-// fails the run already. Judging
-// by the package alone, as this gate first did, failed every
+// that is decided by [coverage], from three facts: which tests REPORTED a
+// result of their own (pass, fail or skip), which packages PASSED, and whether
+// the command NARROWED the tests of the packages it named (a non-empty -run or
+// -skip). A test that reported and did not skip is stale, whatever the
+// command. A test that reported nothing is stale only on an unnarrowed run of
+// its package that passed, where every test ran to its result, so one that did
+// not is a test that was renamed or deleted. On a narrowed run it is a test
+// the filter left out. In a package that failed it may be one a panic,
+// -failfast or the timeout never reached, or one that STARTED and never
+// finished because the binary died under it: the -timeout panic inside it, a
+// sibling's panic, the race detector's abort while it sat paused under
+// t.Parallel. None of those says anything about the entry, and a failed
+// package fails the run already. That is why starting is not enough: a test
+// its binary died under has a `run` record and no result (its output is what
+// [read] flushes as orphaned), and judging it by the `run` told the reader of
+// a measurement that hit the timeout to rename or drop its entry. Judging by
+// the package alone, as this gate first did, failed every
 // `go test -run X ./internal/store` with every test that ran green, because a
 // package that ran was taken to have run every entry declared in it.
 //
@@ -170,18 +176,21 @@ type report struct {
 	// NOT what the staleness half judges by. BOTH test targets run a SUBSET
 	// of the tree — `make test` the shared partition, `make test-solo` the
 	// rest — and a -run covers part of one package, so an entry is judged by
-	// its own test ([coverage]: the tests that started, and the packages that
+	// its own test ([coverage]: the tests that reported, and the packages that
 	// passed), never by its package having a record here.
 	ran map[string]bool
 
-	// started is every test the stream said began — its `run` record — keyed
-	// as the short package, NUL, and the test's full name, subtests included.
+	// reported is every test the stream carried a result of its own for —
+	// pass, fail or skip — keyed as the short package, NUL, and the test's
+	// full name, subtests included.
 	//
-	// It is what lets a narrowed run be judged. `go test -run X` runs part of
-	// a package, so ran says the package ran while most of its tests never
-	// did; an entry is judged there only if its own test started. See
-	// [coverage].
-	started map[string]bool
+	// It is what lets a narrowed run, and a failed package, be judged. `go
+	// test -run X` runs part of a package, so ran says the package ran while
+	// most of its tests never did; an entry is judged there only if its own
+	// test reported. A `run` record is not enough: a test whose binary died
+	// under it started and never finished, and the run says nothing about
+	// whether it would have skipped or measured. See [coverage].
+	reported map[string]bool
 
 	// finished is every package whose binary reported its own result, by
 	// FULL import path — the form `go test` was handed and the partition
@@ -218,7 +227,7 @@ func (r report) passed() map[string]bool {
 // writes build errors and toolchain chatter around the stream, and a gate that
 // swallowed those would hide the one failure nobody can debug without them.
 func read(in *bufio.Scanner, out *os.File) report {
-	r := report{ran: map[string]bool{}, started: map[string]bool{},
+	r := report{ran: map[string]bool{}, reported: map[string]bool{},
 		measuredSeen: map[string]bool{}, finished: map[string]finish{}}
 	buffered := map[string][]string{}
 
@@ -277,12 +286,11 @@ func read(in *bufio.Scanner, out *os.File) report {
 
 		key := e.Package + "\x00" + e.Test
 		switch e.Action {
-		case "run":
-			r.started[short(e.Package)+"\x00"+e.Test] = true
 		case "output":
 			buffered[key] = append(buffered[key], e.Output)
 		case "pass", "fail", "skip":
 			r.tests++
+			r.reported[short(e.Package)+"\x00"+e.Test] = true
 			if m := measurement(short(e.Package), e.Test); m != nil {
 				r.measuredSeen[m.Package+"\x00"+m.Test] = true
 			}
@@ -455,7 +463,7 @@ func main() {
 		exit(1)
 	}
 
-	cov := coverage{passed: r.passed(), started: r.started,
+	cov := coverage{passed: r.passed(), reported: r.reported,
 		narrowed: narrows(argv[1:], os.Getenv("GOFLAGS"))}
 	unlisted, stale := Judge(r.skipped, cov)
 	staleMeasured := JudgeMeasured(r.measuredSeen, cov)
@@ -468,10 +476,11 @@ func main() {
 			s.Package, s.Test)
 	}
 	for _, s := range stale {
-		if !cov.started[s.Package+"\x00"+s.Test] {
-			// Judged without starting: an unnarrowed run of its package that
-			// passed, so the test is not there to skip. "Did not skip" would
-			// send the reader looking for a capability that arrived.
+		if !cov.reported[s.Package+"\x00"+s.Test] {
+			// Judged without a result of its own: an unnarrowed run of its
+			// package that passed, where every test that started reported, so
+			// the test is not there to skip. "Did not skip" would send the
+			// reader looking for a capability that arrived.
 			fmt.Fprintf(os.Stderr, "\nskipgate: %s %s is allowed as When: Always and NEVER RAN,\n"+
 				"on a passing run of every test of its package: the test was renamed or\n"+
 				"deleted. Rename or drop the entry in internal/skipgate/allowed.go.\n",
@@ -586,31 +595,36 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 // (or a measurement's not reporting) means anything.
 type coverage struct {
 	// passed is the packages whose binary reported pass ([report.passed]):
-	// the only ones certain to have started every test the command selected.
+	// the only ones certain to have run every test the command selected to
+	// its result.
 	passed map[string]bool
-	// started is the tests that began ([report.started]).
-	started map[string]bool
+	// reported is the tests that reported a result of their own
+	// ([report.reported]).
+	reported map[string]bool
 	// narrowed is whether the command chose a subset of its packages' tests
-	// (see [narrows]). Without it, a test that never started in a package
+	// (see [narrows]). Without it, a test that reported nothing in a package
 	// that passed is a test that is not there.
 	narrowed bool
 }
 
 // judges reports whether this run says anything about one declared test.
 //
-// A test that STARTED is judged whatever the command. One that never started
+// A test that REPORTED its own result is judged whatever the command: it
+// skipped or it did not, it measured or it did not. One that reported nothing
 // is judged only on an unnarrowed run of its package that passed: there every
-// test started, so a declared test that did not was renamed or deleted, and
-// saying so is the half of the gate that keeps the table from describing tests
-// that no longer exist. On a narrowed run it is a test the filter left out —
-// the run says nothing about it, and judging it anyway failed every targeted
-// run of a package that declares one. In a package that FAILED it may be a
-// test the binary never reached — a panic, the race detector, -failfast or the
-// timeout stopped it first — so calling it renamed or deleted would send the
-// reader after the wrong defect; that run fails already, and the next one
-// that passes judges it.
+// test ran to its result, so a declared test that did not was renamed or
+// deleted, and saying so is the half of the gate that keeps the table from
+// describing tests that no longer exist. On a narrowed run it is a test the
+// filter left out — the run says nothing about it, and judging it anyway
+// failed every targeted run of a package that declares one. In a package that
+// FAILED it may be a test the binary never reached — a panic, the race
+// detector, -failfast or the timeout stopped it first — or one the binary
+// died UNDER, which started and never finished; calling either renamed or
+// deleted, or a structural skip that stopped firing, would send the reader
+// after the wrong defect. That run fails already, and the next one that
+// passes judges it.
 func (c coverage) judges(pkg, test string) bool {
-	if c.started[pkg+"\x00"+test] {
+	if c.reported[pkg+"\x00"+test] {
 		return true
 	}
 	return !c.narrowed && c.passed[pkg]

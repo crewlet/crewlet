@@ -88,7 +88,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/3"
+const memoFormat = "page/4"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -180,6 +180,14 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case code.GitBlame:
 		start, end := q.Blame.Range()
 		parts = append(parts, whole[q.Blame.Rev], pathOf(q), strconv.Itoa(start), strconv.Itoa(end), costModel)
+	case code.GitSearch:
+		// The commit read and the ref that named it, then the query's every
+		// part: whichever path cut the page, its hits are the same lines.
+		s := q.Search
+		paths := slices.Compact(slices.Sorted(slices.Values(s.Paths)))
+		parts = append(parts, whole[searchTipKey], whole[searchRefKey], string(s.Mode),
+			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), strconv.Itoa(len(paths)))
+		parts = append(parts, paths...)
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -517,6 +525,21 @@ func appendPage(buf []byte, p memoPage) []byte {
 			w.str(c.Subject)
 			w.int(c.SubjectBytes)
 		}
+	case code.GitSearch:
+		s := a.Search
+		w.str(s.Tip)
+		w.str(s.Ref)
+		w.str(string(s.Via))
+		w.int(s.SkippedFiles)
+		w.flag(s.Truncated)
+		w.int(len(s.Hits))
+		for _, h := range s.Hits {
+			w.str(h.Path)
+			w.str(h.PathB64)
+			w.int(h.Line)
+			w.str(h.Text)
+			w.str(h.Blob)
+		}
 	}
 	return w
 }
@@ -760,6 +783,17 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Blame = b
+	case code.GitSearch:
+		s := &code.SearchAnswer{Tip: r.str(), Ref: r.str(), Via: code.SearchVia(r.str()), SkippedFiles: r.int(),
+			Truncated: r.flag(), Hits: []code.SearchHit{}}
+		if n := r.count(); r.err == nil {
+			s.Hits = make([]code.SearchHit, n)
+			for i := range s.Hits {
+				s.Hits[i] = code.SearchHit{Path: r.str(), PathB64: r.str(), Line: r.int(), Text: r.str(),
+					Blob: r.str()}
+			}
+		}
+		a.Search = s
 	default:
 		return memoPage{}, errMemoPage
 	}

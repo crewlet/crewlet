@@ -138,8 +138,8 @@ func (c *mergeCase) recordFacts(n int64) code.ChangeDue {
 	res, err := seam.Converse(c.Ctx, code.ConversationWrite{OpID: opNow(), Revise: &code.Revise{RepoID: c.repo,
 		ChangeID: d.ID, N: d.Revision, HeadOID: d.Head, TargetRef: d.TargetRef, TargetOID: d.Tip,
 		TargetPosition: d.TipPosition, BaseOID: f.MergeBase, BaseTree: f.BaseTree, HeadTree: f.HeadTree,
-		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmitted, Touched: f.Touched, TouchesAll: f.TouchesAll,
-		Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
+		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
+		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
 	if err != nil || res.Refusal != "" {
 		c.T.Fatalf("record revision %d's facts: %+v %v", d.Revision, res, err)
 	}
@@ -290,6 +290,52 @@ func TestAnUnreadyMergeBuildsNothing(t *testing.T) {
 	}
 }
 
+// A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
+// judges it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who may
+// merge into main, merges a ready change for the unit's lead, who may too,
+// and not for bob, who only reads the repository, nor for nobody — a
+// stranger, or a person who may not act — each refused not_permitted in
+// words saying whom the work is for, nothing built and the change left open.
+//
+// Mutation: mergeVerdict ignoring the write's ceiling — bob's and nobody's
+// merges land, red.
+func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	c := newMergeCase(t, codetest.SoloOptions{}, codetest.Settings(), map[string]string{"README.md": "one\n"})
+	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Merged for somebody")
+	c.meetGate(n, lead())
+	head := c.change(n).Head
+	before := len(c.objects())
+	for _, tc := range []struct {
+		name    string
+		ceiling *code.WriteCeiling
+		says    string
+	}{
+		{"a colleague who only reads", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureBob},
+			"this work is for seat bob"},
+		{"nobody", &code.WriteCeiling{Kind: code.WriteCeilingNobody}, "may change nothing of this company's code"},
+	} {
+		w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+		w.Ceiling = tc.ceiling
+		res, err := c.write(w)
+		if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalNotPermitted ||
+			!strings.Contains(res.Merge.Detail, tc.says) || res.Outcome != "" || res.Commit != "" {
+			t.Errorf("alice's merge for %s answered %+v %v (%+v), want not_permitted saying %q", tc.name, res, err,
+				res.Merge, tc.says)
+		}
+	}
+	if after := len(c.objects()); after != before {
+		t.Errorf("refused merges stored %d objects", after-before)
+	}
+	if ch := c.change(n); ch.State != code.ChangeStateOpen {
+		t.Fatalf("change %d is %s after merges its requesters may not make", n, ch.State)
+	}
+	w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	c.requireMerged(n, res, err)
+}
+
 // movingMain moves main under every merge record it is asked to decide, the
 // first moves times — a person's push landing between the merge's build and
 // its decide — and counts the records asked.
@@ -377,10 +423,91 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 	}
 }
 
+// expungingBuilds answers the first refusals merges it is asked refused
+// expunging, deciding nothing — as the committer refuses a merge whose
+// builder's copy held another drop epoch than the repository's, an expunge
+// having begun between its build and its decide — and hands every later one
+// to the estate.
+type expungingBuilds struct {
+	host.Estate
+	mu       sync.Mutex
+	refusals int
+	asked    int
+}
+
+func (e *expungingBuilds) wrap(inner host.Estate) host.Estate {
+	e.Estate = inner
+	return e
+}
+
+func (e *expungingBuilds) Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	e.mu.Lock()
+	e.asked++
+	refused := e.asked <= e.refusals
+	e.mu.Unlock()
+	if refused {
+		return code.MergeResult{MergeID: p.Merge.MergeID, Refusal: code.MergeRefusalExpunging,
+			Detail: code.ExpungingBuiltDetail(codetest.RepoName, "merge", "its builder", p.DropEpoch,
+				p.DropEpoch+1)}, nil
+	}
+	return e.Estate.Merge(ctx, p)
+}
+
+// A MERGE REFUSED EXPUNGING IS BUILT AGAIN (M6-D4): a merge an expunge's
+// begin overtook between its build and its decide is refused expunging,
+// nothing decided, and its builder builds it again from a copy synced past the
+// begin, as it does a merge whose target moved — the rebuild counted with the
+// target_moved ones, so a merge refused under its fifth build too is answered
+// expunging in the committer's own sentence, the change left open.
+//
+// Mutation: answer the first expunging refusal as the merge's answer, rather
+// than building it again, and the merge refused once is never landed; answer
+// target_moving at the limit, and the last case's refusal is misnamed.
+func TestAMergeRefusedExpungingIsBuiltAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		refusals int
+		merged   bool
+	}{
+		{"refused once", 1, true},
+		{"refused every time", code.MergeRecomputes + 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &expungingBuilds{refusals: tc.refusals}
+			c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}},
+				codetest.Settings(), map[string]string{"README.md": "one\n"})
+			n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Outlive an expunge")
+			w := merge(c.repo, pat(), n, c.change(n).Head, code.MergeMethodMerge)
+			w.Override = "merging through an expunge"
+			res, err := c.write(w)
+			if !tc.merged {
+				if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalExpunging ||
+					!strings.Contains(res.Merge.Detail, "its builder builds it again") ||
+					res.Merge.Recomputes != code.MergeRecomputes || e.asked != code.MergeRecomputes+1 {
+					t.Fatalf("a merge every expunge overtook answered %+v %v (%+v) after %d records, want "+
+						"expunging after %d recomputes", res, err, res.Merge, e.asked, code.MergeRecomputes)
+				}
+				if ch := c.change(n); ch.State != code.ChangeStateOpen {
+					t.Errorf("change %d is %s, want open", n, ch.State)
+				}
+				return
+			}
+			c.requireMerged(n, res, err)
+			if res.Merge.Recomputes != 1 || e.asked != 2 {
+				t.Errorf("the merge answered %d recomputes after %d records, want 1 after 2",
+					res.Merge.Recomputes, e.asked)
+			}
+		})
+	}
+}
+
 // A QUEUE TARGET'S MERGE IS AN ENQUEUE (M5-D9): a target whose gate requires a
-// check takes a change through its queue, so a merge_change of it builds
-// nothing and enqueues the change, answering its entry and its place; main
-// does not move; and a person's override merges it directly, past the queue.
+// check takes a change through its queue, so a merge_change of a change whose
+// head passed it builds nothing and enqueues the change, answering its entry
+// and its place; main does not move; and a person's override merges it
+// directly, past the queue.
 //
 // Mutation: build the merge on a queue target → the record is refused
 // queue_target, red.
@@ -388,12 +515,16 @@ func TestAQueueTargetsMergeIsEnqueued(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
 	settings.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
-		Checks: []string{"unit"}, Landing: code.Landing{Policy: code.LandingPostLand, Depth: 4, Batch: 4},
-		DeleteSource: code.DeleteNone}
+		Checks: []string{"unit"}, Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteNone}
 	c := newMergeCase(t, codetest.SoloOptions{}, settings, map[string]string{"README.md": "one\n"})
 	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Queue me")
 	c.meetGate(n, lead())
 	head := c.change(n).Head
+	// THE HEAD'S REQUIRED CHECK PASSED, for main: the gate an enqueue is
+	// decided by holds a change's head to it.
+	unit := code.CheckKey{RepoID: c.repo, OID: head, Target: "refs/heads/main", Name: "unit", Attempt: 1}
+	queueCheck(t, c.solo(), unit)
+	endCheck(t, c.solo(), unit)
 	before := len(c.objects())
 	w := merge(c.repo, alice(), n, head, code.MergeMethodSquash)
 	res, err := c.write(w)
@@ -441,9 +572,6 @@ func TestAMergeChangeIsHeldToItsShape(t *testing.T) {
 		{"a message", func(w *code.EngineWrite) { w.Message = "mine" }, "message"},
 		{"files", func(w *code.EngineWrite) { w.Files = []code.FileOp{text("a", "a")} }, "files"},
 		{"a long override", func(w *code.EngineWrite) { w.Override = long }, "override"},
-		{"an override and a consent", func(w *code.EngineWrite) {
-			w.Override, w.AutoRevert = "now", true
-		}, "auto_revert"},
 	} {
 		w := ok
 		tc.edit(&w)

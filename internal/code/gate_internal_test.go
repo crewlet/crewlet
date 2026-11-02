@@ -15,8 +15,8 @@ func gatedRules() []Protection {
 			ApprovalsUnless: []ChangeClass{ChangeClassCommentOnly},
 			HumanPaths:      []HumanPath{{Glob: ".crewlet/**", Unless: []ChangeClass{ChangeClassWhitespaceOnly}}},
 			Checks:          []string{"lint", "unit"},
-			Landing:         Landing{Policy: LandingPreLand, Depth: 4, Batch: 4},
-			OwnersApprove:   true, DeleteSource: DeleteSeats, AutoRevert: true, AgentsEditChecks: true,
+			Landing:         Landing{Depth: 4, Batch: 4},
+			OwnersApprove:   true, DeleteSource: DeleteSeats, AgentsEditChecks: true,
 		}},
 		{PushRule: PushRule{Pattern: "refs/heads/release/*", DirectPush: DirectNone}},
 	}
@@ -71,7 +71,6 @@ func TestAnUnchangedGateComparesEqual(t *testing.T) {
 		"Landing":          func(g *MergeGate) { g.Landing.Batch = 2 },
 		"OwnersApprove":    func(g *MergeGate) { g.OwnersApprove = false },
 		"DeleteSource":     func(g *MergeGate) { g.DeleteSource = DeleteNone },
-		"AutoRevert":       func(g *MergeGate) { g.AutoRevert = false },
 		"AgentsEditChecks": func(g *MergeGate) { g.AgentsEditChecks = false },
 	}
 	fields := reflect.TypeFor[MergeGate]()

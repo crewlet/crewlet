@@ -98,7 +98,9 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *routed)
+		if routed != nil {
+			out = append(out, *routed)
+		}
 	}
 	if opened != "" {
 		if !r.nextRead {
@@ -115,7 +117,9 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *routed)
+		if routed != nil {
+			out = append(out, *routed)
+		}
 	}
 	return out, nil
 }

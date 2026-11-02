@@ -41,7 +41,7 @@ import (
 
 // `crewlet code` — the engine's own git host, from the command line.
 //
-// # Three kinds of subcommand
+// # Four kinds of subcommand
 //
 // status and verify ASK A RUNNING NODE, through the API's /code/ routes, as
 // the person the token is bound to: the repositories are rows on the code
@@ -53,13 +53,20 @@ import (
 // The tests serve the writer — a real node — so the two cannot drift
 // unnoticed.
 //
-// export and import are CLIENT-SIDE: the operator's own git, run with the
-// operator's own environment — their proxy, their configuration, their
-// credentials for another host — talks to the node's git routes exactly as a
-// person's git does. export clones a repository and writes the bundle on this
-// machine; import clones another host's repository here and pushes it into
-// one the node serves, in bounded steps (codeimport.go). The engine dials
-// nothing for either ([operatorGit]).
+// import and purge-unreachable ACT, through the act route
+// (`POST /operator/act/{tool}`) as the person the token is bound to: the
+// tools a person's assistant calls, code_import_repo and
+// code_purge_unreachable, so a request from a shell is the same request with
+// the same record. An import creates the repository, and its home git node
+// fetches the source (codeimportnode.go).
+//
+// export and `import -local` are CLIENT-SIDE: the operator's own git, run
+// with the operator's own environment — their proxy, their configuration,
+// their credentials for another host — talks to the node's git routes exactly
+// as a person's git does. export clones a repository and writes the bundle on
+// this machine; `import -local` clones another host's repository here and
+// pushes it into one the node serves, in bounded steps (codeimport.go). The
+// engine dials nothing for either ([operatorGit]).
 //
 // credential is git's credential helper for the code host
 // ([codeCredential]), which export configures for every git it runs against a
@@ -74,9 +81,18 @@ const codeUsage = `usage: crewlet code <command>
       node keeps its own cache, so verify each
   export <name> <file.bundle> [<config.yaml>] [-api URL] [-git PATH]
       write a repository's every ref and object to one git bundle
-  import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
-      push another host's repository into a declared one, in steps under
-      code.limits.max_push_bytes; the same command again resumes it
+  import <source-url> <name> [<config.yaml>] [-api URL] -owner unit:KEY|seat:HANDLE
+         [-credential VAR] [-mirror] [-op-id ID]
+      create a project the node fills from another host's repository, or
+      keeps in step with it (-mirror), fetching it with the token the node
+      holds as VAR; a person's alone, through their own token
+  import <source-url> <name> -local [<config.yaml>] [-api URL] [-git PATH] [-dry-run]
+      push another host's repository from this machine into one that exists,
+      in steps under code.limits.max_push_bytes; the same command again
+      resumes it
+  purge-unreachable <name> [<config.yaml>] [-api URL] [-op-id ID]
+      ask the repository's maintainer to drop every object no branch or tag
+      reaches, with no grace; a person's alone, through their own token
   credential [-token-env NAME] get|store|erase
       git's credential helper: credential.<url>.helper = !crewlet code credential
 `
@@ -95,6 +111,8 @@ func runCode(environ config.Source, args []string, stdout, stderr io.Writer) err
 		return codeExport(environ, rest, stdout, stderr)
 	case "import":
 		return codeImport(environ, rest, stdout, stderr)
+	case "purge-unreachable":
+		return codePurge(environ, rest, stdout, stderr)
 	case "credential":
 		return codeCredential(rest, os.Stdin, stdout, stderr, func(name string) string {
 			value, _ := environ.Lookup(name)
@@ -296,6 +314,15 @@ type codeRepoView struct {
 		MaxBlobBytes int64 `json:"max_blob_bytes"`
 		RepoMaxBytes int64 `json:"repo_max_bytes"`
 	} `json:"limits"`
+	// Expunge is where the repository's expunges stand: a person's purge
+	// requested and not yet served, an expunge open, and the last commit.
+	Expunge struct {
+		Open           string    `json:"open"`
+		Request        string    `json:"request"`
+		ExpungedAt     time.Time `json:"expunged_at"`
+		DroppedObjects int64     `json:"dropped_objects"`
+		DroppedBytes   int64     `json:"dropped_bytes"`
+	} `json:"expunge"`
 }
 
 // codeProtectionView is one protection rule.
@@ -734,6 +761,9 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 			humanBytes(r.Limits.MaxBlobBytes), humanBytes(r.Limits.RepoMaxBytes))
 	}
 	fmt.Fprintf(&b, "  pushes:       %d ever, the last %s\n", r.Pushes, codeTime(r.LastPushAt))
+	if line := expungeLine(r); line != "" {
+		fmt.Fprintf(&b, "  expunge:      %s\n", line)
+	}
 	fmt.Fprintf(&b, "  created:      %s\n", codeTime(r.CreatedAt))
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return err
@@ -748,6 +778,24 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", p.at, p.by, p.node, p.refs, p.results)
 	}
 	return tw.Flush()
+}
+
+// expungeLine is where a repository's expunges stand, as `status` prints it:
+// a purge requested and not yet served, an expunge open, and the last one
+// committed — "" for a repository never expunged with none asked of it.
+func expungeLine(r codeRepoView) string {
+	var parts []string
+	if e := r.Expunge; e.Request != "" {
+		parts = append(parts, "purge "+e.Request+" requested, not yet served")
+	}
+	if e := r.Expunge; e.Open != "" {
+		parts = append(parts, "expunge "+e.Open+" open")
+	}
+	if e := r.Expunge; !e.ExpungedAt.IsZero() {
+		parts = append(parts, fmt.Sprintf("last committed %s, dropping %d objects (%s)", codeTime(e.ExpungedAt),
+			e.DroppedObjects, humanBytes(e.DroppedBytes)))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // managedLine is who changes a repository and what it is for, as `status`

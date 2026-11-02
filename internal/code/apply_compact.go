@@ -149,6 +149,13 @@ type rewritePlan struct {
 	// outputs then claim nothing about what they hold. A purge's begin dates
 	// its outputs at its scan instead ([Applier.applyExpungeBegin]).
 	content int64
+	// arrived is when its outputs' NEWEST content arrived ([PackRow.Arrived]),
+	// encoded: the greatest of the rows it retires, since moving content
+	// brings none — and 0 where it retires none, which [rewritePlan.apply]
+	// writes as the record's own broker instant: outputs that claim nothing
+	// about what they hold are as young as the record, the side an expunge's
+	// grace keeps whole.
+	arrived int64
 }
 
 // rewriteOutput is one output a rewrite writes, and the kind and state it is
@@ -191,6 +198,7 @@ func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string
 			if len(plan.leaving) == 0 || p.content < plan.content {
 				plan.content = p.content
 			}
+			plan.arrived = max(plan.arrived, p.arrived)
 			plan.leaving = append(plan.leaving, p)
 			gone[p.id] = true
 		}
@@ -238,14 +246,14 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 	}
 	retired, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, added_position, content_position, retired_position,
-			retired_at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, added_position, content_position, arrived_at,
+			retired_position, retired_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(p.leaving), func(i int) []any {
 			l := p.leaving[i]
 			return []any{repoID, l.id, l.part, l.object, l.hash, l.size, l.indexBytes, l.reverseBytes,
-				l.checksum, l.objects, string(l.kind), l.added, l.content, at.packed, at.at()}
+				l.checksum, l.objects, string(l.kind), l.added, l.content, l.arrived, at.packed, at.at()}
 		})
 	if err != nil {
 		return rewritten{}, fmt.Errorf("retire the packs it replaces: %w", err)
@@ -266,16 +274,21 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 		}
 		deleted, _ = res.RowsAffected()
 	}
+	arrived := p.arrived
+	if arrived == 0 {
+		arrived = at.at()
+	}
 	added, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position,
+			arrived_at) VALUES `,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(p.adds), func(i int) []any {
 			a := p.adds[i]
 			return []any{repoID, a.out.PackID, a.out.Object.String(), string(a.out.Hash), a.out.Size,
 				a.out.IndexBytes, a.out.ReverseBytes, a.out.GitChecksum, a.out.Objects, string(a.kind),
-				string(a.state), at.packed, p.content}
+				string(a.state), at.packed, p.content, arrived}
 		})
 	if err != nil {
 		return rewritten{}, fmt.Errorf("write its outputs: %w", err)

@@ -5,7 +5,7 @@
 
 import { href } from "~/app/router.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
-import { changeRef, commitPath, repoPath } from "~/lib/code.ts";
+import { changePath, changeRef, commitPath, repoPath } from "~/lib/code.ts";
 
 /** A repository page's tabs, the overview first: what a reader opens a repository for. */
 export const REPO_TABS = [
@@ -14,6 +14,7 @@ export const REPO_TABS = [
   "branches",
   "commits",
   "pushes",
+  "checks",
   "settings",
 ] as const;
 export type RepoTab = (typeof REPO_TABS)[number];
@@ -51,13 +52,26 @@ export function commitHref(repo: string, sha: string): string {
 /**
  * A comparison of two revisions of a repository, `#/code/repos/{name}/compare`:
  * `base=` (none is the default branch) and `head=`, each as a revision is
- * named on the repository's page.
+ * named on the repository's page, and `file=`, the path its diff opens on —
+ * where a check's failure points.
  */
-export function compareHref(repo: string, at: { base?: string; head?: string } = {}): string {
+export function compareHref(
+  repo: string,
+  at: { base?: string; head?: string; file?: string } = {},
+): string {
   const query: Record<string, string> = {};
   if (at.base) query.base = at.base;
   if (at.head) query.head = at.head;
+  if (at.file) query.file = at.file;
   return href([...repoPath(repo), "compare"], query);
+}
+
+/**
+ * A change's own page opened on its diff: the Files tab, every file its head
+ * revision changes with each one's patch (`ChangePage`'s `tab=files`).
+ */
+export function changeDiffHref(repo: string, number: number): string {
+  return href(changePath(repo, number), { tab: "files" });
 }
 
 /**

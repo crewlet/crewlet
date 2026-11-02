@@ -36,7 +36,10 @@ import (
 // Every write first meets its repository: absent, deleted or being purged is
 // repo_deleted, in the sentence of the state it is in ([RepoGone]); archived
 // is repo_archived, since an archived repository is read-only and its changes
-// are read and written nothing.
+// are read and written nothing; being imported is repo_importing, since it
+// takes no write until its import is done; and a pull mirror is
+// repo_mirrored for every write but a close and a landing, since it moves only
+// by its syncs and neither of those moves a ref.
 //
 // AN OPEN then meets:
 //
@@ -667,6 +670,15 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	case repo.status == RepoStatusArchived:
 		return d.refuse(ChangeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): its changes are read, and written nothing", repo.name))
+	case repo.status == RepoStatusImporting:
+		return d.refuse(ChangeRefusalRepoImporting, ImportingDetail(repo.name))
+	case repo.mirrored && p.Close == nil && p.Landed == nil:
+		// A PULL MIRROR TAKES NO CHANGE OF ITS OWN: it moves only by its
+		// syncs, so nothing it holds merges through one. A CLOSE and a
+		// LANDING still land — neither moves a ref — so a repository that
+		// became a mirror with changes live can shed them, and one its source
+		// merged is recorded merged once a sync brings the merge in.
+		return d.refuse(ChangeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	}
 	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a seat's write on to the
@@ -1287,7 +1299,8 @@ func bodyOf(ctx context.Context, tx *sql.Tx, changeID string) (string, error) {
 // The lifecycle's reads, each registered in plan_test.go: a change by its key —
 // a decide's, an apply's and an answer's — the live change a source branch
 // heads, by code_changes_open_idx with its predicate spelled as the index
-// declares it ([liveChanges]), and a change's body by its key.
+// declares it ([liveChanges]), the live change into a target at a head, by
+// code_changes_target_idx the same way, and a change's body by its key.
 const (
 	// changeColumns is every column of a change [scanChange] reads, in its
 	// order: every column code_changes holds, so a decide, an apply and a read
@@ -1299,5 +1312,11 @@ const (
 	changeRowSQL    = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
 		liveChanges + ` LIMIT 1`
+	// liveChangeAtHeadSQL is the live change into a target at a head — a
+	// failed check a person's CI reported, which names no change
+	// ([headChangeIn]) — one seek of code_changes_target_idx, its predicate
+	// spelled as the index declares it.
+	liveChangeAtHeadSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE repo_id = ? AND target_ref = ? ` +
+		`AND head_oid = ? AND ` + liveChanges + ` LIMIT 1`
 	changeBodySQL = `SELECT body FROM code_change_bodies WHERE change_id = ?`
 )

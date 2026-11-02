@@ -56,9 +56,11 @@ import (
 type SeatWork string
 
 const (
-	// SeatWorkRead is a server-side read of a repository by object id: the
-	// git a read's kind runs (internal/code/query), and a merge preview's
-	// merge (internal/code/home), a read of two commits by their ids too.
+	// SeatWorkRead is a principal's server-side read of a repository by
+	// object id: the git a read's kind runs (internal/code/query) for a seat
+	// or a person, and a merge preview's merge (internal/code/home), a read
+	// of two commits by their ids too — never the engine's own read
+	// ([SeatWorkEngine]).
 	SeatWorkRead SeatWork = "read"
 	// SeatWorkWrite is an engine write's BUILD (internal/code/host): its git
 	// from its read of what every path the change names and every directory
@@ -71,10 +73,19 @@ const (
 	// row, which hold no read-lane slot; and a branch created or deleted
 	// builds nothing and takes no unit.
 	SeatWorkWrite SeatWork = "write"
+	// SeatWorkEngine is a read THE ENGINE makes on its own account
+	// ([GitQuery.EnginesOwn]): a revision's facts or a commit's checks file
+	// a repository's home reads (internal/code/home), and a read made for a
+	// check. It is no seat's, but it runs the same git in the same lane as a
+	// seat's read, so it takes its unit of the same share — and is COUNTED
+	// APART, because a home's background reads counted as seats' would hide
+	// from an operator what holds the share while the seats' reads are sent
+	// on (internal/code/home bounds its own to leave the seats a unit).
+	SeatWorkEngine SeatWork = "engine"
 )
 
 // SeatWorks is the closed set.
-func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite} }
+func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite, SeatWorkEngine} }
 
 // Valid reports a kind of seat git work this build knows.
 func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
@@ -84,15 +95,20 @@ func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
 // round's peel and a fetch's check of its wants wait in.
 //
 // HALF STANDS, MEASURED AGAINST (internal/code/host's BenchmarkEngineWrite,
-// beside=push): on two cores the share is its floor of one unit, and
-// sixty-four engine writes at once still took a person's push to the same
-// repository from 0.1–0.3 s at the p99 to 0.95–1.4 s, past the twice the
-// benchmark holds — yet timed alone once the writes had stopped the push's
-// p99 stayed 1.2–1.5 s against the S3 fake, the packs the writes left
-// rather than the writes, and what remained from memory was the cores' CPU,
-// which a bound on slots does not divide. A narrower share has no unit to
-// give at one, and a wider node's half leaves more slots, not fewer: the
-// figure decides the node's cores, never this fraction.
+// beside=push, its repository kept compacted between rounds so the person's
+// push alone, beside the writes and after them meet one pack state): on two
+// cores the share is its floor of one unit, and sixty-four engine writes at
+// once into the person's repository took the push's p99 from 0.24–0.38 s
+// alone to 0.92–1.64 s, past the twice the benchmark holds, and back to
+// 0.25–0.51 s once they stopped (four runs over the three object stores).
+// What the writes added is not a read-lane slot — the person was refused
+// nothing: the copy's syncs a push waits for ran on the two cores the
+// writes' builds and landings used (their p99 0.25–0.39 s beside the writes,
+// 0.05–0.13 s alone), and the person's proposal waited in the repository's
+// one commit queue behind theirs (its p99 0.09–1.25 s beside them, 34–82 ms
+// alone). A narrower share has no unit to give at one and would shorten
+// neither, and a wider node's half leaves more slots, not fewer: the figure
+// decides the node's cores, never this fraction.
 func ShareOf(slots int) int { return max(1, slots/2) }
 
 // The outcomes of a take: crewlet.code.seatwork.waits' `outcome`.
@@ -145,22 +161,30 @@ var errShareWait = errors.New("code: the seat git-work share's wait ended")
 // naming what spent its asker's attempt.
 // release gives the unit back, and is idempotent — every holder defers it,
 // and the one that releases early calls it again harmlessly.
+//
+// EVERY TAKE IS TIMED, granted or unready (crewlet.code.seatwork.waits, a
+// histogram): the wait is a whole term of each attempt seat git work is
+// given — an engine write's (estate.GitWriteAttempt) and a read's
+// (estate.Timing's GitReadAttempt) — and a count of the waits that ran out
+// says only how often the node gave that term up whole, never how near the
+// granted ones came to it.
 func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {
 	if !work.Valid() {
 		return nil, fmt.Errorf("%w: seat git work %q is not one of %s", ErrInvalid, work, words.Or(SeatWorks()))
 	}
+	began := time.Now()
 	wait, cancel := context.WithTimeoutCause(ctx, s.wait, errShareWait)
 	defer cancel()
 	if err := s.sem.Acquire(wait, 1); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		s.count(work, shareUnready)
+		s.waited(work, shareUnready, time.Since(began))
 		return nil, &ErrGitUnready{Reason: UnreadyShare, Detail: fmt.Sprintf(
 			"%s's seat git work holds its whole share — %d of its read lane's %d slots — and none came free "+
 				"within %s; another git node answers meanwhile", s.node, s.units, s.readSlots, s.wait)}
 	}
-	s.count(work, shareGranted)
+	s.waited(work, shareGranted, time.Since(began))
 	s.moved(+1)
 	return sync.OnceFunc(func() {
 		s.sem.Release(1)
@@ -188,9 +212,9 @@ func (s *GitShare) moved(delta int) {
 	}
 }
 
-// count records one take's outcome.
-func (s *GitShare) count(work SeatWork, outcome string) {
+// waited records how long one take waited, by its outcome.
+func (s *GitShare) waited(work SeatWork, outcome string, took time.Duration) {
 	if s.metrics != nil {
-		s.metrics.Add(metrics.CodeSeatworkWaits, 1, metrics.Attrs{"outcome": outcome, "work": string(work)})
+		s.metrics.Observe(metrics.CodeSeatworkWaits, took, metrics.Attrs{"outcome": outcome, "work": string(work)})
 	}
 }

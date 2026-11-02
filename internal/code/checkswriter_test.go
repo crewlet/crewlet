@@ -3,6 +3,7 @@ package code_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -90,7 +91,8 @@ func checksWriterOn(t testing.TB, n *node) (*code.ChecksWriter, *appendCounter, 
 	w, err := code.NewChecksWriter(code.ChecksWriterOptions{
 		Publisher: counter, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
-		Events:    stream, Now: func() time.Time { return harnessAt }, Metrics: rec,
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
+		Events:    stream, AgentIDs: agentIDs, Now: func() time.Time { return harnessAt }, Metrics: rec,
 	})
 	if err != nil {
 		t.Fatalf("NewChecksWriter: %v", err)
@@ -227,6 +229,77 @@ func TestASecondClaimIsRefusedBeforeItAppends(t *testing.T) {
 	}
 }
 
+// A BURST OF ONE REPOSITORY'S CHECK WRITES PAST ITS BOUND IS REFUSED AT ONCE —
+// the change writer's rule, one implementation (flight.go): while one write of
+// a repository publishes and another waits its turn, a third of the same
+// repository is refused busy, undecided, the moment it arrives, naming the
+// bound, and appends nothing; another repository's write is still taken; and
+// the two taken land once the held publish goes through.
+//
+// Mutation: drop the per-key count, and the third write waits its turn and
+// lands.
+func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, other := changeRepo(t, n, "web"), changeRepo(t, n, "api")
+	gate := newGate(n.pub)
+	w, err := code.NewChecksWriter(code.ChecksWriterOptions{Publisher: gate, DB: n.db.Reader(), NodeID: n.id,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
+		Now:       func() time.Time { return harnessAt }})
+	if err != nil {
+		t.Fatalf("NewChecksWriter: %v", err)
+	}
+	t.Cleanup(func() {
+		gate.open()
+		w.Stop(context.WithoutCancel(t.Context()))
+	})
+	code.SetChecksWriterBounds(w, 2, 8, code.ChecksWriterNodeBytes)
+	type answer struct {
+		res code.ChecksResult
+		err error
+	}
+	publish := func(r code.ChecksRequest) <-chan answer {
+		out := make(chan answer, 1)
+		go func() {
+			res, err := w.Publish(t.Context(), r)
+			out <- answer{res, err}
+		}()
+		return out
+	}
+	first := publish(queueing(checkOn(repo, 1), code.QueueDispatch))
+	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
+	second := publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("A"), Target: mainRef, Name: "unit",
+		Attempt: 1}, code.QueueDispatch))
+	// THE SECOND IS WAITING ITS TURN before the third arrives, or the third
+	// could take its place and the second be the one refused.
+	eventually(t, "the second write waiting its turn", func() bool { return code.ChecksWriterHolders(w, repo) == 2 })
+	select {
+	case a := <-publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("R"), Target: mainRef, Name: "unit",
+		Attempt: 1}, code.QueueDispatch)):
+		requireCheckRefused(t, "a third write of the repository", a.res, a.err, code.CheckRefusalBusy)
+		if want := "2 check writes of this repository hold or wait for its turn on this node, the most one " +
+			"repository takes at once (MaxCheckWritesWaiting)"; !strings.Contains(a.res.Detail, want) {
+			t.Fatalf("the third write was refused %q, want it saying %q", a.res.Detail, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a third write of the repository waited rather than being refused at once")
+	}
+	elsewhere := publish(queueing(checkOn(other, 1), code.QueueDispatch))
+	eventually(t, "the other repository's write reaching the publisher", func() bool {
+		return gate.calls.Load() == 2
+	})
+	gate.open()
+	for name, ch := range map[string]<-chan answer{"first": first, "second": second, "elsewhere": elsewhere} {
+		select {
+		case a := <-ch:
+			requireChecked(t, "the "+name+" write", a.res, a.err)
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s write was not answered in 30 s", name)
+		}
+	}
+}
+
 // AN ATTEMPT FOLLOWS THE ONE BEFORE IT, ENDED: a dispatch is a commit's first
 // attempt, answered from its row when it is queued already; the next is queued
 // only once the one before it ended, the home's requeue only after its
@@ -333,21 +406,22 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	}
 }
 
-// A WRITER DECIDES THE ENGINE'S OWN RECORDS: a rerun and a report name a
-// principal, whose grant this writer holds no chart to judge, so each is no
-// request it decides — refused invalid before anything is read — and an
-// ending of an attempt no runner claimed, which no runner forms, likewise.
+// THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and
+// a claim naming a person's CI are a principal's writes, asked only as a
+// rerun and a report (checkasks.go), so through the engine's own arms each is
+// no request the writer decides — refused invalid before anything is read —
+// and an ending of an attempt no runner claimed, which no runner forms,
+// likewise.
 func TestAChecksWriterDecidesOnlyTheEnginesOwnRecords(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	repo := changeRepo(t, n, "web")
 	w, counter, _, _ := checksWriterOn(t, n)
 	key := checkOn(repo, 1)
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:ada", Seat: "founder"}
 	rerun := queueing(key, code.QueueRerun)
 	rerun.Queued.By = &dev
-	report := queueing(key, code.QueueReport)
-	report.Queued.By, report.Queued.Def = &person, nil
+	report := code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_report"),
+		Started: &code.CheckStarted{CheckKey: key, Placement: code.PlacementExternal, StartedAt: harnessAt}}
 	for name, req := range map[string]code.ChecksRequest{"a rerun": rerun, "a report": report} {
 		if _, err := w.Publish(t.Context(), req); !errors.Is(err, code.ErrInvalidProposal) {
 			t.Errorf("%s answered %v, want code.ErrInvalidProposal", name, err)
@@ -728,6 +802,126 @@ func TestAHeadLeavesTheDueListingOnceItsDispatchIsRecorded(t *testing.T) {
 	none("once its dispatch under the target's checks file is recorded,")
 }
 
+// A DISPATCH QUEUES ITS ATTEMPTS IN ITS OWN RECORD: a head's dispatch
+// carrying the attempts it queues is ONE record — the head taken off the
+// due listing and its attempts' rows written by the same apply, each as a
+// check_queued would write it: unit queued to run, docs recorded skipped and
+// announced as an ending — counted and announced by the writer as the single
+// queues were. Asked again it is answered unchanged, appending nothing; and
+// a dispatch carrying an attempt the rows already hold and one they do not is
+// appended with the new one alone, the held one's row untouched. A dispatch
+// carrying an attempt it cannot — one queued twice, one for another target,
+// one under another checks file, one at a head it does not name, past its
+// rows — is no write at all.
+//
+// Mutations: keep an attempt the rows already hold in the record — the
+// dispatch asked again appends, red; apply the dispatch without its attempts
+// — no row is queued, red; announce none of the attempts a dispatch ended —
+// docs' skip is never announced, red.
+func TestADispatchQueuesItsAttemptsInItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	w, counter, stream, rec := checksWriterOn(t, n)
+	ctx := t.Context()
+	_, heads, _ := checksDue(t, n, repo, harnessAt)
+	if len(heads) != 1 {
+		t.Fatalf("web's due heads are %+v, want its change's", heads)
+	}
+	defs := oidOf("checks-file")
+	attempt := func(name string, skipped bool) code.CheckQueued {
+		return code.CheckQueued{CheckKey: code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef,
+			Name: name, Attempt: 1}, Purpose: code.PurposeHead, ChangeID: change, Revision: 1, DefsOID: defs,
+			Def: defOf(name), Reason: code.QueueDispatch, Skipped: skipped, QueuedAt: harnessAt}
+	}
+	head := code.DispatchedHead{OID: oidOf("B"), ChangeID: change, Revision: 1}
+	dispatch := func(attempts ...code.CheckQueued) code.ChecksRequest {
+		req := dispatching(repo, heads[0].Tip, heads[0].TipPosition, defs, head)
+		req.Dispatched.Attempts = attempts
+		return req
+	}
+	rowOf := func(name string) *code.CheckRow {
+		t.Helper()
+		one, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadCheck, Asker: ada, Repo: "web",
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}, Checks: &code.CheckQuery{OID: oidOf("B"),
+				Target: mainRef, Name: name, Attempt: 1}})
+		if errors.Is(err, code.ErrCheckNotFound) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("read %s at the head: %v", name, err)
+		}
+		if one.Check == nil {
+			return nil
+		}
+		return &one.Check.CheckRow
+	}
+
+	before := counter.appended.Load()
+	res, err := w.Publish(ctx, dispatch(attempt("unit", false), attempt("docs", true)))
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged ||
+		counter.appended.Load() != before+1 {
+		t.Fatalf("the head's dispatch with its attempts answered (%+v, %v) appending %d records, want applied "+
+			"in one", res, err, counter.appended.Load()-before)
+	}
+	unit, docs := rowOf("unit"), rowOf("docs")
+	if unit == nil || unit.State != code.CheckStateQueued || unit.Queued.Packed() != res.Position.Packed() ||
+		docs == nil || docs.State != code.CheckStateSkipped || docs.Queued.Packed() != res.Position.Packed() {
+		t.Fatalf("after the dispatch unit is %+v and docs %+v, want unit queued and docs skipped by its record",
+			unit, docs)
+	}
+	if _, due, _ := checksDue(t, n, repo, harnessAt); len(due) != 0 {
+		t.Fatalf("a head whose dispatch landed with its attempts is still due: %+v", due)
+	}
+	waitAnnouncedOf(t, stream, "code_check_finished", 1)
+	if e, ok := stream.of("code_check_finished")[0].Data.(*types.CodeCheckFinished); !ok || e.Name != "docs" ||
+		e.State != string(code.CheckStateSkipped) {
+		t.Fatalf("the dispatch announced %+v, want docs' skip", stream.of("code_check_finished")[0].Data)
+	}
+	if got := readingOf(rec, metrics.CodeChecksQueued, metrics.Attrs{"purpose": "head"}).Total; got != 1 {
+		t.Fatalf("crewlet.code.checks.queued{purpose=head} = %v after a dispatch queuing unit, want 1", got)
+	}
+
+	appended := counter.appended.Load()
+	res, err = w.Publish(ctx, dispatch(attempt("unit", false), attempt("docs", true)))
+	if err != nil || !res.Unchanged || counter.appended.Load() != appended {
+		t.Fatalf("the dispatch asked again answered (%+v, %v), want unchanged with no record", res, err)
+	}
+	res, err = w.Publish(ctx, dispatch(attempt("unit", false), attempt("lint", false)))
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged ||
+		counter.appended.Load() != appended+1 {
+		t.Fatalf("a dispatch adding lint beside the held unit answered (%+v, %v), want applied in one record",
+			res, err)
+	}
+	if lint, again := rowOf("lint"), rowOf("unit"); lint == nil || lint.Queued.Packed() != res.Position.Packed() ||
+		again == nil || again.Queued.Packed() != unit.Queued.Packed() {
+		t.Fatalf("after the second dispatch lint is %+v and unit %+v, want lint queued by it and unit's queue "+
+			"the first's", lint, again)
+	}
+
+	other := attempt("e2e", false)
+	other.Target = releaseRef
+	underAnother := attempt("e2e", false)
+	underAnother.DefsOID = oidOf("another-file")
+	unnamed := attempt("e2e", false)
+	unnamed.OID = oidOf("C")
+	crowd := make([]code.CheckQueued, 0, code.MaxDispatchRows)
+	for i := range code.MaxDispatchRows {
+		crowd = append(crowd, attempt(fmt.Sprintf("c%03d", i), false))
+	}
+	for what, attempts := range map[string][]code.CheckQueued{
+		"an attempt queued twice":           {attempt("e2e", false), attempt("e2e", true)},
+		"an attempt for another target":     {other},
+		"an attempt under another file":     {underAnother},
+		"an attempt at a head it names not": {unnamed},
+		"more attempts than a record rows":  crowd,
+	} {
+		if _, err := w.Publish(ctx, dispatch(attempts...)); !errors.Is(err, code.ErrInvalidProposal) {
+			t.Errorf("a dispatch carrying %s answered %v, want code.ErrInvalidProposal", what, err)
+		}
+	}
+}
+
 // A TARGET THAT MOVES IS READ AGAIN AT THE HOME'S PACE: once web's head is
 // dispatched at main's tip A, a push moving main to C makes no head due — the
 // head's dispatch names the file the target's reading holds — and makes main
@@ -838,22 +1032,21 @@ func TestACheckBoxReadIsTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
-// every target, a change's — its head's, checked for ITS target — the
-// repository's newest ended first and the window's — each a keyset that
-// resumes where its page ended — and one attempt whole, with the failures its
-// ending named; and a reader the repository's grant shuts out reads none of
-// them.
-//
-// TWO CHANGES SHARE A HEAD, into two branches: web's feature into main, and a
-// backport branch at the same commit into release. Each is checked for its
-// own target — main's lint, unit and vet, release's own unit — as two sets of
-// attempts at one commit, and each change reads its own target's alone.
-//
-// Mutation: read a change's attempts at its head for every target — the
-// backport's change reads main's three beside its own unit — red.
-func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
-	t.Parallel()
+// checksShape is one shape of a `checks` read over [checksOfEveryShape]'s
+// rows — a page of at most its query's limit — and the names of the attempts
+// it lists, in its order.
+type checksShape struct {
+	q    code.ReadQuery
+	want []string
+}
+
+// checksOfEveryShape is a repository web whose head B is checked for two
+// targets — web's feature into main (change 1: main's lint and unit failed a
+// minute apart, its vet running) and a backport branch at the same commit into
+// release (change 2: release's own unit, queued) — with every shape a `checks`
+// read takes of them: the node, the backport's change, and the shapes.
+func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]checksShape) {
+	t.Helper()
 	n := newNode(t)
 	repo, change := discussed(t, n, "web")
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/backport", code.ZeroOID, oidOf("B"))))
@@ -887,32 +1080,7 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 		requireChecked(t, "the ending of "+name, res, err)
 	}
 	stale := statelog.Freshness{Level: statelog.ReadStale}
-	names := func(rows []code.CheckRow) []string {
-		var out []string
-		for _, r := range rows {
-			out = append(out, r.Name)
-		}
-		return out
-	}
-	page := func(q code.ReadQuery) []string {
-		t.Helper()
-		var all []string
-		for {
-			got, err := n.reader.Read(ctx, q)
-			if err != nil {
-				t.Fatalf("read %+v: %v", q.Checks, err)
-			}
-			all = append(all, names(got.Checks)...)
-			if got.Next == "" {
-				return all
-			}
-			q.Cursor = got.Next
-		}
-	}
-	for name, tc := range map[string]struct {
-		q    code.ReadQuery
-		want []string
-	}{
+	return n, backport, map[string]checksShape{
 		"a commit's, for every target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
 			Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B")}}, []string{"lint", "unit", "vet", "unit"}},
 		"a change's": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 2, Fresh: stale,
@@ -927,8 +1095,58 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 			Checks: &code.CheckQuery{Since: harnessAt}}, []string{"unit", "lint"}},
 		"the window past the first ending": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Fresh: stale,
 			Checks: &code.CheckQuery{Since: harnessAt.Add(90 * time.Second)}}, []string{"unit"}},
-	} {
-		if got := page(tc.q); !slices.Equal(got, tc.want) {
+	}
+}
+
+// servedChecks is every attempt q lists, a page at a time from q's own cursor.
+func servedChecks(t *testing.T, n *node, q code.ReadQuery) []code.CheckRow {
+	t.Helper()
+	var all []code.CheckRow
+	for pages := 1; pages <= 100; pages++ {
+		got, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("read %+v: %v", q.Checks, err)
+		}
+		all = append(all, got.Checks...)
+		if got.Next == "" {
+			return all
+		}
+		q.Cursor = got.Next
+	}
+	t.Fatalf("the listing %+v did not end in a hundred pages", q.Checks)
+	return nil
+}
+
+// checkNames is the names of rows, in their order.
+func checkNames(rows []code.CheckRow) []string {
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Name)
+	}
+	return out
+}
+
+// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
+// every target, a change's — its head's, checked for ITS target — the
+// repository's newest ended first and the window's — each a keyset that
+// resumes where its page ended — and one attempt whole, with the failures its
+// ending named and its repository's name; and a reader the repository's grant
+// shuts out reads none of them.
+//
+// TWO CHANGES SHARE A HEAD, into two branches ([checksOfEveryShape]): each is
+// checked for its own target — main's lint, unit and vet, release's own unit
+// — as two sets of attempts at one commit, and each change reads its own
+// target's alone.
+//
+// Mutation: read a change's attempts at its head for every target — the
+// backport's change reads main's three beside its own unit — red.
+func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
+	t.Parallel()
+	n, backport, shapes := checksOfEveryShape(t)
+	ctx := t.Context()
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	for name, tc := range shapes {
+		if got := checkNames(servedChecks(t, n, tc.q)); !slices.Equal(got, tc.want) {
 			t.Errorf("%s checks read %v, want %v", name, got, tc.want)
 		}
 	}
@@ -937,7 +1155,8 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one attempt: %v", err)
 	}
-	if c := one.Check; c == nil || c.State != code.CheckStateFailed || c.Def == nil || c.Def.Run != "make unit" ||
+	if c := one.Check; c == nil || c.Repo != "web" || c.State != code.CheckStateFailed || c.Def == nil ||
+		c.Def.Run != "make unit" ||
 		c.Tail != "--- FAIL" || len(c.Failures) != 1 || c.Failures[0].TestID != "TestA" {
 		t.Fatalf("one attempt read %+v, want main's unit's failure whole", one.Check)
 	}
@@ -962,6 +1181,149 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 		Fresh: stale})
 	if err != nil || len(window.Checks) != 0 {
 		t.Fatalf("a seat the grant shuts out read the window (%v, %v), want none of web's", window.Checks, err)
+	}
+}
+
+// THE CHECKS LISTING IS HELD TO THE GRANT, NARROWED OR NOT. Of three
+// repositories — sales-private and plat-private at `visibility: unit`,
+// platform at `company` — each holding a failed `unit` and a passed `lint`,
+// a seat's window lists exactly the attempts of the repositories its grant
+// reads, newest ended first, and a narrowing by state or by a check's name
+// keeps fewer of those, never one of another repository; a person's lists
+// every repository's. A page is the rows it READ: one the grant and the
+// narrowing kept nothing of still names where the next starts, so a listing a
+// row at a time reaches every kept row. A repository's own listing narrowed
+// by state keeps that state's, and one of a repository the grant shuts out is
+// refused not_permitted, however narrow — and a state that is no check's is
+// refused before anything is read. Every row listed names its repository by
+// name, the window's as a repository's own, since a reader links an attempt
+// to its repository, change and commit by name.
+//
+// Mutations: leave the window's rows unnamed (checksWindow not filling Repo)
+// → every window row names "", red; keep a window's row by the narrowing alone (checksWindow
+// dropping `listed`) → vp-sales lists plat-private's unit, red; ignore the
+// narrowing on a repository's listing (pageChecks kept everything there) →
+// sales-private's passed listing holds its failed unit, red; name the next
+// page after the last KEPT row → the one-row listing stops at its first empty
+// page, before sales-private's unit, red.
+func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
+	t.Parallel()
+	n, ids := grantedChanges(t)
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	repoOf := map[string]string{}
+	minute := 0
+	for _, repo := range []string{"sales-private", "plat-private", "platform"} {
+		repoOf[ids[repo]] = repo
+		for _, c := range []struct {
+			name  string
+			state code.CheckState
+		}{{"unit", code.CheckStateFailed}, {"lint", code.CheckStatePassed}} {
+			key := code.CheckKey{RepoID: ids[repo], OID: oidOf("B"), Target: mainRef, Name: c.name, Attempt: 1}
+			minute++
+			end := ending(key, c.state, code.CheckReasonExit)
+			end.Finished.FinishedAt = harnessAt.Add(time.Duration(minute) * time.Minute)
+			for _, r := range []code.ChecksRequest{queueing(key, code.QueueDispatch), claiming(key, "git-a", ""),
+				end} {
+				res, err := w.Publish(ctx, r)
+				requireChecked(t, repo+"'s "+c.name, res, err)
+			}
+		}
+	}
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	list := func(q code.ReadQuery) ([]string, error) {
+		t.Helper()
+		q.Kind, q.Fresh = code.ReadChecks, stale
+		var all []string
+		for {
+			got, err := n.reader.Read(ctx, q)
+			if err != nil {
+				return all, err
+			}
+			for _, row := range got.Checks {
+				if row.Repo != repoOf[row.RepoID] {
+					t.Errorf("%s's %s was listed naming repository %q, want %q", row.RepoID, row.Name, row.Repo,
+						repoOf[row.RepoID])
+				}
+				all = append(all, repoOf[row.RepoID]+"/"+row.Name)
+			}
+			if got.Next == "" {
+				return all, nil
+			}
+			q.Cursor = got.Next
+		}
+	}
+	window := func(c code.CheckQuery) *code.CheckQuery { c.Since = harnessAt; return &c }
+	for _, tc := range []struct {
+		name string
+		q    code.ReadQuery
+		want []string
+	}{
+		{"vp-sales's failed window", code.ReadQuery{Asker: agent("vp-sales"),
+			Checks: window(code.CheckQuery{State: code.CheckStateFailed})},
+			[]string{"platform/unit", "sales-private/unit"}},
+		{"vp-sales's unit window, a row a page", code.ReadQuery{Asker: agent("vp-sales"), Limit: 1,
+			Checks: window(code.CheckQuery{Name: "unit"})}, []string{"platform/unit", "sales-private/unit"}},
+		{"dev's lint window", code.ReadQuery{Asker: agent("dev"), Checks: window(code.CheckQuery{Name: "lint"})},
+			[]string{"platform/lint", "plat-private/lint"}},
+		{"vp-sales's whole window", code.ReadQuery{Asker: agent("vp-sales"), Checks: window(code.CheckQuery{})},
+			[]string{"platform/lint", "platform/unit", "sales-private/lint", "sales-private/unit"}},
+		{"a person's failed window", code.ReadQuery{Asker: ada,
+			Checks: window(code.CheckQuery{State: code.CheckStateFailed})},
+			[]string{"platform/unit", "plat-private/unit", "sales-private/unit"}},
+		{"vp-sales's passed in sales-private", code.ReadQuery{Asker: agent("vp-sales"), Repo: "sales-private",
+			Checks: &code.CheckQuery{State: code.CheckStatePassed}}, []string{"sales-private/lint"}},
+	} {
+		if got, err := list(tc.q); err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s listed (%v, %v), want %v", tc.name, got, err, tc.want)
+		}
+	}
+	if got, err := list(code.ReadQuery{Asker: agent("vp-sales"), Repo: "plat-private",
+		Checks: &code.CheckQuery{State: code.CheckStateFailed}}); !errors.Is(err, code.ErrNotPermitted) {
+		t.Errorf("vp-sales's failed listing of plat-private = (%v, %v), want code.ErrNotPermitted", got, err)
+	}
+	if _, err := list(code.ReadQuery{Asker: ada, Checks: window(code.CheckQuery{State: "green"})}); !errors.Is(err,
+		code.ErrInvalid) {
+		t.Errorf("a window narrowed by a state that is no check's = %v, want code.ErrInvalid", err)
+	}
+}
+
+// A CHECKS PAGE KEPT SHORTER THAN IT WAS SERVED RESUMES AFTER ITS LAST ROW:
+// for every shape a `checks` read takes — a change's attempts, a commit's, a
+// repository's newest ended first and the window's — the cursor a caller asks
+// for after any row it was served (code.ReadQuery.ChecksCursor) reads every
+// attempt after that row once, in order, as code_get_change's `checks` part
+// does when a page of wide summaries is past one tool answer; and a page's own
+// cursor is the one its last row names.
+//
+// Mutation: ChecksCursor spelled by another walk than the reader's (a
+// change's attempts by the commit's walk) → red.
+func TestAChecksPageResumesAfterAnyRowItServed(t *testing.T) {
+	t.Parallel()
+	n, _, shapes := checksOfEveryShape(t)
+	for name, tc := range shapes {
+		served := servedChecks(t, n, tc.q)
+		if len(served) < 2 && name != "the window past the first ending" &&
+			name != "the backport's, at the same head" {
+			t.Fatalf("%s lists %v; the case needs two attempts to resume between", name, checkNames(served))
+		}
+		for i, row := range served {
+			resumed := tc.q
+			resumed.Cursor = tc.q.ChecksCursor(row)
+			if got, want := checkNames(servedChecks(t, n, resumed)), checkNames(served[i+1:]); !slices.Equal(got,
+				want) {
+				t.Errorf("%s resumed after %s/%d (cursor %q) listed %v, want %v", name, row.Name, row.Attempt,
+					resumed.Cursor, got, want)
+			}
+		}
+		first, err := n.reader.Read(t.Context(), tc.q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if k := len(first.Checks); first.Next != "" && first.Next != tc.q.ChecksCursor(first.Checks[k-1]) {
+			t.Errorf("%s's first page resumes at %q, and its last row names %q", name, first.Next,
+				tc.q.ChecksCursor(first.Checks[k-1]))
+		}
 	}
 }
 

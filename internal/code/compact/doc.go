@@ -1,7 +1,8 @@
 // Package compact keeps a repository's pack count bounded, its bitmap
-// published and what no ref reaches dropped when a person asks: the
-// MAINTAINER's three loops (ADR-0083, ADR-0084, and the expunge's two records
-// that internal/code decides).
+// published and what no ref reaches dropped — when a person asks, and weekly
+// once it is a quarter of the repository: the MAINTAINER's three loops
+// (ADR-0083, ADR-0084, and the expunge's two records that internal/code
+// decides, ADR-0092).
 //
 // Every push stores one pack, so a busy repository's pack count grows with
 // its pushes, and every cold sync then pays a GET a pack and every request a
@@ -37,9 +38,12 @@
 //     layers.go).
 //   - THE EXPUNGE LOOP ([Compactor.ExpungePass]): on every [ExpungePoll] it
 //     lists the repositories with an expunge open or a person's purge
-//     requested (`expunge_due`), and for each it maintains runs ONE CYCLE
-//     ([Compactor.Expunge]) — finishing an expunge left open from its rows,
-//     or serving the purge from its scan to its commit (# The expunge, below).
+//     requested, then every other repository last expunged a week ago or
+//     never (`expunge_due`'s two arms), and for each it maintains runs ONE
+//     CYCLE ([Compactor.Expunge]) — finishing an expunge left open from its
+//     rows, serving the purge from its scan to its commit, or, on its own
+//     schedule, judging whether one is due and running it when it is (# The
+//     expunge, below).
 //
 // # Who maintains, and why one node does all three
 //
@@ -245,14 +249,34 @@
 // packs into KEPT packs (live) and DROPPING ones and moves the repository's
 // drop epoch, and its COMMIT, which retires the dropping packs and keeps a
 // RESCUE of them live — and a person asks for one with a third, a purge
-// REQUEST, which the maintainer serves. A request is what begins a cycle, and
-// its grace is none: a purge keeps no object a force-push or a deletion left
-// behind. An expunge open with no request — one keeping code.PruneGrace — is
+// REQUEST, which the maintainer serves. A request begins a cycle, and its
+// grace is none: a purge keeps no object a force-push or a deletion left
+// behind. THE MAINTAINER'S OWN SCHEDULE begins one too (M6-D8), with
+// code.PruneGrace: every active or archived repository — a scratch one as
+// much as a project, since a push is refused repo_size on live bytes whoever
+// owns them — last expunged code.ExpungeInterval ago or never is listed, least
+// recently expunged first, and its cycle first judges whether an expunge is
+// DUE: what no ref, no drop the grace keeps and no row in flight reaches —
+// the live pack bytes less ONE `rev-list --objects --disk-usage
+// --use-bitmap-index` from them, each object once as git stores it — is MORE
+// than 1/code.ExpungeShare of the live pack bytes AND at least
+// code.ExpungeMinBytes, below which the fleet's re-download of the kept packs
+// costs more than it frees. A repository found NOT DUE is left unscanned for
+// code.ExpungeInterval after, by the scan's instant on this node and never by
+// its row's version — a push moves the version, which would rescan a hot
+// repository at every pass, and a drop's grace or a pack's runs out by the
+// clock with no record moving it — so a clean repository's history is walked
+// at most once a week. A memo lost to a restart or a new maintainer costs one
+// scan. An expunge open with no request — one keeping code.PruneGrace — is
 // finished with that grace.
 //
 // THE SCAN is the copy's refs — its packed-refs as a scratch links it, one
-// moment's with the packs the scratch holds — and the drops the grace keeps
-// (the `expunge_tips` read; none for a purge), and its INPUTS the live packs
+// moment's with the packs the scratch holds — the drops the grace keeps (the
+// `expunge_tips` read; none for a purge) and, for a purge too, what rows hold
+// IN FLIGHT (M6-D2): every revision head of a draft or open change, which its
+// reviewers compare, every live queue entry's head, every candidate's tip — a
+// candidate is rows, never a ref, and its tip is what a landing moves its
+// target onto — and every green row; and its INPUTS the live packs
 // whose content dates from before the request (code.PackRow.Content), every
 // row of each file together, oldest first and capped at
 // code.MaxExpungeInputs rows and [ExpungeInputByteCap] of the cut: a FULL pack
@@ -260,7 +284,12 @@
 // lie in any pack, and the layers over them dropped with the begin
 // (code.LayersOver, the decide's own reading). A pack pushed after the
 // request is no input, so a purge of a busy repository rewrites what it was
-// asked about and nothing pushed since.
+// asked about and nothing pushed since. ON THE SCHEDULE the inputs are the
+// live packs whose newest content ARRIVED code.PruneGrace or longer ago
+// (code.PackRow.Arrived), earliest first under the same caps, so EVERY PACK
+// ADDED WITHIN THE GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects
+// that no ref reaches yet among them — and a pack whose arrival is not known
+// is passed over, the side the grace keeps.
 //
 // THE BUILD SORTS, never judges a record: in a scratch whose OWN packs are the
 // inputs and whose one alternate is a store of every other live pack
@@ -303,8 +332,9 @@
 // code_packs_retired, so a reader already on one finishes, and the store
 // deletes their bytes after code.RetireGrace and the collector's grace — the
 // purge's crewlet.code.expunge.dropped_bytes. Nothing of this loop is
-// measured yet: [ExpungePoll] is the listing's, and [ExpungeInputByteCap] the
-// compaction's half of a record's outputs.
+// measured yet: [ExpungePoll] is the listing's, [ExpungeInputByteCap] the
+// compaction's half of a record's outputs, and code.ExpungeMinBytes is
+// PROVISIONAL, for BenchmarkExpunge to decide.
 //
 // # What it raises
 //

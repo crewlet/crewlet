@@ -37,6 +37,7 @@ import {
   workspaceOf,
   workspaceOpen,
   workspaceRow,
+  type ServicesRun,
   type WorkspaceRow,
 } from "./nav.ts";
 import { keyRow, sequenceWords } from "./keymap.ts";
@@ -62,7 +63,9 @@ import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
-/** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
+/** A company running every service built into Crewlet. */
+const EVERY_SERVICE: ServicesRun = { tracker: true, knowledge: true, chat: true, code: true };
+
 /** Settings' Admin pages: every section but Spend's readings and Models, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
@@ -279,7 +282,7 @@ describe("the navigation grammar", () => {
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
-      Engine: ["nodes", "config", "backups", "storage"],
+      Engine: ["nodes", "config", "backups", "storage", "code"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
     expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
@@ -353,14 +356,14 @@ describe("the navigation grammar", () => {
     // its locks are drawn per section, in its column.
     const spend = settings.sections.find((s) => s.key === "spend")!;
     expect(sectionOpen(spend, [])).toBe(true);
-    expect(workspaceOpen(settings, [])).toBe(true);
-    expect(workspaceMissing(settings, [])).toEqual([]);
-    expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
+    expect(workspaceOpen(settings, [], EVERY_SERVICE)).toBe(true);
+    expect(workspaceMissing(settings, [], EVERY_SERVICE)).toEqual([]);
+    expect(workspaceOpen(workspaceRow("account")!, [], EVERY_SERVICE)).toBe(true);
     // A WORKSPACE'S OWN PERMISSION IS NEEDED BESIDE ITS SECTION'S.
     const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["worklet"] };
-    expect(workspaceOpen(guarded, [])).toBe(false);
-    expect(workspaceMissing(guarded, [])).toEqual(["worklet"]);
-    expect(workspaceOpen(guarded, ["worklet"])).toBe(true);
+    expect(workspaceOpen(guarded, [], EVERY_SERVICE)).toBe(false);
+    expect(workspaceMissing(guarded, [], EVERY_SERVICE)).toEqual(["worklet"]);
+    expect(workspaceOpen(guarded, ["worklet"], EVERY_SERVICE)).toBe(true);
     // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
     expect(personalPath(["account"])).toBe(true);
     expect(personalPath(["settings", "models"])).toBe(false);
@@ -385,7 +388,7 @@ describe("the navigation grammar", () => {
     const opens = (path: string[], held: string[]) => {
       const row = workspaceRow(workspaceOf(path))!;
       const section = sectionOf(path);
-      return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
+      return workspaceOpen(row, held, EVERY_SERVICE) && (!section || sectionOpen(section, held));
     };
     const TRACKER_ONLY = [
       ["me"],
@@ -445,6 +448,8 @@ describe("the navigation grammar", () => {
       ["code"],
       ["code", "repos"],
       ["code", "pushes"],
+      ["code", "queue"],
+      ["code", "checks"],
       // NOR THE INBOX: it is composed from every native domain's notices,
       // each read under its own permission on the engine's side.
       ["inbox"],
@@ -694,12 +699,16 @@ describe("the resolver", () => {
   // bare `#/code` is the row's landing, its changes — as `#/worklet` is Worklet's
   // projects. (A repository's own page is under Repositories: below.)
   // Mutation: send the bare head to Not Found again and the row lands nowhere.
-  test("Code's sections are its three lists, and no word under them is a page", () => {
+  test("Code's sections are its five lists, and no word under them is a page", () => {
     expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
     expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
     expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
+    expect(resolve(["code", "queue"])).toMatchObject({ screen: "code-queue", workspace: "code" });
+    expect(resolve(["code", "checks"])).toMatchObject({ screen: "code-checks", workspace: "code" });
     for (const path of [
       ["code", "pushes", "web"],
+      ["code", "queue", "web"],
+      ["code", "checks", "unit"],
       ["code", "changes"],
       ["code", "web"],
     ]) {
@@ -996,6 +1005,8 @@ describe("the breadcrumb", () => {
     expect(pushes[0]?.path).toEqual(["code"]);
     expect(titleOf(pushes)).toBe("Pushes");
     expect(crumbsFor(["code", "repos"]).map((c) => c.label)).toEqual(["Code", "Repositories"]);
+    expect(crumbsFor(["code", "queue"]).map((c) => c.label)).toEqual(["Code", "Queue"]);
+    expect(crumbsFor(["code", "checks"]).map((c) => c.label)).toEqual(["Code", "Checks"]);
   });
 
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"

@@ -360,6 +360,25 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// REBASE, a forced push of it.
 		builtin.CodeApplySuggestionsTool: true,
 		builtin.CodeRebaseChangeTool:     true,
+		// AND ITS MERGE, which moves its target, and ITS DEQUEUE.
+		builtin.CodeMergeChangeTool:   true,
+		builtin.CodeDequeueChangeTool: true,
+		builtin.CodeRevertChangeTool:  true,
+		// A COMMIT'S CHECKS: what one said is a read a worker may be handed;
+		// a rerun queues an attempt every colleague's change readiness reads,
+		// and a report is a check result on the same rows — neither a
+		// worker's to make under its parent's grant.
+		builtin.CodeGetCheckFailuresTool: false,
+		// A SEARCH OF THE COMPANY'S CODE: a read, and a worker's to make.
+		builtin.CodeSearchTool:      false,
+		builtin.CodeRerunChecksTool: true,
+		builtin.CodeReportCheckTool: true,
+		// A REPOSITORY'S PURGE: a request every reader of the repository's
+		// history loses objects to.
+		builtin.CodePurgeUnreachableTool: true,
+		// A REPOSITORY IMPORTED: a new project every colleague reads,
+		// filled from another host.
+		builtin.CodeImportRepoTool: true,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.
@@ -1095,7 +1114,7 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
-		// AND THE CODE HOST, whose eleven read tools register only over a
+		// AND THE CODE HOST, whose twelve read tools register only over a
 		// code host and the requester ceiling's halves beside it, and whose
 		// writes only where its writes are wired too: left out, every walk over
 		// this fixture met their authority rows as rules no registered tool

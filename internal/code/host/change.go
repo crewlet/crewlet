@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -14,8 +15,9 @@ import (
 
 // A PUSH'S CHANGE, AS ITS RECEIVER HANDLES IT: the options git handed the hook
 // read once (askChange), the change made ready for the push's proposal — its
-// source judged again, its title filled in, its room in the push's record
-// measured (readyChange) — and what became of it told the pusher in one line
+// source judged again, its room in the push's record measured (readyChange),
+// its title filled in beside the push's upload (titleChange) — and what
+// became of it told the pusher in one line
 // on the hook's stderr (changeLine). None of it ever refuses the push, which
 // lands or not by its commands alone (internal/code's pushchange.go). A push
 // the handler refused whole before receive-pack ran never reaches the relay
@@ -58,6 +60,23 @@ func askChange(options []string, cmds []code.Command) changeAsk {
 	return changeAsk{asked: true, option: opt, source: i}
 }
 
+// askedChange is the change a landing opens: the one its builder formed
+// (landing.Change, a revert_change's), or else what its push's options ask
+// for (askChange) — one ask either way, made ready and answered by the same
+// steps, so an engine write's change is opened in its push's record exactly
+// as a person's `-o change` is.
+func (l *landing) askedChange() changeAsk {
+	if l.Change == nil {
+		return askChange(l.PushOptions, l.Commands)
+	}
+	i, r, why := code.ChangeSource(l.Commands)
+	if r != "" {
+		return changeAsk{asked: true, source: -1, answer: &code.ChangeAnswer{Refusal: r, Detail: why}}
+	}
+	opt := *l.Change
+	return changeAsk{asked: true, option: &opt, source: i}
+}
+
 // readyChange makes the change a push asks for ready for its proposal, once
 // the push is to be proposed — cmds its commands as the landing has decided
 // them so far, proposed the same as its proposal carries them — and answers
@@ -69,11 +88,11 @@ func askChange(options []string, cmds []code.Command) changeAsk {
 //     their largest (code.Proposal.ValidateCommands): bad_option, since a
 //     push of the change's branch alone always has room for it.
 //
-// Where the options named no title, the change takes the subject of the
-// commit the push sets its source to (defaultTitle).
-func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cmds,
-	proposed []code.Command) *code.ChangeOption {
-
+// A change whose options named no title is answered with none, and measured
+// with one at its longest: the landing fills it in beside the push's upload
+// (titleChange), so no push waits on a git process before its bytes start
+// for the object store.
+func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []code.Command) *code.ChangeOption {
 	if ask.option == nil || ask.answer != nil {
 		return nil
 	}
@@ -85,9 +104,6 @@ func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cm
 		return nil
 	}
 	opt := *ask.option
-	if opt.Title == "" {
-		opt.Title = s.defaultTitle(ctx, l, source)
-	}
 	err := code.Proposal{Principal: l.Principal, Via: l.Via, Node: s.o.NodeID, Commands: proposed,
 		Change: &opt}.ValidateCommands()
 	if err != nil {
@@ -105,6 +121,22 @@ func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cm
 	return &opt
 }
 
+// titleChange is the work that fills in the title of change, the change a
+// push proposes (readyChange), where its options named none — defaultTitle of
+// source, the command it is opened from, written into change — and nil where
+// there is nothing to fill in. The landing runs it beside the push's upload
+// and waits for it before the proposal is checked (introduceAndStore), so
+// the title is read while the bundle's bytes are already on their way: the
+// read refuses nothing — it falls back to the branch's name and the
+// commit's id — so nothing need wait for it before the upload. source is
+// copied here, so the work reads nothing of the landing's commands.
+func (s *Server) titleChange(l *landing, change *code.ChangeOption, source code.Command) func(context.Context) {
+	if change == nil || change.Title != "" {
+		return nil
+	}
+	return func(ctx context.Context) { change.Title = s.defaultTitle(ctx, l, source) }
+}
+
 // commitHeadBytes is the most of a commit object the title of a change is
 // read from: 64 KiB — its headers (a tree, its parents at 48 bytes each, two
 // identities, a signature of a few kibibytes) and the start of its message,
@@ -116,9 +148,10 @@ const commitHeadBytes = 64 << 10
 // one: the subject of the commit the push sets its source to — what that
 // commit says it does, which is what a change is first read by — read in the
 // push's own scratch, whose pack or alternate holds every commit a push sets
-// a ref to. Where it cannot be read, or is no title once made one (code.AsTitle),
-// the branch's name, which the push's checks have held to a ref's rules: a
-// title always, since a push's change is never refused for its title.
+// a ref to; and, where it cannot be read or is no title, the branch's name
+// and then the commit's id, each made a title (code.DeliveredTitle) — never
+// the name raw, which may hold what a title may not: a title always, since a
+// push's change is never refused for its title.
 func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Command) string {
 	branch := strings.TrimPrefix(source.Ref, "refs/heads/")
 	head := &headBytes{max: commitHeadBytes}
@@ -126,14 +159,16 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 		Dir: l.Scratch.Dir, Alternate: l.Scratch.Alternate, Args: []string{"cat-file", "commit", source.New},
 		Stdout: head, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	}); err != nil {
-		s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
-			"commit", source.New, "error", err)
-		return branch
+		// A READ ENDED WITH ITS LANDING — the upload or the listing beside
+		// it failed (introduceAndStore) — says nothing of the title: the
+		// push fails for what ended it, and is logged for that.
+		if ctx.Err() == nil {
+			s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+				"commit", source.New, "error", err)
+		}
+		return code.DeliveredTitle("", branch, source.New)
 	}
-	if title := code.AsTitle(logSubject(head.buf)); title != "" {
-		return title
-	}
-	return branch
+	return code.DeliveredTitle(logSubject(head.buf), branch, source.New)
 }
 
 // logSubject is the subject of raw, a commit object as `git cat-file commit`
@@ -144,7 +179,8 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 // joined by a space (pretty.c's format_subject), or "" where raw holds no
 // message. Its headers end at the first blank line: a header's continuation
 // lines (a signature's) each start with a space. Its bytes are the commit's,
-// never re-encoded: a subject in another encoding is no title (code.AsTitle).
+// never re-encoded: a subject in another encoding is no title
+// (code.DeliveredTitle).
 //
 // NOT commitSubject's subject (message.go), which is a message's first LINE —
 // the subject a revert quotes, as the sequencer finds it — since a change is
@@ -215,9 +251,18 @@ func resolvedChange(asked bool, tentative *code.ChangeAnswer, out code.PushOutco
 const (
 	// changeOpenedLine and changeUpdatedLine name the change a push opened,
 	// and the live one its source already headed, by its name on its
-	// repository (code.ChangeRef).
-	changeOpenedLine  = "change %s opened"
-	changeUpdatedLine = "change %s updated"
+	// repository (code.ChangeRef) and the address of its page (changeLink):
+	// a person who pushed with `-o change` opens the change from the line
+	// git printed, where its reviewers, its findings and its merge are.
+	changeOpenedLine  = "change %s opened: %s"
+	changeUpdatedLine = "change %s updated: %s"
+	// changeOpenedBare and changeUpdatedBare are the same two lines from a
+	// host told no address of the deployment (Options.ExternalBase): the
+	// change's name, and no link that could not be opened. No engine node
+	// that serves a push is one — every push reaches it through the API
+	// listener, which `api.external_url` is required beside.
+	changeOpenedBare  = "change %s opened"
+	changeUpdatedBare = "change %s updated"
 	// changeRefusedLine is why a push opened none, its code and sentence.
 	changeRefusedLine = "change not opened: %s: %s"
 	// changeUnlanded is a push that did not land, and so opened nothing.
@@ -245,7 +290,10 @@ const (
 //   - for one that did not land, that nothing of it did (changeUnlanded);
 //   - and for one that landed with no word of its change, that it is not
 //     known (changeUnknown).
-func changeLine(c changeAsk, r pushResult, repo string) string {
+//
+// base is the address a person reaches the deployment at
+// (Options.ExternalBase), on which the change's page is linked.
+func changeLine(c changeAsk, r pushResult, repo, base string) string {
 	if !c.asked {
 		return ""
 	}
@@ -259,8 +307,29 @@ func changeLine(c changeAsk, r pushResult, repo string) string {
 		return changeUnlanded
 	case a == nil || a.ChangeID == "" || a.Number < 1:
 		return changeUnknown
-	case a.Opened:
-		return fmt.Sprintf(changeOpenedLine, code.ChangeRef(repo, a.Number))
 	}
-	return fmt.Sprintf(changeUpdatedLine, code.ChangeRef(repo, a.Number))
+	name, link := code.ChangeRef(repo, a.Number), changeLink(base, repo, a.Number)
+	switch {
+	case link == "" && a.Opened:
+		return fmt.Sprintf(changeOpenedBare, name)
+	case link == "":
+		return fmt.Sprintf(changeUpdatedBare, name)
+	case a.Opened:
+		return fmt.Sprintf(changeOpenedLine, name, link)
+	}
+	return fmt.Sprintf(changeUpdatedLine, name, link)
+}
+
+// changeLink is the address of change number on repo's page on the
+// deployment's base — `<api.external_url>/dashboard#/code/repos/web/changes/42`
+// — and "" on a host told no base. The ONE place the link git prints is
+// composed: the dashboard's shell (auth.PathDashboard, which every link a
+// person follows points at, as an invitation's and an artifact's do) and the
+// change's route in it (code.ChangeAddress, which the dashboard's links suite
+// holds to its router).
+func changeLink(base, repo string, number int64) string {
+	if base == "" {
+		return ""
+	}
+	return base + auth.PathDashboard + code.ChangeAddress(repo, number)
 }

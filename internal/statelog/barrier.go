@@ -64,6 +64,17 @@ const BarrierVersion = 1
 // member wrote it, and under an always-fsync it proves the write reached the
 // disk. Two different proofs of the same thing, and it is all the level
 // needs.
+//
+// AND TWO DIFFERENT FAILURES, which is why the index knows how many members
+// store its log ([ReadIndex.unconfirmed]). A barrier several members did not
+// commit in time is a majority that did not agree — an election, a member
+// down or cut off. On one member there is no majority to miss and no election
+// to wait out: its acknowledgement needs nobody else's, so a barrier it did
+// not acknowledge in time is its own write that did not complete — a disk not
+// taking the fsync `stream.sync: always` makes of every append, a member that
+// stopped serving. Told as a missed quorum, a single node on a stalling disk
+// sent its operator looking for peers it does not have, with an election's
+// retry hint.
 type ReadIndex struct {
 	log     Appender
 	stream  string
@@ -72,6 +83,11 @@ type ReadIndex struct {
 	encode  func(Envelope) ([]byte, error)
 	gen     func() uint32
 	metrics *metrics.Recorder
+
+	// members is how many members store the log, read when a barrier is
+	// refused rather than when the index is built: an operator may
+	// re-replicate a stream under a running node.
+	members func() int
 
 	// admission holds a barrier out of the log's gate reserve like any
 	// other ordinary append: barriers go on for as long as reads do, and
@@ -102,10 +118,20 @@ type barrierRun struct {
 
 // DefaultBarrierBudget bounds one barrier append.
 //
-// FIVE SECONDS, which is a quorum round trip's own scale multiplied by three
-// orders: a barrier that has not committed in five seconds is a broker
-// without a quorum rather than a slow one, and a linearizable read is better
-// told that than left holding a request open.
+// FIVE SECONDS, past what a healthy barrier costs at any member count by two
+// orders of magnitude or more — its p99 measured at 3.6 ms on one member and
+// 42–62 ms at three replicas (the package doc's figures) — so a barrier that
+// has not committed in five seconds is a broker that cannot commit rather
+// than a slow one: on several members, one without a quorum (`no_quorum`);
+// on one member, whose acknowledgement waits on nobody else's, one whose own
+// write has stalled (`broker_stalled` — [ReadIndex.unconfirmed]). Either way
+// a linearizable read is better told than left holding a request open.
+//
+// NOT LENGTHENED FOR A STALLING DISK. A single node's broker was seen, in a
+// test runner whose disk two loaded suites shared, holding its writes for
+// 9.27 s; a budget long enough to outlast that holds every linearizable read
+// on the node for as long, where a read refused at five seconds, with a code
+// that names the stall, is one its caller can act on.
 const DefaultBarrierBudget = 5 * time.Second
 
 // NewReadIndex builds the read index of one of a domain's logs — the one spec
@@ -118,14 +144,24 @@ const DefaultBarrierBudget = 5 * time.Second
 // signer is the fleet keyring's signer for the domain: a barrier is a record
 // on the log like any other, so it is signed like any other.
 //
+// members is how many members store the log, as its broker last reported it
+// (the engine's is the stream's own replication factor, never Tier A's floor
+// on it): what decides whether a barrier that did not commit was a majority
+// that did not agree or the sole member's own write — see [ReadIndex].
+//
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, members func() int, signer *Signer,
 	admission Admission, encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
 	if err := spec.Instantiates(d); err != nil {
 		return nil, err
+	}
+	if members == nil {
+		return nil, fmt.Errorf("statelog: read index for %q has no member count, and "+
+			"a barrier that did not commit means something different on one member",
+			d.Name())
 	}
 	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
 	// any other: an unsigned one would let anything the broker admits
@@ -156,9 +192,34 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
 		encode:    encode,
 		gen:       gen,
 		metrics:   rec,
+		members:   members,
 		admission: admission,
 		budget:    DefaultBarrierBudget,
 	}, nil
+}
+
+// unconfirmed is what a barrier on this log that did not commit is refused
+// as; ranOut is whether its wait ran out of time — its own budget, or what its
+// asker's attempt left — rather than ending on an error.
+//
+// ON SEVERAL MEMBERS IT IS `no_quorum`, however it ended: the barrier was
+// proposed to the log's leader and a majority did not commit it in time, or
+// no leader answered — an election, a member down or cut off.
+//
+// ON ONE IT IS NEVER `no_quorum`: no majority is asked, no election is held,
+// and the four seconds an election takes ([ElectionRetryHint]) describe
+// nothing. A barrier the sole member did not acknowledge in time is its own
+// write that did not complete (`broker_stalled`), and one that ended on an
+// error first — nobody answering the append, a stream that closed under it —
+// is a broker that did not answer (`broker_unreachable`).
+func (r *ReadIndex) unconfirmed(ranOut bool) ReadRefusal {
+	switch {
+	case r.members() > 1:
+		return RefuseNoQuorum
+	case ranOut:
+		return RefuseBrokerStalled
+	}
+	return RefuseBrokerUnreachable
 }
 
 // Read returns the read index a linearizable read rests on: the position of a
@@ -341,11 +402,13 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 // from a test's fake appender that returned one ready-made. The trim's line
 // names a refused trimmed record `log_full` by the same rule.
 //
-// What nobody answered stays unclassified, and is the missed quorum it was;
-// and so does an answer saying the record may yet land ([faultUnsettled]): a
-// framework record carries no message id, so the one such answer it can meet
-// is a store that closed under an entry raft had committed, which is a stream
-// restarting and clears exactly as a missed quorum does. The barrier's caller
+// What nobody answered stays unclassified, and is the unconfirmed barrier it
+// was ([ReadIndex.unconfirmed]: a missed quorum on several members, a broker
+// that did not answer on one); and so does an answer saying the record may
+// yet land ([faultUnsettled]): a framework record carries no message id, so
+// the one such answer it can meet is a store that closed under an entry raft
+// had committed, which is a stream restarting and clears exactly as an
+// unanswered append does. The barrier's caller
 // LOGS that error, once per append, and never tells it to a reader: it is the
 // transport's or the broker's own words, and every reader waiting on the
 // append is told [barrierRefusal]'s sentence instead. A refusal the broker

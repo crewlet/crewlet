@@ -96,7 +96,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE SOURCE BRANCH'S HOLD, before the write is sent ([CodeDeps.branch]):
 	// the rebase moves the change's source, often a seat's branch, at the head
 	// it names, so it is held as a read of it is.
-	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, w.Ref, true); refusal != nil {
+	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, true, w.Ref); refusal != nil {
 		return *refusal, nil
 	}
 	res, err := t.deps.Writer.GitWrite(ctx, w)

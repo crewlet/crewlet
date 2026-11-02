@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -255,124 +256,18 @@ func resolveRemote(ctx context.Context, rawURL string, allowPrivate bool, env re
 	return r, nil
 }
 
-// remoteURL reads rawURL as a remote's URL and writes it back, with the Remote
-// it names (no addresses yet) and the URL as parsed.
-//
-// WRITTEN BACK, NEVER PASSED ON: two parsers that read one URL differently — a
-// host after an @, a backslash, an IPv4 address in octal or in fewer than four
-// parts, a trailing dot, a name libcurl would convert to punycode — are how a
-// check of one host becomes a dial of another, or how a pin keyed by one
-// spelling is missed by libcurl's lookup of another and answered by DNS. So
-// git is handed the URL this wrote from what it parsed, in the one spelling
-// every parser reads alike, and anything that has another is refused.
-//
-// The URL is never quoted in a refusal before it parses, and only redacted
-// after: a URL naming a user may carry a password.
+// remoteURL reads rawURL as a remote's URL and writes it back
+// ([gitref.ParseRemoteURL]: THE ONE READING, which the code domain and the
+// configuration hold a recorded mirror or import to as well), with the Remote
+// it names (no addresses yet) and the URL as parsed — refused ErrRemote,
+// naming what to change.
 func remoteURL(rawURL string) (Remote, *url.URL, error) {
-	u, err := url.Parse(rawURL)
+	parsed, err := gitref.ParseRemoteURL(rawURL)
 	if err != nil {
-		// A *url.Error's text quotes the URL whole; its cause does not.
-		if ue, ok := errors.AsType[*url.Error](err); ok {
-			err = ue.Err
-		}
-		return Remote{}, nil, fmt.Errorf("%w: the remote is not a URL: %w", ErrRemote, err)
+		return Remote{}, nil, fmt.Errorf("%w: %w", ErrRemote, err)
 	}
-	switch {
-	case u.Scheme != "https":
-		return Remote{}, nil, fmt.Errorf("%w: %s is not an https URL: a git process dials another host over https alone",
-			ErrRemote, u.Redacted())
-	case u.Opaque != "" || u.Host == "":
-		return Remote{}, nil, fmt.Errorf("%w: %s names no host: write it https://<host>/<path>", ErrRemote, u.Redacted())
-	case u.User != nil:
-		return Remote{}, nil, fmt.Errorf("%w: %s names a user: a credential is a header (Remote.WithHeader), never "+
-			"part of the URL, which git writes into the arguments of every process it starts, where any user of "+
-			"the machine can read it", ErrRemote, u.Redacted())
-	case u.RawQuery != "" || u.ForceQuery:
-		return Remote{}, nil, fmt.Errorf("%w: %s has a query: git appends its own to a remote's URL", ErrRemote, u.Redacted())
-	case u.Fragment != "" || strings.Contains(rawURL, "#"):
-		return Remote{}, nil, fmt.Errorf("%w: %s has a fragment, which names nothing a git server serves", ErrRemote, u.Redacted())
-	}
-	host, addr, err := remoteHost(u)
-	if err != nil {
-		return Remote{}, nil, err
-	}
-	port := 443
-	if p := u.Port(); p != "" {
-		// url.Parse has held it to digits.
-		if port, err = strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
-			return Remote{}, nil, fmt.Errorf("%w: %s's port %s is not one from 1 to 65535", ErrRemote, u.Redacted(), p)
-		}
-	}
-	hostport := host
-	switch {
-	case port != 443:
-		hostport = net.JoinHostPort(host, strconv.Itoa(port))
-	case addr.Is6():
-		hostport = "[" + host + "]"
-	}
-	written := &url.URL{Scheme: "https", Host: hostport, Path: u.Path, RawPath: u.RawPath}
-	return Remote{url: written.String(), host: host, port: port, literal: addr.IsValid()}, written, nil
-}
-
-// remoteHost is u's host as a remote's: an IPv6 address in brackets or an
-// IPv4 address in dotted decimal, each in its one written form, and the
-// address; or a DNS name, lowercased ([dnsName]), and no address.
-//
-// AN IPv6 ADDRESS WITH A ZONE IS REFUSED: a zone names a link of this host, so
-// no host on the internet has one, and libcurl cannot pin one.
-func remoteHost(u *url.URL) (string, netip.Addr, error) {
-	h := u.Hostname()
-	if strings.HasPrefix(u.Host, "[") {
-		addr, err := netip.ParseAddr(h)
-		switch {
-		case err != nil || !addr.Is6():
-			return "", netip.Addr{}, fmt.Errorf("%w: %s's host %q in brackets is not an IPv6 address", ErrRemote, u.Redacted(), h)
-		case addr.Zone() != "":
-			return "", netip.Addr{}, fmt.Errorf("%w: %s's host %s carries a zone, which names a link of this host and "+
-				"never a host on the internet", ErrRemote, u.Redacted(), h)
-		}
-		return addr.String(), addr, nil
-	}
-	// Without brackets only IPv4 parses: url.Parse reads an IPv6 address's
-	// colons as a port.
-	if addr, err := netip.ParseAddr(h); err == nil {
-		return addr.String(), addr, nil
-	}
-	name := strings.ToLower(h)
-	if !dnsName(name) {
-		return "", netip.Addr{}, fmt.Errorf("%w: %s's host %q is not a DNS name of letters, digits and hyphens whose last "+
-			"label begins with a letter, nor an IP address in its one written form (dotted decimal, or IPv6 in "+
-			"brackets): write it so, without a trailing dot, an internationalised name as its punycode",
-			ErrRemote, u.Redacted(), h)
-	}
-	return name, netip.Addr{}, nil
-}
-
-// dnsName reports whether s, lowercase, is a host name every parser reads
-// alike: labels of letters, digits and hyphens, 1 to 63 bytes each and
-// neither beginning nor ending with a hyphen, 253 bytes in all, with no empty
-// label (so no trailing dot, which libcurl may strip before it looks the name
-// up), and a LAST LABEL THAT BEGINS WITH A LETTER, as every top-level domain
-// does — a host that ends in a number is an IPv4 address to libcurl and the C
-// resolver, which read 127.1, 0x7f.1 and 010.0.0.1 as addresses (the last as
-// octal) where netip refuses all three.
-func dnsName(s string) bool {
-	if s == "" || len(s) > 253 {
-		return false
-	}
-	labels := strings.Split(s, ".")
-	for _, l := range labels {
-		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
-			return false
-		}
-		for i := range len(l) {
-			if c := l[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
-		}
-	}
-	last := labels[len(labels)-1]
-	return 'a' <= last[0] && last[0] <= 'z'
+	return Remote{url: parsed.URL, host: parsed.Host, port: parsed.Port, literal: parsed.Addr.IsValid()},
+		parsed.Parsed(), nil
 }
 
 // remoteProxy is the proxy git is told to dial for a remote — p, as the

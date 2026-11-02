@@ -479,12 +479,32 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 
 // rowCount is the rows the book's moves make the record's apply write: every
 // change it moved or opened, every revision and every author it added, the
-// description of every change it opened that carries one, and the live queue
-// entry of every change it moved that holds one. The repository's own row,
-// whose next number an open moves, is the record's already ([recordRows]).
+// description of every change it opened that carries one, the live queue
+// entry of every change it moved that holds one, and the stored readiness of
+// every change it merged or closed — a row at most each, which the apply
+// writes only where the row holds an answer ([clearReadiness]), and which the
+// book counts whether or not, since its rows hold no mergeability. The
+// repository's own row, whose next number an open moves, is the record's
+// already ([recordRows]).
 func (b *changeBook) rowCount() int {
 	w := &b.writes
-	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved()
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + len(b.ended())
+}
+
+// ended is the changes the book's moves merged or closed — none of those it
+// opened, which no record has judged the readiness of yet — whose stored
+// readiness the apply clears ([clearReadiness]).
+func (b *changeBook) ended() []string {
+	var ids []string
+	for _, id := range b.writes.touched {
+		if b.writes.opened[id] {
+			continue
+		}
+		if kind := pushWrite(b.rows[id], false); kind == changeMerged || kind == changeStateMoved {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // queuedMoved is how many of the changes the book's moves reached hold a live
@@ -497,6 +517,30 @@ func (b *changeBook) queuedMoved() int {
 		}
 	}
 	return n
+}
+
+// queueEnds is how the book's moves end the live queue entries of the
+// changes they reached that hold one — none of those it opened, which no queue
+// holds yet: a change whose head moved is ejected (head_moved), a merged one
+// and a closed one dequeued. The apply ends the entries by it, and the decide
+// names the ejected to the committer, which announces each
+// (Committer.announcePushEjections): the same model, so the two agree.
+func (b *changeBook) queueEnds() (ejected, merged, closed []string) {
+	w := &b.writes
+	for _, id := range w.touched {
+		if w.opened[id] || !b.queued[id] {
+			continue
+		}
+		switch pushWrite(b.rows[id], false) {
+		case changeMerged:
+			merged = append(merged, id)
+		case changeStateMoved:
+			closed = append(closed, id)
+		default:
+			ejected = append(ejected, id)
+		}
+	}
+	return ejected, merged, closed
 }
 
 // moved is how many changes the book's moves reached.

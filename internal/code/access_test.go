@@ -494,8 +494,8 @@ func TestAGrantUnderAColleaguesCeilingIsHeldToBoth(t *testing.T) {
 // naming a seat, a seat's naming the writer itself or no handle, a person's
 // write carrying any — is refused on the write.
 //
-// Mutations: ownWork answering only the namespace — the scratch repository's
-// and the seat-owned project's main are refused, red; ownWork answering true
+// Mutations: OwnWork answering only the namespace — the scratch repository's
+// and the seat-owned project's main are refused, red; OwnWork answering true
 // for every repository — Platform's main lands for both, red; WriteCeiling.Grant
 // granting nobody what GrantOf grants a seat — nobody's main lands, red.
 func TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn(t *testing.T) {

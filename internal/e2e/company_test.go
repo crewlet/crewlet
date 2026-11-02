@@ -903,10 +903,6 @@ func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
 func (m *scriptedModel) misrouted() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.channels) != len(m.calls) {
-		// [scriptedModel.saw] records a phase alone.
-		return []string{"this model recorded calls without their channels"}
-	}
 	var bad []string
 	for i, phase := range m.calls {
 		want := ""

@@ -55,7 +55,7 @@ import {
   DESTINATIONS,
   WORKSPACES,
   landingPath,
-  serviceShown,
+  workspaceShown,
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
@@ -633,11 +633,11 @@ function Frame({ children }: { children: ReactNode }) {
     },
     keys: () => setLegendOpen(true),
     // A JUMP TO A PLACE THE COMPANY DOES NOT RUN is bound to nothing, as its
-    // row is drawn nowhere (`nav.ts`'s `serviceShown`).
+    // row is drawn nowhere (`nav.ts`'s `workspaceShown`).
     ...Object.fromEntries(
       WORKSPACES.map((ws) => [
         `go.${ws.key}`,
-        { run: () => nav.to(landingPath(ws, held, runs)), when: serviceShown(ws, runs) },
+        { run: () => nav.to(landingPath(ws, held, runs)), when: workspaceShown(ws, runs) },
       ]),
     ),
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the

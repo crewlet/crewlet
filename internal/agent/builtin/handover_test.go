@@ -21,8 +21,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -51,43 +53,45 @@ import (
 // knowledge answer's sources and a parked coding run's question were the ones
 // nobody had.
 var handsOverWords = map[string]string{
-	builtin.AnswerKnowledgeTool:   "TestEveryUntrustedReadIsFenced/answer_knowledge",
-	builtin.AnswerRunTool:         "TestEveryUntrustedReadIsFenced/answer_run",
-	builtin.CodeBlameTool:         "TestEveryUntrustedReadIsFenced/code_blame",
-	builtin.CodeCherryPickTool:    "TestEveryUntrustedReadIsFenced/code_cherry_pick",
-	builtin.CodeDiffTool:          "TestEveryUntrustedReadIsFenced/code_diff",
-	builtin.CodeGetChangeTool:     "TestEveryUntrustedReadIsFenced/code_get_change",
-	builtin.CodeGetRepoTool:       "TestEveryUntrustedReadIsFenced/code_get_repo",
-	builtin.CodeListChangesTool:   "TestEveryUntrustedReadIsFenced/code_list_changes",
-	builtin.CodeListReposTool:     "TestEveryUntrustedReadIsFenced/code_list_repos",
-	builtin.CodeLogTool:           "TestEveryUntrustedReadIsFenced/code_log",
-	builtin.CodeReadTool:          "TestEveryUntrustedReadIsFenced/code_read",
-	builtin.CodeRevertTool:        "TestEveryUntrustedReadIsFenced/code_revert",
-	builtin.CommentOnPageTool:     "TestEveryUntrustedReadIsFenced/comment_on_page",
-	worklet.DescribeProjectTool:   "TestEveryUntrustedReadIsFenced/describe_project",
-	builtin.GetArtifactTool:       "TestEveryArtifactToolResultIsFenced/get_artifact",
-	builtin.GetPageTool:           "TestEveryUntrustedReadIsFenced/get_page",
-	builtin.GetWorkItemTool:       "TestEveryUntrustedReadIsFenced/get_work_item",
-	builtin.ListArtifactsTool:     "TestEveryArtifactToolResultIsFenced/list_artifacts",
-	builtin.ListChannelsTool:      "TestEveryUntrustedReadIsFenced/list_channels",
-	builtin.ListPagesTool:         "TestEveryUntrustedReadIsFenced/list_pages",
-	worklet.ListProjectFilesTool:  "TestEveryUntrustedReadIsFenced/list_project_files",
-	worklet.ListProjectsTool:      "TestEveryUntrustedReadIsFenced/list_projects",
-	builtin.ListWorkItemsTool:     "TestEveryUntrustedReadIsFenced/list_work_items",
-	worklet.ListWorkViewsTool:     "TestEveryUntrustedReadIsFenced/list_work_views",
-	worklet.MyWorkTool:            "TestEveryUntrustedReadIsFenced/my_work",
-	builtin.PublishArtifactTool:   "TestEveryArtifactToolResultIsFenced/publish_artifact on a stale base",
-	builtin.QueryArtifactDataTool: "TestEveryDataToolResultIsFenced",
-	builtin.QueryEpisodesTool:     "TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt",
-	builtin.ReadArtifactDataTool:  "TestEveryDataToolResultIsFenced",
-	builtin.ReadChannelTool:       "TestEveryUntrustedReadIsFenced/read_channel",
-	worklet.ReadProjectFileTool:   "TestEveryUntrustedReadIsFenced/read_project_file",
-	builtin.SearchKnowledgeTool:   "TestSearchKnowledgeFencesWhatAPageSays",
-	builtin.SearchMessagesTool:    "TestEveryUntrustedReadIsFenced/search_messages",
-	builtin.SearchWorkItemsTool:   "TestEveryUntrustedReadIsFenced/search_work_items",
-	worklet.TaskActivityTool:      "TestEveryUntrustedReadIsFenced/task_activity",
-	chatlet.UpdateChannelTool:     "TestEveryUntrustedReadIsFenced/update_channel",
-	worklet.WorkInboxTool:         "TestEveryUntrustedReadIsFenced/work_inbox",
+	builtin.AnswerKnowledgeTool:      "TestEveryUntrustedReadIsFenced/answer_knowledge",
+	builtin.AnswerRunTool:            "TestEveryUntrustedReadIsFenced/answer_run",
+	builtin.CodeBlameTool:            "TestEveryUntrustedReadIsFenced/code_blame",
+	builtin.CodeCherryPickTool:       "TestEveryUntrustedReadIsFenced/code_cherry_pick",
+	builtin.CodeDiffTool:             "TestEveryUntrustedReadIsFenced/code_diff",
+	builtin.CodeGetChangeTool:        "TestEveryUntrustedReadIsFenced/code_get_change",
+	builtin.CodeGetCheckFailuresTool: "TestACheckLogIsFenced",
+	builtin.CodeGetRepoTool:          "TestEveryUntrustedReadIsFenced/code_get_repo",
+	builtin.CodeListChangesTool:      "TestEveryUntrustedReadIsFenced/code_list_changes",
+	builtin.CodeListReposTool:        "TestEveryUntrustedReadIsFenced/code_list_repos",
+	builtin.CodeLogTool:              "TestEveryUntrustedReadIsFenced/code_log",
+	builtin.CodeReadTool:             "TestEveryUntrustedReadIsFenced/code_read",
+	builtin.CodeRevertTool:           "TestEveryUntrustedReadIsFenced/code_revert",
+	builtin.CodeSearchTool:           "TestCodeSearchHitsAreFenced",
+	builtin.CommentOnPageTool:        "TestEveryUntrustedReadIsFenced/comment_on_page",
+	worklet.DescribeProjectTool:      "TestEveryUntrustedReadIsFenced/describe_project",
+	builtin.GetArtifactTool:          "TestEveryArtifactToolResultIsFenced/get_artifact",
+	builtin.GetPageTool:              "TestEveryUntrustedReadIsFenced/get_page",
+	builtin.GetWorkItemTool:          "TestEveryUntrustedReadIsFenced/get_work_item",
+	builtin.ListArtifactsTool:        "TestEveryArtifactToolResultIsFenced/list_artifacts",
+	builtin.ListChannelsTool:         "TestEveryUntrustedReadIsFenced/list_channels",
+	builtin.ListPagesTool:            "TestEveryUntrustedReadIsFenced/list_pages",
+	worklet.ListProjectFilesTool:     "TestEveryUntrustedReadIsFenced/list_project_files",
+	worklet.ListProjectsTool:         "TestEveryUntrustedReadIsFenced/list_projects",
+	builtin.ListWorkItemsTool:        "TestEveryUntrustedReadIsFenced/list_work_items",
+	worklet.ListWorkViewsTool:        "TestEveryUntrustedReadIsFenced/list_work_views",
+	worklet.MyWorkTool:               "TestEveryUntrustedReadIsFenced/my_work",
+	builtin.PublishArtifactTool:      "TestEveryArtifactToolResultIsFenced/publish_artifact on a stale base",
+	builtin.QueryArtifactDataTool:    "TestEveryDataToolResultIsFenced",
+	builtin.QueryEpisodesTool:        "TestQueryEpisodesFencesWhatAPastTurnWasAskedAsWhoeverWroteIt",
+	builtin.ReadArtifactDataTool:     "TestEveryDataToolResultIsFenced",
+	builtin.ReadChannelTool:          "TestEveryUntrustedReadIsFenced/read_channel",
+	worklet.ReadProjectFileTool:      "TestEveryUntrustedReadIsFenced/read_project_file",
+	builtin.SearchKnowledgeTool:      "TestSearchKnowledgeFencesWhatAPageSays",
+	builtin.SearchMessagesTool:       "TestEveryUntrustedReadIsFenced/search_messages",
+	builtin.SearchWorkItemsTool:      "TestEveryUntrustedReadIsFenced/search_work_items",
+	worklet.TaskActivityTool:         "TestEveryUntrustedReadIsFenced/task_activity",
+	chatlet.UpdateChannelTool:        "TestEveryUntrustedReadIsFenced/update_channel",
+	worklet.WorkInboxTool:            "TestEveryUntrustedReadIsFenced/work_inbox",
 }
 
 // EVERY TOOL THAT HANDS A MODEL SOMEBODY ELSE'S WORDS IS FENCED, AND THE SET
@@ -220,8 +224,9 @@ func (c sweepCall) name() string {
 
 // sweepVariants are the answers a tool gives besides its ordinary one that
 // hand words over: a thread rather than a room, a stale publish's live
-// version, each part of a change past its summary, and a revert's and a
-// pick's conflict, whose marked text is the repository's.
+// version, each part of a change past its summary, a page of a check's kept
+// log, and a revert's and a pick's conflict, whose marked text is the
+// repository's.
 func sweepVariants(r *sweepRig) []sweepCall {
 	changePart := func(part string) sweepCall {
 		args, _ := holdingCall(builtin.CodeGetChangeTool)
@@ -230,6 +235,11 @@ func sweepVariants(r *sweepRig) []sweepCall {
 			args["file"] = "a.txt"
 		}
 		return sweepCall{tool: builtin.CodeGetChangeTool, variant: part, args: args}
+	}
+	checkLog := func() sweepCall {
+		args, _ := holdingCall(builtin.CodeGetCheckFailuresTool)
+		args["cursor"] = firstLogPage
+		return sweepCall{tool: builtin.CodeGetCheckFailuresTool, variant: "log", args: args}
 	}
 	conflict := func(tool string) sweepCall {
 		args, _ := holdingCall(tool)
@@ -242,6 +252,7 @@ func sweepVariants(r *sweepRig) []sweepCall {
 		{tool: builtin.PublishArtifactTool, variant: "stale base", refused: tools.RefusalStaleVersion,
 			args: map[string]any{"artifact": r.artifact, "base_version": 1, "content": "<p>plain</p>"}},
 		changePart("findings"), changePart("reviews"), changePart("comments"), changePart("diff"),
+		changePart("checks"), checkLog(),
 		conflict(builtin.CodeRevertTool), conflict(builtin.CodeCherryPickTool),
 	}
 }
@@ -255,7 +266,14 @@ func sweepCalls(t *testing.T) []sweepCall {
 	for _, surface := range []string{"seat", "operator"} {
 		reg := r.registry(surface)
 		for _, name := range reg.Names() {
-			out = append(out, sweepCall{surface: surface, tool: name, args: r.args[name]})
+			c := sweepCall{surface: surface, tool: name, args: r.args[name]}
+			// A PERSON'S VERB ON A SEAT'S SURFACE is refused by the table
+			// before anything is read, whatever the seat holds: its answer
+			// to a seat is that refusal and nothing a store holds.
+			if human, _ := authz.HumanOnlyOf(authz.Action(name)); human && surface == "seat" {
+				c.refused = tools.RefusalForbidden
+			}
+			out = append(out, c)
 		}
 		for _, v := range sweepVariants(r) {
 			if _, held := reg.Lookup(v.tool); held {
@@ -383,8 +401,17 @@ func newSweepRig(t *testing.T) *sweepRig {
 
 	// THE CODE HOST: the scratch repository every code tool's [holdingCall]
 	// names, its change !7, and the code host's writes, landing but for a
-	// revert's or a pick's onto [sweepConflicted].
-	codeWire := writeDeps(sweepCodeHost(t, words), sweepCodeWrites(words))
+	// revert's or a pick's onto [sweepConflicted]; a search of the company's
+	// code, whose every hit is a file's line — the sweep's words — and a
+	// check's kept log, which is what the commit's tests printed; and the
+	// fleet's placement a purge's answer names.
+	host := sweepCodeHost(t, words)
+	codeWire := writeDeps(host, sweepCodeWrites(words))
+	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
+		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
+	}}
+	codeWire.Logs = &checkLogs{text: words}
+	codeWire.Placement = purgePlacement{}
 
 	deps := builtin.Deps{
 		A2A: &asker{}, Skills: store, Refinable: store,
@@ -466,7 +493,9 @@ func (r *sweepRig) registry(surface string) *tools.Registry {
 
 // call makes one sweep call: on a seat's surface in agent-cto's turn, as its
 // own principal, and on the operator catalogue as the founder at the
-// dashboard, outside any turn.
+// dashboard, outside any turn, with a fresh proof of who they are — so a
+// gesture that asks a step-up (a purge) reaches its answer rather than the
+// ceremony's.
 func (r *sweepRig) call(t *testing.T, c sweepCall) (tools.Result, error) {
 	t.Helper()
 	entry, ok := r.registry(c.surface).Lookup(c.tool)
@@ -474,7 +503,10 @@ func (r *sweepRig) call(t *testing.T, c sweepCall) (tools.Result, error) {
 		t.Fatalf("%s is not registered on the %s surface", c.tool, c.surface)
 	}
 	if c.surface == "operator" {
-		return entry.Tool.Call(withRequestKey(personBoundTo("founder", iam.AllGrants...), request(5)), c.args)
+		founder, _ := iam.From(personBoundTo("founder", iam.AllGrants...))
+		founder.ReauthAt = time.Now().Add(time.Hour).UTC()
+		return entry.Tool.Call(withRequestKey(iam.WithPrincipal(context.Background(), founder), request(5)),
+			c.args)
 	}
 	ctx := turnctx.WithPrincipal(t.Context(), r.turn)
 	if tool, ok := entry.Tool.(tools.SeatCallable); ok {
@@ -533,11 +565,14 @@ func sweepArgs(artifact string) map[string]map[string]any {
 // codeSweepArgs is what each code tool is called with: the call of it
 // [holdingCall] makes on the scratch repository, which lands on the rig's code
 // host as it does on the hold's — a change read for its summary, which the
-// variants follow part by part, and a diff for one file's patch — and the
-// operator's own code and health reads, which name nothing the stores hold.
+// variants follow part by part, and a diff for one file's patch — a person's
+// own code writes, which no seat's turn sends and [holdingCall] so names no
+// call of, and the operator's own code and health reads, which name nothing
+// the stores hold.
 func codeSweepArgs() map[string]map[string]any {
 	out := map[string]map[string]any{}
-	for _, name := range slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites()) {
+	for _, name := range slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool},
+		builtin.CodeWrites()) {
 		args, _ := holdingCall(name)
 		if args == nil {
 			args = map[string]any{}
@@ -547,6 +582,11 @@ func codeSweepArgs() map[string]map[string]any {
 	delete(out[builtin.CodeGetChangeTool], "part")
 	out[builtin.CodeDiffTool]["file"] = "a.txt"
 	repo := out[builtin.CodeGetRepoTool]["repo"]
+	out[builtin.CodeImportRepoTool] = map[string]any{"name": "web", "url": "https://git.example.com/acme/web.git",
+		"credential": "GITHUB_TOKEN", "owner": map[string]any{"kind": "unit", "ref": "eng"}}
+	out[builtin.CodeReportCheckTool] = map[string]any{"repo": repo, "sha": mainOID, "checked_for": "main",
+		"name": "lint", "status": "failed", "summary": "2 lint errors", "url": "https://ci.example.com/runs/1"}
+	out[builtin.CodePurgeUnreachableTool] = map[string]any{"repo": repo}
 	out[builtin.CodeMarkInboxTool] = map[string]any{"read": []any{"r-1"}}
 	out[builtin.CodeRepoReadersTool] = map[string]any{"repo": repo}
 	out[builtin.FleetHealthTool] = map[string]any{}
@@ -587,6 +627,11 @@ func sweepCodeHost(t *testing.T, words string) *codeHost {
 	poison(t, reflect.ValueOf(&change.comments).Elem(), words)
 	change.listing = []code.ChangeSummary{change.detail.ChangeSummary}
 	host.changes = change.read
+	// A CHECK OF main THAT FAILED, which the change's head is checked by too:
+	// its summary, the tail of its output and its failure's message are what
+	// the commit's tests printed, as its kept log is ([checkLogs]).
+	host.checks = []code.CheckDetail{failedCheck(words, words, words, "a.go", len(words))}
+	poison(t, reflect.ValueOf(&host.checks).Elem(), words)
 	lines := strings.Count(words, "\n") + 1
 	host.git = func(q code.GitQuery) code.GitAnswer {
 		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: codeAt(12)}

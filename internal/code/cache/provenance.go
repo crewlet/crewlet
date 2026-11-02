@@ -438,6 +438,11 @@ func withRun(runs []provenanceRun, run provenanceRun) []provenanceRun {
 // and leaving each held one to its last release (runMaps.forget); e.mu is
 // held.
 func (c *Cache) forgetRuns(inc *incarnation) {
+	// The code index's files are mappings of inc's too (codeindex.go): let
+	// go where inc is gone or its record moved past the opening.
+	if o := inc.codeIndex; o != nil && (inc.discarded || o.rec != inc.codeIndexRecord()) {
+		c.forgetCodeIndex(inc)
+	}
 	if len(inc.mapped) == 0 {
 		return
 	}

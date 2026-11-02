@@ -29,25 +29,30 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fixedCode is a code surface answering what it holds for good: a git host,
-// the code domain's reads, its reads by object id and who read a unit's
-// repository — each absent where it holds nil, for the reason why (the company
-// hosts no code where why is nil) — and the tokens a coding box's run token
+// the code domain's reads, its reads by object id, who read a unit's
+// repository and the object store a check's log is read from — each absent
+// where it holds nil, for the reason why (the company hosts no code where why
+// is nil) — and the tokens a coding box's run token
 // and a check's box's token verify by, none where it holds nil.
 type fixedCode struct {
 	git      api.GitRoutes
 	reads    queries.CodeReads
 	gitReads api.GitReader
 	readers  builtin.ReadersDeps
+	logs     queries.CheckLogs
+	search   queries.CodeSearcher
 	why      error
 	boxes    *host.BoxTokens
 	checks   *host.CheckTokens
@@ -90,6 +95,20 @@ func (f fixedCode) CodeReads() (queries.CodeReads, error) {
 	return f.reads, nil
 }
 
+func (f fixedCode) CheckLogs() (queries.CheckLogs, error) {
+	if f.logs == nil {
+		return nil, f.unserved()
+	}
+	return f.logs, nil
+}
+
+func (f fixedCode) CodeSearcher() (queries.CodeSearcher, error) {
+	if f.search == nil {
+		return nil, f.unserved()
+	}
+	return f.search, nil
+}
+
 func (f fixedCode) RepoReaders() (builtin.ReadersDeps, error) {
 	if f.readers.Readers == nil {
 		return builtin.ReadersDeps{}, f.unserved()
@@ -123,6 +142,20 @@ func (s *switchedCode) RepoReaders() (builtin.ReadersDeps, error) {
 		return builtin.ReadersDeps{}, engine.ErrCodeNotHosted
 	}
 	return s.fixedCode.RepoReaders()
+}
+
+func (s *switchedCode) CheckLogs() (queries.CheckLogs, error) {
+	if !s.present.Load() {
+		return nil, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.CheckLogs()
+}
+
+func (s *switchedCode) CodeSearcher() (queries.CodeSearcher, error) {
+	if !s.present.Load() {
+		return nil, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.CodeSearcher()
 }
 
 func (s *switchedCode) GitReads() (api.GitReader, error) {
@@ -420,7 +453,8 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	t.Parallel()
 	held := func(what string) bool {
-		return slices.ContainsFunc(codeQuestions, func(q codeQuestion) bool { return q.what == what })
+		return what == codeSearchQuestion.what ||
+			slices.ContainsFunc(codeQuestions, func(q codeQuestion) bool { return q.what == what })
 	}
 	named := map[string][]string{}
 	for _, r := range api.NamedRoutes() {
@@ -428,7 +462,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			named[r.What] = append(named[r.What], r.Method+" "+r.Pattern)
 		}
 	}
-	for _, q := range codeQuestions {
+	for _, q := range append(slices.Clone(codeQuestions), codeSearchQuestion) {
 		if got := named[q.what]; !slices.Equal(got, []string{q.route}) {
 			t.Errorf("%s is named by the routes %v, want exactly %s", q.what, got, q.route)
 		}
@@ -455,19 +489,26 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				a := code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
 					RepoRef: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main",
 						Visibility: code.VisibilityCompany}}}}
-				if q.Kind == code.ReadCommit {
+				switch q.Kind {
+				case code.ReadCommit:
 					a.Commit = &code.CommitChanges{Commit: q.Commit}
+				case code.ReadCheck:
+					// A FAILED ATTEMPT, so its log has a page to answer.
+					a.Check = &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{
+						RepoID: fakeRepoID, OID: fakeCommit, Target: "refs/heads/main", Name: "unit",
+						Attempt: 1}, State: code.CheckStateFailed},
+						Log: &code.CheckLog{Object: fakeLogKey, Size: int64(len(fakeLog))}}
 				}
 				return a, nil
 			}}
 			a := codeApp(t, tc.roles, fixedCode{git: fakeGitRoutes{}, reads: reads,
-				readers: readersOn(t, &fakeRepoReaders{})})
+				readers: readersOn(t, &fakeRepoReaders{}), logs: fakeLogs{}})
 			for _, what := range a.Queries().Names() {
 				if strings.HasPrefix(what, "code_") && !held(what) {
 					t.Errorf("this node answers the code question %q, which no path here holds", what)
 				}
 			}
-			var want, mounted []string
+			want, mounted := []string{codeSearchQuestion.route}, []string(nil)
 			for _, q := range codeQuestions {
 				want = append(want, q.route)
 			}
@@ -489,10 +530,13 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			for _, q := range codeQuestions {
 				path := strings.Replace(strings.TrimPrefix(q.route, "GET "), "{name}", "web", 1)
 				path = strings.Replace(strings.Replace(path, "{n}", "1", 1), "{sha}", fakeCommit, 1)
-				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, which every other
-				// question reads past as no parameter of its own.
-				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod",
-					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod"} {
+				path = strings.NewReplacer("{oid}", fakeCommit, "{check}", "unit", "{attempt}", "1").Replace(path)
+				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, and the branch an
+				// attempt was checked for, which every other question reads
+				// past as no parameter of its own.
+				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main",
+					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod" +
+						"&oid=" + fakeCommit + "&check=unit&attempt=1&target=refs/heads/main"} {
 					before := len(reads.queries())
 					if rec := ask(t, a, http.MethodGet, at, true); rec.Code != http.StatusOK {
 						t.Errorf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
@@ -523,10 +567,11 @@ type codeQuestion struct {
 	repo        string
 }
 
-// codeQuestions are the eight: the three rows, who read a unit's repository,
-// which reads the repository's row by name before its readers, and a change's
-// four — the changes, one change (its revisions with its detail, asked of no
-// part), whom its records reached and one reviewer's reviews.
+// codeQuestions are every code question: the three rows, who read a unit's
+// repository, which reads the repository's row by name before its readers,
+// a change's four — the changes, one change (its revisions with its detail,
+// asked of no part), whom its records reached and one reviewer's reviews — a
+// repository's content, and its merge queues and its checks.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /code/repos", code.ReadRepos, ""},
 	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web"},
@@ -547,6 +592,115 @@ var codeQuestions = []codeQuestion{
 	{"code_diff", "GET /code/repos/{name}/diff", code.ReadRepo, "web"},
 	{"code_compare", "GET /code/repos/{name}/compare", code.ReadRepo, "web"},
 	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web"},
+	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
+	// across repositories where the route names none, one attempt whole, and
+	// a page of its log, read after the attempt that names it.
+	{"code_queue", "GET /code/queue", code.ReadQueue, ""},
+	{"code_checks", "GET /code/checks", code.ReadChecks, ""},
+	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web"},
+	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web"},
+}
+
+// codeSearchQuestion is the code search: a question of its own beside
+// codeQuestions, since it asks the code search rather than the reader
+// ([TestCodeSearchIsAnsweredOnItsPath]).
+var codeSearchQuestion = codeQuestion{what: "code_search", route: "GET /code/search"}
+
+// fakeSearcher is the code search: every query it is asked recorded, each
+// answered with one line of the first repository it names, or of web.
+type fakeSearcher struct {
+	mu    sync.Mutex
+	asked []codesearch.Query
+}
+
+func (f *fakeSearcher) CodeSearch(_ context.Context, q codesearch.Query) (codesearch.Answer, error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, q)
+	f.mu.Unlock()
+	repo := "web"
+	if len(q.Search.Repos) > 0 {
+		repo = q.Search.Repos[0]
+	}
+	return codesearch.Answer{Hits: []codesearch.Hit{{Repo: repo, SearchHit: code.SearchHit{Path: "go.mod",
+		Line: 1, Text: "module " + q.Search.Text, Blob: fakeCommit}}},
+		Tips: map[string]string{repo: fakeCommit}, Coverage: codesearch.Coverage{Searched: 1}}, nil
+}
+
+func (f *fakeSearcher) queries() []codesearch.Query {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.asked)
+}
+
+// A CODE SEARCH IS ANSWERED ON ITS PATH: GET /code/search and the generic
+// form of `code_search` are one question, each asking the code search once,
+// as the caller, with the search its parameters name, and answering its
+// lines, the tip each repository was searched at and the coverage; a node
+// whose company hosts no code answers it `404 not_found` (`not_hosted`) and
+// searches nothing, as every code read does; and the path is guarded, a
+// search with no credential refused before anything is asked.
+//
+// Mutation: drop code_search's named route, and the path answers no_route,
+// red; hand the search the reader's surface in place of the searcher's, and
+// the search is never asked, red.
+func TestCodeSearchIsAnsweredOnItsPath(t *testing.T) {
+	t.Parallel()
+	search := &fakeSearcher{}
+	a := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
+	for _, at := range []string{"/code/search?q=needle&repo=web", "/query/code_search?q=needle&repo=web"} {
+		before := len(search.queries())
+		rec := ask(t, a, http.MethodGet, at, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
+		}
+		asked := search.queries()
+		if len(asked) != before+1 {
+			t.Fatalf("GET %s asked the search %d times, want once", at, len(asked)-before)
+		}
+		q := asked[len(asked)-1]
+		if q.Search.Text != "needle" || !slices.Equal(q.Search.Repos, []string{"web"}) ||
+			q.Asker.Kind != code.PrincipalOperator || q.Asker.OperatorID != "token:founder" {
+			t.Errorf("GET %s searched %+v as %+v, want needle in web as token:founder", at, q.Search, q.Asker)
+		}
+		var body codesearch.Answer
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET %s answered %q: %v", at, rec.Body.String(), err)
+		}
+		if len(body.Hits) != 1 || body.Hits[0].Repo != "web" || body.Tips["web"] != fakeCommit ||
+			body.Coverage.Searched != 1 {
+			t.Errorf("GET %s answered %+v, want web's one line at its tip, one repository searched", at, body)
+		}
+	}
+
+	unhosted := codeApp(t, nil, fixedCode{})
+	rec := ask(t, unhosted, http.MethodGet, "/code/search?q=needle", true)
+	if code, _ := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Errorf("a search where the company hosts no code answered %d %s, want 404 not_found", rec.Code, code)
+	}
+
+	guarded := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
+	before := len(search.queries())
+	if rec := ask(t, guarded, http.MethodGet, "/code/search?q=needle", false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a search with no credential answered %d, want the guard's 401", rec.Code)
+	}
+	if len(search.queries()) != before {
+		t.Errorf("a search with no credential was searched")
+	}
+}
+
+// fakeLog is the one log fakeLogs holds, under fakeLogKey.
+const fakeLog = "--- FAIL: TestUpload\n"
+
+// fakeLogKey is the object fakeLog is kept as.
+var fakeLogKey = objstore.KeyAt(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+
+// fakeLogs is an object store holding fakeLog under every key: a page of it
+// is what a log question answers.
+type fakeLogs struct{}
+
+func (fakeLogs) ReadAt(_ context.Context, _ objstore.Object, off, n int64) ([]byte, error) {
+	end := min(off+n, int64(len(fakeLog)))
+	return []byte(fakeLog[off:end]), nil
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the

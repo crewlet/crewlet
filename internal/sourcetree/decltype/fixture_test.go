@@ -4,7 +4,8 @@ package decltype_test
 // example.com/m. Each probe carries its verdict: want(EXPR, "verdict") for the
 // type of EXPR — a declared type by its full import path and name, a literal
 // by its shape ("[]T", "map[K]V", "chan T", "func", "struct", "interface"),
-// "unread <package>", "unresolved" or "unknown" — and sel(EXPR, "Name",
+// "unread <package>", "param" (a type parameter nothing binds),
+// "unresolved" or "unknown" — and sel(EXPR, "Name",
 // "verdict") for what the selector resolves to. Pointers are transparent, as
 // a selector makes them, so *T reads as T.
 var fixture = map[string]string{
@@ -234,8 +235,23 @@ func generics(vs []*Inner, bx Box[*Inner]) {
 }
 
 func unbound[T any](v T) {
-	want(v, "unresolved")
+	want(v, "param")
 	sel(v, "N", "undetermined")
+}
+
+func (x Box[T]) unboundReceiver(v T) {
+	want(v, "param")
+	want(x.v, "param")
+	var local T
+	want(local, "param")
+	for _, e := range []T{v} {
+		want(e, "param")
+	}
+}
+
+func (x Box[Inner]) shadowingReceiver(v Inner) {
+	want(v, "param")
+	want(x.v, "param")
 }
 
 func outside() {
