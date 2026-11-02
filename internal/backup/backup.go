@@ -592,7 +592,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	}
 	// ROOM FOR THE LOG EACH COPY HOLDS BACK, before anything is pinned or
 	// copied: see [Service.room].
-	if err := s.room(files); err != nil {
+	if err = s.room(files); err != nil {
 		return Manifest{}, err
 	}
 
