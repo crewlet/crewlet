@@ -491,6 +491,87 @@ func TestAChangesReviewsAndFindingsAreReadWithIt(t *testing.T) {
 	}
 }
 
+// A READ NAMING FINDINGS SERVES THOSE ALONE: a findings part narrowed to the
+// findings a write names (ReadQuery.FindingIDs) answers each the change holds
+// — whichever review raised it, however the part would page them — in id
+// order, with its text, and none it does not hold and none it did not name;
+// after a cursor, only those past it; and a narrowing of another part, of
+// another kind, beside a limit, past MaxFindingsPerReview, naming one twice
+// or naming no finding's id is refused.
+//
+// Mutations: serve the part's first page in place of the ids named → the
+// unnamed finding is read, red; keep the read's order in place of the ids'
+// → red; serve the ids before the cursor → red; let a limit beside them pass
+// → red.
+func TestAReadNamingFindingsServesThoseAlone(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	suggestion := "time.Sleep(backoff)"
+	suggesting := raising(code.SeverityMajor, 7, "Sleep between tries")
+	suggesting.Suggestion = &suggestion
+	res, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
+		raising(code.SeverityBlocker, 3, "No backoff"), suggesting))
+	first := requireReviewed(t, res, err)
+	res, err = w.Converse(ctx, reviewing(repo, change, cto, 1, code.VerdictComment, nil,
+		raising(code.SeverityNit, 9, "A name")))
+	second := requireReviewed(t, res, err)
+	unheld := uuid.Must(uuid.NewV7()).String()
+
+	named := func(q code.ReadQuery) []string {
+		t.Helper()
+		q.Asker, q.Kind, q.Repo, q.Change, q.Part, q.Fresh = cto, code.ReadChange, "web", 1, code.PartFindings, stale
+		answer, err := n.reader.Read(ctx, q)
+		if err != nil {
+			t.Fatalf("read web!1's findings %v after %q: %v", q.FindingIDs, q.Cursor, err)
+		}
+		if answer.Next != "" {
+			t.Errorf("three short findings named carry a cursor %q", answer.Next)
+		}
+		var ids []string
+		for _, f := range answer.Findings {
+			ids = append(ids, f.ID)
+			if f.ID == first[1] && (f.Suggestion == nil || *f.Suggestion != suggestion || f.Raiser != "plat-lead") {
+				t.Errorf("the suggesting finding reads %+v", f)
+			}
+		}
+		return ids
+	}
+	want := []string{second[0], first[1]}
+	slices.Sort(want)
+	if got := named(code.ReadQuery{FindingIDs: []string{second[0], unheld, first[1]}}); !slices.Equal(got, want) {
+		t.Errorf("the findings named came %v, want %v: the two web!1 holds, by id, and not %s", got, want, first[0])
+	}
+	if got := named(code.ReadQuery{FindingIDs: []string{second[0], first[1]}, Cursor: want[0]}); !slices.Equal(got,
+		want[1:]) {
+		t.Errorf("the findings named after %s came %v, want %v", want[0], got, want[1:])
+	}
+
+	many := make([]string, code.MaxFindingsPerReview+1)
+	for i := range many {
+		many[i] = uuid.Must(uuid.NewV7()).String()
+	}
+	for name, q := range map[string]code.ReadQuery{
+		"another part":     {Kind: code.ReadChange, Change: 1, Part: code.PartReviews, FindingIDs: first},
+		"the revisions":    {Kind: code.ReadChange, Change: 1, FindingIDs: first},
+		"a listing":        {Kind: code.ReadChanges, FindingIDs: first},
+		"beside a limit":   {Kind: code.ReadChange, Change: 1, Part: code.PartFindings, FindingIDs: first, Limit: 1},
+		"past the bound":   {Kind: code.ReadChange, Change: 1, Part: code.PartFindings, FindingIDs: many},
+		"one named twice":  {Kind: code.ReadChange, Change: 1, Part: code.PartFindings, FindingIDs: []string{first[0], first[0]}},
+		"no finding's id":  {Kind: code.ReadChange, Change: 1, Part: code.PartFindings, FindingIDs: []string{"f-1"}},
+		"an uppercased id": {Kind: code.ReadChange, Change: 1, Part: code.PartFindings, FindingIDs: []string{strings.ToUpper(first[0])}},
+	} {
+		q.Asker, q.Repo, q.Fresh = cto, "web", stale
+		if _, err := n.reader.Read(ctx, q); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(),
+			"finding_ids") {
+			t.Errorf("%s: Read = %v, want ErrInvalid naming finding_ids", name, err)
+		}
+	}
+}
+
 // WHAT WAITS ON AN OWNER'S FIX IS WHAT THEIR CHANGES' COUNTERS ASK: needs=fix
 // lists an owner's live changes — the asker's own where it names none — whose
 // reviewer's standing verdict asks for changes or whose finding nobody has

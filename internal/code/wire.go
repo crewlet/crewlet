@@ -1407,6 +1407,30 @@ type ReadQuery struct {
 	// ignores it, answers no resolution, which its asker refuses as a fault
 	// rather than act on a repository nothing resolved.
 	Resolve bool `json:"resolve,omitempty"`
+	// FindingIDs narrows a `change` read's findings part to the findings it
+	// names, 1 to [MaxFindingsPerReview] of them, each a finding's id once —
+	// what one write names: an apply's suggestions, an answer to findings —
+	// served by one seek of each id's text and narrow row, never a walk of
+	// the part. Findings are paged by id, and ids are time-ordered, so the
+	// findings a write names, the newest review's, are on the part's LAST
+	// page: unnarrowed, every such write read the change's whole review
+	// history to keep at most 64 rows of it. An id the change does not hold
+	// is no row of the answer, as a page holds none of it. The rows come in
+	// id order and are bounded by the page's bytes as a page of the part is,
+	// so a cursor resumes them where findings at their bounds filled one;
+	// refused beside a limit, which the ids are, and on every other part and
+	// kind.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row — and one a build that predates it would decode
+	// and ignore, answering the part's first page in its place. AS A STATED
+	// CONDITION, as [ReadQuery.Push]'s: no build that carries the code domain
+	// has run without this field — none of the domain is on main, so no image
+	// and no release serves a code read. Were a build without it ever to run
+	// first, a read of named findings would move to a part of its own, which
+	// such a build refuses as a part it does not know, rather than ride a
+	// field it ignores.
+	FindingIDs []string `json:"finding_ids,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -546,47 +548,65 @@ func (r *Reader) changeReviews(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 // next page reads.
 func (r ReviewRow) Cursor() string { return strconv.FormatInt(r.Position.Packed(), 10) }
 
+// ValidFindingID reports whether id is a finding's id as a review's record
+// mints one: a UUIDv7 in its canonical lowercase spelling — the grammar a read
+// narrowed to findings holds each id to ([ReadQuery.FindingIDs]), so a caller
+// can tell an id no change holds from a read it would have refused.
+func ValidFindingID(id string) bool {
+	u, err := uuid.Parse(id)
+	return err == nil && u.Version() == 7 && u.String() == id
+}
+
+// validateFindingIDs is [ReadQuery.validate] for the findings a read is
+// narrowed to ([ReadQuery.FindingIDs]): none, or 1 to [MaxFindingsPerReview]
+// findings' ids, each a UUIDv7 in its canonical spelling, each once.
+func validateFindingIDs(ids []string) error {
+	if len(ids) > MaxFindingsPerReview {
+		return fmt.Errorf("%w: finding_ids: %d findings, past the %d one read names (MaxFindingsPerReview)",
+			ErrInvalid, len(ids), MaxFindingsPerReview)
+	}
+	for i, id := range ids {
+		if !ValidFindingID(id) {
+			return fmt.Errorf("%w: finding_ids[%d]: %q is not a finding's id, a UUIDv7 in its canonical "+
+				"lowercase spelling", ErrInvalid, i, id)
+		}
+		if slices.Contains(ids[:i], id) {
+			return fmt.Errorf("%w: finding_ids[%d]: %q is named twice", ErrInvalid, i, id)
+		}
+	}
+	return nil
+}
+
 // changeFindings serves a page of change id's findings — named, its web!n —
 // by id, after the finding a cursor names: the texts' key walked, which leads
 // with the change, and each finding's narrow row read by its key beside its
-// text.
+// text; or, for a read narrowed to the findings it names
+// ([ReadQuery.FindingIDs]), those of them after the cursor, each one seek of
+// the texts' key and one of the row's.
 func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
 	out *ReadAnswer) error {
 
-	limit := min(limitOr(q.Limit, defaultFindingLimit), r.pageRows)
-	query, args := findingsOfSQL, []any{id}
-	if q.Cursor != "" {
-		if bareUUIDv7("cursor", q.Cursor) != nil {
-			return fmt.Errorf("%w: %q is not a finding's id", ErrBadCursor, q.Cursor)
-		}
-		query, args = findingsOfAfterSQL, append(args, q.Cursor)
+	if q.Cursor != "" && bareUUIDv7("cursor", q.Cursor) != nil {
+		return fmt.Errorf("%w: %q is not a finding's id", ErrBadCursor, q.Cursor)
 	}
-	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
+	if len(q.FindingIDs) > 0 {
+		return r.namedFindings(ctx, tx, q, named, id, out)
+	}
+	limit := min(limitOr(q.Limit, defaultFindingLimit), r.pageRows)
+	query, args := findingsOfSQL, []any{id, limit}
+	if q.Cursor != "" {
+		query, args = findingsOfAfterSQL, []any{id, q.Cursor, limit}
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("code: read the findings of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
-		var (
-			f                                             FindingRow
-			kind, side, severity, category, state, byKind string
-			resolved, position                            int64
-			suggestion                                    sql.NullString
-		)
-		if err := rows.Scan(&f.ID, &f.ReviewID, &f.Raiser, &kind, &f.Revision, &f.CommitOID, &f.Path, &f.BlobOID,
-			&side, &f.LineStart, &f.LineEnd, &severity, &category, &state, &f.ResolutionNote, &f.ResolvedBy,
-			&byKind, &f.ResolvedCommit, &resolved, &position, &f.Title, &f.Body, &suggestion); err != nil {
+		f, err := scanFinding(rows)
+		if err != nil {
 			return fmt.Errorf("code: read the findings of %s: %w", named, err)
-		}
-		f.RaiserKind, f.Side, f.Severity, f.Category = PartyKind(kind), Side(side), Severity(severity),
-			Category(category)
-		f.State, f.ResolvedByKind, f.Position = FindingState(state), PartyKind(byKind), unpacked(position)
-		if resolved != 0 {
-			f.ResolvedPosition = unpacked(resolved)
-		}
-		if suggestion.Valid {
-			f.Suggestion = &suggestion.String
 		}
 		out.Findings = append(out.Findings, f)
 		if pg.add(f.encodedBytes()) {
@@ -595,6 +615,83 @@ func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 		}
 	}
 	return rows.Err()
+}
+
+// namedFindings serves the findings of change id — named, its web!n — that a
+// read is narrowed to ([ReadQuery.FindingIDs]) and that come after its cursor,
+// in id order, a page's order, so a cursor resumes them as it resumes the
+// part: ONE statement, each id one seek of the texts' key beside the change
+// and one of the narrow row's key, whatever the change's review history
+// holds. Every id is a row at most, so MaxFindingsPerReview bounds what the
+// statement reads; the page's bytes bound what the answer carries, findings
+// whose suggestions reach their bound filling a page before 64 of them do,
+// and the cursor then names the last one it carries — never past the last
+// named, which leaves none to resume.
+func (r *Reader) namedFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
+	out *ReadAnswer) error {
+
+	asked := slices.DeleteFunc(slices.Clone(q.FindingIDs), func(f string) bool {
+		return q.Cursor != "" && f <= q.Cursor
+	})
+	if len(asked) == 0 {
+		return nil
+	}
+	list, err := json.Marshal(asked)
+	if err != nil {
+		return fmt.Errorf("code: name the findings of %s: %w", named, err)
+	}
+	rows, err := tx.QueryContext(ctx, findingsNamedSQL, string(list), id)
+	if err != nil {
+		return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var read []FindingRow
+	for rows.Next() {
+		f, err := scanFinding(rows)
+		if err != nil {
+			return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+		}
+		read = append(read, f)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+	}
+	slices.SortFunc(read, func(a, b FindingRow) int { return strings.Compare(a.ID, b.ID) })
+	pg := page{maxRows: len(read), maxB: r.pageBytes}
+	for i, f := range read {
+		out.Findings = append(out.Findings, f)
+		if pg.add(f.encodedBytes()) && i < len(read)-1 {
+			out.Next = f.Cursor()
+			break
+		}
+	}
+	return nil
+}
+
+// scanFinding is one row of findingsOfSQL, findingsOfAfterSQL or
+// findingsNamedSQL: a finding's narrow row and its text.
+func scanFinding(rows *sql.Rows) (FindingRow, error) {
+	var (
+		f                                             FindingRow
+		kind, side, severity, category, state, byKind string
+		resolved, position                            int64
+		suggestion                                    sql.NullString
+	)
+	if err := rows.Scan(&f.ID, &f.ReviewID, &f.Raiser, &kind, &f.Revision, &f.CommitOID, &f.Path, &f.BlobOID,
+		&side, &f.LineStart, &f.LineEnd, &severity, &category, &state, &f.ResolutionNote, &f.ResolvedBy,
+		&byKind, &f.ResolvedCommit, &resolved, &position, &f.Title, &f.Body, &suggestion); err != nil {
+		return FindingRow{}, err
+	}
+	f.RaiserKind, f.Side, f.Severity, f.Category = PartyKind(kind), Side(side), Severity(severity),
+		Category(category)
+	f.State, f.ResolvedByKind, f.Position = FindingState(state), PartyKind(byKind), unpacked(position)
+	if resolved != 0 {
+		f.ResolvedPosition = unpacked(resolved)
+	}
+	if suggestion.Valid {
+		f.Suggestion = &suggestion.String
+	}
+	return f, nil
 }
 
 // Cursor is the cursor that resumes a page of a change's findings after f: its
@@ -686,6 +783,17 @@ const (
 			x.body, x.suggestion
 		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
 		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
+	// findingsNamedSQL is the findings a read names ([ReadQuery.FindingIDs]),
+	// a JSON array of their ids: each one seek of the texts' key — the change
+	// and the id, both — and one of the narrow row's, and no walk of the
+	// change's findings. Unordered: at most MaxFindingsPerReview rows, which
+	// the reader sorts.
+	findingsNamedSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
+			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
+			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
+			x.body, x.suggestion
+		FROM json_each(?) AS j CROSS JOIN code_finding_texts AS x CROSS JOIN code_findings AS f
+		WHERE x.change_id = ? AND x.finding_id = CAST(j.value AS TEXT) AND f.id = x.finding_id`
 )
 
 // reviewsGiven serves a page of ONE REVIEWER'S REVIEWS — the `reviews`
