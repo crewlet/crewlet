@@ -116,7 +116,10 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		return coord.Record{}, false
 	}
 	if change.Delete {
+		// THE LOG GOES WITH IT, under the same lock: this twin removes
+		// both at once, where the KV removes the record and then the log.
 		delete(f.runs, turnID)
+		delete(f.runLogs, turnID)
 		f.notifyRunLocked(turnID, coord.SandboxRunUpdate{})
 		return read, true
 	}
@@ -156,6 +159,87 @@ func (f *Fleet) WatchSandboxRun(ctx context.Context, turnID string) (<-chan coor
 			delete(f.runWatchers, turnID)
 		}
 	}), nil
+}
+
+// SandboxRunLog reads the log beside turnID's run.
+func (f *Fleet) SandboxRunLog(_ context.Context, turnID string) (coord.Record, bool, error) {
+	if turnID == "" {
+		return coord.Record{}, false, errors.New("coord/memory: a sandbox run's log needs a turn id")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	log, ok := f.runLogs[turnID]
+	if !ok {
+		return coord.Record{}, false, nil
+	}
+	return copyRecord(log), true, nil
+}
+
+// MutateSandboxRunLog changes the log beside turnID's run by a decision taken
+// on the log as it stands — optimistic, as [Fleet.MutateSandboxRun] is and for
+// its reasons, the decision taken outside the lock.
+//
+// ONLY BESIDE A RECORD, checked under the lock the write takes, so this twin
+// never writes a log it would then have to remove: a run whose record is gone
+// writes nothing.
+func (f *Fleet) MutateSandboxRunLog(ctx context.Context, turnID string,
+	decide func(coord.Record, bool) ([]byte, error)) (coord.Record, bool, error) {
+
+	if turnID == "" {
+		return coord.Record{}, false, errors.New("coord/memory: a sandbox run's log needs a turn id")
+	}
+	if decide == nil {
+		return coord.Record{}, false, errors.New("coord/memory: a change to a sandbox run's log needs a decision")
+	}
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if err := ctx.Err(); err != nil {
+				return coord.Record{}, false, fmt.Errorf("%w: change the sandbox run %s's log: %w",
+					coord.ErrUnavailable, turnID, err)
+			}
+		}
+		f.mu.Lock()
+		read, found := f.runLogs[turnID]
+		f.mu.Unlock()
+		if !found {
+			read = coord.Record{Key: turnID}
+		}
+		read = copyRecord(read)
+		put, err := decide(copyRecord(read), found)
+		if err != nil {
+			return coord.Record{}, false, err
+		}
+		if len(put) == 0 {
+			return read, false, nil
+		}
+		written, won, gone := f.applyRunLog(turnID, read, found, put)
+		switch {
+		case gone:
+			return coord.Record{}, false, nil
+		case won:
+			return written, true, nil
+		}
+	}
+}
+
+// applyRunLog writes put as turnID's log where the log still stands as read
+// (absent where found is false), reporting the log written; or gone, writing
+// nothing, where the run has no record.
+func (f *Fleet) applyRunLog(turnID string, read coord.Record, found bool, put []byte) (coord.Record, bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, live := f.runs[turnID]; !live {
+		return coord.Record{}, false, true
+	}
+	current, ok := f.runLogs[turnID]
+	if ok != found || (ok && current.Version != read.Version) {
+		return coord.Record{}, false, false
+	}
+	// FROM THE STORE-WIDE COUNTER, for the records' reason ([Fleet.version]).
+	f.version++
+	stored := coord.Record{Key: turnID, Value: slices.Clone(put), Version: f.version}
+	f.runLogs[turnID] = stored
+	return copyRecord(stored), true, false
 }
 
 // putRunLocked stores value as turnID's record at the next store-wide version
