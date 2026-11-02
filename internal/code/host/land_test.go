@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -343,6 +344,17 @@ func TestAMirroredRepositoryRefusesEveryPush(t *testing.T) {
 	mirrored.MirrorFrom = &code.MirrorSource{URL: "https://forge.example.com/acme/web.git",
 		Credential: "${FORGE_TOKEN}"}
 	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: mirrored})
+	// MADE A PULL MIRROR, IT IS IMPORTED FIRST: its import's end lands as its
+	// home lands one once the source's refs are in.
+	if row := c.Rows().Repo; !row.Mirrored || row.Status != code.RepoStatusImporting {
+		t.Fatalf("the repository after its mirror_from is %s mirrored=%v, want a pull mirror importing from "+
+			"its source", row.Status, row.Mirrored)
+	}
+	done := code.ImportDone{RepoID: c.Rows().Repo.ID, Node: node.ID()}
+	if res, err := c.Fleet.(*codetest.SoloFleet).Code(t).Import(c.Ctx, code.ImportProposal{Done: &done}); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("end the pull mirror's import: %+v, %v", res, err)
+	}
 	if row := c.Rows().Repo; !row.Mirrored || row.Status != code.RepoStatusActive {
 		t.Fatalf("the repository after its mirror_from is %s mirrored=%v, want an active pull mirror",
 			row.Status, row.Mirrored)

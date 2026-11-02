@@ -296,7 +296,10 @@ type RepoStatus string
 
 const (
 	// RepoStatusImporting is being filled from another host — an import, or
-	// a pull mirror's first fetch from its source ([CreateRepo.status]) — and
+	// a pull mirror's first fetch from its source, at its create
+	// ([CreateRepo.status]) or when a settings record makes an active
+	// repository a mirror of a source it does not follow yet
+	// ([repoRemotes.startsImport]) — and
 	// takes no write until its import is done: no push, no change, no
 	// archive and no expunge ([RefusalRepoImporting]). It is fetched, listed
 	// and renamed, its settings change and it is deleted as an active one is;

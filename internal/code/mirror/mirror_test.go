@@ -395,6 +395,69 @@ func TestAPullMirrorFollowsAForcePush(t *testing.T) {
 	}
 }
 
+// A REPOSITORY MADE A PULL MIRROR LATER IS IMPORTED FIRST (M6-D16): an active
+// repository a person pushed a branch of their own to, then declared a pull
+// mirror of a source with more refs than one chunk carries, is brought onto
+// its source by an IMPORT — chunk 1, then chunk 2 from the rows, then its end
+// — never by a sync, whose fetch is given one push's deadline; and once it is
+// done it is the active pull mirror of exactly the source's refs, the branch
+// the source never had deleted.
+//
+// Mutation: drop the settings apply's start of the import (mirrorImportSQL) —
+// the repository stays active and its home syncs it, no chunk proposed, red.
+func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	a := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	var tags strings.Builder
+	for i := range code.MaxImportRefs {
+		fmt.Fprintf(&tags, "create refs/tags/v%04d %s\n", i, a)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(tags.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("tagging the source: %v\n%s", err, stderr)
+	}
+	s := codetest.Settings()
+	s.Protections = nil
+	h.f.Declare(t, code.Declared{Name: "later", Settings: s})
+	p := codetest.NewPerson(t, h.f, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"local": "local\n"}, "local")
+	if res := p.Push(t.Context(), work, h.f.Nodes()[0].URL()+"/git/later", "HEAD:refs/heads/local"); res.Err != nil {
+		t.Fatalf("push local: %s", res)
+	}
+
+	s.MirrorFrom = &code.MirrorSource{URL: h.src.url}
+	h.f.Declare(t, code.Declared{Name: "later", Settings: s})
+	if rows := h.rows("later"); rows.Repo.Status != code.RepoStatusImporting || !rows.Repo.Mirrored {
+		t.Fatalf("later made a pull mirror is %s (mirrored %t), want importing from its source",
+			rows.Repo.Status, rows.Repo.Mirrored)
+	}
+	h.pass(h.mirrors())
+
+	rows := h.rows("later")
+	if rows.Repo.Status != code.RepoStatusActive || !rows.Repo.Mirrored {
+		t.Fatalf("after its import later is %s (mirrored %t), want an active pull mirror", rows.Repo.Status,
+			rows.Repo.Mirrored)
+	}
+	if got, ok := rows.Refs["refs/heads/local"]; ok {
+		t.Errorf("local is still at %s, which the source never had", got)
+	}
+	if got := rows.Refs["refs/heads/main"]; got != a || len(rows.Refs) != code.MaxImportRefs+1 {
+		t.Errorf("later holds %d refs, main at %s; want the source's %d, main at %s", len(rows.Refs), got,
+			code.MaxImportRefs+1, a)
+	}
+	chunks, dones := h.est.chunks()
+	h.est.mu.Lock()
+	syncs := len(h.est.syncs)
+	h.est.mu.Unlock()
+	if len(chunks) != 2 || chunks[0].Seq != 1 || chunks[1].Seq != 2 || len(dones) != 1 || dones[0].Seq != 2 ||
+		syncs != 0 {
+		t.Fatalf("later was brought onto its source by chunks %v, %d ends and %d syncs; want an import of "+
+			"chunks 1 and 2 and its end, and no sync", seqs(chunks), len(dones), syncs)
+	}
+}
+
 // AN IMPORT PAST THE BLOB LIMIT ENDS WITH ITS ERROR: a source holding a blob
 // past code.limits.max_blob_bytes is not landed in part and retried for ever
 // — the attempt that finds the blob ends the import, the repository active

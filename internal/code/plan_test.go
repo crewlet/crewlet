@@ -352,6 +352,7 @@ func registeredStatements() map[string]statement {
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"mirror import":       {mirrorImportSQL, []any{`{"url":"https://forge.example.com/a/web.git"}`, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},

@@ -218,9 +218,13 @@ func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	s := suiteSettings()
 	s.MirrorFrom = mirrorSource
 	n.ensure("web", s, t2)
+	endImport(t, n, c, web, 0)
 	if got := detail("web"); got.MirrorFrom == nil || *got.MirrorFrom != *mirrorSource ||
-		!got.MirrorSyncedAt.IsZero() || got.Import != nil {
-		t.Fatalf("a pull mirror never synced details %+v, want its source and no sync", got)
+		!got.MirrorSyncedAt.IsZero() || got.Import == nil ||
+		got.Import.Source != (code.ImportSource{URL: mirrorSource.URL, Credential: mirrorSource.Credential}) ||
+		got.Import.DoneAt.IsZero() {
+		t.Fatalf("a pull mirror imported and never synced details %+v, want its source, the import from it "+
+			"ended and no sync", got)
 	}
 	sync := syncOf(n, web, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
 	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})
@@ -260,6 +264,7 @@ func TestAMirrorSyncIsStaleAgainstAMovedRef(t *testing.T) {
 	s := suiteSettings()
 	s.MirrorFrom = mirrorSource
 	n.ensure("web", s, t2)
+	endImport(t, n, c, repo, 0)
 
 	first := syncOf(n, repo, 0, update(main, oidOf("A"), oidOf("B")))
 	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: first})
@@ -308,6 +313,8 @@ func TestTheImportAndMirrorListingsNameWhatTheirHomesOwe(t *testing.T) {
 	s := suiteSettings()
 	s.MirrorFrom = mirrorSource
 	n.ensure("web", s, t2)
+	c, _ := committerOn(t, n, n.pub)
+	endImport(t, n, c, pulled, 0)
 
 	r := n.reader
 	stale := statelog.Freshness{Level: statelog.ReadStale}

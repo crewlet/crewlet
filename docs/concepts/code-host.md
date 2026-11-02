@@ -171,10 +171,15 @@ code:
   glob once and each owner in one entry, and at most 256 KiB in all as the code
   log records them ([Path owners](#path-owners)).
 - **`mirror_from`** `{url, credential}` — makes it a **pull mirror** of a
-  repository at another host: it is imported from there when it is created,
-  and then moves only by the code host's syncs from it, so it takes no push
-  and no change of its own — each refused `repo_mirrored` ([What git
-  prints](#what-git-prints-and-what-it-means)). Its `protect` list is warned
+  repository at another host: it is imported from there first — when it is
+  created, and when a repository that exists is given a `mirror_from`, or
+  moved to another `url`, later — and then moves only by the code host's
+  syncs from it, so it takes no push and no change of its own — each refused
+  `repo_mirrored` ([What git prints](#what-git-prints-and-what-it-means)).
+  Made a mirror later, it reads `importing` until the source has landed:
+  every branch and tag it holds but a seat's own (`refs/heads/seats/`) is
+  made the source's, and one the source does not have is deleted. A new
+  `credential` alone changes no source, and imports nothing. Its `protect` list is warned
   about, since no push reaches a rule, and an archived one is refused: an
   archived repository takes no sync.
 - **`mirror_to`** `{url, credential, as, refs}` — makes it a **push mirror**:

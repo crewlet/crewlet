@@ -197,7 +197,7 @@ function MirrorDialog({
       <Stack gap={2}>
         <p className="muted">
           {kind === "pull"
-            ? "It moves only by the code host's syncs from this repository, every 15 minutes, and takes no push of its own."
+            ? "A source it does not follow yet is imported first — its branches and tags, but a seat's own, become the source's, and one the source lacks is deleted — and then it moves only by the code host's syncs from it, every 15 minutes, and takes no push of its own."
             : "The code host pushes these refs there as the seat you name: that seat's own identity at the other host, never a bot."}
         </p>
         <Input

@@ -3,14 +3,16 @@
 -- A repository may follow, publish to, or be filled from a repository at
 -- another host (internal/code's mirror.go):
 --
---   - mirror_from makes it a PULL MIRROR: it is imported from its source when
---     it is created, then moves only by the syncs its home makes from it, and
---     takes no push and no change of its own (refused repo_mirrored);
+--   - mirror_from makes it a PULL MIRROR: it is imported from its source
+--     first — when it is created, or when a settings record makes an active
+--     repository a mirror of a source it does not follow yet — then moves only
+--     by the syncs its home makes from it, and takes no push and no change of
+--     its own (refused repo_mirrored);
 --   - mirror_to makes it a PUSH MIRROR: its home pushes the refs it names to
 --     a repository at another host, as one seat's own identity there;
---   - import_source is what its create filled it from — the create's own
---     import, or a pull mirror's source — fixed at the create, so a mirror_from
---     a settings change moves meanwhile is the next sync's to follow.
+--   - import_source is what its import fetches — a create's own import, or a
+--     pull mirror's source — fixed while the import runs, so a mirror_from a
+--     settings change moves meanwhile is the next sync's to follow.
 --
 -- Each is the JSON of code.MirrorSource, code.MirrorTarget and
 -- code.ImportSource, and '' for none — the value that says there is no
