@@ -479,6 +479,43 @@ export function linesValue(run: LineRun): string {
 }
 
 /**
+ * How many lines above a picked line a file opened AT it begins: the picked
+ * line is scrolled to the middle of the screen, and half of a tall screen is
+ * under fifty lines of 13 px code, so what leads up to the line is on screen
+ * without a press for earlier lines — and a read that begins fifty lines
+ * sooner costs the engine nothing it would not stream past anyway (git cannot
+ * seek inside a file).
+ */
+export const PICK_CONTEXT = 50;
+
+/**
+ * Where a file's lines (or its blame) should begin for the line an address
+ * picks to be drawn, or null where they need not move: no line is picked, it
+ * is drawn already (`drawn` is the first and last line on screen), or the
+ * file has no such line (`total`, its lines) — a stale link, which opens the
+ * file where it is rather than nowhere.
+ *
+ * A pick only a press could make is always drawn, so the lines move only for
+ * an ADDRESS that names a line not on screen: a link from a search hit, ⌘K,
+ * a Permalink, or the history. They begin PICK_CONTEXT lines before it — at
+ * the line itself where they already begin there and it is still not drawn,
+ * which only lines longer than a page can do, so the answer never repeats
+ * the place it was asked from.
+ */
+export function lineToOpenAt(
+  picked: LineRun | null,
+  from: number,
+  drawn: LineRun | null,
+  total: number,
+): number | null {
+  if (!picked || picked.start > total) return null;
+  if (drawn && picked.start >= drawn.start && picked.start <= drawn.end) return null;
+  const at = Math.max(1, picked.start - PICK_CONTEXT);
+  if (at !== from) return at;
+  return picked.start !== from ? picked.start : null;
+}
+
+/**
  * Whether a revision is named by a WHOLE object id: the one spelling no later
  * push can move, which the engine answers immutably and a Permalink names.
  */

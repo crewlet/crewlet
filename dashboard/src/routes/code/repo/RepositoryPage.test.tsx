@@ -110,9 +110,89 @@ const byRef = (url: URL, part: Record<string, unknown>) => ({
       }),
 });
 
+/** A file longer than a page, its lines each `line <n>`. */
+const BIG_FILE = "src/big.go";
+const BIG_LINES = 3000;
+/** The lines one page of the big file holds, as about 56 KiB of ordinary source does. */
+const BIG_PAGE_LINES = 1500;
+/** The lines one page of its blame holds: two pages a blame's range of 500. */
+const BIG_BLAME_PAGE_LINES = 250;
+
+const bigText = (from: number, to: number) =>
+  Array.from({ length: to - from + 1 }, (_, i) => `line ${from + i}\n`).join("");
+
+/**
+ * The range a read of the big file asks, as the engine holds it: `start_line`
+ * and `end_line` (each from 1), and a cursor `<letter><line>` that must name a
+ * line inside them — refused otherwise, as the engine refuses one.
+ */
+function bigRange(url: URL, defaultEnd: (start: number) => number, letter: string) {
+  const p = url.searchParams;
+  const start = Number(p.get("start_line") ?? 1);
+  const end = Number(p.get("end_line") ?? defaultEnd(start));
+  const cursor = p.get("cursor");
+  const from = cursor ? Number(cursor.slice(1)) : start;
+  const ok =
+    start <= BIG_LINES && from >= start && from <= end && (!cursor || cursor[0] === letter);
+  return { start, end, from, ok };
+}
+
+/** A page of the big file: from the range's first line or the cursor's, at most BIG_PAGE_LINES. */
+function bigFileRead(url: URL) {
+  const { end, from, ok } = bigRange(url, () => BIG_LINES, "l");
+  if (!ok) return json({ error: "bad_params" }, 400);
+  const to = Math.min(from + BIG_PAGE_LINES - 1, end);
+  return json(
+    byRef(url, {
+      kind: "blob",
+      ...(to < end ? { next: `l${to + 1}` } : {}),
+      blob: {
+        path: BIG_FILE,
+        oid: OTHER,
+        size: bigText(1, BIG_LINES).length,
+        lines: BIG_LINES,
+        start_line: from,
+        end_line: to,
+        text: bigText(from, to),
+      },
+    }),
+  );
+}
+
+/**
+ * A page of the big file's blame: a range of at most 500 lines (the engine's
+ * code.MaxBlameLines), the default 500 from its first line, paged within it
+ * BIG_BLAME_PAGE_LINES at a time — a range any wider, or a cursor outside it,
+ * refused as the engine refuses them.
+ */
+function bigBlameRead(url: URL) {
+  const { start, end, from, ok } = bigRange(url, (s) => Math.min(s + 499, BIG_LINES), "b");
+  if (!ok || end - start + 1 > 500) return json({ error: "bad_params" }, 400);
+  const to = Math.min(from + BIG_BLAME_PAGE_LINES - 1, end);
+  return json(
+    byRef(url, {
+      kind: "blame",
+      ...(to < end ? { next: `b${to + 1}` } : {}),
+      blame: {
+        path: BIG_FILE,
+        start_line: from,
+        end_line: to,
+        lines: Array.from({ length: to - from + 1 }, (_, i) => ({
+          line: from + i,
+          commit: HEAD,
+          orig_line: from + i,
+          text: `line ${from + i}`,
+        })),
+        commits: { [HEAD]: { author: "Ada", authored_at: "2026-10-20T10:00:00Z" } },
+      },
+    }),
+  );
+}
+
 /**
  * The engine: the repository, its refs, a root holding `src/` and a README, a
- * file of three lines, its blame and a history — and every request made.
+ * file of three lines and one of BIG_LINES, their blames and a history — and
+ * every request made.
  */
 function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = []) {
   const asked: URL[] = [];
@@ -202,6 +282,7 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
               }),
             );
           }
+          if (p.get("path") === BIG_FILE) return bigFileRead(url);
           return json(
             byRef(url, {
               kind: "blob",
@@ -217,6 +298,7 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
             }),
           );
         case "/query/code_blame":
+          if (p.get("path") === BIG_FILE) return bigBlameRead(url);
           return json(
             byRef(url, {
               kind: "blame",
@@ -441,6 +523,89 @@ test("the blame is read at the file's commit and heads each run of lines once", 
   expect(within(table).getAllByText("Grace")).toHaveLength(1);
   await waitFor(() => expect(reads(asked, "code_blame").length).toBeGreaterThan(0));
   expect(reads(asked, "code_blame")[0]?.searchParams.get("ref")).toBe(HEAD);
+});
+
+/** Watch what is scrolled into view: jsdom lays nothing out, and has no scrollIntoView. */
+function watchScrolls(): Element[] {
+  const scrolled: Element[] = [];
+  Element.prototype.scrollIntoView = function (this: Element) {
+    scrolled.push(this);
+  };
+  return scrolled;
+}
+
+afterEach(() => {
+  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+});
+
+// A LINK TO A LINE PAST A FILE'S FIRST PAGE OPENS AT IT — a search hit, ⌘K, a
+// Permalink: the file is read again from PICK_CONTEXT lines before the line
+// (`start_line`), the line is drawn picked and scrolled into view, and the
+// lines before are read back a press at a time, each step a range that meets
+// the lines after it. Mutation: read the file from its first page alone (no
+// `start_line`), or leave the earlier step's end short of the lines drawn, and
+// this fails.
+test("a file opens at a picked line past its first page, and reads back from there", async () => {
+  const scrolled = watchScrolls();
+  const asked = stubEngine();
+  mount(`#/code/repos/web?tab=files&path=src%2Fbig.go&lines=2400`);
+
+  const line = await screen.findByRole("button", { name: "Line 2400" });
+  expect(line.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("line 2400")).toBeTruthy();
+  await waitFor(() => expect(scrolled.map((e) => e.id)).toContain("L2400"));
+  const opened = reads(asked, "code_blob").filter((u) => u.searchParams.has("start_line"));
+  expect(opened.map((u) => u.searchParams.get("start_line"))).toEqual(["2350"]);
+  expect(screen.queryByRole("button", { name: "Line 1" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Line 2349" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
+  expect(await screen.findByRole("button", { name: "Line 1850" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Line 2349" })).toBeTruthy();
+  const back = reads(asked, "code_blob").filter((u) => u.searchParams.has("end_line"));
+  expect(
+    back.map((u) => [u.searchParams.get("start_line"), u.searchParams.get("end_line")]),
+  ).toEqual([["1850", "2349"]]);
+  // A PRESS ON A LINE DRAWN MOVES NOTHING: no read, no scroll.
+  const before = asked.length;
+  fireEvent.click(screen.getByRole("button", { name: "Line 1900" }));
+  await waitFor(() => expect(location.hash).toContain("lines=1900"));
+  expect(asked.length).toBe(before);
+  expect(scrolled.map((e) => e.id)).toEqual(["L2400"]);
+});
+
+// A FILE'S BLAME OPENS AT THE PICKED LINE TOO, and reads range after range: a
+// blame names at most CODE_MAX_BLAME_LINES lines, so its lines past the first
+// range — never reachable before — are read from the line after it, and a page
+// inside a range is asked with the range's own first line. Mutation: page the
+// blame by the engine's cursor alone, or open it from line 1, and this fails.
+test("a blame opens at a picked line past its first range and reads on across ranges", async () => {
+  const scrolled = watchScrolls();
+  const asked = stubEngine();
+  mount(`#/code/repos/web?tab=files&path=src%2Fbig.go&lens=blame&lines=2400`);
+
+  const line = await screen.findByRole("button", { name: "Line 2400" });
+  expect(line.getAttribute("aria-pressed")).toBe("true");
+  await waitFor(() => expect(scrolled.map((e) => e.id)).toContain("L2400"));
+  const ranges = () =>
+    reads(asked, "code_blame").map((u) => [
+      u.searchParams.get("start_line"),
+      u.searchParams.get("cursor"),
+    ]);
+  expect(ranges()).toContainEqual(["2350", null]);
+  expect(screen.queryByRole("button", { name: "Line 2600" })).toBeNull();
+
+  // ON PAST THE RANGE'S FIRST PAGE, then into the next range.
+  fireEvent.click(screen.getByRole("button", { name: "Load more lines" }));
+  expect(await screen.findByRole("button", { name: "Line 2600" })).toBeTruthy();
+  expect(ranges()).toContainEqual(["2350", "b2600"]);
+  fireEvent.click(screen.getByRole("button", { name: "Load more lines" }));
+  expect(await screen.findByRole("button", { name: "Line 2850" })).toBeTruthy();
+  expect(ranges()).toContainEqual(["2850", null]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
+  expect(await screen.findByRole("button", { name: "Line 1850" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Line 2349" })).toBeTruthy();
 });
 
 // A BRANCH OPENS ITS FILES: the default branch at the bare Files address, any

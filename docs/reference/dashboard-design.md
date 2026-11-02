@@ -7895,6 +7895,18 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  An address whose `lines=` the file's first page does not draw — a Code ›
+  Search hit, a ⌘K hit or a Permalink to a line past the first ~56 KiB —
+  OPENS AT THE LINE: the file is read again from fifty lines before it
+  (`code_blob`'s `start_line`), paged forward from there as before, the line
+  drawn picked and scrolled to the middle of the screen, and **Load earlier
+  lines** reads back towards line 1 five hundred lines a press (`start_line`
+  and `end_line`, each step followed through its pages, so it meets the lines
+  after it). The blame does the same through its own `start_line`, and reads
+  a range of at most `code.MaxBlameLines` (500) lines at a time, range after
+  range, so **Load more lines** reaches a blame's last line. A press picks a
+  line on screen and so reads nothing; a line the file does not have is said
+  so beside its size.
   The revision picker lists the first page of the branches and of the tags
   (`code_refs`), read ONCE by the page while its Files or Commits tab is open
   and handed to every picker it draws — a comparison's two pickers share one

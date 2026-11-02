@@ -275,6 +275,16 @@ export const CODE_ALARM_KINDS = [
 ] as const;
 
 /**
+ * The most lines one blame names, its whole range (`code.MaxBlameLines`): the
+ * Files tab's blame asks its lines a range at a time, each at most this many,
+ * and the source reads earlier lines in steps of the same size. Held by
+ * `internal/code.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers`: a
+ * wider range is refused, and a narrower one asks the engine more often than
+ * it needs to.
+ */
+export const CODE_MAX_BLAME_LINES = 500;
+
+/**
  * What an unset `code.scratch` and `code.identity_domain` read as — the
  * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
  * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
