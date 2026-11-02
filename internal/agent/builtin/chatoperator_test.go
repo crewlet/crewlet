@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -391,6 +392,97 @@ func TestOnlyTheEmptyListEmptiesARoom(t *testing.T) {
 	}
 	if len(f.memberSets) != 1 || f.memberSets[0] == nil || len(f.memberSets[0]) != 0 {
 		t.Errorf("the empty list was handed over as %#v, want the room emptied", f.memberSets)
+	}
+}
+
+// THE MEMBERSHIP A CALLER READ REACHES THE STORE AS ITS EXPECTATION.
+//
+// `expected_members` is what makes a whole set stated from a screen safe: the
+// store refuses the write when the room moved since that read
+// (chatlet.Store.SetMembers). So absent is no expectation, a list is handed
+// over exactly as read (following included), the empty list expects an empty
+// room, and a value naming nobody by mistake is refused rather than read as
+// an empty room, which would refuse every change against a room with people
+// in it.
+//
+// Mutation: drop the argument, read it as members, or read a blank string as
+// the empty list, and a case here fails.
+func TestTheMembershipACallerReadIsHandedOverAsItsExpectation(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		expected any
+		want     *[]chatlet.Member
+	}{
+		"absent": {nil, nil},
+		"as read": {[]any{map[string]any{"handle": "bob", "follow_all": true}, "ana"},
+			&[]chatlet.Member{{Handle: "bob", FollowAll: true}, {Handle: "ana"}}},
+		"an empty room": {[]any{}, &[]chatlet.Member{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeChat()
+			tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+			args := map[string]any{"channel": chatRoomID, "members": []any{"bob"}}
+			if c.expected != nil {
+				args["expected_members"] = c.expected
+			}
+			if got := invokeOperator(t, tool, args); got.Failed {
+				t.Fatalf("the tool refused %v: %s", c.expected, got.Output)
+			}
+			if len(f.expected) != 1 {
+				t.Fatalf("the store was handed %d expectations, want one", len(f.expected))
+			}
+			switch got := f.expected[0]; {
+			case c.want == nil && got != nil:
+				t.Errorf("no expectation was sent and the store was handed %+v", *got)
+			case c.want != nil && (got == nil || !slices.Equal(*got, *c.want)):
+				t.Errorf("the store was handed %+v, want %+v", got, *c.want)
+			}
+		})
+	}
+
+	f := newFakeChat()
+	tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+	got := invokeOperator(t, tool, map[string]any{"channel": chatRoomID,
+		"members": []any{"bob"}, "expected_members": " , "})
+	if tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output,
+		"`expected_members` names nobody") {
+		t.Errorf("an expectation naming nobody answered %+v, want it refused", got)
+	}
+	if len(f.keys) != 0 {
+		t.Errorf("an expectation naming nobody reached the store: %d writes", len(f.keys))
+	}
+}
+
+// A MEMBERSHIP STATED AGAINST MEMBERS THAT CHANGED IS TOLD AS THAT.
+//
+// The store refuses a whole set whose expectation the room has moved past
+// (chatlet.ErrMembersChanged): a stale read, which the caller cures by reading
+// the members again. The conflict sentence ("the room kept changing under this
+// write") is not what happened, and a person approving or pressing the change
+// is owed their own words for it, so the tool says which read to make again
+// and carries the person's refusal.
+//
+// Mutation: drop the ErrMembersChanged case, and the generic sentence and no
+// person's words come back.
+func TestAMembershipStatedAgainstChangedMembersSaysSo(t *testing.T) {
+	t.Parallel()
+	f := newFakeChat()
+	f.writeErr = fmt.Errorf("%w: the members of #launch changed after they were read",
+		chatlet.ErrMembersChanged)
+	tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+	got := invokeOperator(t, tool, map[string]any{"channel": chatRoomID,
+		"members": []any{"bob"}, "expected_members": []any{"bob", "ana"}})
+	if tools.RefusalOf(got) != tools.RefusalStaleVersion ||
+		!strings.Contains(got.Output, "the members of #launch changed after they were read") ||
+		!strings.Contains(got.Output, "Read the room's members again") ||
+		strings.Contains(got.Output, "kept changing") {
+		t.Errorf("a stale membership answered %+v, want a stale version naming the read to "+
+			"make again", got)
+	}
+	if got.PersonRefusal != caveat.MembersChanged() {
+		t.Errorf("the person is told %q, want the catalog's words for changed members",
+			got.PersonRefusal.Person())
 	}
 }
 
