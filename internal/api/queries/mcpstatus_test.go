@@ -472,14 +472,32 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// ADMIN'S: launch commands and each failure's first line are the
-// configuration and what became of it, which `/config` shows the same reader.
-// And an unreadable lease table is an error, not a fleet with no nodes.
-func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
+// EVERYBODY'S, AND THE ADMIN'S READING IS THE CONFIGURATION READER'S: launch
+// commands and each failure's first line are the configuration and what
+// became of it, which `/config` shows the same reader, so a caller holding
+// every app but admin is answered, in a member's reading. And an unreadable
+// lease table is an error, not a fleet with no nodes.
+//
+// Mutation: register the question at admin, or answer every caller the
+// admin's reading, and this is red.
+func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	requiresExactly(t, r, "mcp_servers_status", iam.GrantAdmin)
+	if posture := r.PostureOf("mcp_servers_status"); !posture.IsEverybody() {
+		t.Errorf("mcp_servers_status is asked as %s, want everybody", posture)
+	}
+	if got, err := r.Answer(everyGrant(t), "mcp_servers_status", nil); err != nil {
+		t.Fatal(err)
+	} else if _, admin := got.(queries.MCPStatusAnswer); !admin {
+		t.Errorf("an administrator was answered %T, want the admin's reading", got)
+	}
+	everyApp := slices.DeleteFunc(slices.Clone(iam.AllGrants), func(g iam.Grant) bool { return g == iam.GrantAdmin })
+	if got, err := r.Answer(asking(t, everyApp...), "mcp_servers_status", nil); err != nil {
+		t.Errorf("a caller holding every app but admin was refused: %v", err)
+	} else if member, ok := got.(queries.MemberMCPStatusAnswer); !ok || member.Reading != queries.ReadingMember {
+		t.Errorf("a caller holding every app but admin was answered %T, want a member's reading", got)
+	}
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})

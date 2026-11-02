@@ -380,9 +380,9 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
-| `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-catalogue)) |
-| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
-| `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `admin`** (see [below](#get-mcp-serversname)) |
+| `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `tools.read`**, everybody's: a member reads the curated half alone (see [below](#get-mcp-catalogue)) |
+| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `tools.read`**, everybody's, in two readings (see [below](#get-mcp-serversname)) |
 | `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
@@ -857,11 +857,11 @@ told they lead nobody goes looking for an authority they already hold.
 
 | Needs | What it reaches |
 |---|---|
-| **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions (an agent's **status**, with its **body** to an administrator and to whoever leads the seat, [below](#a-status-reader-never-receives-a-transcript)), `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/executors` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row: `/feed`, `decisions`, `answered_decisions` and the `knowledge` question |
+| **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions (an agent's **status**, with its **body** to an administrator and to whoever leads the seat, [below](#a-status-reader-never-receives-a-transcript)), `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/executors` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` in [a member's reading](#a-members-reading-of-mcp--tools), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row: `/feed`, `decisions`, `answered_decisions` and the `knowledge` question |
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a harness the host runs — and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and an executor's tail (`/executors/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -5540,7 +5540,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, and the built-in tools by group. **Takes `admin`**. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, and the built-in tools by group. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -9191,9 +9191,13 @@ shared knowledge backend, reachable by all members via query-time search.
 Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
 what the configuration declares for it and what each live node did with it,
 and the engine's built-in tools beside them.
-**It takes `admin`**, as `GET /config` does — it names the nodes, the
-launch commands and the first line of each failure, which is what the
-configuration it reports on carries.
+**It is everybody's, in two readings**, as [`GET /llm/entries`](#get-llmentries)
+is: a server's condition and its tools are what tell a member why an agent
+lacks one. A caller `config.read` admits (an administrator) reads the answer
+below whole, `reading: "admin"`, as `GET /config` shows them the launch
+commands it reports on; anybody else reads
+[a member's reading](#a-members-reading-of-mcp--tools), `reading: "member"`,
+which names no launch line, failure sentence or wait.
 
 **Off the heartbeats, not a fan-out.** Each node re-publishes its MCP servers
 as they are at each beat on its presence lease — a child that died after it
@@ -9301,6 +9305,7 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
 
 ```json
 {
+  "reading": "admin",
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
   "servers": [
     {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
@@ -9354,11 +9359,15 @@ see [Per-entity read and write](#per-entity-read-and-write).
 ### `GET /mcp-catalogue`
 
 What a server is added from, for the add flow of **Settings › MCP & tools**.
-It is decided by `config.read`, so **it takes `admin`**, as adding a server
-does: an entry is the draft of a launch line every engine host runs, and the
-answer names the registry the company's configuration does. A plain read
-rather than a question: nothing in it is live, so the socket does not carry
-it. It sits outside `/mcp-servers/`, whose next segment is always a server's
+It is decided by `tools.read`, so **it is everybody's**, in two readings. A
+caller `config.read` admits reads the answer below, `reading: "admin"`: the
+registry the company's configuration names, searched for `q`. Anybody else
+reads `{"reading": "member", "curated": [...]}`, the curated half alone
+whatever `q` says: the registry is the company's configuration (an address
+an administrator chose, which may be on the company's own network), a search
+is a request the engine makes to it, and searching it is part of adding a
+server. A plain read rather than a question: nothing in it is live, so the
+socket does not carry it. It sits outside `/mcp-servers/`, whose next segment is always a server's
 name, so a server may be called `catalogue` and still have its own
 [detail](#get-mcp-serversname).
 
@@ -9397,6 +9406,7 @@ over 200 characters, or holding a control character) is refused, as
 
 ```json
 {
+  "reading": "admin",
   "curated": [
     {"id": "linear", "name": "linear", "title": "Linear", "vendor": "linear",
      "description": "Issues, projects, cycles and documents.", "transport": "http",
@@ -9428,9 +9438,11 @@ over 200 characters, or holding a control character) is refused, as
 ### `GET /mcp-servers/{name}`
 
 One MCP server, whole, for its page under **Settings › MCP & tools**. It is
-decided by `config.read`, so **it takes `admin`**, as `GET /mcp-servers` does
-and for its reason. A plain read rather than a question, until a screen
-watches it: the page reads it on a poll.
+decided by `tools.read`, so **it is everybody's**, in the two readings
+`GET /mcp-servers` answers and for its reason: a caller `config.read` admits
+reads the answer below, `reading: "admin"`, and anybody else
+[a member's reading](#a-members-reading-of-mcp--tools). A plain read rather
+than a question, until a screen watches it: the page reads it on a poll.
 
 **What the fleet lists, not what this node runs.** A per-agent server's
 children run only on the nodes holding its seats, so the node answering may
@@ -9539,6 +9551,7 @@ server that lists nothing.
 
 ```json
 {
+  "reading": "admin",
   "server": {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
              "configured": true, "shared": false, "enabled": true, "description": "",
              "transport": "stdio", "command": "github-mcp-server", "args": ["stdio"], "url": "",
@@ -9592,6 +9605,74 @@ server that lists nothing.
                        "turn_id": "6c1f0e2a-5b7d-4e8f-9a1b-2c3d4e5f6a7b", "tool": "get_issue",
                        "outcome": "answered", "refusal": "", "duration_ms": 412}],
             "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}}
+}
+```
+
+### A member's reading of MCP & tools
+
+`GET /mcp-servers`, `GET /mcp-servers/{name}` and `GET /mcp-catalogue` answer
+anybody `config.read` does not admit in a member's reading,
+`reading: "member"`: each server's condition and its tools, and nothing that
+names a launch line, a header, a variable, an account or a call. It is built
+from types of its own, copied field by field from the administrator's answer,
+so a field added to that answer reaches no member until somebody adds it to
+the member's reading too.
+
+A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`,
+`shared`, `enabled`, `description`, `transport`, `state`, `started`, `failed`,
+`waiting`, `tools`, `refused_tools`, `refused_count`, `shadowed_tools`,
+`shadowed_count` and `nodes`, each node's cell its counts, `error_class`,
+`down_since` and `restarts`. It leaves out `command`, `args` and `url`, each
+cell's `error` and `wait` sentences and the seats they name, and
+`unlisted_annotations`, which is about a configuration only an administrator
+reads. The list's `nodes` and `builtin` are as an administrator reads them.
+
+A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
+(every field), `tool_count`, `server_info`, `last_success` and:
+
+- `instances`, each without its `wait` (the variables a waiting instance waits
+  for), and each `failure` and `last_failure` as `{class, at, node, seat}`,
+  without `said`: what a server or its process said can name an address or an
+  account;
+- `instance_nodes` as `{node, answered, count}`, without the `reason` a node
+  did not answer;
+- `last_failure` as `{class, at, node, seat}`;
+- `resolved` as `{auth, runs_on, timeouts, binding}`, `binding` as
+  `{vendor, by}`, without the `keys` a seat's credential goes in, the
+  `box_seats` or the placement `warnings`.
+
+It leaves out `instructions` and `dependants`.
+
+```json
+{
+  "reading": "member",
+  "server": {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
+             "configured": true, "shared": false, "enabled": true, "description": "",
+             "transport": "stdio", "state": "running", "started": 3, "failed": 0, "waiting": 0,
+             "tools": 42, "refused_tools": [], "refused_count": 0, "shadowed_tools": [],
+             "shadowed_count": 0, "nodes": [{"node": "node-a", "reported": true, "started": 2,
+             "failed": 0, "waiting": 0, "tools": 42, "error_class": "", "down_since": null,
+             "restarts": 1}]},
+  "nodes": [{"id": "node-a", "reported": true}],
+  "listed": [{"node": "node-a", "at": "2026-11-01T09:00:00Z", "instances": 2, "tools": 42}],
+  "tools": [{"name": "get_issue", "raw": "get_issue", "title": "Get issue", "…": "…"}],
+  "tool_count": 42,
+  "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
+  "instances": [
+    {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
+     "restarts": 1, "tools": 42, "failure": null,
+     "last_failure": {"class": "exited", "at": "2026-11-01T08:39:58Z", "node": "node-a",
+                      "seat": "backend-dev"},
+     "last_answer": "2026-11-01T09:02:11Z"}
+  ],
+  "instance_nodes": [{"node": "node-a", "answered": true, "count": 1}],
+  "last_success": "2026-11-01T09:02:11Z",
+  "last_failure": {"class": "exited", "at": "2026-11-01T08:39:58Z", "node": "node-a",
+                   "seat": "backend-dev"},
+  "resolved": {"auth": "integration", "runs_on": "engine_host",
+               "timeouts": {"startup_seconds": 120, "request_seconds": 300,
+                            "startup_default": true, "request_default": true},
+               "binding": {"vendor": "github", "by": "recognised"}}
 }
 ```
 

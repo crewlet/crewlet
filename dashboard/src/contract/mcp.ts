@@ -183,8 +183,15 @@ interface McpShadowedTool {
   message: string;
 }
 
-/** The whole answer. */
+/**
+ * The whole answer, as an administrator reads it (`reading: "admin"`), which
+ * is the only reading the page asks for while the section is admin's. A
+ * member's reading is a narrower answer, with no launch line, failure sentence
+ * or wait, declared with the screen that draws it.
+ */
 export interface McpServersStatusAnswer {
+  /** Which of the answer's two readings this is. */
+  reading: "admin";
   /** In name order. */
   servers: McpServerStatus[];
   /** The live nodes in id order: the columns every server is drawn against. */
