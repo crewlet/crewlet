@@ -49,10 +49,11 @@ import (
 // figure is read back from it ([joinTurns]). A turn duration can move UP a bin
 // — an untallied turn that gains a segment — so per-bin counts do not grow but
 // the count AT OR ABOVE every bin does, and the histograms join on those
-// ([Hist.Join]). A newest instant joins by the later one, and a fire or a read
-// entry the fleet holds that the derivation lacks is kept, under its own
-// identity. A label — a seat's handle and role, a fire's outcome and turn, a
-// read's newest context — is the derivation's wherever the derivation STATES
+// ([Hist.Join]). A newest instant joins by the later one, and a fire, a
+// superseded fire or a read entry the fleet holds that the derivation lacks is
+// kept, under its own identity. A label (a seat's handle and role, a fire's
+// outcome and turn, a read's newest context) is the derivation's wherever the
+// derivation STATES
 // one for the thing it labels, because labels are not counts and a newer one
 // is the truer. A handle or a role the derivation leaves EMPTY keeps the
 // fleet's: an empty one is not a newer label but a seat the chart no longer
@@ -85,7 +86,10 @@ import (
 // figures, and walks the whole company's day — every node's, every seat's — to
 // read one seat's cells. Naming the key also makes the statement a guard: a key
 // reshaped under it fails with `no such index` rather than quietly walking the
-// day again.
+// day again. AND ON A SCHEDULE'S FIRES, for the same planner's other habit: it
+// prefers the schedule's own history index (replicated 0076), three of the
+// key's five columns, and reads every day of that schedule on every node to
+// find one node's day.
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
@@ -112,8 +116,12 @@ const (
 		  FROM usage_person_tokens INDEXED BY sqlite_autoindex_usage_person_tokens_1
 		 WHERE day = ? AND node = ? AND person = ?`
 	appliedScheduleSQL = `
-		SELECT fired_at, target, outcome, trace_id, turn_id
-		  FROM usage_schedule_runs
+		SELECT fired_at, scheduled_at, fire_label, target, outcome, trace_id, turn_id
+		  FROM usage_schedule_runs INDEXED BY sqlite_autoindex_usage_schedule_runs_1
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	appliedSupersededSQL = `
+		SELECT trace_id, at
+		  FROM usage_schedule_superseded
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
 )
 
@@ -173,8 +181,11 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			return err
 		case KindSchedule:
 			var err error
-			rec.Fires, err = appliedFires(ctx, tx, s)
-			held = len(rec.Fires) > 0
+			if rec.Fires, err = appliedFires(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Superseded, err = appliedSuperseded(ctx, tx, s)
+			held = len(rec.Fires) > 0 || len(rec.Superseded) > 0
 			return err
 		}
 		return fmt.Errorf("%s is a kind this build holds no rows of", s)
@@ -279,16 +290,41 @@ func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	var out []Fire
 	for rows.Next() {
 		var (
-			f     Fire
-			fired int64
+			f          Fire
+			fired, due int64
 		)
-		if err := rows.Scan(&fired, &f.Target, &f.Outcome, &f.TraceID, &f.TurnID); err != nil {
+		if err := rows.Scan(&fired, &due, &f.FireLabel, &f.Target, &f.Outcome,
+			&f.TraceID, &f.TurnID); err != nil {
 			return nil, err
 		}
-		f.At = store.DecodeTime(fired)
+		f.At, f.ScheduledAt = store.DecodeTime(fired), store.DecodeTime(due)
 		out = append(out, f)
 	}
 	slices.SortFunc(out, compareFire)
+	return out, rows.Err()
+}
+
+// appliedSuperseded reads a schedule-day's superseded fires, in their order.
+func appliedSuperseded(ctx context.Context, tx *sql.Tx, s Subject) ([]Superseded, error) {
+	rows, err := tx.QueryContext(ctx, appliedSupersededSQL, s.Day, s.Node, s.ScopeType,
+		s.ScopeID, s.Schedule)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Superseded
+	for rows.Next() {
+		var (
+			sup Superseded
+			at  int64
+		)
+		if err := rows.Scan(&sup.TraceID, &at); err != nil {
+			return nil, err
+		}
+		sup.At = store.DecodeTime(at)
+		out = append(out, sup)
+	}
+	slices.SortFunc(out, compareSuperseded)
 	return out, rows.Err()
 }
 
@@ -321,6 +357,7 @@ func Join(derived, applied Record) Record {
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
 		out.Fires = joinFires(derived.Fires, applied.Fires)
+		out.Superseded = joinSuperseded(derived.Superseded, applied.Superseded)
 	}
 	return out
 }
@@ -495,6 +532,34 @@ func compareFire(a, b Fire) int {
 
 func compareInstant(a, b time.Time) int {
 	return cmp.Compare(store.EncodeTime(a), store.EncodeTime(b))
+}
+
+// compareSuperseded is a record's order of superseded fires: when each was
+// recorded, then its trace, as the store derives them.
+func compareSuperseded(a, b Superseded) int {
+	return cmp.Or(compareInstant(a.At, b.At), cmp.Compare(a.TraceID, b.TraceID))
+}
+
+// joinSuperseded joins two schedule-days' superseded fires: every fire either
+// holds, once per trace, at the derivation's instant where both hold it. A
+// fire a seat set aside stays set aside, so the set only grows: a log that
+// lost the record (swept, restored) does not make the fire run after all.
+func joinSuperseded(d, a []Superseded) []Superseded {
+	if len(a) == 0 {
+		return d
+	}
+	out := slices.Clone(d)
+	seen := make(map[string]bool, len(out))
+	for _, sup := range out {
+		seen[sup.TraceID] = true
+	}
+	for _, sup := range a {
+		if !seen[sup.TraceID] {
+			out = append(out, sup)
+		}
+	}
+	slices.SortStableFunc(out, compareSuperseded)
+	return out
 }
 
 // joinFires joins two schedule-days' fires: every fire either holds, under the

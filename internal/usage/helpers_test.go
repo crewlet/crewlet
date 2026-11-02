@@ -171,12 +171,13 @@ func recordAt(t *testing.T, r usage.Record, seq uint64) statelog.Record {
 func dump(t *testing.T, db *store.DB) map[string][]string {
 	t.Helper()
 	orders := map[string]string{
-		"usage_turns":         "day, node, agent_id",
-		"usage_tokens":        "day, node, agent_id, phase, worker, model, provider_key",
-		"usage_reads":         "day, node, agent_id, backend, page_id, via",
-		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
-		"usage_person_tokens": "day, node, person, phase, worker, model, provider_key",
-		"usage_tool_calls":    "day, node, agent_id, server, tool",
+		"usage_turns":               "day, node, agent_id",
+		"usage_tokens":              "day, node, agent_id, phase, worker, model, provider_key",
+		"usage_reads":               "day, node, agent_id, backend, page_id, via",
+		"usage_schedule_runs":       "day, node, scope_type, scope_id, name, fired_at, target",
+		"usage_schedule_superseded": "day, node, scope_type, scope_id, name, trace_id",
+		"usage_person_tokens":       "day, node, person, phase, worker, model, provider_key",
+		"usage_tool_calls":          "day, node, agent_id, server, tool",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {

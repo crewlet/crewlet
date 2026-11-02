@@ -1,6 +1,7 @@
 package sqlledger_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/scheduletest"
@@ -36,9 +38,41 @@ func TestMain(m *testing.M) {
 // thing as the in-memory twin — never depended on there being two.
 func TestContract(t *testing.T) {
 	t.Parallel()
-	scheduletest.Run(t, func(t *testing.T) schedule.Ledger {
-		return sqlledger.New(open(t).SQL())
+	scheduletest.Run(t, func(t *testing.T) scheduletest.Backend {
+		db := open(t)
+		return scheduletest.Backend{Ledger: sqlledger.New(db.SQL()),
+			Rows: func(ctx context.Context) ([]schedule.Run, error) { return rows(ctx, db) }}
 	})
+}
+
+// rows reads every row of `scheduled_runs`, column by column, the way the
+// usage domain's derivation reads them (store.DB.UsageForDay): the suite's
+// view of what a claim recorded.
+func rows(ctx context.Context, db *store.DB) ([]schedule.Run, error) {
+	rs, err := db.SQL().QueryContext(ctx, `
+		SELECT scope_type, scope_id, schedule_name, fire_label, target_handle,
+		       scheduled_at, fired_at, outcome, trace_id
+		  FROM scheduled_runs`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rs.Close() }()
+	var out []schedule.Run
+	for rs.Next() {
+		var (
+			run                  schedule.Run
+			scope, outcome       string
+			scheduledAt, firedAt int64
+		)
+		if err := rs.Scan(&scope, &run.ScopeID, &run.ScheduleName, &run.FireLabel,
+			&run.TargetHandle, &scheduledAt, &firedAt, &outcome, &run.TraceID); err != nil {
+			return nil, err
+		}
+		run.Scope, run.Outcome = types.ScheduleScope(scope), schedule.Outcome(outcome)
+		run.ScheduledAt, run.FiredAt = store.DecodeTime(scheduledAt), store.DecodeTime(firedAt)
+		out = append(out, run)
+	}
+	return out, rs.Err()
 }
 
 // TestALedgerWithNoDatabaseSaysSo covers the one state the contract suite
@@ -60,9 +94,6 @@ func TestALedgerWithNoDatabaseSaysSo(t *testing.T) {
 			ctx := t.Context()
 			if _, err := tc.l.Claim(ctx, schedule.Run{}); !errors.Is(err, sqlledger.ErrNoDB) {
 				t.Errorf("Claim = %v, want ErrNoDB", err)
-			}
-			if _, err := tc.l.Recent(ctx, 10); !errors.Is(err, sqlledger.ErrNoDB) {
-				t.Errorf("Recent = %v, want ErrNoDB", err)
 			}
 			if _, err := tc.l.Purge(ctx, time.Now()); !errors.Is(err, sqlledger.ErrNoDB) {
 				t.Errorf("Purge = %v, want ErrNoDB", err)

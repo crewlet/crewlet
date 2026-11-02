@@ -22,8 +22,8 @@ import (
 //
 // The split is the one migration 0011 made for the token counter: what the
 // FLEET has to agree on is "may I start", and nothing more. The node's own
-// ledger stays as its audit record of what it dispatched — which is what the
-// dashboard reads and what the retention sweep purges.
+// ledger stays as its audit record of what it dispatched, which the usage
+// domain derives the schedules' history from and the retention sweep purges.
 
 // FireClaims is the fleet-shared half of the guard, satisfied by
 // coord.Fires.
@@ -51,9 +51,9 @@ var _ Claimer = (*SharedClaimer)(nil)
 
 // NewSharedClaimer joins the fleet's claim to this node's audit ledger.
 //
-// history may be nil — a node with no local store still has to be refused a
-// fire a peer has claimed, and losing the audit row is a gap in a dashboard
-// rather than a duplicated turn. The shared half is required, because without
+// history may be nil: a node with no local store still has to be refused a
+// fire a peer has claimed, and losing the audit row is a gap in the schedule's
+// history rather than a duplicated turn. The shared half is required, because without
 // it there is no guard at all.
 func NewSharedClaimer(fires FireClaims, history Ledger) (*SharedClaimer, error) {
 	if fires == nil {

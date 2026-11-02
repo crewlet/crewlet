@@ -46,7 +46,6 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -2354,7 +2353,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card.
 			Objects: e.Backends().Fleet,
-			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because
 			// the answerer it registered on every node is the other

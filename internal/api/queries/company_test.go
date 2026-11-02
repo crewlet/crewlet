@@ -32,7 +32,6 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/observe"
-	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
@@ -189,89 +188,6 @@ func TestAZonelessScheduleIsDescribedOnTheCompanysClock(t *testing.T) {
 	// is Monday the 24th at 00:00 UTC — not 09:00 UTC.
 	if want := "2026-08-24T00:00:00Z"; row["next_run"] != want {
 		t.Errorf("next run = %v, want %s — 09:00 on the company's clock", row["next_run"], want)
-	}
-}
-
-// fakeRuns is a dispatch ledger with fixed contents.
-type fakeRuns struct {
-	runs []schedule.Run
-	err  error
-
-	// asked records the narrowed read's arguments, so a case about the
-	// per-schedule listing can prove the identity reached the ledger
-	// rather than only that some rows came back.
-	asked struct {
-		scope   types.ScheduleScope
-		scopeID string
-		name    string
-		limit   int
-	}
-}
-
-func (f *fakeRuns) Recent(context.Context, int) ([]schedule.Run, error) {
-	return f.runs, f.err
-}
-
-func (f *fakeRuns) RecentFor(_ context.Context, scope types.ScheduleScope,
-	scopeID, name string, limit int) ([]schedule.Run, error) {
-
-	f.asked.scope, f.asked.scopeID = scope, scopeID
-	f.asked.name, f.asked.limit = name, limit
-	// THE STUB FILTERS TOO, so a case cannot pass by handing back rows
-	// the narrowing would have excluded.
-	out := []schedule.Run{}
-	for _, run := range f.runs {
-		if run.Scope == scope && run.ScopeID == scopeID && run.ScheduleName == name {
-			out = append(out, run)
-		}
-	}
-	return out, f.err
-}
-
-func TestSchedulesCarriesTheDispatchHistory(t *testing.T) {
-	t.Parallel()
-	cfg := company(t)
-	body := asMap(t, answer(t, queries.Sources{
-		Company: companySource(t, cfg),
-		Runs: &fakeRuns{runs: []schedule.Run{{
-			FireKey: schedule.FireKey{
-				Scope: "role", ScopeID: "ceo", ScheduleName: "standup",
-				FireLabel: "20260823T0900", TargetHandle: "ceo",
-			},
-			ScheduledAt: pinned, FiredAt: pinned, Outcome: schedule.OutcomeFired,
-			TraceID: "trace-1",
-		}}},
-	}, "schedules", nil))
-
-	runs, _ := body["recent_runs"].([]any)
-	if len(runs) != 1 {
-		t.Fatalf("%d runs, want 1: %v", len(runs), body)
-	}
-	run, _ := runs[0].(map[string]any)
-	if run["schedule_name"] != "standup" || run["outcome"] != "fired" {
-		t.Errorf("run = %v", run)
-	}
-	if run["trace_id"] != "trace-1" {
-		t.Errorf("the run does not link to its turn: %v", run)
-	}
-}
-
-func TestAnUnreadableHistoryDoesNotBlankTheSchedules(t *testing.T) {
-	t.Parallel()
-	// The configured schedules are the half an operator opens this screen
-	// for. Refusing to show them because the footnote is unreadable would
-	// blank the page over its least important part.
-	cfg := company(t)
-	body := asMap(t, answer(t, queries.Sources{
-		Company: companySource(t, cfg),
-		Runs:    &fakeRuns{err: context.DeadlineExceeded},
-	}, "schedules", nil))
-
-	if rows, _ := body["schedules"].([]any); len(rows) != 1 {
-		t.Errorf("the schedules were lost with the history: %v", body)
-	}
-	if runs, _ := body["recent_runs"].([]any); len(runs) != 0 {
-		t.Errorf("recent_runs = %v, want an empty list", runs)
 	}
 }
 
@@ -3198,73 +3114,6 @@ func TestTheFleetReportsEachNodesAdminPosture(t *testing.T) {
 	if _, present := byID["node-c"]["admin"]; present {
 		t.Error("a node that serves no API carries an admin posture anyway, so " +
 			"a worker binding no API reads as a node that refuses")
-	}
-}
-
-// ONE SCHEDULE'S HISTORY, which the company-wide ledger cannot be.
-//
-// `schedules.recent_runs` is fifty rows across EVERY schedule, so a company
-// with twenty hourly ones fills it in two and a half hours: "did the standup
-// fire this week" was unanswerable while every row of the answer sat in the
-// table, and a screen paging the company's and filtering is exactly how a
-// reader concludes a schedule stopped running.
-func TestOneSchedulesRunsAreReadableOnTheirOwn(t *testing.T) {
-	t.Parallel()
-	fired := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
-	ledger := &fakeRuns{runs: []schedule.Run{
-		{FireKey: schedule.FireKey{
-			Scope: types.ScheduleScopeRole, ScopeID: "ceo",
-			ScheduleName: "standup", FireLabel: "20260608T0900", TargetHandle: "ceo",
-		}, ScheduledAt: fired, FiredAt: fired, Outcome: schedule.OutcomeFired},
-		// A SECOND UNIT DECLARING THE SAME NAME, which is what makes the
-		// scope part of the identity rather than decoration.
-		{FireKey: schedule.FireKey{
-			Scope: types.ScheduleScopeUnit, ScopeID: "platform",
-			ScheduleName: "standup", FireLabel: "20260608T0900", TargetHandle: "eng",
-		}, ScheduledAt: fired, FiredAt: fired, Outcome: schedule.OutcomeFired},
-	}}
-
-	body := asMap(t, answer(t, queries.Sources{Runs: ledger}, "schedule_runs",
-		map[string]any{"scope_type": "role", "scope_id": "ceo", "name": "standup"}))
-
-	got := rows(t, body["runs"])
-	if len(got) != 1 {
-		t.Fatalf("%d runs, want the role's alone: %#v", len(got), body["runs"])
-	}
-	if got[0]["scope_id"] != "ceo" {
-		t.Errorf("the run is %v's", got[0]["scope_id"])
-	}
-	// THE IDENTITY REACHED THE LEDGER, rather than the answer filtering a
-	// company-wide read in the surface.
-	if ledger.asked.scope != types.ScheduleScopeRole || ledger.asked.scopeID != "ceo" ||
-		ledger.asked.name != "standup" {
-
-		t.Errorf("the ledger was asked about %+v", ledger.asked)
-	}
-	if ledger.asked.limit != queries.MaxScheduleRuns {
-		t.Errorf("the ledger was asked for %d rows, want the cap %d",
-			ledger.asked.limit, queries.MaxScheduleRuns)
-	}
-}
-
-// A SCHEDULE'S IDENTITY IS ALL THREE PARTS, and every one of them is required:
-// a name alone would merge two teams' histories, and a scope this build does
-// not know is refused naming the two rather than read as a filter that matches
-// nothing.
-func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
-	t.Parallel()
-	src := queries.Sources{Runs: &fakeRuns{}}
-	for _, params := range []map[string]any{
-		{"scope_id": "ceo", "name": "standup"},
-		{"scope_type": "role", "name": "standup"},
-		{"scope_type": "role", "scope_id": "ceo"},
-		{"scope_type": "team", "scope_id": "ceo", "name": "standup"},
-	} {
-		if _, err := askNative(t, src, "schedule_runs", params); !errors.Is(
-			err, queries.ErrBadParams) {
-
-			t.Errorf("%v answered %v, want bad params", params, err)
-		}
 	}
 }
 

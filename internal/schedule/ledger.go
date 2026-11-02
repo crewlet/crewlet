@@ -96,8 +96,8 @@ type Run struct {
 	Outcome Outcome
 
 	// TraceID links the row to the turn the fire caused. Each fire gets its
-	// own trace, so the dashboard can go from a ledger row to exactly that
-	// turn's calls.
+	// own trace, so the schedule's history can go from a fire to exactly
+	// that turn's calls, and find a fire its seat did not run.
 	TraceID string
 }
 
@@ -127,52 +127,26 @@ type Claimer interface {
 // Ledger is the full contract a scheduled-run store must satisfy, and the one
 // certified by internal/schedule/scheduletest.
 //
-// It is wider than [Claimer] because two other callers exist and neither is
-// the scheduler: the dashboard reads Recent to draw the dispatch history, and
-// the retention sweep calls Purge. A backend the contract suite has not
-// certified does not exist as far as the engine is concerned.
+// It is wider than [Claimer] by one call, for the one other caller: the
+// retention sweep calls Purge. Nothing READS a ledger through this contract.
+// The schedules' history is the usage domain's fires (internal/usage), every
+// data node's, derived from this node's `scheduled_runs` rows by the store and
+// joined there with what became of each fire, which this ledger cannot know:
+// it records `fired` when the scheduler sends a fire, and the seat's node
+// decides later whether a later fire runs in its place. A backend the contract
+// suite has not certified does not exist as far as the engine is concerned.
 type Ledger interface {
 	Claimer
-
-	// Recent returns the newest rows first, at most limit of them.
-	//
-	// Ordering is (FiredAt descending, then the identity tuple ascending).
-	// The tiebreak is part of the contract rather than an implementation
-	// detail: two rows can share a millisecond, and without one the SQL
-	// backend and the memory twin would answer a dashboard differently for
-	// the same data — which is the class of divergence a twin exists to
-	// prevent, not to introduce.
-	//
-	// A limit of zero or below returns nothing. That is the honest reading
-	// of "give me no rows"; treating it as unbounded would make a caller
-	// whose page size arrived as 0 pull the whole table.
-	Recent(ctx context.Context, limit int) ([]Run, error)
-
-	// RecentFor is [Ledger.Recent] narrowed to ONE schedule, in the same
-	// order and under the same limit rule.
-	//
-	// Because `Recent` is the whole company's, and a company-wide page of
-	// fifty is not a history of anything: twenty schedules firing hourly
-	// fill it in two and a half hours, so "did the standup fire this
-	// week" was unanswerable while every row of the answer sat in the
-	// table. A screen wanting one schedule's history had to page the
-	// company's and filter, which is the shape that makes a reader
-	// conclude a schedule stopped running.
-	//
-	// The scope tuple is the identity a [Row] carries, so a caller hands
-	// back exactly what the schedule listing gave it.
-	RecentFor(ctx context.Context, scope types.ScheduleScope,
-		scopeID, name string, limit int) ([]Run, error)
 
 	// Purge drops rows whose FiredAt is strictly before `before`, returning
 	// how many went.
 	//
 	// The cutoff is an INSTANT rather than an age because the caller owns
 	// the policy, and here the policy has a floor that is not obvious: the
-	// ledger is a claim table first and a dashboard feed second, so nothing
+	// ledger is a claim table first and an audit record second, so nothing
 	// may be deleted while a tick could still evaluate the fire it records.
-	// That floor is the catchup window's upper clamp — see
-	// [Scheduler.RetentionFloor]. Sweeping inside it does not merely lose
+	// That floor is the catchup window's upper clamp (see
+	// [Scheduler.RetentionFloor]). Sweeping inside it does not merely lose
 	// history, it lets that fire run a second time.
 	//
 	// Dropping a row MUST drop its claim key with it. A purge that kept the
