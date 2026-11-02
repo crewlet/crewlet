@@ -51,6 +51,13 @@
 // clock rather than one per subsystem, because a clock per subsystem gives
 // "today" one answer per subsystem.
 //
+// # One grant per tool server
+//
+// An MCP server reaches an agent seat through `access` on its own entry, or,
+// for a server reading each agent's own vendor credential, through the seat's
+// integration lane, and through nothing else: [MCPServer.Reach]. A seat's
+// `mcp_env` block holds values for a server it already gets. That is ADR-0076.
+//
 // # No validation framework
 //
 // A schema library would carry the constraints on the field types, raise from

@@ -1541,6 +1541,60 @@
         "null"
       ]
     },
+    "MCPAccess": {
+      "additionalProperties": false,
+      "properties": {
+        "except": {
+          "description": "Agent seat handles left out although a unit in units holds them.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "seats": {
+          "description": "Agent seat handles that get this server.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "units": {
+          "description": "Unit keys whose agent seats get this server, the seats of every unit beneath each included.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPRegistry": {
       "additionalProperties": false,
       "properties": {
@@ -1562,6 +1616,10 @@
     "MCPServer": {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "$ref": "#/$defs/MCPAccess",
+          "description": "Which agent seats get this server: units (every agent seat beneath each), seats, and except. Absent = every agent seat. Not for a server bound to a vendor's per-seat credential, which the integration grants."
+        },
         "args": {
           "description": "Arguments for the executable (stdio).",
           "items": {

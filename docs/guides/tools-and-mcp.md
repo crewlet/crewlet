@@ -448,7 +448,7 @@ lists the built-ins group by group, the discovery pair included (see the
 
 ### Per-Role MCP Servers (GitHub)
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Agent seats on at the GitHub integration get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ### Where a tool comes from
 
@@ -656,9 +656,70 @@ runs, from a revision it has not applied past yet, is free: the create is
 judged against the configuration alone. The name, the prefix, the keys and the
 address are held to [the naming rules](#naming-a-server-and-its-tools).
 Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [configure via the API](configure-via-api.md). A per-seat server still needs
-a seat to declare credentials for it under `mcp_env`, which is written in the
-org builder.
+see [configure via the API](configure-via-api.md). Which agents get it is the
+entry's own `access`: see [Choosing which agents get a server](#choosing-which-agents-get-a-server).
+
+### Choosing which agents get a server
+
+A server reaches an agent through one grant, `access` on its `mcp_servers`
+entry, and through nothing else:
+
+```yaml
+mcp_servers:
+  - name: search                 # no access: every agent seat
+    command: search-mcp
+  - name: linear
+    transport: http
+    url: https://mcp.linear.app/mcp
+    headers: {Authorization: "Bearer ${LINEAR_KEY}"}
+    access:
+      units: [eng]               # every agent seat in eng and in every unit beneath it
+      seats: [pm]                # and this agent seat by name
+      except: [eng-intern]       # but not this one, though eng holds it
+```
+
+- **Absent, every agent seat** gets the server, including one added later.
+  `access: {}` names nobody, which the configuration answers with an advisory
+  (turn the server off with `enabled: false` if nothing should run it).
+- **Written, exactly the seats it names.** A unit is named by its key (its
+  `id`), and stands for every agent seat in it and in every unit beneath it,
+  so an agent that joins the team gets what the team has. A seat is named by
+  its handle. `except` leaves out seats a named unit holds. Names are matched
+  exactly, as `lead:` and `manages:` are.
+- **One grant for both kinds of server.** A shared server's one instance
+  offers its tools to the seats it is granted to and no other: the tools are
+  cut from every other seat's surface, its `tool_sources` and its prompt. A
+  per-agent server (`shared: false`) starts a child for each seat it is granted
+  to, and for nobody else.
+- **A server reading each agent's own vendor credential is granted by the
+  integration instead**: the agents on at its lane
+  (`roles[].integrations.<lane>.enabled`, the integration's Agents tab) get it,
+  because that lane is where the engine provisions, seals and binds each
+  agent's credential. Such a server takes no `access`, and one written is
+  refused. These are the servers that declare `seat_credentials` and the ones
+  the engine recognises (see [Seat credentials the engine binds](#seat-credentials-the-engine-binds)).
+- **A seat's `mcp_env` block holds values and grants nothing.** It is what the
+  seat's child of a server it already gets is started with. A block for a
+  server that does not reach the seat is refused, naming the block, and so is a
+  unit's block for a server that reaches none of the unit's own agents and an
+  executor box's `sandbox.mcp.servers` entry for a server the seat is not
+  granted: a change to a grant fails the write instead of leaving a block that
+  looks like one. A server turned off is held to the same rule, since it keeps
+  its grant for the day it is turned back on. The blocks the engine reads by
+  their own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`,
+  `confluence`) are the engine's as well as a server's, and are not held to it.
+- **A grant names only what the company holds**: a unit key that is no unit's,
+  a handle that is no seat's or is a person's (a person runs no tools), a name
+  listed twice, or a seat both named and left out, is refused at its entry.
+  Removing a seat or a unit a grant still names is refused the same way, so a
+  later seat or unit taking the same handle or key is never granted by a grant
+  written for another: change the server's `access` first.
+
+These are admission rules: a stored revision that breaks one still runs, by the
+grant as written, and every node reports it as a warning on each apply. A
+server's page answers who it reaches and why on its detail
+([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname),
+`reaches`, for an administrator).
 
 ### Turning a server off
 
@@ -1399,7 +1460,7 @@ with the action `store_value`, naming the key and the variable.
 
 ## Per-agent identity
 
-Each Role names its per-server credentials directly in `mcp_env`, so every agent authenticates as itself in external tools. The engine applies these as **env vars** for `stdio` servers and **HTTP headers** for `http` servers — it stays tool-agnostic, reading only `mcp_env` (and, for the Slack transport, `integrations.slack`):
+Each Role names its per-server credentials directly in `mcp_env`, so every agent authenticates as itself in external tools. A block holds values for a server the seat [is granted](#choosing-which-agents-get-a-server) and grants nothing itself. The engine applies these as **env vars** for `stdio` servers and **HTTP headers** for `http` servers — it stays tool-agnostic, reading only `mcp_env` (and, for the Slack transport, `integrations.slack`):
 
 ```yaml
 roles:
@@ -1515,9 +1576,9 @@ difference is a lifetime as much as a scope.
 
 | | `shared: true` (default) | `shared: false` |
 |---|---|---|
-| What it is | One child for the company | A **template**: one child per role that declares credentials for it |
+| What it is | One child for the company | A **template**: one child per agent seat it is [granted to](#choosing-which-agents-get-a-server) |
 | Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
-| Who can call it | Every seat | Only the seat whose child it is |
+| Who can call it | Every agent seat it is granted to | Only the seat whose child it is |
 | Lifetime | The config **epoch** — reconciled on every apply, stopped when a revision drops it | The seat's **lease** — spawned when this node claims the seat, reconciled in place on every apply while it holds it, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
@@ -1628,10 +1689,12 @@ side. A claimed seat therefore gets its own registry (the company's catalogue
 plus its own children's tools) and its own bridge (holding only its own
 children).
 
-**A seat that declares no `mcp_env` for a template gets no child.** A template
-with nobody's identity in it is a server nobody can act through, and offering
-its tools anyway would put entries in the prompt whose every call fails
-authentication.
+**A template starts a child for the seats it is granted to and no other**,
+whatever `mcp_env` blocks a seat holds ([Choosing which agents get a server](#choosing-which-agents-get-a-server)).
+A seat granted a template whose values it does not supply has its child held
+back for the value it is missing, named on the server's page, rather than
+started with an empty credential (see
+[A key that may go without its value](#a-key-that-may-go-without-its-value)).
 
 **A server that will not start costs its own tools and nothing else.** The seat
 keeps its builtins, the other servers keep working, and the operator sees that

@@ -325,3 +325,75 @@ roles:
 		t.Errorf("github is given to boxes nobody named: %+v", github)
 	}
 }
+
+// THE DETAIL SAYS WHO A SERVER REACHES AND WHY, from the one grant the engine
+// starts and files by ([config.MCPServer.Reach]), so the page never re-derives
+// it: every agent for a server with no access, a unit (the nearest one
+// named) or the seat named, minus the seats left out, and the lane for a
+// server reading each agent's own vendor credential. A box listing the grant
+// does not back, which only a stored revision can carry, gives that box
+// nothing, so it is not among the server's boxes.
+//
+// Mutation: list every agent seat in reachesOf, or drop the grant check from
+// resolvedOf's boxes, and this is red.
+func TestTheDetailSaysWhoAServerReachesAndWhy(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    main: {model: sonnet, run_in: direct}
+mcp_servers:
+  - {name: search, command: search-mcp}
+  - {name: docs, command: docs-mcp, access: {units: [eng], seats: [ceo], except: [intern]}}
+  - name: chat
+    command: chat-mcp
+    shared: false
+    seat_credentials: [{kind: slack, key: SLACK_MCP_XOXB_TOKEN}]
+roles:
+  - {name: Founder, handle: founder, kind: human}
+  - {name: CEO, handle: ceo, integrations: {slack: {enabled: true}}}
+  - {name: Ops, handle: ops, llm: main, sandbox: {mcp: {servers: [docs]}}}
+units:
+  - name: Eng
+    id: eng
+    roles:
+      - {name: Dev, handle: dev, llm: main, sandbox: {mcp: {servers: [docs]}}}
+      - {name: Intern, handle: intern}
+`
+	// STORED, not submitted: admission refuses ops' box listing.
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := strings.Replace(doc, "  - {name: Ops, handle: ops, llm: main, sandbox: {mcp: {servers: [docs]}}}\n",
+		"  - {name: Ops, handle: ops, llm: main}\n", 1)
+	surface, _ := configSurface(t, valid)
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
+	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+		Config: surface, MCPListings: fakeListings{}})
+	via := func(v string) *string { return &v }
+	for name, want := range map[string][]queries.MCPReachView{
+		"search": {{Seat: "ceo", Reason: config.MCPReachEveryAgent}, {Seat: "ops", Reason: config.MCPReachEveryAgent},
+			{Seat: "dev", Reason: config.MCPReachEveryAgent}, {Seat: "intern", Reason: config.MCPReachEveryAgent}},
+		"docs": {{Seat: "ceo", Reason: config.MCPReachSeat}, {Seat: "dev", Reason: config.MCPReachUnit, Via: via("eng")}},
+		"chat": {{Seat: "ceo", Reason: config.MCPReachIntegration, Via: via("slack")}},
+	} {
+		got, err := s.MCPServer(t.Context(), name)
+		if err != nil {
+			t.Fatalf("MCPServer(%s): %v", name, err)
+		}
+		if !slices.EqualFunc(got.Reaches, want, func(a, b queries.MCPReachView) bool {
+			return a.Seat == b.Seat && a.Reason == b.Reason && (a.Via == nil) == (b.Via == nil) &&
+				(a.Via == nil || *a.Via == *b.Via)
+		}) {
+			raw, _ := json.Marshal(got.Reaches)
+			t.Errorf("%s reaches %s", name, raw)
+		}
+		if name == "docs" && !slices.Equal(got.Resolved.BoxSeats, []queries.MCPBoxSeat{{Seat: "dev", Cell: "direct"}}) {
+			t.Errorf("docs' boxes = %+v, want dev's alone: ops is not granted it", got.Resolved.BoxSeats)
+		}
+	}
+}

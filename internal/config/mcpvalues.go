@@ -195,7 +195,7 @@ func (c *Company) grantedSeat(server *MCPServer, handle string) (*Role, Path, er
 	if seat == nil {
 		return nil, nil, fmt.Errorf("%w: %q", ErrMCPValueNoSeat, handle)
 	}
-	if !granted(server, seat) {
+	if _, reached := server.Reach(seat); !reached {
 		return nil, nil, fmt.Errorf("%w: %q is not granted %q", ErrMCPValueNotGranted, handle, server.Name)
 	}
 	for role, path := range c.EachRole() {
@@ -204,14 +204,6 @@ func (c *Company) grantedSeat(server *MCPServer, handle string) (*Role, Path, er
 		}
 	}
 	return nil, nil, fmt.Errorf("%w: %q", ErrMCPValueNoSeat, handle)
-}
-
-// granted is [MCPServer.Grants] ignoring `enabled`: a server turned off still
-// takes its values.
-func granted(server *MCPServer, seat *org.Role) bool {
-	on := *server
-	on.Enabled = Toggle{}
-	return on.Grants(seat)
 }
 
 // PointMCPValue points slot's key at its variable, replacing any other

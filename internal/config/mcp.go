@@ -56,11 +56,12 @@ const ToolServerName = "crewlet"
 //
 // # Shared or per-seat
 //
-// Shared (the default) launches ONE instance whose tools every agent can
-// call. Setting it false makes this entry a TEMPLATE: no global instance is
-// launched, and instead every seat that declares credentials for this
-// server under role.mcp_env gets its own instance with those credentials
-// applied — environment variables for stdio, HTTP headers for http.
+// Shared (the default) launches ONE instance whose tools the agent seats the
+// server is granted to can call. Setting it false makes this entry a
+// TEMPLATE: no global instance is launched, and instead every agent seat the
+// server is granted to ([MCPServer.Grants]) gets its own instance, with that
+// seat's role.mcp_env values for it applied: environment variables for stdio,
+// HTTP headers for http.
 //
 // That is what makes each agent act as a distinct identity: its own tracker
 // token, its own chat bot token, its own code-host authorization header. An
@@ -96,6 +97,13 @@ type MCPServer struct {
 	// Shared launches one instance for the company. False makes this a
 	// per-seat template — see the type's own comment.
 	Shared Toggle `yaml:"shared,omitempty" json:"shared,omitzero" desc:"One shared instance (default), or false for one per seat."`
+
+	// Access is which agent seats the server reaches ([MCPAccess]). Absent,
+	// every agent seat; written, exactly the seats it names. A pointer,
+	// because the two differ: `access: {}` names nobody. Refused on a server
+	// bound to a vendor's per-seat credential, which the integration's lane
+	// grants instead. See [MCPServer.Reach].
+	Access *MCPAccess `yaml:"access,omitempty" json:"access,omitempty" desc:"Which agent seats get this server: units (every agent seat beneath each), seats, and except. Absent = every agent seat. Not for a server bound to a vendor's per-seat credential, which the integration grants."`
 
 	// The stdio fields.
 	Command string            `yaml:"command,omitempty" json:"command,omitempty" desc:"Executable to launch (stdio)."`
@@ -218,29 +226,27 @@ func (m *MCPServer) IsEnabled() bool { return m.Enabled.Or(true) }
 // agree on a description in any script.
 const MaxMCPDescription = 200
 
-// Grants reports whether seat's turns are offered this server's tools.
+// Grants reports whether seat's turns are offered this server's tools: the
+// server is on ([MCPServer.IsEnabled]) and its grant reaches the seat
+// ([MCPServer.Reach]). For a shared server that is whether the seat's surface
+// holds its one instance's tools; for a per-agent server, whether the seat gets
+// a child of its own. A seat's `mcp_env` block plays no part: it holds values.
 //
-// A server turned off ([MCPServer.IsEnabled]) is granted to nobody. Otherwise
-// a shared server serves every AGENT seat; a per-seat template serves only a
-// seat that declares credentials for it under mcp_env — its own or its unit's,
-// which is why this takes the seat AS THE ENGINE RUNS IT ([org.Organization]
-// as the engine built it, where a unit's credentials are already layered under
-// its agent members), rather than the authored role — because a template with nobody's identity in it is a server
-// nobody can act through. A human seat runs no tools at all.
+// It takes the seat AS THE ENGINE RUNS IT ([org.Organization] as the
+// configuration built it), which carries where the seat sits and the lanes it
+// is on at, rather than the authored role. A human seat runs no tools at all.
 //
-// THE ONE RULE, read by the engine when it starts a seat's children and by the
-// org projection when it tells a reader which servers a seat can reach, so the
-// two cannot answer differently. What it describes is the GRANT: whether the
-// server actually started is the heartbeat's report, not this.
+// THE ONE RULE, read by the engine when it builds a seat's surface and starts
+// its children, by an executor's box, and by the org projection when it tells a
+// reader which servers a seat can reach, so none of them can answer
+// differently. What it describes is the GRANT: whether the server actually
+// started is the heartbeat's report, not this.
 func (m *MCPServer) Grants(seat *org.Role) bool {
-	if seat == nil || !seat.IsAgent() || !m.IsEnabled() {
+	if !m.IsEnabled() {
 		return false
 	}
-	if m.IsShared() {
-		return true
-	}
-	_, declared := seat.MCPEnv[m.Name]
-	return declared
+	_, reached := m.Reach(seat)
+	return reached
 }
 
 // OptionalKey reports whether key's value may resolve to nothing, the key then

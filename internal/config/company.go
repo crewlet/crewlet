@@ -315,7 +315,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
-		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry())
+		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry(), c.validateMCPAccess(o))
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

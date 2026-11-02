@@ -115,6 +115,46 @@ type MCPServerAnswer struct {
 	// Values are the headers or variables the server is sent, by name
 	// ([MCPValueState]). Always a list.
 	Values []MCPValueState `json:"values"`
+
+	// Reaches is every agent seat the server's grant reaches, each with why
+	// ([config.MCPServer.Reach]), in the chart's order. THE GRANT, WHETHER OR
+	// NOT THE SERVER IS ON: a server turned off reaches these seats again
+	// when it is turned back on, and its row's state says it is off. Always
+	// a list; empty for a server the configuration does not declare.
+	Reaches []MCPReachView `json:"reaches"`
+}
+
+// MCPReachView is one agent seat a server reaches, and why: through `access`
+// (every agent, a unit named, the seat named) or, for a server reading each
+// agent's own vendor credential, the integration lane the seat is on at.
+type MCPReachView struct {
+	// Seat is the seat's handle.
+	Seat   string                `json:"seat"`
+	Reason config.MCPReachReason `json:"reason"`
+	// Via is the key of the unit that grants it, for `unit`, and the lane the
+	// seat is on at, for `integration`; null otherwise.
+	Via *string `json:"via"`
+}
+
+// reachesOf is every agent seat of roster that server's grant reaches, in the
+// chart's order ([org.Organization.AllRoles]).
+func reachesOf(server *config.MCPServer, roster *org.Organization) []MCPReachView {
+	out := []MCPReachView{}
+	if roster == nil {
+		return out
+	}
+	for seat := range roster.AllRoles() {
+		reach, ok := server.Reach(seat)
+		if !ok {
+			continue
+		}
+		view := MCPReachView{Seat: seat.Handle(), Reason: reach.Reason}
+		if reach.Via != "" {
+			view.Via = &reach.Via
+		}
+		out = append(out, view)
+	}
+	return out
 }
 
 // MCPUsageDays is how many company days a server's usage and recent calls
@@ -310,6 +350,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	out := MCPServerAnswer{
 		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
 		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
+		Reaches: []MCPReachView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -329,8 +370,9 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		organization = roster
 		if company != nil {
 			if i := slices.IndexFunc(company.MCPServers, func(m config.MCPServer) bool { return m.Name == name }); i >= 0 {
-				resolved := resolvedOf(company, &company.MCPServers[i])
+				resolved := resolvedOf(company, roster, &company.MCPServers[i])
 				out.Resolved = &resolved
+				out.Reaches = reachesOf(&company.MCPServers[i], roster)
 			}
 			values, valuesErr := s.mcpValues(ctx, company, name)
 			if valuesErr != nil {

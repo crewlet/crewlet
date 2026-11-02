@@ -399,6 +399,7 @@ export const LINEAR_DETAIL: McpServerAnswer = {
   },
   last_check: null,
   values: [],
+  reaches: [{ seat: "backend-dev", reason: "every_agent", via: null }],
 };
 
 /** Linear whole, as a member reads it. */

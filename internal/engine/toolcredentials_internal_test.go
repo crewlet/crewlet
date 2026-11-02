@@ -72,6 +72,7 @@ mcp_servers:
   - name: tracker
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
+    access: {seats: [cto]}
 roles:
   - name: CEO
     handle: ceo

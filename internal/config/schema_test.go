@@ -587,7 +587,7 @@ units:
       - name: CTO
         handle: cto
         llm: [oc, default]
-        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}}
+        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}, gitlab: {enabled: true, access_level: 30}}
         sandbox:
           max_turns: 0
           pause_ttl_seconds: 600

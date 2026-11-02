@@ -6191,9 +6191,12 @@ a label derived from it follows the same rule.
 - **`tool_sources`** is where the seat's tools come from, in the tool
   registry's own origin grammar: `builtin` first, then `mcp:<server>` for each
   server the seat is granted, in the order `mcp_servers` declares them. A
-  shared server is granted to every agent seat; a `shared: false` template only
-  to a seat that declares credentials for it under `mcp_env`, its own or its
-  unit's — the rule the engine starts a seat's own server instances by. It is
+  server is granted by its entry's `access` (every agent seat where it has
+  none), or, for one reading each agent's own vendor credential, by the
+  integration lane the seat is on at
+  ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)):
+  the rule the engine builds the seat's surface and starts its own server
+  instances by, and never a seat's `mcp_env` block, which holds values. It is
   the GRANT, not what is running: a server that failed to start is still
   listed, and the node heartbeat's MCP report is what says it failed.
 
@@ -9482,7 +9485,7 @@ failure somebody has to act on:
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
 | `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
 | `waiting` | Nothing was launched and nothing failed, and some seat's instance is waiting for its provisioned credential. Only where nothing else decides: a server serving one seat while another waits is `running`, and one with a failure beside a wait is `partial` or `failing` |
-| `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
+| `not_started` | Every reporting node started nothing for it — a per-seat template granted to no seat a live node holds |
 | `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
@@ -9794,6 +9797,17 @@ it under, so a node that drained, died or restarted stops counting at once.
   the key, `null` for one the document sets. What
   [`PUT /mcp-servers/{name}/values/{key}`](#put-mcp-serversnamevalueskey)
   stores. An administrator's reading only.
+- `reaches` is every agent seat the server's grant reaches, in the chart's
+  order, each `{seat, reason, via}`: `seat` its handle, and `reason`
+  `every_agent` (the entry has no `access`), `unit` (a unit `access.units`
+  names holds it; `via` is that unit's key, the nearest one named), `seat`
+  (`access.seats` names it) or `integration` (the server reads each agent's
+  own vendor credential and the seat is on at its lane; `via` is the lane).
+  `via` is `null` for the other two. The grant itself, whether or not the
+  server is on: a server turned off reaches these seats again once it is
+  turned back on. Empty for a server the configuration does not declare
+  ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
+  An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
   configuration does not declare: `auth` (`integration` for a per-agent server
@@ -9807,7 +9821,8 @@ it under, so a node that drained, died or restarted stops counting at once.
   `declared` in `seat_credentials` or `recognised` from its address or command,
   and the `keys` it is started with, `{field, key}` by name; `null` for none);
   `box_seats` (the seats whose executor box is given the server through
-  `sandbox.mcp.servers`, each with the `cell` its box runs in); and `warnings`
+  `sandbox.mcp.servers`, each with the `cell` its box runs in; a seat the
+  server is not granted to is given nothing, so it is not one); and `warnings`
   (placements expected to fail, `{kind, seat, cell, message}`:
   `private_address_in_cloud_box` for a server on a private network given to a
   box in the `e2b` cell, which runs outside that network, and `command_in_box`
@@ -9896,7 +9911,9 @@ server that lists nothing.
   "calls": {"calls": [{"at": "2026-11-01T08:58:12Z", "seat": "backend-dev",
                        "turn_id": "6c1f0e2a-5b7d-4e8f-9a1b-2c3d4e5f6a7b", "tool": "get_issue",
                        "outcome": "answered", "refusal": "", "duration_ms": 412}],
-            "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}}
+            "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}},
+  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github"},
+              {"seat": "pm", "reason": "integration", "via": "github"}]
 }
 ```
 
@@ -9938,7 +9955,7 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
   the `seats` that called it: how often a tool is used tells a member whether
   it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions`, `dependants` and `calls`.
+It leaves out `instructions`, `dependants`, `calls` and `reaches`.
 
 ```json
 {

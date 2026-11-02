@@ -248,8 +248,8 @@ flowchart TB
 
 **Two MCP lifetimes, and the difference is a security boundary.** A
 `shared: true` server is one company-wide child bound to the **config epoch**.
-A `shared: false` server is a *template*, and each seat gets its own child bound
-to that **seat's lease** — spawned before its mailbox opens, killed when the
+A `shared: false` server is a *template*, and each seat it is granted to gets its
+own child bound to that **seat's lease** — spawned before its mailbox opens, killed when the
 lease goes. The credentials in one of those children *are* that seat's identity,
 and two children of one template publish identical tool names: in a single
 registry one would shadow the other and every seat would call whichever won,

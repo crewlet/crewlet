@@ -176,6 +176,7 @@ mcp_servers:
   - name: tracker
     shared: false
     command: tracker-server
+    access: {seats: [ceo]}
   - name: wiki
     enabled: false
     command: wiki-server
