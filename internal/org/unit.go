@@ -137,6 +137,12 @@ type Unit struct {
 	// human seats.
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
+	// MCPLimits is what this unit's lead holds MCP servers to for every
+	// agent seat beneath the unit, at any depth ([MCPLimits]); each seat is
+	// held to the strictest of its own and every enclosing unit's
+	// ([Role.Limits]).
+	MCPLimits MCPLimits `yaml:"mcp_limits,omitempty" json:"mcp_limits,omitempty"`
+
 	Roles    []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
 	Children []*Unit `yaml:"children,omitempty" json:"children,omitempty"`
 

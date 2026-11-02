@@ -354,7 +354,7 @@ export const LINEAR_DETAIL: McpServerAnswer = {
   unlisted_levels: [],
   server_info: { name: "linear-mcp", version: "2.1.0", protocol: "2026-07-28" },
   instructions: "Search before you create an issue.",
-  dependants: { mcp_env: [], sandbox: [], secrets: ["LINEAR_TOKEN"], oauth: false },
+  dependants: { mcp_env: [], sandbox: [], mcp_limits: [], secrets: ["LINEAR_TOKEN"], oauth: false },
   instances: [
     {
       seat: "",
@@ -446,7 +446,7 @@ export const LINEAR_DETAIL: McpServerAnswer = {
   },
   last_check: null,
   values: [],
-  reaches: [{ seat: "backend-dev", reason: "every_agent", via: null }],
+  reaches: [{ seat: "backend-dev", reason: "every_agent", via: null, limited: null }],
   changes: [],
 };
 

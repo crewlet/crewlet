@@ -239,10 +239,16 @@ func (m *MCPServer) IsEnabled() bool { return m.Enabled.Or(true) }
 const MaxMCPDescription = 200
 
 // Grants reports whether seat's turns are offered this server's tools: the
-// server is on ([MCPServer.IsEnabled]) and its grant reaches the seat
-// ([MCPServer.Reach]). For a shared server that is whether the seat's surface
+// server is on ([MCPServer.IsEnabled]), its grant reaches the seat
+// ([MCPServer.Reach]), and no limit on the way down to the seat turns it off
+// ([org.Role.LimitOn]). For a shared server that is whether the seat's surface
 // holds its one instance's tools; for a per-agent server, whether the seat gets
 // a child of its own. A seat's `mcp_env` block plays no part: it holds values.
+//
+// A LIMIT IS NOT A GRANT, so it is read here and not in Reach: a server a
+// team's lead turns off for the team keeps its grant, and every value and
+// listing written for a seat it reaches, for the day the limit is lifted, as a
+// server turned off on its entry does.
 //
 // It takes the seat AS THE ENGINE RUNS IT ([org.Organization] as the
 // configuration built it), which carries where the seat sits and the lanes it
@@ -257,8 +263,10 @@ func (m *MCPServer) Grants(seat *org.Role) bool {
 	if !m.IsEnabled() {
 		return false
 	}
-	_, reached := m.Reach(seat)
-	return reached
+	if _, reached := m.Reach(seat); !reached {
+		return false
+	}
+	return !seat.LimitOn(m.Name).Off
 }
 
 // OptionalKey reports whether key's value may resolve to nothing, the key then

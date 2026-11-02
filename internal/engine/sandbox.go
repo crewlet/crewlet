@@ -1986,6 +1986,16 @@ func sandboxMCP(
 					"is given it")
 			continue
 		}
+		if limit := seat.LimitOn(name); limit.Off {
+			// OUT OF THE SCOPE, as one turned off on its entry is: a limit
+			// on the way down to this seat turns it off, and keeps the
+			// listing for the day it is lifted.
+			log.Info("sandbox_mcp_server_limited", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: a limit turns it off for "+
+					"this seat (mcp_limits on the seat or a unit above it), and an executor "+
+					"launched once the limit is lifted is given it")
+			continue
+		}
 		if !server.Grants(seat) {
 			// OUT OF THE SCOPE, as one turned off is: declared, and not
 			// this seat's. Admission refuses the listing, so only a stored
@@ -1996,15 +2006,17 @@ func sandboxMCP(
 					"reading each agent's own credential)")
 			continue
 		}
-		if !server.Tools.AllowsEveryTool() {
+		if !server.Tools.AllowsEveryTool() || len(seat.LimitOn(name).Tools) > 0 {
 			// OUT OF THE SCOPE, as one not granted is: a box reaches a
-			// server whole, so a level that holds a tool back could not
-			// hold there. Admission refuses the listing, so only a stored
-			// revision reaches here.
+			// server whole, so a level that holds a tool back, on the
+			// server's entry or in a limit on the way down to this seat,
+			// could not hold there. Admission refuses the listing, so only
+			// a stored revision reaches here.
 			log.Warn("sandbox_mcp_server_levelled", "seat", seat.Handle(), "server", name,
 				"detail", "the executor is not given this server in its box: some of its "+
-					"tools are held back from the agents (mcp_servers[].tools), and a box "+
-					"reaches a server whole; the seat reaches its allowed tools over the bridge")
+					"tools are held back from this agent (mcp_servers[].tools, or mcp_limits on "+
+					"the seat or a unit above it), and a box reaches a server whole; the seat "+
+					"reaches its tools over the bridge, each at its level")
 			continue
 		}
 		if server.OAuth != nil {

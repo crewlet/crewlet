@@ -32,6 +32,12 @@ import (
 // space, channel, address or contact ids — are never a lead's: all four are
 // asked as `config.write`, which is admin's.
 //
+// NOR IS WIDENING AN MCP SERVER. A lead writes their own seats' and units'
+// `mcp_limits` to hold a server back from their teams, and only that: every
+// limit a write lifts or loosens for an agent seat, by editing a block or by
+// moving a seat out from under one ([config.OrgDiff.Widened]), is asked as
+// `config.write` too, so an administrator grants and a lead narrows.
+//
 // A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
 // unchanged still makes a new revision and re-activates it on every node,
 // rebuilding every seat's tools, providers and MCP children — the gesture
@@ -127,10 +133,12 @@ type RefusedChange struct {
 	// Why is what about the change reaches it — `place`, `self`, `lead`,
 	// `manages`, `named`, `duplicate` — `credential` for a credential the
 	// change sets, clears or alters, `key` for a key another system finds
-	// the object by, or `unchanged` for a write that changes nothing.
+	// the object by, `widens` for an MCP limit the change lifts or loosens
+	// for the seat, or `unchanged` for a write that changes nothing.
 	Why string `json:"why,omitempty"`
-	// Value is the reference, the id, the credential's path or the key's
-	// field.
+	// Value is the reference, the id, the credential's path, the key's
+	// field, or the limit as the seat is held to it
+	// (`mcp_limits.<server>.enabled`, `mcp_limits.<server>.tools.<tool>`).
 	Value string `json:"value,omitempty"`
 	// Reason is the authority table's own reason for refusing it.
 	Reason authz.Reason `json:"reason"`
@@ -279,6 +287,10 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 		refused = append(refused, refusedPart{change: RefusedChange{Kind: "setting",
 			ID: key}, decision: company})
 	}
+	for _, w := range diff.Widened {
+		refused = append(refused, refusedPart{change: RefusedChange{Kind: string(config.OrgSeat),
+			ID: w.Seat, Why: "widens", Value: w.Field()}, decision: company})
+	}
 	for _, change := range diff.Changes {
 		for _, path := range change.Credentials {
 			refused = append(refused, refusedPart{change: RefusedChange{
@@ -344,8 +356,9 @@ func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
 	if code == httpjson.CodeUnauthorized && len(err.Refused) > 0 {
 		detail["refused"] = err.Refused
 		detail["hint"] = "Leads can change seats and units in their own units " +
-			"only. Settings, credentials, ${VAR} references, projects, spaces, " +
-			"channels, addresses and contact ids need admin."
+			"only, and can hold an MCP server back from them but never give one " +
+			"back. Settings, credentials, ${VAR} references, projects, spaces, " +
+			"channels, addresses, contact ids and lifting an MCP limit need admin."
 	}
 	httpjson.FailWithFields(w, status, code, detail)
 }

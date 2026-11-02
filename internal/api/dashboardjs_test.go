@@ -1542,17 +1542,23 @@ const (
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
 	// initial load did not grow. 5385 KiB.
+	// A team's MCP limits in the Remove dialog (each seat's and unit's
+	// mcp_limits block a removal clears, listed and counted with the other
+	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
+	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
+	// load does not fetch. 5386 KiB.
 	// Signing a server in to OAuth from its page (the Sign in and Revoke
 	// dialogs, the Connection tab's sign-in card, a client's secret named as
 	// one, and the sign-in alarm opening the dialog) took it from 5384.9 KiB
-	// to 5393.3 KiB (+8.4 KiB): the settings chunk +7.0 KiB, and
+	// to 5393.3 KiB (+8.4 KiB), measured before the MCP limits: the settings chunk +7.0 KiB, and
 	// useLatestHandlers, which the dialog is the first settings screen to
 	// read, became a chunk of its own (+1.5 KiB) as Rollup moved 1.2 KiB of
 	// shared settings code into the Access chunk. 5394 KiB.
 	// The wizard's OAuth and client credentials (the Sign-in step's client
 	// choice, scopes and callback address, a service identity's fields, the
 	// oauth block it writes and the secret it stores) took it from 5393.3 KiB
-	// to 5398.1 KiB (+4.8 KiB), all of it the settings chunk. 5399 KiB.
+	// to 5398.1 KiB (+4.8 KiB), all of it the settings chunk. On the MCP
+	// limits, the two took it from 5385.2 KiB to 5398.3 KiB. 5399 KiB.
 	treeBudget = 5<<20 + 279<<10
 )
 
