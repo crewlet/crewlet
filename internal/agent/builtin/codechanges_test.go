@@ -95,8 +95,9 @@ func newChangeHost(f *changeFixture) *codeHost {
 // read answers q as the shipped reader pages a change read: a listing of the
 // repository's changes newest first by number, a page after the number its
 // cursor names; and one change's revisions — with its detail on a first page
-// — newest first after the revision a cursor names, or a part of its
-// conversation after the row a cursor names.
+// — newest first after the revision a cursor names, its detail alone for a
+// read asking it alone (code.ReadQuery.DetailOnly, a write tool's), or a part
+// of its conversation after the row a cursor names.
 func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 	out := code.ReadAnswer{Position: f.at, Level: q.Fresh.Level}
 	if q.Repo != "" && q.Repo != f.repo {
@@ -137,6 +138,11 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		if q.Cursor == "" {
 			d := f.detail
 			out.Change = &d
+			if q.DetailOnly {
+				// THE DETAIL ALONE, as the reader answers it: no revision
+				// read, so none and no cursor to the next.
+				return out, nil
+			}
 		} else {
 			n, err := strconv.ParseInt(q.Cursor, 10, 64)
 			if err != nil {
