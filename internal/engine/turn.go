@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,20 @@ type Dispatcher struct {
 
 	// Turn runs the seat's turn once the guards have passed.
 	Turn func(ctx context.Context, req Request) (turn.Result, error)
+
+	// Settled is told the wakes a delivery has finished with: every
+	// constituent of a partition the dispatch acknowledged, whether a turn
+	// ran on it or it was settled without one (worked already, answered a
+	// parked run, parked). It is what takes a person's queued line down
+	// once their message no longer waits ([Engine.settleWaiting]). nil
+	// settles nothing.
+	Settled func(ctx context.Context, handle string, wakes []string)
+
+	// running counts the dispatches in progress per seat, which is how
+	// "this seat is busy right now" is answered for a person's message
+	// that reaches it meanwhile ([Dispatcher.Running]).
+	runningMu sync.Mutex
+	running   map[string]int
 
 	// Park requeues a partition and reports whether it landed. The
 	// dispatcher acks only on true: acking a park whose requeue failed
@@ -379,6 +394,20 @@ func (r Request) Ask() []*events.Event {
 // queue backend's handler guard, which NAKs a panic, so a defect was run again
 // up to the whole delivery budget. See [Dispatcher.recoverPanic].
 func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) (result queue.Result) {
+	d.enter(handle)
+	defer d.leave(handle)
+	// SETTLED ONCE THE OUTCOME IS FINAL, which is why this is deferred
+	// FIRST: deferred calls run last to first, so it runs after the panic
+	// recovery below has decided what a recovered dispatch answers. See
+	// [settledBy] for which wakes a dispatch has finished with.
+	defer func() {
+		if d.Settled == nil {
+			return
+		}
+		if wakes := settledBy(ctx, result, evs); len(wakes) > 0 {
+			d.Settled(ctx, handle, wakes)
+		}
+	}()
 	held := holding{events: evs}
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -386,6 +415,69 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		}
 	}()
 	return d.dispatch(ctx, handle, evs, &held)
+}
+
+// Running reports whether a delivery of the seat is being dispatched on this
+// node right now: a turn of it is running, or about to.
+func (d *Dispatcher) Running(handle string) bool {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	return d.running[handle] > 0
+}
+
+func (d *Dispatcher) enter(handle string) {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	if d.running == nil {
+		d.running = map[string]int{}
+	}
+	d.running[handle]++
+}
+
+func (d *Dispatcher) leave(handle string) {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	if d.running[handle]--; d.running[handle] <= 0 {
+		delete(d.running, handle)
+	}
+}
+
+// settledBy is the wakes a dispatch has finished with, whose queued lines come
+// down ([Dispatcher.Settled]).
+//
+// EVERY WAKE OF AN ACKNOWLEDGED DELIVERY: a turn ran on it, or it was settled
+// without one. A delivery handed back (a Nak or a Defer) comes back, and its
+// person is still waiting, EXCEPT a wake the hand-back dead-letters: the
+// backend retires a message whose deliveries are spent rather than return it,
+// so nothing would ever pick it up and end its line. Which ones those are is
+// each message's own headroom as the queue states it
+// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent.
+func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []string {
+	if result.Outcome == queue.OutcomeAck {
+		return wakeIDsOf(evs)
+	}
+	var out []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if left, known := queue.DeliveriesLeftFor(ctx, ev.ID); known && left <= 0 {
+			out = append(out, ev.ID.String())
+		}
+	}
+	return out
+}
+
+// wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
+// held under ([notify.WaitingNotice.Wake]).
+func wakeIDsOf(evs []*events.Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		if ev != nil {
+			out = append(out, ev.ID.String())
+		}
+	}
+	return out
 }
 
 // holding is what one delivery is still answerable for, narrowed as the stages

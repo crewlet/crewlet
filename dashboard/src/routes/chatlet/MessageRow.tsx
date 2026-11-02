@@ -69,6 +69,7 @@ import { packPosition } from "./cursor.ts";
 import { clockOf, timeOf } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
+import { workingLine } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
@@ -335,8 +336,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     thread && !threadOpen && (packPosition(thread.last_reply_position) ?? 0) > threadRead;
   const answering = working.filter((seat) => seat.thread === message.id);
   const answeringLine = answering[0]
-    ? `${people.nameOf(answering[0].handle)} ${answering[0].status || "is writing a reply"}`
+    ? workingLine(people.nameOf(answering[0].handle), answering[0], "is writing a reply")
     : "";
+  const answeringQueued = !!answering[0]?.queued;
 
   const footer = (
     <>
@@ -375,6 +377,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
                 className="chat-thread-working"
                 status={answeringLine}
                 label={answeringLine}
+                queued={answeringQueued}
               />
             ) : undefined
           }
@@ -385,6 +388,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           className="chat-thread-working"
           status={answeringLine}
           label={answeringLine}
+          queued={answeringQueued}
         />
       )}
       {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:

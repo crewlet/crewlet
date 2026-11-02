@@ -73,7 +73,7 @@ import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
-import { useChatFrames, useChatPresence } from "./live.ts";
+import { useChatFrames, useChatPresence, workingLine } from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
 import { PendingRow } from "./Pending.tsx";
 import { threadPagesTouched } from "./messages.ts";
@@ -320,8 +320,13 @@ function Thread({
                   <div className="chat-pane-working__text">
                     <span className="chat-pane-working__name">{person.name}</span>
                     <ThinkingIndicator
-                      status={entry.status || "Writing a reply"}
-                      label={`${person.name} is writing a reply`}
+                      status={entry.status || (entry.queued ? "Queued" : "Writing a reply")}
+                      label={
+                        entry.queued
+                          ? workingLine(person.name, entry, "is queued")
+                          : `${person.name} is writing a reply`
+                      }
+                      queued={entry.queued}
                     />
                   </div>
                 </div>

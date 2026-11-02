@@ -4321,6 +4321,11 @@ export interface ChatWorking {
    *  engine's hub declares it renders words, so every frame it sends carries
    *  one. */
   status?: string;
+  /** The seat has not started on the message: it waits behind what the seat
+   *  is already doing, and `status` says what ("is queued behind its current
+   *  task"). Drawn as the kit's queued indicator, still, until the turn that
+   *  picks it up takes the line over in place. */
+  queued?: boolean;
 }
 
 /** Who is in one room right now, as the room's screen draws it — derived from
@@ -7706,6 +7711,10 @@ export interface RoomMember {
   turn?: string;
   /** For an agent at work in a chat room, the line shown beside its name; empty for the bare indicator. */
   status?: string;
+  /** For an agent, that `status` is about a person's message waiting behind
+   *  what the agent is already doing rather than work under way: the room
+   *  draws the indicator still. Never set for a person. */
+  queued?: boolean;
 }
 
 /** Who is in one room (`presence.Roster`). */
