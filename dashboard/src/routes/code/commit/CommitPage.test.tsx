@@ -135,12 +135,15 @@ function stubEngine({
   compare = {},
   act = () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13", receipt: {} }),
   patch = [PATCH],
+  files = [[{ path: "app.go", status: "M", added: 1, deleted: 1 }]],
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
   act?: () => Promise<Response> | Response;
   /** A file's patch as its pages: page n is answered from the cursor `p:<n>`, as the engine cuts one at a line. */
   patch?: readonly string[];
+  /** The diff's files as their pages: page n is answered from the cursor `f:<n>`. */
+  files?: readonly (readonly Record<string, unknown>[])[];
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -173,20 +176,23 @@ function stubEngine({
         case "/query/code_commit":
           return json(commitAnswer);
         case "/query/code_diff": {
+          const file = p.get("file");
           const page = Number((p.get("cursor") ?? "p:0").slice(2));
-          const paged = p.get("file") !== null && page + 1 < patch.length;
+          const pages = file !== null ? patch.length : files.length;
           return json({
             repo: "web",
             kind: "diff",
-            ...(paged ? { next: `p:${page + 1}` } : {}),
+            ...(page + 1 < pages ? { next: `${file !== null ? "p" : "f"}:${page + 1}` } : {}),
             diff: {
               base: p.get("base"),
               head: p.get("head"),
-              files: [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
-              total: 1,
+              // A FILE'S PATCH IS ANSWERED WITH THAT FILE, as the engine's
+              // is; a listing with its page of files.
+              files: file !== null ? files.flat().filter((f) => f.path === file) : files[page],
+              total: files.flat().length,
               added: 1,
               deleted: 1,
-              ...(p.get("file") ? { patch: patch[page] } : {}),
+              ...(file !== null ? { patch: patch[page] } : {}),
             },
           });
         }
@@ -306,6 +312,31 @@ test("a patch past one page draws the rest of its hunks when the reader asks", a
   const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "p:1");
   expect(second?.searchParams.get("file")).toBe("app.go");
   expect(second?.searchParams.get("head")).toBe(SHA);
+});
+
+// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: a diff's files
+// are a page at a time, and a link or a reload naming a file past the first
+// page reads its patch all the same, the file described by that patch's own
+// answer — a binary one said as binary, with no line drawn. Mutation: open
+// only a file the loaded pages list, or take a file's kind from the listing
+// alone, and this fails.
+test.each([
+  ["its patch", { path: "z.go", status: "A", added: 2, deleted: 0 }, "new"],
+  [
+    "that it is binary",
+    { path: "z.go", status: "A", added: 0, deleted: 0, binary: true },
+    "A binary file: git draws no lines of it.",
+  ],
+])("a file the address names past the first page of files draws %s", async (_what, zgo, drawn) => {
+  const { asked } = stubEngine({
+    files: [[{ path: "app.go", status: "M", added: 1, deleted: 1 }], [zgo]],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=z.go`);
+
+  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  expect(await within(region).findByText(drawn)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Load more files" })).toBeTruthy();
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("file") === "z.go")).toBe(true);
 });
 
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty

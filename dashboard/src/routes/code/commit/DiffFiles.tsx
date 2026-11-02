@@ -54,7 +54,6 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
   // THE FIRST FILE, where the address names none: a diff is read for its
   // changes, and a list of names alone is a click away from any of them.
   const shown = file || files[0]?.path || "";
-  const entry = files.find((f) => f.path === shown);
   return (
     <Stack gap={3}>
       <div className="toolbar">
@@ -126,16 +125,19 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
             )}
             {paged.pageError && <PageFailed error={paged.pageError} />}
           </Stack>
-          {entry ? (
+          {shown && (
+            // THE FILE THE ADDRESS NAMES, WHEREVER IT IS LISTED: a diff's
+            // files are a page at a time, so a link or a reload naming a file
+            // past the pages loaded reads its patch all the same — the patch's
+            // own answer describes the file.
             <FilePatch
               repo={repo}
               base={base}
               head={head}
-              entry={entry}
+              path={shown}
+              listed={files.find((f) => f.path === shown)}
               layout={layout === "split" ? "split" : "unified"}
             />
-          ) : (
-            files.length > 0 && <p className="muted">Choose a file to read its changes.</p>
           )}
         </div>
       </QueryState>
@@ -146,31 +148,37 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
 /**
  * One file's patch, as git wrote it, in the one `DiffView`: every page of it
  * the reader has asked for (`lib/patchPages.ts`).
+ *
+ * THE FILE IS THE PATCH'S OWN ANSWER'S where the listing read so far holds
+ * none of it: the engine answers a file's patch with the file — its status,
+ * its modes and whether git calls it binary — so a file the address names
+ * past the pages listed is described by the read that draws it. One the
+ * listing holds is known binary before anything is asked, and nothing is.
  */
 function FilePatch({
   repo,
   base,
   head,
-  entry,
+  path,
+  listed,
   layout,
 }: {
   repo: string;
   base: string;
   head: string;
-  entry: CodeDiffFile;
+  path: string;
+  listed: CodeDiffFile | undefined;
   layout: "unified" | "split";
 }) {
-  const params = useMemo(
-    () => ({ name: repo, base, head, file: entry.path }),
-    [repo, base, head, entry.path],
-  );
-  const read = useCodeQuery("code_diff", params, { enabled: !entry.binary });
-  const { paged, hunks } = usePatchPages(read, params, (cursor) =>
+  const params = useMemo(() => ({ name: repo, base, head, file: path }), [repo, base, head, path]);
+  const read = useCodeQuery("code_diff", params, { enabled: !listed?.binary });
+  const { paged, hunks, file } = usePatchPages(read, params, (cursor) =>
     codeRest.query("code_diff", { ...params, cursor }),
   );
+  const entry = listed ?? file;
   return (
-    <section aria-label={`Changes to ${entry.path}`} className="code-file">
-      {entry.binary ? (
+    <section aria-label={`Changes to ${path}`} className="code-file">
+      {entry?.binary ? (
         <p className="muted">A binary file: git draws no lines of it.</p>
       ) : read.loading && !read.data ? (
         <Skeleton variant="text" rows={8} label="Loading the patch" />
@@ -178,6 +186,11 @@ function FilePatch({
         <QueryState error={read.error} refusal={read.refusal} detail={read.detail} loading={false}>
           {null}
         </QueryState>
+      ) : !entry ? (
+        // A FILE THE DIFF DOES NOT CHANGE has no patch, and the engine
+        // answers its read with no file: said, rather than drawn as a file
+        // with no line changed.
+        <p className="muted">{`The two revisions hold the same ${path}: this diff does not change it.`}</p>
       ) : hunks.length === 0 ? (
         <p className="muted">
           {entry.old_mode !== entry.new_mode
@@ -186,7 +199,7 @@ function FilePatch({
         </p>
       ) : (
         <Stack gap={2}>
-          <DiffView hunks={hunks} layout={layout} aria-label={`Changes to ${entry.path}`} />
+          <DiffView hunks={hunks} layout={layout} aria-label={`Changes to ${path}`} />
           <PatchPager paged={paged} />
         </Stack>
       )}

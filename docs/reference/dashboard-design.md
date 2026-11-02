@@ -7924,7 +7924,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   both whole ids, so every page of it is immutable: the files a page at a
   time, and one file's patch (`file=`, the first where none is named) in the
   one `DiffView`, `layout=unified` or `split`, a page at a time as a
-  change's is (**Load more lines**). A change's revisions link
+  change's is (**Load more lines**). The file `file=` names is read whether
+  or not a page of files read so far lists it — a link to a file past the
+  first page opens it — and is described by its patch's own answer (its
+  status, its modes, whether git calls it binary). A change's revisions link
   their heads here.
 - **A comparison**, `#/code/repos/{name}/compare`, compares `head=` with
   `base=` (none is the default branch), each named as a revision on the
