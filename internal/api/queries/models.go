@@ -584,7 +584,7 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 			if e.Waiting == nil {
 				e.Waiting = &ModelWaiting{Seats: []string{}, Since: parked.Since}
 			}
-			handle := instanceSeat(organization, parked.Seat)
+			handle := organization.AgentHandleByID(parked.Seat)
 			if !slices.Contains(e.Waiting.Seats, handle) {
 				e.Waiting.Seats = append(e.Waiting.Seats, handle)
 			}

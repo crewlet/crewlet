@@ -9,8 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -358,9 +356,9 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 			if m, ok := r.servers[name]; ok {
 				cell.Started, cell.Failed, cell.Waiting, cell.Tools = m.Started, m.Failed, m.Waiting, m.Tools
 				cell.Error = m.Error
-				cell.ErrorSeat = instanceSeat(organization, m.ErrorSeat)
+				cell.ErrorSeat = organization.AgentHandleByID(m.ErrorSeat)
 				cell.Wait = m.Wait
-				cell.WaitSeat = instanceSeat(organization, m.WaitSeat)
+				cell.WaitSeat = organization.AgentHandleByID(m.WaitSeat)
 				if class := mcp.FailureClass(m.ErrorClass); class.Valid() {
 					cell.ErrorClass = class
 				}
@@ -428,25 +426,6 @@ func shadowedTools(notes map[coord.MCPToolShadow]struct{}) []MCPShadowedTool {
 		return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.By, b.By))
 	})
 	return out
-}
-
-// instanceSeat names the seat a failed instance was launched for, or a waiting
-// one is held back for, by its handle.
-//
-// A NODE REPORTS THE SEAT'S ID, as a lease names its seat, and the screen reads
-// a handle; resolved here, on this answer's own org. A seat this org no longer
-// holds is named by its id — the honest fallback, as a lease's is in `fleet`
-// — and a shared server's failure names none.
-func instanceSeat(organization *org.Organization, id uuid.UUID) string {
-	if id == uuid.Nil {
-		return ""
-	}
-	if organization != nil {
-		if role := organization.AgentSeatByID(id); role != nil {
-			return role.Handle()
-		}
-	}
-	return id.String()
 }
 
 // configuredRow is a server's launch as the configuration declares it, with
