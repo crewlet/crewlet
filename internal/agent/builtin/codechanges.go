@@ -752,6 +752,26 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.C
 	return answer.ChangeBrief, answer.Revisions[0], answer.Position, nil
 }
 
+// row is the change's ROW ALONE — in brief and with no revision
+// ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on the
+// code host — and the position it was read at, at the seat's level: what a
+// read that needs nothing of the change but its state, its branches, its id
+// and its number asks, which a coding run's launch on a change is
+// ([CodeDeps.runChange]). Its detail would read its description, authors,
+// conversation and mergeability and judge its readiness, all of it dropped.
+func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Position, *tools.Result) {
+	answer, refusal := g.read(ctx, code.ReadQuery{Brief: true, DetailOnly: true}, statelog.Position{})
+	if refusal != nil {
+		return nil, statelog.Position{}, refusal
+	}
+	if answer.ChangeBrief == nil {
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's row with none", g.ref()),
+			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
+		return nil, statelog.Position{}, &r
+	}
+	return answer.ChangeBrief, answer.Position, nil
+}
+
 // detail is the change IN DETAIL and its head revision — its detail beside a
 // first page of its revisions, one revision long — and the position it was
 // read at: what a read that presents the change's readiness, or acts on it,

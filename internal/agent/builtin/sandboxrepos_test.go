@@ -212,12 +212,17 @@ func changeAt(state code.ChangeState) *code.ChangeDetail {
 }
 
 // hostWithChange is the code host holding site and its change number 3 in
-// state, answering a read of any other number not found.
+// state — its row to a read in brief, its detail to any other — answering a
+// read of any other number not found.
 func hostWithChange(state code.ChangeState) *codeHost {
 	host := newCodeHost()
 	host.changes = func(q code.ReadQuery) (code.ReadAnswer, error) {
 		if q.Kind != code.ReadChange || q.Change != 3 {
 			return code.ReadAnswer{}, fmt.Errorf("%w: site!%d", code.ErrChangeNotFound, q.Change)
+		}
+		if q.Brief {
+			return code.ReadAnswer{Position: codeAt(12), Level: q.Fresh.Level,
+				ChangeBrief: &changeAt(state).ChangeSummary}, nil
 		}
 		return code.ReadAnswer{Position: codeAt(12), Level: q.Fresh.Level, Change: changeAt(state)}, nil
 	}
@@ -229,14 +234,17 @@ func hostWithChange(state code.ChangeState) *codeHost {
 // change's own source branch, from the head that branch holds, and names the
 // change on the run's grant, so its pushes revise it and its collection names
 // it; the change is read once, LINEARIZABLE — a run must not start from a
-// change a node behind still shows open — and as its DETAIL ALONE
-// (code.ReadQuery.DetailOnly), no revision of it read; and a closed or a
+// change a node behind still shows open — and as its ROW ALONE
+// (code.ReadQuery.Brief beside DetailOnly): no revision of it read, and none
+// of its description, authors, conversation, mergeability or readiness,
+// since a launch needs only its branch; and a closed or a
 // merged one is refused before a box costs anything, as is a change of
 // another repository and one the repository does not hold.
 //
 // Mutations: start from the default branch rather than the change's — the
 // base is main's, red; read the change stale — red; read it with a page of
-// its revisions — red; let a merged change through — red.
+// its revisions — red; read its detail (changeOf) — red; let a merged change
+// through — red.
 func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 	t.Parallel()
 	for _, named := range []string{"3", "site!3"} {
@@ -260,8 +268,8 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 			if q.Kind == code.ReadChange && q.Fresh.Level != statelog.ReadLinearizable {
 				t.Errorf("change %q: the change was read %s, want linearizable", named, q.Fresh.Level)
 			}
-			if q.Kind == code.ReadChange && (!q.DetailOnly || q.Limit != 0) {
-				t.Errorf("change %q: the change was read as %+v, want its detail alone", named, q)
+			if q.Kind == code.ReadChange && (!q.Brief || !q.DetailOnly || q.Limit != 0) {
+				t.Errorf("change %q: the change was read as %+v, want its row alone", named, q)
 			}
 		}
 		if len(resolves) != 1 || resolves[0].Refs[0] != "refs/heads/feature" {
