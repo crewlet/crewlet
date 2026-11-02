@@ -10519,12 +10519,14 @@ already names every run's audience. A run whose question resolved to nobody —
 the label named no one the chart has and the seat has no lead chain, or the
 node held no company when it parked — matches no one.
 
-The suspended conversation — the serialised Execute loop, which a run keeps
-beside its record rather than on it — is deliberately not returned: it is the
-largest thing a run keeps, and every prompt in it is already reachable
-through the event store. `bridge_calls` is kept beside the record too, and is
-read only for a run whose record counts a bridged call, and only for a reader
-shown the run's body.
+The parked turn's frozen state — the context the run's turn re-enters with,
+kept on the run's record — is deliberately not returned: it is the largest
+thing the record holds, and every prompt in it is already reachable through
+the event store. `bridge_calls` is not on the record at all: it comes from the
+run's bridged tool log, kept beside the record under a key of its own, and is
+read only for a reader shown the run's body — one read of the log from the
+coordination store's leader for each run that reader is shown, a run with no
+calls included, and none for a run whose body is withheld.
 
 The run record lives in the fleet's coordination store, which every node
 opens, so every node answers with the fleet's runs. A company with no sandbox
