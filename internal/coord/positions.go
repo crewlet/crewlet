@@ -206,7 +206,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS FIFTEEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS SEVENTEEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -231,7 +231,10 @@ type PositionRegister interface {
 // own stamp as a model retry does (mcprestart.go). The fifteenth is
 // [MCPCheckKey], an MCP server's latest test, which an age would take off the
 // server's page while it is still the latest; the apply that removes the
-// server removes it (mcpcheck.go).
+// server removes it (mcpcheck.go). The sixteenth and seventeenth are an MCP
+// server's OAuth: [MCPGrantKey], the public half of its grant, good until
+// somebody signs out or removes the server, and [MCPSignInKey], a sign-in in
+// progress, lapsed by its own field as a device sign-in is (mcpoauth.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
