@@ -264,6 +264,57 @@ func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 	}
 }
 
+// A READ THAT RESOLVES ITS REPOSITORY ANSWERS ITS ROW (ReadQuery.Resolve): a
+// change read, a listing of a repository's changes and a listing of its checks,
+// each asked to resolve the name it reads by, answer beside their pages the
+// very row a `repo` read resolves the name to — and none where they are not
+// asked; a resolving read is held to the grant as the read it rides on is, so
+// a seat that may not read the repository is refused it, never handed its
+// row.
+//
+// Mutations: answer no resolution → Resolved is nil; answer the grant's
+// partial row (readableIn's) → it differs from the repo read's; resolve
+// without judging the grant → vp-sales is answered plat-private's row.
+func TestAReadThatResolvesItsRepositoryAnswersItsRow(t *testing.T) {
+	t.Parallel()
+	n, _ := grantedChanges(t)
+	ctx := t.Context()
+	dev := agent("dev")
+	repo, err := n.reader.Read(ctx, code.ReadQuery{Asker: dev, Kind: code.ReadRepo, Repo: "plat-private",
+		Fresh: stale})
+	if err != nil || repo.Repo == nil {
+		t.Fatalf("plat-private as dev reads it = %+v, %v; want its detail", repo, err)
+	}
+	for name, q := range map[string]code.ReadQuery{
+		"a change read":           {Kind: code.ReadChange, Change: 1},
+		"a part of a change":      {Kind: code.ReadChange, Change: 1, Part: code.PartComments},
+		"a change in brief":       {Kind: code.ReadChange, Change: 1, Brief: true},
+		"a change's detail alone": {Kind: code.ReadChange, Change: 1, DetailOnly: true},
+		"a listing of changes":    {Kind: code.ReadChanges},
+		"a listing of checks":     {Kind: code.ReadChecks, Checks: &code.CheckQuery{Change: 1}},
+	} {
+		q.Asker, q.Repo, q.Fresh = dev, "plat-private", stale
+		plain, err := n.reader.Read(ctx, q)
+		if err != nil || plain.Resolved != nil {
+			t.Errorf("%s not asked to resolve = %+v, %v; want no resolution", name, plain.Resolved, err)
+		}
+		q.Resolve = true
+		got, err := n.reader.Read(ctx, q)
+		switch {
+		case err != nil || got.Resolved == nil:
+			t.Errorf("%s asked to resolve = %+v, %v; want plat-private's row", name, got.Resolved, err)
+		case !reflect.DeepEqual(*got.Resolved, repo.Repo.RepoRef):
+			t.Errorf("%s resolved plat-private as %+v, want the repo read's %+v", name, *got.Resolved,
+				repo.Repo.RepoRef)
+		}
+		q.Asker = agent("vp-sales")
+		if got, err = n.reader.Read(ctx, q); !errors.Is(err, code.ErrNotPermitted) || got.Resolved != nil {
+			t.Errorf("%s resolved for vp-sales = %+v, %v; want ErrNotPermitted and no row", name, got.Resolved,
+				err)
+		}
+	}
+}
+
 // grantedChanges is a node judging seats by [testChart], with one change open
 // on each of three repositories — sales-private (`visibility: unit`, Sales'),
 // plat-private (`visibility: unit`, Platform's) and platform (`visibility:
@@ -627,6 +678,10 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"a later page in brief":         {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, Cursor: "2"}, "brief:"},
 		"a detail alone in brief":       {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, DetailOnly: true}, "brief:"},
 		"a repository in brief":         {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Brief: true}, "brief:"},
+		"a listing resolving nothing":   {code.ReadQuery{Kind: code.ReadChanges, State: "open", Resolve: true}, "resolve:"},
+		"a repository resolving itself": {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Resolve: true}, "resolve:"},
+		"a history resolving its name":  {code.ReadQuery{Kind: code.ReadPushes, Repo: "web", Resolve: true}, "resolve:"},
+		"a duty listing resolving":      {code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1, Resolve: true}, "resolve:"},
 		"comments past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,
 			Part: code.PartComments, Limit: code.MaxCommentsPerPage + 1}, "limit:"},
 		"reviewers past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,

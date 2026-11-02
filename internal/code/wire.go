@@ -1385,6 +1385,26 @@ type ReadQuery struct {
 	// decodes and ignores it, answers the detail with a first page of
 	// revisions beside it: a heavier answer, never a wrong one.
 	DetailOnly bool `json:"detail_only,omitempty"`
+	// Resolve asks a read that names its repository BY NAME and judges the
+	// asker's grant on it — a `change` read, a `changes` or a `checks`
+	// listing naming one repository — for the repository the name RESOLVED
+	// to as well ([ReadAnswer.Resolved]): its row as a `repo` read resolves
+	// it, read in the same snapshot as the answer, and the read a POINT read
+	// of the repository, which a record this node deferred on it refuses, as
+	// a `repo` read is refused. A seat's or a person's assistant's call that
+	// has not yet resolved the repository it names sets it on its first read,
+	// so that read is the resolution too — ONE linearizable read, one barrier
+	// on the code log, where a `repo` read and then the call's own were two
+	// serial barriers, on every call the operator surface makes. Refused on
+	// every other read, and on a listing naming no repository.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without it — none of the
+	// domain is on main — and a build that predates it, which decodes and
+	// ignores it, answers no resolution, which its asker refuses as a fault
+	// rather than act on a repository nothing resolved.
+	Resolve bool `json:"resolve,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1530,17 +1550,25 @@ type ReadAnswer struct {
 	//
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row, under [ReadQuery.Brief]'s stated condition.
-	ChangeBrief *ChangeSummary         `json:"change_brief,omitempty"`
-	Revisions   []RevisionRow          `json:"revisions,omitempty"`
-	Reviewers   []ReviewerRow          `json:"reviewers,omitempty"`
-	Comments    []CommentRow           `json:"comments,omitempty"`
-	Reviews     []ReviewRow            `json:"reviews,omitempty"`
-	Findings    []FindingRow           `json:"findings,omitempty"`
-	Routed      *RoutedPage            `json:"routed,omitempty"`
-	Introduced  []IntroducedRow        `json:"introduced,omitempty"`
-	Due         []CompactionCandidate  `json:"due,omitempty"`
-	Publish     []PublicationCandidate `json:"publish,omitempty"`
-	Expunge     []ExpungeCandidate     `json:"expunge,omitempty"`
+	ChangeBrief *ChangeSummary `json:"change_brief,omitempty"`
+	// Resolved is the repository the read's name resolved to, on a read that
+	// asks for it ([ReadQuery.Resolve]): its row as a `repo` read resolves
+	// it, at the answer's checkpoint, naming the name it redirects from where
+	// the name is one it was renamed from ([RepoRef.Redirect]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row, under [ReadQuery.Resolve]'s stated condition.
+	Resolved   *RepoRef               `json:"resolved,omitempty"`
+	Revisions  []RevisionRow          `json:"revisions,omitempty"`
+	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
+	Comments   []CommentRow           `json:"comments,omitempty"`
+	Reviews    []ReviewRow            `json:"reviews,omitempty"`
+	Findings   []FindingRow           `json:"findings,omitempty"`
+	Routed     *RoutedPage            `json:"routed,omitempty"`
+	Introduced []IntroducedRow        `json:"introduced,omitempty"`
+	Due        []CompactionCandidate  `json:"due,omitempty"`
+	Publish    []PublicationCandidate `json:"publish,omitempty"`
+	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`
