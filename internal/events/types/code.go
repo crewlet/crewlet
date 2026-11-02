@@ -647,8 +647,7 @@ type CodeTargetBroken struct {
 	RepoName string `json:"repo_name"`
 
 	// Target is the protected branch, Commit the landing's commit, and Kind
-	// how it landed (internal/code's LandingKinds: pre_land, direct,
-	// push).
+	// how it landed (internal/code's LandingKinds: queue, direct, push).
 	Target string `json:"target"`
 	Commit string `json:"commit"`
 	Kind   string `json:"kind"`

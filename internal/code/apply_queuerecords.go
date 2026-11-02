@@ -301,7 +301,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	from := l.BaseOID
 	for i, e := range l.Entries {
 		by := entries[e.EntryID].EnqueuedBy.Handle
-		landings[i] = landing{target: l.TargetRef, ordinal: i + 1, kind: LandedPreLand, change: e.ChangeID,
+		landings[i] = landing{target: l.TargetRef, ordinal: i + 1, kind: LandedQueue, change: e.ChangeID,
 			entry: e.EntryID, base: from, commit: e.Commit, enqueuedBy: by, by: by, green: true}
 		from = e.Commit
 	}

@@ -300,9 +300,6 @@ func (r CheckRow) encodedBytes() int {
 			n += field(s.key, stringBytes(s.value), false)
 		}
 	}
-	if r.Borrowed {
-		n += field("borrowed", trueBytes, false)
-	}
 	if r.Reporter != "" {
 		n += field("reporter", stringBytes(r.Reporter), false)
 	}

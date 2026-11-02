@@ -173,9 +173,9 @@ func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.C
 // mergeStep is the revert's step two: the change it opened merged — at the
 // commit the revert made, into the reverted change's target — as the caller,
 // under the operation's [stepTwo], its source deleted as a merge's default
-// deletes a seat's ([seatSourceDeleted]); what became of it said on out, a
-// merge that did not happen as a residue beside the opened change, never as
-// a refusal.
+// deletes a seat's, decided by the git node that builds the merge
+// ([deleteSource]); what became of it said on out, a merge that did not
+// happen as a residue beside the opened change, never as a refusal.
 func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv conversing, op string,
 	res code.EngineWriteResult, number int64, out *codeRevertAnswer) {
 
@@ -195,17 +195,15 @@ func (t *codeRevertChange) mergeStep(ctx context.Context, turn *turnctx.Turn, cv
 			CodeMergeChangeTool, CodeGetChangeTool))
 		return
 	}
+	// ITS BRANCH'S DELETION IS THE DEFAULT, the git node's to decide as it
+	// judges the merge (code.EngineWrite.DeleteSource): a seat's revert
+	// branch is deleted unless a gate over the target keeps it, a person's
+	// kept.
 	g := cv.g
-	source := revertBranch(g.c.asker, cv.change.Number)
-	deletes, refusal := seatSourceDeleted(ctx, g, source, cv.change.TargetRef)
-	if refusal != nil {
-		notMerged(fmt.Sprintf("its target's merge rules could not be read (%s)", refusal.Output))
-		return
-	}
 	w := code.EngineWrite{Kind: code.WriteMergeChange, RepoID: g.repo.ID, Principal: writer(ctx, turn, g.c),
 		OpID: statelog.StepOpID(op, stepTwo), Fresh: revertFresh(t.deps.writeFresh(turn, g.c, g.repo),
 			res.Position), Ref: cv.change.TargetRef, ExpectedHead: res.Commit, Change: number,
-		Method: code.MergeMethodMerge, DeleteSource: deletes, Ceiling: g.c.write}
+		Method: code.MergeMethodMerge, Ceiling: g.c.write}
 	if err := w.Validate(); err != nil {
 		notMerged(err.Error())
 		return

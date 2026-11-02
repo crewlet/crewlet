@@ -144,7 +144,8 @@ func CanaryRunningWith(f func(dir string) func()) func(*Options) {
 }
 
 // InstallWakesWith makes the installer wait on f's channel, told when its
-// earliest wait ends, in place of a timer.
+// earliest wait ends, in place of a timer — which the channel fires as: once
+// the cache's clock reaches that end, and at once where it has (clock.At).
 func InstallWakesWith(o *Options, f func(at time.Time) <-chan time.Time) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}

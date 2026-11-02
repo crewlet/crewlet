@@ -76,6 +76,25 @@ import (
 // linearizable sync brings past the begin, and answered expunging where
 // every rebuild meets it: a begin is rare and its sync quick, so one rebuild
 // almost always lands it.
+//
+// EVERY ROUND DRAWS ON ONE BUDGET, AND FITS ONE ATTEMPT. The merge's git is
+// code.MergeBuildDeadline across its first build and every rebuild together,
+// never that much a round: the router sizes the write's attempt on a git node
+// for ONE build of it (internal/estate's Timing.GitWriteAttemptFor), so five
+// rounds of thirty seconds each would run past the attempt on exactly the
+// busy target rebuilds exist for — answered unready during a build, which
+// sends the walk's runner-up git node to start the whole merge again, or busy
+// at the landing, either after builds and stored bundles nobody proposes. So
+// a rebuild is started only where it fits — the round before it as the
+// measure of it, since it merges the same change onto a tip moved by a push
+// or two: what is left of the budget must hold the git that round ran, and
+// what is left of the attempt the waits the attempt holds for one write (the
+// share's, and three reads' at a read's budget each), that git, and the
+// upload and proposal that round's landing was held to (the deadline rule's)
+// — and a merge with no room for one is answered target_moving with its
+// rebuilds so far, as is a rebuild whose git runs out the budget the rounds
+// before it left: the change is no larger than its first build proved it,
+// its target moved under it.
 
 // mergeCarrying is p as its landing proposes it: carrying pack — the bundle
 // its landing stored, nil for a merge that stores none — as its record names
@@ -88,11 +107,13 @@ func mergeCarrying(p code.MergeProposal, pack *code.PackRef, epoch int64) code.M
 }
 
 // mergeJudgement is what a merge's judgement read: the change, the target's
-// tip in the copy, and whether the target lands its merges through its queue.
+// tip in the copy, whether the target lands its merges through its queue, and
+// whether the merge deletes the change's source ([writing.deletesSource]).
 type mergeJudgement struct {
-	change *code.ChangeDetail
-	tip    string
-	queue  bool
+	change       *code.ChangeDetail
+	tip          string
+	queue        bool
+	deleteSource bool
 }
 
 // mergeVerdict is a refusal a merge's judgement reached, with its sentence and
@@ -107,10 +128,17 @@ type mergeVerdict struct {
 
 // runMerge is a merge_change's steps from its sync on: judged, built, landed —
 // and built again onto a target that moved under it, or from a copy an
-// expunge's begin overtook, at most code.MergeRecomputes times.
+// expunge's begin overtook, at most code.MergeRecomputes times, every round
+// drawing on the merge's ONE budget of git and started only where it fits
+// what is left of that budget and of the write's attempt (roomToRebuild).
 func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
+	// ONE BUDGET FOR EVERY ROUND (code.MergeBuildDeadline): charged by each
+	// round's git and never given afresh, so the merge's git is the one
+	// build its attempt was sized for.
+	wr.left = s.buildBudget(wr.w.Kind)
+	var again *code.MergeAnswer
 	for recomputes := 0; ; recomputes++ {
 		syncStart := s.now()
 		j, res, done, err := wr.judgeMerge(ctx, fresh)
@@ -122,24 +150,76 @@ func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error)
 			res, err = wr.enqueue(ctx, j)
 			return withRecomputes(res, recomputes), err
 		}
-		res, again, err := wr.buildAndLandMerge(ctx, j)
-		if err != nil || again == nil {
+		before := wr.left
+		res, refused, err := wr.buildAndLandMerge(ctx, j)
+		if errors.Is(err, errBuildSpent) {
+			if recomputes == 0 {
+				return wr.spent(), nil
+			}
+			// A REBUILD RAN OUT WHAT THE ROUNDS BEFORE IT LEFT: the change
+			// built within its budget once; its target kept moving.
+			return withRecomputes(wr.notRebuilt(again, recomputes, fmt.Sprintf("its rebuilds ran out the %s of "+
+				"git a merge is given", s.buildBudget(wr.w.Kind))), recomputes), nil
+		}
+		if err != nil || refused == nil {
 			return withRecomputes(res, recomputes), err
 		}
-		if recomputes == code.MergeRecomputes && again.Refusal == code.MergeRefusalExpunging {
-			return withRecomputes(code.EngineWriteResult{Merge: again}, recomputes), nil
-		}
+		again = refused
 		if recomputes == code.MergeRecomputes {
-			return withRecomputes(code.EngineWriteResult{Merge: &code.MergeAnswer{
-				Refusal: code.MergeRefusalTargetMoving,
-				Detail: fmt.Sprintf("%s moved under this merge's build %d times running: it moves faster than a "+
-					"merge is built onto it — merge again once it is quieter", wr.w.Ref, recomputes+1)}},
-				recomputes), nil
+			return withRecomputes(wr.notRebuilt(again, recomputes+1, ""), recomputes), nil
+		}
+		if why := wr.roomToRebuild(ctx, before-wr.left); why != "" {
+			return withRecomputes(wr.notRebuilt(again, recomputes+1, why), recomputes), nil
 		}
 		// THE TIP THE DECIDE HELD is at or past the log's head as this node
 		// reads it next: built again onto what a linearizable sync finds.
 		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
+}
+
+// notRebuilt is the answer to a merge built builds times and not again, why
+// saying what stopped it ("" for code.MergeRecomputes rebuilds spent): the
+// last record's own refusal where it was expunging — the copies every build
+// met — and target_moving where its target moved under each build.
+func (wr *writing) notRebuilt(last *code.MergeAnswer, builds int, why string) code.EngineWriteResult {
+	if last != nil && last.Refusal == code.MergeRefusalExpunging {
+		return code.EngineWriteResult{Merge: last}
+	}
+	stopped := ""
+	if why != "" {
+		stopped = ", and " + why
+	}
+	return code.EngineWriteResult{Merge: &code.MergeAnswer{Refusal: code.MergeRefusalTargetMoving,
+		Detail: fmt.Sprintf("%s moved under this merge's build %d times running%s: it moves faster than a merge "+
+			"is built onto it — merge again once it is quieter", wr.w.Ref, builds, stopped)}}
+}
+
+// roomToRebuild is why the merge cannot be built again — "" where it can —
+// judged with the round just landed, whose git ran lastGit, as the measure of
+// the next: what is left of the merge's budget of git must hold lastGit, and
+// what is left of the write's attempt the waits an engine write's attempt
+// holds beside its build (internal/estate's GitWriteAttempt: the share's
+// code.GitShareWait, and three at a read's budget each — the sync, the read
+// of a moved head as the write's own push, the sync at the log's head a
+// refusal is judged at — each this host's syncWait), the build's lastGit,
+// and the upload and proposal the last landing was held to (writing.landNeed,
+// the deadline rule's). A caller with no deadline holds any.
+func (wr *writing) roomToRebuild(ctx context.Context, lastGit time.Duration) string {
+	s := wr.s
+	if wr.left < lastGit {
+		return fmt.Sprintf("its builds left %s of the %s of git a merge is given, under the %s its last ran",
+			max(wr.left, 0).Round(time.Millisecond), s.buildBudget(wr.w.Kind), lastGit.Round(time.Millisecond))
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ""
+	}
+	need := code.GitShareWait + 3*s.syncWait + lastGit + wr.landNeed
+	if left := time.Until(deadline); left < need {
+		return fmt.Sprintf("its caller left %s, under the %s another build and landing take",
+			left.Round(time.Millisecond), need.Round(time.Millisecond))
+	}
+	return ""
 }
 
 // withRecomputes is res with how many times its merge was built again.
@@ -175,9 +255,9 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 		}
 		if v.ours && !asked {
 			asked = true
-			if res, found, err := wr.outcome(ctx); err != nil || found {
+			if res, cmds, found, err := wr.outcome(ctx); err != nil || found {
 				if found && res.Outcome != "" {
-					res.Merge = &code.MergeAnswer{}
+					res.Merge = &code.MergeAnswer{DeleteSource: deletedSource(cmds)}
 				}
 				return mergeJudgement{}, res, true, err
 			}
@@ -195,7 +275,10 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 // decide reads its rules: the repository's status, the change as the caller
 // read it, a seat's override, the target's tip, and — for a merge its gate
 // holds — whether its target is a queue's and whether its readiness, with its
-// asker as the merger, is met but for the merge its build proves.
+// asker as the merger, is met but for the merge its build proves. The change
+// is read as its DETAIL ALONE (code.ReadQuery.DetailOnly): a merge reads no
+// revision, and this read is made again at the log's head before a refusal
+// and on every rebuild, each a page of revisions' facts shipped for nothing.
 func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement, mergeVerdict, error) {
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
@@ -215,7 +298,7 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 	}
 	floor := statelog.FloorAt(statelog.ReadSession, wr.synced.Position)
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,
-		Change: w.Change, Fresh: floor})
+		Change: w.Change, DetailOnly: true, Fresh: floor})
 	switch {
 	case errors.Is(err, code.ErrChangeNotFound):
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalChangeNotFound, detail: fmt.Sprintf(
@@ -259,16 +342,24 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 			"into %s, which does not exist", named, w.Ref)}, nil
 	}
 	j := mergeJudgement{change: c, tip: tip}
+	gate := &mergeGate{wr: wr, floor: floor}
 	if w.Ceiling != nil {
-		if v, err := wr.mergeCeiling(ctx, floor, named); err != nil || v.refusal != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		if v, err := wr.mergeCeiling(ctx, gate, named); err != nil || v.refusal != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			return mergeJudgement{}, v, err
 		}
+	}
+	if j.deleteSource, err = wr.deletesSource(ctx, gate, c.SourceRef); err != nil {
+		return mergeJudgement{}, mergeVerdict{}, err
 	}
 	if w.Override != "" {
 		return j, mergeVerdict{}, nil
 	}
-	if j.queue, err = wr.queueTarget(ctx, floor); err != nil || j.queue {
-		return j, mergeVerdict{}, err
+	rules, err := gate.rules(ctx)
+	if err != nil {
+		return mergeJudgement{}, mergeVerdict{}, err
+	}
+	if j.queue = rules.QueueTarget(); j.queue {
+		return j, mergeVerdict{}, nil
 	}
 	if c.Readiness == nil {
 		return mergeJudgement{}, mergeVerdict{}, fmt.Errorf("host: the read of live change %s answered no "+
@@ -301,14 +392,16 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 //     whoever woke the turn, nobody included, as every write's is;
 //   - NOBODY (code.WriteCeilingNobody) steers nothing else;
 //   - a COLLEAGUE SEAT is held to the merge authority the colleague itself
-//     holds into the target — the change's readiness read AS the colleague,
-//     whose merge_authority precondition the reader judges by the target's
-//     gate and the company's floor from its own chart (M5-D2) — so a seat
-//     never merges for a colleague a merge the colleague could not make, and
-//     one the colleague may not read is refused as one it may not merge.
-func (wr *writing) mergeCeiling(ctx context.Context, floor statelog.Freshness, named string) (mergeVerdict,
-	error) {
-
+//     holds into the target (M5-D2) — code.MergeAuthority, the one rule a
+//     readiness's merge_authority term is judged by, judged here for the
+//     colleague from this node's chart, the synced row and the target's gate
+//     this merge reads anyway ([mergeGate]) — so a seat never merges for a
+//     colleague a merge the colleague could not make, and one the colleague
+//     may not read (code.Grant.MayRead) is refused as one it may not merge.
+//     No read of the change is made again as the colleague: the term reads
+//     nothing of the change but its target, which the write names and the
+//     caller's own read already held to the change's.
+func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named string) (mergeVerdict, error) {
 	s, w, repo := wr.s, wr.w, wr.synced.Repo
 	roster := s.o.Roster()
 	if roster == nil {
@@ -325,42 +418,77 @@ func (wr *writing) mergeCeiling(ctx context.Context, floor statelog.Freshness, n
 			named, w.Ref, code.SeatNamespaceRoot)}, nil
 	}
 	colleague := code.Principal{Kind: code.PrincipalAgent, Seat: w.Ceiling.Seat}
-	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: colleague, Repo: repo.Name,
-		Change: w.Change, Fresh: floor})
-	switch {
-	case errors.Is(err, code.ErrNotPermitted):
+	if !code.GrantOf(colleague, repo, roster).MayRead() {
 		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
 			"seat %s, whose ask started its turn and who may not read %s, so may not merge it", w.Ceiling.Seat,
 			named)}, nil
-	case err != nil:
+	}
+	rules, err := gate.rules(ctx)
+	if err != nil {
 		return mergeVerdict{}, err
-	case ans.Change == nil || ans.Change.Readiness == nil:
-		return mergeVerdict{}, fmt.Errorf("host: the read of %s as seat %s answered no readiness", named,
-			w.Ceiling.Seat)
 	}
-	for _, p := range ans.Change.Readiness.Preconditions {
-		switch {
-		case p.Kind != code.PreconditionMergeAuthority:
-		case p.State == code.PreconditionMet:
-			return mergeVerdict{}, nil
-		default:
-			return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
-				"seat %s, whose ask started its turn, and it may not make this merge itself: %s",
-				w.Ceiling.Seat, p.Detail)}, nil
-		}
+	if p := code.MergeAuthority(colleague, repo, w.Ref, rules, roster); p.State != code.PreconditionMet {
+		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
+			"seat %s, whose ask started its turn, and it may not make this merge itself: %s",
+			w.Ceiling.Seat, p.Detail)}, nil
 	}
-	// A READINESS NAMING NO MERGE AUTHORITY judged nothing of the colleague:
-	// never taken for an allow.
-	return mergeVerdict{}, fmt.Errorf("host: the readiness of %s read as seat %s names no merge authority",
-		named, w.Ceiling.Seat)
+	return mergeVerdict{}, nil
 }
 
-// queueTarget reports a target whose merges land through its queue: one some
-// rule protects, whose gates — read from the repository's detail, which its
-// row never carries — require a check. A target no rule protects has no gate,
-// and is never read for one.
-func (wr *writing) queueTarget(ctx context.Context, floor statelog.Freshness) (bool, error) {
+// deletesSource is whether this merge deletes the change's source branch: its
+// caller's word where it said one (code.EngineWrite.DeleteSource), and
+// otherwise THE DEFAULT, decided here on the snapshot the merge is judged on
+// — a source in a seat's namespace is deleted unless a gate over the target
+// keeps it (code.GateRules.KeepsSource, from the gate this judgement reads
+// anyway wherever a rule protects the target), and every other source is
+// kept (Q4): a seat's branch is the engine's working copy, and a person's is
+// theirs. Decided here rather than by the caller, so a merge from a seat's
+// branch costs its caller no read of the gates, and the rule a merge deletes
+// by is the one its own judgement read.
+func (wr *writing) deletesSource(ctx context.Context, gate *mergeGate, source string) (bool, error) {
+	if said := wr.w.DeleteSource; said != nil {
+		return *said, nil
+	}
+	if !strings.HasPrefix(source, gitref.SeatsRoot) {
+		return false, nil
+	}
+	rules, err := gate.rules(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !rules.KeepsSource, nil
+}
+
+// deletedSource reports a merge's push row deleting the change's source: the
+// second ref a merge's push names, there only where the merge deleted it
+// (code.Merge's push).
+func deletedSource(cmds []code.Command) bool {
+	return len(cmds) > 1 && cmds[1].New == code.ZeroOID
+}
+
+// mergeGate is the gate one judgement of a merge holds its target to — every
+// rule of the repository matching it, with its merge gate, combined with
+// code.merge_by_floor on this node's epoch (code.GateRulesOf) — read at most
+// once a judgement, and only where something asks it: whether the target is a
+// queue's, the merge authority of the colleague a seat's merge is made for,
+// and whether a merge from a seat's branch deletes it by default. Read where the judgement's floor holds the synced copy, so each
+// question is asked of the snapshot the merge is judged on.
+type mergeGate struct {
+	wr    *writing
+	floor statelog.Freshness
+	read  *code.GateRules
+}
+
+// rules is the target's gate: the repository's gates — which its row never
+// carries — read from its detail only where a rule protects the target. A
+// target no rule protects has no gate, and is never read for one.
+func (m *mergeGate) rules(ctx context.Context) (code.GateRules, error) {
+	if m.read != nil {
+		return *m.read, nil
+	}
+	wr := m.wr
 	w, repo := wr.w, wr.synced.Repo
+	floor := wr.s.limits().MergeByFloor
 	protected := false
 	for _, rule := range repo.Protections {
 		if pattern, ok := gitref.ParsePattern(rule.Pattern); !ok || pattern.Match(w.Ref) {
@@ -370,26 +498,28 @@ func (wr *writing) queueTarget(ctx context.Context, floor statelog.Freshness) (b
 			break
 		}
 	}
-	if !protected {
-		return false, nil
+	var rules []code.Protection
+	if protected {
+		ans, err := wr.s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: w.Principal,
+			Repo: repo.Name, Gates: true, Fresh: m.floor})
+		if err != nil {
+			return code.GateRules{}, err
+		}
+		if ans.Repo == nil {
+			return code.GateRules{}, fmt.Errorf("host: the read of repository %s's gates answered no repository",
+				repo.Name)
+		}
+		rules = make([]code.Protection, len(ans.Repo.Gates))
+		for i, g := range ans.Repo.Gates {
+			rules[i] = code.Protection{PushRule: code.PushRule{Pattern: g.Pattern}, Gate: &g.Gate}
+		}
 	}
-	ans, err := wr.s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: w.Principal, Repo: repo.Name,
-		Gates: true, Fresh: floor})
+	gate, err := code.GateRulesOf(rules, w.Ref, floor)
 	if err != nil {
-		return false, err
+		return code.GateRules{}, err
 	}
-	if ans.Repo == nil {
-		return false, fmt.Errorf("host: the read of repository %s's gates answered no repository", repo.Name)
-	}
-	rules := make([]code.Protection, len(ans.Repo.Gates))
-	for i, g := range ans.Repo.Gates {
-		rules[i] = code.Protection{PushRule: code.PushRule{Pattern: g.Pattern}, Gate: &g.Gate}
-	}
-	gate, err := code.GateRulesOf(rules, w.Ref, "")
-	if err != nil {
-		return false, err
-	}
-	return gate.QueueTarget(), nil
+	m.read = &gate
+	return gate, nil
 }
 
 // enqueue puts the change in its target's queue, at the head its caller read —
@@ -403,7 +533,7 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 	wr.landed = true
 	res, err := wr.s.o.Estate.Queue(ctx, code.QueueProposal{OpID: w.OpID, Asker: asker, Seen: wr.synced.Position,
 		Enqueue: &code.Enqueue{RepoID: w.RepoID, EntryID: entry, ChangeID: j.change.ID, TargetRef: w.Ref,
-			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: w.DeleteSource, CloseTask: w.CloseTask}})
+			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: j.deleteSource, CloseTask: w.CloseTask}})
 	var quiet silence
 	switch {
 	case errors.Is(err, code.ErrInvalidProposal):
@@ -419,13 +549,13 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 		// A NODE WENT SILENT, or the caller left: it may have enqueued it.
 		wr.s.log.Warn("code_merge_enqueue_unknown", "repo", wr.repoName(), "entry", entry, "error", err)
 		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Merge: &code.MergeAnswer{EntryID: entry,
-			Queued: true}}, nil
+			Queued: true, DeleteSource: j.deleteSource}}, nil
 	case res.Refusal != "":
 		return code.EngineWriteResult{Position: res.Position, Merge: &code.MergeAnswer{EntryID: entry,
 			Refusal: res.Refusal, Detail: res.Detail, Unmet: res.Unmet}}, nil
 	}
 	return code.EngineWriteResult{Outcome: res.Outcome, Position: res.Position, Merge: &code.MergeAnswer{
-		Queued: true, EntryID: res.EntryID, Place: res.Place}}, nil
+		Queued: true, EntryID: res.EntryID, Place: res.Place, DeleteSource: j.deleteSource}}, nil
 }
 
 // buildAndLandMerge is one round's build and landing: the merge built in its
@@ -467,7 +597,7 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 		Merge: &code.MergeProposal{OpID: w.OpID, Asker: w.Principal, Seen: wr.synced.Position,
 			Merge: code.Merge{RepoID: w.RepoID, MergeID: wr.pushID, ChangeID: j.change.ID, Method: w.Method,
 				TargetRef: w.Ref, BaseOID: j.tip, HeadOID: w.ExpectedHead, CommitOID: commit,
-				DeleteSource: w.DeleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})
+				DeleteSource: j.deleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})
 	wr.landTook += s.now().Sub(landStart)
 	if err != nil {
 		return code.EngineWriteResult{}, nil, err
@@ -489,18 +619,22 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 	case statelog.OutcomePending:
 		res.Commit = commit
 	}
+	if m.Refusal == "" {
+		res.Merge.DeleteSource = j.deleteSource
+	}
 	return res, nil, nil
 }
 
 // buildMergeShared is a merge's build under one unit of the node's seat
-// git-work share and its kind's budget of git run time
-// (code.MergeBuildDeadline): a fast-forward's ancestry, or a merge's or a
-// squash's merge, commit and pack. Past code.GitShareWait the share is
-// unready, about this node; a build that runs its whole budget is too_large.
+// git-work share and what is left of its budget of git run time
+// (code.MergeBuildDeadline, every round's together: runMerge gives it once):
+// a fast-forward's ancestry, or a merge's or a squash's merge, commit and
+// pack. Past code.GitShareWait the share is unready, about this node; a build
+// that runs out the budget is errBuildSpent, which runMerge answers.
 func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	code.EngineWriteResult, bool, error) {
 
-	s, w := wr.s, wr.w
+	s := wr.s
 	release, err := s.o.Share.Take(ctx, code.SeatWorkWrite)
 	if err != nil {
 		if code.AnswerDue(ctx) {
@@ -510,12 +644,9 @@ func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j me
 		return "", code.EngineWriteResult{}, true, err
 	}
 	defer release()
-	wr.metered, wr.left = true, s.buildBudget(w.Kind)
+	wr.metered = true
 	commit, res, done, err := wr.buildMerge(ctx, sc, j)
 	wr.metered = false
-	if errors.Is(err, errBuildSpent) {
-		return "", wr.spent(), true, nil
-	}
 	return commit, res, done, err
 }
 

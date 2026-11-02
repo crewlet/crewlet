@@ -1775,6 +1775,7 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		inc.leaving[key] = ev
 	}
 	begun := snap.repo.DropEpoch > inc.dropEpoch
+	purged := crossedACommit(inc.dropEpoch, snap.repo.DropEpoch, inc.droppingPacks > 0)
 	for cs, from := range was {
 		now := placeOf(inc, cs)
 		if from == placeNone || from == now {
@@ -1787,17 +1788,24 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		// begin's inputs, whose objects the packs they add hold, and a pack
 		// whose files only move, out of objects/pack into the view or back. A
 		// dropping pack no row names any more is AN EXPUNGE'S COMMIT taking
-		// what it held out of the repository (EventPackExpunged).
+		// what it held out of the repository (EventPackExpunged) — and so is
+		// every pack leaving a round that crossed a commit the copy never
+		// placed the dropping pack of (crossedACommit): the packs the begin
+		// added to hold its inputs' objects are not all here.
 		ev := EventPackRetired
-		if from == placeDropping && now == placeNone {
+		if now == placeNone && (from == placeDropping || purged) {
 			ev = EventPackExpunged
 		}
 		leave(leaveKey{from, cs}, ev)
 	}
 	if begun {
+		ev := EventPackRetired
+		if purged {
+			ev = EventPackExpunged
+		}
 		for cs := range inc.installedPacks {
 			if placeOf(inc, cs) != placeLive {
-				leave(leaveKey{placeLive, cs}, EventPackRetired)
+				leave(leaveKey{placeLive, cs}, ev)
 			}
 		}
 	}
@@ -1807,6 +1815,25 @@ func applyDelta(inc *incarnation, snap snapshot) {
 	if snap.layersServed {
 		setChain(inc, snap.layers)
 	}
+}
+
+// crossedACommit reports whether a round bringing a copy whose objects/ hold
+// the drop epoch held (Synced.DropEpoch) to rows at the epoch rows crossed an
+// expunge's COMMIT as well as its begin — open being whether the rows still
+// leave a pack dropping. An expunge is open one at a time per repository and
+// its dropping rows are live until its commit, so of the epochs crossed every
+// one but the open expunge's has committed: what it left dropping is out of
+// the repository, never placed in this copy, and the begin's inputs leaving
+// it took those objects with them. A retirement keeps every object it
+// takes out (X04); these did not, so they leave as the commit's
+// (EventPackExpunged), and the commit-graph and the memo naming what was
+// purged go with them, as they go from a copy that held the view.
+func crossedACommit(held, rows int64, open bool) bool {
+	crossed := rows - held
+	if open {
+		crossed--
+	}
+	return crossed > 0
 }
 
 // sameRepo reports whether two reads of a repository's row found it the same,

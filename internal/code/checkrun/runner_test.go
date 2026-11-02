@@ -73,7 +73,9 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 // files and no commit identity.
 //
 // Mutation: hand the box every code.checks.env entry, or the process's own
-// model keys — the unnamed secret or ANTHROPIC_API_KEY reaches it, red.
+// model keys — the unnamed secret or ANTHROPIC_API_KEY reaches it, red; run
+// the check's command with ANTHROPIC_API_KEY — the command was run with it,
+// red.
 func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-the-engine's-own")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "the-engine's-plan")
@@ -116,6 +118,14 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	if tok := spec.Env[sandbox.GitTokenVar]; !strings.HasPrefix(tok, "chk-web-unit-1-") {
 		t.Errorf("the box's token is %q, want its check's", tok)
 	}
+	f.container.end(box, 0, "")
+	f.ended(key)
+	// Read once the attempt has ENDED, never once its box is made: the box
+	// is handed to the case before the runner sets it up and long before it
+	// starts the command, so a read between sees only what ran by then.
+	if bg := box.Background(); len(bg) != 1 {
+		t.Fatalf("the premise: the box ran the check's command once, it ran %q", bg)
+	}
 	for _, exec := range box.Execs() {
 		for name := range exec.Env {
 			if strings.Contains(name, "ANTHROPIC") || strings.Contains(name, "CLAUDE") {
@@ -123,8 +133,6 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 			}
 		}
 	}
-	f.container.end(box, 0, "")
-	f.ended(key)
 }
 
 // A CHECK SPENDS NO TOKENS: nothing it runs is a model's, so the runner holds

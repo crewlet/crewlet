@@ -37,8 +37,22 @@ import (
 // notice of that source the page took — and a next page resume each source
 // exactly where it stopped: a sort of the union could take a source's third
 // notice and leave its second, and no single position of that source would
-// then say what was shown. Each source is asked for the whole page's limit, so
-// the merge never runs past a source's page while that source has more.
+// then say what was shown. Each source is asked for the whole page's limit.
+//
+// # A source's page may end past its last notice
+//
+// A source may scan rows it does not answer: the code host leaves out a
+// notice its asker may not read — every notice on a repository deleted and
+// not yet purged among them — and its own cursor is still the last row it
+// scanned ([SourcePage.Next]). So where the page took EVERY notice a source
+// answered, that source resumes at its own cursor, never at its last notice:
+// a page the source answered empty, or one whose last rows it left out,
+// resumed at the last notice taken (or at the cursor it was asked with,
+// where it answered none) would be asked for the same rows again on every
+// page, and the inbox would never reach what lies below them. Such a short
+// page is the one place the merge runs past what a source has yet to show:
+// its next notices, below what it scanned, may come on a later page after an
+// older notice of another source — but every notice still comes, and once.
 //
 // # A page closes between two positions of a source
 //
@@ -75,7 +89,8 @@ type SourceQuery struct {
 	Snoozed     SnoozeScope
 	Limit       int
 	// Cursor is the source's own cursor — the position of the last notice
-	// of this source a page took — "" for its first page.
+	// of this source a page took, or the source's own [SourcePage.Next]
+	// where the page took every notice it answered — "" for its first page.
 	Cursor string
 }
 
@@ -84,7 +99,9 @@ type SourceQuery struct {
 type SourcePage struct {
 	Notices []Notice
 	// Next is the source's own cursor past this page, "" when it holds no
-	// more.
+	// more: past every row the source SCANNED for it, which may lie below
+	// its last notice — or name a page of none — where the source left out
+	// rows its asker may not read (this file's head).
 	Next string
 	// SeenThrough is where the person's marks over this source say they
 	// have read to, on this source's log; PrimaryReasons the split that
@@ -271,10 +288,12 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 			}
 		}
 	}
-	// ONE POSITION PER SOURCE: the last notice of its the page took, or the
-	// cursor it was asked with where it took none — and a source read to
-	// its end, every notice of its last page taken and nothing after it, is
-	// done.
+	// ONE POSITION PER SOURCE: a source read to its end, every notice of its
+	// last page taken and nothing after it, is done; one whose page was
+	// taken whole resumes at its own cursor, past every row it scanned —
+	// those it left out included (this file's head); one taken in part, at
+	// the last notice of its the page took; and one the page took none of,
+	// at the cursor it was asked with.
 	after := map[string]string{}
 	for name, cursor := range cursors {
 		after[name] = cursor
@@ -284,6 +303,9 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 		switch {
 		case h.taken == len(h.page.Notices) && h.page.Next == "":
 			after[h.name] = sourceDone
+		case h.taken == len(h.page.Notices):
+			after[h.name] = h.page.Next
+			more = true
 		case h.taken > 0:
 			after[h.name] = h.page.Notices[h.taken-1].Position.String()
 			more = true

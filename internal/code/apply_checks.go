@@ -136,7 +136,6 @@ func (q checkQueue) overdueAt() int64 {
 // set it, its holder's later record naming the box.
 type checkRun struct {
 	runner, placement, box string
-	borrowed               bool
 	startedAt              int64
 }
 
@@ -191,7 +190,7 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 // (TestNothingButSyncWritesACache).
 func startedPart(s CheckStarted) checkPart {
 	return checkPart{run: &checkRun{
-		runner: s.Runner, placement: string(s.Placement), box: s.Box, borrowed: s.Borrowed,
+		runner: s.Runner, placement: string(s.Placement), box: s.Box,
 		startedAt: store.EncodeTime(s.StartedAt),
 	}}
 }
@@ -268,8 +267,8 @@ func (r *checkRow) joinQueue(q checkQueue) bool {
 // joinRun keeps the claim with the lower (startedAt, runner); and of ONE
 // claim — its holder's later record repeats its StartedAt and Runner — the
 // box it names, set once (two different, which no holder names, keep the
-// lesser, so either order holds one), the placement likewise, and borrowed
-// once either said so. It reports whether the row changed.
+// lesser, so either order holds one), and the placement likewise. It reports
+// whether the row changed.
 func (r *checkRow) joinRun(s checkRun) bool {
 	held := r.run
 	switch {
@@ -279,7 +278,6 @@ func (r *checkRow) joinRun(s checkRun) bool {
 	case s.startedAt == held.startedAt && s.runner == held.runner:
 		r.run.placement = lesser(held.placement, s.placement)
 		r.run.box = lesser(held.box, s.box)
-		r.run.borrowed = held.borrowed || s.borrowed
 	}
 	return r.run != held
 }
@@ -353,8 +351,8 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 	q, r, e := row.queue, row.run, row.ending
 	if _, err = tx.ExecContext(ctx, writeCheckSQL, key.RepoID, key.OID, key.Name, key.Attempt,
 		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, key.Target, q.base,
-		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, r.borrowed,
-		e.reporter, q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
+		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
+		q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
 		e.tail); err != nil {
 		return 0, fmt.Errorf("code: write check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
@@ -395,7 +393,7 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 	err := tx.QueryRowContext(ctx, readCheckSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt).Scan(
 		&e.state, &q.purpose, &q.changeID, &q.revision, &q.candidateID, &q.entryID, &q.base,
 		&q.defsOID, &q.required, &q.runIn, &q.timeoutSeconds, &e.reason, &run.runner, &run.placement, &run.box,
-		&run.borrowed, &e.reporter, &q.queuedAt, &run.startedAt, &e.finishedAt, &e.durationMs, &e.exitCode,
+		&e.reporter, &q.queuedAt, &run.startedAt, &e.finishedAt, &e.durationMs, &e.exitCode,
 		&e.failuresOmitted, &q.position, &e.position, &e.url, &e.summary, &q.def, &e.failures, &e.tail)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -508,7 +506,7 @@ const (
 	checksEndedKey = "code_checks_finished_idx"
 
 	readCheckSQL = `SELECT state, purpose, change_id, revision, candidate_id, entry_id, base_oid,
-		defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement, box_handle, borrowed,
+		defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement, box_handle,
 		reporter, queued_at, started_at, finished_at, duration_ms, exit_code, failures_omitted,
 		queued_position, finished_position, url, summary, def, failures, tail
 		FROM code_checks INDEXED BY ` + checksKey + `
@@ -518,18 +516,18 @@ const (
 	// queue (checkQueue.overdueAt).
 	writeCheckSQL = `INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose,
 			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in,
-			timeout_seconds, reason, runner_node, placement, box_handle, borrowed, reporter, queued_at,
+			timeout_seconds, reason, runner_node, placement, box_handle, reporter, queued_at,
 			started_at, finished_at, duration_ms, exit_code, failures_omitted, queued_position,
 			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?)
+			?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, commit_oid, target_ref, name, attempt) DO UPDATE SET
 			state = excluded.state, purpose = excluded.purpose, change_id = excluded.change_id,
 			revision = excluded.revision, candidate_id = excluded.candidate_id, entry_id = excluded.entry_id,
 			base_oid = excluded.base_oid, defs_oid = excluded.defs_oid,
 			required = excluded.required, run_in = excluded.run_in, timeout_seconds = excluded.timeout_seconds,
 			reason = excluded.reason, runner_node = excluded.runner_node, placement = excluded.placement,
-			box_handle = excluded.box_handle, borrowed = excluded.borrowed, reporter = excluded.reporter,
+			box_handle = excluded.box_handle, reporter = excluded.reporter,
 			queued_at = excluded.queued_at, started_at = excluded.started_at,
 			finished_at = excluded.finished_at, duration_ms = excluded.duration_ms,
 			exit_code = excluded.exit_code, failures_omitted = excluded.failures_omitted,

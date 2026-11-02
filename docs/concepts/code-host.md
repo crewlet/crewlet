@@ -1318,8 +1318,18 @@ sequenceDiagram
    it decided, and built again over the copy the begin left
    ([What git prints](#what-git-prints-and-what-it-means)), since it may rely
    on an object the begin made dropping.
-2. **Between the two**, compaction goes on with the live packs, and a
-   publication of the repository waits for the commit.
+2. **Between the two, the repository's compaction and publication wait.**
+   Its maintainer runs one rewrite of a repository at a time, so from the
+   scan to the commit — one cycle — it builds no merge of the repository and
+   publishes none of its layers. A busy repository's pack count grows by its
+   pushes for that long, which its pushes feel only where the growth reaches
+   the pack bound: those carrying objects are then refused
+   `compaction_behind` until the cycle ends and compaction catches up
+   ([Compaction](#compaction)). Only an expunge a stopped cycle left open
+   sits beside compactions, until the next pass finishes it: the committer
+   decides a merge of live packs then as ever, since a merge drops nothing
+   and no dropping pack is its input, and refuses a publication until the
+   commit.
 3. **The commit retires the dropping packs** into the table of retired
    packs, and keeps live, as a **rescue**, whatever of them a push that
    landed between the scan and the begin reaches again. Its one precondition
@@ -1384,10 +1394,15 @@ next pass.
 
 **What it costs.** On the schedule, the scan that judges an expunge due is
 one `git rev-list --disk-usage` over the repository's whole history, and every
-build is a walk of it from every tip kept,
-admitted in the node's maintenance lane at a publication's charge — about
-600 bytes an object of the repository — so a refused expunge is a purge
-waiting, never a push refused. The begin's record writes at most 2 625 rows
+build is a walk of it from every tip kept. Each is admitted in the node's
+maintenance lane at room for that walk, 240 bytes an object of the whole
+repository as a clone without a bitmap takes, and for the delta window beside
+it, six times `code.limits.max_blob_bytes` (300 MiB by default); a build adds
+550 bytes an object of the packs it sorts, as a merge does. A node whose
+budget cannot hold that refuses the expunge and asks again at every pass.
+Nothing is refused at once, but what no ref reaches keeps counting against
+`code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,
+until a git node with the room maintains the repository. The begin's record writes at most 2 625 rows
 and applied in 75 ms at its widest, measured on two cores, the commit's at
 most 97 rows in 13.5 ms. Every other git node holding the repository downloads
 the kept, the dropping and the rescue packs once — the maintainer links its
@@ -1580,7 +1595,8 @@ moves — and each push of a record sees what the ones before it did.
   than onto it is no move of the head the push's own apply can see — whether
   one commit holds another is git's to say — so the repository's home finds
   it when it reads the revision's facts and lands the change: `merged`, by
-  `push`, at the target's tip it found holding the head ([The home's change
+  `push`, at the target's tip it found holding the head, and made by whoever
+  pushed that tip, who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
   `source_deleted` — after the same push's merges, so a push that sets the
@@ -4652,7 +4668,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a change it found landed — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -4667,7 +4683,10 @@ records name nobody — but a revision's facts, which its home records and
 which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
-colleague's revision reads for both grants. A
+colleague's revision reads for both grants — and a change it found landed:
+the push that moved the target to the tip holding the change's head merged
+it, so the landing names whoever made that push, and the change's other
+authors told it merged read for that pusher's grant too. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -4775,8 +4794,10 @@ colleague could push, or the seat's own work. **A change's
 [merge](#a-merge-end-to-end)** — or its enqueue, which a target whose gate
 requires a check takes in its place — is held by the git node that builds it
 to the merge authority the colleague holds itself into the target (its
-gate's `merge_by` and the company's floor, as the change's readiness judges
-it read as the colleague), refused `not_permitted` otherwise; for a
+gate's `merge_by` and the company's floor, by the one rule the change's
+readiness judges that term by, judged for the colleague from the git node's
+own chart and the gate the merge reads anyway, the change read once), and to
+a repository the colleague may read, refused `not_permitted` otherwise; for a
 stranger, or a person who may not act in the company now, a seat merges
 nothing but into a branch of its own namespace or of a repository it owns.
 
@@ -6172,7 +6193,7 @@ change as whoever enqueued it.
 | `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
-merge's (`kind: direct`), a queue's (`pre_land`) and a person's
+merge's (`kind: direct`), a queue's (`kind: queue`) and a person's
 own push under `direct_push: persons` (`kind: push`, naming their human seat)
 — green, and the branch's green row moved with it, where the branch's gate
 requires no check. The push's decide stamps its landings from the rules its
@@ -6500,7 +6521,7 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
 | `ready_to_merge` | The change's authors who may merge it into its target; where none may, the effective lead of the repository's owner | The mergeability whose stored answer goes from not ready to ready |
-| `merged` | The change's authors | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
+| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that moved the target to the tip the home found its head in; the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
 | `review_submitted` | The change's authors | A review that approves or comments |
 | `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
 | `thread` | Everybody who said something in the thread | A comment |
@@ -6521,7 +6542,10 @@ chart holds, in the snapshot, and not the asker's list beside them.
   something of whoever hears them; the rest are news to absorb.
 - **Nobody hears of a change they made — but a failed check.** A reviewer is
   not told of their own review, nor a pusher of the merge their push made —
-  whoever wrote it — nor an enqueuer of the landing their entry made, since
+  whoever wrote it, and whether the push set the target to the change's head
+  or moved it past, to a merge commit of their own, which the home finds and
+  records as the change landed, naming that push's pusher — nor an enqueuer
+  of the landing their entry made, since
   the queue lands an entry on its enqueuer's account. A check of a head that
   fails is the one exception: it is news to whoever pushed that head above
   all, since nothing else they did tells them, so they hear it as the
@@ -6623,7 +6647,8 @@ stops after its record committed loses no wake.
   asked for is that colleague's errand, and a code read in the turn is
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
-  and a revision's facts are whoever pushed the revision.
+  a revision's facts are whoever pushed the revision, and a change it found
+  landed whoever pushed the target's tip it found the change's head in.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a
@@ -7060,7 +7085,10 @@ change by its number, the head its caller read, the method, and — for a
 person — an override's reason, at most 1 KiB.
 
 1. **Judged before anything is built.** The node's copy is synced to the
-   caller's floor and the change read there, as its caller: a change that is
+   caller's floor and the change read there, as its caller — its detail
+   alone, with none of its revisions, which a merge never reads and whose
+   first page on a change pushed many times is up to 4 MiB of touched paths:
+   a change that is
    gone, closed or merged, a draft, into another branch or at another head is
    refused with the record's own codes (`change_not_found`,
    `change_not_open`, `change_draft`, `stale`, `head_moved`), and a seat's
@@ -7080,7 +7108,8 @@ person — an override's reason, at most 1 KiB.
 3. **Built onto the tip the copy holds**, in a scratch beside the copy, under
    one unit of the node's seat git-work share and **thirty seconds of git** —
    the budget a change's [mergeability](#mergeability) is merged in, since it
-   is the same merge. A `fast_forward` builds nothing: the tip must be an
+   is the same merge — for the merge as a whole: every rebuild below draws on
+   the same thirty seconds. A `fast_forward` builds nothing: the tip must be an
    ancestor of the head, or it is refused `not_fast_forward`. A `merge` or a
    `squash` runs one `git merge-tree --write-tree` of the tip and the head —
    histories sharing no commit merge from the empty tree, as the
@@ -7107,13 +7136,22 @@ person — an override's reason, at most 1 KiB.
    again onto the tip a sync at the log's head finds — at most **four
    times**; moved under the fifth build too, it is answered `target_moving`:
    the branch moves faster than a merge is built onto it, and its queue, or a
-   quieter moment, lands it. A merge built from a copy taken before an expunge
-   of the repository began is refused `expunging` and built again the same
-   way, from a copy synced past it.
+   quieter moment, lands it. A rebuild is started only where it fits, the
+   round before it its measure: what is left of the merge's thirty seconds of
+   git must hold the git that round ran, and what is left of the router's
+   attempt the share's wait and three reads' at their budget, that git, and
+   the upload and proposal that round's landing was held to. A merge with no
+   room for one is
+   answered `target_moving` at once, with its rebuilds so far, as is a
+   rebuild that runs out what the builds before it left — rather than a build
+   that ends `unready` and sends the next git node to merge it from scratch,
+   or a landing refused `busy`. A merge built from a copy taken before an
+   expunge of the repository began is refused `expunging` and built again the
+   same way, from a copy synced past it.
 
 A router gives a merge **102 seconds** on one git node — an engine write's 82
-with its ten seconds of build replaced by the merge's thirty — and every other
-write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
+with its ten seconds of build replaced by the merge's thirty, which its
+rebuilds share — and every other write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
 `crewlet.code.host.write.duration`'s `build` stage times its builds, every
 rebuild included.
 

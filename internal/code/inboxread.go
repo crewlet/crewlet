@@ -1,8 +1,10 @@
 package code
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -36,9 +38,12 @@ import (
 // newest fifty would open an inbox of nothing (the tracker's own lesson,
 // internal/worklet's inboxread.go). Every set it binds is the Classifier's
 // ([inbox.Classifier]), the lookups the page is then marked by, so a notice
-// the scan hides is exactly one the page would have marked. ONE STATEMENT
-// whatever is asked: a filter not asked is bound to say so ([inboxScanSQL]),
-// never left out of a statement built per call.
+// the scan hides is exactly one the page would have marked. ONE RANGE
+// STATEMENT whatever is asked: a filter not asked is bound to say so ([inboxScanSQL]),
+// never left out of a statement built per call. Under `unread` the range
+// starts at the person's seen-through position, and the few notices below it
+// an unread mark brings back are sought by their key beside it ([inboxScan]):
+// what the person has read through is never walked.
 //
 // # Held to the repository's grant
 //
@@ -242,12 +247,12 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		Notices: []InboxNotice{}}
 	out.Inbox = page
 
-	args, selects, err := inboxScanArgs(q, classifier, now)
+	scan, selects, err := inboxScanOf(q, classifier, now)
 	if err != nil || !selects {
 		return err
 	}
 	limit := min(limitOr(q.Limit, inbox.MaxRows), r.pageRows)
-	scanned, err := scanInbox(ctx, tx, in.Handle, append(slices.Clone(args), limit))
+	scanned, err := scan.run(ctx, tx, limit)
 	if err != nil {
 		return err
 	}
@@ -263,10 +268,10 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		last := scanned[len(scanned)-1]
 		at := statelog.Position{Stream: last.LogStream, Generation: last.LogGeneration, Seq: last.LogSeq}
 		out.Next = at.String()
-		rest := append(slices.Clone(args), MaxRecordRows)
-		rest[1], rest[2] = at.Packed()+1, at.Packed()-1
+		rest := scan
+		rest.before, rest.after = at.Packed()+1, at.Packed()-1
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		more, err := scanInbox(ctx, tx, in.Handle, rest)
+		more, err := rest.run(ctx, tx, MaxRecordRows)
 		if err != nil {
 			return err
 		}
@@ -318,10 +323,85 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	return nil
 }
 
-// scanInbox runs [inboxScanSQL] with args — [inboxScanArgs]' and the limit —
+// inboxScan is one inbox read's scan: whose notices, the exclusive bounds on
+// the code log it reads between, and every filter [inboxScanSQL] binds, each
+// set ONE JSON array — the Classifier's, so the scan and the page's marks are
+// one rule.
+//
+// # `unread` reads nothing the person has read through
+//
+// Under `unread`, a notice at or below the seen-through position is read
+// unless an unread mark names it ([inbox.Classifier.Classify]), so the rows
+// such a page can hold are those above the position and the ones the unread
+// list names. The scan reads exactly those: the range of the person's notices
+// starts at the position ([inboxScan.floor]), and the notices the unread list
+// names below it — at most [inbox.MaxEntries] — are looked up by their key
+// ([inboxMarkedSQL]) and merged in. Bounded only by a predicate on each row,
+// a person who had marked everything read walked every notice they hold, the
+// whole of `inbox.retention_days`, to answer nothing — on every badge poll.
+// The position bounds the range only ON THE CODE LOG'S STREAM, as it covers a
+// notice only there; every notice the applier writes is on it.
+type inboxScan struct {
+	handle        string
+	before, after int64
+
+	restricted bool
+	reasons    string
+
+	unread                 bool
+	unreadMarks, readMarks string
+	seenStream             string
+	seenAt                 int64
+	// marked is the unread list as [record, change] pairs, the key
+	// [inboxMarkedSQL] seeks.
+	marked string
+
+	scope  string
+	asleep string
+}
+
+// floor is the range's exclusive lower bound: the caller's `since`, raised
+// under `unread` to the seen-through position on the code log.
+func (s inboxScan) floor() int64 {
+	if s.unread && s.seenStream == topics.CodeLogStream && s.seenAt > s.after {
+		return s.seenAt
+	}
+	return s.after
+}
+
+// run is up to limit of the scan's notices, newest first: the range above
+// [inboxScan.floor], and where the floor was raised past the scan's own lower
+// bound, the notices the unread list names below it, merged in.
+func (s inboxScan) run(ctx context.Context, tx *sql.Tx, limit int) ([]InboxNotice, error) {
+	flag := func(on bool) int {
+		if on {
+			return 1
+		}
+		return 0
+	}
+	floor := s.floor()
+	out, err := scanInbox(ctx, tx, s.handle, inboxScanSQL, s.handle, s.before, floor, flag(s.restricted),
+		s.reasons, flag(s.unread), s.unreadMarks, s.readMarks, s.seenStream, s.seenAt, s.scope, s.asleep,
+		s.asleep, limit)
+	if err != nil || floor == s.after || s.marked == "[]" {
+		return out, err
+	}
+	marked, err := scanInbox(ctx, tx, s.handle, inboxMarkedSQL, s.marked, s.handle, min(s.before, floor+1),
+		s.after, flag(s.restricted), s.reasons, s.scope, s.asleep, s.asleep)
+	if err != nil || len(marked) == 0 {
+		return out, err
+	}
+	out = append(out, marked...)
+	slices.SortStableFunc(out, func(a, b InboxNotice) int {
+		return cmp.Or(cmp.Compare(b.LogGeneration, a.LogGeneration), cmp.Compare(b.LogSeq, a.LogSeq))
+	})
+	return out[:min(len(out), limit)], nil
+}
+
+// scanInbox runs statement — [inboxScanSQL] or [inboxMarkedSQL] — with args
 // for handle's inbox, each notice named by its [NoticeID].
-func scanInbox(ctx context.Context, tx *sql.Tx, handle string, args []any) ([]InboxNotice, error) {
-	rows, err := tx.QueryContext(ctx, inboxScanSQL, args...)
+func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args ...any) ([]InboxNotice, error) {
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
 	}
@@ -351,25 +431,25 @@ func scanInbox(ctx context.Context, tx *sql.Tx, handle string, args []any) ([]In
 	return out, nil
 }
 
-// inboxScanArgs binds [inboxScanSQL]'s filters from q and the person's marks,
-// and false where the filters select nothing at all — a reason filter whose
-// intersection with the primary split is empty, or only the snoozed notices
-// of a person who snoozed none.
-func inboxScanArgs(q ReadQuery, marks inbox.Classifier, now time.Time) ([]any, bool, error) {
+// inboxScanOf is the scan q asks for, its filters bound from the person's
+// marks, and false where the filters select nothing at all — a reason filter
+// whose intersection with the primary split is empty, or only the snoozed
+// notices of a person who snoozed none.
+func inboxScanOf(q ReadQuery, marks inbox.Classifier, now time.Time) (inboxScan, bool, error) {
 	in := q.Inbox
-	before := int64(math.MaxInt64)
+	s := inboxScan{handle: in.Handle, before: math.MaxInt64, restricted: len(in.Reasons) > 0 || in.PrimaryOnly,
+		unread: in.Unread, scope: string(in.Snoozed)}
 	if q.Cursor != "" {
 		at, err := statelog.ParsePosition(q.Cursor)
 		if err != nil {
-			return nil, false, fmt.Errorf("%w: %q is not a notice's place on the code log", ErrBadCursor, q.Cursor)
+			return inboxScan{}, false, fmt.Errorf("%w: %q is not a notice's place on the code log", ErrBadCursor,
+				q.Cursor)
 		}
-		before = at.Packed()
+		s.before = at.Packed()
 	}
-	var after int64
 	if !in.Since.IsZero() {
-		after = in.Since.Packed()
+		s.after = in.Since.Packed()
 	}
-	restricted := len(in.Reasons) > 0 || in.PrimaryOnly
 	var reasons []string
 	for _, reason := range Reasons() {
 		if len(in.Reasons) > 0 && !slices.Contains(in.Reasons, reason) {
@@ -380,37 +460,37 @@ func inboxScanArgs(q ReadQuery, marks inbox.Classifier, now time.Time) ([]any, b
 		}
 		reasons = append(reasons, string(reason))
 	}
-	if restricted && len(reasons) == 0 {
-		return nil, false, nil
+	if s.restricted && len(reasons) == 0 {
+		return inboxScan{}, false, nil
 	}
 	asleep := marks.Asleep(now)
 	if in.Snoozed == inbox.SnoozeOnly && len(asleep) == 0 {
-		return nil, false, nil
+		return inboxScan{}, false, nil
 	}
-	seen := marks.Seen()
-	var seenStream string
-	var seenAt int64
-	if seen.Seq != 0 && seen.Stream != "" {
-		seenStream, seenAt = seen.Stream, int64(seen.Packed())
+	if seen := marks.Seen(); seen.Seq != 0 && seen.Stream != "" {
+		s.seenStream, s.seenAt = seen.Stream, int64(seen.Packed())
 	}
-	lists := make([]string, 0, 4)
-	for _, ids := range [][]string{reasons, marks.UnreadMarks(), marks.ReadMarks(), asleep} {
-		list, err := jsonList(ids)
-		if err != nil {
-			return nil, false, err
+	unread := marks.UnreadMarks()
+	pairs := make([][2]string, 0, len(unread))
+	for _, id := range unread {
+		if record, change, ok := splitNoticeID(id); ok {
+			pairs = append(pairs, [2]string{record, change})
 		}
-		lists = append(lists, list)
 	}
-	flag := func(on bool) int {
-		if on {
-			return 1
+	marked, err := json.Marshal(pairs)
+	if err != nil {
+		return inboxScan{}, false, fmt.Errorf("code: name the notices %s marked unread: %w", in.Handle, err)
+	}
+	s.marked = string(marked)
+	for _, list := range []struct {
+		ids []string
+		to  *string
+	}{{reasons, &s.reasons}, {unread, &s.unreadMarks}, {marks.ReadMarks(), &s.readMarks}, {asleep, &s.asleep}} {
+		if *list.to, err = jsonList(list.ids); err != nil {
+			return inboxScan{}, false, err
 		}
-		return 0
 	}
-	return []any{in.Handle, before, after,
-		flag(restricted), lists[0],
-		flag(in.Unread), lists[1], lists[2], seenStream, seenAt,
-		string(in.Snoozed), lists[3], lists[3]}, true, nil
+	return s, true, nil
 }
 
 // noticeChangesIn is what each change of ids says now, by its id — its row,
@@ -477,7 +557,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 	}
 	_ = rows.Close()
-	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list, string(FindingOpen), string(PartyAgent))
+	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list)
 	if err != nil {
 		return nil, fmt.Errorf("code: count the findings of the changes an inbox page names: %w", err)
 	}
@@ -511,14 +591,23 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 // nothing else. Each set is ONE JSON array parameter, the tracker's reason
 // (its idList): the lists are the person's own, each at most inbox.MaxEntries.
 // A mark names a notice by its [NoticeID], the record's id and the change's
-// joined by "/", which the statement spells from the two columns.
+// joined by "/", which the statement spells from the two columns. Under
+// `unread` its range starts at the seen-through position ([inboxScan]).
+//
+// inboxMarkedSQL is the notices an unread `unread` scan reads below that
+// position: those the person's unread list names, one seek of the notice
+// table's key a [record, change] pair — at most inbox.MaxEntries — each held
+// to the read's bounds, reasons and snooze scope. No order and no limit: the
+// read merges them into the range's page.
 //
 // noticeBodiesSQL reads each change's description by its key: the change's
 // row is changesByIDSQL's, which the readiness judges too, so a page reads
-// code_changes once; noticeFindingsSQL reads each change's open agent findings' severities
-// from the raiser index's range of the change, counted here rather than
-// grouped by the statement — a GROUP BY on a column the index does not lead
-// with sorts what it found, and the rows are a page's changes' findings.
+// code_changes once; noticeFindingsSQL reads each change's open agent
+// findings' severities by one covering seek of code_findings_open_agent_idx,
+// which holds those alone (replicated 0132) — never the change's every
+// finding of every revision, superseded and dismissed ones included — counted
+// here rather than grouped by the statement, the rows being a page's changes'
+// open agent findings.
 const (
 	inboxScanSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
@@ -532,10 +621,30 @@ const (
 				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END
 		ORDER BY n.log_seq DESC
 		LIMIT ?`
+	inboxMarkedSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
+			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
+		FROM json_each(?) AS j CROSS JOIN code_notifications AS n INDEXED BY sqlite_autoindex_code_notifications_1
+		WHERE n.record_id = CAST(j.value ->> 0 AS TEXT) AND n.change_id = CAST(j.value ->> 1 AS TEXT)
+			AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
+			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
 	noticeBodiesSQL = `SELECT b.change_id, b.body
 		FROM json_each(?) AS j CROSS JOIN code_change_bodies AS b INDEXED BY sqlite_autoindex_code_change_bodies_1
 		WHERE b.change_id = CAST(j.value AS TEXT)`
 	noticeFindingsSQL = `SELECT f.change_id, f.severity
-		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY code_findings_raiser_idx
-		WHERE f.change_id = CAST(j.value AS TEXT) AND f.state = ? AND f.raiser_kind = ?`
+		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY ` + openAgentFindingsKey + `
+		WHERE f.change_id = CAST(j.value AS TEXT) AND ` + openAgentFindings
 )
+
+// openAgentFindingsKey is code_findings_open_agent_idx, (change_id, severity,
+// state, raiser_kind) WHERE [openAgentFindings] (replicated 0132): a change's
+// open agent findings alone, every column the read names carried, so its
+// seek is covering.
+const openAgentFindingsKey = "code_findings_open_agent_idx"
+
+// openAgentFindings is the predicate code_findings_open_agent_idx is partial
+// on, spelled as the index declares it — the pinned planner takes a partial
+// index only for a statement that implies its predicate in its own words — of
+// [FindingOpen] and [PartyAgent], which a test holds the two to.
+const openAgentFindings = `state = 'open' AND raiser_kind = 'agent'`

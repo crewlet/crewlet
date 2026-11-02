@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,16 +147,20 @@ func TestACodeMarkIsDecidedOnThePersonsRecord(t *testing.T) {
 }
 
 // A CODE MARK NAMES ONLY THEIR NOTICES: a mark naming a record that reached
-// somebody else is refused naming it; a person marking another's record, and a
-// seat marking its own, are refused as not theirs to make — and none of them
-// lands a record.
+// somebody else is refused naming it — alone, or among founder's own notices
+// in one gesture; a person marking another's record, and a seat marking its
+// own, are refused as not theirs to make — and none of them lands a record.
+// A gesture naming several of founder's own notices finds every one, in the
+// one statement that reads where they sit, and lands.
 //
 // Mutation: find a notice's position by its record alone, whoever it reached
-// — the ask to plat-lead lands as one of founder's marks, red.
+// — the ask to plat-lead lands as one of founder's marks, red; take the first
+// notice the statement answers and no more — the gesture over founder's two
+// notices is refused naming the second, red.
 func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	_, _, repo, change := founderNotices(t, n, 0)
+	own, _, repo, change := founderNotices(t, n, 1)
 	w, _ := writerOn(t, n, n.pub)
 	ask := converse(t, w, asking(repo, change, dev, "plat-lead"))
 	theirs := code.NoticeID(n.recordAt(ask.Position).OpID, change)
@@ -165,6 +170,8 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 		want code.MarkRefusal
 	}{
 		"another's notice": {marking(code.MarkGesture{Read: []string{theirs}}), code.MarkInvalid},
+		"another's among their own": {marking(code.MarkGesture{Read: []string{own[0], theirs, own[1]}}),
+			code.MarkInvalid},
 		"another's record": {func() code.MarkWrite {
 			w := marking(code.MarkGesture{Read: []string{theirs}})
 			w.Handle = "cto"
@@ -181,6 +188,19 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 			t.Errorf("%s: the mark answered %+v, %v; want it refused %s with nothing landed", name, res, err,
 				tc.want)
 		}
+		if tc.want == code.MarkInvalid && !strings.Contains(res.Detail, theirs) {
+			t.Errorf("%s: the refusal says %q, want it to name %s", name, res.Detail, theirs)
+		}
+	}
+	mark(t, m, marking(code.MarkGesture{Read: own}))
+	page, _ := readInbox(t, n, code.InboxQuery{}, "", 0)
+	if len(page.Notices) != len(own) {
+		t.Fatalf("founder's inbox holds %v, want their %d notices", idsOf(page), len(own))
+	}
+	for _, notice := range page.Notices {
+		if !notice.Read {
+			t.Errorf("after founder marked both their notices read, %s reads unread", notice.RecordID)
+		}
 	}
 }
 
@@ -188,10 +208,14 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 // snoozed, the first page of three is the three that are not — a full page,
 // never an empty one with a cursor behind it — the snoozed scope lists exactly
 // the three put off, and `unread` past a read-through position lists only what
-// sits above it, every page carrying its cursor where more remain.
+// sits above it, every page carrying its cursor where more remain — and, with
+// the oldest notice marked unread again, that notice too, in its place below
+// the four above the position, on the next page when a page of four holds
+// those.
 //
 // Mutation: filter the page after the scan — the first page reads none of the
-// snoozed three and answers empty, red.
+// snoozed three and answers empty, red; seek no unread mark below the
+// position — the notice marked unread again is never listed, red.
 func TestTheCodeInboxFiltersInTheScan(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -226,6 +250,20 @@ func TestTheCodeInboxFiltersInTheScan(t *testing.T) {
 	unread, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 0)
 	if got, want := idsOf(unread), newestFirst(ids[2:]); !slices.Equal(got, want) {
 		t.Errorf("unread past %s lists %v, want what sits above it %v", through, got, want)
+	}
+	mark(t, m, marking(code.MarkGesture{Unread: []string{ids[0]}}))
+	again, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 0)
+	if got, want := idsOf(again), append(newestFirst(ids[2:]), ids[0]); !slices.Equal(got, want) {
+		t.Errorf("unread past %s with %s marked unread again lists %v, want %v — an unread mark below the "+
+			"position brings its notice back, in its place", through, ids[0], got, want)
+	}
+	page, next = readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, "", 4)
+	if got, want := idsOf(page), newestFirst(ids[2:]); !slices.Equal(got, want) || next == "" {
+		t.Errorf("a page of four of those five lists %v with cursor %q, want %v and a cursor", got, next, want)
+	}
+	rest, _ := readInbox(t, n, code.InboxQuery{Unread: true, Snoozed: inbox.SnoozeInclude}, next, 4)
+	if got := idsOf(rest); !slices.Equal(got, ids[:1]) {
+		t.Errorf("the page after it lists %v, want the notice marked unread again, %v", got, ids[:1])
 	}
 	primary, _ := readInbox(t, n, code.InboxQuery{Reasons: []code.Reason{code.ReasonMention},
 		Snoozed: inbox.SnoozeInclude}, "", 0)

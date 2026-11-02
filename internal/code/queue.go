@@ -396,8 +396,10 @@ const (
 	MergeRefusalTargetMoved MergeRefusal = "target_moved"
 	// MergeRefusalTargetMoving is a merge its BUILDER answered once its
 	// target moved under the first build and under every one of
-	// [MergeRecomputes] rebuilds after it: the branch moves faster than a
-	// merge is built onto it, and its queue, or a quieter moment, lands it.
+	// [MergeRecomputes] rebuilds after it — or under every rebuild the
+	// merge's one [MergeBuildDeadline] of git and its write's attempt had
+	// room for: the branch moves faster than a merge is built onto it, and
+	// its queue, or a quieter moment, lands it.
 	// Never a decide's: the git node that built the merge answers it.
 	MergeRefusalTargetMoving MergeRefusal = "target_moving"
 	// MergeRefusalNotPerson is a merge past its target's gate asked by

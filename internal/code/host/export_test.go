@@ -350,6 +350,22 @@ func HoldGit(s *Server, args ...string) (reached <-chan struct{}, release func()
 	return at, func() { closing.Do(func() { close(held) }) }
 }
 
+// SlowGit has s report every process it hands the pool from now on whose
+// arguments start with args — a subcommand, and as many of its own arguments
+// as tell one of its processes from another — as having run took, whatever it
+// really ran: what a write's build is charged for it against its budget of
+// git. Set before s's first write.
+func SlowGit(s *Server, took time.Duration, args ...string) {
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		res, err := run(ctx, c)
+		if len(args) > 0 && len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
+			res.Took = took
+		}
+		return res, err
+	}
+}
+
 // RecordGit has s record every gitproc.Cmd it hands the pool from now on, and
 // answers a reader of what it has recorded, in order. Set before s's first
 // request: the server reads the field on every request's goroutine.

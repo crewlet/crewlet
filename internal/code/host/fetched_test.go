@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -150,6 +151,16 @@ func TestAUnitRepositorysFetchIsRecorded(t *testing.T) {
 // request did not end well, so its client was not sent the repository whole.
 // The stand-in upload-pack writes a v2 answer's pack section and its pack's
 // first packet, and then nothing until the stall ends it.
+//
+// THE STALL IS THE STAND-IN'S ALONE (host.Timing.Stall), so the case's commit
+// is an engine write, which runs no transfer, never a push: a real
+// receive-pack is quiet from its pack's last byte until its hook answers,
+// longer than this stall on a loaded runner, and a push seeding the case was
+// ended there for a stall — its client answered 503 for a push that had
+// landed.
+//
+// Mutation: seed main with a push again, and the premise that the node
+// served no push fails.
 func TestAFetchTheNodeEndedIsNoRecord(t *testing.T) {
 	fake := gittest.Wrap(t, `case " $* " in
 *" --advertise-refs "*) ;;
@@ -157,11 +168,22 @@ func TestAFetchTheNodeEndedIsNoRecord(t *testing.T) {
 esac`)
 	timing := fast
 	timing.Stall = 300 * time.Millisecond
-	c, f, head := unitCase(t, codetest.SoloOptions{GitPath: fake, Shape: codetest.Shape{Timing: timing}})
-	before := len(f.Fetched())
+	unit := codetest.Settings()
+	unit.Visibility = code.VisibilityUnit
+	c := newCase(t, codetest.SoloOptions{GitPath: fake, Shape: codetest.Shape{Timing: timing}}, unit)
+	f := c.Fleet.(*codetest.SoloFleet)
+	seeded, err := f.Write(c.Ctx, files(c.Rows().Repo.ID, pat(), "refs/heads/main", "", "", text("README.md", "one\n")))
+	if err != nil || seeded.Outcome != statelog.OutcomeApplied || seeded.Commit == "" {
+		t.Fatalf("the premise: main's first commit, an engine write, answered %+v, %v", seeded, err)
+	}
 	n := c.Fleet.Nodes()[0]
+	if pushes, _ := observed(n.Metrics(), metrics.CodePushDuration, nil); pushes != 0 {
+		t.Fatalf("the premise: the node served a push (%d in all), a real receive-pack held to the stand-in's stall",
+			pushes)
+	}
+	before := len(f.Fetched())
 	req, err := http.NewRequestWithContext(c.Ctx, http.MethodPost, n.URL()+"/git/"+codetest.RepoName+
-		"/git-upload-pack", strings.NewReader(fetchWants([]string{head})))
+		"/git-upload-pack", strings.NewReader(fetchWants([]string{seeded.Commit})))
 	if err != nil {
 		t.Fatal(err)
 	}

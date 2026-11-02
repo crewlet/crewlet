@@ -902,6 +902,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	e.mu.Lock()
 	held := inc.converged || inc.pins > 0
 	known := maps.Clone(inc.leaving)
+	purged := crossedACommit(inc.dropEpoch, snap.repo.DropEpoch, viewWanted)
 	e.mu.Unlock()
 	emptied := viewHeld && !viewWanted && !held
 	if len(strays) == 0 {
@@ -933,9 +934,18 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 				// pack out of the view: what it held may be gone from every
 				// copy, and a graph or an answer about it with it.
 				ev = EventPackExpunged
-			case places[key.name] != placeNone ||
-				!history && (retired[key.name] || known[key] == EventPackRetired):
+			case places[key.name] != placeNone:
 				ev = EventPackRetired
+			case !history && (retired[key.name] || known[key] == EventPackRetired):
+				// A RETIREMENT, unless the round crossed an expunge's commit
+				// this copy never placed the dropping pack of
+				// (crossedACommit): then what the begin added to hold this
+				// pack's objects is not all here, and it leaves as the
+				// commit's.
+				ev = EventPackRetired
+				if purged {
+					ev = EventPackExpunged
+				}
 			}
 		}
 		if had, ok := leaving[key]; !ok || had != EventPackRemoved {

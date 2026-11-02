@@ -207,7 +207,7 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 			}
 		}
 		return out, nil
-	case code.ReadChanges, code.ReadChange, code.ReadQueue:
+	case code.ReadChanges, code.ReadChange:
 		if h.changes != nil {
 			return h.changes(q)
 		}

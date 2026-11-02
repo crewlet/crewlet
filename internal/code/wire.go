@@ -1324,6 +1324,27 @@ type ReadQuery struct {
 	// as every page of a change is. Under the same condition as Reviewer: no
 	// build ignores it.
 	Part ChangePart `json:"part,omitempty"`
+	// DetailOnly asks a `change` read for the change's DETAIL ALONE — its
+	// row, description, authors, conversation, mergeability and readiness —
+	// with no page of its revisions beside it, and nothing else answers it:
+	// a read that judges or acts on a change sets it — a merge's and a
+	// rebase's build on the repository's git node (a merge's read again at
+	// the head of the log before a refusal and once more on every rebuild),
+	// and a seat's write tool resolving the change it names — and a read
+	// that presents its revisions does not. None of those reads a revision, and a
+	// first page of them is up to defaultRevisionLimit (200) revisions, each
+	// carrying its facts' touched paths (up to MaxTouchedPaths) — up to
+	// MaxPageBytes of JSON — read, encoded, shipped from a data node and
+	// decoded to be dropped. Refused on every other kind, and beside a part,
+	// a cursor or a limit, which page a list it does not read.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:
+	// no build that carries the code domain has run without this field —
+	// none of the domain is on main — and a build that predates it, which
+	// decodes and ignores it, answers the detail with a first page of
+	// revisions beside it: a heavier answer, never a wrong one.
+	DetailOnly bool `json:"detail_only,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -2114,12 +2135,11 @@ type CheckRow struct {
 	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
 	// Reason is why its ending ended it, "" before one.
 	Reason CheckReason `json:"reason,omitempty"`
-	// Runner, Placement, Box and Borrowed are its claim's; Reporter is the
-	// human seat of the person whose CI reported its ending.
+	// Runner, Placement and Box are its claim's; Reporter is the human seat of
+	// the person whose CI reported its ending.
 	Runner    string         `json:"runner,omitempty"`
 	Placement CheckPlacement `json:"placement,omitempty"`
 	Box       string         `json:"box,omitempty"`
-	Borrowed  bool           `json:"borrowed,omitempty"`
 	Reporter  string         `json:"reporter,omitempty"`
 	// QueuedAt, StartedAt and FinishedAt are its queue's, its claim's and
 	// its ending's instants, each zero before it.

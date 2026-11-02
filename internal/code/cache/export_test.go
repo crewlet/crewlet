@@ -1151,9 +1151,16 @@ func ScrubFor(c *Cache, repoID string) (damaged, whole []string, err error) {
 	return damaged, whole, err
 }
 
+// KickScrubber wakes the scrubber as a copy's first use since its scrub, a
+// report or an inherited copy's first round does: a case's kick while it
+// waits, which has it pass again and arm its wake anew.
+func KickScrubber(c *Cache) { c.kickScrubber() }
+
 // ScrubWakesWith makes the scrubber ask f for its wake at the next interval's
-// end — next, on the cache's clock — in place of a timer: a case on a clock of
-// its own sees when the scrubber means to wake, and wakes it.
+// end — next, on the cache's clock — in place of a timer, which the channel
+// fires as: once that clock reaches next, and at once where it has
+// (clock.At). A case on a clock of its own sees when the scrubber means to
+// wake, and wakes it by moving the clock there.
 func ScrubWakesWith(o *Options, f func(next time.Time) <-chan time.Time) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}

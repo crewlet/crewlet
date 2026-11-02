@@ -1022,7 +1022,7 @@ func decideStarted(s CheckStarted, d checksDecision, held bool, named func(Check
 			named(s.CheckKey), row.Runner, row.StartedAt.Format(time.RFC3339Nano))), nil
 	case row.State == CheckStateRunning:
 		// THE HOLDER'S OWN: its claim sent again, or its record naming the
-		// box it made — which sets the box once, and the borrowed flag on.
+		// box it made — which sets the box once.
 		switch {
 		case s.Placement != row.Placement:
 			return checksDecision{}, fmt.Errorf("%w: started.placement: %s is claimed for a %s cell, and its "+
@@ -1030,7 +1030,7 @@ func decideStarted(s CheckStarted, d checksDecision, held bool, named func(Check
 		case s.Box != "" && row.Box != "" && s.Box != row.Box:
 			return checksDecision{}, fmt.Errorf("%w: started.box: %s runs in box %s, and its holder names "+
 				"%s — a holder names its one box once", ErrInvalidProposal, named(s.CheckKey), row.Box, s.Box)
-		case (s.Box == "" || s.Box == row.Box) && (!s.Borrowed || row.Borrowed):
+		case s.Box == "" || s.Box == row.Box:
 			d.unchanged = true
 			return d, nil
 		}

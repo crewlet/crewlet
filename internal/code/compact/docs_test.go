@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -61,6 +63,106 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	}
 }
 
+// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md and
+// docs/guides/code.md tell an operator when an expunge is due (its share and
+// its least), how often a repository is asked (its interval), how long what a
+// force-push left is kept (the prune grace), how many packs a begin takes and
+// writes, how long the object store keeps what it dropped (the retire grace)
+// and what its builds are admitted at — in the constants' own figures, held
+// here, so moving one (ExpungeMinBytes is provisional until BenchmarkExpunge
+// decides it) cannot leave a page saying what the code no longer does.
+//
+// Mutation: change code.ExpungeShare, code.ExpungeMinBytes, code.PruneGrace,
+// code.ExpungeInterval, code.MaxExpungeInputs, code.MaxExpungeOutputs,
+// code.RetireGrace, cache.CompactBytesPerObject,
+// gitproc.TransferBytesPerObject or cache.CompactWindowBytes's multiple, and
+// a page no longer says what that one bounds.
+func TestThePagesStateTheExpungesBounds(t *testing.T) {
+	t.Parallel()
+	share := fractionWord(t, int(code.ExpungeShare))
+	least := mebibytes(t, int64(code.ExpungeMinBytes))
+	interval := span(t, code.ExpungeInterval)
+	grace, graceDays := span(t, code.PruneGrace), days(t, code.PruneGrace)
+	retired := span(t, code.RetireGrace)
+	windowBlobs := cache.CompactWindowBytes(code.Limits{MaxBlobBytes: 1})
+	window := mebibytes(t, cache.CompactWindowBytes(code.Limits{MaxBlobBytes: code.DefaultMaxBlobBytes}))
+	for page, wants := range map[string][]string{
+		filepath.Join("concepts", "code-host.md"): {
+			fmt.Sprintf("is **due** once that is more than a %s of the repository's live pack bytes and at least %s",
+				share, least),
+			fmt.Sprintf("The %s is provisional", least),
+			fmt.Sprintf("due past a %s and %s", share, least),
+			fmt.Sprintf("last expunged %s ago or never", interval),
+			fmt.Sprintf("not scanned again on that node for %s, so a clean repository's history is walked at most once %s",
+				interval, interval),
+			fmt.Sprintf("for **%s**, git's own `gc.pruneExpire` default: every object", graceDays),
+			fmt.Sprintf("stays fetchable by its id for %s, and no push in flight", grace),
+			fmt.Sprintf("kept **%s**, git's own `gc.pruneExpire` default, because the weekly", graceDays),
+			fmt.Sprintf("fetchable by its id for %s after the push", grace),
+			fmt.Sprintf("keeps it for %s after the deletion", graceDays),
+			fmt.Sprintf("Restore a branch you need within %s of its deletion", grace),
+			fmt.Sprintf("A begin takes at most %s packs and writes at most %d", spaced(int64(code.MaxExpungeInputs)),
+				code.MaxExpungeOutputs),
+			fmt.Sprintf("each %s apart on the schedule", interval),
+			fmt.Sprintf("by **the object store, for %s** after the commit", retired),
+			fmt.Sprintf("the schedule waits for a %s of the repository to be unreachable", share),
+			fmt.Sprintf("%d bytes an object of the whole repository", gitproc.TransferBytesPerObject),
+			fmt.Sprintf("%s times `code.limits.max_blob_bytes` (%s by default)", numberWord(t, int(windowBlobs)), window),
+			fmt.Sprintf("a build adds %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
+		},
+		filepath.Join("guides", "code.md"): {
+			fmt.Sprintf("every %s once a %s of the repository, and at least %s, is unreachable, keeping what a "+
+				"force-push or a deletion left for %s", strings.TrimPrefix(interval, "a "), share, least, grace),
+			fmt.Sprintf("rather than %s on", grace),
+			fmt.Sprintf("within %s of its deletion", grace),
+			fmt.Sprintf("the object store for %s,", retired),
+		},
+	} {
+		path := filepath.Join(sourcetree.Root(t), "docs", page)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not say %q", path, want)
+			}
+		}
+	}
+}
+
+// mebibytes is n as the pages write a size of whole mebibytes (64 MiB).
+func mebibytes(t *testing.T, n int64) string {
+	t.Helper()
+	if n <= 0 || n%(1<<20) != 0 {
+		t.Fatalf("the pages write %d bytes in whole mebibytes: say it there, and here", n)
+	}
+	return fmt.Sprintf("%d MiB", n>>20)
+}
+
+// days is d as the pages write a grace in days (14 days).
+func days(t *testing.T, d time.Duration) string {
+	t.Helper()
+	const day = 24 * time.Hour
+	if d <= 0 || d%day != 0 {
+		t.Fatalf("the pages write %v in whole days: say it there, and here", d)
+	}
+	return fmt.Sprintf("%d days", d/day)
+}
+
+// span is d as the pages spell a span in words (a day, a week, two weeks).
+func span(t *testing.T, d time.Duration) string {
+	t.Helper()
+	const day = 24 * time.Hour
+	words := map[time.Duration]string{day: "a day", 7 * day: "a week", 14 * day: "two weeks"}
+	w, ok := words[d]
+	if !ok {
+		t.Fatalf("the pages spell %v in words: add it here as they write it", d)
+	}
+	return w
+}
+
 // spaced is n as the docs write a number: its thousands set apart by a space
 // (90 909).
 func spaced(n int64) string {
@@ -87,7 +189,8 @@ func spell(t *testing.T, d time.Duration) string {
 // numberWord is n as the pages spell a small count in words.
 func numberWord(t *testing.T, n int) string {
 	t.Helper()
-	words := map[int]string{2: "two", 4: "four", 5: "five", 8: "eight", 10: "ten", 16: "sixteen", 20: "twenty"}
+	words := map[int]string{2: "two", 4: "four", 5: "five", 6: "six", 8: "eight", 10: "ten", 16: "sixteen",
+		20: "twenty"}
 	w, ok := words[n]
 	if !ok {
 		t.Fatalf("the pages spell %d in words: add it here as they write it", n)

@@ -1760,6 +1760,11 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: part: only a change read names a part of the change", ErrInvalid)
 	case q.Part != "" && !q.Part.Valid():
 		return fmt.Errorf("%w: part: %q is not one of %s", ErrInvalid, q.Part, words.Or(ChangeParts()))
+	case q.DetailOnly && q.Kind != ReadChange:
+		return fmt.Errorf("%w: detail_only: only a change read answers a change's detail", ErrInvalid)
+	case q.DetailOnly && (q.Part != "" || q.Cursor != "" || q.Limit != 0):
+		return fmt.Errorf("%w: detail_only: a change's detail alone pages no part — named by no part, cursor "+
+			"or limit", ErrInvalid)
 	case q.Commit != "" && q.Kind != ReadCommit:
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
@@ -1858,6 +1863,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("path_owners", "only a read of one repository answers its path owners")
 	case q.Gates:
 		return refused("gates", "only a read answering one repository's detail answers its rules' merge gates")
+	case q.DetailOnly:
+		return refused("detail_only", "only a change read answers a change's detail")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case q.Change != 0:
@@ -1975,7 +1982,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2026,7 +2033,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2068,7 +2075,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2120,7 +2127,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2179,7 +2186,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2222,7 +2229,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"branch_changes", q.BranchChanges != nil},
@@ -2304,7 +2311,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},

@@ -131,11 +131,12 @@ func (b *building) rebase(ctx context.Context) (string, code.EngineWriteResult, 
 }
 
 // rebasedChange is the change a rebase names, read at the copy's position as
-// its caller: live, and from the branch the write moves.
+// its caller, its detail alone (no revision is read): live, and from the
+// branch the write moves.
 func (wr *writing) rebasedChange(ctx context.Context) (*code.ChangeDetail, error) {
 	w, repo := wr.w, wr.synced.Repo
 	ans, err := wr.s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,
-		Change: w.Change, Fresh: statelog.FloorAt(statelog.ReadSession, wr.synced.Position)})
+		Change: w.Change, DetailOnly: true, Fresh: statelog.FloorAt(statelog.ReadSession, wr.synced.Position)})
 	if err != nil {
 		return nil, err
 	}

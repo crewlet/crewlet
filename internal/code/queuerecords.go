@@ -73,8 +73,9 @@ import (
 // []string{"op"}, Equals: "<op>"} — candidate, eject, land, green, broken,
 // queue_sweep) with the companions queue.go's head names, and so do the
 // values they add to closed sets an older build reads: `merged_via` queue on
-// a change's row and `via` queue on a push's, which an older reader
-// of either refuses as a way it does not know (scanPush). Neither is a gate.
+// a change's row, `via` queue on a push's and `kind` queue on a landing's,
+// which an older reader of the first two refuses as a way it does not know
+// (scanPush). None is a gate.
 
 // The queue's bounds.
 const (

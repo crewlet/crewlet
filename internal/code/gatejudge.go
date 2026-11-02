@@ -140,11 +140,12 @@ type GateRules struct {
 	// OwnersApprove is whether any gate makes path owners gating.
 	OwnersApprove bool
 	// KeepsSource is whether any gate matching Target keeps a seat's source
-	// branch when a change merges (delete_source: none): a merge's caller
-	// deletes a source in a seat's namespace unless it is so, and keeps
-	// every other source (Q4) — a gate that keeps it wins over one that
-	// deletes it, since a deleted branch is the one of the two no later
-	// write undoes.
+	// branch when a change merges (delete_source: none): a merge whose caller
+	// said nothing deletes a source in a seat's namespace unless it is so,
+	// and keeps every other source (Q4), decided by the git node that judges
+	// the merge (internal/code/host's deletesSource) — a gate that keeps it
+	// wins over one that deletes it, since a deleted branch is the one of the
+	// two no later write undoes.
 	KeepsSource bool
 }
 
@@ -361,12 +362,12 @@ type GateFacts struct {
 
 // QueuedFacts is a change's live entry in its target's merge queue as the gate
 // reads it: the entry, where it stands, and its place in its target's queue,
-// from 1.
+// from 1 — answered on the queue precondition ([Precondition.Queue]).
 type QueuedFacts struct {
-	EntryID   string
-	TargetRef string
-	State     QueueState
-	Place     int
+	EntryID   string     `json:"entry_id"`
+	TargetRef string     `json:"target_ref"`
+	State     QueueState `json:"state"`
+	Place     int        `json:"place"`
 }
 
 // HeadFacts is what a change's merge gate reads of its head revision's
@@ -804,14 +805,14 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 
 // queued is the queue precondition of a change its target's merge queue holds:
 // COMPUTING, waiting on nobody — the queue lands it — its place and its state
-// named.
+// named, and its entry carried whole ([Precondition.Queue]).
 func (g gateJudge) queued() Precondition {
-	q := g.f.Queue
+	q := *g.f.Queue
 	doing := "waits"
 	if q.State == QueueTesting {
 		doing = "is being tested"
 	}
-	return Precondition{Kind: PreconditionQueue, State: PreconditionComputing, Detail: fmt.Sprintf(
+	return Precondition{Kind: PreconditionQueue, State: PreconditionComputing, Queue: &q, Detail: fmt.Sprintf(
 		"%s %s at place %d in %s's queue: the queue lands it once its gate holds on what it is merged with",
 		g.ref, doing, q.Place, q.TargetRef)}
 }
@@ -1132,16 +1133,29 @@ func (g gateJudge) check() Precondition {
 	return p
 }
 
-// mergeAuthority is the merge_authority precondition, of the merger f names: a
-// person always holds it; on a target no rule protects, whoever may push the
-// branch — a fast-forward of it ([Grant.RefRule]); on a protected one, the
-// standing the gate's merge_by and the company's floor ask — writers write the
-// repository, maintainers maintain it, persons are persons. Unmet, it waits on
-// the seat that maintains the repository where one may merge; a merge only a
-// person makes names nobody, since any person may.
+// mergeAuthority is the merge_authority precondition, of the merger f names
+// ([MergeAuthority]).
 func (g gateJudge) mergeAuthority() Precondition {
+	return MergeAuthority(g.f.Merger, g.rows.Repo, g.rows.Change.TargetRef, g.rules, g.roster)
+}
+
+// MergeAuthority is the merge_authority precondition of m, merging into
+// target of repo under rules — the gate target is held to, combined with
+// code.merge_by_floor ([GateRulesOf]) — judged on roster: a person always
+// holds it; on a target no rule protects, whoever may push the branch — a
+// fast-forward of it ([Grant.RefRule]); on a protected one, the standing the
+// gate's merge_by and the company's floor ask — writers write the repository,
+// maintainers maintain it, persons are persons. Unmet, it waits on the seat
+// that maintains the repository where one may merge; a merge only a person
+// makes names nobody, since any person may.
+//
+// PURE OVER VALUES, AND THE ONE RULE OF THE TERM: a readiness judges it for
+// its merger, and the git node judges it for the colleague a seat's merge is
+// made for (internal/code/host's mergeCeiling) from the chart, the row and
+// the gate it already holds, with no read of the change made again as that
+// colleague. Neither restates it.
+func MergeAuthority(m Principal, repo RepoRef, target string, rules GateRules, roster Roster) Precondition {
 	p := Precondition{Kind: PreconditionMergeAuthority}
-	m, target := g.f.Merger, g.rows.Change.TargetRef
 	who := "this credential, bound to nobody,"
 	if handle, kind := m.party(); kind != "" {
 		who = Party{Handle: handle, Kind: kind}.named()
@@ -1151,10 +1165,10 @@ func (g gateJudge) mergeAuthority() Precondition {
 			return p
 		}
 	}
-	grant := GrantOf(m, g.rows.Repo, g.roster)
-	if !g.rules.Protected() {
+	grant := GrantOf(m, repo, roster)
+	if !rules.Protected() {
 		if refusal, why := grant.RefRule(fastForward(target)); refusal != "" {
-			p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(g.rows.Repo, g.roster))
+			p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(repo, roster))
 			p.Detail = fmt.Sprintf("%s may not merge into %s, which no rule protects, as it may not push it: %s",
 				who, target, why)
 			return p
@@ -1170,7 +1184,7 @@ func (g gateJudge) mergeAuthority() Precondition {
 	// it cannot type handed to a call it cannot type either, fmt.Sprintf
 	// among them, since it cannot tell it from a gitproc.Cmd.
 	var need Access
-	switch g.rules.MergeBy {
+	switch rules.MergeBy {
 	case MergeByWriters:
 		need = AccessWrite
 	case MergeByMaintainers:
@@ -1180,19 +1194,19 @@ func (g gateJudge) mergeAuthority() Precondition {
 		// every one it does (MergeBy.Rank): only a person merges.
 		p.State = PreconditionUnmet
 		p.Detail = fmt.Sprintf("a merge into %s is a person's (merge_by %s, the stricter of its rules' and "+
-			"code.merge_by_floor), and %s is none", target, g.rules.MergeBy, who)
+			"code.merge_by_floor), and %s is none", target, rules.MergeBy, who)
 		return p
 	}
 	if grant.Access >= need {
 		p.State = PreconditionMet
 		p.Detail = fmt.Sprintf("%s holds %s on %s, and a merge into %s takes %s (merge_by %s)", who, grant.Access,
-			g.rows.Repo.Name, target, need, g.rules.MergeBy)
+			repo.Name, target, need, rules.MergeBy)
 		return p
 	}
-	p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(g.rows.Repo, g.roster))
+	p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(repo, roster))
 	p.Detail = fmt.Sprintf("%s holds %s on %s, and a merge into %s takes %s (merge_by %s, the stricter of its "+
-		"rules' and code.merge_by_floor): %s or a person merges it", who, grant.Access, g.rows.Repo.Name,
-		target, need, g.rules.MergeBy, maintainedBy(g.rows.Repo, g.roster))
+		"rules' and code.merge_by_floor): %s or a person merges it", who, grant.Access, repo.Name,
+		target, need, rules.MergeBy, maintainedBy(repo, roster))
 	return p
 }
 

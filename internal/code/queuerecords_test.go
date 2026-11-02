@@ -85,11 +85,11 @@ func (n *node) checked(repoID, oid, target, name string, attempt int, state code
 	at := store.EncodeTime(harnessAt)
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, ?, 'tip', '', 0, '', '', '', '', 1, '', 600, 'exit',
-			'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', '', '', '', '')`,
+			'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', '', '', '', '')`,
 		repoID, oid, target, name, attempt, string(state), at, at, at, store.EncodeTime(harnessAt.Add(600*time.Second)))
 }
 
@@ -222,9 +222,9 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 			AND actor = 'pat:ada' AND actor_seat = 'founder' AND introduced = ?`, push, oidOf("M")); pushes != 1 {
 		t.Fatalf("%d push rows record the landing as ada's push via queue introducing M, want one", pushes)
 	}
-	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedPreLand) ||
+	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedQueue) ||
 		got[0].entry != entryID || got[0].base != oidOf("A") || got[0].commit != oidOf("M") || !got[0].green {
-		t.Fatalf("main's landings read %+v, want one green pre_land landing of the entry from A to M", got)
+		t.Fatalf("main's landings read %+v, want one green queue landing of the entry from A to M", got)
 	}
 	if green, _ := n.greenOf(repo, mainRef); green != oidOf("M") {
 		t.Fatalf("main's green row is at %q, want the landing's tip", green)

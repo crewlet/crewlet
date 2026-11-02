@@ -525,8 +525,9 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 
 // change serves one change by its number: on a first page of its revisions
 // its detail beside them, and on a later page, after the number of the last
-// revision the page before served, its revisions alone; and a page of the
-// part of its conversation the read names ([ReadQuery.Part]) — every page
+// revision the page before served, its revisions alone; its detail with no
+// revision for a read asking it alone ([ReadQuery.DetailOnly]); and a page of
+// the part of its conversation the read names ([ReadQuery.Part]) — every page
 // judged against the grant from the repository's row ([readableIn]).
 func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
@@ -577,6 +578,11 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
 			Conversation: conversation, Mergeability: merge}
 		out.Change.Readiness = readiness[row.id]
+		if q.DetailOnly {
+			// THE DETAIL ALONE: its asker reads no revision, so none is
+			// read, encoded or shipped ([ReadQuery.DetailOnly]).
+			return nil
+		}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
 	} else {
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)
