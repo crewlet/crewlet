@@ -20,7 +20,8 @@ import (
 // AN EXPUNGE, DECIDED: the one rewrite that drops objects, in two records of
 // their own on a repository's subject — its BEGIN ([ExpungeBegin]) and its
 // COMMIT ([ExpungeCommit]) — beside a third that only asks for one, a person's
-// REQUEST ([ExpungeRequest]). Each is proposed to the repository's committer
+// REQUEST ([ExpungeRequest]), and a fourth that says none is due, its
+// maintainer's clean SCAN ([ExpungeScan]). Each is proposed to the repository's committer
 // ([Committer.ProposeExpunge]) and decided by it in ONE snapshot, alone, as a
 // compaction is: everything that moves a repository's packs has one writer,
 // and contends on one subject.
@@ -67,6 +68,9 @@ import (
 // A request asked again under its own id is the same request, collapsed by
 // the operation ledger.
 //
+// A SCAN meets one rule: no expunge open — else stale: an open expunge is
+// finished from its rows, and its commit records the repository judged.
+//
 // A BEGIN:
 //
 //  1. no expunge open — else stale: a repository expunges once at a time;
@@ -95,14 +99,14 @@ import (
 //  5. the arithmetic: its rescue holds no more objects than the dropping
 //     packs' rows count — else [ErrInvalidProposal].
 //
-// NO REF IS READ, and no protection and no push: a request costs the
-// repository's row; a begin the row, a seek of the key an input and the
+// NO REF IS READ, and no protection and no push: a request and a scan cost
+// the repository's row; a begin the row, a seek of the key an input and the
 // published chain; a commit the row and the repository's own pack rows. The
 // rows of two snapshots are never paired.
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
 // naming the field), before it is queued: anything but exactly one of a
-// request, a begin and a commit; a repository id that is no repository's in
+// request, a begin, a commit and a scan; a repository id that is no repository's in
 // its canonical spelling; a request whose id is no operation id this engine
 // accepts (statelog.CheckCallerOpID), or whose asker is no person bound to a
 // seat; a begin or a commit whose own id is no bare UUIDv7, whose node config
@@ -115,7 +119,9 @@ import (
 // no bare UUIDv7, or whose retirements are not sorted and distinct or number,
 // as its rescue may, past MaxExpungeOutputs; an output whose pack id is not
 // its derivation ([DeriveOutputPackID]) or whose bundle [PackRef.Check]
-// refuses; and a proposal past what one record may carry. What the inputs, the
+// refuses; a scan whose own id is no bare UUIDv7, whose node config does not
+// admit or whose Seen is no position on the code log; and a proposal past
+// what one record may carry. What the inputs, the
 // chain and the dropping packs hold is the decide's to judge, from the rows.
 func (p ExpungeProposal) Validate() error {
 	_, err := p.measure()
@@ -149,6 +155,8 @@ func (p ExpungeProposal) ValidateUnstored() error {
 	switch {
 	case p.Request != nil:
 		return fmt.Errorf("%w: a request stores nothing — Validate checks it", ErrInvalidProposal)
+	case p.Scan != nil:
+		return fmt.Errorf("%w: a scan stores nothing — Validate checks it", ErrInvalidProposal)
 	case p.Begin != nil && p.Commit == nil:
 		b := *p.Begin
 		if b.Add, err = unstored("begin.add", b.Add); err != nil {
@@ -188,7 +196,7 @@ func (p ExpungeProposal) measure() (int, error) {
 }
 
 // record is the record p is: its op, its operation id — the set field's own
-// id — its session floor, and its payload. p is one of the three, which
+// id — its session floor, and its payload. p is one of the four, which
 // [ExpungeProposal.validFields] holds it to before anything reads this.
 func (p ExpungeProposal) record() (OpKind, string, statelog.Position, any) {
 	switch {
@@ -196,13 +204,15 @@ func (p ExpungeProposal) record() (OpKind, string, statelog.Position, any) {
 		return OpExpungeBegin, p.Begin.ExpungeID, p.Begin.Seen, *p.Begin
 	case p.Commit != nil:
 		return OpExpungeCommit, p.Commit.CommitID, p.Commit.Seen, *p.Commit
+	case p.Scan != nil:
+		return OpExpungeScan, p.Scan.ScanID, p.Scan.Seen, *p.Scan
 	case p.Request != nil:
 		return OpExpungeRequest, p.Request.RequestID, statelog.Position{}, *p.Request
 	}
 	return "", "", statelog.Position{}, nil
 }
 
-// RepoID is the repository p is about, by whichever of its three records it
+// RepoID is the repository p is about, by whichever of its four records it
 // carries — "" for one that carries none, which the estate's router refuses
 // as it refuses a push naming no repository. It is the ONE answer the router
 // keys p by, the committer queues it under and the estate's seam raises the
@@ -213,6 +223,8 @@ func (p ExpungeProposal) RepoID() string {
 		return p.Begin.RepoID
 	case p.Commit != nil:
 		return p.Commit.RepoID
+	case p.Scan != nil:
+		return p.Scan.RepoID
 	case p.Request != nil:
 		return p.Request.RepoID
 	}
@@ -221,17 +233,20 @@ func (p ExpungeProposal) RepoID() string {
 
 // again is what p's asker does after a refusal that decided nothing: a person
 // asks for the purge again, and a maintainer's next pass reads the rows and
-// plans again.
+// plans — or scans — again.
 func (p ExpungeProposal) again() string {
-	if p.Request != nil {
+	switch {
+	case p.Request != nil:
 		return "ask for the purge again"
+	case p.Scan != nil:
+		return "the next pass scans again"
 	}
 	return "the next pass plans again"
 }
 
 // decidedRows is the most rows p's record makes its apply touch: a request's
-// one, the repository's row; a begin's [expungeBeginRows]; a commit's
-// [expungeCommitRows].
+// and a scan's one, the repository's row; a begin's [expungeBeginRows]; a
+// commit's [expungeCommitRows].
 func (p ExpungeProposal) decidedRows() int {
 	switch {
 	case p.Begin != nil:
@@ -247,22 +262,49 @@ func (p ExpungeProposal) decidedRows() int {
 // bytes.
 func (p ExpungeProposal) validFields() error {
 	set := 0
-	for _, isSet := range []bool{p.Request != nil, p.Begin != nil, p.Commit != nil} {
+	for _, isSet := range []bool{p.Request != nil, p.Begin != nil, p.Commit != nil, p.Scan != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
-		return fmt.Errorf("%w: an expunge proposal is exactly one of a request, a begin and a commit, and "+
-			"this one sets %d", ErrInvalidProposal, set)
+		return fmt.Errorf("%w: an expunge proposal is exactly one of a request, a begin, a commit and a scan, "+
+			"and this one sets %d", ErrInvalidProposal, set)
 	}
 	switch {
 	case p.Request != nil:
 		return p.Request.validFields()
 	case p.Begin != nil:
 		return p.Begin.validFields()
+	case p.Scan != nil:
+		return p.Scan.validFields()
 	}
 	return p.Commit.validFields()
+}
+
+// validFields holds a scan to [ExpungeProposal.Validate]'s rules: a
+// repository id, its own id a bare UUIDv7, a node config admits and a Seen on
+// the code log — a begin's and a commit's rules for the fields it shares
+// with them.
+func (s ExpungeScan) validFields() error {
+	if err := validRepoID("scan.repo_id", s.RepoID); err != nil {
+		return err
+	}
+	if err := bareUUIDv7("scan.scan_id", s.ScanID); err != nil {
+		return err
+	}
+	switch {
+	case !config.ValidNodeID(s.Node):
+		return badField("scan.node", "%q is not a node id", s.Node)
+	case s.Seen.IsZero():
+		return badField("scan.seen", "a scan's record names the code log's position its scan read at")
+	case s.Seen.Stream != topics.CodeLogStream:
+		return badField("scan.seen", "%s is a position on another log than the code log (%s)", s.Seen,
+			topics.CodeLogStream)
+	case s.Seen.Valid() != nil:
+		return fmt.Errorf("%w: scan.seen: %w", ErrInvalidProposal, s.Seen.Valid())
+	}
+	return nil
 }
 
 // badField is a field of an expunge proposal refused: [ErrInvalidProposal], the
@@ -520,9 +562,16 @@ func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention
 		return decideBegin(ctx, tx, *p.Begin, repo, d, now)
 	case p.Commit != nil:
 		return decideCommit(ctx, tx, *p.Commit, repo, d, now)
+	case p.Scan != nil && repo.expungeID != "":
+		// AN OPEN EXPUNGE IS FINISHED, NEVER JUDGED: its maintainer's next
+		// pass finishes it from the rows, and its commit records the
+		// repository judged.
+		d.refusal, d.detail = RefusalStale, fmt.Sprintf("expunge %s is open on %s and has not committed; "+
+			"the next pass finishes it rather than scanning", repo.expungeID, repo.name)
+		return d, nil
 	}
 	// A REQUEST forms its record, whatever request is open: its apply widens
-	// that one to itself.
+	// that one to itself. A SCAN with no expunge open forms its record.
 	return d, nil
 }
 
@@ -822,6 +871,9 @@ func (c *Committer) appliedExpunge(ctx context.Context, p ExpungeProposal, opID 
 	switch {
 	case p.Request != nil:
 		return ExpungeResult{Outcome: statelog.OutcomeApplied, Position: at, Request: p.Request.RequestID}, nil
+	case p.Scan != nil:
+		// A SCAN ADDS NO PACK: its record applied is its answer.
+		return ExpungeResult{Outcome: statelog.OutcomeApplied, Position: at}, nil
 	case p.Begin != nil:
 		added = append(idsOf(p.Begin.Add), idsOf(p.Begin.Dropping)...)
 	default:

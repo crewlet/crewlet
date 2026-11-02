@@ -32,7 +32,7 @@ func (s *recordSpy) wrote(handle string) (worklet.WriteResult, error) {
 	}}, nil
 }
 
-func (s *recordSpy) MarkInbox(_ context.Context, _, handle string,
+func (s *recordSpy) MarkInbox(_ context.Context, _, handle string, _ statelog.Position,
 	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)

@@ -257,7 +257,8 @@ type maintStep uint16
 
 // stepCompact, stepPublish and stepExpunge are the background work a
 // repository's maintainer runs between passes (background.go:
-// Cache.AdmitCompaction, Cache.AdmitPublication and Cache.AdmitExpunge) as
+// Cache.AdmitCompaction, Cache.AdmitPublication, and Cache.AdmitExpunge with
+// the scan that judges one due, Cache.AdmitExpungeScan) as
 // steps of an incarnation's memoryRefused set: the three steps there that are
 // no declared write, at the first bits past every bit a write may take
 // (maxMaintWrites), so the set an incarnation keeps of what the node's memory

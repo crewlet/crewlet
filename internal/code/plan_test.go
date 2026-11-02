@@ -351,15 +351,13 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
-		"owners digest":       {ownersDigestSQL, []any{strings.Repeat("a", 64), "repo-1"}, []string{repoKey + " (id=?)"}},
-		"human paths digest":  {humanPathsDigestSQL, []any{strings.Repeat("a", 64), "repo-1"}, []string{repoKey + " (id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", strings.Repeat("a", 64), strings.Repeat("b", 64), "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, false, 1, false, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
@@ -1182,14 +1180,15 @@ func registeredStatements() map[string]statement {
 		"request":              {requestSQL, []any{"r", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin counters":       {beginCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"scan":                 {scanSQL, []any{1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
-		// THE WEEKLY ARM of the same listing, least recently expunged first
+		// THE WEEKLY ARM of the same listing, least recently judged first
 		// up to an instant, from its start and after a cursor's row.
 		"expunge weekly": {expungeWeeklySQL, []any{2, MaxSnapshotItems},
-			[]string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
+			[]string{"code_repos_expunge_due_idx (expunge_scanned_at<=?)"}},
 		"expunge weekly after": {expungeWeeklyAfterSQL, []any{2, 1, 1, "repo-1", MaxSnapshotItems},
-			[]string{"code_repos_expunge_due_idx (expunged_at>=? AND expunged_at<=?)"}},
+			[]string{"code_repos_expunge_due_idx (expunge_scanned_at>=? AND expunge_scanned_at<=?)"}},
 		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},

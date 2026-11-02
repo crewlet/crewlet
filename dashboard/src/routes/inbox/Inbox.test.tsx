@@ -1124,7 +1124,8 @@ describe("the pane", () => {
     expect(posted).toEqual([
       { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
       // AN ANSWERED QUESTION DOES NOT COME BACK AS AN UPDATE.
-      { tool: "mark_inbox", args: { read: ["r-1"] } },
+      // HELD TO THE NOTICE IT MARKS, which the deciding node waits for.
+      { tool: "mark_inbox", args: { read: ["r-1"], seen: "CREWLET_TRACKER_LOG@1:1" } },
     ]);
     expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
       "Answered Ship anyway",
@@ -1550,7 +1551,11 @@ describe("the pane", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
-    expect(posted).toEqual([{ tool: "mark_inbox", args: { read: ["r-2"] } }]);
+    // ITS OWN POSITION RIDES AS THE FLOOR, as a code notice's does. Mutation:
+    // send `seen` for a code notice alone, red.
+    expect(posted).toEqual([
+      { tool: "mark_inbox", args: { read: ["r-2"], seen: "CREWLET_TRACKER_LOG@1:2" } },
+    ]);
     expect(screen.getByRole("button", { name: "Mark as unread" })).toBeTruthy();
   });
 
@@ -1579,7 +1584,11 @@ describe("the pane", () => {
     expect(updates.getByText("Retry the upload once")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
-    expect(posted).toEqual([{ tool: "code_mark_inbox", args: { read: ["c-5"] } }]);
+    // ITS OWN POSITION RIDES AS THE FLOOR, which the deciding node waits for.
+    // Mutation: drop `seen` from NoticeActions' code write, red.
+    expect(posted).toEqual([
+      { tool: "code_mark_inbox", args: { read: ["c-5"], seen: "CREWLET_CODE_LOG@1:5" } },
+    ]);
   });
 
   // THE INTENT-FIRST CARD: the work item the change implements and its
@@ -1789,8 +1798,14 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
     await settle();
     expect(posted).toEqual([
-      { tool: "mark_inbox", args: { read_through: "CREWLET_TRACKER_LOG@1:12" } },
-      { tool: "code_mark_inbox", args: { read_through: "CREWLET_CODE_LOG@1:5" } },
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
+      {
+        tool: "code_mark_inbox",
+        args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
+      },
     ]);
   });
 
@@ -1810,7 +1825,10 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
     await settle();
     expect(posted).toEqual([
-      { tool: "mark_inbox", args: { read_through: "CREWLET_TRACKER_LOG@1:12" } },
+      {
+        tool: "mark_inbox",
+        args: { read_through: "CREWLET_TRACKER_LOG@1:12", seen: "CREWLET_TRACKER_LOG@1:12" },
+      },
     ]);
   });
 

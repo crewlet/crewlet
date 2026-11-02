@@ -56,7 +56,9 @@ import (
 	"github.com/crewlet/crewlet/static"
 )
 
-// staticDir is the directory package static embeds, on disk.
+// staticDir is package static's directory on disk: the dashboard's committed
+// build output, which the package embeds all of but the trees
+// [unembeddedTrees] declares.
 func staticDir(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(sourcetree.Root(t), "static")
@@ -74,8 +76,8 @@ func servedTree(t *testing.T) string {
 // Every one of these is a real failure mode of a committed build artifact: a
 // merge that took one side's index.html and the other's assets, a `git add`
 // that missed the fonts directory, a build run with the protocol config
-// skipped or writing into the served tree. Each leaves a tree that looks plausible in a diff and serves a blank
-// page.
+// skipped or writing into the served tree. Each leaves a tree that looks
+// plausible in a diff and serves a blank page.
 func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	t.Parallel()
 	served := servedTree(t)
@@ -925,6 +927,22 @@ func TestTheNoticesAreServedAsText(t *testing.T) {
 	}
 }
 
+// unembeddedTrees are the directories under static/ that the dashboard's build
+// writes and the binary deliberately does not carry, each with why: the one
+// exception TestEveryStaticFileIsInTheBinary makes, holding each to the
+// opposite rule, that none of its files is in the binary.
+//
+// Declared here rather than moved out of static/, because static/ is where
+// every build target of dashboard/ is committed: `make dashboard` writes it,
+// `make dashboard-check` judges it, and .gitattributes keeps it out of text
+// merges. The embed takes the targets a browser asks for; a target that is
+// build output and no asset stays beside them, and is named here.
+var unembeddedTrees = map[string]string{
+	"protocol": "the wire protocol alone (dashboard/vite.protocol.config.ts), which internal/e2e's " +
+		"replay reads from disk and no page loads: embedded, it was 124 KiB of a test's module in " +
+		"every engine binary and image",
+}
+
 // TestEveryStaticFileIsInTheBinary guards the embed pattern against the tree.
 //
 // The pattern is a LIST, and a list is a thing that goes stale. It named
@@ -932,10 +950,16 @@ func TestTheNoticesAreServedAsText(t *testing.T) {
 // the favicon and the sidebar brand, both asked for by the shell — were simply
 // absent from the binary. Every module and stylesheet served perfectly; the
 // page just had no logo.
+//
+// A tree [unembeddedTrees] declares is held the other way, since a pattern
+// that took it would put it back in every binary. The declaration is exact in
+// both directions: an entry whose tree holds no file excuses nothing today and
+// would let the next file to land there pass unread, so it is deleted.
 func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 	t.Parallel()
 	static := staticDir(t)
 	embedded := embeddedTree(t)
+	unembedded := map[string]int{}
 	err := sourcetree.Walk(static, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasSuffix(p, ".go") {
 			return err
@@ -945,15 +969,23 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		want, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
 		got, ok := embedded[rel]
+		if tree, _, below := strings.Cut(rel, "/"); below && unembeddedTrees[tree] != "" {
+			unembedded[tree]++
+			if ok {
+				t.Errorf("%s is in the binary, and nothing under static/%s/ is to be: %s; take it out "+
+					"of the embed pattern in static/static.go", rel, tree, unembeddedTrees[tree])
+			}
+			return nil
+		}
 		if !ok {
 			t.Errorf("%s is in %s but not in the binary; add it to the embed "+
 				"pattern in static/static.go", rel, static)
 			return nil
+		}
+		want, err := os.ReadFile(p)
+		if err != nil {
+			return err
 		}
 		if !bytes.Equal(got, want) {
 			t.Errorf("%s: %d bytes embedded, %d on disk", rel, len(got), len(want))
@@ -962,6 +994,12 @@ func TestEveryStaticFileIsInTheBinary(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walking %s: %v", static, err)
+	}
+	for tree, why := range unembeddedTrees {
+		if unembedded[tree] == 0 {
+			t.Errorf("unembeddedTrees excuses static/%s/, which holds no file: delete the entry. It was: %s",
+				tree, why)
+		}
 	}
 }
 

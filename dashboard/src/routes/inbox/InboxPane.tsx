@@ -110,6 +110,7 @@ import {
   findingsLine,
   measuredLine,
   moment,
+  noticeFloor,
   noticeNote,
   noticeText,
   noticeTitle,
@@ -456,6 +457,7 @@ function ChangeNoticePane({
       <NoticeActions
         notice={notice}
         source="code"
+        seen={noticeFloor([notice])}
         now={now}
         zone={zone}
         maxSnoozeAhead={maxSnoozeAhead}
@@ -526,9 +528,14 @@ function AskPane({
 
   const onAnswered = (given: AskAnswer) => {
     setAnswer(given);
-    const unread = notices.filter((n) => !n.read).map((n) => n.record_id);
+    const unread = notices.filter((n) => !n.read);
     if (unread.length > 0) {
-      void mark.run({ read: unread }, { done: "Marked read", quiet: true });
+      // HELD TO THE FURTHEST OF THE NOTICES IT NAMES, which the deciding node
+      // waits for rather than refusing one this page was shown as unknown.
+      void mark.run(
+        { read: unread.map((n) => n.record_id), seen: noticeFloor(unread) },
+        { done: "Marked read", quiet: true },
+      );
     }
     onSettled("Answered", given);
   };
@@ -1482,6 +1489,7 @@ function NoticePane({
       <NoticeActions
         notice={notice}
         source="tracker"
+        seen={noticeFloor([notice])}
         now={now}
         zone={zone}
         maxSnoozeAhead={maxSnoozeAhead}

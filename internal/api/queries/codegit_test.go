@@ -13,12 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// whole, abbrev and the two positions are what these cases name: a commit's
-// whole id, an abbreviation of it, and where a ref last moved and the node's
-// own write landed on the code log.
+// whole, other, forked, abbrev and the two positions are what these cases
+// name: two commits' whole ids, the one both forked from, an abbreviation of
+// the first, and where a ref last moved and the node's own write landed on
+// the code log.
 const (
 	whole  = "1111111111111111111111111111111111111111"
 	other  = "2222222222222222222222222222222222222222"
+	forked = "3333333333333333333333333333333333333333"
 	abbrev = "1111111"
 )
 
@@ -149,12 +151,15 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 // freshness, and asks its git node at the furthest of the node's own write to
 // the repository, the caller's floor on the code log and where each ref last
 // moved — never at the resolve's own checkpoint. `HEAD` is the default branch,
-// which a read of the repository names first: the resolve is then floored at
-// that read. A name no live ref holds is not_found (`no_ref`), naming it, and
-// nothing is read by object id.
+// which the resolve answers from the repository's row in its own transaction
+// (code.HeadRef): a tree at HEAD — the Repository page's commonest question —
+// is ONE read of the rows, a resolve naming HEAD at the caller's freshness,
+// with no read of the repository ahead of it. A name no live ref holds is
+// not_found (`no_ref`), naming it, and nothing is read by object id.
 //
 // Mutation: floor the git read at the resolve's Position — red; resolve each
-// ref in a read of its own — red.
+// ref in a read of its own — red; read the repository first to name its
+// default branch — red.
 func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	t.Parallel()
 	caller := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 30}
@@ -185,14 +190,16 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	}
 
 	headed := &stubCode{}
-	if _, err := askNative(t, queries.Sources{Code: headed}, "code_tree", map[string]any{"name": "web"}); err != nil {
+	if _, err := askNative(t, queries.Sources{Code: headed}, "code_tree", map[string]any{"name": "web",
+		"read_level": "session", "min_position": caller.String()}); err != nil {
 		t.Fatal(err)
 	}
-	if len(headed.asked) != 1 || headed.asked[0].Kind != code.ReadRepo || len(headed.resolved) != 1 ||
-		!slices.Equal(headed.resolved[0].Refs, []string{"main"}) ||
-		headed.resolved[0].Fresh.Level != statelog.ReadSession {
-		t.Errorf("a tree at HEAD read %+v and resolved %+v, want the repository first and its default branch "+
-			"at session floored there", headed.asked, headed.resolved)
+	if len(headed.asked) != 0 || len(headed.resolved) != 1 ||
+		!slices.Equal(headed.resolved[0].Refs, []string{code.HeadRef}) ||
+		headed.resolved[0].Fresh.Level != statelog.ReadSession ||
+		headed.resolved[0].Fresh.Floor("CREWLET_CODE_LOG") != caller {
+		t.Errorf("a tree at HEAD read %+v and resolved %+v, want one resolve naming HEAD at the caller's "+
+			"session floored at %v and no read of the repository", headed.asked, headed.resolved, caller)
 	}
 
 	missing := &stubCode{refs: func(q code.RefQuery) (code.RefAnswer, error) {
@@ -215,8 +222,10 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 // the WHOLE ids the comparison answered, so the preview merges exactly the
 // two commits compared whatever the request spelled; as the caller, at the
 // floor the comparison was read at; and answers its state and conflicts
-// beside the comparison. A home that cannot answer now is unavailable, never
-// an answer about the two commits.
+// beside the comparison — of two commits that have diverged, neither
+// containing the other, which is the one comparison git has to merge to
+// answer. A home that cannot answer now is unavailable, never an answer about
+// the two commits.
 //
 // Mutation: preview the request's own spellings — an abbreviation reaches the
 // preview, red; answer the comparison without its preview — red.
@@ -225,7 +234,7 @@ func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 	stub := &stubCode{floor: wrote,
 		git: func(q code.GitQuery) (code.GitAnswer, error) {
 			return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &code.CompareAnswer{Base: whole,
-				Head: other, MergeBase: whole, BaseIsAncestor: true, Ahead: 1}}, nil
+				Head: other, MergeBase: forked, Ahead: 1, Behind: 2}}, nil
 		},
 		preview: func(q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
 			return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeConflict,
@@ -246,7 +255,7 @@ func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 			other, whole, stubRepoID, wrote)
 	}
 	got, ok := answer.(queries.CodeComparison)
-	if !ok || got.Compare == nil || got.Compare.MergeBase != whole || got.Preview.State != code.MergeConflict ||
+	if !ok || got.Compare == nil || got.Compare.MergeBase != forked || got.Preview.State != code.MergeConflict ||
 		!slices.Equal(got.Preview.Conflicts, []string{"go.mod"}) || got.Preview.ConflictsOmitted != 2 {
 		t.Errorf("the comparison answered %+v, want the comparison and its preview", answer)
 	}
@@ -257,6 +266,60 @@ func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 	if _, err := askNative(t, queries.Sources{Code: down}, "code_compare", map[string]any{"name": "web",
 		"base": whole, "head": other}); !errors.Is(err, queries.ErrUnavailable) {
 		t.Errorf("a comparison whose home could not preview answered %v, want unavailable", err)
+	}
+}
+
+// AN ANCESTRAL COMPARISON ASKS NO PREVIEW. Where one commit contains the
+// other — base inside head, a fast-forward, or head inside base, a merge of
+// nothing — the merge a preview runs answers `clean` with no path conflicted,
+// so the comparison answers that from its own merge base and asks its home
+// nothing: no scratch, no git and no unit of the node's seat git-work share
+// for the commonest comparison there is. Asked by whole ids it is immutable,
+// the merge decided.
+//
+// Mutation: ask the home whatever the comparison answered — a preview is
+// asked, red; answer an ancestral comparison anything but clean — red.
+func TestAnAncestralComparisonAsksNoPreview(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		relation code.CompareAnswer
+	}{
+		{"base inside head", code.CompareAnswer{MergeBase: whole, BaseIsAncestor: true, Ahead: 3}},
+		{"head inside base", code.CompareAnswer{MergeBase: other, HeadIsAncestor: true, Behind: 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stub := &stubCode{
+				git: func(q code.GitQuery) (code.GitAnswer, error) {
+					c := tc.relation
+					c.Base, c.Head = whole, other
+					return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Compare: &c}, nil
+				},
+				preview: func(q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+					return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head,
+						State: code.MergeConflict, Conflicts: []string{"go.mod"}}, nil
+				}}
+			answer, err := askNative(t, queries.Sources{Code: stub}, "code_compare", map[string]any{"name": "web",
+				"base": whole, "head": other})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stub.previewed) != 0 {
+				t.Errorf("an ancestral comparison asked its home %d merge previews, want none: %+v",
+					len(stub.previewed), stub.previewed)
+			}
+			fixed, immutable := answer.(queries.Immutable)
+			if !immutable {
+				t.Fatalf("an ancestral comparison by whole ids answered %T, want it immutable", answer)
+			}
+			got, ok := fixed.Answer.(queries.CodeComparison)
+			if !ok || got.Preview.State != code.MergeClean || len(got.Preview.Conflicts) != 0 ||
+				got.Preview.ConflictsOmitted != 0 {
+				t.Errorf("an ancestral comparison answered %+v, want its preview clean, no path conflicted",
+					fixed.Answer)
+			}
+		})
 	}
 }
 

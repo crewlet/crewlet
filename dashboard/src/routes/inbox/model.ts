@@ -89,6 +89,7 @@ import type {
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
+  InboxPosition,
   WorkAskRow,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
@@ -346,9 +347,52 @@ export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
       newest[n.source] = n;
     }
   }
-  const spelled = (n: InboxNotice | null) =>
-    n ? `${n.position.stream}@${n.position.generation ?? 0}:${n.position.seq}` : null;
+  const spelled = (n: InboxNotice | null) => (n ? spelledPosition(n.position) : null);
   return { tracker: spelled(newest.tracker), code: spelled(newest.code) };
+}
+
+/**
+ * A notice's position as a write's argument spells one,
+ * `<stream>@<generation>:<sequence>` — what `read_through` reads through and
+ * a mark's `seen` waits for (`mark_inbox`, `code_mark_inbox`).
+ */
+export function spelledPosition(p: InboxPosition): string {
+  return `${p.stream}@${p.generation ?? 0}:${p.seq}`;
+}
+
+/** Where a notice sits on its domain's log, as its own fields carry it. */
+export interface NoticeLogPosition {
+  log_stream: string;
+  log_generation: number;
+  log_seq: number;
+}
+
+/**
+ * The floor a mark of these notices waits for — the furthest of their own
+ * positions, spelled as `seen` takes it — or undefined for none. A mark is
+ * decided by whichever data node is asked, which may not have reached a notice
+ * this page was read with elsewhere; held to the furthest, it waits for every
+ * one it names. One log's notices only: a position on one log says nothing of
+ * another's, and each mark tool refuses a floor on a log that is not its own.
+ */
+export function noticeFloor(notices: readonly NoticeLogPosition[]): string | undefined {
+  let furthest: NoticeLogPosition | undefined;
+  for (const n of notices) {
+    if (
+      !furthest ||
+      n.log_generation > furthest.log_generation ||
+      (n.log_generation === furthest.log_generation && n.log_seq > furthest.log_seq)
+    ) {
+      furthest = n;
+    }
+  }
+  return furthest
+    ? spelledPosition({
+        stream: furthest.log_stream,
+        generation: furthest.log_generation,
+        seq: furthest.log_seq,
+      })
+    : undefined;
 }
 
 // ---------------------------------------------------------------------------

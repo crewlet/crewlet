@@ -4124,7 +4124,8 @@ var ACTIONS = {
 			"unread",
 			"snooze",
 			"unsnooze",
-			"read_through"
+			"read_through",
+			"seen"
 		],
 		domain: "tracker",
 		apps: ["worklet"],
@@ -4263,7 +4264,8 @@ var ACTIONS = {
 			"unread",
 			"snooze",
 			"unsnooze",
-			"read_through"
+			"read_through",
+			"seen"
 		],
 		domain: "code",
 		apps: [],

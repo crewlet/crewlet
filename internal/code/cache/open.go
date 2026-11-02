@@ -103,10 +103,18 @@ type Cache struct {
 	codeIndexBytes atomic.Int64
 	// placement is where this node keeps code indexes (Options.Placement),
 	// nil for nowhere; indexWanted is the repositories a round moved the refs
-	// of since the indexer last looked, under indexMu, and indexKicks its wake.
+	// of since the indexer last looked, under indexMu, and indexKicks its
+	// wake. indexBack, under indexMu too, is what the budget took of the
+	// repositories this node keeps an index of — the copy it evicted, the
+	// index it trimmed — by the bytes each held: what the indexer waits for
+	// room for before it fills or builds that one again (codeindex.go); and
+	// indexSeen, under indexMu too, the place among each repository's index
+	// holders the indexer last saw this node in, and since when (indexPlace).
 	placement   *Placement
 	indexMu     sync.Mutex
 	indexWanted map[string]bool
+	indexBack   map[string]indexTaken
+	indexSeen   map[string]indexPlace
 	indexKicks  chan struct{}
 	// droppingBytes is what every incarnation's dropping view holds, of
 	// heldBytes — the pack files an expunge's begin left dropping, which

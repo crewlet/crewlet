@@ -2216,6 +2216,7 @@ person actually says about their inbox, naming each notice by the `record_id`
 | `unsnooze` | Brings snoozed notices back now. |
 | `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. |
 | `primary_reasons` | Which wake reasons are yours to act on — see below. Omitted, your choice stands; an empty list takes the default back. |
+| `seen` | How far you have read the tracker's log, `<stream>@<generation>:<sequence>` — the `position` of the newest notice you were shown. Optional, and it changes nothing on your record: it is what the mark waits for. A mark is decided by whichever node holding the company's records is asked, which may not yet have applied a notice your inbox page was read with elsewhere; held to `seen`, that node waits for it, and one that cannot reach it in time answers that it is behind, which the same call clears, rather than refusing a notice you were shown as no change the company recorded. A position on another log is refused. |
 
 Everything you do not name stays exactly as it was — every other mark, every
 snooze, and how far you have read. The engine applies the move to your record
@@ -2233,7 +2234,7 @@ tomorrow, it is offered once), or a moment you pick, and only the ones inside
 the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
 the write would refuse is never shown. *Mark all read* is `read_through` at the
 newest notice the screen LOADED, so a notice that arrived after you looked is
-still unread. A question, a parked coding run, a stopped seat and a condition
+still unread. Every one of these sends the notices' own position as `seen`. A question, a parked coding run, a stopped seat and a condition
 carry none of these: each leaves the list when it is answered or cleared, and
 answering a question in the Inbox marks the notices that asked it read, so it
 does not come back as an update.

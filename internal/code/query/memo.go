@@ -183,10 +183,19 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case code.GitSearch:
 		// The commit read and the ref that named it, then the query's every
 		// part: whichever path cut the page, its hits are the same lines.
+		// The place it continues after among them: a page of a search is
+		// another answer than its first (a path is never empty, so none is
+		// told from every place).
 		s := q.Search
+		after, afterLine := "", 0
+		if s.After != nil {
+			after, _ = s.After.Raw()
+			afterLine = s.After.Line
+		}
 		paths := slices.Compact(slices.Sorted(slices.Values(s.Paths)))
 		parts = append(parts, whole[searchTipKey], whole[searchRefKey], string(s.Mode),
-			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), strconv.Itoa(len(paths)))
+			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
+			strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)

@@ -116,7 +116,23 @@ type PersonAuthority struct {
 // [inbox.CheckGesture] refuses on what it says is a content refusal of this
 // write, marked [ErrInvalid] like every other with its sentence unchanged, so
 // each surface that classes the tracker's refusals classes it with them.
-func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
+//
+// SEEN IS THE ASKER'S FLOOR: how far they read the tracker's log, which the
+// decide waits for ([Writer.After]) before it opens its snapshot. A mark is
+// unkeyed and decided by whichever data node the estate router reaches
+// (estate's tracker.mark_inbox), and the inbox page that showed the notice may
+// have been read from a peer ahead of it — this node's copy out of service, a
+// router walk, another ingress node. A decide below the notice's record finds
+// no history row for it and refuses the mark as naming no change this company
+// recorded, which is false the moment the node catches up. With the floor, a
+// node that cannot reach it within the write budget answers `behind`
+// ([statelog.ReasonBehind]) — a condition the same call clears — and appends
+// nothing. The floor is THIS call's alone and never the node's session floor
+// (estate.Session): a position no log will reach, raised into a floor every
+// later request on the node carries, would refuse every one of them. The zero
+// position waits for nothing; a position on another log is refused
+// [ErrInvalid].
+func (w *Writer) MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
 	gesture inbox.Gesture[Reason], authority PersonAuthority) (WriteResult, error) {
 
 	if err := w.ownRecord(handle, "inbox", authority); err != nil {
@@ -127,6 +143,12 @@ func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
 			return WriteResult{}, invalid("%s", inbox.Sentence(err))
 		}
 		return WriteResult{}, err
+	}
+	if !seen.IsZero() {
+		if err := seen.On(trackerStream); err != nil {
+			return WriteResult{}, invalid("seen: %v", err)
+		}
+		w = w.After(seen)
 	}
 	return w.writePerson(ctx, opID, handle, func(tx *sql.Tx, post *Person,
 		at time.Time) error {

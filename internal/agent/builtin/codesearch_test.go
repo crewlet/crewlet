@@ -189,47 +189,68 @@ func codeTool(t *testing.T, deps builtin.CodeDeps, name string) tools.Callable {
 	return nil
 }
 
-// A SEARCH'S PAGES ARE CUT FROM ITS OWN ORDER: a search answers at most
-// code.MaxSearchHits lines, in the order of their repositories, paths and
-// line numbers, which fenced are past one tool answer — so each page holds the
-// hits that fit, whole, under builtin.ToolAnswerBytes as sent, and `next`
-// names the last one sent; the next page is the hits AFTER it, however the
-// search answers when asked again. Walked to its end, the pages are every
-// line once, in order — every path here a file's name that is not UTF-8,
-// which the search orders by its BYTES (codesearch.CompareHits), so a cursor
-// keeps the last path sent as its bytes, not as the text its U+FFFD stands in.
-// A cursor of another search, or none at all, is refused.
+// tipOf is the commit the fake search searched repository repo at.
+func tipOf(repo string) string {
+	return strings.Repeat(map[string]string{"aaa": "a", "api": "b", "web": "d"}[repo], 40)
+}
+
+// A SEARCH'S PAGES ARE CUT FROM ITS OWN ORDER, AND EACH IS ITS OWN SEARCH:
+// a search's lines come in the order of their repositories, paths and line
+// numbers, and a page holds the lines that fit, whole, under
+// builtin.ToolAnswerBytes as sent, `next` naming the last one sent; the next
+// page's search is ASKED AFTER that line — its codesearch.Key, the commit its
+// repository was searched at with it — and for no more lines than a page
+// asks, so the search answers that page's lines and never an earlier one's,
+// whatever it answers ahead of the key when asked again. Walked to its end,
+// the pages are every line once, in order, more than code.MaxSearchHits of
+// them — every path here a file's name that is not UTF-8, which the search
+// orders by its BYTES (codesearch.CompareHits), so a cursor keeps the last
+// path sent as its bytes, not as the text its U+FFFD stands in. A cursor of
+// another search, or none at all, is refused.
 //
 // Mutations: the page uncut (every hit at once) → past the answer, red; the
-// next page skipped by a count of the hits sent rather than by the last one's
-// key → the line the second search adds ahead of the cursor shifts it, and a
-// line is answered twice, red; the last hit sent kept on the next page → red;
-// the cursor keeping a path's text alone → its U+FFFD's bytes sort before the
-// path's own 0xff, the last hit sent comes again, red; the cursor's search
-// not compared → red.
+// cursor's key not handed to the search (Query.After) → every page is the
+// first, red; the key's commit not carried → red; the cursor keeping a path's
+// text alone → its U+FFFD's bytes sort before the path's own 0xff, the last
+// hit sent comes again, red; the cursor's search not compared → red.
 func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	t.Parallel()
 	var every []codesearch.Hit
-	for i := range code.MaxSearchHits {
-		repo := []string{"api", "web"}[i*2/code.MaxSearchHits]
+	total := code.MaxSearchHits + 100
+	for i := range total {
+		repo := []string{"api", "web"}[i*2/total]
 		every = append(every, searchHit(repo, fmt.Sprintf("src/f%03d\xff.go", i), i+1,
 			strings.Repeat("x", code.MaxSearchLineBytes-8)+fmt.Sprintf("%08d", i)))
 	}
-	search := &codeSearches{answer: func(n int, _ codesearch.Query) (codesearch.Answer, error) {
+	search := &codeSearches{answer: func(n int, q codesearch.Query) (codesearch.Answer, error) {
 		hits := every
 		if n > 1 {
-			// ASKED AGAIN, the search answers a line it did not before,
-			// ahead of every place a page was cut at: a push landed.
+			// ASKED AGAIN, the search has a line it did not before, ahead
+			// of every place a page was cut at: a push landed.
 			hits = append([]codesearch.Hit{searchHit("aaa", "a.go", 1, "new")}, every...)
 		}
-		return codesearch.Answer{Hits: hits, Coverage: codesearch.Coverage{Searched: 2, Truncated: true}}, nil
+		if q.After != nil {
+			// As the search answers a key: the lines after it alone.
+			key := codesearch.Hit{Repo: q.After.Repo, SearchHit: code.SearchHit{Path: q.After.Path,
+				PathB64: q.After.PathB64, Line: q.After.Line}}
+			hits = slices.DeleteFunc(slices.Clone(hits), func(h codesearch.Hit) bool {
+				return codesearch.CompareHits(key, h) >= 0
+			})
+		}
+		cut := q.Limit > 0 && len(hits) > q.Limit
+		if cut {
+			hits = hits[:q.Limit]
+		}
+		return codesearch.Answer{Hits: hits, Tips: map[string]string{"aaa": tipOf("aaa"), "api": tipOf("api"),
+			"web": tipOf("web")}, Coverage: codesearch.Coverage{Searched: 2, Truncated: cut}}, nil
 	}}
 	turn, _ := readerTurn(t)
 	reg := codeRegistry(t, withSearch(codeDeps(newCodeHost()), search))
 	var (
-		read   []string
-		cursor string
-		pages  int
+		read     []string
+		lastSent []codesearch.Hit
+		cursor   string
+		pages    int
 	)
 	for {
 		args := map[string]any{"query": "needle"}
@@ -251,7 +272,10 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 		for _, h := range page.Hits {
 			read = append(read, fmt.Sprintf("%s/%s:%d", h.Repo, h.Path, h.Line))
 		}
-		if page.Next == "" || pages > code.MaxSearchHits {
+		if len(page.Hits) > 0 {
+			lastSent = append(lastSent, page.Hits[len(page.Hits)-1])
+		}
+		if page.Next == "" || pages > 50 {
 			break
 		}
 		cursor = page.Next
@@ -267,6 +291,24 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	// THE FIRST PAGE IS THE FIRST SEARCH'S, which had no `aaa` line.
 	if !slices.Equal(read, want) {
 		t.Errorf("the pages read %d lines, want the search's %d once each, in its order", len(read), len(want))
+	}
+	// EACH PAGE'S SEARCH IS ASKED AFTER THE LINE THE PAGE BEFORE SENT LAST,
+	// at the commit it was read at, for no more than a page asks.
+	for i, q := range search.asked() {
+		if q.Limit < 1 || q.Limit >= code.MaxSearchHits {
+			t.Errorf("page %d asked the search for %d lines, want a page's: more than none, fewer than %d",
+				i+1, q.Limit, code.MaxSearchHits)
+		}
+		if i == 0 {
+			if q.After != nil {
+				t.Errorf("the first page was asked after %+v", *q.After)
+			}
+			continue
+		}
+		prev := lastSent[i-1]
+		if want := codesearch.KeyOf(prev, tipOf(prev.Repo)); q.After == nil || *q.After != want {
+			t.Errorf("page %d was asked after %+v, want %+v", i+1, q.After, want)
+		}
 	}
 
 	for _, c := range []struct{ what, cursor string }{
@@ -328,6 +370,60 @@ func TestCodeSearchHoldsAndFloorsWhatItNames(t *testing.T) {
 	}
 	if asks := search.asked(); len(asks) != 2 {
 		t.Errorf("the refused search was asked: %d searches", len(asks))
+	}
+}
+
+// A PAGE RESOLVES WHAT IT SEARCHES, A REF ONCE A TURN: a page after a key
+// searches the key's repository at the key's commit, so it resolves no ref
+// there, even in a turn that has resolved nothing; and a ref a turn resolved
+// in a repository is resolved there again by no later search of that turn —
+// the resolution, its hold taken, floors them all — while the next turn
+// resolves it afresh. The search is floored there either way.
+//
+// Mutations: resolve the ref in the key's repository (searchHolds' key
+// skip) — the second turn's page resolves main in site, red; resolve it on
+// every search of a turn (searchHolds' searchRefKey) — the second turn's
+// second search resolves it again, red.
+func TestCodeSearchResolvesARefOnceATurn(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	search := &codeSearches{answer: func(n int, _ codesearch.Query) (codesearch.Answer, error) {
+		if n > 1 {
+			return codesearch.Answer{Hits: []codesearch.Hit{}}, nil
+		}
+		return codesearch.Answer{Hits: []codesearch.Hit{searchHit("site", "a.go", 1, "needle"),
+			searchHit("site", "a.go", 2, "needle")}, Tips: map[string]string{"site": mainOID},
+			Coverage: codesearch.Coverage{Searched: 1, Truncated: true}}, nil
+	}}
+	reg := codeRegistry(t, withSearch(codeDeps(host), search))
+	args := map[string]any{"query": "repo:site ref:main needle"}
+	resolved := func() int {
+		_, resolves, _ := host.asked()
+		return len(resolves)
+	}
+	var first struct {
+		Next string `json:"next"`
+	}
+	if err := json.Unmarshal([]byte(callIn(t, reg, writerTurn(t), builtin.CodeSearchTool, args).Output),
+		&first); err != nil || first.Next == "" || resolved() != 1 {
+		t.Fatalf("the first page: %v, next %q, %d resolves, want a next page and main resolved once", err,
+			first.Next, resolved())
+	}
+	turn := writerTurn(t)
+	callIn(t, reg, turn, builtin.CodeSearchTool, map[string]any{"query": args["query"], "cursor": first.Next})
+	if n := resolved(); n != 1 {
+		t.Errorf("a page after a key in site resolved main %d times in all, want still once: site is "+
+			"searched at the key's commit", n)
+	}
+	callIn(t, reg, turn, builtin.CodeSearchTool, args)
+	callIn(t, reg, turn, builtin.CodeSearchTool, args)
+	if n := resolved(); n != 2 {
+		t.Errorf("two searches in a new turn resolved main %d times in all, want twice: once a turn", n)
+	}
+	for i, q := range search.asked() {
+		if q.Git.Floor(topics.CodeLogStream).IsZero() {
+			t.Errorf("search %d naming site was floored at %+v, want this node's own pushes to it", i+1, q.Git)
+		}
 	}
 }
 

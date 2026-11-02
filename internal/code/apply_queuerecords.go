@@ -168,8 +168,7 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 			return 0, err
 		}
 		next := entries[x.EntryID]
-		next.State, next.EndedAt, next.EndedPosition, next.EndReason = QueueEjected, at.at(), at.packed,
-			QueueEndReason(x.Reason)
+		next.State, next.EndedAt, next.EndedPosition, next.EndReason = QueueEjected, at.at(), at.packed, x.Reason
 		ejected[i] = entryRow{queueEntry: next, ejected: detail}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryEjected, ejected); err != nil {

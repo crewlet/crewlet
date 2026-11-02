@@ -277,12 +277,7 @@ func TestCloseTaskIsDecidedAsWorkletsWrite(t *testing.T) {
 // queue read is counted, red; keep the turn's run on the asker → red.
 func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	t.Parallel()
-	queued := siteChange()
-	queued.detail.Readiness.Preconditions = append(queued.detail.Readiness.Preconditions, code.Precondition{
-		Kind: code.PreconditionQueue, State: code.PreconditionComputing, Detail: "site!7 waits at place 2",
-		Queue: &code.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: code.QueueWaiting,
-			Place: 2}})
-	host := newChangeHost(queued)
+	host := newChangeHost(siteChange().queued())
 	writer := &codeWrites{}
 	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})

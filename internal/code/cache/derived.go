@@ -1057,8 +1057,9 @@ func DerivedFiles() []Derived {
 		Writes: []Write{{Step: StepCodeIndex, Trigger: TriggerIndexer, Writer: Writer{File: codeIndexFile},
 			Charge: "one segment's postings: at most codeindex.SegmentSourceBytes of source read through one " +
 				"cat-file, each blob's bytes held only while its trigrams are taken, and the tip's every path " +
-				"and blob, about 60 bytes a file, while its tip map is written; a merge holds the segments it " +
-				"merges and two buffers of one trigram's postings"}},
+				"and blob, about 60 bytes a file, while its tip map is written; every file streamed into its " +
+				"staged file and every segment read back MAPPED, never held, so a merge holds two buffers of " +
+				"one trigram's postings and a map of each input's blobs, four bytes a blob"}},
 		// Its files by name, with NO MAIN: the index is there by its record
 		// (codeIndexState), which names each segment and the tip map, as the
 		// index of pushes is there by its runs'. And NOT a tree moved whole:

@@ -59,8 +59,9 @@ import (
 // live ref of the repository — every one named in the sentence.
 const ReasonNoRef = "no_ref"
 
-// headRev names the repository's default branch, as the code tools take it.
-const headRev = "HEAD"
+// headRev names the repository's default branch, as the code tools take it
+// and as a resolve of refs answers it (code.HeadRef).
+const headRev = code.HeadRef
 
 // CodePage is a read by object id as a code question answers it: the
 // repository by the name the request asked by, the kind, the object a tree or
@@ -195,31 +196,32 @@ func (s Sources) gitAskOf(ctx context.Context, p Params, what string) (gitAsk, e
 }
 
 // resolve is the repository the question names and every revision of revs as
-// an object id: an object id passes as it is; every other is a ref, and all
-// of them are resolved in ONE read of their refs at the caller's freshness —
-// `HEAD` as the default branch, which a read of the repository names first,
-// every later read at `session` floored at that read's position. Where no
-// revision names a ref the repository is read alone, for its id. A name no
-// live ref holds is [NotFound] (`no_ref`), every one of them named.
+// an object id: an object id passes as it is; every other is a ref — `HEAD`
+// among them, the default branch, which the reader resolves from the
+// repository's row in the same transaction (code.HeadRef) — and all of them
+// are resolved in ONE read at the caller's freshness, which answers the
+// repository too. Where no revision names a ref the repository is read alone,
+// for its id. A name no live ref holds is [NotFound] (`no_ref`), every one of
+// them named.
+//
+// ONE READ FOR EVERY SPELLING: the default branch is what a question's `ref`
+// defaults to, so a read of the row ahead of the refs, to learn which branch
+// `HEAD` is, would cost the commonest question a repository is asked a second
+// snapshot — on a node without the estate, a second hop through the router —
+// and would let the name be released and taken again between the two.
 func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, error) {
-	var (
-		repo  code.RepoRef
-		names []string
-		head  bool
-	)
+	var names []string
 	for _, r := range revs {
 		switch {
 		case code.ValidRev(r.spelled):
 			r.oid = r.spelled
-		case r.spelled == headRev:
-			head = true
 		case !slices.Contains(names, r.spelled):
 			names = append(names, r.spelled)
 		}
 	}
-	fresh := g.fresh
-	if head || len(names) == 0 {
-		a, err := g.reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: g.name, Asker: g.asker, Fresh: fresh})
+	if len(names) == 0 {
+		a, err := g.reads.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: g.name, Asker: g.asker,
+			Fresh: g.fresh})
 		if err != nil {
 			return code.RepoRef{}, codeRefusal(g.name, err)
 		}
@@ -227,15 +229,9 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 			return code.RepoRef{}, fmt.Errorf("queries: the code host answered repository %s's read with no "+
 				"detail", g.name)
 		}
-		repo, fresh = a.Repo.RepoRef, statelog.FloorAt(statelog.ReadSession, a.Position)
-		if head && !slices.Contains(names, repo.DefaultBranch) {
-			names = append(names, repo.DefaultBranch)
-		}
+		return a.Repo.RepoRef, nil
 	}
-	if len(names) == 0 {
-		return repo, nil
-	}
-	a, err := g.reads.ResolveRef(ctx, code.RefQuery{Repo: g.name, Refs: names, Fresh: fresh, Asker: g.asker})
+	a, err := g.reads.ResolveRef(ctx, code.RefQuery{Repo: g.name, Refs: names, Fresh: g.fresh, Asker: g.asker})
 	if err != nil {
 		return code.RepoRef{}, codeRefusal(g.name, err)
 	}
@@ -246,22 +242,11 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (code.RepoRef, err
 		return code.RepoRef{}, fmt.Errorf("queries: the code host answered %d of the %d refs asked of %s",
 			len(a.Refs), len(names), g.name)
 	}
-	// A NAME RELEASED AND TAKEN AGAIN between the read of the repository and
-	// the read of its refs names two repositories: nothing read of the one is
-	// an answer about the other, and the same question asked again reads one.
-	if repo.ID != "" && a.Repo.ID != repo.ID {
-		return code.RepoRef{}, fmt.Errorf("%w: repository %q was deleted and declared again while it was read: "+
-			"ask again", ErrUnavailable, g.name)
-	}
 	for _, r := range revs {
 		if r.oid != "" {
 			continue
 		}
-		name := r.spelled
-		if name == headRev {
-			name = a.Repo.DefaultBranch
-		}
-		ref := a.Refs[slices.Index(names, name)]
+		ref := a.Refs[slices.Index(names, r.spelled)]
 		r.oid, r.ref = ref.OID, &ref
 	}
 	return a.Repo, nil
@@ -566,6 +551,20 @@ func (s Sources) codeDiff(ctx context.Context, p Params) (any, error) {
 // Immutable only where both are whole ids and the merge was decided: a merge
 // its home could not decide in a read's time answers `unknown`, which a later
 // read may decide.
+//
+// A COMPARISON IN WHICH ONE COMMIT CONTAINS THE OTHER IS ITS OWN PREVIEW, and
+// asks the home nothing: base inside head is a fast-forward, head inside base
+// merges nothing, and the merge a preview runs (`git merge-tree`, the home's
+// mergeIn) answers both `clean`, no path conflicted — so the answer is that
+// merge's, decided here from the merge base the comparison already read.
+// Asked of the home it would cost a call to the home on every view and, until
+// the home's memo held the merge, a scratch, a `cat-file` and a merge-tree
+// under a unit of the node's seat git-work share, which the seats' own reads
+// draw from — for the commonest comparison there is: a branch against the
+// target it was cut from, which has not moved since. Nothing the
+// preview would judge or record is lost: the comparison was judged against
+// the same grant by the same node and, of a `visibility: unit` repository,
+// recorded as its asker's read.
 func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_compare")
 	if err != nil {
@@ -591,10 +590,13 @@ func (s Sources) codeCompare(ctx context.Context, p Params) (any, error) {
 	if page.Compare == nil {
 		return nil, fmt.Errorf("queries: the code host answered %s's comparison with no comparison", g.name)
 	}
-	preview, err := g.reads.MergePreview(ctx, code.MergePreviewQuery{RepoID: repo.ID, Asker: g.asker,
-		Base: page.Compare.Base, Head: page.Compare.Head, Fresh: g.floor(repo, base, head)})
-	if err != nil {
-		return nil, codeRefusal(g.name, err)
+	preview := code.MergePreviewAnswer{State: code.MergeClean}
+	if !page.Compare.BaseIsAncestor && !page.Compare.HeadIsAncestor {
+		preview, err = g.reads.MergePreview(ctx, code.MergePreviewQuery{RepoID: repo.ID, Asker: g.asker,
+			Base: page.Compare.Base, Head: page.Compare.Head, Fresh: g.floor(repo, base, head)})
+		if err != nil {
+			return nil, codeRefusal(g.name, err)
+		}
 	}
 	out := CodeComparison{CodePage: page, Preview: CodeMergePreview{State: preview.State,
 		Conflicts: preview.Conflicts, ConflictsOmitted: preview.ConflictsOmitted}}

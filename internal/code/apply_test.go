@@ -632,6 +632,64 @@ func TestARestoreBringsBackSettingsAndRefs(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S ROW DIGESTS WHAT EVERY RECORD WRITES BESIDE IT: a create, a
+// settings change and a restore each leave the row's owners_digest and
+// human_paths_digest the digests of the path owners and of the rules' human
+// paths that record wrote — what the merge gate, a revise's decide and the
+// home's due listing read in place of the rows ([rowDigests]) — and a delete,
+// which keeps the rules and the owners, keeps both.
+//
+// Mutation: leave the digests out of restoreRepoSQL — the restored row keeps
+// the digests of the settings before its delete, red; out of settingsSQL or
+// the create's insert, likewise.
+func TestARepositorysRowDigestsWhatEveryRecordWritesBesideIt(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	// held are settings whose one rule holds main to a person on glob, which
+	// a unit owns: settings of another glob digest otherwise in both columns.
+	held := func(glob string, epoch int64) RepoSettings {
+		s := settingsFor("", "refs/heads/main")
+		s.ConfigEpoch = epoch
+		s.Protections[0].Gate = &MergeGate{MergeBy: MergeByWriters, Approvals: ApprovalsOne,
+			Landing: Landing{Depth: 4, Batch: 4}, DeleteSource: DeleteSeats, HumanPaths: []HumanPath{{Glob: glob}}}
+		s.PathOwners = []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{glob}}}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("the settings holding %s are refused: %v", glob, err)
+		}
+		return s
+	}
+	created, settled, back := held("web/**", 1), held("deploy/**", 1), held("docs/**", 2)
+	digests := func(s RepoSettings) [2]string {
+		return [2]string{OwnersDigest(s.PathOwners), HumanPathsDigest(ruleGatesOf(s.Protections))}
+	}
+	if a, b, c := digests(created), digests(settled), digests(back); a[0] == b[0] || b[0] == c[0] ||
+		a[1] == b[1] || b[1] == c[1] {
+		t.Fatalf("the premise: the three settings digest apart in both columns, and they digest %v, %v and %v",
+			a, b, c)
+	}
+	digested := func(after string, s RepoSettings) {
+		t.Helper()
+		got := [2]string{e.str(`SELECT owners_digest FROM code_repos WHERE id = 'repo-a'`),
+			e.str(`SELECT human_paths_digest FROM code_repos WHERE id = 'repo-a'`)}
+		if want := digests(s); got != want {
+			t.Errorf("after %s the row's owners and human paths digests are %q, want those of the owners and "+
+				"the rules it wrote, %q", after, got, want)
+		}
+	}
+	e.apply(rec(t, NameSubject("a"), OpCreate, Scope{NamePath(NameToken("a")), RepoPath("repo-a")},
+		CreateRepo{RepoID: "repo-a", Name: "a", Settings: created}))
+	digested("the create", created)
+	e.apply(rec(t, RepoSubject("repo-a"), OpSettings, Scope{RepoPath("repo-a")},
+		SettingsRecord{RepoID: "repo-a", Settings: settled}))
+	digested("a settings change", settled)
+	e.apply(rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
+		LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
+	digested("the delete", settled)
+	e.apply(rec(t, RepoSubject("repo-a"), OpRestore, Scope{RepoPath("repo-a")},
+		LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 2, Settings: &back}))
+	digested("the restore", back)
+}
+
 // seed writes bulk rows of a repository's history straight into the estate:
 // pushes push rows, refs refs and the first packs packs ([estate.seedPacks]).
 func (e *estate) seed(id string, pushes, refs, packs int) {

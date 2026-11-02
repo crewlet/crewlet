@@ -1,12 +1,15 @@
 package cache_test
 
 import (
+	"context"
 	"errors"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
 )
@@ -201,7 +204,8 @@ func TestTheIndexSkipsBinariesAndLargeFiles(t *testing.T) {
 // repository's index is kept by the first code.IndexHolders of its git order,
 // and a holder that holds no copy fills one for it — deliberately, beside the
 // read path's rule that only the home fills — while a node past the holders
-// fills nothing, and a holder the order no longer names drops what it kept.
+// fills nothing, and a holder the order no longer names drops what it kept
+// once the order has stood cache.IndexPlacementGrace.
 //
 // Mutation: hold to the first node of the order alone (codeindex.go's
 // indexHeld) — the second holder keeps no index; or skip the drop — the node
@@ -213,8 +217,10 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	head, _ := w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
 	var mu sync.Mutex
 	order := []string{"git-1", "git-2", "git-3"}
+	clk := newClock()
 	placed := func(node string) func(*cache.Options) {
 		return func(o *cache.Options) {
+			clk.on(o)
 			o.Placement = &cache.Placement{Node: node, Order: func(id string) ([]string, error) {
 				if id != repo {
 					return nil, errors.New("no such repository")
@@ -248,19 +254,83 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 	order = []string{"git-1", "git-3", "git-2"}
 	mu.Unlock()
 	cache.IndexPass(t.Context(), second)
-	if _, _, ok := cache.CodeIndexFiles(second, repo); ok {
-		t.Error("a node the order moved past the holders still keeps its index")
+	if !keeps(second, repo) {
+		t.Error("a node the order moved past the holders dropped its index at once, within the grace")
+	}
+	clk.Add(cache.IndexPlacementGrace)
+	cache.IndexPass(t.Context(), second)
+	if keeps(second, repo) {
+		t.Error("a node the order moved past the holders for the grace still keeps its index")
 	}
 	if got := cache.CodeIndexBytes(second); got != 0 {
 		t.Errorf("the node counts %d bytes of code indexes after it dropped its one", got)
 	}
 }
 
+// A HOLDER BACK WITHIN THE GRACE MOVES NO INDEX. The order is over the live
+// git nodes, and a restarting node leaves it for the length of its restart,
+// which made the next node of each of its repositories' orders a holder that
+// filled a copy and built a whole index — dropped again the moment the node
+// was back. A node that becomes a holder fills and builds nothing until its
+// place has stood cache.IndexPlacementGrace, and a place that changes back
+// meanwhile starts the grace again; one that stands builds.
+//
+// Mutation: act on a holder's place at once (codeindex.go's settled answering
+// true for every holder) — the third node fills while the second restarts; or
+// keep the grace's start when the place changes back (settled keeping since)
+// — the second absence builds at once.
+func TestAHolderBackWithinTheGraceMovesNoIndex(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	head, _ := w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	var mu sync.Mutex
+	order := []string{"git-1", "git-2", "git-3"}
+	clk := newClock()
+	third := w.open(t, clk.on, func(o *cache.Options) {
+		o.Placement = &cache.Placement{Node: "git-3", Order: func(string) ([]string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(order), nil
+		}}
+	})
+	look := func(live ...string) {
+		t.Helper()
+		mu.Lock()
+		order = live
+		mu.Unlock()
+		cache.IndexPass(t.Context(), third)
+	}
+	look("git-1", "git-2", "git-3")
+	look("git-1", "git-3") // git-2 restarting
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if third.Holds(repo) || keeps(third, repo) {
+		t.Fatalf("the third node fills a copy (%t) or keeps an index (%t) while the second restarts within the "+
+			"grace", third.Holds(repo), keeps(third, repo))
+	}
+	look("git-1", "git-2", "git-3") // back
+	look("git-1", "git-3")          // and gone again
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if third.Holds(repo) || keeps(third, repo) {
+		t.Fatalf("the third node fills a copy (%t) or keeps an index (%t) a half grace into the second's second "+
+			"absence", third.Holds(repo), keeps(third, repo))
+	}
+	clk.Add(cache.IndexPlacementGrace / 2)
+	look("git-1", "git-3")
+	if tip, _, ok := cache.CodeIndexFiles(third, repo); !ok || tip != head {
+		t.Errorf("the third node keeps the index at %s (%t) once the second has been gone the grace, want it "+
+			"built at %s", tip, ok, head)
+	}
+}
+
 // THE CODE INDEXES ARE TRIMMED BEFORE A REPOSITORY. What the node's indexes
 // hold past their share of the budget (cache.CodeIndexShare) is theirs to
-// give back, whole and least recently used first: one dropped is built again
-// from one tip's blobs, where a repository evicted is a cold sync of every
-// pack.
+// give back, whole and searched least recently first
+// (TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack): one dropped is
+// built again from one tip's blobs, where a repository evicted is a cold sync
+// of every pack.
 //
 // Mutation: trim nothing (codeindex.go's trimCodeIndexes answers at once) —
 // the index stays past its share.
@@ -335,5 +405,369 @@ func TestOnlyTheFirstOfTwoHoldersSendsASearchOn(t *testing.T) {
 			t.Errorf("git-1 in the order %v is a holder %t and passes a search on %t, want %t and %t", tc.order,
 				got.Holder, got.PassesOn, tc.holder, tc.passesOn)
 		}
+	}
+}
+
+// fourSegmentFiles is four files of disjoint text: at a segment a file
+// (cache.IndexSegmentBytesWith(1)) a build writes four segments and merges
+// the first three as it goes (TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd).
+func fourSegmentFiles() map[string]string {
+	files := map[string]string{}
+	for i, word := range []string{"alpha", "bravo", "charlie", "delta"} {
+		files[word+".txt"] = strings.Repeat(word+" "+strings.Repeat(string(rune('k'+i)), 3)+"\n", 8)
+	}
+	return files
+}
+
+// AN INDEX BUILD SYNCS ITS DIRECTORY ONCE. Nothing names a file a build
+// places until its commit stores the record, and every staged file is synced
+// as it is written, so the index's directory is synced once, before the
+// commit — never after each placement, which cost a first build of many
+// segments a second fsync a file. A build of four segments, merged twice,
+// and a tip map places seven files and syncs the directory once.
+//
+// Mutation: sync the directory after each placement (codeindex.go's place,
+// b.c.durableDir of the index's directory after the rename) — seven syncs.
+func TestAnIndexBuildSyncsItsDirectoryOnce(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", fourSegmentFiles())
+	var (
+		mu     sync.Mutex
+		synced []string
+	)
+	c := w.open(t, cache.IndexSegmentBytesWith(1), cache.SyncingWith(func(dir string) {
+		if filepath.Base(dir) == "codeindex" {
+			mu.Lock()
+			defer mu.Unlock()
+			synced = append(synced, dir)
+		}
+	}))
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	_, paths, ok := cache.CodeIndexFiles(c, repo)
+	if !ok {
+		t.Fatal("the build stored no index")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{filepath.Dir(paths[0])}; !slices.Equal(synced, want) {
+		t.Errorf("the build synced the index's directory %d times (%v), want once (%v)", len(synced), synced,
+			want)
+	}
+}
+
+// holding is a Placement that makes the cache git-1 and the first holder of
+// every repository: what a case whose indexer it drives needs.
+func holding(o *cache.Options) {
+	o.Placement = &cache.Placement{Node: "git-1", Order: func(string) ([]string, error) {
+		return []string{"git-1", "git-2"}, nil
+	}}
+}
+
+// indexHashes counts the code index files a cache held to their trailers, by path.
+type indexHashes struct {
+	mu   sync.Mutex
+	seen map[string]int
+	// held, when set, is closed by the next hash, which then waits for
+	// release.
+	held, release chan struct{}
+}
+
+// on is an Options mutation that counts every code index file a check of
+// the cache hashes.
+func (h *indexHashes) on(o *cache.Options) {
+	cache.WhileHashing(o, func(path string) {
+		if filepath.Base(filepath.Dir(path)) != "codeindex" {
+			return
+		}
+		h.mu.Lock()
+		if h.seen == nil {
+			h.seen = map[string]int{}
+		}
+		h.seen[path]++
+		held, release := h.held, h.release
+		h.held = nil
+		h.mu.Unlock()
+		if held != nil {
+			close(held)
+			<-release
+		}
+	})
+}
+
+func (h *indexHashes) counts() map[string]int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return maps.Clone(h.seen)
+}
+
+// A SEARCH NEVER HASHES A CODE INDEX. After a restart nothing in the process
+// has held an index's files to their trailers, and holding them is a cold
+// read of every byte of the index: a search that finds it so reads the tip
+// with git grep — however many search at once — and the indexer's next look
+// verifies it, each file once, off every request's path, while a search that
+// asks meanwhile greps rather than wait for it; the searches after it read
+// the index and hash nothing.
+//
+// Mutation: let a search verify (codeindex.go's CodeIndex asks codeIndex with
+// verify) — the searches hash the files; verify nothing in the indexer
+// (Index's codeIndexVouched check skipped) — the index stays unopened; or let
+// a search wait for the indexer's verifying opening (codeIndex's verifying
+// answer skipped) — it waits out its context.
+func TestASearchNeverHashesACodeIndex(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n", "b.go": "package b\n"})
+	first := w.open(t, holding)
+	cache.IndexPass(t.Context(), first)
+	_, paths, ok := cache.CodeIndexFiles(first, repo)
+	if !ok {
+		t.Fatal("the indexer built no index")
+	}
+	var h indexHashes
+	c := w.reopen(t, first, holding, h.on)
+	s := w.sync(t, c, repo)
+	if _, after, ok := cache.CodeIndexFiles(c, repo); !ok || !slices.Equal(after, paths) {
+		t.Fatalf("the restarted copy keeps the index %v (%t), want the one built, %v", after, ok, paths)
+	}
+	searches := func() []bool {
+		var wg sync.WaitGroup
+		got := make([]bool, 4)
+		for i := range got {
+			wg.Go(func() { _, got[i] = c.CodeIndex(t.Context(), s) })
+		}
+		wg.Wait()
+		return got
+	}
+	if got := searches(); slices.Contains(got, true) {
+		t.Errorf("searches of an index nothing has verified read it (%v), want each to grep", got)
+	}
+	if got := h.counts(); len(got) != 0 {
+		t.Errorf("the searches hashed the index's files %v, want none", got)
+	}
+	// The indexer's look, held in its first hash while a search asks: the
+	// search greps at once rather than wait for the verification.
+	held, release := make(chan struct{}), make(chan struct{})
+	h.mu.Lock()
+	h.held, h.release = held, release
+	h.mu.Unlock()
+	looked := make(chan struct{})
+	go func() {
+		defer close(looked)
+		cache.IndexPass(t.Context(), c)
+	}()
+	select {
+	case <-held:
+	case <-looked:
+		t.Fatalf("the indexer's look held no file of the index to its trailer (the searches hashed %v): "+
+			"nothing verified it there", h.counts())
+	}
+	waiting, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	_, read := c.CodeIndex(waiting, s)
+	waited := waiting.Err() != nil
+	cancel()
+	close(release)
+	<-looked
+	if read || waited {
+		t.Errorf("a search during the indexer's verification read the index (%t) or waited for it (%t), want "+
+			"it to grep at once", read, waited)
+	}
+	want := map[string]int{}
+	for _, p := range paths {
+		want[p] = 1
+	}
+	if got := h.counts(); !maps.Equal(got, want) {
+		t.Errorf("the indexer's look hashed %v, want each of the index's files once: %v", got, want)
+	}
+	if got := searches(); slices.Contains(got, false) {
+		t.Errorf("searches after the indexer verified the index answer %v, want each to read it", got)
+	}
+	if got := h.counts(); !maps.Equal(got, want) {
+		t.Errorf("the searches after the verification hashed %v, want nothing more than %v", got, want)
+	}
+}
+
+// A LOOK AT UNMOVED REFS READS NO TIP. The indexer looks at every repository
+// it keeps an index of every minute, and reading a tip is a git process; only
+// a round that writes the copy's refs can move the tip, so a look that finds
+// the refs the index's tip was read under reads nothing — and one after any
+// ref moved, the default branch's or another, reads the tip again.
+//
+// Mutation: read the tip whatever the refs (Index's unmoved answer skipped)
+// — the looks at unmoved refs read it.
+func TestALookAtUnmovedRefsReadsNoTip(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	var (
+		mu    sync.Mutex
+		reads int
+	)
+	c := w.open(t, cache.IndexTipReadingWith(func(string) {
+		mu.Lock()
+		defer mu.Unlock()
+		reads++
+	}))
+	read := func(want int, after string) {
+		t.Helper()
+		mu.Lock()
+		defer mu.Unlock()
+		if reads != want {
+			t.Errorf("the indexer read the tip %d times after %s, want %d", reads, after, want)
+		}
+	}
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	read(1, "its first build")
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	read(1, "two looks at refs nothing moved")
+	w.push(t, repo, "refs/heads/topic", map[string]string{"b.go": "package b\n"})
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexCurrent)
+	read(2, "a push to another branch and a look after it")
+	w.push(t, repo, "refs/heads/main", map[string]string{"c.go": "package c\n"})
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	read(3, "a push to the default branch")
+}
+
+// keeps reports whether repo's copy in c keeps a code index.
+func keeps(c *cache.Cache, repo string) bool {
+	_, _, ok := cache.CodeIndexFiles(c, repo)
+	return ok
+}
+
+// THE TRIM KEEPS WHAT IS SEARCHED, AND TAKES NOTHING STRAIGHT BACK. Past their
+// share, the node's code indexes lose the index of the repository SEARCHED
+// least recently here — whatever its copy's readers did since — and the
+// indexer builds a trimmed index again only into room for what it held, or
+// for a repository searched more recently than an index it would displace:
+// rebuilt at the next look, an index the trim took put the share over again
+// and the trim took the next, every minute, for ever.
+//
+// Mutation: order the trim by the copy's last use alone (codeindex.go's
+// trimCodeIndexes) — the searched index, read longer ago, goes; build a
+// trimmed index again whatever the share (indexHeld's mayBuildIndex check
+// skipped) — the trimmed one is rebuilt at once; or never let a search
+// displace an index (mayBuildIndex answering false with no room) — the
+// searched repository's index is not built back.
+func TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.go": "package a\n", "b.go": "package b\n"}
+	probe := newSyncWorld(t, onMemory)
+	one := probe.repo(t, 1)
+	probe.push(t, one, "refs/heads/main", files)
+	sized := probe.open(t)
+	indexOf(t, sized, probe.sync(t, sized, one), cache.IndexBuilt)
+	size := cache.CodeIndexBytes(sized)
+
+	// A share that holds one index and a half: two are past it.
+	w := newSyncWorld(t, onMemory)
+	searchedRepo, quiet := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, searchedRepo, "refs/heads/main", files)
+	w.push(t, quiet, "refs/heads/main", files)
+	clk := newClock()
+	c := w.open(t, clk.on, holding, func(o *cache.Options) { o.MaxBytes = cache.CodeIndexShare * (size + size/2) })
+	s := w.sync(t, c, searchedRepo)
+	indexOf(t, c, s, cache.IndexBuilt)
+	c.IndexTip(s) // a search of it, here
+	clk.Add(time.Minute)
+	indexOf(t, c, w.sync(t, c, quiet), cache.IndexBuilt) // read after the search: its copy is the newer
+	if got := cache.CodeIndexBytes(c); got != 2*size {
+		t.Fatalf("the two indexes hold %d bytes, want %d each: the case needs two of the probe's size", got, size)
+	}
+	if !cache.TrimCodeIndexes(t.Context(), c) {
+		t.Fatal("the trim dropped nothing of two indexes past their share")
+	}
+	if !keeps(c, searchedRepo) || keeps(c, quiet) {
+		t.Fatalf("after the trim the searched repository keeps its index %t and the quiet one %t, want true and "+
+			"false", keeps(c, searchedRepo), keeps(c, quiet))
+	}
+
+	clk.Add(time.Minute)
+	cache.IndexPass(t.Context(), c)
+	if keeps(c, quiet) {
+		t.Error("the indexer built the trimmed index straight back, with no room for it in the share")
+	}
+	clk.Add(time.Minute)
+	c.IndexTip(w.sync(t, c, quiet)) // a search of the trimmed one, newer than the other's
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, quiet) {
+		t.Fatal("the indexer did not build back the index of a repository searched more recently than the " +
+			"one it would displace")
+	}
+	cache.TrimCodeIndexes(t.Context(), c)
+	if !keeps(c, quiet) || keeps(c, searchedRepo) {
+		t.Errorf("after the second trim the newly searched repository keeps its index %t and the other %t, "+
+			"want true and false", keeps(c, quiet), keeps(c, searchedRepo))
+	}
+}
+
+// AN INDEXER'S LOOK IS NO USE OF THE COPY. The indexer looks at every copy it
+// keeps an index of every minute; counted as a reader's use, that made each
+// such copy look used within the minute to the budget's eviction, which then
+// evicted the repositories people read first. A look leaves the copy's last
+// use where its readers left it.
+//
+// Mutation: pin the indexer's sync as a use (sync.go's indexSync, use true)
+// — the look moves the last use.
+func TestAnIndexersLookIsNoUseOfTheCopy(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	clk := newClock()
+	c := w.open(t, clk.on, holding)
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, repo) {
+		t.Fatal("the indexer built no index")
+	}
+	before := cache.LastUsed(c, repo)
+	clk.Add(time.Hour)
+	cache.IndexPass(t.Context(), c)
+	if got := cache.LastUsed(c, repo); !got.Equal(before) {
+		t.Errorf("the indexer's look moved the copy's last use from %s to %s, want it where it was", before, got)
+	}
+}
+
+// AN EVICTED COPY IS FILLED BACK ONLY INTO ROOM. A copy the indexer keeps an
+// index in that the budget evicted is filled again only once the budget has
+// room for what it held: filled at the next look, it evicted the next least
+// used copy, a GET a pack every minute while the held copies outgrew the
+// budget.
+//
+// Mutation: fill whatever the budget's room (indexHeld's roomToFill check
+// skipped) — the evicted copy is filled at the next look.
+func TestAnEvictedCopyIsFilledBackOnlyIntoRoom(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.go": "package a\n"}
+	probe := newSyncWorld(t, onMemory)
+	probe.push(t, probe.repo(t, 1), "refs/heads/main", files)
+	sized := probe.open(t, holding)
+	cache.IndexPass(t.Context(), sized)
+	index, copyBytes := cache.CodeIndexBytes(sized), cache.Total(sized)
+	// A budget whose share has room for the index, and which the copy alone
+	// is past.
+	budget := cache.CodeIndexShare * (index + 1)
+	if index == 0 || copyBytes <= budget {
+		t.Fatalf("the probe's copy holds %d bytes and its index %d: the case needs a copy past %d", copyBytes,
+			index, budget)
+	}
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", files)
+	c := w.open(t, holding, func(o *cache.Options) { o.MaxBytes = budget })
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, repo) {
+		t.Fatal("the indexer built no index")
+	}
+	if cache.EvictToBudget(c) != 1 || c.Holds(repo) {
+		t.Fatal("the budget did not evict the copy: the case needs one past it")
+	}
+	cache.IndexPass(t.Context(), c)
+	if c.Holds(repo) {
+		t.Error("the indexer filled the evicted copy again with no room in the budget for it")
 	}
 }

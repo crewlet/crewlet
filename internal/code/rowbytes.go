@@ -809,7 +809,19 @@ func (p Precondition) encodedBytes() int {
 	if p.BlockersOmitted != 0 {
 		n += field("blockers_omitted", intBytes(p.BlockersOmitted), false)
 	}
+	if p.Queue != nil {
+		n += field("queue", p.Queue.encodedBytes(), false)
+	}
 	return n + field("detail", stringBytes(p.Detail), false)
+}
+
+// encodedBytes is the length of the queue entry's JSON encoding, as a queue
+// precondition carries it ([Precondition.Queue]).
+func (q QueuedFacts) encodedBytes() int {
+	return 2 + field("entry_id", stringBytes(q.EntryID), true) +
+		field("target_ref", stringBytes(q.TargetRef), false) +
+		field("state", stringBytes(string(q.State)), false) +
+		field("place", intBytes(int64(q.Place)), false)
 }
 
 // encodedBytes is the length of the blocker's JSON encoding.

@@ -143,9 +143,10 @@ func compactionCharge(inputs int64, limits code.Limits) int64 {
 // a walk: `pack-objects --revs` from every tip it keeps reads every commit,
 // tree and blob those reach — the repository's whole history, whichever packs
 // it sorts — as a clone without a bitmap walks it, at the transfer's figure an
-// object (gitproc.TransferBytesPerObject). A due scan is admitted here too, at
-// no input: the walk's room and the window alone. A node whose budget cannot
-// hold the charge is refused it (ErrNoMemory); the expunge is asked again at
+// object (gitproc.TransferBytesPerObject). A due scan is not admitted here:
+// it sorts nothing and searches no delta, so it takes the walk's room and
+// the indexes it holds alone ([Cache.AdmitExpungeScan]). A node whose budget
+// cannot hold the charge is refused it (ErrNoMemory); the expunge is asked again at
 // every pass, and a git node with more memory serves it once it becomes the
 // repository's maintainer. Its refusal refuses no push at once, as a
 // compaction's does at the pack bound, but it is no publication's mere
@@ -164,6 +165,32 @@ func (c *Cache) AdmitExpunge(s Synced, inputs int64, limits code.Limits) (*Admis
 	return c.admitBackground(s, stepExpungeWork, func(objects int64) int64 {
 		return expungeCharge(inputs, objects, limits)
 	})
+}
+
+// AdmitExpungeScan admits the SCAN that judges whether an expunge of s's
+// repository is due on its maintainer's own schedule — ONE walk of the whole
+// history from what the expunge keeps, and the indexes of the packs it may
+// take, which its caller holds in memory while the walk runs (held bytes) —
+// or refuses it at once, having started nothing, as [Cache.admitBackground]
+// says, charged at held + chargeOver(0, 0, objects): room for a walk of the
+// WHOLE repository at a transfer's figure an object, as an expunge's build is
+// charged for its own walk, and what the caller holds.
+//
+// NEVER THE BUILD'S CHARGE: the scan sorts no object and searches no delta,
+// so a repository found not due — nearly every repository, nearly every week
+// — costs its maintainer the walk alone, and a node that could not hold an
+// expunge's build of a large repository may still learn the repository owes
+// none. Charged at the build's figure an object of the packs it weighs, a
+// gigabyte's scan asked 2.4 GB where its walk and its indexes hold under a
+// gigabyte, and a node giving its background work 1 GiB refused it.
+//
+// A refusal for memory is logged and counted as an expunge's is (step
+// expunge).
+func (c *Cache) AdmitExpungeScan(s Synced, held int64) (*Admission, error) {
+	if held < 0 {
+		return nil, fmt.Errorf("%w: an expunge's scan holds %d bytes", ErrInvalid, held)
+	}
+	return c.admitBackground(s, stepExpungeWork, func(objects int64) int64 { return held + chargeOver(0, 0, objects) })
 }
 
 // expungeCharge is what one build of an expunge sorting inputs objects of a

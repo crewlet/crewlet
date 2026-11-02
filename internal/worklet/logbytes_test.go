@@ -130,7 +130,7 @@ const (
 	codeChangeOpenBytes           = 3_100
 	codeChangeEditBytes           = 2_770
 	codeReviewersBytes            = 1_190
-	codeReviseBytes               = 1_330
+	codeReviseBytes               = 1_420
 	codeMergeabilityBytes         = 1_030
 	codeMergeabilityRecheckBytes  = 880
 	codeMergeabilityRefreshBytes  = 860
@@ -303,8 +303,8 @@ func codeLogDay() []codeLogTerm {
 		{code.OpThreadResolve, "a thread resolved, one a change", changes, codeThreadResolveBytes, false},
 		{code.OpMerge, "a merge of the change deleting its source, one a change — and at the most beside " +
 			"a queued change's train and landing, which it does not take", changes, codeMergeBytes, false},
-		{code.OpRevise, "a revision's facts asking nobody, one a push, carrying no routing", revisions,
-			codeReviseBytes, false},
+		{code.OpRevise, "a revision's facts asking nobody and held to no human path, one a push, carrying " +
+			"no routing", revisions, codeReviseBytes, false},
 		{code.OpMergeability, "a revision's merge into its target, one a push, not ready and so carrying " +
 			"no routing", revisions, codeMergeabilityBytes, false},
 		{code.OpMergeability, "the refresh that turns a change ready, routed to whoever may merge it, " +
@@ -385,6 +385,13 @@ func codeLogOp(day []codeLogTerm, op code.OpKind) codeLogTerm {
 // hold's reason in codeLogNegligible weighs the turns' holds by it.
 const codeHoldRecordBytes = 896
 
+// codeExpungeScanRecordBytes is the most one clean scan's record takes the
+// code log as the engine writes one — internal/code's
+// TestACleanScanCostsTheLogOneSmallRecord holds a scan at most this (its
+// expungeScanRecordBytes). The scan's reason in codeLogNegligible weighs a
+// fleet's weekly scans by it.
+const codeExpungeScanRecordBytes = 736
+
 // codeLogNegligible is every op of the code domain whose records the code
 // log's day leaves out, and why: each is appended at the rate a person edits
 // the company's document or runs a command, at the rate the company makes,
@@ -419,7 +426,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 12 % of the day's least of 22.1 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.3 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -443,16 +450,39 @@ var codeLogNegligible = map[code.OpKind]string{
 		"a person runs, one record each, a later one widening the purge already open",
 	// AN EXPUNGE'S TWO RECORDS, appended by the repository's maintainer
 	// (internal/code/compact's expunge loop, polling code.ReadExpungeDue),
-	// come at the rate of the purge above, which is the one thing this build
-	// expunges for: a schedule of the maintainer's own — an expunge keeping
-	// a grace, ExpungeBegin.Grace not 0 — would append them at a rate of its
-	// own, which the day must price once it exists.
-	code.OpExpungeBegin: "the begin of an expunge serving a person's purge: its repository's " +
-		"maintainer begins a cycle for each purge asked, as many as its live packs need — one or " +
-		"two for a repository at the default ceiling (code.MaxExpungeOutputs) — each begin naming " +
-		"at most code.MaxExpungeInputs packs it retires and code.MaxExpungeOutputs it writes",
-	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, " +
-		"retiring its dropping packs and adding their rescue, each at most code.MaxExpungeOutputs",
+	// come at two rates, each bounded by what it frees rather than by the
+	// clock: a person's purge above, and the maintainer's own WEEKLY
+	// SCHEDULE (code.ExpungeInterval) — at most one cycle a repository a
+	// week, and only once what no ref, no drop within code.PruneGrace and no
+	// row in flight reaches, in the packs older than the grace, is more than
+	// a quarter (code.ExpungeShare) of the repository's live bytes and at
+	// least code.ExpungeMinBytes. A cycle takes that garbage out, so a
+	// repository is due again only once another quarter of it has become
+	// unreachable and aged past the grace: even a repository churning that
+	// fast appends a begin and a commit a week, beside the 21 000 pushes of
+	// the reference company's week. A clean scan's record is its own op
+	// below.
+	code.OpExpungeBegin: "the begin of an expunge: one for each cycle its repository's maintainer runs — " +
+		"serving a person's purge, as many as its live packs need (one or two for a repository at the " +
+		"default ceiling, code.MaxExpungeOutputs), or on its own weekly schedule at most one a repository " +
+		"every code.ExpungeInterval (more only where internal/code/compact's ExpungeInputByteCap splits one), " +
+		"and only once more " +
+		"than a quarter (code.ExpungeShare) and at least code.ExpungeMinBytes of the repository's live bytes " +
+		"lie unreachable in packs past their grace — each begin naming at most code.MaxExpungeInputs packs it " +
+		"retires and code.MaxExpungeOutputs it writes",
+	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, at the begin's rate " +
+		"— a purge's, or the weekly schedule's — retiring its dropping packs and adding their rescue, each at " +
+		"most code.MaxExpungeOutputs",
+	// A CLEAN SCAN is its maintainer's record that a repository owes no
+	// expunge, which takes the repository out of every git node's weekly
+	// listing for code.ExpungeInterval: one a repository a week at the most,
+	// and none for one an expunge committed in that week. Held to a bound in
+	// TestTheCodeLogsDayPricesEveryRecordItTakes.
+	code.OpExpungeScan: "a repository's maintainer's record that its scan on its own schedule found no " +
+		"expunge due: at most one a repository every code.ExpungeInterval (a week), each at most " +
+		"codeExpungeScanRecordBytes — even a company at config.CodeMaxRepos projects, every one judged " +
+		"clean every week, appends them under a twentieth of the day's least, and the reference company's " +
+		"day, which makes no scratch repository (codeLogManagers), judges only the repositories it has",
 	// A PERSON'S MARK is their own gesture, never a seat's: code_mark_inbox
 	// is human-only and the operator catalogue's alone, so its rate is the
 	// presses of a person's Inbox buttons and their assistant's calls — and the
@@ -863,7 +893,7 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.Revise](),
 		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
 			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
-			"owners_digest"},
+			"owners_digest", "human_paths_digest"},
 		absent: absent(
 			map[string]string{
 				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +
@@ -878,6 +908,11 @@ var codeLogFields = map[code.OpKind]struct {
 					"repositories declare none",
 				"asked":          "the reviewers a revision's owners ask, likewise",
 				"skipped_owners": "the path owners a revision could not ask, likewise",
+				"human_paths": "which of its target's human paths hold a revision to a person and which " +
+					"their unless waives, a place each, and the reference revision touches none: its " +
+					"target's gate names none at the least, and at the most only code.ChecksDirGlob, " +
+					"which the checks it requires hold it to, and none of its five paths — the upload " +
+					"package's code and its docs page — is under it",
 			}),
 	},
 	code.OpMergeability: {
@@ -1910,6 +1945,16 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 			"its least, and an edit a change at %d bytes (codeChangeEditBytes) appends %.2f MB a day "+
 			"against a least of %.1f MB: price them into codeLogDay, or restate the bound",
 			codeChangeEditBytes, edits/1e6, least/1e6)
+	}
+	// A CLEAN SCAN stays out of the day on the same bound: a company at
+	// config.CodeMaxRepos projects, every one scanned clean once every
+	// code.ExpungeInterval, appends under a twentieth of the day's least.
+	scansADay := float64(config.CodeMaxRepos) * float64(24*time.Hour) / float64(code.ExpungeInterval)
+	if scans := scansADay * codeExpungeScanRecordBytes; scans >= least/20 {
+		t.Errorf("codeLogNegligible leaves a clean scan out of the day on a bound of a twentieth of its least, "+
+			"and %.0f scans a day at %d bytes (codeExpungeScanRecordBytes) append %.2f MB against a least of "+
+			"%.1f MB: price them into codeLogDay, or restate the bound", scansADay, codeExpungeScanRecordBytes,
+			scans/1e6, least/1e6)
 	}
 	// A RED TIP'S BROKEN stays out of the day on the same bound: every one of
 	// the reference company's changes' landings broken once appends under a

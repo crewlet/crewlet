@@ -154,7 +154,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 
 	// AND A DECLARED LIST REPLACES IT, so the preference has an effect
 	// rather than being storage for a rule nobody wrote.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", inbox.Gesture[worklet.Reason]{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		PrimaryReasons: &[]worklet.Reason{worklet.ReasonMention},
 	}, worklet.PersonAuthority{}); err != nil {
 
@@ -208,7 +208,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows
 	// at all, which is the pruned state.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", inbox.Gesture[worklet.Reason]{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		ReadThrough: &statelog.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
@@ -233,7 +233,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
 	// their queue out of order does.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{newest.RecordID}}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
@@ -267,7 +267,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	// about — a position left behind by a stream that was recreated — is
 	// planted: it is the state a person's record is in after the fact, and
 	// the reader is what has to survive it.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", inbox.Gesture[worklet.Reason]{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		PrimaryReasons: &[]worklet.Reason{},
 	}, worklet.PersonAuthority{}); err != nil {
 		t.Fatalf("write bob's record: %v", err)
@@ -298,7 +298,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 
 	notice := r.inbox(worklet.InboxQuery{Handle: "bob"}).Notices[0]
 	asleep := wednesday.Add(48 * time.Hour)
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", inbox.Gesture[worklet.Reason]{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		Snooze: []inbox.Snooze{{RecordID: notice.RecordID, Until: asleep}},
 	}, worklet.PersonAuthority{}); err != nil {
 

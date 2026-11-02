@@ -387,17 +387,17 @@ func listExpunges(t *testing.T, n *node, q code.ReadQuery) ([]code.ExpungeCandid
 }
 
 // THE EXPUNGE LISTING'S WEEKLY ARM FOLLOWS ITS OPEN ARM: asked with an
-// instant (ReadQuery.ExpungedBefore), the `expunge_due` listing serves every
+// instant (ReadQuery.ScannedBefore), the `expunge_due` listing serves every
 // repository with an expunge open or a purge requested first, by id, and then
-// every OTHER active or archived repository last expunged at or before the
-// instant — never expunged here — least recently expunged first and the id
+// every OTHER active or archived repository last judged at or before the
+// instant — never judged here — least recently judged first and the id
 // breaking a tie, each repository once and a deleted one in neither, paged one
 // row at a time across both arms. Asked without one it serves the open arm
 // alone, as the purge's maintainer always asked it; a weekly arm's cursor
 // without the instant, and the instant on any other read, are refused.
 //
 // Mutation: drop the weekly arm's "nothing open" residual, and a repository
-// owing a purge is listed twice; keyset the weekly arm on expunged_at alone,
+// owing a purge is listed twice; keyset the weekly arm on expunge_scanned_at alone,
 // and a page of one row skips every repository never expunged but the first.
 func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
 	t.Parallel()
@@ -424,7 +424,7 @@ func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
 	n.drain()
 
 	code.SetPageLimits(n.reader, 1, 1<<20)
-	listed, cursors := listExpunges(t, n, code.ReadQuery{ExpungedBefore: time.Now()})
+	listed, cursors := listExpunges(t, n, code.ReadQuery{ScannedBefore: time.Now()})
 	var got []string
 	for _, cand := range listed {
 		got = append(got, cand.ID)
@@ -451,10 +451,10 @@ func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrBadCursor) {
 		t.Errorf("the weekly arm's cursor %q without its instant answered %v, want ErrBadCursor", weekly, err)
 	}
-	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadCompactionDue, ExpungedBefore: time.Now(),
+	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadCompactionDue, ScannedBefore: time.Now(),
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrInvalid) ||
-		!strings.Contains(err.Error(), "expunged_before") {
-		t.Errorf("a compaction listing naming an instant answered %v, want ErrInvalid naming expunged_before", err)
+		!strings.Contains(err.Error(), "scanned_before") {
+		t.Errorf("a compaction listing naming an instant answered %v, want ErrInvalid naming scanned_before", err)
 	}
 }
 
@@ -479,7 +479,7 @@ func TestAScratchRepositoryIsExpungedLikeAProject(t *testing.T) {
 	n.drain()
 	weekly := func(before time.Time) map[string]code.ExpungeCandidate {
 		t.Helper()
-		listed, _ := listExpunges(t, n, code.ReadQuery{ExpungedBefore: before})
+		listed, _ := listExpunges(t, n, code.ReadQuery{ScannedBefore: before})
 		out := map[string]code.ExpungeCandidate{}
 		for _, cand := range listed {
 			out[cand.ID] = cand
@@ -757,3 +757,122 @@ func TestARepositorysDetailSaysWhereItsPurgeStands(t *testing.T) {
 			"the one object it dropped", got)
 	}
 }
+
+// A CLEAN SCAN TAKES A REPOSITORY OUT OF THE WEEKLY LISTING: a maintainer's
+// record that its scan found no expunge due (code.ExpungeScan) applies, and
+// the `expunge_due` listing's weekly arm — read by any node, from the rows —
+// leaves the repository out until the record's instant, while a repository
+// never judged stays; asked again from past that instant it names it again.
+// A scan proposed while an expunge is open on the repository is refused
+// stale, writing nothing: an open expunge is finished, never judged. And a
+// scan with no Seen, or naming no node, is no proposal at all.
+//
+// Mutation: have the scan's apply leave expunge_scanned_at where it was, and
+// the judged repository stays listed; key the weekly arm on expunged_at, and
+// likewise; drop the decide's open-expunge rule, and the scan beside an open
+// expunge applies.
+func TestACleanScanTakesARepositoryOutOfTheWeeklyListing(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	judged, _ := packedRepo(t, n, "judged", 1)
+	idle, _ := packedRepo(t, n, "idle", 1)
+	n.drain()
+	scan := func(repo string) code.ExpungeScan {
+		return code.ExpungeScan{RepoID: repo, ScanID: statelog.NewOpID(time.Now(), ""), Node: n.id,
+			Seen: n.waiter.Committed()}
+	}
+	s := scan(judged)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Scan: &s})
+	requireExpunged(t, res, err)
+	n.drain()
+	weekly := func(before time.Time) map[string]bool {
+		t.Helper()
+		listed, _ := listExpunges(t, n, code.ReadQuery{ScannedBefore: before})
+		out := map[string]bool{}
+		for _, cand := range listed {
+			out[cand.ID] = true
+		}
+		return out
+	}
+	if got := weekly(time.Now().Add(-time.Minute)); got[judged] || !got[idle] {
+		t.Errorf("the weekly arm from a minute ago names the judged repository %t and the idle one %t, "+
+			"want only the idle one", got[judged], got[idle])
+	}
+	if got := weekly(time.Now().Add(time.Hour)); !got[judged] {
+		t.Error("the weekly arm from past the scan's instant does not name the judged repository")
+	}
+
+	expunging, ids := packedRepo(t, n, "expunging", 2)
+	b := beginFor(n, expunging, 1, ids, 1, 1)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	s = scan(expunging)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Scan: &s})
+	if err != nil || res.Refusal != code.RefusalStale || !res.Position.IsZero() {
+		t.Errorf("a scan beside an open expunge answered %+v, %v; want refused stale with no record", res, err)
+	}
+
+	for name, bad := range map[string]func(*code.ExpungeScan){
+		"no seen": func(s *code.ExpungeScan) { s.Seen = statelog.Position{} },
+		"no node": func(s *code.ExpungeScan) { s.Node = "" },
+		"no uuid": func(s *code.ExpungeScan) { s.ScanID = "scan-1" },
+	} {
+		s := scan(judged)
+		bad(&s)
+		if _, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Scan: &s}); !errors.Is(err,
+			code.ErrInvalidProposal) {
+			t.Errorf("a scan with %s answered %v, want ErrInvalidProposal", name, err)
+		}
+	}
+}
+
+// A CLEAN SCAN COSTS THE LOG ONE SMALL RECORD — the figure the code log's day
+// bounds its maintainers' clean scans by (internal/worklet's
+// codeExpungeScanRecordBytes): at most one a repository an ExpungeInterval.
+// What it takes is measured as the day measures a push (BenchmarkPushLogBytes):
+// the log's stream grown by the one record, as the broker counts it against
+// the log's ceiling — its signed frame, its subject and the broker's
+// per-message overhead.
+//
+// Mutation: carry the scan twice in its record's payload — the scan takes the
+// log past its figure, red.
+func TestACleanScanCostsTheLogOneSmallRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	id, _ := packedRepo(t, n, "scanned", 1)
+	n.drain()
+	before, err := n.log.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := code.ExpungeScan{RepoID: id, ScanID: statelog.NewOpID(time.Now(), ""), Node: n.id,
+		Seen: n.waiter.Committed()}
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Scan: &s})
+	requireExpunged(t, res, err)
+	after, err := n.log.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records := after.Messages - before.Messages; records != 1 {
+		t.Fatalf("the scan appended %d records, want one", records)
+	}
+	grew := int64(after.Bytes - before.Bytes)
+	t.Logf("a clean scan by node %q takes the log %d bytes", n.id, grew)
+	if grew > expungeScanRecordBytes {
+		t.Errorf("a clean scan takes the log %d bytes, over the %d the code log's day bounds one at", grew,
+			expungeScanRecordBytes)
+	}
+}
+
+// expungeScanRecordBytes is the most one clean scan's record takes the code
+// log, the figure internal/worklet's codeExpungeScanRecordBytes bounds the
+// maintainers' scans by. 736 BYTES: a repository id, a scan id, a node id and
+// a position beside the record's envelope measure 708 here, at the harness's
+// clock and the log's first generation; a running node's instant prints up to
+// ten bytes more and a generation printed whole seventeen, as holdRecordBytes
+// allows, so 736 bounds both. A node id longer than the suite's adds a byte a
+// character, as it does to every record.
+const expungeScanRecordBytes = 736

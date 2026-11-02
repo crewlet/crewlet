@@ -63,7 +63,7 @@ func snoozeAll(t *testing.T, r *roundTrip, ids []string, until time.Time) {
 		gesture.Snooze = append(gesture.Snooze, inbox.Snooze{RecordID: id, Until: until})
 	}
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze-"+itoa(len(ids)),
-		"bob", gesture, worklet.PersonAuthority{}); err != nil {
+		"bob", statelog.Position{}, gesture, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("snooze %d notices: %v", len(ids), err)
 	}
@@ -161,7 +161,7 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	ids := crowdedInbox(t, r, 12)
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: ids[:6]}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark read: %v", err)
@@ -188,13 +188,13 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	// unread mark on one of those outranks the position, in the scan as
 	// in the marks.
 	through := positionOf(noticeOf(t, r, ids[9]))
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob",
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{ReadThrough: through}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("read through: %v", err)
 	}
 	r.drain()
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob",
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Unread: []string{ids[10]}}, worklet.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark unread: %v", err)

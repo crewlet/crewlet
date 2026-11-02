@@ -77,6 +77,30 @@ func IndexSegmentBytesWith(n int64) func(*Options) {
 	}
 }
 
+// IndexMappedWith makes each build of a code index by the cache Open builds
+// tell fn the path of every segment it writes and the bytes it reads it back
+// through (knobs.indexMapped).
+func IndexMappedWith(fn func(path string, data []byte)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.indexMapped = fn
+	}
+}
+
+// IndexTipReadingWith makes the cache Open builds tell fn the directory of
+// each copy whose default branch's tip a look of its indexer reads with git
+// (knobs.indexTipReading).
+func IndexTipReadingWith(fn func(dir string)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.indexTipReading = fn
+	}
+}
+
 // IndexTicksWith makes the indexer of the cache Open builds look at every
 // repository on ticks rather than every IndexPoll (knobs.indexTicks).
 func IndexTicksWith(ticks <-chan time.Time) func(*Options) {

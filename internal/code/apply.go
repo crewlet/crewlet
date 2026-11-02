@@ -447,15 +447,16 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err != nil {
 		return 0, fmt.Errorf("code: the create at %s: %w", at.position, err)
 	}
+	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
 			(id, name, status, managed_by, kind, owner_kind, owner, visibility, search, default_branch,
 			 description, config_epoch, created_at, created_by, created_by_kind, last_activity_at, version,
-			 mirror_from, mirror_to, import_source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 mirror_from, mirror_to, import_source, owners_digest, human_paths_digest)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		p.RepoID, p.Name, string(p.status()), string(s.ManagedBy), string(s.Kind), string(s.Owner.Kind),
 		s.Owner.Ref, string(s.Visibility), string(s.Search), s.DefaultBranch, s.Description, s.ConfigEpoch,
-		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports)
+		at.at(), createdBy, createdKind, at.at(), at.packed, from, to, imports, ownersDigest, humanPathsDigest)
 	if err != nil {
 		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -479,35 +480,41 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	return 1 + 2*int(created) + protections + owners, nil
 }
 
+// rowDigests is what a repository's row carries of the settings s writes
+// beside it: the digest of its path owners ([OwnersDigest];
+// code_repos.owners_digest) and of its rules' human paths ([HumanPathsDigest];
+// code_repos.human_paths_digest). The merge gate and a revise's decide read
+// the columns rather than hash the rows they digest, and the home's due
+// listing compares them with the digests a revision's facts were matched
+// against, which no statement could hash.
+//
+// THEY RIDE THE STATEMENT THAT WRITES THE ROW — a create's insert, a settings
+// change's update and a restore's — never one of their own. Every record that
+// writes a repository's rules and path owners writes its row beside them, in
+// the one transaction, so no reader holds the digests without the rows they
+// digest; a statement of their own would rewrite the row its record had just
+// written, twice, and count two rows more against the apply transaction's row
+// budget for nothing ([reconcileRecordRows]).
+func rowDigests(s RepoSettings) (owners, humanPaths string) {
+	return OwnersDigest(s.PathOwners), HumanPathsDigest(ruleGatesOf(s.Protections))
+}
+
 // insertPathOwners writes a repository's path owners, one row an owner with its
-// globs packed one a line ([packPaths]), and their digest on the repository's
-// row ([OwnersDigest]; code_repos.owners_digest) — beside the rows it digests,
-// so no reader holds the one without the other: the merge gate and a revise's
-// decide read the column rather than hash every owner row, and the home's due
-// listing compares it with the digest a revision's facts were matched against,
-// which no statement could hash. An owner the record names twice — which no
-// writer forms, the settings holding each owner once — keeps its first row
-// rather than aborting the transaction on every node, as a protection's
-// pattern does.
+// globs packed one a line ([packPaths]); their digest is the repository's row's,
+// written by the statement that writes the row beside them ([rowDigests]). An
+// owner the record names twice — which no writer forms, the settings holding
+// each owner once — keeps its first row rather than aborting the transaction
+// on every node, as a protection's pattern does.
 func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	owners []PathOwner) (int, error) {
 
-	n, err := store.InsertRows(ctx, tx, maxVariables,
+	return store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_path_owners (repo_id, owner_kind, owner, paths) VALUES `,
 		`(?, ?, ?, ?)`, `ON CONFLICT (repo_id, owner_kind, owner) DO NOTHING`, len(owners),
 		func(i int) []any {
 			po := owners[i]
 			return []any{repoID, string(po.Owner.Kind), po.Owner.Ref, packPaths(po.Paths)}
 		})
-	if err != nil {
-		return 0, err
-	}
-	res, err := tx.ExecContext(ctx, ownersDigestSQL, OwnersDigest(owners), repoID)
-	if err != nil {
-		return 0, fmt.Errorf("digest the path owners: %w", err)
-	}
-	digested, _ := res.RowsAffected()
-	return n + int(digested), nil
 }
 
 // packPaths and unpackPaths are a path owner's globs as its row holds them:
@@ -519,10 +526,9 @@ func packPaths(paths []string) string { return strings.Join(paths, "\n") }
 func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
 // insertProtections writes a repository's rules in the record's order, each
-// with its merge gate as the record encodes it ([gateColumn]), and the digest
-// of their human paths on the repository's row ([HumanPathsDigest];
-// code_repos.human_paths_digest) — beside the rules it digests, as
-// [insertPathOwners] writes the owners' (humanpaths.go says who reads it). A
+// with its merge gate as the record encodes it ([gateColumn]); the digest of
+// their human paths is the repository's row's, written by the statement that
+// writes the row beside them ([rowDigests]; humanpaths.go says who reads it). A
 // pattern the record names twice — which no writer forms, the settings being
 // sorted and unique — keeps its first rule rather than aborting the
 // transaction on every node.
@@ -536,22 +542,13 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 			return 0, err
 		}
 	}
-	n, err := store.InsertRows(ctx, tx, maxVariables,
+	return store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push, gate) VALUES `,
 		`(?, ?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
 		func(i int) []any {
 			r := rules[i]
 			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush), gates[i]}
 		})
-	if err != nil {
-		return 0, err
-	}
-	res, err := tx.ExecContext(ctx, humanPathsDigestSQL, HumanPathsDigest(ruleGatesOf(rules)), repoID)
-	if err != nil {
-		return 0, fmt.Errorf("digest the human paths: %w", err)
-	}
-	digested, _ := res.RowsAffected()
-	return n + int(digested), nil
 }
 
 // applyRepo is every record on a repository's own subject.
@@ -591,6 +588,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case ExpungeBegin:
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
+		payloadRepo = p.RepoID
+	case ExpungeScan:
 		payloadRepo = p.RepoID
 	case ImportChunk:
 		payloadRepo = p.RepoID
@@ -676,6 +675,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyExpungeBegin(ctx, tx, at, p)
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
+	case ExpungeScan:
+		return a.applyExpungeScan(ctx, tx, at, p)
 	case ImportChunk:
 		return a.applyImportChunk(ctx, tx, at, p)
 	case ImportDone:
@@ -779,9 +780,11 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if err != nil {
 		return 0, fmt.Errorf("code: the settings at %s: %w", at.position, err)
 	}
+	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, settingsSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, from, to, string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, string(s.status()), s.ConfigEpoch,
+		at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
@@ -872,9 +875,11 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("code: the restore at %s: %w", at.position, err)
 	}
+	ownersDigest, humanPathsDigest := rowDigests(s)
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), string(s.Search),
-		s.DefaultBranch, s.Description, from, to, string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
+		s.DefaultBranch, s.Description, from, to, ownersDigest, humanPathsDigest, string(s.status()), p.ConfigEpoch,
+		at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -928,26 +933,27 @@ const (
 	repoVersionSQL = `SELECT version, managed_by FROM code_repos WHERE id = ?`
 	// settingsSQL settles a repository's settings, its status only where it
 	// is active or archived: an importing repository stays importing until
-	// its import is done, and a deleted or purging one stays as it is.
+	// its import is done, and a deleted or purging one stays as it is. It
+	// writes the digests of the rules and the path owners the record replaces
+	// beside it ([rowDigests]).
 	settingsSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
-			description = ?, mirror_from = ?, mirror_to = ?,
+			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
 			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
-	ownersDigestSQL     = `UPDATE code_repos SET owners_digest = ? WHERE id = ?`
-	humanPathsDigestSQL = `UPDATE code_repos SET human_paths_digest = ? WHERE id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('importing', 'active', 'archived')`
 	// restoreRepoSQL brings a deleted repository back: IMPORTING where its
 	// create imported and the import is not done — it resumes from what of
-	// it landed — and otherwise in the status its settings say.
+	// it landed — and otherwise in the status its settings say; with the
+	// digests of the rules and the path owners it carries back ([rowDigests]).
 	restoreRepoSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
-			description = ?, mirror_from = ?, mirror_to = ?,
+			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
 			status = CASE WHEN import_source != '' AND imported_at = 0 THEN 'importing' ELSE ? END,
 			deleted_at = NULL, config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ? AND status = 'deleted'`

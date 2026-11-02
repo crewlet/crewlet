@@ -977,7 +977,7 @@ func (c *Committer) run(rc *repoCommitter) {
 //
 // A COMPACTION, AN EXPUNGE RECORD, A CHANGE'S OR A QUEUE'S WRITE OR A MERGE
 // IS NEVER GATHERED: a record carries one op, and each is a record of its own
-// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk,
+// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpExpungeScan, OpImportChunk,
 // OpImportDone, OpMirrorSync, the ops
 // ChangeOps lists, OpEnqueue, OpDequeue and OpMerge). Met behind pushes, it
 // ends the batch and is carried to be decided alone, after them and before

@@ -118,6 +118,7 @@ type Cache interface {
 	AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
 		error)
 	AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
+	AdmitExpungeScan(s cache.Synced, held int64) (*cache.Admission, error)
 	NewMergeScratch(ctx context.Context, s cache.Synced, id string, packs []string) (*cache.Scratch, error)
 	NewLayerScratch(ctx context.Context, s cache.Synced, id string, base int) (*cache.Scratch, error)
 	StageExpunge(ctx context.Context, s cache.Synced, id string, inputs []string) (*cache.Scratch, error)
@@ -337,12 +338,6 @@ type Compactor struct {
 	// pack may be among and whose cap is its own ([ExpungeInputByteCap]),
 	// floored at its lightest input.
 	expungeCaps map[string]int64
-	// clean is every repository an expunge's scan on the maintainer's own
-	// schedule found NOT DUE, and when it scanned it: left unscanned for
-	// code.ExpungeInterval after, so a repository with little garbage is
-	// walked at most weekly however often the weekly arm lists it
-	// ([Compactor.cleanAt]).
-	clean map[string]time.Time
 	// held is what a full object store holds back of each loop.
 	held [loops]holds
 	// behind is the last compaction pass's repositories this node maintains
@@ -422,7 +417,7 @@ func New(o Options) (*Compactor, error) {
 		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]*expungeClaim{},
 		notDue: map[string]memo{}, nothing: map[string]statelog.Position{}, built: map[string]lastBuild{},
 		tails: map[string]time.Time{}, caps: map[string]int64{}, expungeCaps: map[string]int64{},
-		clean: map[string]time.Time{}, done: make(chan struct{})}
+		done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
 	}
@@ -703,7 +698,10 @@ func (c *Compactor) claimExpunge(repoID string) bool {
 //   - RESERVED — from its plan ([Compactor.reserveExpunge]) until its rescue
 //     has synced past its begin: a compaction merges beside it, leaving out
 //     every pack the plan chose as an input, by git checksum, as it leaves
-//     out a publication's reservation ([Compactor.claimCompaction]);
+//     out a publication's reservation ([Compactor.claimCompaction]). On the
+//     schedule, whose plan follows its walk, every pack the cycle may take
+//     is reserved through the walk and the reservation narrowed to the
+//     plan's inputs after;
 //   - BEGUN ([Compactor.beganExpunge]) — from then to its commit, the begin
 //     having retired every input in this node's copy: a compaction builds
 //     beside it as though none ran.
@@ -723,8 +721,11 @@ type expungeClaim struct {
 // reserveExpunge records every input p chose as the reservation of repoID's
 // expunge this node is running ([expungeClaim]'s RESERVED): from then on a
 // compaction of the repository is admitted beside it and leaves those packs
-// out. A later, narrower plan of the same cycle — the bundle rule's rebuild —
-// keeps the first one's reservation, which holds every input it chose.
+// out. Each call REPLACES the reservation: the schedule's cycle reserves
+// every pack it may take for its walk, then narrows to its plan's inputs
+// ([Compactor.cycle]). A later, narrower plan of the same cycle — the bundle
+// rule's rebuild — reserves nothing again and keeps the reservation, which
+// holds every input it chose.
 func (c *Compactor) reserveExpunge(repoID string, p planned) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -984,8 +984,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("the committer was proposed the compaction %+v, want %+v", got, compaction)
 	}
 
-	// AN EXPUNGE'S THREE RECORDS, every field of each and of the answer: a
-	// person's request, and a maintainer's begin and commit.
+	// AN EXPUNGE'S FOUR RECORDS, every field of each and of the answer: a
+	// person's request, and a maintainer's begin, commit and clean scan.
 	bundle := func(id, sum string) code.PackRef {
 		return code.PackRef{PackID: id, Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte(id)),
 			Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60, GitChecksum: sum, Objects: 2}
@@ -1005,6 +1005,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Node: "git-a", Seen: at, DropEpoch: 4, Retire: []string{"019a0c2e-0000-7000-8000-0000000000e3"},
 			Add: []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e5",
 				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")}}},
+		"a scan": {Scan: &code.ExpungeScan{RepoID: ref.ID, ScanID: "019a0c2e-0000-7000-8000-0000000000e6",
+			Node: "git-a", Seen: at}},
 	} {
 		d.mu.Lock()
 		d.expunged = code.ExpungeResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
@@ -1328,7 +1330,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		// THE WEEKLY ARM'S INSTANT: dropped on the wire, the maintainer would
 		// be answered the open arm alone, and no expunge on its schedule
 		// would ever begin.
-		{Kind: code.ReadExpungeDue, ExpungedBefore: created, Cursor: "weekly:0:" + ref.ID,
+		{Kind: code.ReadExpungeDue, ScannedBefore: created, Cursor: "weekly:0:" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// THE HOME'S DUE CHANGE WORK, of every repository and of one, each
 		// with the instant its refresh is paced by, and the rechecks one

@@ -672,7 +672,7 @@ func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []worklet.Fie
 	return f.written(opID)
 }
 
-func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
+func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string, _ statelog.Position,
 	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }

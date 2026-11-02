@@ -126,14 +126,16 @@ func heap() int64 {
 //
 //   - build-s/GB: the build's seconds a gigabyte of source, segments written
 //     as production writes them (a segment each codeindex.SegmentSourceBytes,
-//     merged as codeindex.MergeNewest says after each) into memory, as the
-//     cache's place does before it stages the file. The blobs are made in
-//     memory where the cache reads them through one cat-file;
+//     merged as codeindex.MergeNewest says after each) into memory, where the
+//     cache streams each into its staged file and maps it back: no disk in
+//     the figure. The blobs are made in memory where the cache reads them
+//     through one cat-file;
 //   - index-B/src-B: the index's bytes — its segments and its tip map — a
 //     byte of the source it indexes;
 //   - seg-peak-MiB: the heap one segment's build holds at its peak, the
-//     builder's postings and table with the written segment beside them —
-//     what codeindex.SegmentSourceBytes is sized by;
+//     builder's postings and table with the written segment beside them — a
+//     bound above the cache's build, which streams the segment to its file,
+//     and what codeindex.SegmentSourceBytes is sized by;
 //   - zlib-B/src-B: the tree's own files deflated as a pack deflates an
 //     object, a byte of source — the least a copy holding the tip takes,
 //     against which CodeIndexShare weighs the index;
@@ -283,7 +285,8 @@ var _ io.Writer = (*countingWriter)(nil)
 
 // segmentPeak is the heap one segment's build holds at its peak: the
 // first codeindex.SegmentSourceBytes of the tip, in id order, added to a
-// builder and written beside it into memory, as the cache's place writes it.
+// builder and written beside it into memory: a bound above the cache's
+// build, which streams the segment into its staged file.
 func segmentPeak(b *testing.B, corpus []corpusFile, ids []codeindex.OID, order []int) int64 {
 	base := heap()
 	builder := &codeindex.Builder{}

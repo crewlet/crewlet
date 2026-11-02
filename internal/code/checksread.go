@@ -298,7 +298,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"expunge_tips", q.ExpungeTips != nil},
-		{"expunged_before", !q.ExpungedBefore.IsZero()},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
@@ -344,7 +344,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"expunge_tips", q.ExpungeTips != nil},
-		{"expunged_before", !q.ExpungedBefore.IsZero()},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
@@ -395,7 +395,7 @@ func (q ReadQuery) validateChecksQueued() error {
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"expunge_tips", q.ExpungeTips != nil},
-		{"expunged_before", !q.ExpungedBefore.IsZero()},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
@@ -442,7 +442,7 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
 		{"expunge_tips", q.ExpungeTips != nil},
-		{"expunged_before", !q.ExpungedBefore.IsZero()},
+		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_queued", q.ChecksQueued != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {

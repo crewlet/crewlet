@@ -356,11 +356,12 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []workl
 }
 
 // MarkInbox applies one gesture to a person's inbox, under the authority the
-// caller's table decided.
-func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
+// caller's table decided, held to seen — how far the caller read the Worklet's
+// log — on whichever holder decides it.
+func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
 	gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opMarkInbox, &w.actor, markInboxArgs{
-		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
+		OpID: opID, Handle: handle, Seen: seen, Gesture: gesture, Authority: authority,
 	})
 	w.settled(out.Result)
 	return out, err

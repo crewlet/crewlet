@@ -158,6 +158,62 @@ func TestIndexAndGrepAnswerTheSameHits(t *testing.T) {
 	}
 }
 
+// A SEARCH CONTINUED AFTER A PLACE ANSWERS THE LINES PAST IT, and only those
+// (code.SearchQuery.After): walked a line a page, each page continued after
+// the last line the one before answered, the index and git grep each answer
+// every line once and in order — a place inside a file and one between
+// files alike — and a second walk, answered from the memo where the node
+// keeps one, answers the same, since a page is memoized under its place.
+// A place past every file holding the text answers nothing, and passes over
+// no file before it unsaid: the files it skips for their size or as
+// binaries are behind it, never counted.
+//
+// Mutation: drop the place from the line check (searching.add) — the index
+// answers a/one.go:3 again on every page; key the memo without the place —
+// every page is the first's; count the large file before the place (viaGrep)
+// — git grep says it skipped a file a page past it never read.
+func TestASearchContinuedAfterAPlaceAnswersTheLinesPastIt(t *testing.T) {
+	t.Parallel()
+	x, repo, _ := searchFixture(t)
+	x.codeIndexed(repo)
+	servers := map[string]*query.Server{"index": x.server(0, query.Options{}),
+		"grep": x.server(0, query.Options{Cache: grepOnly{x.f.Nodes()[0].Cache()}})}
+	q := code.SearchQuery{Text: "status", Mode: codeindex.ModeLiteral, IgnoreCase: true}
+	want := []string{"a/one.go:3", "a/one.go:4", "a/one.go:5", "b/two.txt:1", "b/two.txt:3"}
+	for name, s := range servers {
+		for walk := range 2 {
+			var got []string
+			page := q
+			page.Limit = 1
+			for range len(want) + 1 {
+				a := mustRead(t, s, searchQ(repo, page)).Search
+				for _, h := range a.Hits {
+					got = append(got, h.Path+":"+strconv.Itoa(h.Line))
+				}
+				if len(a.Hits) == 0 {
+					break
+				}
+				after := code.SearchAfterOf(a.Hits[len(a.Hits)-1])
+				page.After = &after
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s, walk %d: a line a page answered %v, want %v", name, walk, got, want)
+			}
+		}
+		between := q
+		between.After = &code.SearchAfter{Path: "b", Line: 1}
+		if a := mustRead(t, s, searchQ(repo, between)).Search; len(a.Hits) != 2 || a.Hits[0].Path != "b/two.txt" {
+			t.Errorf("%s: continued after b, answered %+v, want b/two.txt's two lines", name, a.Hits)
+		}
+		past := q
+		past.After = &code.SearchAfter{Path: "c", Line: 1}
+		if a := mustRead(t, s, searchQ(repo, past)).Search; len(a.Hits) != 0 || a.SkippedFiles != 0 {
+			t.Errorf("%s: continued after c, answered %d hits and %d skipped files, want none of either", name,
+				len(a.Hits), a.SkippedFiles)
+		}
+	}
+}
+
 // skippedIn is how many of the fixture's skipped files q's paths admit, of n
 // under b/.
 func skippedIn(q code.SearchQuery, n int) int {

@@ -498,7 +498,8 @@ const reconcileInFlight = statelog.ApplyTxRowBudget / reconcileRecordRows
 // as the applier counts them: a settings change or a restore deletes a
 // repository's rules and its path owners and writes the new ones — at most
 // [MaxProtectionsPerRepo] and [MaxPathOwners] rows each way — and moves the
-// repository's row. A create writes at most 131, its claim, its row and its
+// repository's row, which carries the digests of both in the same statement
+// ([rowDigests]). A create writes at most 131, its claim, its row and its
 // kind's count beside the rules and owners, and a deletion one.
 const reconcileRecordRows = 2*(MaxProtectionsPerRepo+MaxPathOwners) + 1
 

@@ -7928,7 +7928,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   which contains which, how many commits each has that the other lacks — and
   the merge preview, asked of the repository's home git node by the two whole
   ids the comparison answered, the one merge a change's mergeability is
-  recorded by: **Merges cleanly**, or **Conflicts** with the paths, or that
+  recorded by (where one commit contains the other that merge is clean, and
+  is answered so with nothing asked of the home): **Merges cleanly**, or
+  **Conflicts** with the paths, or that
   the home could not decide it in a read's time. The merge preview is the one
   state the page wears a tone for. What head changed is read from the merge
   base to head (the three-dot reading every code host shows), both whole.

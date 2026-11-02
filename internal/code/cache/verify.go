@@ -391,7 +391,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	if fresh.Level == "" {
 		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
-	s, damage, found, err := c.sync(ctx, v.e.id, fresh, true)
+	s, damage, found, err := c.sync(ctx, v.e.id, fresh, true, true)
 	if err != nil {
 		return VerifyReport{Repo: v.e.id, Name: v.held.Repo.Name},
 			fmt.Errorf("cache: verify %s: %w", v.label, err)
@@ -525,7 +525,7 @@ func (c *Cache) repairInPlace(ctx context.Context, s Synced) (Synced, *damaged, 
 	e.mu.Lock()
 	if e.dead || e.current != s.inc {
 		e.mu.Unlock()
-		return c.sync(ctx, e.id, linearizable, true)
+		return c.sync(ctx, e.id, linearizable, true, true)
 	}
 	c.markWhole(e, s.inc, Failure{Reason: RebuildVerify}, dropRequest)
 	w := newWaiter(linearizable)

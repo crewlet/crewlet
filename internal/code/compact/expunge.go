@@ -29,13 +29,15 @@ import (
 // listing is two arms. Its OPEN arm walks the partial index that holds only
 // the repositories with an expunge open or a purge requested
 // (code_repos_expunging_idx): a handful in a fleet of any size. Its WEEKLY arm
-// seeks code_repos_expunge_due_idx for every other repository not expunged
-// within code.ExpungeInterval — in a steady fleet nearly all of them, since a
-// scan that finds one not due writes nothing: at most config.CodeMaxRepos
-// projects and the seats' scratch repositories, a few pages of
-// code.MaxSnapshotItems index rows a minute. Reading those rows is the
-// minute's whole cost for a repository found clean: its history is walked at
-// most once an ExpungeInterval ([Compactor.cleanAt]).
+// seeks code_repos_expunge_due_idx for every other repository not JUDGED
+// within code.ExpungeInterval — neither expunged nor scanned clean, a scan
+// that finds one not due being a record of its own (code.ExpungeScan) — so a
+// steady fleet's listing holds only the repositories owed a scan, about one
+// in every ExpungeInterval's worth of minutes of them (config.CodeMaxRepos
+// projects and the seats' scratch repositories), on every git node, after a
+// restart, a rolling upgrade or a git node joining or leaving as much as
+// before it: a repository's history is walked at most once an ExpungeInterval
+// whichever node maintains it ([Compactor.judgedClean]).
 const ExpungePoll = time.Minute
 
 // ExpungeInputByteCap is the most PACK bytes one expunge's begin rewrites at a
@@ -83,8 +85,9 @@ var errNothingKept = errors.New("compact: the expunge's inputs hold no object to
 // ExpungePass is one pass of the EXPUNGE loop:
 //
 //  1. LIST every repository with an expunge open or a purge requested, then
-//     every other active or archived repository last expunged
-//     code.ExpungeInterval ago or never, least recently expunged first — the
+//     every other active or archived repository last judged — expunged, or
+//     scanned and found clean — code.ExpungeInterval ago or never, least
+//     recently judged first — the
 //     `expunge_due` read's two arms, every page, at STALE for the compaction
 //     listing's reason (the router carries this node's own writes as a floor
 //     on every code read it sends), each with its live objects;
@@ -97,10 +100,10 @@ var errNothingKept = errors.New("compact: the expunge's inputs hold no object to
 //     back for a full store ([Compactor.releaseHeld]);
 //  4. every listed repository this node maintains, in the listing's order,
 //     until the next tick would begin: one held back for a full store skipped
-//     until the room is there, one of the weekly arm whose scan found it not
-//     due within code.ExpungeInterval skipped ([Compactor.cleanAt]), and
-//     every other EXPUNGED ([Compactor.Expunge]) — one cycle each, one at a
-//     time.
+//     until the room is there, and every other EXPUNGED ([Compactor.Expunge])
+//     — one cycle each, one at a time; a repository of the weekly arm whose
+//     scan finds it not due recorded so ([Compactor.judgedClean]), which
+//     takes it out of every node's listing for code.ExpungeInterval.
 //
 // A listing that fails is the pass's error. The pass is logged
 // code_expunge_pass, at DEBUG unless it expunged, refused or failed something.
@@ -128,7 +131,7 @@ func (c *Compactor) ExpungePass(ctx context.Context) (ExpungeReport, error) {
 		if unknown != nil || ctx.Err() != nil || !c.now().Before(until) {
 			break
 		}
-		if (c.isHeld(expungeLoop, cand.ID) && !released[cand.ID]) || !maintained[cand.ID] || c.cleanAt(cand) {
+		if (c.isHeld(expungeLoop, cand.ID) && !released[cand.ID]) || !maintained[cand.ID] {
 			continue
 		}
 		report.Maintained++
@@ -152,10 +155,10 @@ func (c *Compactor) ExpungePass(ctx context.Context) (ExpungeReport, error) {
 }
 
 // listExpunges is every repository the `expunge_due` listing names, every
-// page: its open arm, and its weekly arm of the repositories last expunged at
+// page: its open arm, and its weekly arm of the repositories last judged at
 // or before before.
 func (c *Compactor) listExpunges(ctx context.Context, before time.Time) ([]code.ExpungeCandidate, error) {
-	q := code.ReadQuery{Kind: code.ReadExpungeDue, ExpungedBefore: before,
+	q := code.ReadQuery{Kind: code.ReadExpungeDue, ScannedBefore: before,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
 	var out []code.ExpungeCandidate
 	for {
@@ -171,12 +174,11 @@ func (c *Compactor) listExpunges(ctx context.Context, before time.Time) ([]code.
 	}
 }
 
-// forgetExpunges drops the expunge loop's hold for a full store, and its
-// memory of a scan that found the repository not due, of a repository the
-// listing no longer names — its purge served, expunged within the week, or
-// itself deleted — so both are bounded by the repositories listed. A halved
-// cap is kept for the compactor's life, as a compaction's is: it is a fact
-// about what the repository's packs make of a build.
+// forgetExpunges drops the expunge loop's hold for a full store of a
+// repository the listing no longer names — its purge served, judged within
+// the week, or itself deleted — so it is bounded by the repositories listed.
+// A halved cap is kept for the compactor's life, as a compaction's is: it is
+// a fact about what the repository's packs make of a build.
 func (c *Compactor) forgetExpunges(listed []code.ExpungeCandidate) {
 	named := make(map[string]bool, len(listed))
 	for _, cand := range listed {
@@ -189,40 +191,42 @@ func (c *Compactor) forgetExpunges(listed []code.ExpungeCandidate) {
 			delete(c.held[expungeLoop].repos, id)
 		}
 	}
-	for id := range c.clean {
-		if !named[id] {
-			delete(c.clean, id)
-		}
-	}
 }
 
-// cleanAt reports whether cand is a repository of the weekly arm — no
-// expunge open, no purge requested — whose scan on this node found it NOT
-// DUE less than code.ExpungeInterval ago: left unscanned until the interval
-// has passed, so a repository with little garbage is walked at most weekly
-// however often the listing names it.
+// judgedClean records that cand's scan on the maintainer's own schedule,
+// which read the repository at seen, found NO expunge due: ONE RECORD on the
+// repository's subject (code.ExpungeScan), proposed to its committer, whose
+// apply moves the repository's expunge_scanned_at to the record's instant, so
+// the weekly arm leaves the repository out for code.ExpungeInterval on every
+// node — this one after a restart, and whichever node maintains it next.
 //
-// BY THE SCAN'S INSTANT ALONE, NEVER BY THE ROW'S VERSION: a version that
-// moved — a push — would rescan a hot repository at every pass, a walk of its
-// whole history a minute; and a version that did not move says nothing of
-// what has become unreachable since, because a drop's grace and a pack's run
-// out by the clock (code.PruneGrace) with no record written.
-func (c *Compactor) cleanAt(cand code.ExpungeCandidate) bool {
-	if cand.Open != "" || cand.Request != "" {
-		return false
+// SHARED FLEET STATE, NEVER THIS PROCESS'S MEMORY: a verdict kept here was
+// lost to every restart, rolling upgrade and maintainer reshuffle, so a
+// fleet-wide deploy downloaded and walked every repository again whatever its
+// last scan; and since a clean scan wrote nothing, every git node listed
+// nearly every repository through the estate every minute for the few scans
+// a week of work. BY THE RECORD'S INSTANT, NEVER BY THE ROW'S VERSION: a
+// version that moved — a push — would rescan a hot repository at every pass,
+// and one that did not says nothing of what has become unreachable since,
+// because a drop's grace and a pack's run out by the clock (code.PruneGrace)
+// with no record written.
+//
+// Whatever becomes of the record, the cycle is not due: a record refused,
+// pending or not known applied leaves the repository listed, and the next
+// pass scans it again — the cost of a code log that is not taking writes, the
+// same a begin it refused costs.
+func (c *Compactor) judgedClean(ctx context.Context, cand code.ExpungeCandidate, seen statelog.Position) {
+	scan := code.ExpungeScan{RepoID: cand.ID, ScanID: statelog.NewOpID(c.now(), ""), Node: c.o.NodeID, Seen: seen}
+	res, err := c.o.Estate.Expunge(ctx, code.ExpungeProposal{Scan: &scan})
+	switch {
+	case err != nil:
+		c.log.Warn("code_expunge_scan_unrecorded", "repo", cand.Name, "scan", scan.ScanID, "error", err,
+			"detail", "the clean scan's record could not be appended, so the repository stays listed and the "+
+				"next pass scans it again")
+	case res.Outcome == "":
+		c.log.Debug("code_expunge_scan_unrecorded", "repo", cand.Name, "scan", scan.ScanID,
+			"reason", string(res.Refusal), "detail", res.Detail)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	at, ok := c.clean[cand.ID]
-	return ok && c.now().Sub(at) < code.ExpungeInterval
-}
-
-// rememberClean is cand's scan on the maintainer's own schedule found not due,
-// now ([Compactor.cleanAt]).
-func (c *Compactor) rememberClean(cand code.ExpungeCandidate) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.clean[cand.ID] = c.now()
 }
 
 // maintainedOfExpunges is which listed repositories this node maintains, off
@@ -334,28 +338,32 @@ type openExpunge struct {
 //
 //  1. SCAN: sync at session, floored at the version the listing read, as a
 //     compaction does — the committer holds every input to its own snapshot
-//     and refuses a plan from an older one — and PLAN the cycle's inputs
-//     ([planExpunge]) over the live packs it holds, read once: for a purge
-//     the live packs whose content dates from before the request
-//     (code.PackRow.Content), oldest first; on the schedule the live packs
-//     whose newest content ARRIVED code.PruneGrace or longer ago
-//     (code.PackRow.Arrived), oldest first, so a pack younger than the grace
-//     is kept whole, and a repository with none is remembered not due for
-//     code.ExpungeInterval with no walk; either capped at
+//     and refuses a plan from an older one — and read the live packs it
+//     holds, once. A PURGE then PLANS the cycle's inputs ([planExpunge]): the
+//     live packs whose content dates from before the request
+//     (code.PackRow.Content), oldest first. THE SCHEDULE first takes the live
+//     packs whose newest content ARRIVED code.PruneGrace or longer ago
+//     (code.PackRow.Arrived, [scheduled]), the only packs a cycle may take,
+//     so a pack younger than the grace is kept whole — a repository with none
+//     is judged clean ([Compactor.judgedClean]) with no walk. Then
+//     RESERVE ([Compactor.reserveExpunge]): a purge its inputs, the schedule
+//     every eligible pack, since its walk reads their indexes and its plan
+//     chooses among them; until here — the sync and a pure plan, seconds — a
+//     compaction of the repository on this node answered busy, and from here
+//     it merges beside the cycle, leaving them out. Then read the drops the
+//     grace keeps (the `expunge_tips` read, at the scan's floor, since its
+//     instant less the grace — none of a drop's for a purge, whose instant is
+//     now), and what rows hold in flight, which a purge keeps too
+//     ([keptTips]). ON THE SCHEDULE, judge whether the expunge is due at all
+//     ([Compactor.due]): a walk of what the refs and those tips reach,
+//     weighing what each eligible pack would drop — recording a repository
+//     found not due for code.ExpungeInterval — then plan its inputs, the
+//     eligible packs that would drop a byte, densest first, and narrow the
+//     reservation to them. Either plan is capped at
 //     code.MaxExpungeInputs rows and [ExpungeInputByteCap] of the cut — FULL
 //     packs and packs a published layer names among them, since what an
 //     expunge drops may lie in any pack; the layers over them are the begin's
-//     to drop (code.LayersOver, the decide's own reading). Then RESERVE the
-//     inputs ([Compactor.reserveExpunge]): until here — the sync and a pure
-//     plan, seconds — a compaction of the repository on this node answered
-//     busy, and from here it merges beside the cycle, leaving them out. Then
-//     read the drops the grace keeps (the `expunge_tips` read, at the scan's
-//     floor, since its instant less the grace — none of a drop's for a
-//     purge, whose instant is now), and what rows hold in flight, which a
-//     purge keeps too ([keptTips]); and ON THE SCHEDULE judge whether the
-//     expunge is due at all ([Compactor.due]) — a walk of what those and the
-//     refs reach — remembering a repository found not due for
-//     code.ExpungeInterval.
+//     to drop (code.LayersOver, the decide's own reading).
 //  2. ADMIT the builds to the maintenance lane (cache.Cache.AdmitExpunge).
 //  3. BUILD in a scratch of the inputs leaning on a store of every other live
 //     pack, its refs linked from the copy (cache.Cache.StageExpunge): the KEPT
@@ -380,6 +388,17 @@ type openExpunge struct {
 //     rescue's walk.
 func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace time.Duration) (Outcome, error) {
 	began := c.now()
+	if cand.Request == "" && cand.LiveBytes < c.bounds.expungeMin {
+		// NEVER DUE, FROM ITS ROW ALONE: what no tip reaches is at most its
+		// live pack bytes, which its live bytes bound — so it is judged with
+		// no sync, no admission and no walk, and recorded so, at the version
+		// the listing read. A small project, a seat's scratch repository or
+		// an archived one no cache holds is never downloaded to learn it.
+		c.judgedClean(ctx, cand, cand.Version)
+		c.log.Debug("code_expunge_not_due", "repo", cand.Name, "live_bytes", cand.LiveBytes,
+			"detail", "its live bytes are under the least an expunge frees")
+		return OutcomeNotDue, nil
+	}
 	s, err := c.o.Cache.Sync(ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
 	if err != nil {
 		return c.expungeFailed(cand, "sync", err)
@@ -393,11 +412,28 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	cap := c.expungeCapFor(cand.ID)
 	// THE LIVE PACKS, READ ONCE, at the scan's sync: the plan chooses its
 	// inputs among them and the due judgment weighs them, while the
-	// repository's merges go on beside the cycle from its plan on — each
-	// merge's round swapping the copy, which leaves the one s pins no live set
-	// to read again.
+	// repository's merges go on beside the cycle from its first reservation
+	// on — each merge's round swapping the copy, which leaves the one s pins
+	// no live set to read again.
 	live := c.o.Cache.Packs(s)
-	var p planned
+	// planCapped caps a plan at the bytes of its cut and RESERVES its inputs
+	// ([expungeClaim]): from here the repository's compactions on this node
+	// merge beside the rest of the cycle — its reads, its walk, its build, its
+	// upload and its begin — leaving out every input the plan chose.
+	var cut int64
+	planCapped := func(q planned) planned {
+		cut = c.bounds.cutFor(q)
+		if at := ExpungeInputByteCap(cut); at < cap {
+			q, cap = q.recapExpunge(at), at
+		}
+		c.reserveExpunge(cand.ID, q)
+		return q
+	}
+	var (
+		p        planned
+		eligible []pack
+	)
+	by := c.now().Add(-code.PruneGrace)
 	if cand.Request != "" {
 		p = planExpunge(live, requestedBefore(cand.Requested), cap)
 		if len(p.inputs) == 0 {
@@ -408,33 +444,44 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 				"detail", "no live pack dates from before the request")
 			return OutcomeNotDue, nil
 		}
+		p = planCapped(p)
 	} else {
-		p = planExpunge(live, arrivedBy(c.now().Add(-code.PruneGrace)), cap)
-		if len(p.inputs) == 0 {
-			c.rememberClean(cand)
+		eligible = scheduled(live, by)
+		if len(eligible) == 0 {
+			c.judgedClean(ctx, cand, s.Position)
 			c.log.Debug("code_expunge_not_due", "repo", cand.Name,
 				"detail", "every live pack arrived within the grace, which keeps it whole")
 			return OutcomeNotDue, nil
 		}
+		// EVERY ELIGIBLE PACK RESERVED through the walk: it reads each one's
+		// index from the copy s pins, and the plan after it chooses among
+		// them, so a merge beside it that retired one would leave the walk an
+		// index gone and the begin an input no longer live. The young packs a
+		// hot repository's pushes add, the ones its merges are for, stay free.
+		c.reserveExpunge(cand.ID, planned{inputs: eligible})
 	}
-	cut := c.bounds.cutFor(p)
-	if at := ExpungeInputByteCap(cut); at < cap {
-		p, cap = p.recapExpunge(at), at
-	}
-	// RESERVED FROM HERE: the repository's compactions on this node merge
-	// beside the rest of the cycle — its reads, its walk, its build, its
-	// upload and its begin — leaving out every input the plan chose
-	// ([expungeClaim]).
-	c.reserveExpunge(cand.ID, p)
 	drops, err := c.keptTips(ctx, cand.ID, s.Position, c.now().Add(-grace))
 	if err != nil {
 		return c.expungeFailed(cand, "scan", err)
 	}
 	limits := c.o.Limits()
 	if cand.Request == "" {
-		if out, err := c.due(ctx, cand, s, live, drops, limits); out != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		freed, out, err := c.due(ctx, cand, s, live, eligible, drops) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		if out != "" {
 			return out, err
 		}
+		p = planExpunge(live, arrivedBy(by, freed), cap)
+		if len(p.inputs) == 0 {
+			// EVERY FILE THAT WOULD FREE A BYTE IS PAST WHAT ONE BEGIN NAMES
+			// (code.MaxExpungeInputs rows): none a cycle can take.
+			c.judgedClean(ctx, cand, s.Position)
+			c.log.Debug("code_expunge_not_due", "repo", cand.Name,
+				"detail", "no pack holding what no tip reaches is one a single begin can name")
+			return OutcomeNotDue, nil
+		}
+		// NARROWED to the plan's inputs: every other eligible pack is free to
+		// merge again for the rest of the cycle.
+		p = planCapped(p)
 	}
 	c.observeStage(stageScan, began)
 
@@ -1123,66 +1170,72 @@ func (c *Compactor) keptTips(ctx context.Context, repoID string, at statelog.Pos
 }
 
 // due judges whether an expunge of cand on the maintainer's own schedule is
-// due, over s, the live packs its scan read (live) and the drops and rows in
-// flight it keeps (drops): "" where it is — the cycle goes on — and the
-// cycle's outcome where it is not. The live bytes are the scan's reading, never
-// a second read of s: the repository's merges run beside the walk, and the
-// swap of a merge's round leaves the copy s pins no live set, which would read
-// as nothing unreachable.
+// due, over the live packs its scan read (live) and the eligible files among
+// them — those a cycle may take ([scheduled]) — and the drops and rows in
+// flight its scan keeps (drops): by checksum, what each eligible file would
+// drop, and "" where the expunge is due — the cycle goes on — or the cycle's
+// outcome where it is not. The live bytes are the scan's reading, never a
+// second read of s: the repository's merges run beside the walk, and the swap
+// of a merge's round leaves the copy s pins no live set, which would read as
+// nothing live.
 //
-// DUE once the live pack bytes no tip reaches are MORE than
-// 1/code.ExpungeShare of the live pack bytes and at least the bounds'
-// expungeMin (code.ExpungeMinBytes) — [expungeDue]. What a tip reaches is
-// ONE WALK, `rev-list --objects --disk-usage --use-bitmap-index` from every
-// ref of the copy (--all) and every drop and row in flight the scan keeps
-// (--stdin, one a line, a drop whose object a purge already took out passed
-// over by --ignore-missing, as the build passes it over): the bytes git
-// stores what they reach in, each object once, read through the copy's
-// published bitmaps where they cover it. Run in the maintenance lane under
-// the expunge's own admission — a walk of the whole history, as the build's
-// is — and released before the build is admitted.
+// DUE once the bytes of the ELIGIBLE files no tip reaches are MORE than
+// 1/code.ExpungeShare of the repository's live pack bytes and at least the
+// bounds' expungeMin (code.ExpungeMinBytes) — [expungeDue] — never what the
+// whole repository holds unreachable: garbage in a pack younger than the
+// grace is no byte any cycle now could free ([Compactor.unreachableIn]). What
+// a tip reaches is ONE WALK from every ref of the copy and every drop and row
+// in flight the scan keeps, run in the maintenance lane under an admission of
+// its own (cache.Cache.AdmitExpungeScan) — room for a walk of the whole
+// history, as the build's walk is charged, and the indexes it holds
+// ([indexBytes]), never the build's charge, since it sorts nothing — and
+// released before the build is admitted.
 //
-// Found NOT DUE, the repository is remembered for code.ExpungeInterval
-// ([Compactor.cleanAt]), so a repository with little garbage is walked at
-// most weekly.
+// Found NOT DUE, the repository is recorded judged ([Compactor.judgedClean]),
+// so a repository with little garbage is walked at most weekly.
 func (c *Compactor) due(ctx context.Context, cand code.ExpungeCandidate, s cache.Synced, live []code.PackRow,
-	drops []string, limits code.Limits) (Outcome, error) {
+	eligible []pack, drops []string) (map[string]int64, Outcome, error) {
 
-	adm, err := c.o.Cache.AdmitExpunge(s, 0, limits)
+	adm, err := c.o.Cache.AdmitExpungeScan(s, indexBytes(eligible))
 	switch {
 	case errors.Is(err, gitproc.ErrBusy):
 		c.log.Debug("code_expunge_busy", "repo", cand.Name, "error", err)
-		return OutcomeBusy, err
+		return nil, OutcomeBusy, err
 	case errors.Is(err, cache.ErrNoMemory):
 		c.log.Warn("code_expunge_refused", "repo", cand.Name, "reason", reasonMemory, "error", err)
-		return OutcomeRefused, err
+		return nil, OutcomeRefused, err
 	case err != nil:
-		return c.expungeFailed(cand, "admit", err)
+		out, err := c.expungeFailed(cand, "admit", err)
+		return nil, out, err
 	}
-	reachable, err := c.reachableBytes(ctx, adm, s, drops)
+	freed, err := c.unreachableIn(ctx, adm, s, eligible, drops)
 	adm.Release()
 	if err != nil {
-		return c.expungeFailed(cand, "scan", err)
+		out, err := c.expungeFailed(cand, "scan", err)
+		return nil, out, err
 	}
 	seen := map[string]bool{}
-	var liveBytes int64
+	var liveBytes, unreachable int64
 	for _, row := range live {
 		if !seen[row.GitChecksum] {
 			seen[row.GitChecksum] = true
 			liveBytes += row.Ref().PackBytes()
 		}
 	}
-	unreachable := max(liveBytes-reachable, 0)
-	if !expungeDue(unreachable, liveBytes, c.bounds.expungeMin) {
-		c.rememberClean(cand)
-		c.log.Debug("code_expunge_not_due", "repo", cand.Name, "live_bytes", liveBytes,
-			"unreachable_bytes", unreachable,
-			"detail", "what no tip reaches is under a quarter of the live bytes, or under the least an expunge "+
-				"frees; the repository is scanned again in a week")
-		return OutcomeNotDue, nil
+	for _, n := range freed {
+		unreachable += n
 	}
-	c.log.Info("code_expunge_due", "repo", cand.Name, "live_bytes", liveBytes, "unreachable_bytes", unreachable)
-	return "", nil
+	if !expungeDue(unreachable, liveBytes, c.bounds.expungeMin) {
+		c.judgedClean(ctx, cand, s.Position)
+		c.log.Debug("code_expunge_not_due", "repo", cand.Name, "live_bytes", liveBytes,
+			"unreachable_bytes", unreachable, "eligible", len(eligible),
+			"detail", "what no tip reaches of the packs older than the grace is under a quarter of the live "+
+				"bytes, or under the least an expunge frees; the repository is scanned again in a week")
+		return nil, OutcomeNotDue, nil
+	}
+	c.log.Info("code_expunge_due", "repo", cand.Name, "live_bytes", liveBytes, "unreachable_bytes", unreachable,
+		"eligible", len(eligible))
+	return freed, "", nil
 }
 
 // expungeDue reports whether unreachable bytes of a repository of live pack
@@ -1190,32 +1243,6 @@ func (c *Compactor) due(ctx context.Context, cand code.ExpungeCandidate, s cache
 // 1/code.ExpungeShare of them, and at least least.
 func expungeDue(unreachable, live, least int64) bool {
 	return unreachable >= least && unreachable*code.ExpungeShare > live
-}
-
-// reachableBytes is what the copy s pins stores the objects in that its refs
-// and tips reach: ONE `rev-list --disk-usage` in adm's slot ([Compactor.due]).
-func (c *Compactor) reachableBytes(ctx context.Context, adm *cache.Admission, s cache.Synced,
-	tips []string) (int64, error) {
-
-	var in strings.Builder
-	for _, oid := range tips {
-		in.WriteString(oid + "\n")
-	}
-	res, err := adm.Run(ctx, gitproc.Cmd{
-		Dir: s.Dir, Class: gitproc.ClassMaintenance,
-		Args: []string{"rev-list", "--objects", "--disk-usage", "--use-bitmap-index", "--ignore-missing", "--all",
-			"--stdin"},
-		Stdin:    strings.NewReader(in.String()),
-		Deadline: gitproc.ReadDeadline + gitproc.HistoryWalk(s.Repo.LiveObjects),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("compact: walk what %s's tips reach: %w", s.Repo.Name, err)
-	}
-	n, err := strconv.ParseInt(strings.TrimSpace(string(res.Stdout)), 10, 64)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("compact: rev-list --disk-usage printed %q where it states bytes", res.Stdout)
-	}
-	return n, nil
 }
 
 // union is every object id of a and b, each once, sorted.
@@ -1283,42 +1310,39 @@ func (c *Compactor) observeStage(stage string, began time.Time) {
 // owed is which live packs one cycle of an expunge takes: a purge's, those
 // whose content dates from before the position its request landed at; or, on
 // the maintainer's own schedule, those whose newest content arrived at or
-// before an instant — its clock less code.PruneGrace.
+// before an instant — its clock less code.PruneGrace — and that hold bytes no
+// tip reaches, freed by checksum as its scan weighed them
+// ([Compactor.unreachableIn]).
 type owed struct {
 	schedule  bool
 	requested statelog.Position
 	arrivedBy time.Time
+	freed     map[string]int64
 }
 
 // requestedBefore is a purge's [owed]: the packs dated before its request.
 func requestedBefore(requested statelog.Position) owed { return owed{requested: requested} }
 
-// arrivedBy is the schedule's [owed]: the packs that arrived at or before at.
-func arrivedBy(at time.Time) owed { return owed{schedule: true, arrivedBy: at} }
+// arrivedBy is the schedule's [owed]: the packs that arrived at or before at
+// and free something, by freed.
+func arrivedBy(at time.Time, freed map[string]int64) owed {
+	return owed{schedule: true, arrivedBy: at, freed: freed}
+}
 
-// planExpunge plans one cycle of an expunge over a repository whose live rows
-// are live, taking what o owes, its inputs capped at byteCap pack bytes —
-// PURE in those: every FILE (a git checksum, all of its rows together, as a
-// compaction's plan weighs one) that o owes, capped at code.MaxExpungeInputs
-// row ids and at byteCap pack bytes — never below one file, since one pack
-// rewritten is a cycle. A FULL pack and a pack a published layer names are
-// inputs like any other: what an expunge drops may lie in any pack, and an
-// expunge is the one rewrite that takes them.
-//
-// A PURGE'S: every file one of whose rows dates its content from before the
-// request (code.PackRow.Content: zero, a pack this node adopted whose row no
-// round has served yet, is read as older than every request, so a pack whose
-// date is not known is rewritten rather than passed over), oldest content
-// first. THE SCHEDULE'S: every file whose rows' newest content ARRIVED at or
-// before the instant (code.PackRow.Arrived) — a file one of whose rows'
-// arrival is not known, zero, is passed over, the side the grace keeps whole
-// — earliest arrival first. The lowest row id breaks a tie.
-func planExpunge(live []code.PackRow, o owed, byteCap int64) planned {
-	type file struct {
-		pack
-		content, arrived int64
-		unknown          bool
-	}
+// file is one pack FILE of a repository's live rows — a checksum, all of its
+// rows together, as a compaction's plan weighs one — with the oldest of its
+// rows' content and the newest of their arrivals, unknown where one of its
+// rows' arrival is not known (zero: a pack a cache adopted before a round
+// served its row).
+type file struct {
+	pack
+	content, arrived int64
+	unknown          bool
+}
+
+// filesOf is live's files, in the order their first rows come, each with its
+// row ids sorted.
+func filesOf(live []code.PackRow) []*file {
 	files := map[string]*file{}
 	var order []*file
 	for _, row := range live {
@@ -1337,19 +1361,69 @@ func planExpunge(live []code.PackRow, o owed, byteCap int64) planned {
 			f.arrived = max(f.arrived, row.Arrived.UnixNano())
 		}
 	}
-	var due []*file
 	for _, f := range order {
 		slices.Sort(f.ids)
+	}
+	return order
+}
+
+// ripe reports whether the schedule may take f at by: every row's arrival
+// known, and the newest at or before by — a file one of whose rows' arrival
+// is not known is passed over, the side the grace keeps whole.
+func (f *file) ripe(by time.Time) bool { return !f.unknown && f.arrived <= by.UnixNano() }
+
+// scheduled is every file of live the maintainer's own schedule may take at
+// by ([file.ripe]), earliest arrival first, the lowest row id breaking a tie:
+// the files its scan weighs ([Compactor.due]). PURE in its inputs.
+func scheduled(live []code.PackRow, by time.Time) []pack {
+	var ripe []*file
+	for _, f := range filesOf(live) {
+		if f.ripe(by) {
+			ripe = append(ripe, f)
+		}
+	}
+	slices.SortFunc(ripe, func(a, b *file) int {
+		return cmp.Or(cmp.Compare(a.arrived, b.arrived), strings.Compare(a.ids[0], b.ids[0]))
+	})
+	out := make([]pack, len(ripe))
+	for i, f := range ripe {
+		out[i] = f.pack
+	}
+	return out
+}
+
+// planExpunge plans one cycle of an expunge over a repository whose live rows
+// are live, taking what o owes, its inputs capped at byteCap pack bytes —
+// PURE in those: every FILE ([file]) o owes, capped at code.MaxExpungeInputs
+// row ids and at byteCap pack bytes — never below one file, since one pack
+// rewritten is a cycle. A FULL pack and a pack a published layer names are
+// inputs like any other: what an expunge drops may lie in any pack, and an
+// expunge is the one rewrite that takes them.
+//
+// A PURGE'S: every file one of whose rows dates its content from before the
+// request (code.PackRow.Content: zero, a pack this node adopted whose row no
+// round has served yet, is read as older than every request, so a pack whose
+// date is not known is rewritten rather than passed over), oldest content
+// first. THE SCHEDULE'S: every file the schedule may take ([file.ripe]) that
+// frees a byte (o.freed), DENSEST FIRST — the most it frees for each byte it
+// rewrites, which every git node holding the repository downloads again —
+// then earliest arrival: a file that frees nothing is never rewritten,
+// however old. The lowest row id breaks a tie.
+func planExpunge(live []code.PackRow, o owed, byteCap int64) planned {
+	var due []*file
+	for _, f := range filesOf(live) {
 		switch {
 		case !o.schedule && f.content < o.requested.Packed():
 			due = append(due, f)
-		case o.schedule && !f.unknown && f.arrived <= o.arrivedBy.UnixNano():
+		case o.schedule && f.ripe(o.arrivedBy) && o.freed[f.checksum] > 0:
 			due = append(due, f)
 		}
 	}
+	density := func(f *file) float64 { return float64(o.freed[f.checksum]) / float64(max(f.packBytes, 1)) }
 	slices.SortFunc(due, func(a, b *file) int {
 		if o.schedule {
-			return cmp.Or(cmp.Compare(a.arrived, b.arrived), strings.Compare(a.ids[0], b.ids[0]))
+			return cmp.Or(cmp.Compare(density(b), density(a)), cmp.Compare(a.arrived, b.arrived),
+				strings.Compare(a.ids[0], b.ids[0]))
 		}
 		return cmp.Or(cmp.Compare(a.content, b.content), strings.Compare(a.ids[0], b.ids[0]))
 	})

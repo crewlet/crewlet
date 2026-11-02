@@ -85,6 +85,17 @@ func siteChange() *changeFixture {
 	return f
 }
 
+// queued is f's change in its target's queue, waiting at place 2: its
+// readiness's queue precondition names its live entry, siteEntryID, the entry
+// a dequeue takes out (code.Precondition.Queue).
+func (f *changeFixture) queued() *changeFixture {
+	f.detail.Readiness.Preconditions = append(f.detail.Readiness.Preconditions, code.Precondition{
+		Kind: code.PreconditionQueue, State: code.PreconditionComputing, Detail: "site!7 waits at place 2",
+		Queue: &code.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: code.QueueWaiting,
+			Place: 2}})
+	return f
+}
+
 // newChangeHost is the code host holding site and its change site!7.
 func newChangeHost(f *changeFixture) *codeHost {
 	h := newCodeHost()
@@ -95,8 +106,9 @@ func newChangeHost(f *changeFixture) *codeHost {
 // read answers q as the shipped reader pages a change read: a listing of the
 // repository's changes newest first by number, a page after the number its
 // cursor names; and one change's revisions — with its detail on a first page
-// — newest first after the revision a cursor names, or a part of its
-// conversation after the row a cursor names.
+// — newest first after the revision a cursor names, its detail alone for a
+// read asking it alone (code.ReadQuery.DetailOnly, a write tool's), or a part
+// of its conversation after the row a cursor names.
 func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 	out := code.ReadAnswer{Position: f.at, Level: q.Fresh.Level}
 	if q.Repo != "" && q.Repo != f.repo {
@@ -137,6 +149,11 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		if q.Cursor == "" {
 			d := f.detail
 			out.Change = &d
+			if q.DetailOnly {
+				// THE DETAIL ALONE, as the reader answers it: no revision
+				// read, so none and no cursor to the next.
+				return out, nil
+			}
 		} else {
 			n, err := strconv.ParseInt(q.Cursor, 10, 64)
 			if err != nil {

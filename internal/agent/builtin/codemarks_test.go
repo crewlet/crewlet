@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -65,4 +66,52 @@ func TestACodeMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 		t.Errorf("a refused gesture reached the code host: %+v", writes.marks)
 	}
 	writes.mu.Unlock()
+}
+
+// A CODE MARK CARRIES THE CALLER'S FLOOR: `seen`, how far the caller read the
+// code log, reaches the code host as the mark's Seen — which its decide waits
+// for, so a notice the person was shown is never refused by a node not yet at
+// it — a call naming none carries the zero position, and a `seen` that is no
+// position, or one on another log, is refused before anything is asked.
+//
+// Mutation: drop `Seen: seen` from the write the tool asks for, and the floor
+// never reaches the code host, red; accept a position on any log, and the
+// Worklet's position is asked, red.
+func TestACodeMarkCarriesTheCallersFloor(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	writes := &codeWrites{}
+	wired := codeDeps(host)
+	wired.Writer = writes
+	tool, ok := readersCatalogueOver(wired, nil)[builtin.CodeMarkInboxTool]
+	if !ok {
+		t.Fatal("the operator catalogue over the code host's writes does not serve code_mark_inbox")
+	}
+	floor := codeAt(12)
+	got, err := tool.Call(asBoundPerson(), map[string]any{"read": []any{"r-1"}, "seen": floor.String()})
+	if err != nil || got.Failed {
+		t.Fatalf("a mark carrying its floor answered %v %q", err, got.Output)
+	}
+	bare, err := tool.Call(asBoundPerson(), map[string]any{"read": []any{"r-2"}})
+	if err != nil || bare.Failed {
+		t.Fatalf("a mark carrying no floor answered %v %q", err, bare.Output)
+	}
+	for _, bad := range []string{"not-a-position", "CREWLET_TRACKER_LOG@1:12"} {
+		refused, err := tool.Call(asBoundPerson(), map[string]any{"read": []any{"r-3"}, "seen": bad})
+		if err != nil || !refused.Failed || tools.RefusalOf(refused) != tools.RefusalInvalid {
+			t.Errorf("a mark seen at %q answered %v %+v, want it refused invalid", bad, err, refused)
+		}
+	}
+	writes.mu.Lock()
+	marks := slices.Clone(writes.marks)
+	writes.mu.Unlock()
+	switch {
+	case len(marks) != 2:
+		t.Fatalf("the code host was asked %+v, want the two well-formed marks and no other", marks)
+	case marks[0].Seen != floor:
+		t.Errorf("the mark seen at %s reached the code host seen at %s", floor, marks[0].Seen)
+	case !marks[1].Seen.IsZero():
+		t.Errorf("the mark naming no floor reached the code host seen at %s, want the zero position",
+			marks[1].Seen)
+	}
 }

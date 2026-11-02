@@ -142,9 +142,18 @@ code:
   and only by a search that names it. The index is kept by the first two git
   nodes of the repository's order over the live git nodes — each fills a copy
   of its own for it, and builds it again within a minute of a push, reading
-  only the files the push brought — and an index costs each git node keeping one
+  only the files the push brought. A node that becomes one of the two because
+  another left the order builds nothing until that one has been gone ten
+  minutes, and a node the order moves past keeps its index ten minutes, so a
+  git node's restart moves no index. An index costs each git node keeping one
   its disk and a build at every new tip, and a `grep` repository costs nothing
-  until somebody asks it. A repository a tool makes starts at `grep`
+  until somebody asks it. A git node's indexes hold at most a third of its
+  cache's budget: past it, the index of the repository searched there least
+  recently is dropped, and is built again only once the node has room for it
+  or that repository is searched there more recently than an index the node
+  keeps, which it then displaces — its searches read it with git grep
+  meanwhile, and `crewlet.code.index.builds` counts the looks as
+  `over_share`. A repository a tool makes starts at `grep`
   ([Repositories made by tools](#repositories-made-by-tools)). Any other value
   refuses the revision.
 - **`default_branch`** — what a clone checks out; any branch name git would
@@ -1193,7 +1202,8 @@ after its whole build. An [expunge](#expunge), the third writer of a
 repository's packs, holds back the repository's merges the same way, and no
 longer: they wait only while it syncs and plans,
 then go on beside its walk, its build and its upload with every pack but the
-ones it is rewriting, and once it has begun, beside it as though it were not
+ones it is rewriting (through a weekly expunge's walk, every pack old enough
+to rewrite, since the walk weighs them all), and once it has begun, beside it as though it were not
 running — so a repository being purged is never the one whose pushes are
 refused `compaction_behind`. No publication of the repository builds while
 an expunge of it runs, since the expunge drops the layers over what it
@@ -1229,18 +1239,25 @@ publication, one rewrite of a repository at a time
 
 - **Weekly, on the maintainer's own schedule.** Every minute a git node lists
   the repositories it may owe an expunge — first those with one open or a
-  purge requested, then every active or archived repository last expunged a
-  week ago or never, least recently expunged first, a seat's
+  purge requested, then every active or archived repository last expunged or
+  found clean a week ago or never, least recently first, a seat's
   [scratch repositories](#repositories-made-by-tools) as much as projects —
   and for each it maintains, it **scans**: one walk of the repository's
-  history from what it keeps (below) weighs what nothing reaches. The expunge
+  history from what it keeps (below) weighs what nothing reaches in the packs
+  an expunge may rewrite — those that arrived two weeks or more ago, the
+  grace below — never in a younger pack, which it keeps whole. The expunge
   is **due** once that is more than a quarter of the repository's live pack
-  bytes and at least 64 MiB; below either, rewriting the kept packs, which
-  every git node holding the repository then downloads again, costs more
-  than the bytes it frees, and the repository is not scanned again on that
-  node for a week, so a clean repository's history is walked at most once a
-  week. The 64 MiB is provisional, until the expunge's benchmark has priced a
-  cycle against what it frees.
+  bytes and at least 64 MiB, and it then rewrites only packs that hold some
+  of it, those freeing the most for their size first: below a quarter,
+  rewriting the kept packs, which every git node holding the repository then
+  downloads again, costs more than the bytes it frees. A repository whose
+  live bytes are under 64 MiB is judged from its size alone, never
+  downloaded or walked. One found clean either way is recorded so on the
+  repository, which takes it off every git node's list for a week — after a
+  restart, an upgrade or a new git node as much as before — so a clean
+  repository's history is walked at most once a week. The 64 MiB is
+  provisional: the expunge's benchmark has priced a 100 MB repository's
+  cycle against what it frees, and not yet a gigabyte's.
 - **At once, when a person purges** the repository's unreachable objects —
   `code_purge_unreachable` from your own assistant, **Purge unreachable
   history** on the repository's Settings tab in the dashboard, or
@@ -1393,12 +1410,15 @@ dropping packs ([metrics reference](../reference/metrics.md)); its log says
 next pass.
 
 **What it costs.** On the schedule, the scan that judges an expunge due is
-one `git rev-list --disk-usage` over the repository's whole history, and every
+one `git rev-list` over the repository's whole history, each object it names
+looked up in the index of every pack old enough to rewrite, and every
 build is a walk of it from every tip kept. Each is admitted in the node's
 maintenance lane at room for that walk, 240 bytes an object of the whole
-repository as a clone without a bitmap takes, and for the delta window beside
-it, six times `code.limits.max_blob_bytes` (300 MiB by default); a build adds
-550 bytes an object of the packs it sorts, as a merge does. A node whose
+repository as a clone without a bitmap takes. The scan adds what its indexes
+hold, 29 bytes an object of the packs it weighs and 44 more an object of the
+largest of them; a build adds the delta window, six times
+`code.limits.max_blob_bytes` (300 MiB by default), and 550 bytes an object
+of the packs it sorts, as a merge does. A node whose
 budget cannot hold that refuses the expunge and asks again at every pass.
 Nothing is refused at once, but what no ref reaches keeps counting against
 `code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,
@@ -5121,7 +5141,19 @@ sequenceDiagram
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
-  answers first, and a limit cuts the first lines of the whole search.
+  answers first, and a limit cuts the first lines of the whole search. A
+  repository whose search stopped early — its answer full, or its five
+  seconds spent — answered its first lines up to its last, so the asker keeps
+  no line of any repository past that last: every line of the search before
+  the answer's last is in the answer.
+- **A page continues after its key.** A search can be asked again after the
+  last line it answered — its repository, the commit it was read at, its path
+  and line. Then no repository before that one is asked; that one is read at
+  that commit, from the next line on, its node reading no file before the
+  path; and the limit counts those lines alone. So a page of a long search
+  costs the lines from its place on, never the whole search again, and a push
+  between two pages neither repeats nor skips a line of the file the first was
+  cut in. The `code_search` tool pages this way.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -5146,7 +5178,9 @@ and `not_indexed`, the indexed repositories among those searched that were
 read with git grep, no index answering for their tip yet. Each lists its
 first hundred names, in order, beside its whole count; `skipped_files` and
 `truncated` add up those of every repository searched, and `truncated` is set
-too where the merge cut lines past the limit.
+too where the merge cut lines past the limit or past a repository that
+stopped early. A search asked after a line names only the repositories from
+that line's on: the ones before it were the pages before's.
 
 ### The memo
 
@@ -5912,7 +5946,12 @@ asks one beside its answer — the `preview` of `GET
 /code/repos/{name}/compare` ([A repository's
 content](../reference/api-endpoints.md#a-repositorys-content)) — and a
 comparison whose preview is `unknown` is answered without the tag that
-marks it immutable, since the same merge asked again may finish.
+marks it immutable, since the same merge asked again may finish. A
+comparison in which one commit contains the other — a branch against the
+target it was cut from, which has not moved since, or a head its base already
+holds — asks no preview at all: that merge is `clean`, conflicting in no
+path, which the comparison's own merge base already says, so the home spends
+no scratch, no git and no unit of its share on it.
 
 ### Merge readiness
 

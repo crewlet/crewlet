@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -61,21 +62,29 @@ import (
 // a seat that pushed and then searched finds what it pushed. An unfiltered
 // search is floored at nothing — each copy as it stands, the question's own
 // rule — and its answer names the commit each repository was searched at.
+// A page after the first resolves only the repositories it searches, a ref in
+// each once a turn ([CodeDeps.searchHolds]).
 //
 // # Fenced, and paged by its own order
 //
 // A line is a file's text, which nobody a read by object id can name vouches
 // for, so each hit's text goes out inside a fence of the turn's boundary at
 // trust `external`, naming no writer (ADR-0040) — `repo_file`, as code_read's
-// lines. A search answers at most code.MaxSearchHits lines in all, in the
-// order of their repositories' names, their paths' bytes and their numbers,
-// and those lines fenced are more than one tool answer, so the answer is cut,
-// whole hits, at [ToolAnswerBytes] as it is sent ([fitLabelled]), and `next`
-// names the last hit sent. The next page searches again and answers the hits
-// AFTER it in that order — keyed by the hit, never by a count, so a page is
-// never a line answered twice — and a cursor names the search it was cut
-// from, so one handed to another search is refused rather than read as a
-// place in it.
+// lines. The search answers its lines in the order of their repositories'
+// names, their paths' bytes and their numbers, and a page asks it for what
+// one answer holds ([searchPageHits]); the page is cut, whole hits, at
+// [ToolAnswerBytes] as it is sent ([fitLabelled]), and `next` names the last
+// hit sent — its codesearch.Key, the commit its repository was searched at
+// with it. The next page's SEARCH starts there (codesearch.Query.After): no
+// repository before the key's is asked, the key's own is read at the key's
+// commit from the line after it, and the git nodes count their limit among
+// those lines alone. So a page costs the lines from its place on, never the
+// whole search again; it continues the file the page before was cut in at the
+// commit it was read at, so no line is answered twice or skipped for a push
+// between the two; and paging reaches every line of the search, however many,
+// where `truncated` with no `next` is a search that stopped before its first
+// line somewhere — narrow it. A cursor names the search it was cut from, so
+// one handed to another search is refused rather than read as a place in it.
 
 // CodeSearchTool is the code search's name: its authority row's action.
 const CodeSearchTool = string(authz.ActionCodeSearch)
@@ -98,8 +107,8 @@ func (t *codeSearch) Description() string {
 		"can read that keeps a search index, or in those repo: names — search before reading whole " +
 		"trees. Each hit is a repository, a path, a line and the file's blob id, read at the commit " +
 		"`tips` names; its text arrives fenced as content nobody vouches for. `coverage` names what " +
-		"was not searched, and `truncated` means narrow it with repo: or path:. A page at a time — " +
-		"pass `next` back as `cursor` with the same search."
+		"was not searched, and `truncated` with no `next` means lines went unread: narrow it with repo: or " +
+		"path:. A page at a time — pass `next` back as `cursor` with the same search."
 }
 
 func (t *codeSearch) Parameters() map[string]any {
@@ -158,13 +167,17 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := codesearch.Query{Search: search, Asker: c.asker, CeilingSeat: c.ceiling, Rows: seatRead}
+	// ONE PAGE'S LINES, AFTER THE LAST ONE SENT: the search itself starts
+	// at the cursor's key and stops at what a page holds, so a page costs
+	// the git nodes the lines it answers, never the whole search again.
+	q := codesearch.Query{Search: search, Limit: searchPageHits, After: after, Asker: c.asker,
+		CeilingSeat: c.ceiling, Rows: seatRead}
 	if turn != nil && c.asker.Kind == code.PrincipalAgent {
 		// A SEAT'S SEARCH NAMES ITS TURN, whose bucket on each answering
 		// git node pays the search's second look at the log's head, as a
 		// read by object id's does ([CodeDeps.gitRead]).
 		q.Turn = turn.RunID
-		if q.Git, refusal = t.deps.searchHolds(ctx, turn, t.Name(), c, search); refusal != nil {
+		if q.Git, refusal = t.deps.searchHolds(ctx, turn, t.Name(), c, search, after); refusal != nil {
 			return *refusal, nil
 		}
 	}
@@ -172,18 +185,44 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return searchFailure(ctx, t.Name(), err), nil
 	}
-	hits := answer.Hits
-	if after != nil {
-		// THE HITS AFTER THE LAST ONE SENT, by the order the search answers
-		// in: the search is asked again whole, and what an earlier page
-		// answered is left out by its key, never by a count.
-		hits = slices.DeleteFunc(slices.Clone(hits), func(h codesearch.Hit) bool {
-			return codesearch.CompareHits(*after, h) >= 0
-		})
+	k, rendered, err := fitLabelled(len(answer.Hits), searchPage(turn, c.asker.Seat, search, answer))
+	switch {
+	case err != nil:
+		return labelFault(ctx, t.Name(), err), nil
+	case k == 0 && len(answer.Hits) > 0:
+		// A HIT is a path, a line of at most code.MaxSearchLineBytes and a
+		// blob's id, fenced; and the coverage lists at most
+		// codesearch.MaxCoverageNames names a set — together far under one
+		// answer, so this is a bound broken, never a search.
+		return faulted(ctx, t.Name(), errors.New("builtin: one search hit beside its coverage is past one "+
+			"tool answer"), fmt.Sprintf("%s could not fit one line in one answer: %s.", t.Name(), faultSaid)), nil
 	}
-	build := func(k int) (*foreignRead, any) {
-		read := newForeignRead(turn, c.asker.Seat)
-		page := codeSearchPage{Hits: hits[:k], Coverage: answer.Coverage}
+	return compactAnswer(rendered, "Narrow the search with repo: or path:.")
+}
+
+// searchPageHits is the most lines a page of code_search asks the search for
+// (codesearch.Query.Limit): what one tool answer holds of the SMALLEST lines
+// a search answers that carry text — a one-byte repository, path and line,
+// fenced — measured as sent by TestCodeSearchAsksForWhatOnePageHolds. Asked
+// for more, a page would have the git nodes find, confirm and send lines no
+// page of them can carry, which the next page reads again; asked for fewer, a
+// page of short lines would be shorter than one answer holds, and the search
+// cut into more pages. Lines that are longer, as nearly all are, fill a page
+// sooner, and the lines past the page's last are the next page's to read
+// again — less than one page's worth at most. Under code.MaxSearchHits (500),
+// which a page of the shortest lines could not carry.
+const searchPageHits = 315
+
+// searchPage is the fitLabelled builder of the page of answer's first k hits:
+// each hit's text fenced, the commit each repository with a hit on the page
+// was searched at, the coverage, and — where lines may follow the page's
+// last — the cursor of the page after it.
+func searchPage(turn *turnctx.Turn, seat string, search codeindex.Query,
+	answer codesearch.Answer) func(k int) (*foreignRead, any) {
+
+	return func(k int) (*foreignRead, any) {
+		read := newForeignRead(turn, seat)
+		page := codeSearchPage{Hits: answer.Hits[:k], Coverage: answer.Coverage}
 		for i, hit := range page.Hits {
 			// A LINE IS A FILE'S TEXT, which nobody this read can name
 			// vouches for: fenced, at the least trust.
@@ -196,26 +235,18 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				page.Tips[hit.Repo] = tip
 			}
 		}
-		// A PROBE OF NO HITS names no place: it is the bare answer
+		// THE NEXT PAGE, where lines may follow the page's last: those the
+		// page was cut before, or — the search having stopped (Truncated)
+		// — those it did not read. Every line before the search's last is
+		// in its answer (codesearch's merge), so the page after it misses
+		// none. A PROBE OF NO HITS names no place: it is the bare answer
 		// fitLabelled measures first, never a page sent.
-		if k > 0 && k < len(hits) {
-			page.Next = searchCursorOf(search, hits[k-1])
+		if k > 0 && (k < len(answer.Hits) || answer.Coverage.Truncated) {
+			last := answer.Hits[k-1]
+			page.Next = searchCursorOf(search, codesearch.KeyOf(last, answer.Tips[last.Repo]))
 		}
 		return read, page
 	}
-	k, rendered, err := fitLabelled(len(hits), build)
-	switch {
-	case err != nil:
-		return labelFault(ctx, t.Name(), err), nil
-	case k == 0 && len(hits) > 0:
-		// A HIT is a path, a line of at most code.MaxSearchLineBytes and a
-		// blob's id, fenced; and the coverage lists at most
-		// codesearch.MaxCoverageNames names a set — together far under one
-		// answer, so this is a bound broken, never a search.
-		return faulted(ctx, t.Name(), errors.New("builtin: one search hit beside its coverage is past one "+
-			"tool answer"), fmt.Sprintf("%s could not fit one line in one answer: %s.", t.Name(), faultSaid)), nil
-	}
-	return compactAnswer(rendered, "Narrow the search with repo: or path:.")
 }
 
 // searchArgs is the search a call names — `query` in the grammar, the
@@ -256,15 +287,26 @@ func searchWords(err error) string {
 	return err.Error()
 }
 
-// searchHolds resolves, for a seat's turn, every repository search names —
-// holding a scratch one ([CodeDeps.repo]) — and the ref it names in each,
-// holding a seat's branch ([CodeDeps.refsOf]), and answers the floor each
-// copy searched is brought to: this node's own pushes to those repositories
-// and every push that set the ref there ([code.RefsFloor]). A ref that could
-// be a seat's branch, in a search naming no repository, is refused: it would
-// be read in every repository the seat may read and held in none.
+// searchHolds resolves, for a seat's turn, every repository search names
+// that the page searches — holding a scratch one ([CodeDeps.repo]) — and the
+// ref it names in each, holding a seat's branch ([CodeDeps.refsOf]), and
+// answers the floor each copy searched is brought to: this node's own pushes
+// to those repositories and every push that set the ref there
+// ([code.RefsFloor]). A ref that could be a seat's branch, in a search naming
+// no repository, is refused: it would be read in every repository the seat
+// may read and held in none.
+//
+// A PAGE AFTER A KEY (after) searches no repository before the key's, so it
+// resolves none of them, and reads the key's own at the key's commit, so it
+// resolves no ref there. And a ref is resolved in a repository ONCE A TURN
+// ([searchRefKey]): the page after it in the same turn reuses the resolution
+// and the hold it took, and floors its copies where the first page did — a
+// floor, which a ref that moved since only leaves lower than it might be,
+// never a pin. This node's own pushes are read again on every page, a local
+// read that costs nothing, so a seat that pushed between two pages finds
+// what it pushed on the second.
 func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
-	search codeindex.Query) (statelog.Freshness, *tools.Result) {
+	search codeindex.Query, after *codesearch.Key) (statelog.Freshness, *tools.Result) {
 
 	named := search.Ref != "" && !code.ValidRev(search.Ref)
 	if named && len(search.Repos) == 0 && (code.Holdable(search.Ref) || code.Holdable("refs/heads/"+search.Ref)) {
@@ -278,25 +320,48 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 		refs []code.ResolvedRef
 	)
 	for _, name := range search.Repos {
+		if after != nil && name < after.Repo {
+			continue
+		}
 		repo, refusal := d.repo(ctx, turn, tool, c, name)
 		if refusal != nil {
 			return statelog.Freshness{}, refusal
 		}
 		own = furthestOnLog(own, d.Code.FloorOf(repo.ID))
-		if !named {
+		if !named || after != nil && name == after.Repo {
 			continue
+		}
+		key := searchRefKey{asker: c.asker, repoID: repo.ID, ref: search.Ref}
+		if held, ok := turn.LookedUp().Load(key); ok {
+			if live, ok := held.([]code.ResolvedRef); ok {
+				refs = append(refs, live...)
+				continue
+			}
 		}
 		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, search.Ref)
 		if refusal != nil {
 			return statelog.Freshness{}, refusal
 		}
+		var live []code.ResolvedRef
 		for _, ref := range answer.Refs {
 			if ref.Missing == "" {
-				refs = append(refs, ref)
+				live = append(live, ref)
 			}
 		}
+		turn.LookedUp().Store(key, live)
+		refs = append(refs, live...)
 	}
 	return code.RefsFloor(own, refs...), nil
+}
+
+// searchRefKey keys, in a turn's lookups, a search's ref as one repository
+// resolved it for asker ([CodeDeps.searchHolds]): the live refs it answered,
+// their holds taken — a FACT about what the turn read, which floors the
+// turn's later pages of the search and decides nothing.
+type searchRefKey struct {
+	asker  code.Principal
+	repoID string
+	ref    string
 }
 
 // searchFailure explains a search that did not answer: a refusal over one
@@ -321,14 +386,15 @@ func searchFailure(ctx context.Context, tool string, err error) tools.Result {
 }
 
 // searchCursor is what a code_search cursor carries: the search it was cut
-// from, by its fingerprint, and the last hit sent — its place, the
-// repository, the path as the hit names it (its text, and its exact bytes
-// where they are not UTF-8) and the line — which the next page compares by
-// the search's own order ([codesearch.CompareHits]), never a copy of it.
+// from, by its fingerprint, and the key of the last hit sent
+// (codesearch.Key) — the repository, the commit it was searched at, the path
+// as the hit names it (its text, or its exact bytes where they are not
+// UTF-8) and the line — which the next page's search continues after.
 type searchCursor struct {
 	Search  string `json:"s"`
 	Repo    string `json:"r"`
-	Path    string `json:"p"`
+	Tip     string `json:"t"`
+	Path    string `json:"p,omitempty"`
 	PathB64 string `json:"b,omitempty"`
 	Line    int    `json:"l"`
 }
@@ -344,17 +410,17 @@ func searchFingerprint(q codeindex.Query) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// searchCursorOf is the cursor of the page after h, in search.
-func searchCursorOf(search codeindex.Query, h codesearch.Hit) string {
-	data, _ := json.Marshal(searchCursor{Search: searchFingerprint(search), Repo: h.Repo, Path: h.Path,
-		PathB64: h.PathB64, Line: h.Line})
+// searchCursorOf is the cursor of the page after key, in search.
+func searchCursorOf(search codeindex.Query, key codesearch.Key) string {
+	data, _ := json.Marshal(searchCursor{Search: searchFingerprint(search), Repo: key.Repo, Tip: key.Tip,
+		Path: key.Path, PathB64: key.PathB64, Line: key.Line})
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-// searchCursorArg is the place a call's cursor names in search — the last
-// hit sent, as far as the search's order reads one — nil for the first page,
-// or the refusal of a cursor that is not one of search's.
-func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codesearch.Hit, *tools.Result) {
+// searchCursorArg is the key a call's cursor names in search — the last hit
+// a page sent, which the search continues after — nil for the first page, or
+// the refusal of a cursor that is not one of search's.
+func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codesearch.Key, *tools.Result) {
 	if cursor == "" {
 		return nil, nil
 	}
@@ -363,10 +429,12 @@ func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codes
 	if err == nil {
 		err = json.Unmarshal(data, &c)
 	}
-	if err == nil && c.PathB64 != "" {
-		_, err = base64.StdEncoding.DecodeString(c.PathB64)
+	key := codesearch.Key{Repo: c.Repo, Tip: c.Tip, SearchAfter: code.SearchAfter{Path: c.Path,
+		PathB64: c.PathB64, Line: c.Line}}
+	if err == nil {
+		_, err = key.Raw()
 	}
-	if err != nil || c.Line < 1 || c.Repo == "" || c.Path == "" {
+	if err != nil || !code.ValidName(c.Repo) || !gitref.ValidOID(c.Tip) {
 		r := failed(fmt.Sprintf("%s: `cursor` is not a page of a search — hand back the `next` a "+
 			"page answered, unchanged.", tool))
 		return nil, &r
@@ -376,6 +444,5 @@ func searchCursorArg(tool string, search codeindex.Query, cursor string) (*codes
 			"`query`, `mode`, `ignore_case`, `repo`, `path` and `ref` it was answered for.", tool))
 		return nil, &r
 	}
-	return &codesearch.Hit{Repo: c.Repo, SearchHit: code.SearchHit{Path: c.Path, PathB64: c.PathB64,
-		Line: c.Line}}, nil
+	return &key, nil
 }

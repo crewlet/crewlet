@@ -357,7 +357,6 @@ func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	c, _ := committerOn(t, n, n.pub)
-	ctx := t.Context()
 	pushedBy := func(who code.Principal, id string, cmds ...code.Command) code.PushEntry {
 		e := entry(id, cmds...)
 		e.Principal = who
@@ -409,7 +408,7 @@ func TestALandingIsMadeByWhoeverPushedTheTipItsHomeFound(t *testing.T) {
 					"apply sees the change merged", routingAt(t, n, pushed.Position))
 			}
 
-			res, err := c.ProposeChange(ctx, landing(repo, change, 2, oidOf("B2"), mainRef, oidOf("M")))
+			res, err := c.ProposeChange(t.Context(), landing(repo, change, 2, oidOf("B2"), mainRef, oidOf("M")))
 			if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged {
 				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
 			}

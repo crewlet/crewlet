@@ -960,8 +960,12 @@ since.
 and your own assistant's ([The company's
 code](tools-and-mcp.md#the-companys-code)): `query` in the grammar above,
 with the same `mode`, `ignore_case`, `repo`, `path` and `ref` beside it. Each
-line arrives fenced as a file's text that nobody vouches for, and the 500
-lines come a page at a time, each page under one tool answer.
+line arrives fenced as a file's text that nobody vouches for, a page at a
+time, each page under one tool answer. A page asks the git nodes for at most
+315 lines, the most one answer holds, starting after the last line of the
+page before — at the commit that line was read at — so a page costs the
+lines it reads from its place on, never the whole search again, and paging
+reaches every matching line however many there are.
 
 ## Seats and code
 

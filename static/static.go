@@ -52,7 +52,9 @@ import (
 //
 // A NEW TOP-LEVEL ASSET WOULD NEED A NEW PATTERN HERE, and
 // TestEveryStaticFileIsInTheBinary is what says so — it walks this directory
-// on disk and fails on anything the embed did not take.
+// on disk and fails on anything the embed did not take. The one tree it
+// excuses is protocol/, declared there (unembeddedTrees) with why, and held
+// the other way: a pattern that took it fails the same test.
 //
 //go:embed all:dashboard all:artifacts
 var files embed.FS

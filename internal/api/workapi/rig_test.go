@@ -341,7 +341,7 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 	return b.w.answer(opID)
 }
 
-func (b *bound) MarkInbox(_ context.Context, opID, handle string,
+func (b *bound) MarkInbox(_ context.Context, opID, handle string, _ statelog.Position,
 	_ inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()

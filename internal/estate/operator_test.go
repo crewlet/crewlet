@@ -173,8 +173,16 @@ func (w deskWriter) WriteFields(_ context.Context, opID string, _ []worklet.Fiel
 	return w.d.note("write_fields", opID, w.a), nil
 }
 
-func (w deskWriter) MarkInbox(_ context.Context, opID, _ string,
+// deskSeen is the floor a mark carries across, which the holder must receive
+// as sent: dropped on the wire, the deciding node waits for nothing and
+// refuses a notice its caller was shown as unknown.
+var deskSeen = statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 41}
+
+func (w deskWriter) MarkInbox(_ context.Context, opID, _ string, seen statelog.Position,
 	g inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
+	if seen != deskSeen {
+		return worklet.WriteResult{}, fmt.Errorf("the floor did not cross: %+v", seen)
+	}
 	if !slices.Equal(g.Read, []string{"rec-1"}) {
 		return worklet.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
 	}
@@ -361,7 +369,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		{"write_types", func() (worklet.WriteResult, error) { return w.WriteTypes(ctx, "op-2", nil) }},
 		{"write_fields", func() (worklet.WriteResult, error) { return w.WriteFields(ctx, "op-3", nil) }},
 		{"mark_inbox", func() (worklet.WriteResult, error) {
-			return w.MarkInbox(ctx, "op-4", "founder", inbox.Gesture[worklet.Reason]{Read: []string{"rec-1"}},
+			return w.MarkInbox(ctx, "op-4", "founder", deskSeen, inbox.Gesture[worklet.Reason]{Read: []string{"rec-1"}},
 				authorized)
 		}},
 		{"write_pins", func() (worklet.WriteResult, error) {
