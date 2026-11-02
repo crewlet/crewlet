@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
@@ -38,6 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -710,8 +713,49 @@ var _ sandbox.Resumer = (*resumer)(nil)
 // Unrecovered, it skipped the coordinator's revert as well as its settle, so
 // the run row was stranded in resumed while the queue redelivered a completion
 // the claim then refused.
+//
+// AND A PANIC AFTER THE TURN BEGAN ENDS THE TURN ON THE EXECUTOR LOG: the
+// coordinator settles a begun turn that broke without a word of its own
+// ([sandbox.ErrResumeAbandoned]), its frame — which owes the turn's end on
+// every other way out — is what panicked, and no ending of the run owes one
+// for a turn that came back. So the end is owed here, failed, saying it
+// panicked ([panickedEnding]), for the run's ending to record. A panic BEFORE
+// the turn began is the coordinator's to announce as a loss, which owes the
+// turn's end itself ([sandbox.CoordinatorOptions.TurnLost]).
 func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
-	return r.engine.guardResume(ctx, req.Run, func() error { return r.resume(ctx, req) })
+	return r.engine.resumeGuarded(ctx, req, r.resume)
+}
+
+// resumeGuarded is [resumer.Resume] over the resume body run: run guarded
+// ([Engine.guardResume]), and a panic once its turn began ended on the executor
+// log as failed ([panickedEnding]).
+func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
+	run func(context.Context, sandbox.ResumeRequest) error) error {
+
+	var began atomic.Bool
+	if begin := req.Begin; begin != nil {
+		req.Begin = func(ctx context.Context) error {
+			if err := begin(ctx); err != nil {
+				return err
+			}
+			began.Store(true)
+			return nil
+		}
+	}
+	err := e.guardResume(ctx, req.Run, func() error { return run(ctx, req) })
+	var panicked *turn.PanicError
+	if began.Load() && errors.As(err, &panicked) {
+		e.oweExecutorEnd(ctx, req.Run, panickedEnding(panicked))
+	}
+	return err
+}
+
+// panickedEnding is how a resumed turn that panicked once it had begun ended:
+// failed, saying it panicked and with what — redacted, since a panic's value
+// can quote what a tool or a box said. The stack stays in the log.
+func panickedEnding(panicked *turn.PanicError) executordomain.Ending {
+	return executordomain.Ending{Outcome: executordomain.OutcomeFailed,
+		Failure: redact.Secrets(fmt.Sprintf("the resumed turn panicked and was abandoned: %v", panicked.Value))}
 }
 
 // resume is [resumer.Resume]'s body, separated so the recovery around it is
@@ -1124,13 +1168,22 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// answered, its end owed on the run's record for the run's ending to
 	// record on the executor log, and the run settled rather than reverted
 	// (below).
+	//
+	// UNLESS THE STOP WAS DECIDED ON THE RUN this segment's relaunch was
+	// launching ([stoppedByRun]): that stop's own ending answers the
+	// colleague and owes the turn's end, from the run's record, once this
+	// frame has returned and the stop's read has kept the relaunched job's
+	// session ([sandbox.CoordinatorOptions.CloseStopped]); answered here as
+	// well, the colleague was answered twice.
 	stopped := func(stop error, why string) error {
 		pause, _ := stopOf(stop)
 		role, agentID := seatIdentity(company, in.Turn.Handle())
 		e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 			in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
-		answered := answer(res, stop)
-		e.oweExecutorEnd(ctx, in.Run, stoppedEnding(res, resumedReply, stop, answered))
+		if !stoppedByRun(stop) {
+			answered := answer(res, stop)
+			e.oweExecutorEnd(ctx, in.Run, stoppedEnding(res, resumedReply, stop, answered))
+		}
 		return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, why, stop)
 	}
 	// A LAUNCH THIS SEGMENT'S FENCE REFUSED once its record was written is
@@ -1207,17 +1260,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err), reason, err))
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
-		// A RETRY NEEDS THE RUN'S RECORD, and a relaunch that failed in its
-		// launch — no box, no attach, no start — abandoned the record under
-		// it ([sandbox.Coordinator.Launch]): reverted, the claim would find
-		// nothing to hand back, the completion nothing to claim again, and
-		// the turn would end in silence, its colleague unanswered and its end
-		// nowhere. So a segment that broke and left no record ends the turn
+		// A RETRY NEEDS THE RUN'S RECORD AS THE CLAIM LEFT IT, and a relaunch
+		// that failed in its launch — no box, no attach, no start — abandoned
+		// the run under it ([sandbox.Coordinator.Launch]): its ending is
+		// decided, and its record waits for this frame to say how the turn
+		// ended before it goes ([sandbox.Coordinator.OweEnd]). Reverted, the
+		// claim would find nothing to hand back, the completion nothing to
+		// claim again, and the turn would end in silence, its colleague
+		// unanswered and its end nowhere. So a segment that broke on a run
+		// whose ending is decided, or whose record is gone, ends the turn
 		// here, as one abandoned, and settles rather than reverts.
-		if e.runRecordGone(ctx, in.Run.TurnID) {
+		if e.runEnded(ctx, in.Run.TurnID) {
 			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err),
-				"its relaunch failed, and its run's record went with it", err))
-			return fmt.Errorf("%w (the resumed turn's relaunch failed and took its run's record with it): %w",
+				"its relaunch failed, and its run was ended with it", err))
+			return fmt.Errorf("%w (the resumed turn's relaunch failed and its run was ended with it): %w",
 				sandbox.ErrResumeAbandoned, err)
 		}
 		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
@@ -1533,8 +1589,7 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // reads `done` after the loop overrode it), whether its reply reached the party
 // waiting and on what, what the reviewer said landed, what stopped a blocked
 // round, and answered, the engine's own answer to a colleague's ask — which the
-// next turn on the conversation is told beside the session it continues
-// ([endingOf]).
+// turn's row on the log keeps beside the session the turn kept ([endingOf]).
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {

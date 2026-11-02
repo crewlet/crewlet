@@ -3449,12 +3449,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// because the reply wakes another seat and the record of this turn
 	// should exist first.
 	//
-	// NOT FOR A TURN STOPPED BETWEEN ITS LAUNCH AND ITS PARK: that stop's own
-	// ending answers the colleague and records the turn's end on the
-	// executor log, from the run's record, once its read has kept the job's
-	// session ([sandbox.CoordinatorOptions.CloseStopped]) — answered here as
-	// well, the colleague would find the channel the first answer closed.
-	if stoppedAtPark {
+	// NOT FOR A TURN WHOSE RUN A STOP ENDED — between its launch and its park,
+	// or while it was still launching, the stop decided on the run's record
+	// and the attach refused ([stoppedByRun]): that stop's own ending answers
+	// the colleague and records the turn's end on the executor log, from the
+	// run's record, once its read has kept the job's session
+	// ([sandbox.CoordinatorOptions.CloseStopped]). Answered here as well, the
+	// two answers raced each other's open check and both reached the asker.
+	if stoppedAtPark || stoppedByRun(err) {
 		e.abandonedLaunches.Delete(req.RunID)
 		return res, err
 	}

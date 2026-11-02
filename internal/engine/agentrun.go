@@ -424,20 +424,24 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		failed := runner.Launched{LaunchID: recorded}
 		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
 		switch {
+		case stopped:
+			// A STOP DECIDED ON THE RUN, whether or not the turn's own fence
+			// refused the launch beside it: the stop's ending answers the
+			// turn's colleague and records its end, so the error says the
+			// stop is the run's ([stoppedByRun]) and the frame does neither.
+			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
+				"error", err, "detail", "a person stopped the seat's running work while its "+
+					"executor was launching; the launch is ended and the turn stops")
+			return failed, &stopError{pause: pauseOfStop(decided), handle: handle, ofRun: true}
 		case turn.Stopped(err):
 			// THE TURN'S OWN FENCE REFUSED IT once the record was written:
 			// the launch abandoned the record under it
 			// ([sandbox.Coordinator.Launch]), so no ending of the run owes the
 			// turn's end, and the frame that ends the turn records it.
-			if recorded != "" && !stopped {
+			if recorded != "" {
 				e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
 			}
 			return failed, err
-		case stopped:
-			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
-				"error", err, "detail", "a person stopped the seat's running work while its "+
-					"executor was launching; the launch is ended and the turn stops")
-			return failed, &stopError{pause: pauseOfStop(decided), handle: handle}
 		}
 		return failed, err
 	}

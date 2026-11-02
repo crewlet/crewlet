@@ -176,11 +176,12 @@ func (k executorKeep) sessionStore() (*executordomain.SessionStore, error) {
 // oweExecutorEnd records how a turn that launched an executor ended: OWED on
 // the turn's run row ([sandbox.Coordinator.OweEnd]), which the run's ending
 // records on the executor log once every capture of the turn has settled and
-// before it deletes the row — so the seat's mail waits on it, and the next turn
-// on the conversation reads it. A turn whose row is gone — its launch abandoned
-// under it — has nothing to owe it on, and its end is recorded now
-// ([sandbox.Coordinator.EndTurn]), best effort and said where the log does not
-// take it.
+// before it deletes the row — so the seat's mail waits on it, and the turn's
+// row on the log holds it beside the session it kept. Owed under a context of
+// the coordinator's own, so a frame a drain is cancelling still owes it. A turn
+// whose row is gone has nothing to owe it on, and its end is recorded now
+// ([sandbox.Coordinator.EndTurn]) — owed after all where the row turns out to
+// be there — best effort and said where the log does not take it.
 //
 // DECIDED ONCE: a turn whose row owes an end already keeps that one.
 func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executordomain.Ending) {
@@ -201,9 +202,9 @@ func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, end
 	e.endTurnNow(ctx, runTurnEnd(run, ending))
 }
 
-// endTurnNow records a turn's end on the executor log at once
-// ([sandbox.Coordinator.EndTurn]), for a turn with no run record left to owe it
-// on — best effort, and said where the log does not take it.
+// endTurnNow records a turn's end for a turn with no run record left to owe it
+// on ([sandbox.Coordinator.EndTurn], which owes it on the record where one is
+// there after all) — best effort, and said where the log does not take it.
 func (e *Engine) endTurnNow(ctx context.Context, end sandbox.TurnEnd) {
 	rt := e.sandbox.Load()
 	if rt == nil {
@@ -218,16 +219,19 @@ func (e *Engine) endTurnNow(ctx context.Context, end sandbox.TurnEnd) {
 	}
 }
 
-// runRecordGone reports whether a turn's run record is gone, read through this
-// node's sandbox runtime; false where it cannot be read, which says nothing
-// about the record, so the turn is retried as it would have been.
-func (e *Engine) runRecordGone(ctx context.Context, turnID string) bool {
+// runEnded reports whether a turn's run is over: its record gone, or its
+// ending decided — a relaunch abandoned under the turn's frame, whose record
+// waits for that frame to owe the turn's end ([sandbox.Coordinator.OweEnd]).
+// Read through this node's sandbox runtime; false where it cannot be read,
+// which says nothing about the run, so the turn is retried as it would have
+// been.
+func (e *Engine) runEnded(ctx context.Context, turnID string) bool {
 	rt := e.sandbox.Load()
 	if rt == nil || rt.pending == nil {
 		return false
 	}
-	_, found, err := rt.pending.Get(ctx, turnID)
-	return err == nil && !found
+	run, found, err := rt.pending.Get(ctx, turnID)
+	return err == nil && (!found || run.Ending != nil)
 }
 
 // runTurnEnd is the end of the turn run's row belongs to, ending as ending.
@@ -311,9 +315,9 @@ func replySurface(reply turn.Reply) string {
 const replyA2A = "a2a"
 
 // stoppedEnding is how a turn a person stopped ended: stopped, by whom and why
-// — the reason in their own words, which the next turn is told fenced as theirs
-// (the ending's field is declared somebody else's) — beside whatever the turn's
-// loop had decided and delivered by then.
+// — the reason in their own words, kept as theirs, fenced for any model that
+// reads it (the ending's field is declared somebody else's) — beside whatever
+// the turn's loop had decided and delivered by then.
 func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colleagueAnswer) executordomain.Ending {
 	ending := endingOf(res, reply, answered)
 	ending.Outcome, ending.Failure = executordomain.OutcomeStopped, ""
