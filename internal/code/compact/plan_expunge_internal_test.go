@@ -89,3 +89,35 @@ func checksums(files []pack) []string {
 	}
 	return out
 }
+
+// AN EXPUNGE ON THE SCHEDULE IS DUE PAST A QUARTER AND AT THE LEAST: its
+// unreachable bytes must be MORE than 1/code.ExpungeShare of the live bytes —
+// exactly a quarter is not — and AT LEAST the least an expunge frees — one
+// byte under it is not, whatever its share — and every compactor the engine
+// builds holds code.ExpungeMinBytes as that least.
+//
+// Mutation: drop `unreachable >= least` from expungeDue, and the case under
+// the least is due; judge the share with >=, and exactly a quarter is; leave
+// the production bounds' least at zero, and the last check fails.
+func TestAnExpungeIsDuePastAQuarterAndAtTheLeast(t *testing.T) {
+	t.Parallel()
+	const least = 1 << 20
+	for name, tc := range map[string]struct {
+		unreachable, live int64
+		due               bool
+	}{
+		"a byte under the least, half unreachable": {least - 1, 2 * least, false},
+		"at the least, half unreachable":           {least, 2 * least, true},
+		"at the least, exactly a quarter":          {least, code.ExpungeShare * least, false},
+		"at the least, a byte past a quarter":      {least, code.ExpungeShare*least - 1, true},
+		"past the least, under a quarter":          {2 * least, code.ExpungeShare*2*least + 1, false},
+	} {
+		if got := expungeDue(tc.unreachable, tc.live, least); got != tc.due {
+			t.Errorf("%s: expungeDue(%d, %d, %d) = %t, want %t", name, tc.unreachable, tc.live, least, got, tc.due)
+		}
+	}
+	if production.expungeMin != code.ExpungeMinBytes {
+		t.Errorf("the production bounds hold %d as the least an expunge frees, want code.ExpungeMinBytes (%d)",
+			production.expungeMin, code.ExpungeMinBytes)
+	}
+}

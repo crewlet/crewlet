@@ -275,12 +275,14 @@ func TestACleanRepositoryIsScannedWeekly(t *testing.T) {
 // output that merged an old leak with a later push and arrived when the push
 // did — while every pack old enough to take holds only what its refs reach,
 // is NOT DUE: the scan weighs what the packs a cycle may take would drop, and
-// they would drop nothing. No begin is proposed, every live pack stays where
-// it was, and the young pack's objects are still live.
+// they would drop nothing — so the scan itself finds it not due, never a plan
+// that comes up empty after it. No begin is proposed, every live pack stays
+// where it was, and the young pack's objects are still live.
 //
-// Mutation: weigh the whole repository's unreachable bytes rather than the
-// eligible packs', and the cycle rewrites the old, reachable packs to free
-// nothing — applied.
+// Mutation: weigh every live pack rather than the eligible ones, and the scan
+// finds the repository due (code_expunge_due); take into the plan a pack that
+// frees nothing as well, and the cycle rewrites the old, reachable packs to
+// free nothing — applied.
 func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -319,6 +321,9 @@ func TestAWeeklyExpungeThatWouldDropNothingBeginsNothing(t *testing.T) {
 	if out, err := expungeWhileBusy(t, c, cand); out != compact.OutcomeNotDue {
 		t.Fatalf("a scan whose old packs hold only what a ref reaches answered %s, %v; want not due:\n%s",
 			out, err, l)
+	}
+	if n := l.count("code_expunge_due"); n != 0 {
+		t.Errorf("the scan of a repository whose old packs would drop nothing found it due %d times:\n%s", n, l)
 	}
 	if n := l.count("code_expunge_begun"); n != 0 {
 		t.Errorf("a weekly expunge that would drop nothing began %d cycles", n)
@@ -362,6 +367,35 @@ func TestARepositoryUnderTheMinimumIsJudgedFromItsRow(t *testing.T) {
 	}
 	if _, ok := x.weekly(codetest.RepoName, time.Now().Add(-time.Minute)); ok {
 		t.Error("the weekly arm still names the repository judged a moment ago")
+	}
+}
+
+// A QUARTER UNDER THE MINIMUM IS NOT DUE: a repository whose packs old enough
+// to take hold more than a quarter of its live bytes unreachable, but fewer
+// unreachable bytes than the least an expunge frees, is scanned and left
+// alone — not due, its leak still in a live pack.
+//
+// Mutation: drop the least from the due rule (`unreachable >= least`), and
+// the scan expunges the leak.
+func TestAQuarterUnderTheMinimumIsNotDue(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.push(96 << 10)
+	leaked := x.leakBytes("leak", 64<<10)
+	c := x.past()
+	compact.ExpungeFrom(c, 128<<10)
+	cand, ok := x.weekly(codetest.RepoName, time.Now().Add(code.PruneGrace+time.Hour-code.ExpungeInterval))
+	if !ok {
+		t.Fatalf("the weekly arm names no %s, never judged", codetest.RepoName)
+	}
+	if cand.LiveBytes < 128<<10 {
+		t.Fatalf("the repository holds %d live bytes, under the least of 128 KiB the case scans past", cand.LiveBytes)
+	}
+	if out, err := expungeWhileBusy(t, c, cand); out != compact.OutcomeNotDue {
+		t.Fatalf("a scan of 64 KiB unreachable under a least of 128 KiB answered %s, %v; want not due", out, err)
+	}
+	if !x.liveHold(leaked) {
+		t.Error("a scan that found the repository not due took its leak out")
 	}
 }
 
