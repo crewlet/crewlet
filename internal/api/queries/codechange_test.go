@@ -172,6 +172,67 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 	}
 }
 
+// A PAGE OF FINDINGS PAST ONE RE-ANCHORING IS PLACED WHOLE: the findings part
+// takes any page the reader serves (up to code.MaxFindingsPerPage, which a
+// screen asks), and a git node's re-anchoring places at most
+// code.MaxReanchors — so a page of findings raised on an earlier revision
+// past that is placed by several re-anchorings, each one a git node takes,
+// all at the head's floor, never refused as the request's mistake naming a
+// field it never sent.
+//
+// Mutation: place the page with one re-anchoring of every anchor → the
+// question refuses the page, red.
+func TestAPageOfFindingsPastOneReanchoringIsPlacedWhole(t *testing.T) {
+	t.Parallel()
+	const findings = 100
+	rows := twoRevisions(atCodeSeq(4800))
+	stub := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+		out, err := rows(q)
+		if q.Part == code.PartFindings {
+			out.Findings = nil
+			for i := range findings {
+				out.Findings = append(out.Findings, code.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1,
+					Path: "upload/retry.go", Side: code.SideNew, BlobOID: oid("b"), LineStart: i + 1,
+					LineEnd: i + 1})
+			}
+		}
+		return out, err
+	}, git: func(q code.GitQuery) (code.GitAnswer, error) {
+		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Reanchor: &code.ReanchorAnswer{}}
+		for _, a := range q.Reanchor.Anchors {
+			out.Reanchor.Anchors = append(out.Reanchor.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 2,
+				End: a.End + 2})
+		}
+		return out, nil
+	}}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "findings", "limit": fmt.Sprint(findings)})
+	if err != nil {
+		t.Fatalf("a page of %d findings raised on an earlier revision was refused: %v", findings, err)
+	}
+	found, ok := answer.(queries.CodeChangeFindings)
+	if !ok {
+		t.Fatalf("the findings part answered %T", answer)
+	}
+	for i := range findings {
+		id := fmt.Sprintf("f%03d", i)
+		if at := found.Placed[id]; at.Start != i+3 {
+			t.Errorf("finding %s was placed at %+v, want line %d of revision 2", id, at, i+3)
+		}
+	}
+	if len(stub.read) < 2 {
+		t.Errorf("a page of %d findings was placed by %d re-anchorings, want one for every %d", findings,
+			len(stub.read), code.MaxReanchors)
+	}
+	for _, q := range stub.read {
+		if q.Kind != code.GitReanchor || len(q.Reanchor.Anchors) > code.MaxReanchors ||
+			!reflect.DeepEqual(q.Fresh, statelog.FloorAt(statelog.ReadSession, atCodeSeq(20))) {
+			t.Errorf("asked %s of %d anchors at %+v, want a re-anchoring of at most %d at the head's floor", q.Kind,
+				len(q.Reanchor.Anchors), q.Fresh, code.MaxReanchors)
+		}
+	}
+}
+
 // A CHANGE QUESTION'S PART IS READ AS IT ASKS, and a parameter its part does
 // not take is the request's mistake, refused before anything is read: a
 // revision to the revisions, a file to the files, an earlier revision that is

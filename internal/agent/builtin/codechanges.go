@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -176,8 +177,9 @@ const (
 // list at once, and at an ordinary row (a revision about three hundred bytes,
 // a finding or a review about a kilobyte, a comment about half of one) under
 // half of one tool answer; a page of long rows is cut whole-row at the answer.
-// The findings' page is also what one re-anchoring places, at most
-// code.MaxReanchors, which the constant below holds at compile time.
+// The findings' page is also at most what one re-anchoring places,
+// code.MaxReanchors, which the constant below holds at compile time, so a
+// page of them is placed by one read (code.Place).
 const (
 	changeRevisionsPage = 25
 	changeFindingsPage  = 25
@@ -186,7 +188,8 @@ const (
 )
 
 // A page of findings is placed in one read: its size may not pass what one
-// re-anchoring places (a negative constant does not compile).
+// re-anchoring places (a negative constant does not compile), since a larger
+// page would cost a turn a read more than it needs.
 const _ = uint(code.MaxReanchors - changeFindingsPage)
 
 // ---- a change as these tools name it ------------------------------------ //
@@ -1136,28 +1139,49 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 
 // place is where each finding of findings is in revision rev of a change whose
 // head revision is head, by the finding's id: what the rows say without a read
-// ([code.PlaceFindings]), and every other finding by ONE re-anchoring read,
-// floored at the head revision — the latest any finding was raised on — and
-// at rev's own head and base. A finding on the old side of a revision whose
-// base is not yet recorded is in neither, unplaced.
+// ([code.PlaceFindings]), and every other finding by the re-anchoring reads
+// the code domain's rule asks ([code.Place]) — one, for a page of this tool's
+// size — floored at the head revision — the latest any finding was raised on
+// — and at rev's own head and base. A finding on the old side of a revision
+// whose base is not yet recorded is in neither, unplaced.
 func (g changeRead) place(ctx context.Context, head, rev code.RevisionRow,
 	findings []code.FindingRow) (map[string]code.FindingPlace, *tools.Result) {
 
-	placed, reanchor := code.PlaceFindings(rev, findings)
-	if reanchor == nil {
-		return placed, nil
-	}
-	answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{Kind: code.GitReanchor,
-		RepoID: g.repo.ID, Fresh: g.floor(head, rev), Reanchor: reanchor})
-	if refusal != nil {
+	fresh := g.floor(head, rev)
+	placed, err := code.Place(rev, findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{
+			Kind: code.GitReanchor, RepoID: g.repo.ID, Fresh: fresh, Reanchor: reanchor})
+		if refusal != nil {
+			return nil, refusedRead{refusal}
+		}
+		return answer.Reanchor, nil
+	})
+	if refusal := refusedIn(err); refusal != nil {
 		return nil, refusal
 	}
-	if err := code.PlaceAnchors(placed, reanchor, answer.Reanchor); err != nil {
+	if err != nil {
 		r := faulted(ctx, g.tool, fmt.Errorf("builtin: %s: %w", g.ref(), err), fmt.Sprintf("%s could not place "+
 			"%s's findings in revision %d: %s.", g.tool, g.ref(), rev.N, faultSaid))
 		return nil, &r
 	}
 	return placed, nil
+}
+
+// refusedRead carries a read's refusal, already composed as this tool's
+// answer, through the code domain's helpers, which take a caller's reads as
+// functions answering errors ([code.Place]); [refusedIn] takes it back out.
+type refusedRead struct{ r *tools.Result }
+
+func (e refusedRead) Error() string { return e.r.Output }
+
+// refusedIn is the refusal err carries ([refusedRead]), nil where it carries
+// none — no error, or one of the code domain's own, which the caller tells
+// as its fault.
+func refusedIn(err error) *tools.Result {
+	if refused, ok := errors.AsType[refusedRead](err); ok {
+		return refused.r
+	}
+	return nil
 }
 
 // ---- reviews and comments ------------------------------------------------ //

@@ -2,6 +2,7 @@ package queries
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -314,9 +315,10 @@ func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 // findings answers the `findings` part: a page of the change's findings as the
 // reader serves it, read at session floored at the head's read, each placed in
 // the revision asked about — the head by default — without a read where the
-// rows say where it is, and by ONE re-anchoring of the revision otherwise
-// (code.PlaceFindings), asked at the floor of the head revision and of the
-// revision placed in.
+// rows say where it is, and otherwise by re-anchorings of the revision asked
+// at once, one for every code.MaxReanchors findings (code.Place), so a page
+// of any size the reader serves is placed — each asked at the floor of the
+// head revision and of the revision placed in.
 func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	d, head, first, err := g.head(ctx)
 	if err != nil {
@@ -334,19 +336,22 @@ func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	if err != nil {
 		return nil, codeRefusal(q.Repo, err)
 	}
-	placed, reanchor := code.PlaceFindings(rev, page.Findings)
-	if reanchor != nil {
+	fresh := code.ObjectFloor(g.reads.FloorOf(d.RepoID), head, rev)
+	placed, err := code.Place(rev, page.Findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer,
+		error) {
+
 		answer, err := g.gitRead(ctx, code.GitQuery{Kind: code.GitReanchor, RepoID: d.RepoID, Asker: g.q.Asker,
-			Fresh: code.ObjectFloor(g.reads.FloorOf(d.RepoID), head, rev), Reanchor: reanchor})
-		if err != nil {
-			return nil, err
-		}
+			Fresh: fresh, Reanchor: reanchor})
+		return answer.Reanchor, err
+	})
+	switch {
+	case errors.Is(err, code.ErrMisplaced):
 		// AN ANSWER PLACING ANOTHER SET THAN THE ANCHORS ASKED is no git
-		// node's of this build: this node's fault, never a finding with
-		// no place.
-		if err := code.PlaceAnchors(placed, reanchor, answer.Reanchor); err != nil {
-			return nil, fmt.Errorf("queries: %s: %w", g.ref(), err)
-		}
+		// node's of this build: this node's fault, never a finding with no
+		// place.
+		return nil, fmt.Errorf("queries: %s: %w", g.ref(), err)
+	case err != nil:
+		return nil, err
 	}
 	return CodeChangeFindings{ReadAnswer: page, Revision: rev.N, Placed: placed}, nil
 }

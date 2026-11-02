@@ -565,11 +565,13 @@ func TestARevisionsFilesAreReadFromItsRecordedBase(t *testing.T) {
 // push, the latest any finding was raised on; a finding raised on the asked
 // revision is where it was raised, with nothing asked; and one on the old side
 // of a revision that shares no history with its target is gone. Each finding's
-// `at` is where its lines are, outdated or gone as the git node placed them.
+// `at` is where its lines are, outdated or gone as the git node placed them;
+// and a re-anchoring the git node refuses is answered as that refusal, never
+// as this node's fault.
 //
 // Mutations: every finding placed where it was raised (no re-anchoring); the
 // re-anchoring read at the head whatever revision was asked about; the floor
-// at the asked revision alone → red.
+// at the asked revision alone; a refused re-anchoring told as a fault → red.
 func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 	t.Parallel()
 	raised := func(id string, revision int64, side code.Side, start, end int) code.FindingRow {
@@ -683,6 +685,18 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 		if _, _, gits := host.asked(); len(gits) != 1 || len(gits[0].Reanchor.Anchors) != 2 ||
 			gits[0].Reanchor.Base != "" {
 			t.Errorf("a revision of no base was asked %+v", gits)
+		}
+	})
+
+	t.Run("a re-anchoring refused", func(t *testing.T) {
+		t.Parallel()
+		host := newChangeHost(fixture())
+		host.gitErr = &code.ErrGitUnready{Reason: code.UnreadyNoChart, Detail: "n1 holds no chart yet"}
+		got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), builtin.CodeGetChangeTool,
+			map[string]any{"change": "site!7", "part": "findings"})
+		if tools.RefusalOf(got) != tools.RefusalUnavailable {
+			t.Errorf("a re-anchoring the git node could not answer was told %+v, want its refusal, unavailable",
+				got)
 		}
 	})
 

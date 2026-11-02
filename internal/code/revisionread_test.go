@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"testing"
@@ -164,16 +165,17 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 		finding("new-side", 1, code.SideNew)}
 
 	rev := measured(2, "head-2", oidOf("base"), 20, 18)
-	placed, reanchor := code.PlaceFindings(rev, page)
+	placed, reads := code.PlaceFindings(rev, page)
 	if want := map[string]code.FindingPlace{"here": {Start: 10, End: 12}}; !maps.Equal(placed, want) {
 		t.Errorf("placed without a read %v, want %v", placed, want)
 	}
-	want := &code.ReanchorQuery{Base: oidOf("base"), Head: rev.Head, Anchors: []code.LineAnchor{
+	want := []*code.ReanchorQuery{{Base: oidOf("base"), Head: rev.Head, Anchors: []code.LineAnchor{
 		{ID: "old-side", Path: "retry.go", Side: code.SideOld, BlobOID: oidOf("old-side"), Start: 10, End: 12},
-		{ID: "new-side", Path: "retry.go", Side: code.SideNew, BlobOID: oidOf("new-side"), Start: 10, End: 12}}}
-	if !reflect.DeepEqual(reanchor, want) {
-		t.Fatalf("the re-anchoring asked is %+v, want %+v", reanchor, want)
+		{ID: "new-side", Path: "retry.go", Side: code.SideNew, BlobOID: oidOf("new-side"), Start: 10, End: 12}}}}
+	if !reflect.DeepEqual(reads, want) {
+		t.Fatalf("the re-anchorings asked are %+v, want %+v", reads, want)
 	}
+	reanchor := reads[0]
 	if err := code.PlaceAnchors(placed, reanchor, &code.ReanchorAnswer{Anchors: []code.Reanchored{
 		{ID: "new-side", Start: 14, End: 16}, {ID: "old-side", Gone: true}}}); err != nil {
 		t.Fatalf("a whole answer was refused: %v", err)
@@ -194,18 +196,127 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 	}
 
 	unrelated := measured(2, "head-2", "", 20, 18)
-	placed, reanchor = code.PlaceFindings(unrelated, page)
-	if placed["old-side"] != (code.FindingPlace{Gone: true}) || reanchor == nil ||
-		len(reanchor.Anchors) != 1 || reanchor.Anchors[0].ID != "new-side" || reanchor.Base != "" {
+	placed, reads = code.PlaceFindings(unrelated, page)
+	if placed["old-side"] != (code.FindingPlace{Gone: true}) || len(reads) != 1 ||
+		len(reads[0].Anchors) != 1 || reads[0].Anchors[0].ID != "new-side" || reads[0].Base != "" {
 		t.Errorf("in a revision sharing no history placed %v and asked %+v, want the old side gone and the new "+
-			"side one anchor", placed, reanchor)
+			"side one anchor", placed, reads)
 	}
 	unmeasured := code.RevisionRow{N: 2, Head: oidOf("head-2"), Position: atSeq(20)}
-	placed, reanchor = code.PlaceFindings(unmeasured, page)
-	if _, held := placed["old-side"]; held || reanchor == nil || len(reanchor.Anchors) != 1 {
-		t.Errorf("in an unmeasured revision placed %v and asked %+v, want the old side unplaced", placed, reanchor)
+	placed, reads = code.PlaceFindings(unmeasured, page)
+	if _, held := placed["old-side"]; held || len(reads) != 1 || len(reads[0].Anchors) != 1 {
+		t.Errorf("in an unmeasured revision placed %v and asked %+v, want the old side unplaced", placed, reads)
 	}
-	if placed, reanchor = code.PlaceFindings(rev, page[:1]); reanchor != nil || len(placed) != 1 {
-		t.Errorf("a page of the revision's own findings asked %+v, want no read", reanchor)
+	if placed, reads = code.PlaceFindings(rev, page[:1]); reads != nil || len(placed) != 1 {
+		t.Errorf("a page of the revision's own findings asked %+v, want no read", reads)
+	}
+}
+
+// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a git node's re-anchoring
+// places at most code.MaxReanchors anchors, and the reader serves a page of up
+// to code.MaxFindingsPerPage findings, every one of which may need one — so a
+// page past one read is cut into reads that each pass the git node's own
+// check, that together ask every anchor once, and that keep the anchors of
+// one pair of blobs in one read wherever the page allows; and every read's
+// answer is folded in, however the reads interleave, while a read that is
+// refused answers that refusal — the first in the reads' order.
+//
+// Mutations: one read of every anchor → the read the git node refuses, red;
+// cut the page in its own order → a pair split across reads, red; fold in only
+// the first read's answer → findings unplaced, red; answer the last refusal →
+// the wrong refusal, red.
+func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
+	t.Parallel()
+	rev := measured(2, "head-2", oidOf("base"), 20, 18)
+	// A FULL PAGE raised on revision 1, interleaving its files, so a page
+	// cut in its own order puts each file in every read: file i%5, each
+	// file's findings on one blob of it.
+	var page []code.FindingRow
+	for i := range code.MaxFindingsPerPage {
+		path := fmt.Sprintf("pkg/file%d.go", i%5)
+		page = append(page, code.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1, Path: path,
+			Side: code.SideNew, BlobOID: oidOf(path), LineStart: i + 1, LineEnd: i + 1})
+	}
+	placed, reads := code.PlaceFindings(rev, page)
+	if len(placed) != 0 {
+		t.Errorf("placed %d findings of another revision without a read, want none", len(placed))
+	}
+	wantReads := (code.MaxFindingsPerPage + code.MaxReanchors - 1) / code.MaxReanchors
+	if len(reads) != wantReads {
+		t.Fatalf("a page of %d findings asked %d re-anchorings, want %d of at most %d", len(page), len(reads),
+			wantReads, code.MaxReanchors)
+	}
+	asked := map[string]int{}
+	pairIn := map[string]map[int]bool{}
+	for i, q := range reads {
+		if err := (code.GitQuery{Kind: code.GitReanchor, RepoID: "01920000-0000-7000-8000-000000000001",
+			Asker:    code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"},
+			Reanchor: q}).Validate(); err != nil {
+			t.Errorf("re-anchoring %d is one no git node takes: %v", i, err)
+		}
+		for _, a := range q.Anchors {
+			asked[a.ID]++
+			if pairIn[a.BlobOID] == nil {
+				pairIn[a.BlobOID] = map[int]bool{}
+			}
+			pairIn[a.BlobOID][i] = true
+		}
+	}
+	for _, f := range page {
+		if asked[f.ID] != 1 {
+			t.Errorf("finding %s was asked in %d re-anchorings, want 1", f.ID, asked[f.ID])
+		}
+	}
+	// 40 findings a file, 64 a read: a file is split across two reads at
+	// most where its findings sit together, and every read holds every file
+	// where they do not.
+	for blob, in := range pairIn {
+		if len(in) > 2 {
+			t.Errorf("the pair of blob %s was diffed by %d reads, want at most 2", blob, len(in))
+		}
+	}
+
+	ask := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		out := &code.ReanchorAnswer{}
+		for _, a := range q.Anchors {
+			out.Anchors = append(out.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 1, End: a.End + 1})
+		}
+		return out, nil
+	}
+	placed, err := code.Place(rev, page, ask)
+	if err != nil {
+		t.Fatalf("a page answered whole was refused: %v", err)
+	}
+	for _, f := range page {
+		if at, ok := placed[f.ID]; !ok || at.Start != f.LineStart+1 {
+			t.Errorf("finding %s placed %+v (%t), want line %d", f.ID, at, ok, f.LineStart+1)
+		}
+	}
+
+	// THE FIRST REFUSAL IN THE READS' ORDER, however late it arrives: the
+	// first read is refused only once the second has been.
+	first, second := errors.New("first"), errors.New("second")
+	secondDone := make(chan struct{})
+	refusing := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		switch q.Anchors[0].ID {
+		case reads[0].Anchors[0].ID:
+			<-secondDone
+			return nil, first
+		case reads[1].Anchors[0].ID:
+			defer close(secondDone)
+			return nil, second
+		}
+		return ask(q)
+	}
+	if _, err := code.Place(rev, page, refusing); !errors.Is(err, first) {
+		t.Errorf("a page two of whose reads were refused answered %v, want the first read's refusal", err)
+	}
+	misplacing := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		out, _ := ask(q)
+		out.Anchors = out.Anchors[1:]
+		return out, nil
+	}
+	if _, err := code.Place(rev, page, misplacing); !errors.Is(err, code.ErrMisplaced) {
+		t.Errorf("a read answering one anchor short answered %v, want ErrMisplaced", err)
 	}
 }

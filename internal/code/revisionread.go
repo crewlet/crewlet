@@ -1,8 +1,12 @@
 package code
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -17,9 +21,13 @@ import (
 // copies of the rule would show a seat and a person two diffs of one revision,
 // or one finding on two different lines.
 //
-// PURE OVER THE ROWS: nothing here reads, so each surface makes its own reads
-// — through the estate router, as its caller — and says, in its own words,
-// what it could not read.
+// NOTHING HERE READS: each surface makes its own reads — through the estate
+// router, as its caller — and says, in its own words, what it could not read.
+// What is decided here is which reads an answer takes, and that the ones that
+// need nothing of each other go AT ONCE ([AtOnce]): the re-anchorings of one
+// page of findings ([Place]). Every read made after another rather than
+// beside it is one more wait in the answer — and both surfaces make the same
+// reads by the same rule.
 //
 // # Files from the recorded base
 //
@@ -37,8 +45,11 @@ import (
 // A finding names lines of the revision it was raised on. In another revision
 // they are where the lines changed above them moved them — OUTDATED where its
 // own lines changed, GONE where the revision holds no file at its path — which
-// ONE re-anchoring read of the revision asked about places for a page of
-// findings ([PlaceFindings]).
+// re-anchoring reads of the revision asked about place for a page of findings
+// ([PlaceFindings]): one read for every [MaxReanchors] findings the rows do
+// not place, asked at once, so a page of any size the reader serves
+// ([MaxFindingsPerPage]) is placed, and a page the code tools read is one
+// read.
 
 // FilesGap is why a revision's files cannot be read from the facts its rows
 // hold: a closed set with [FilesGap.Valid], "" for a revision whose files can.
@@ -189,16 +200,22 @@ type FindingPlace struct {
 // finding's id, as far as the rows say without a read — one raised on rev
 // where it was raised; one on the OLD side of a revision whose facts record no
 // base gone, since its old side is the empty tree, which holds no file — and
-// the ONE re-anchoring that places every other, nil where none is left, which
-// a caller asks of the repository's home git node at the floor of rev and of
+// the re-anchorings that place every other, none where none is left, which a
+// caller asks of the repository's home git node at the floor of rev and of
 // the change's head revision ([ObjectFloor]) and folds in with
-// [PlaceAnchors]. A finding on the old side of a revision whose facts are not
-// recorded yet has no base to place it in: it is in neither, and stays
-// unplaced.
+// [PlaceAnchors] — [Place] does both. A finding on the old side of a revision
+// whose facts are not recorded yet has no base to place it in: it is in
+// neither, and stays unplaced.
 //
-// A caller placing a page of at most [MaxReanchors] findings asks one read,
-// since each finding is at most one anchor.
-func PlaceFindings(rev RevisionRow, findings []FindingRow) (map[string]FindingPlace, *ReanchorQuery) {
+// EACH RE-ANCHORING PLACES AT MOST [MaxReanchors] ANCHORS, the most one git
+// node's read takes ([ReanchorQuery]). A finding is at most one anchor, so a
+// page of up to MaxReanchors findings is one read in the page's order, and a
+// larger one — the reader serves up to [MaxFindingsPerPage], four reads'
+// worth — is cut into reads of MaxReanchors, its anchors first put in the
+// order of their path, side and blob: a read runs one diff of every distinct
+// pair of blobs its anchors name, so the anchors of one pair sharing a read
+// diff each pair in as few of the reads as the page allows.
+func PlaceFindings(rev RevisionRow, findings []FindingRow) (map[string]FindingPlace, []*ReanchorQuery) {
 	placed := make(map[string]FindingPlace, len(findings))
 	base := ""
 	if rev.Facts != nil {
@@ -217,23 +234,98 @@ func PlaceFindings(rev RevisionRow, findings []FindingRow) (map[string]FindingPl
 				Start: f.LineStart, End: f.LineEnd})
 		}
 	}
-	if len(anchors) == 0 {
+	switch {
+	case len(anchors) == 0:
 		return placed, nil
+	case len(anchors) <= MaxReanchors:
+		return placed, []*ReanchorQuery{{Base: base, Head: rev.Head, Anchors: anchors}}
 	}
-	return placed, &ReanchorQuery{Base: base, Head: rev.Head, Anchors: anchors}
+	// STABLE, so the anchors of one pair keep the page's order among them.
+	slices.SortStableFunc(anchors, func(a, b LineAnchor) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(string(a.Side), string(b.Side)),
+			strings.Compare(a.BlobOID, b.BlobOID))
+	})
+	var reads []*ReanchorQuery
+	for chunk := range slices.Chunk(anchors, MaxReanchors) {
+		reads = append(reads, &ReanchorQuery{Base: base, Head: rev.Head, Anchors: chunk})
+	}
+	return placed, reads
 }
+
+// Place is where each of findings is in revision rev, by the finding's id:
+// [PlaceFindings]'s rows, and every re-anchoring it names asked through ask
+// AT ONCE ([AtOnce]) — none needs another's answer — and folded in with
+// [PlaceAnchors]. ask is the caller's own read by object id, asked at the
+// floor of rev and of the change's head revision ([ObjectFloor]); its error,
+// the first in the reads' order, is answered as it is, and an answer placing
+// another set than its anchors is [ErrMisplaced].
+func Place(rev RevisionRow, findings []FindingRow, ask func(*ReanchorQuery) (*ReanchorAnswer, error)) (
+	map[string]FindingPlace, error) {
+
+	placed, reads := PlaceFindings(rev, findings)
+	answers := make([]*ReanchorAnswer, len(reads))
+	each := make([]func() error, len(reads))
+	for i, q := range reads {
+		each[i] = func() (err error) {
+			answers[i], err = ask(q)
+			return err
+		}
+	}
+	if err := AtOnce(each...); err != nil {
+		return nil, err
+	}
+	// FOLDED IN ONCE EVERY READ HAS ANSWERED: placed is one map, which no
+	// read may write while another does.
+	for i, q := range reads {
+		if err := PlaceAnchors(placed, q, answers[i]); err != nil {
+			return nil, err
+		}
+	}
+	return placed, nil
+}
+
+// AtOnce runs each of reads in a goroutine of its own — on the caller's for a
+// single read — waits for every one, and answers the first error in their
+// ORDER, not the first to arrive, so the refusal a caller is told is the same
+// however the reads interleave.
+//
+// IT CANCELS NONE: each read is bounded by its own answer's deadline, and a
+// read cancelled because another failed would answer a cancellation — which a
+// surface tells as a condition of the node, and a seat's turn records —
+// beside the refusal that was the real one.
+func AtOnce(reads ...func() error) error {
+	if len(reads) == 1 {
+		return reads[0]()
+	}
+	errs := make([]error, len(reads))
+	var wg sync.WaitGroup
+	for i, read := range reads {
+		wg.Go(func() { errs[i] = read() })
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ErrMisplaced is a re-anchoring's answer that placed another set than the
+// anchors asked ([PlaceAnchors]): no git node of this build gives one, so the
+// caller treats it as its own fault rather than a finding with no place.
+var ErrMisplaced = errors.New("code: a re-anchoring's answer is not the anchors asked")
 
 // PlaceAnchors writes into placed where a re-anchoring's answer put each
 // anchor asked placed, refusing an answer that placed any other set than the
-// anchors asked — which no git node of this build gives, so the caller treats
-// it as its own fault rather than a finding with no place.
+// anchors asked ([ErrMisplaced]).
 func PlaceAnchors(placed map[string]FindingPlace, asked *ReanchorQuery, answer *ReanchorAnswer) error {
 	got := 0
 	if answer != nil {
 		got = len(answer.Anchors)
 	}
 	if got != len(asked.Anchors) {
-		return fmt.Errorf("code: a re-anchoring placed %d of the %d anchors asked", got, len(asked.Anchors))
+		return fmt.Errorf("%w: it placed %d of the %d anchors asked", ErrMisplaced, got, len(asked.Anchors))
 	}
 	want := make(map[string]bool, len(asked.Anchors))
 	for _, a := range asked.Anchors {
@@ -241,7 +333,7 @@ func PlaceAnchors(placed map[string]FindingPlace, asked *ReanchorQuery, answer *
 	}
 	for _, a := range answer.Anchors {
 		if !want[a.ID] {
-			return fmt.Errorf("code: a re-anchoring placed anchor %q, which was not asked", a.ID)
+			return fmt.Errorf("%w: it placed anchor %q, which was not asked", ErrMisplaced, a.ID)
 		}
 		delete(want, a.ID)
 		placed[a.ID] = FindingPlace{Start: a.Start, End: a.End, Outdated: a.Outdated, Gone: a.Gone}
