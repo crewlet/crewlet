@@ -938,7 +938,11 @@ the grep repositories a search with no `repo:` left out. An empty answer with
 an empty coverage means nothing matched; an empty answer with a coverage that
 names repositories means those were not looked at: search them again by name,
 or ask after the node named. At most 500 lines come back, in the order of
-repository, path and line, and `truncated` says more matched. See
+repository, path and line, and `truncated` says more may have matched; the
+repositories named after the last line, none of whose lines could come back,
+are listed as past the limit — a common word reads the first repositories
+that fill the answer, not every one — so narrow the search with `repo:` or
+`path:` to reach them. See
 [Code search](../concepts/code-host.md#code-search).
 
 **Searching from the dashboard.** **Code › Search** (`#/code/search`) takes

@@ -78,9 +78,9 @@ type Answer struct {
 // Coverage is what a search covered. Every repository the search names — the
 // repositories its repo: filters name, or, unfiltered, every `search:
 // indexed` repository the asker may read — is in exactly ONE of Searched,
-// Building, NotAnswering, NotPermitted, Stale and NoRef, but in a search
-// continued after a [Key], which names those from the key's on: the ones
-// before it were asked for the pages before, and are in none; GrepNotNamed is the
+// Building, NotAnswering, NotPermitted, Stale, NoRef and PastLimit, but in a
+// search continued after a [Key], which names those from the key's on: the
+// ones before it were asked for the pages before, and are in none; GrepNotNamed is the
 // repositories an unfiltered search leaves out, and NotIndexed names those
 // of Searched that were read with git grep.
 type Coverage struct {
@@ -115,15 +115,25 @@ type Coverage struct {
 	// NoRef is the repositories holding no ref or commit the search's ref:
 	// names: nothing to search in them at it.
 	NoRef RepoSet `json:"no_ref"`
+	// PastLimit is the repositories none of whose lines can be in the
+	// answer: it holds Limit lines, every one of a repository named before
+	// them. A git node passes over such a repository unread once its own
+	// first Limit lines are of repositories named before it, so a search for
+	// a common word reads the repositories that fill the limit rather than
+	// the company; whether one was read or passed over turns on how the reads
+	// interleaved, so it is named here by its name alone, either way.
+	// Truncated is set beside it.
+	PastLimit RepoSet `json:"past_limit"`
 	// SkippedFiles is the files the searched repositories passed over for
 	// their size or as binaries (code.SearchAnswer.SkippedFiles).
 	SkippedFiles int `json:"skipped_files"`
 	// Truncated says lines may follow the last hit, or be missing: a
 	// repository's search stopped at its limit, its answer's bound or its
-	// budget, or the merge cut the lines past Limit or past such a stop.
-	// Every line before the last hit is answered; the lines after it are
-	// what a search continued after it answers, but for a repository whose
-	// budget ran out before its first line, which no page reaches.
+	// budget, the merge cut the lines past Limit or past such a stop, or a
+	// repository is past the limit (PastLimit). Every line before the last
+	// hit is answered; the lines after it are what a search continued after
+	// it answers, but for a repository whose budget ran out before its first
+	// line, which no page reaches.
 	Truncated bool `json:"truncated"`
 }
 
@@ -420,7 +430,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		all[i] = &asked{repo: r, order: orders[r.ID]}
 	}
 	var (
-		hits []Hit
+		m    = newMerge(sq.Hits())
 		ends prefixEnd
 		cut  = false
 	)
@@ -429,6 +439,12 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		byNode := map[string][]*asked{}
 		for _, a := range all {
 			if a.done || a.at >= len(a.order) {
+				continue
+			}
+			if m.passed(a.repo.Name) {
+				// PAST THE LIMIT ALREADY: the first round's lines fill the
+				// limit before any of this repository's could come, so its
+				// runner-up is not asked for lines the answer cannot hold.
 				continue
 			}
 			// THE FILL: the first node of the order is its home, which may
@@ -455,7 +471,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 				for _, r := range rep.Repos {
 					results[r.RepoID] = r
 				}
-				hits = append(hits, rep.Hits...)
+				m.fold(rep.Hits)
 				cut = cut || rep.Cut
 				// A NODE THAT CUT its lines answered the first of them up to
 				// its last; a repository that stopped early, its own first
@@ -486,7 +502,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 					a.why = fmt.Sprintf("it did not answer within %s", RoundBudget)
 				}
 				switch r.Outcome {
-				case OutcomeSearched, OutcomeNotPermitted, OutcomeNoRef:
+				case OutcomeSearched, OutcomeNotPermitted, OutcomeNoRef, OutcomePastLimit:
 					a.done = ok
 				}
 				a.at++
@@ -495,19 +511,23 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 	}
 	tips := map[string]string{}
 	for _, a := range all {
+		if m.passed(a.repo.Name) {
+			// PAST THE LIMIT OF THE WHOLE SEARCH, whatever its node said or
+			// whether one answered: decided by the name against the lines
+			// every node's answers left, so the coverage is the same
+			// whichever node answered first.
+			a.done, a.result, cut = true, RepoResult{RepoID: a.repo.ID, Outcome: OutcomePastLimit}, true
+		}
 		classify(&out.Coverage, a, tips)
 	}
-	slices.SortFunc(hits, CompareHits)
-	hits = slices.CompactFunc(hits, func(x, y Hit) bool { return CompareHits(x, y) == 0 })
-	var past bool
-	hits, past = ends.keep(hits)
+	// The merge's first Limit lines, then no line past a stop: both cut a
+	// prefix of the same order, so which runs first does not change what is
+	// kept.
+	hits, folded := m.lines()
+	hits, past := ends.keep(hits)
 	cut = cut || past
-	limit := sq.Hits()
-	if len(hits) > limit {
-		hits, cut = hits[:limit], true
-	}
 	out.Hits = append(out.Hits, hits...)
-	out.Coverage.Truncated = out.Coverage.Truncated || cut
+	out.Coverage.Truncated = out.Coverage.Truncated || cut || folded
 	for _, h := range out.Hits {
 		if out.Tips == nil {
 			out.Tips = map[string]string{}
@@ -536,6 +556,8 @@ func classify(c *Coverage, a *asked, tips map[string]string) {
 			add(&c.NotPermitted, name)
 		case OutcomeNoRef:
 			add(&c.NoRef, name)
+		case OutcomePastLimit:
+			add(&c.PastLimit, name)
 		}
 		return
 	}
@@ -609,7 +631,8 @@ func (s *RepoSet) cap() {
 
 // sortCoverage puts every set and the nodes in order.
 func sortCoverage(c *Coverage) {
-	for _, s := range []*RepoSet{&c.NotIndexed, &c.Building, &c.NotPermitted, &c.GrepNotNamed, &c.Stale, &c.NoRef} {
+	for _, s := range []*RepoSet{&c.NotIndexed, &c.Building, &c.NotPermitted, &c.GrepNotNamed, &c.Stale, &c.NoRef,
+		&c.PastLimit} {
 		s.cap()
 	}
 	for i := range c.NotAnswering {
@@ -685,7 +708,7 @@ func (s *Searcher) record(via string, took time.Duration, c Coverage) {
 	}
 	for reason, n := range map[string]int{"not_indexed": c.NotIndexed.Count, "building": c.Building.Count,
 		"not_answering": not, "not_permitted": c.NotPermitted.Count, "grep_not_named": c.GrepNotNamed.Count,
-		"stale": c.Stale.Count, "no_ref": c.NoRef.Count} {
+		"stale": c.Stale.Count, "no_ref": c.NoRef.Count, "past_limit": c.PastLimit.Count} {
 		if n > 0 {
 			s.metrics.Add(metrics.CodeSearchCoverage, uint64(n), metrics.Attrs{"reason": reason})
 		}

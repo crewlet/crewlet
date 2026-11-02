@@ -21,6 +21,7 @@ const quiet = () => ({
   grep_not_named: set([]),
   stale: set([]),
   no_ref: set([]),
+  past_limit: set([]),
   skipped_files: 0,
   truncated: false,
 });
@@ -117,6 +118,17 @@ describe("what a search covered", () => {
 
   test("is a warning where the lines were cut", () => {
     expect(coverageNotes({ ...quiet(), truncated: true }).variant).toBe("warning");
+  });
+
+  // PAST THE LIMIT IS SAID, beside the cut it comes with: a repository whose
+  // every line falls after the last one shown is named, with how to reach it.
+  // Mutation: drop the note, and this fails.
+  test("names the repositories past the limit", () => {
+    const notes = coverageNotes({ ...quiet(), truncated: true, past_limit: set(["zeta"], 4) });
+    expect(notes.variant).toBe("warning");
+    expect(notes.notes).toContain(
+      "Past the limit: 4 repositories (zeta and 3 more), named after the last line shown — narrow the search with repo: or path: to reach them.",
+    );
   });
 
   // WHAT THE SEARCH'S OWN TERMS LEFT OUT IS SAID, AND IS NO WARNING: a grep

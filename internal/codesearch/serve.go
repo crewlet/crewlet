@@ -96,31 +96,54 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	return s.wire.SealReply(s.search(rctx, req, asked))
 }
 
-// search reads every repository asked, at most ServeReads at once, and keeps
-// the first Limit hits of them all. A line past the last of a repository that
-// stopped early is the asker's to leave out ([prefixEnd]), which it does from
-// the outcomes this reply carries; the node cuts by its limit alone.
+// search reads the repositories asked IN THE ORDER OF THEIR NAMES, at most
+// ServeReads at once, folding each one's lines into the request's merge as
+// its read returns — so the request holds the first Limit lines and the
+// answers of the reads in flight, never every answer — and PASSES OVER a
+// repository the merge has passed: once the first Limit lines are all of
+// repositories named before it, none of its lines can be in the reply, so a
+// search for a common word reads the first repositories that fill the limit
+// and the reads in flight beside them rather than every repository assigned.
+// Every repository named after the last line kept is past the limit
+// ([OutcomePastLimit]), read or not: decided by its name once every read has
+// returned, so the reply is the same however the reads interleaved. A line
+// past the last of a repository that stopped early is the asker's to leave
+// out ([prefixEnd]), which it does from the outcomes this reply carries; the
+// node cuts by its limit alone.
 func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Reply {
 	results := make([]RepoResult, len(asked))
-	hits := make([][]Hit, len(asked))
+	order := make([]int, len(asked))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(x, y int) int { return cmp.Compare(asked[x].Name, asked[y].Name) })
+	m := newMerge(req.Search.Hits())
 	slots := make(chan struct{}, ServeReads)
 	var wg sync.WaitGroup
-	for i, a := range asked {
+	for _, i := range order {
+		a := asked[i]
 		slots <- struct{}{}
+		// Asked once a slot is free: the reads that held them may have
+		// filled the limit meanwhile.
+		if m.passed(a.Name) {
+			<-slots
+			continue
+		}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			results[i], hits[i] = s.one(ctx, req, a)
+			var hits []Hit
+			results[i], hits = s.one(ctx, req, a)
+			m.fold(hits)
 		})
 	}
 	wg.Wait()
-	all := slices.Concat(hits...)
-	limit := req.Search.Hits()
-	slices.SortFunc(all, CompareHits)
 	out := Reply{Version: Protocol, Request: req.ID, Node: s.node, Repos: results}
-	if len(all) > limit {
-		all, out.Cut = all[:limit], true
+	out.Hits, out.Cut = m.lines()
+	for i, a := range asked {
+		if m.passed(a.Name) {
+			results[i], out.Cut = RepoResult{RepoID: a.RepoID, Outcome: OutcomePastLimit}, true
+		}
 	}
-	out.Hits = all
 	return out
 }
 

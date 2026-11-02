@@ -9524,8 +9524,8 @@ bytes that are not UTF-8), `line`, `text` (at most 256 bytes of it) and `blob`,
 the file's object id — in the order of repository, path and line; `tips`, the
 commit each repository with a hit was searched at, by its name; and
 `coverage`, what the search did and did not reach: `searched`, `building`,
-`stale`, `not_answering`, `not_permitted`, `no_ref`, `grep_not_named`,
-`not_indexed`, `skipped_files` and `truncated`, as [Code
+`stale`, `not_answering`, `not_permitted`, `no_ref`, `past_limit`,
+`grep_not_named`, `not_indexed`, `skipped_files` and `truncated`, as [Code
 search](../concepts/code-host.md#code-search) tells each. An empty `hits`
 says nothing matched in the repositories counted under `searched`, and no
 more: every set beside it but `not_indexed` names repositories the search did

@@ -1722,6 +1722,8 @@ func Catalogue() []Instrument {
 				"other git node in its order to ask; `stale`, a node behind the " +
 				"log or the company's configuration; `not_permitted`, a grant the " +
 				"answering node's chart refused; `no_ref`, no such ref in it; " +
+				"`past_limit`, every line of it past the answer's limit, so it " +
+				"was passed over or its lines were cut; " +
 				"`grep_not_named`, a `search: grep` repository an unfiltered " +
 				"search leaves out; `not_indexed`, an indexed repository read " +
 				"with git grep. A steady `not_answering` is a git node to look " +

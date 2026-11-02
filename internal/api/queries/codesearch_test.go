@@ -108,7 +108,8 @@ func TestTheDashboardReadsWhatACodeSearchAnswers(t *testing.T) {
 			Tips: map[string]string{"web": stubOID},
 			Coverage: codesearch.Coverage{Searched: 1, NotIndexed: set, Building: set,
 				NotAnswering: []codesearch.NodeGap{{Node: "git-b", Why: "silent", Repos: set}},
-				NotPermitted: set, GrepNotNamed: set, Stale: set, NoRef: set, SkippedFiles: 2, Truncated: true},
+				NotPermitted: set, GrepNotNamed: set, Stale: set, NoRef: set, PastLimit: set, SkippedFiles: 2,
+				Truncated: true},
 		}, nil
 	}}
 	raw, err := askNative(t, queries.Sources{Code: s}, "code_search", map[string]any{"q": "module"})
@@ -126,7 +127,8 @@ func TestTheDashboardReadsWhatACodeSearchAnswers(t *testing.T) {
 	gaps := rowsOf(t, coverage["not_answering"])
 	holdShape(t, "CodeSearchNodeGap", gaps, false)
 	var sets []map[string]any
-	for _, key := range []string{"not_indexed", "building", "not_permitted", "grep_not_named", "stale", "no_ref"} {
+	for _, key := range []string{"not_indexed", "building", "not_permitted", "grep_not_named", "stale", "no_ref",
+		"past_limit"} {
 		sets = append(sets, asMap(t, coverage[key]))
 	}
 	for _, gap := range gaps {

@@ -5154,6 +5154,14 @@ sequenceDiagram
   costs the lines from its place on, never the whole search again, and a push
   between two pages neither repeats nor skips a line of the file the first was
   cut in. The `code_search` tool pages this way.
+- **Bounded by the limit, not by the company.** A node folds each
+  repository's lines into the ones it keeps as its read returns, so what a
+  search holds is its limit of lines and the reads in flight, however many
+  repositories a node answers for. And a node reads its repositories in the
+  order of their names: once the lines it keeps fill the limit and are all of
+  repositories named before the next one, that one cannot reach the answer
+  and is not read — a search for a common word reads the repositories that
+  fill its limit rather than every repository in the company.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -5169,6 +5177,7 @@ under `not_answering`, naming the runner-up, whatever the first node said:
 | `not_answering` | was not answered by the node named beside it, with why: silent, busy, failing, or holding no key the request is signed under |
 | `not_permitted` | the answering node's chart did not grant the asker: the configuration moved since the asker's listing |
 | `no_ref` | holds no ref or commit the search's `ref:` names |
+| `past_limit` | none of its lines can be in the answer: the answer holds the search's limit of lines, all of repositories named before it. Read or passed over unread, it is named here by its name either way, and `truncated` is set |
 
 and beside them `grep_not_named`, the `search: grep` repositories the asker
 may read that a search with no `repo:` filter leaves out — git grep over every

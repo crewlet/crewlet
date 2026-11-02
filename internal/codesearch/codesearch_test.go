@@ -641,3 +641,54 @@ func TestARepositoryThatStoppedEarlyEndsTheMerge(t *testing.T) {
 			got.Hits, got.Coverage.Truncated, want)
 	}
 }
+
+// A NODE HOLDS THE FIRST LIMIT LINES, NEVER EVERY ANSWER: a node assigned
+// many repositories, each answering the search's whole limit of lines, reads
+// them in the order of their names and folds each answer in as it returns —
+// so once the first answers fill the limit, every repository named after
+// them is passed over unread, and the node reads at most the reads one
+// request runs at once, whatever it is assigned. The answer is the first
+// repository's lines, and every other repository is named past the limit,
+// by its name, however the reads interleaved.
+//
+// Mutations: collect every answer and cut once the last returns, and the
+// node reads every repository, red; fold without cutting at the limit, and
+// nothing is ever passed, red.
+func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
+	t.Parallel()
+	const limit = 5
+	n := 3*codesearch.ServeReads + 7
+	var repos []repo
+	for i := range n {
+		r := indexed(fmt.Sprintf("repo-%03d", i), "git-a")
+		for j := range limit {
+			r.lines = append(r.lines, line(fmt.Sprintf("f%d.go", j), 1))
+		}
+		repos = append(repos, r)
+	}
+	e := &estate{repos: repos}
+	a := &node{}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a}))
+	q := query("needle")
+	q.Limit = limit
+	got, err := s.Search(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.asked) > codesearch.ServeReads {
+		t.Errorf("the node read %d of its %d repositories, want at most the %d one request reads at once",
+			len(a.asked), n, codesearch.ServeReads)
+	}
+	var want []codesearch.Hit
+	for _, h := range repos[0].lines {
+		want = append(want, codesearch.Hit{Repo: "repo-000", SearchHit: h})
+	}
+	if !reflect.DeepEqual(got.Hits, want) {
+		t.Errorf("hits %v, want repo-000's %d lines", got.Hits, limit)
+	}
+	c := got.Coverage
+	if c.Searched != 1 || c.PastLimit.Count != n-1 || !c.Truncated {
+		t.Errorf("searched %d, past the limit %d, truncated %t; want 1, %d and true", c.Searched,
+			c.PastLimit.Count, c.Truncated, n-1)
+	}
+}

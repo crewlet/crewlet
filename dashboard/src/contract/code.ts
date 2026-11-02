@@ -330,6 +330,11 @@ interface CodeSearchCoverage {
   grep_not_named: CodeSearchRepoSet;
   stale: CodeSearchRepoSet;
   no_ref: CodeSearchRepoSet;
+  /**
+   * None of their lines can be in the answer: it holds the search's limit of
+   * lines, all of repositories named before them.
+   */
+  past_limit: CodeSearchRepoSet;
   skipped_files: number;
   truncated: boolean;
 }

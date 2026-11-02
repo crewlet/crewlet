@@ -137,7 +137,8 @@ type Reply struct {
 	// Repos is what became of each repository assigned it.
 	Repos []RepoResult `json:"repos,omitempty"`
 	// Hits are the first Limit lines of its repositories' answers by (name,
-	// path, line); Cut says it left lines out past them.
+	// path, line); Cut says it left lines out past them, or named a
+	// repository past the limit ([OutcomePastLimit]).
 	Hits []Hit `json:"hits,omitempty"`
 	Cut  bool  `json:"cut,omitempty"`
 }
@@ -166,11 +167,18 @@ const (
 	// OutcomeFailed means the node refused it for any other reason — a request
 	// this build reads otherwise than its asker's; its runner-up is asked.
 	OutcomeFailed Outcome = "failed"
+	// OutcomePastLimit means no line of it can be in the answer: the node's
+	// first Limit lines are all of repositories named before it, so every line
+	// it holds sorts after them. Read or passed over unread — which turns on
+	// how the node's reads interleaved, so the node names it by its name alone
+	// once every read has returned. Final: its runner-up is never asked.
+	OutcomePastLimit Outcome = "past_limit"
 )
 
 // Outcomes is the closed set.
 func Outcomes() []Outcome {
-	return []Outcome{OutcomeSearched, OutcomeUnready, OutcomeNotPermitted, OutcomeNoRef, OutcomeFailed}
+	return []Outcome{OutcomeSearched, OutcomeUnready, OutcomeNotPermitted, OutcomeNoRef, OutcomeFailed,
+		OutcomePastLimit}
 }
 
 // RepoResult is one repository's outcome.

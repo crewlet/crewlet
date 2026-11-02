@@ -168,6 +168,11 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
   if (coverage.no_ref.count > 0) {
     notes.push(`Nothing to search at the ref named in ${counted(coverage.no_ref)}.`);
   }
+  if (coverage.past_limit.count > 0) {
+    notes.push(
+      `Past the limit: ${counted(coverage.past_limit)}, named after the last line shown — narrow the search with repo: or path: to reach them.`,
+    );
+  }
   if (coverage.skipped_files > 0) {
     notes.push(
       `${plural(coverage.skipped_files, "file")} passed over for their size or as binaries.`,
