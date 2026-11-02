@@ -476,3 +476,65 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 		t.Errorf("a handle no seat holds is targeted %+v, want no member, said", got)
 	}
 }
+
+// A RUN TAKEN OVER IS HELD TO WHAT ITS BOX SAYS, AS ITS RECORD NAMES THE BRIEF.
+// A node that took a run over before its box first reached the bridge hears
+// the box's word on its first request there, and has only the job's record to
+// tell whether the launch on another node continued a session at all: a job
+// whose record names a continuing brief is held to the session its box says
+// it started — the one its launch chose, or one of its own, written on the
+// job's record — and one whose launch continued none is held to its own, and
+// nothing is recorded, as its launch's node would have done.
+//
+// Mutation: read the record's brief the other way round, or arm the reopened
+// run whatever its box said, and a case goes red.
+func TestARunTakenOverIsHeldToWhatItsBoxSaysAsItsRecordNamesTheBrief(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		brief    sandbox.BriefKind
+		fellBack bool
+		armed    bool
+		want     sandbox.SessionStart
+	}{
+		"a continuing launch whose box took the session up": {brief: sandbox.BriefContinuedNewBox,
+			armed: true, want: sandbox.SessionStartContinued},
+		"a continuing launch whose box started its own": {brief: sandbox.BriefContinuedNewBox, fellBack: true,
+			want: sandbox.SessionStartFresh},
+		"a launch that continued no session": {brief: sandbox.BriefFresh},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			store := sandbox.NewCoordStore(coordmemory.NewFleet())
+			run, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+				sandbox.Fence{})
+			if err != nil {
+				t.Fatalf("BeginLaunch: %v", err)
+			}
+			run.Launch.Brief = tc.brief
+			ledger := newBridgeLedger(store, nil)
+			ledger.bind(run.LaunchID)
+			var armed []bool
+			reopenedStarted(ledger, run, func(continued bool) { armed = append(armed, continued) })(ctx,
+				tc.fellBack)
+			if len(armed) != 1 || armed[0] != tc.armed {
+				t.Fatalf("the reopened run was held to %v, want once to a continued session: %v", armed, tc.armed)
+			}
+			// A JOB WHOSE LAUNCH CONTINUED NONE has nothing written, and nothing
+			// sent to write it: its record is read once.
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				row, _, err := store.Get(ctx, "t1")
+				switch {
+				case err != nil:
+					t.Fatalf("Get: %v", err)
+				case row.Launch.SessionStart == tc.want:
+					return
+				case tc.want == "" || time.Now().After(deadline):
+					t.Fatalf("the job's record says %q, want %q", row.Launch.SessionStart, tc.want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}

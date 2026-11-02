@@ -150,7 +150,6 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	}
 	ledger := newBridgeLedger(rt.pending, reopened.Meter)
 	ledger.nudge = e.nudgeRun
-	continues := run.Launch.Brief.Continues()
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
 	// after the last one the row records, and a resume reads them by it.
 	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
@@ -170,9 +169,8 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		Skills: state.NativeSkills,
 		// AND THE SESSION ITS BOX STARTED, said again by the token it dials
 		// on its first request here — the same token it dialled the node it
-		// was taken from with — for a job whose launch continued a session,
-		// as the record names its brief.
-		Started: boxStarted(ledger, run.TurnID, func() bool { return continues }, reopened.Started),
+		// was taken from with ([reopenedStarted]).
+		Started: reopenedStarted(ledger, run, reopened.Started),
 	}
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its
@@ -188,4 +186,18 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	}
 	log.InfoContext(ctx, "bridge_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
 		"seat", handle, "calls_before", len(run.BridgeCalls))
+}
+
+// reopenedStarted is what the bridge session of run, taken over while it works,
+// does once the run's box says which session it started there ([boxStarted]):
+// it holds the reopened run's guard to that session through started
+// ([runner.ReopenedRun.Started]) and records it on the job's record — for a job
+// whose launch continued a session, AS THE JOB'S RECORD NAMES ITS BRIEF
+// ([sandbox.LaunchRecord.Brief]), the one word on it this node has of what the
+// launch on another node, or before a restart, decided.
+func reopenedStarted(ledger *bridgeLedger, run sandbox.PendingRun,
+	started func(continued bool)) func(context.Context, bool) {
+
+	continues := run.Launch.Brief.Continues()
+	return boxStarted(ledger, run.TurnID, func() bool { return continues }, started)
 }
