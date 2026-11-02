@@ -88,7 +88,12 @@ const (
 	// MaxLandEntries is the most entries one land record lands: 64,
 	// [MaxPushesPerRecord], since it lands one push row an entry — the
 	// committer's group commit's shape — which a train's whole tested
-	// prefix, at most [MaxCandidateEntries] (also 64), fits in.
+	// prefix, at most [MaxCandidateEntries] (also 64), fits in. MEASURED,
+	// a record of all 64, each deleting its source, holds the write lane
+	// 33 ms, and one of a single entry 5.7 ms (BenchmarkApplyALandRecord,
+	// doc.go's measured section): under the third of
+	// statelog.ApplyTxTimeBudget the domain's records are sized to, so a
+	// train's whole prefix lands as one.
 	MaxLandEntries = MaxPushesPerRecord
 
 	// MaxEjectedPaths is the most paths one ejection names of a conflicted

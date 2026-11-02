@@ -869,8 +869,10 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
 		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
 		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
-		// key, driven from the list; an entry put in a candidate, ejected and
-		// landed by its key; a target's train abandoned — its testing entries
+		// key, and a list of their changes by theirs, each driven from the
+		// list — the entries a record puts in a candidate, ejects and lands
+		// are written back as upserts on their key, which have no plan; a
+		// target's train abandoned — its testing entries
 		// over code_queue_live_idx, its candidates over
 		// code_candidates_train_idx — a train's landed candidates and its
 		// candidates at a record's position over the same; a train's pack's
@@ -889,12 +891,8 @@ func registeredStatements() map[string]statement {
 		"entries a push ejected": {pushEjectedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`,
 			1000, "ejected", "head_moved"},
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
-		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", 0, "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"land an entry": {landEntrySQL, []any{1, 1000, oid("m"), "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"changes named": {changesNamedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
 		"abandon a train's entries": {resetTrainSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"abandon a train's candidates": {dropTrainSQL, []any{"repo-1", "refs/heads/main"},
