@@ -579,6 +579,8 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		RoleName:    seat.Name,
 		Description: e.Schedule.Task,
 		Schedule:    e.Schedule.Name,
+		ScopeType:   e.Scope,
+		ScopeID:     e.ScopeID,
 		ScheduledAt: fireUTC.UTC(),
 
 		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
