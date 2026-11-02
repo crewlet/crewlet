@@ -473,7 +473,7 @@ export const BUILTIN_TOOL_SOURCE = "builtin";
  * THE ENGINE'S OWN AGENT TOOLS ARE LEFT OUT. They are how an agent works, not a
  * place a reader goes, and "artif" listed `get_artifact` and
  * `set_artifact_schema` above the artifacts a reader was looking for. They stay
- * listed in Settings, under MCP Tools; what is offered here is a tool the
+ * listed in Settings, under MCP & tools; what is offered here is a tool the
  * company connected.
  */
 export function toolHits(
@@ -489,7 +489,9 @@ export function toolHits(
     icon: "wrench",
     label: tool.name,
     hint: tool.source,
-    go: () => nav.to(["settings", "mcp-tools"], { q: tool.name }),
+    // THE TOOL'S OWN ADDRESS, which opens it where the page shows it: its
+    // server's Tools tab, searched for it.
+    go: () => nav.to(["settings", "mcp-tools", tool.name]),
   }));
 }
 

@@ -46,6 +46,16 @@ type ToolRow struct {
 	// can write IRREVERSIBLY, and which reach outside the company at all.
 	Annotations ToolHints `json:"annotations"`
 
+	// Risk is how much a call can change, RiskDeclared whether a hint the
+	// tool carries decided it, and External whether a call may reach past
+	// the company: the engine's one reading of the hints ([mcp.RiskOf]), the
+	// same an MCP server's detail answers per tool, so a screen shows a
+	// built-in's risk and a server tool's in one vocabulary and reads
+	// neither again from the hints.
+	Risk         mcp.Risk `json:"risk"`
+	RiskDeclared bool     `json:"risk_declared"`
+	External     bool     `json:"external"`
+
 	// Delivers names WHERE calling this tool puts something in front of
 	// somebody outside the turn, and is empty for a tool that reaches
 	// nobody. The registry's own predicate, never re-derived here: a tool
@@ -161,6 +171,7 @@ func ListedRows(taken []ToolRow, listings []coord.MCPListing,
 func toolRow(name, description, origin string, ann tools.Annotations, delivers string,
 	input map[string]any) ToolRow {
 
+	risk := mcp.RiskOf(ann)
 	return ToolRow{
 		Name:        name,
 		Description: description,
@@ -174,7 +185,10 @@ func toolRow(name, description, origin string, ann tools.Annotations, delivers s
 			Idempotent:  ann.Idempotent.String(),
 			OpenWorld:   ann.OpenWorld.String(),
 		},
-		Delivers:    delivers,
-		InputSchema: input,
+		Risk:         risk.Risk,
+		RiskDeclared: risk.Declared,
+		External:     risk.External,
+		Delivers:     delivers,
+		InputSchema:  input,
 	}
 }

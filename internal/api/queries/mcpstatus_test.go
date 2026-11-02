@@ -507,8 +507,8 @@ func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 	}
 }
 
-// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, every shape held both ways,
-// and knows exactly the states the engine sends.
+// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, in both readings, every
+// shape held both ways, and knows exactly the states the engine sends.
 func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
@@ -538,6 +538,23 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	holdShape(t, "McpRefusedTool", refused, false)
 	holdShape(t, "McpShadowedTool", shadowed, false)
+
+	// A MEMBER'S READING, through the same question: its own row and cell
+	// shapes, no launch line and no alarm.
+	memberRaw, err := r.Answer(iam.WithPrincipal(t.Context(), person(iam.StageActive, everyAppButAdmin()...)),
+		"mcp_servers_status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := asMap(t, memberRaw)
+	holdShape(t, "McpMemberServersStatusAnswer", []map[string]any{member}, false)
+	memberServers := rowsOf(t, member["servers"])
+	holdShape(t, "McpMemberServerStatus", memberServers, false)
+	var memberCells []map[string]any
+	for _, s := range memberServers {
+		memberCells = append(memberCells, rowsOf(t, s["nodes"])...)
+	}
+	holdShape(t, "McpMemberServerNode", memberCells, false)
 
 	alarms := rowsOf(t, body["alarms"])
 	holdShape(t, "McpAlarm", alarms, false)

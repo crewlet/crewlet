@@ -63,10 +63,10 @@ import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
 /** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
-/** Settings' Admin pages: every section but Spend's readings and Models, which every member reads. */
+/** Settings' Admin pages: every section but Spend's readings, Models and MCP & tools, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
-    .sections.filter((s) => s.group !== "Spend" && s.key !== "models")
+    .sections.filter((s) => s.group !== "Spend" && s.key !== "models" && s.key !== "mcp-tools")
     .map((s) => s.path);
 }
 
@@ -442,6 +442,10 @@ describe("the navigation grammar", () => {
       // EACH MODEL'S CONDITION is every member's: it is why a seat waits. Its
       // actions and its credentials stay an Admin's, on the page itself.
       ["settings", "models"],
+      // EACH MCP SERVER'S CONDITION AND ITS TOOLS are every member's: they
+      // are why an agent lacks a tool. Launch lines, alarms and every action
+      // stay an Admin's, on the page itself.
+      ["settings", "mcp-tools"],
       ["account"],
     ];
     for (const path of OVERVIEW) {
@@ -876,7 +880,7 @@ describe("the breadcrumb", () => {
     expect(titleOf(brand)).toBe("Brand");
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
-      "MCP Tools",
+      "MCP & tools",
     ]);
   });
 
@@ -895,7 +899,7 @@ describe("the breadcrumb", () => {
       ),
     };
     const runs = { tracker: true, knowledge: true, chat: true };
-    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "spend"]);
+    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "mcp-tools"]);
     expect(landingPath(gated, ["admin"], runs)).toEqual(gated.path);
     // A reader not read yet: the workspace's own path, as the frame draws a lock only once it knows.
     expect(landingPath(gated, null, runs)).toEqual(gated.path);
@@ -1100,7 +1104,7 @@ test("three fixed ancestors is the deepest trail the route table produces", () =
     ],
     [
       ["settings", "mcp-tools", "servers", "github"],
-      ["Settings", "MCP Tools", "Servers"],
+      ["Settings", "MCP & tools", "Servers"],
     ],
   ];
   for (const [path, ancestry] of three) {

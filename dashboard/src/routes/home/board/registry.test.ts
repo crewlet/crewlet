@@ -85,15 +85,17 @@ describe("who may add what", () => {
 
   // SETTINGS IS ADMIN'S BUT FOR SPEND'S READINGS, which every reader reads:
   // its widgets follow its sections.
-  test("a reader without admin is offered of Settings' widgets only Spend's readings and the models", () => {
+  test("a reader without admin is offered of Settings' widgets only Spend's readings, the models and the MCP servers", () => {
     expect(settings.length).toBeGreaterThan(0);
     for (const def of settings) {
       // Expensive tasks names its tasks by the tracker's keys, which MEMBER holds;
-      // each model's condition is every member's (`llm_entries`' member reading).
+      // each model's condition is every member's (`llm_entries`' member reading),
+      // and so is each MCP server's (`mcp_servers_status`' member reading).
       const open =
         def.from === "settings-spend" ||
         def.from === "settings-spend-tasks" ||
-        def.key === "settings.models";
+        def.key === "settings.models" ||
+        def.key === "settings.mcp-servers";
       expect(canUse(def, MEMBER), def.key).toBe(open);
     }
   });
