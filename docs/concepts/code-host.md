@@ -4448,7 +4448,12 @@ update reaches would be in the repository all the same. A commit the
 repository already holds is no forgery — a box's old checkout pushing back a
 branch deleted since, the engine's own tool commits on it — so each commit
 committed as the engine is looked up in the node's copy of the repository,
-and only one the copy lacks is refused. One push may bring back up to 1 000
+and only one the copy lacks is refused. The copy keeps a deleted branch's
+commits for two weeks after the deletion, and a box is never that old when it
+pushes: a turn's job continues in its kept box only while the box is younger
+than seven days, and its credential is valid seven days from its launch
+([reuse across launches](code-sandbox.md#how-a-coding-task-runs)). A person's
+purge keeps nothing, so a box pushing a purged commit back is refused. One push may bring back up to 1 000
 of them; a longer history is refused with the remedy of pushing it in parts,
 since a part that landed is reached by a ref and the box's git does not send
 it again. A refused push stores and proposes nothing, and its `code_push` line

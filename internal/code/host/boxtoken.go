@@ -35,7 +35,9 @@ const BoxUser = "run"
 // settles within its give-up window and the seat's next holder's recovery
 // reaps; a token copied out of a box is worth nothing past either. It is also
 // the floor of a keyring rotation's last step: an old key dropped sooner
-// refuses every running box's pushes (docs/concepts/secret-store.md).
+// refuses every running box's pushes (docs/concepts/secret-store.md). And it
+// is a ceiling as well as a floor: with sandbox.KeptBoxMaxAge it may not pass
+// code.PruneGrace, which land.go holds at compile time ([Server.forged]).
 const RunTokenTTL = 7 * 24 * time.Hour
 
 // BoxRunRef names a run's ONE job: the row's key (the turn's run id) and the
