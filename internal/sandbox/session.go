@@ -1383,7 +1383,7 @@ func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
 			ended = true
 			return true, nil
 		}
-		lastErr = fmt.Errorf("outcome %s: %v", res.Outcome, err)
+		lastErr = fmt.Errorf("outcome %s: %w", res.Outcome, err)
 		return false, err
 	})
 	if !ended {
