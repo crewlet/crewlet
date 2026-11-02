@@ -335,7 +335,7 @@ func (pv *previewing) sync(ctx context.Context, fresh statelog.Freshness) error 
 	case errors.Is(err, code.ErrRepoNotFound):
 		return fmt.Errorf("home: repository %s: %w", pv.q.RepoID, err)
 	case errors.Is(err, cache.ErrInvalid):
-		return fmt.Errorf("%w: fresh: %v", code.ErrInvalid, err)
+		return fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return pv.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
 			"the preview's need before its answer fell due; the sync goes on, and another git node answers "+
@@ -404,7 +404,7 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 			"merge in: %v; another git node answers", p.o.NodeID, err))
 	}
 	defer sc.Remove()
-	if absent, err := pv.commits(ctx, sc); err != nil || absent != "" {
+	if absent, err := pv.commits(ctx, sc); err != nil || absent != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err == nil {
 			err = fmt.Errorf("%w: repository %s holds no commit %s", code.ErrObjectNotFound, repo.Name, absent)
 		}

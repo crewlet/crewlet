@@ -581,7 +581,7 @@ func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
 			}
 		}
 		if match {
-			n += uint64(s.Total)
+			n += s.Total
 		}
 	}
 	return n
