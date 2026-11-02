@@ -396,12 +396,12 @@ func fireOutcomeArgs() []any {
 func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	[]ScheduleRun, bool, error) {
 
-	query, args, err := scheduleRunsSQL(q)
-	if err != nil {
-		return nil, false, err
+	query, args, invalid := scheduleRunsSQL(q)
+	if invalid != nil {
+		return nil, false, invalid
 	}
 	var out []ScheduleRun
-	err = estate.Read(ctx, func(tx *sql.Tx) error {
+	err := estate.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err

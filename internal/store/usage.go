@@ -1326,7 +1326,7 @@ func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule
 			f                        UsageFire
 			at, due                  int64
 		)
-		if err := rows.Scan(&scopeType, &scopeID, &name, &f.Target, &at, &due,
+		if err = rows.Scan(&scopeType, &scopeID, &name, &f.Target, &at, &due,
 			&f.FireLabel, &f.Outcome, &f.TraceID, &f.TurnID); err != nil {
 			return nil, fmt.Errorf("store: scan the usage day's schedule fires: %w", err)
 		}
@@ -1334,7 +1334,7 @@ func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule
 		s := of(scopeType, scopeID, name)
 		s.Fires = append(s.Fires, f)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: read the usage day's schedule fires: %w", err)
 	}
 	superseded, err := d.usageSuperseded(ctx, w)
