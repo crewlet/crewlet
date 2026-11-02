@@ -5621,7 +5621,11 @@ be read at a glance:
   [the turn trace](#the-turn-trace-four-tabs-one-clock)). A round with no update
   for two minutes is marked **no update**, for ten **stalled**, in the
   caution and failure tones — and never while the turn is parked, because an
-  executor in its box is silent on purpose.
+  executor in its box is silent on purpose. What waits behind the turn in the
+  seat's inbox is on the row too, as the node holding the seat counts it with
+  the turn's own mail left out: "1 person waiting" (or "2 people waiting") for
+  the priority lane, then "4 waiting" for the rest, and nothing when the inbox
+  holds nothing else.
 - **Waiting on a person** — every executor parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
@@ -5629,7 +5633,8 @@ be read at a glance:
   `answer_executor{turn_id, launch_id, answer}` for words, as the person reading,
   naming the question it drew.
 - **In a box** — the rest of the executors in flight, eight before it
-  says how many more. Empty, it says *What a finished one did is on its
+  says how many more. Each row's caption adds what waits in the inbox of the
+  seat the executor holds, in the same words as a running turn's row. Empty, it says *What a finished one did is on its
   turn’s trace*: a settled executor's row is deleted, so the sentence it
   replaced, promising every finished run under Runs, was false.
 - **Activity** — the engine's own count of events over the window
