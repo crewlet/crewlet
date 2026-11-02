@@ -43,14 +43,12 @@ roles:
     llm_review: codex-review
 `
 
-// fakeModels is the engine's half: what this node resolved, and its alarms.
+// fakeModels is the engine's half: what this node resolved.
 type fakeModels struct {
-	local  []queries.LocalModel
-	alarms []statelog.Alarm
+	local []queries.LocalModel
 }
 
 func (f fakeModels) LocalModels() []queries.LocalModel { return f.local }
-func (f fakeModels) LatestAlarms() []statelog.Alarm    { return f.alarms }
 
 type fakeSecretRows []secrets.Record
 
@@ -78,10 +76,12 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 					TokenLifetime: 365 * 24 * time.Hour},
 				{Key: "codex-review", Route: "none"},
 			},
-			alarms: []statelog.Alarm{
+		},
+		Alarms: func() []statelog.Alarm {
+			return []statelog.Alarm{
 				{Kind: statelog.KindLLMSignInRefused, Detail: "codex-review was refused"},
 				{Kind: statelog.KindApplyLag, Detail: "not a model's"},
-			},
+			}
 		},
 		Secrets: fakeSecretRows{{Name: "CLAUDE_CODE_OAUTH_TOKEN", UpdatedBy: "miles",
 			UpdatedAt: pinned.Add(-360 * 24 * time.Hour)}},

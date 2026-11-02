@@ -39,7 +39,18 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		// a redelivered trigger is several rows here — and this is how a
 		// reader asks for the others. See ADR-0017.
 		WorkKey: strings.TrimSpace(p.String("work_key")),
-		Limit:   p.Int("limit", 0),
+		// THE TURNS THAT CALLED AN MCP SERVER'S TOOLS, or one of them, off
+		// the tally each turn's ending states ([store.TurnQuery.Server]).
+		Server: strings.TrimSpace(p.String("server")),
+		Tool:   strings.TrimSpace(p.String("tool")),
+		Limit:  p.Int("limit", 0),
+	}
+	if q.Tool != "" && q.Server == "" {
+		// A TOOL IS ONE SERVER'S: two servers can offer one name, and a
+		// filter that matched either would list turns the caller did not
+		// ask about.
+		return nil, fmt.Errorf("%w: tool=%s names no server; name the server it is "+
+			"one of with server=", ErrBadParams, q.Tool)
 	}
 	// FAILED IS THREE-VALUED, and the third value is the default: nil is
 	// every turn, true is the ones that carried a failure, false is the

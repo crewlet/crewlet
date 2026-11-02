@@ -72,8 +72,10 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"model_retries", modelRetryCases},
 		{"device_sign_ins", deviceSignInCases},
 		{"mcp_listings", mcpListingCases},
+		{"mcp_restarts", mcpRestartCases},
 		{"maintenance", maintenanceCases},
 		{"backups", backupCases},
+		{"feed_marks", feedMarkCases},
 		{"listings", listingCases},
 		{"markers", markerCases},
 	}

@@ -57,6 +57,7 @@ type client struct {
 
 	hints *hintTable
 	child *childProcess // nil for HTTP
+	ident *httpIdentity // nil for stdio
 
 	mu      sync.RWMutex
 	session *sdk.ClientSession
@@ -106,6 +107,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	switch spec.kind() {
 	case TransportHTTP:
 		transport, ident = newHTTPTransport(spec, log)
+		c.ident = ident
 		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", spec.URL)
 	default:
 		transport, c.child, err = newStdioTransport(spec, log)
@@ -134,12 +136,13 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	session, err := sdkClient.Connect(startCtx, probed, nil)
 	if err != nil {
 		c.reportStartFailure(err)
+		class := c.startClass(err)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return nil, fmt.Errorf(
+			return nil, classify(class, fmt.Errorf(
 				"mcp: server %q did not connect within %s: %w. Raise startup_timeout_seconds on the server if it legitimately takes longer to start",
-				spec.Name, spec.startupTimeout(), err)
+				spec.Name, spec.startupTimeout(), err))
 		}
-		return nil, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err)
+		return nil, classify(class, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err))
 	}
 
 	// The parent's copy of the write end goes NOW, not at stop. While this
@@ -176,6 +179,51 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	}
 	log.InfoContext(ctx, "server_initialized", "server", spec.Name, "server_name", serverName)
 	return c, nil
+}
+
+// startClass is why a start whose handshake failed with err failed, from the
+// facts this client holds rather than the SDK's sentence: a local server's
+// command that could not be started, or its process that exited on its own
+// before it answered; a remote server's answer that was not a success. Else
+// what err's own types say ([ClassOf]), which is where a refused dial, a
+// certificate, a host not found and the startup timeout are read.
+//
+// Called after [client.reportStartFailure], which ends the child: an exit the
+// engine caused is not the server's own, and is not read as one.
+func (c *client) startClass(err error) FailureClass {
+	if c.child != nil {
+		if started := c.child.startErr.Load(); started != nil {
+			return classOfCause(*started)
+		}
+		if c.child.hasExited() && c.child.ownExit {
+			return FailExited
+		}
+	}
+	if c.ident != nil {
+		if answered := c.ident.failed.Load(); answered != nil {
+			return answered.class
+		}
+	}
+	return ClassOf(err)
+}
+
+// deathClass is why a session that ended, ended: a local server's process
+// that exited on its own, or a remote server's last answer when it was not a
+// success. Empty otherwise, since a session the engine itself ended, or one
+// whose transport simply stopped hearing, fits no class.
+func (c *client) deathClass() FailureClass {
+	if c.child != nil {
+		if c.child.hasExited() && c.child.ownExit {
+			return FailExited
+		}
+		return ""
+	}
+	if c.ident != nil {
+		if answered := c.ident.failed.Load(); answered != nil {
+			return answered.class
+		}
+	}
+	return ""
 }
 
 // reportStartFailure surfaces the server's own last words and makes sure the

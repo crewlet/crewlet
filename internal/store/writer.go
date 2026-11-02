@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -174,6 +175,10 @@ var tagKeys = map[string]string{
 	// filter.
 	"action":       "action",
 	"provider_key": "provider_key",
+	// And an MCP server gesture's (types.MCPServerActed): the configured
+	// server it was made on, under a key of its own because `server` means
+	// other things on other types.
+	"mcp_server": "mcp_server",
 	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
 	// (types.AssistantTurnCompleted, and an approved write the act route
 	// records under the assistant transport), so the Audit log lists every
@@ -349,8 +354,8 @@ func ExtractTags(payload []byte) map[string]string {
 	if failed {
 		tags["failed"] = "true"
 	}
-	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read and the
-	// only other one. Every turn-level record carries it as an object,
+	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read. Every
+	// turn-level record carries it as an object,
 	// `work_item{backend, id, key, project}`, and the tag is its identity
 	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
 	// that is the one of the four that a move or a rename leaves alone and
@@ -393,6 +398,18 @@ func ExtractTags(payload []byte) map[string]string {
 					tags["trigger_reason"] = trigger.Origin.Reason
 				}
 			}
+		}
+	}
+	// THE MCP SERVERS A RECORD'S CALLS WERE FOR, the fourth nested read: every
+	// `tool_executions[].source` that names a server (types.ToolExecution),
+	// answered or refused. A server's recent calls are read out of the phase
+	// records that made them ([EventLog.ToolCalls]), and a listing never
+	// selects the payload (a phase record carries its whole prompt and tool
+	// log), so without the tag every phase record in the window was read
+	// whole to find the few that called one server.
+	if raw, ok := flat["tool_executions"]; ok {
+		if servers := mcpServersTag(raw); servers != "" {
+			tags[mcpServersTagKey] = servers
 		}
 	}
 	return tags
@@ -454,6 +471,43 @@ func OriginRef(kind, id string) string {
 	}
 	return kind + ":" + id
 }
+
+// mcpServersTagKey is the tag [ExtractTags] names a record's MCP servers under.
+const mcpServersTagKey = "mcp_servers"
+
+// mcpServersTag is the servers a record's tool calls named, as the tag holds
+// them: each between commas, sorted, once (`,github,linear,`), and "" for a
+// record whose calls named none.
+//
+// ONE STRING because a tag is one (the tags are a flat map the listing reads
+// whole), and DELIMITED AT BOTH ENDS so [mcpServerTagNeedle] matches one whole
+// name: a server name is letters, digits and hyphens (config's server name
+// rule), so no name holds a comma and `,git,` never matches inside
+// `,github,`. Only the `source` of each call is decoded; the rest of the tool
+// log stays bytes.
+func mcpServersTag(raw json.RawMessage) string {
+	var calls []struct {
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(raw, &calls) != nil {
+		return ""
+	}
+	var servers []string
+	for _, c := range calls {
+		if server, ok := mcp.OriginServer(c.Source); ok && !slices.Contains(servers, server) {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		return ""
+	}
+	slices.Sort(servers)
+	return "," + strings.Join(servers, ",") + ","
+}
+
+// mcpServerTagNeedle is what a record whose calls named server holds inside
+// its [mcpServersTag].
+func mcpServerTagNeedle(server string) string { return "," + server + "," }
 
 // jsonInt reads a number out of a raw JSON field.
 //

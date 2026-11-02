@@ -160,7 +160,7 @@ func TestARoomSaysWhatChangedInIt(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.store.SetMembers(t.Context(), person("bob"), id,
-		[]chatlet.Member{{Handle: "jane"}, {Handle: "bob"}, {Handle: "sre"}}); err != nil {
+		[]chatlet.Member{{Handle: "jane"}, {Handle: "bob"}, {Handle: "sre"}}, nil); err != nil {
 		t.Fatalf("take kim out: %v", err)
 	}
 	r.drain()

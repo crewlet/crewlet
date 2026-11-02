@@ -3981,6 +3981,10 @@ export interface ChatChannelSummary {
   revision: number;
   /** THIS VIEWER'S membership flag: every message in the room reaches them. */
   follow_all?: boolean;
+  /** The viewer is in the room. False only for a room listed because they
+   *  starred it and may read it (a team's room they are outside), from which
+   *  nothing reaches them unless it names them. */
+  member: boolean;
   /** Room posts above this viewer's cursor, counted to `chatlet.UnreadLimit`
    *  (100). Their own messages, the tombstones, room events and replies in a
    *  thread do not count: a reply is read in its thread. */

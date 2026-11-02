@@ -504,6 +504,18 @@ type ChannelsQuery struct {
 	// is every room of the viewer's; the viewer's own handle is the same.
 	With string
 
+	// Starred is the rooms the viewer starred, from the same read state as
+	// [ChannelsQuery.Cursors]. A star is a person keeping a room in the
+	// list they work out of, so a starred room they may READ and are not in
+	// is listed beside the rooms they are in ([ChannelSummary.Member] says
+	// which): a team's room is readable by every seat and joined only by
+	// being in the team, and before this a star on it kept it nowhere.
+	// A starred room the viewer may not read (a private room they left) is
+	// not listed and not counted, exactly as a room that does not exist.
+	// Ignored with [ChannelsQuery.With], whose rooms are memberships two
+	// seats share.
+	Starred []string
+
 	// Limit is the most rooms the listing answers, the most recently
 	// active first, cut from the one list sorted by activity and never
 	// paged; zero is [MaxRailChannels]. A rail is answered whole, each room
@@ -554,6 +566,12 @@ type ChannelSummary struct {
 	// room reaches them. It is per member rather than per room, which is
 	// why it is here rather than on the channel.
 	FollowAll bool `json:"follow_all,omitempty"`
+
+	// Member says the viewer is in the room. False only for a room listed
+	// because they starred it ([ChannelsQuery.Starred]), which a screen
+	// must not take for a membership: no message reaches them from it
+	// unless it names them.
+	Member bool `json:"member"`
 
 	// Unread is how many room posts sit above this viewer's cursor, counted
 	// to [UnreadLimit]. A reply in a thread is not one: it is read in its
@@ -898,7 +916,16 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	if err != nil {
 		return ChannelListing{}, err
 	}
+	member := make(map[string]bool, len(order))
+	for _, id := range order {
+		member[id] = true
+	}
+	if strings.TrimSpace(q.With) == "" {
+		order = append(order, starredBeside(q.Starred, member)...)
+	}
 	if len(order) > MaxRailChannels {
+		// THE MEMBERSHIPS FIRST: they lead the list, so a cut takes the
+		// rooms only starred before any room the person is in.
 		out.Truncated = true
 		order = order[:MaxRailChannels]
 	}
@@ -912,7 +939,8 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	out.Unreadable = undecodable
 	direct := make([]string, 0, len(rooms))
 	for _, entry := range rooms {
-		if !Visible(who, entry.room, true) {
+		id := entry.room.ID
+		if !entry.room.Kind.Valid() {
 			// A ROOM THIS BUILD CANNOT CLASSIFY IS NOT SHOWN, and it
 			// is counted with the documents it cannot decode: both
 			// are a newer peer's row that this build must not
@@ -920,10 +948,17 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 			out.Unreadable++
 			continue
 		}
-		id := entry.room.ID
+		if !Visible(who, entry.room, member[id]) {
+			// A STARRED ROOM THIS VIEWER MAY NOT READ is not there, and
+			// is not counted: a private room they were taken out of
+			// answers as a room that does not exist, here as in every
+			// read. A membership is always visible, so only a star
+			// reaches this.
+			continue
+		}
 		summary := ChannelSummary{
 			Channel: entry.room, Revision: entry.revision,
-			FollowAll: follow[id],
+			FollowAll: follow[id], Member: member[id],
 		}
 		summary.Last, err = lastMessage(ctx, tx, id)
 		if err != nil {
@@ -1007,6 +1042,28 @@ func railMemberships(ctx context.Context, tx *sql.Tx, who, with string) (
 		return nil, nil, fmt.Errorf("chatlet: read %s's rooms: %w", who, err)
 	}
 	return follow, order, nil
+}
+
+// starredBeside is the starred rooms a rail lists beside the viewer's own: each
+// once, in id order, leaving out the rooms they are already in. At most
+// [MaxRailChannels], which is the most one rail lists at all; the read state
+// that holds the stars bounds them far below the size of a statement.
+func starredBeside(starred []string, member map[string]bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, id := range starred {
+		id = strings.TrimSpace(id)
+		if id == "" || member[id] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	if len(out) > MaxRailChannels {
+		out = out[:MaxRailChannels]
+	}
+	return out
 }
 
 // railRoom is one room's row as the rail read it.

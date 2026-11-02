@@ -30,6 +30,7 @@ func catalogue() []events.Payload {
 		TaskAssigned{},
 		// schedule.go
 		ScheduledTaskFired{},
+		ScheduledFireSuperseded{},
 		// notification.go
 		ExternalNotification{}, TurnTriggerSkipped{},
 		NotificationsCoalesced{}, NotificationSkipped{},
@@ -76,6 +77,8 @@ func catalogue() []events.Payload {
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
 		OperatorActed{}, BackupRequested{}, ModelActed{},
+		// mcpservers.go
+		MCPServerActed{},
 		// assistant_read.go
 		AssistantConversationRead{},
 		// assistant.go
@@ -110,6 +113,7 @@ var wireTypes = []string{
 	"auxiliary_spend",
 	"backup_requested",
 	"model_acted",
+	"mcp_server_acted",
 	"budget_exhausted",
 	"budget_meters",
 	"compaction_completed",
@@ -159,6 +163,7 @@ var wireTypes = []string{
 	"executor_failed",
 	"executor_launched",
 	"executor_stopped",
+	"scheduled_fire_superseded",
 	"scheduled_task_fired",
 	"seat_access_drift_restored",
 	"seat_paused",
@@ -339,8 +344,11 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
+	"mcp_server_acted": {"action", "actor", "actor_kind", "failed", "mcp_server", "operator_id",
+		"outcome", "refusal", "seat"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
-	"task_assigned":                 {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
+	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "task_id", "timeout_seconds"},
+	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
 	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},

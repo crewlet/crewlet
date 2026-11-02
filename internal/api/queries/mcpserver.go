@@ -1,4 +1,5 @@
-// One MCP server, whole: what it lists across the fleet.
+// One MCP server, whole: what it lists across the fleet, and how it has been
+// used.
 
 package queries
 
@@ -14,8 +15,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // MCPListingReader is the fleet's listings of its MCP servers' tools
@@ -33,8 +40,12 @@ type MCPListingReader interface {
 	MCPToolSchemas(ctx context.Context, digests []string) (map[string]coord.MCPToolSchema, error)
 }
 
-// MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole.
+// MCPServerAnswer is `GET /mcp-servers/{name}`: one server, whole, the admin's
+// reading; a member is answered [MemberMCPServer] of it.
 type MCPServerAnswer struct {
+	// Reading is [ReadingAdmin]: which of the answer's two readings this is.
+	Reading string `json:"reading"`
+
 	// Server is the server's row exactly as `mcp_servers_status` answers
 	// it, and Nodes the live nodes its cells are drawn against.
 	Server MCPServerRow    `json:"server"`
@@ -65,6 +76,119 @@ type MCPServerAnswer struct {
 	// ([configapi.Service.ServerDependants]): empty lists for a server the
 	// configuration does not declare.
 	Dependants configapi.MCPDependants `json:"dependants"`
+
+	// Instances is every instance of the server on the nodes said to hold
+	// one, read from each node at query time (ADR-0021), by node then seat;
+	// InstanceNodes names each node asked, whether it answered and why not,
+	// and how many instances it holds, so a short list is never read as a
+	// server with fewer instances. ALWAYS LISTS.
+	Instances     []MCPInstanceView     `json:"instances"`
+	InstanceNodes []MCPInstanceNodeView `json:"instance_nodes"`
+
+	// LastSuccess is when an instance last answered, and LastFailure the
+	// latest failure of any instance read, kept after it came back: null
+	// where none has, or no node holding one answered.
+	LastSuccess *time.Time      `json:"last_success"`
+	LastFailure *MCPFailureView `json:"last_failure"`
+
+	// Resolved is what the engine decides about the server from its
+	// configuration: how it signs in, where it runs, the timeouts in force,
+	// the integration it reads, the boxes it is given and the placements
+	// expected to fail. Null for a server the configuration does not
+	// declare, which has nothing to resolve.
+	Resolved *MCPResolved `json:"resolved"`
+
+	// Usage is the server's calls per tool over the last [MCPUsageDays]
+	// company days, every data node's (the usage domain's counts).
+	Usage MCPServerUsage `json:"usage"`
+
+	// Calls is the server's newest calls in the same days, out of the phase
+	// records that made them on every data node (turn detail), with which
+	// nodes answered.
+	Calls MCPServerCalls `json:"calls"`
+}
+
+// MCPUsageDays is how many company days a server's usage and recent calls
+// cover: a week, today included, so a tool used on one weekday a week still
+// shows, and so the calls listed are the calls the counts are of.
+const MCPUsageDays = 7
+
+// MCPServerUsage is a server's calls per tool over a range of company days.
+type MCPServerUsage struct {
+	// Since and Until are the range's first and last company day, both
+	// inclusive, and Days its length.
+	Since string `json:"since"`
+	Until string `json:"until"`
+	Days  int    `json:"days"`
+
+	// Tools is one row per tool called in the range, by name. ALWAYS A
+	// LIST: a server nobody called has none.
+	Tools []MCPToolUsage `json:"tools"`
+
+	// Elided is how many (server, tool) entries the per-seat-day cap
+	// dropped across the range, on every data node, entries of which some
+	// may have been this server's. Zero says every count is whole.
+	Elided int64 `json:"elided"`
+}
+
+// MCPToolUsage is one tool's calls over the range: every seat's, every
+// node's, each in exactly one of four outcomes (mcp.CallOutcome) at the time
+// its turn counted it, so Calls is their sum.
+type MCPToolUsage struct {
+	// Tool is the name the calls used, prefix included: the
+	// [MCPToolView.Name] it joins.
+	Tool string `json:"tool"`
+
+	Calls       int64 `json:"calls"`
+	Failed      int64 `json:"failed"`
+	Unavailable int64 `json:"unavailable"`
+	Refused     int64 `json:"refused"`
+
+	// TotalMS is how long the calls that ran took between them: a mean is
+	// TotalMS over Calls less Refused, the calls that ran.
+	TotalMS int64 `json:"total_ms"`
+
+	// LastAt is the newest call that ran, null when none did.
+	LastAt *time.Time `json:"last_at"`
+
+	// Seats are the handles of the seats that called it, sorted. ALWAYS A
+	// LIST.
+	Seats []string `json:"seats"`
+}
+
+// MCPServerCalls is a server's newest calls, at most [store.MaxToolCalls].
+type MCPServerCalls struct {
+	// Calls is newest first. ALWAYS A LIST.
+	Calls []MCPCallRow `json:"calls"`
+
+	// Coverage says which data nodes the calls were read from, and why any
+	// did not answer (ADR-0021).
+	Coverage eventfan.Coverage `json:"coverage"`
+}
+
+// MCPCallRow is one call to one of the server's tools: who, when, which tool
+// and how it ended. NEVER ITS ARGUMENTS OR ITS RESULT, which are a model's
+// and a server's words and can hold a credential or a customer's data; the
+// turn it was made in holds them, for whoever may read that seat's trail.
+type MCPCallRow struct {
+	// At is when the call was handed to the tool, or for one refused before
+	// it ran, when its phase was recorded.
+	At time.Time `json:"at"`
+
+	// Seat is the handle of the seat that made it, and TurnID the run it
+	// was made in.
+	Seat   string `json:"seat"`
+	TurnID string `json:"turn_id"`
+
+	Tool string `json:"tool"`
+
+	// Outcome is which of the four the call is in, and Refusal the class of
+	// a failure the engine classified, "" otherwise.
+	Outcome mcp.CallOutcome `json:"outcome"`
+	Refusal mcp.Refusal     `json:"refusal"`
+
+	// DurationMS is how long it took, null for a call nothing timed.
+	DurationMS *int64 `json:"duration_ms"`
 }
 
 // MCPServerListing is one live node's listing of the server.
@@ -118,9 +242,10 @@ type MCPToolView struct {
 }
 
 // ErrMCPDetailUnavailable is a detail asked of a node that holds no copy of
-// the fleet's listings or no configuration surface to read the dependants
-// from: one that serves no engine.
-var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of the fleet's MCP listings")
+// the fleet's listings, no configuration surface to read the dependants from,
+// or no history to read the usage and the calls from: one that serves no
+// engine.
+var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of the fleet's MCP listings or history")
 
 // MCPServer answers one server, whole: `GET /mcp-servers/{name}`.
 //
@@ -133,17 +258,25 @@ var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of th
 // ([coord.LiveMCPListings]): a node that died, drained or restarted stops
 // counting with its presence, before any sweep removes its record.
 //
-// THE CONFIGURATION READER'S, as `mcp_servers_status` is admin's and for its
-// reason: the row names the launch command and the first line of each
-// failure. [ErrBadParams] for an empty name, [ErrNotFound] for a server no
+// ITS INSTANCES ARE READ WHERE THEY LIVE: every node whose last beat reports
+// an instance of it, or that carried no report, is asked at query time
+// ([Sources.MCPInstances]), and each is named with whether it answered.
+//
+// THE ADMIN'S READING, WHOLE: the row names the launch command and the first
+// line of each failure, the dependants each block and secret naming the
+// server, and the resolved facts the headers or variables a credential goes
+// in. A route answers a member [MemberMCPServer] of it ([MCPReading]), as
+// `mcp_servers_status` answers a member its own reading. [ErrBadParams] for an
+// empty name, [ErrNotFound] for a server no
 // node configures, reports or lists, [ErrMCPDetailUnavailable] on a node with
-// no copy, and any other error is a store that could not be read.
+// no copy, and any other error is a store that could not be read or a read of
+// the instances this node could not make.
 func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return MCPServerAnswer{}, fmt.Errorf("%w: name must be an MCP server's configured name", ErrBadParams)
 	}
-	if s.MCPListings == nil || s.Config == nil || s.Coord == nil {
+	if s.MCPListings == nil || s.Config == nil || s.Coord == nil || s.Usage == nil || s.Events == nil {
 		return MCPServerAnswer{}, ErrMCPDetailUnavailable
 	}
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
@@ -166,7 +299,8 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		return MCPServerAnswer{}, fmt.Errorf("%w: no MCP server %q is configured, reported or listed", ErrNotFound, name)
 	}
 	out := MCPServerAnswer{
-		Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
+		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
+		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -180,6 +314,17 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			Shared: listings[0].Shared, State: MCPNotStarted, UnlistedAnnotations: []string{},
 			RefusedTools: []MCPRefusedTool{}, ShadowedTools: []MCPShadowedTool{}, Nodes: []MCPServerNode{}}
 	}
+	var organization *org.Organization
+	if s.Company != nil {
+		company, roster := s.Company()
+		organization = roster
+		if company != nil {
+			if i := slices.IndexFunc(company.MCPServers, func(m config.MCPServer) bool { return m.Name == name }); i >= 0 {
+				resolved := resolvedOf(company, &company.MCPServers[i])
+				out.Resolved = &resolved
+			}
+		}
+	}
 	if out.Server.Configured {
 		dependants, found, readErr := s.Config.ServerDependants(ctx, name)
 		if readErr != nil {
@@ -188,6 +333,13 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		if found {
 			out.Dependants = dependants
 		}
+	}
+	if s.MCPInstances != nil {
+		read, readErr := s.MCPInstances.MCPInstances(ctx, name, instanceNodes(out.Server))
+		if readErr != nil {
+			return MCPServerAnswer{}, readErr
+		}
+		out.Instances, out.InstanceNodes, out.LastSuccess, out.LastFailure = instancesOf(read, organization)
 	}
 	for _, l := range listings {
 		out.Listed = append(out.Listed, MCPServerListing{
@@ -210,7 +362,92 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	}
 	out.Tools = tools
 	out.ToolCount = max(out.ToolCount, len(out.Tools))
+	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
+		return MCPServerAnswer{}, err
+	}
 	return out, nil
+}
+
+// mcpActivity is a server's usage and newest calls over the last
+// [MCPUsageDays] company days: the counts from the usage domain, the calls
+// from the phase records on every data node, one window for both.
+//
+// EACH SEAT BY THE CHART'S HANDLE while the chart holds it, and otherwise by
+// the handle its days recorded ([Sources.chartHandles]'s rule); a call by a
+// seat neither names is named by the seat's id.
+func (s Sources) mcpActivity(ctx context.Context, server string) (MCPServerUsage, MCPServerCalls, error) {
+	window := tokens.LastDays(MCPUsageDays, s.clock(), s.zone())
+	usageOut := MCPServerUsage{Since: window.First.Label, Until: window.Last.Label,
+		Days: window.Days(), Tools: []MCPToolUsage{}}
+	rows, err := usage.ServerToolCalls(ctx, s.Usage, usage.ServerToolCallsQuery{
+		From: window.First.Label, To: window.Last.Label, Server: server})
+	if err != nil {
+		return MCPServerUsage{}, MCPServerCalls{}, usageErr(err)
+	}
+	if usageOut.Elided, err = usage.ToolsElided(ctx, s.Usage, window.First.Label, window.Last.Label); err != nil {
+		return MCPServerUsage{}, MCPServerCalls{}, usageErr(err)
+	}
+	chart := s.chartHandles()
+	handles := map[string]string{}
+	handleOf := func(agentID string) string {
+		if seat, ok := chart[agentID]; ok && seat.handle != "" {
+			return seat.handle
+		}
+		return cmp.Or(handles[agentID], agentID)
+	}
+	for _, r := range rows {
+		if r.Handle != "" {
+			handles[r.AgentID] = r.Handle
+		}
+	}
+	usageOut.Tools = foldToolUsage(rows, handleOf)
+
+	calls, coverage, err := s.Events.ToolCalls(ctx, store.ToolCallQuery{
+		Server: server, Since: window.First.Start, Limit: store.MaxToolCalls})
+	if err != nil {
+		return MCPServerUsage{}, MCPServerCalls{}, err
+	}
+	callsOut := MCPServerCalls{Calls: make([]MCPCallRow, 0, len(calls)), Coverage: coverage}
+	for _, c := range calls {
+		callsOut.Calls = append(callsOut.Calls, MCPCallRow{
+			At: c.At, Seat: handleOf(c.AgentID), TurnID: c.TurnID, Tool: c.Tool,
+			Outcome: c.Outcome, Refusal: c.Refusal, DurationMS: c.DurationMS,
+		})
+	}
+	return usageOut, callsOut, nil
+}
+
+// foldToolUsage sums every seat's rows into one row per tool, by name, each
+// with the handles of the seats that called it.
+//
+// PURE over its inputs, so the arithmetic is tested without a database.
+func foldToolUsage(rows []usage.ServerToolCallsRow, handleOf func(string) string) []MCPToolUsage {
+	byTool := map[string]*MCPToolUsage{}
+	seats := map[string]map[string]struct{}{}
+	for _, r := range rows {
+		u, ok := byTool[r.Tool]
+		if !ok {
+			u = &MCPToolUsage{Tool: r.Tool}
+			byTool[r.Tool], seats[r.Tool] = u, map[string]struct{}{}
+		}
+		u.Calls += r.Calls
+		u.Failed += r.Failed
+		u.Unavailable += r.Unavailable
+		u.Refused += r.Refused
+		u.TotalMS += r.TotalMS
+		if !r.LastAt.IsZero() && (u.LastAt == nil || r.LastAt.After(*u.LastAt)) {
+			last := r.LastAt
+			u.LastAt = &last
+		}
+		seats[r.Tool][handleOf(r.AgentID)] = struct{}{}
+	}
+	out := make([]MCPToolUsage, 0, len(byTool))
+	for _, tool := range slices.Sorted(maps.Keys(byTool)) {
+		u := byTool[tool]
+		u.Seats = slices.Sorted(maps.Keys(seats[tool]))
+		out = append(out, *u)
+	}
+	return out
 }
 
 // latestIdentified is the listing changed last that carries the server's

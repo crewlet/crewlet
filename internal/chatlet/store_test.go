@@ -831,7 +831,7 @@ func TestEveryGestureTheLedgerCannotVouchForAnswersWithItsOperationAlone(t *test
 		}},
 		{"set the members", func() (chatlet.Written, error) {
 			return r.store.SetMembers(ctx, person("jane"), room,
-				members("eng", "jane", "bob"))
+				members("eng", "jane", "bob"), nil)
 		}},
 		{"join", func() (chatlet.Written, error) {
 			return r.store.Join(ctx, person("bob"), room)
@@ -1859,7 +1859,7 @@ func TestADirectConversationsMembershipCannotBePatched(t *testing.T) {
 	r.drain()
 
 	_, err = r.store.SetMembers(t.Context(), person("jane"), opened.Channel.ID,
-		members("jane", "eng", "ops"))
+		members("jane", "eng", "ops"), nil)
 	if !errors.Is(err, chatlet.ErrForbidden) {
 		t.Fatalf("a conversation's participants were patched: %v", err)
 	}
