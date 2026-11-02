@@ -7934,9 +7934,14 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   person's alone, on a repository they maintain) opens a confirmation that
   names, BEFORE the press, who keeps copies of what it drops — every git
   node's copy until it syncs past the purge, every backup taken before it,
-  and the object store for a day (a versioned S3 bucket for as long as its
-  own rules keep a deleted object) — and only its Purge asks the repository's
-  maintainer; the section says where the last purge stands. A declared
+  the object store for a day (a versioned S3 bucket for as long as its own
+  rules keep a deleted object), and every clone and fetch that already took
+  it (a person's, a coding box's, a CI runner's checkout), which nothing on
+  the server reaches — the repository's push mirror by its URL among them,
+  where it has one, since that host already holds whatever was pushed to it
+  ([Expunge](../concepts/code-host.md#expunge), "What still holds a purged
+  object") — and only its Purge asks the repository's maintainer; the
+  section says where the last purge stands. A declared
   repository's search mode and mirrors are the company document's, settled
   by every activation: they are held with that sentence and the tab leads to
   Settings › Configuration, while its purge, which changes none of its

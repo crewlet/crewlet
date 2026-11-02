@@ -7,7 +7,8 @@
  * repository's search mode and mirrors are the document's, while a purge is
  * offered for it; a deleted or importing repository takes no change; a
  * scratch repository is never indexed and takes no mirror; the mode a
- * repository has is no change; the purge's confirmation names every keeper;
+ * repository has is no change; the purge's confirmation names every keeper,
+ * a push mirror's host by its URL;
  * and a credential is a reference to a variable's name, never a token.
  */
 
@@ -28,6 +29,7 @@ import {
   pullMirrorHeld,
   pullMirrorStanding,
   purgeHeld,
+  purgeKeepers,
   purgeMessage,
   searchModeHeld,
 } from "./repoWrites.ts";
@@ -103,13 +105,39 @@ test("each control is held with its own reason", () => {
   expect(purgeHeld(repo({ head: undefined, live_packs: 0 }), PERSON)).toMatch(/no object/);
 });
 
-test("the purge's confirmation names every keeper of a copy", () => {
+// THE CONFIRMATION NAMES EVERY KEEPER code-host.md's "What still holds a
+// purged object" lists — the git nodes' caches, the backups, the object store
+// and every clone and fetch that already took the object — each by what it
+// is, so a keeper dropped from the list, or the list dropped from the
+// sentence, fails here rather than reading as a purge that leaves nothing
+// behind. Mutation: drop the clones, or join fewer keepers, and this fails.
+test("the purge's confirmation names every keeper of a copy code-host.md lists", () => {
   const message = purgeMessage(repo());
-  expect(PURGE_KEEPERS.length).toBe(3);
   for (const keeper of PURGE_KEEPERS) expect(message).toContain(keeper);
-  expect(message).toMatch(/git node/);
-  expect(message).toMatch(/backup/);
-  expect(message).toMatch(/object store/);
+  expect(message).toMatch(/every git node's copy/);
+  expect(message).toMatch(/every backup taken before the purge/);
+  expect(message).toMatch(/the object store, for a day/);
+  expect(message).toMatch(/every clone and fetch that already took it/);
+  expect(message).toMatch(/a person's clone, a coding box's, a CI runner's checkout/);
+  expect(message).toMatch(/nothing on the server reaches/);
+  expect(message).toMatch(/rotated/);
+  expect(message).not.toMatch(/push mirror/);
+});
+
+// A PUSH MIRROR'S HOST IS NAMED BY ITS URL: it already holds whatever the
+// repository pushed to it, and no purge here reaches it — the one clone the
+// person purging configured themselves, on the same tab. Mutation: leave the
+// mirror out of the keepers, and this fails.
+test("a repository with a push mirror names its host among a purge's keepers", () => {
+  const url = "https://mirror.example.com/acme/web.git";
+  const mirrored = repo({
+    remotes: { mirror_to: { url, credential: "${MIRROR_TOKEN}", as: "cto" } },
+  } as Partial<CodeRepoDetail>);
+  const message = purgeMessage(mirrored);
+  expect(message).toContain(url);
+  expect(message).toMatch(/push mirror/);
+  for (const keeper of PURGE_KEEPERS) expect(message).toContain(keeper);
+  expect(purgeKeepers(mirrored)).toHaveLength(PURGE_KEEPERS.length + 1);
 });
 
 test("a credential is a reference to a variable's name, never a token", () => {
