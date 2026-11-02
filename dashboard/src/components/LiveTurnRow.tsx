@@ -45,7 +45,7 @@ import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/l
 import { turnIdOf } from "~/lib/turns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
-import { waitingWords } from "~/lib/inboxWaiting.ts";
+import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** The words a stale or stalled round carries, with how long it has been quiet. */
@@ -108,9 +108,6 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   const callLine = lastCallLine(row);
   const last = phone && detail ? [detail, callLine].filter(Boolean).join(" · ") : callLine;
   const quiet = quietMark(row, now);
-  // WHAT WAITS BEHIND THIS TURN, as the node holding the seat counts it:
-  // the turn's own mail is not in it (lib/inboxWaiting.ts).
-  const waiting = waitingWords(row.waiting);
   const doing = liveDoing(row, now, seat);
   const { admin } = useViewer();
   const linked = turnId !== "" && admin;
@@ -128,11 +125,9 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
               {quiet.text}
             </Tag>
           )}
-          {waiting.map((word) => (
-            <Tag key={word.text} size="xs" variant={word.person ? "info" : "neutral"}>
-              {word.text}
-            </Tag>
-          ))}
+          {/* WHAT WAITS BEHIND THIS TURN, as the node holding the seat
+              counts it: the turn's own mail is not in it. */}
+          <InboxWaitingTags waiting={row.waiting} />
           <span className="live-elapsed">
             {Number.isFinite(started) ? fmtElapsed(now - started) : ""}
           </span>
