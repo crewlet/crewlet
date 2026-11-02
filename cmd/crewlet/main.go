@@ -2432,6 +2432,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
 			// seal says: opened under this node's fleet keyring.
 			RunAnswers: e.AnswerSeal(),
+			// WHAT A HELD CALL WOULD SEND, sealed on its run's row and
+			// opened under this node's fleet keyring for who may approve
+			// it.
+			HeldCalls: sandbox.NewCallSeal(e.Cipher()),
 			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
 			// owns the run. The ENGINE's reader, because the answerer
 			// it registered on every node is the other half of the same

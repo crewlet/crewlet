@@ -113,7 +113,7 @@ providers:
   sandbox:
     fake: true
 mcp_servers:
-  - {name: gitlab, command: glab, args: [mcp, serve], shared: false}
+  - {name: gitlab, command: glab, args: [mcp, serve], shared: false, tools: {default: allow}}
 roles:
   - name: Agent SWE
     handle: swe

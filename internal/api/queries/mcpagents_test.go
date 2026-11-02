@@ -222,7 +222,7 @@ func TestAServerListingPastItsRecordCountsEveryTool(t *testing.T) {
 		levels string
 		want   int
 	}{
-		{"every tool allowed", "", 300},
+		{"every tool offered", "", 300},
 		{"every tool blocked but two", ", tools: {default: blocked, levels: {t000: allow, t001: allow}}", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

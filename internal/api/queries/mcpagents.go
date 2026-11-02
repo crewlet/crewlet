@@ -60,8 +60,9 @@ type MCPAgentServer struct {
 	Server string                `json:"server"`
 	Reason config.MCPReachReason `json:"reason"`
 	// Tools is how many tools the server offers the seat: every tool the
-	// fleet's live listings name for it at a level other than blocked (a
-	// tool refused its name is never listed), 0 for a server turned off,
+	// fleet's live listings name for it at a level other than blocked, one
+	// at approve included (it is offered, and each call waits for a person);
+	// a tool refused its name is never listed. 0 for a server turned off,
 	// which is granted to nobody.
 	Tools int `json:"tools"`
 	// State is the server's own state, its row's ([MCPServerRow.State]): an
@@ -184,9 +185,10 @@ type mcpOffer struct {
 	// names are the tools offered under each name the listings carry.
 	names []string
 	// past is how many tools the listings count beyond the names they carry
-	// ([coord.MaxMCPListedTools]), each offered at the server's baseline:
-	// a server that lists that many puts every agent it reaches far past the
-	// budget whatever the levels of a few of them.
+	// ([coord.MaxMCPListedTools]), each offered unless the entry's default
+	// blocks it (no tool starts at blocked): a server that lists that many
+	// puts every agent it reaches far past the budget whatever the levels of
+	// a few of them.
 	past int
 }
 
@@ -202,7 +204,7 @@ func offerOf(server *config.MCPServer, listings []coord.MCPListing) mcpOffer {
 			out.names = append(out.names, t.Name)
 		}
 	}
-	if server.Tools.DefaultLevel() != config.MCPToolBlocked {
+	if server.Tools.Default != config.MCPToolBlocked {
 		out.past = counted - len(tools)
 	}
 	return out

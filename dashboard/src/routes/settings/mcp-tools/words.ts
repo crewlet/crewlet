@@ -298,6 +298,11 @@ export const ALARM: Record<
     tone: "info",
     title: ({ server }) => `${server}'s sign-in runs out soon`,
   },
+  mcp_approval_waiting: {
+    tone: "warning",
+    title: ({ server, who }) =>
+      who ? `${who} is waiting for your approval` : `A call to ${server} is waiting for approval`,
+  },
 };
 
 /** Each fix's button, where the page itself carries it out. */
@@ -306,6 +311,7 @@ export const FIX: Record<McpFixKind, string> = {
   integration: "See its sign-in",
   edit: "See which tools",
   sign_in: "See its sign-in",
+  approve: "Open the Inbox",
 };
 
 /**

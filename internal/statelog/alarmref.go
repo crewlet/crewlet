@@ -32,7 +32,7 @@ func AlarmReference() string {
 	}
 	if perServer := PerServerKinds(); len(perServer) > 0 {
 		fmt.Fprintf(&b, perServerNote, saidKinds(perServer),
-			spoken(MCPOutageGrace), spoken(MCPWaitingGrace))
+			spoken(MCPOutageGrace), spoken(MCPWaitingGrace), spoken(MCPApprovalGrace))
 	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
@@ -201,6 +201,10 @@ var alarmMeaning = map[Kind]string{
 	KindMCPOAuthExpiring: "An MCP server's OAuth sign-in runs out within seven days, where its " +
 		"vendor said when. The engine renews the access the sign-in grants, but only a person " +
 		"signing in again renews the sign-in itself.",
+	KindMCPApprovalWaiting: "An agent's run called one of an MCP server's tools at Needs " +
+		"approval, and the call has waited for a person's answer for longer than a third " +
+		"of the default pause TTL. The run is parked and its seat free; its work waits on " +
+		"the answer.",
 }
 
 const alarmHeader = `# Alarms
@@ -285,8 +289,12 @@ the server serves and ` + "`mcp_server_partial`" + ` when some do; an agent's
 instance held back %s (the longest an integration waits between two passes it
 still owes, plus one heartbeat) raises ` + "`mcp_server_waiting_long`" + `; and a
 tool no agent can be handed under its name raises ` + "`mcp_tools_refused`" + ` as
-soon as a node lists it. The MCP servers answer (` + "`GET /mcp-servers`" + `)
-carries the four with the gesture that fixes each.
+soon as a node lists it. A call an agent's run holds for a person's approval
+raises ` + "`mcp_approval_waiting`" + ` once it has waited %s (a third of the default
+pause TTL a parked run's box is kept for), read off the runs' own records rather
+than the heartbeat, its entry naming the seat whose run waits. The MCP servers
+answer (` + "`GET /mcp-servers`" + `) carries the five with the gesture that fixes
+each.
 `
 
 const alarmFooter = `

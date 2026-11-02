@@ -248,6 +248,7 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
       ],
     },
   ],
+  approvals: [],
   agents: [
     {
       seat: "backend-engineer",

@@ -637,6 +637,12 @@ type BridgeCall struct {
 	Source  string `json:"source,omitempty"`
 	Refusal string `json:"refusal,omitempty"`
 
+	// Held marks a call to a tool at Needs approval that was not made but
+	// recorded as the job's question ([PendingRun.HeldCall], ADR-0077): a
+	// call that ended the job, as a submission or an ask does
+	// ([BridgeCall.Ends]).
+	Held bool `json:"held,omitempty"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.
@@ -685,6 +691,11 @@ const (
 // EndsRun reports whether a call to the tool named is one of the two ways an
 // executor's run ends ([SubmitWorkTool], [AskAndWaitTool]).
 func EndsRun(tool string) bool { return tool == SubmitWorkTool || tool == AskAndWaitTool }
+
+// Ends reports whether the call is one that ended its job: a call to
+// [EndsRun]'s two tools, or a call to a tool at Needs approval the bridge
+// held ([BridgeCall.Held]), which parks the run as an ask does.
+func (c BridgeCall) Ends() bool { return EndsRun(c.Name) || c.Held }
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
@@ -864,6 +875,17 @@ type PendingRun struct {
 	QuestionContext string             `json:"question_context,omitempty"`
 	Decision        *decision.Decision `json:"decision,omitempty"`
 	Audience        string             `json:"audience"`
+
+	// HeldCall is the call to a tool at Needs approval the question asks
+	// about, nil for a question the run asked itself (ADR-0077). Written
+	// with the question by [PendingStore.RecordAsk], pinned to the job
+	// that made the call ([HeldCall.LaunchID]), marked and given its result
+	// by the resume that makes it ([PendingStore.MarkHeldCall],
+	// [PendingStore.RecordHeldResult]), and cleared when the next job opens,
+	// never by a claim given back: that is what keeps the call from being
+	// made twice. A KEY OF ITS OWN AT THE TOP OF THE ROW, carrying the keys a
+	// later build adds inside it ([HeldCall.Extra]).
+	HeldCall *HeldCall `json:"held_call,omitempty"`
 
 	// ParkedInputTokens and ParkedOutputTokens are what the job that
 	// asked the question cost, recorded with the question.
@@ -1874,6 +1896,28 @@ type PendingStore interface {
 	// written again.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
 
+	// MarkHeldCall records that the resume a claim drives is making the
+	// held call its run's job made ([PendingRun.HeldCall]), and answers the
+	// held call as the row then holds it, and whether this write is the one
+	// that marked it: false for a call some resume marked before, which is
+	// never made again (ADR-0077).
+	//
+	// ON THE CLAIM'S TERMS, as a take is ([PendingStore.TakeAnswer]): only
+	// while the run is [StatusResumed] on that launch, carrying its answer
+	// and its held call, its ending not yet decided, under the claimant's
+	// fence or a newer one, a zero fence not exempt. A row that is not that
+	// claim answers [ErrHeldCallUnclaimed]. NOTHING CLEARS THE MARK but the
+	// next job's opening: a claim given back ([PendingStore.ReleaseClaim])
+	// or revived ([PendingStore.ReviveAnswer]) keeps it, so every later
+	// attempt at the same answer finds it.
+	MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error)
+
+	// RecordHeldResult records what the held call a resume marked returned,
+	// sealed ([CallSeal.SealResult]), on the same terms as
+	// [PendingStore.MarkHeldCall], once: a call whose result is recorded is
+	// not written again, and answers true.
+	RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error)
+
 	// ReviveAnswer gives a claim no resume holds back to the recorded answer
 	// it was taken for: the run returns to [StatusAnswered], owed the resume
 	// the answer drives, and the reviving node drives it. In the same write
@@ -2035,8 +2079,13 @@ type ConversationRef struct {
 // tick or an A2A wake stored no conversation, and a wake that could not name
 // one carries none — so two absences comparing equal would make every such
 // delivery the answer to every such run.
+//
+// A HELD CALL IS NEVER A CONVERSATION'S TO ANSWER (ADR-0077): whoever speaks
+// on the line the run was launched from is not, for that, somebody who may
+// approve a call to a tool, so a run whose question is a held call admits no
+// delivery at all, and its approval arrives by its own route.
 func (c ConversationRef) Answers(run PendingRun) bool {
-	return run.ConversationKey != "" && run.ConversationKey == c.Identity
+	return run.HeldCall == nil && run.ConversationKey != "" && run.ConversationKey == c.Identity
 }
 
 // sameBatch reports whether this delivery arrived in the very batch the run

@@ -572,6 +572,7 @@ mcp_servers:
     shared: false
     command: glab
     args: [mcp, serve]
+    tools: {default: allow}
   - name: gh
     transport: http
     shared: false

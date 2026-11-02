@@ -48,12 +48,14 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: github
+    tools: {default: allow}
     transport: http
     shared: false
     url: "https://mcp.example.com/"
     headers:
       X-Workspace: "acme"
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "tracker-server"
 roles:
@@ -286,10 +288,12 @@ integrations:
     token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-an-atlassian-server"
     access: {seats: [ceo]}
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
     access: {seats: [cto]}
@@ -451,10 +455,12 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: "search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY}"
   - name: docs
+    tools: {default: allow}
     transport: http
     shared: false
     url: "https://${DOCS_HOST}/mcp"

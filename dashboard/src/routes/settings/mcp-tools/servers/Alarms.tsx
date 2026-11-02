@@ -102,6 +102,12 @@ function Fix({
           {FIX.sign_in}
         </ButtonLink>
       );
+    case "approve":
+      return (
+        <ButtonLink size="small" variant="secondary" href={href(["inbox"])}>
+          {FIX.approve}
+        </ButtonLink>
+      );
   }
 }
 
@@ -152,6 +158,11 @@ function itemFor(
       meta = <>Its integration has not minted the credential{since ? <>, {since}</> : null}</>;
       body =
         "The instance starts once the integration seals the credential it mints for the agent. Its Agents tab says whether the agent is turned on there.";
+      break;
+    case "mcp_approval_waiting":
+      meta = <>Its run is parked{since ? <>, {since}</> : null}</>;
+      body =
+        "It called a tool that asks a person before each call. Allow it once, always, or deny it; until then the run waits and its seat takes other work.";
       break;
     case "mcp_tools_refused": {
       const one = (row?.refused_count ?? refused.length) === 1;

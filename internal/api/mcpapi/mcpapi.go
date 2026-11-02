@@ -64,6 +64,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -110,6 +111,10 @@ type Options struct {
 	// Tools writes a server's tool levels; nil answers it unavailable.
 	Tools ToolDocuments
 
+	// Approvals finds a held call and delivers its answer; nil answers an
+	// approval unavailable.
+	Approvals Approvals
+
 	// Values is the secret store a value is sealed in: required.
 	Values ValueStore
 
@@ -126,8 +131,9 @@ type Options struct {
 	Audit operator.AuditPublisher
 
 	// Guard decides each route's policy. Nil is the request context's
-	// principal with no org chart, which every route here asks for alone:
-	// no verb they take asks a relation.
+	// principal with no org chart, which decides every verb here but one: an
+	// approval (`tools.approve`) asks whether the caller leads the seat
+	// whose run made the call, which only a guard over the chart answers.
 	Guard authz.Guard
 }
 
@@ -141,6 +147,7 @@ type Service struct {
 	drafts    DraftChecker
 	documents ValueDocuments
 	tools     ToolDocuments
+	approvals Approvals
 	values    ValueStore
 	now       func() time.Time
 	signIns   SignIns
@@ -191,8 +198,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
 		restarter: opts.Restarter, checker: opts.Checker, drafts: opts.Drafts, documents: opts.Documents,
-		tools: opts.Tools, values: opts.Values, now: now, signIns: opts.SignIns, audit: opts.Audit,
-		guard: guard}, nil
+		tools: opts.Tools, approvals: opts.Approvals, values: opts.Values, now: now, signIns: opts.SignIns,
+		audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -275,8 +282,28 @@ func (s *Service) Routes(mux authz.Mux) error {
 	}
 	// OUTSIDE /mcp-servers/, for the catalogue's reason: the id is a
 	// sign-in's, not a server's.
-	return router.Handle("GET /mcp-sign-ins/{id}", authz.Policy{Action: authz.ActionConfigRead},
-		http.HandlerFunc(s.serveSignIn))
+	if err := router.Handle("GET /mcp-sign-ins/{id}", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveSignIn)); err != nil {
+		return err
+	}
+	// A HELD CALL'S ANSWER (approvals.go), outside /mcp-servers/ for the
+	// catalogue's reason: decided on the caller's own record here, which
+	// admits a person and no agent and no assistant, and on the seat whose
+	// run made the call once the handler has read it. It acts on the held
+	// call and keeps it, as an answer to a run's question does.
+	approvals := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerApprove))
+	return approvals.Handle("POST /mcp-approvals/{id}",
+		authz.Policy{Action: authz.ActionToolsApprove, Object: ownRecord}.Rewriting(),
+		s.audited(types.MCPServerApprove, s.serveApproval))
+}
+
+// ownRecord is the caller's own record, which a verb a person takes about a
+// seat is admitted on before the handler knows the seat: every principal that
+// has one and may act at all is admitted to it, as internal/api/workapi
+// admits a person's verbs before their name resolves.
+func ownRecord(r *http.Request) authz.Object {
+	principal, _ := iam.From(r.Context())
+	return authz.Object{Kind: authz.KindPerson, Owner: iam.RecordOwner(principal)}
 }
 
 // serveDetail answers one server whole, in the caller's reading: 404 for a

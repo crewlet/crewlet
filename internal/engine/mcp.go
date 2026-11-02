@@ -873,14 +873,15 @@ func withheldByInstance(outcomes []mcpOutcome) map[string]*credentialMissing {
 
 // toolLevels converts the entry's tool levels ([config.MCPToolPolicy]) into
 // what the MCP client files the server's tools by: a blocked tool is never
-// filed, on this server's every instance, shared or a seat's own child.
+// filed and a tool at approve asks a person before each call, on this server's
+// every instance, shared or a seat's own child.
 //
-// THE DEFAULT IS WRITTEN OUT, never left unset: an entry that says
-// `default: allow` and one that says nothing decide every tool alike, and a
-// spec that told them apart would restart a running server for an edit that
-// changes none of its tools.
+// AN UNSET DEFAULT STAYS UNSET: it leaves each tool the levels do not name at
+// the level its hints start it at, which only the server's listing can say,
+// so it is decided where the tools are filed ([mcp.Levels.Of]) and never
+// written out here as one level for every tool.
 func toolLevels(p config.MCPToolPolicy) mcp.Levels {
-	out := mcp.Levels{Default: mcp.Level(p.DefaultLevel())}
+	out := mcp.Levels{Default: mcp.Level(p.Default)}
 	if len(p.Levels) > 0 {
 		out.Tools = make(map[string]mcp.Level, len(p.Levels))
 		for tool, level := range p.Levels {

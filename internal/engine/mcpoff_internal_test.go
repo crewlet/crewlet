@@ -22,11 +22,13 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     enabled: false
     command: "search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY_NOBODY_SET}"
   - name: tracker
+    tools: {default: allow}
     enabled: false
     shared: false
     command: "tracker-server"

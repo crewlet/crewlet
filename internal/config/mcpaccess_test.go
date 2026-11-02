@@ -160,7 +160,7 @@ units:
 name: Acme
 providers: {sandbox: {fake: true}}
 mcp_servers:
-  - {name: tracker, command: tracker-mcp, access: {seats: [ceo]}}
+  - {name: tracker, command: tracker-mcp, access: {seats: [ceo]}, tools: {default: allow}}
 roles:
   - {name: CEO, handle: ceo}
   - {name: Dev, handle: dev, sandbox: {mcp: {servers: [tracker]}}}
@@ -200,7 +200,7 @@ name: Acme
 providers: {sandbox: {fake: true}}
 mcp_servers:
   - {name: tracker, command: tracker-mcp, shared: false, access: {units: [eng]}}
-  - {name: notes, command: notes-mcp, access: {seats: [dev]}}
+  - {name: notes, command: notes-mcp, access: {seats: [dev]}, tools: {default: allow}}
 units:
   - name: Eng
     id: eng

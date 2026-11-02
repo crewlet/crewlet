@@ -514,6 +514,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	r := queries.NewRegistry()
 	src := mcpSources(t, mcpFleet(t))
 	src.Alarms = mcpEvaluation
+	src.Sandbox, src.HeldCalls = heldRuns(t)
 	src.MCPListings = fakeListings{}
 	queries.Register(r, src)
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
@@ -522,6 +523,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "McpServersStatusAnswer", []map[string]any{body}, false)
+	holdShape(t, "McpApproval", rowsOf(t, body["approvals"]), false)
 	holdShape(t, "McpStatusNode", rowsOf(t, body["nodes"]), false)
 	servers := rowsOf(t, body["servers"])
 	holdShape(t, "McpServerStatus", servers, false)
@@ -580,8 +582,9 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	holdShape(t, "McpAlarmEntry", entries, false)
 	holdShape(t, "McpFix", fixes, false)
 	for name, want := range map[string][]string{
-		"McpAlarmKind": stringsOf(statelog.PerServerKinds()),
-		"McpFixKind":   stringsOf(queries.MCPFixKinds),
+		"McpAlarmKind":      stringsOf(statelog.PerServerKinds()),
+		"McpFixKind":        stringsOf(queries.MCPFixKinds),
+		"McpApprovalStatus": stringsOf(queries.MCPApprovalStatuses),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {
