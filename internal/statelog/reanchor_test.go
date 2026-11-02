@@ -2734,12 +2734,13 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 
 // A GENERATION'S AUTHOR IS READ ONE WAY FOR EVERY DOMAIN.
 //
-// The seven generation records — the tracker's, the knowledge base's, the
+// The eight generation records — the tracker's, the knowledge base's, the
 // identity estate's, the artifacts log's, the artifact datastore's, the
-// Dashboard Assistant's and chat's — name the party a reanchor's facts name,
-// and the audit feed reads those histories side by side, so the facts are
-// read by one rule ([statelog.GenerationFacts.Author]) rather than seven
-// copies of it.
+// Dashboard Assistant's, chat's and the code log's — name the party a
+// reanchor's facts name, and the audit feed reads those histories side by
+// side, so the facts are read by one rule ([statelog.GenerationFacts.Author])
+// rather than eight copies of it, and each domain's own test holds its record
+// to this one.
 // The kind is an ACTOR kind, the vocabulary the engine's reanchor passes, and
 // one that vocabulary does not hold — a principal's word among them — is an
 // operator; an operator with no credential beside it is a credential acting
