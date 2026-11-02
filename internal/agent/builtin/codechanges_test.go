@@ -437,21 +437,30 @@ func TestAListingIsReadAsItsArgumentsSay(t *testing.T) {
 	}
 }
 
-// A LISTING NAMES A WORK ITEM AS THE CHANGE WRITES DO: a Worklet item's key
-// — what a seat woken on it holds — its id, and either under Worklet's
-// backend each list the changes carrying the item, asked of the reader by the
-// identity a change's row holds (`native:<task id>`), the very item
-// code_open_change filed under the key; another tracker's item is listed by
-// its identity as named. A key that names no task, a key with no tracker on
-// this surface to resolve it, and `none`, which carries no item and no index
+// A LISTING NAMES A WORK ITEM AS THE CHANGE WRITES DO, AND RESOLVES ONLY A
+// KEY: a Worklet item's key — what a seat woken on it holds — bare or under
+// Worklet's backend, is resolved by the tracker's own read and lists the
+// changes carrying the item, asked of the reader by the identity a change's
+// row holds (`native:<task id>`), the very item code_open_change filed under
+// the key. An identity is listed as named with no tracker read: a Worklet id,
+// bare or under `native:`, even with no Worklet on this surface, and even
+// when its task is gone, since a purge leaves the changes that carry it; and
+// another tracker's item. A key that names no task, an id in a spelling no
+// row holds (resolved as a key would be), a key with no tracker on this
+// surface to resolve it, and `none`, which carries no item and no index
 // holds, are each refused before the code host is asked anything — `none`
 // before the tracker is either.
 //
 // Mutation: the listing passing `work` to the reader as named, unresolved →
-// the key reaches the reader as itself, red.
+// the key reaches the reader as itself, red. Mutation: an id sent through the
+// tracker's read again → the read counts, and the gone task's refusal, red.
 func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
 	t.Parallel()
-	book := taskBook{{ID: "t-9", Key: "ENG-9", Project: "ENG"}}
+	const (
+		id   = "3f1c2a9e-7b4d-5e60-8a1f-0c9d2e7b4a51" // as create_work_item mints one
+		gone = "9b0e4d2c-1a7f-5c38-b6e2-4f8a0d1c3e97" // an id whose task was purged
+	)
+	book := taskBook{{ID: id, Key: "ENG-9", Project: "ENG"}}
 	for _, c := range []struct {
 		name  string
 		work  string
@@ -459,11 +468,15 @@ func TestAListingNamesAWorkItemAsTheChangeWritesDo(t *testing.T) {
 		want  string // the work item the reader is asked for, "" for a refusal
 		reads int    // the tracker reads the call makes
 	}{
-		{name: "a Worklet key", work: "ENG-9", tasks: true, want: "native:t-9", reads: 1},
-		{name: "a Worklet id", work: "t-9", tasks: true, want: "native:t-9", reads: 1},
-		{name: "a Worklet key under its backend", work: "native:ENG-9", tasks: true, want: "native:t-9", reads: 1},
+		{name: "a Worklet key", work: "ENG-9", tasks: true, want: "native:" + id, reads: 1},
+		{name: "a Worklet key under its backend", work: "native:ENG-9", tasks: true, want: "native:" + id, reads: 1},
+		{name: "a Worklet id", work: id, tasks: true, want: "native:" + id},
+		{name: "a Worklet id under its backend", work: "native:" + id, tasks: true, want: "native:" + id},
+		{name: "a Worklet id with no tracker here", work: "native:" + id, want: "native:" + id},
+		{name: "the id of a task that is gone", work: "native:" + gone, tasks: true, want: "native:" + gone},
 		{name: "another tracker's identity", work: "jira:10042", tasks: true, want: "jira:10042"},
 		{name: "a key no task has", work: "ENG-404", tasks: true, reads: 1},
+		{name: "an id no row spells", work: strings.ToUpper(id), tasks: true, reads: 1},
 		{name: "a key with no tracker to resolve it", work: "ENG-9"},
 		{name: "none", work: "none", tasks: true},
 	} {

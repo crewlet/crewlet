@@ -61,6 +61,7 @@ func Required(re *regexp.Regexp) Prefilter {
 		}
 		return 0
 	})
+	need = unimplied(need)
 	var p Prefilter
 	for _, set := range need {
 		var c clause
@@ -511,6 +512,47 @@ func better(a, b []piece) bool {
 		return la > lb
 	}
 	return len(a) < len(b)
+}
+
+// unimplied is need without each clause another one implies: a clause whose
+// every substring, folded or not, is one of a second clause's is satisfied by
+// every text that satisfies it, so the conjunction admits the same texts with
+// the second dropped, and checking that one on every text a scan admits buys
+// nothing. Of two alike, the first stands, so the order [better] put them in
+// holds. Every clause dropped is implied by one kept: the relation is a
+// strict order over a finite list, so each dropped clause has a kept one
+// beneath it.
+//
+// WHY IT IS NEEDED: syntax.Simplify writes a part repeated n times as n
+// copies of it, and [concat] keeps every child's clauses, so (foo.*){100} was
+// a hundred clauses of foo and foo.*(foo|bar) kept the wider second clause.
+// Two clauses that differ only in how they compare (foo, and (?i)foo) both
+// stay: the plain one implies the folded one, but pieces are compared as they
+// are, and an index that lowers both reads them as one (codeindex's own
+// unimplied).
+func unimplied(need [][]piece) [][]piece {
+	within := func(a, b []piece) bool {
+		for _, p := range a {
+			if !slices.Contains(b, p) {
+				return false
+			}
+		}
+		return true
+	}
+	out := make([][]piece, 0, len(need))
+	for i, set := range need {
+		implied := false
+		for j, other := range need {
+			if j != i && within(other, set) && (j < i || !within(set, other)) {
+				implied = true
+				break
+			}
+		}
+		if !implied {
+			out = append(out, set)
+		}
+	}
+	return out
 }
 
 func shortest(set []piece) int {

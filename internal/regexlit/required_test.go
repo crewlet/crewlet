@@ -91,6 +91,34 @@ func sameClauses(got, want [][]string) bool {
 	return slices.Equal(norm(got), norm(want))
 }
 
+// A CLAUSE ANOTHER ONE IMPLIES IS NOT KEPT. Every text the narrower clause
+// admits, the wider one admits too, so the conjunction admits the same texts
+// without the wider one, and a scan checking it on every line it admits buys
+// nothing. syntax.Simplify writes a repeated part as that many copies of it,
+// so (foo.*){100} was a hundred clauses of foo, each checked on every line a
+// code search admitted. Two clauses that merely overlap both stay, and so do
+// two that differ only in how they compare, which an index lowering both
+// reads as one (codeindex's unimplied).
+//
+// Mutation: keep every clause again (Required not calling unimplied), and the
+// repeated and the superset rows fail; drop a clause another one merely
+// overlaps, and the overlapping row fails.
+func TestRequiredKeepsNoClauseAnotherImplies(t *testing.T) {
+	t.Parallel()
+	for pattern, want := range map[string][][]string{
+		`(foo.*){100}`:         {{"foo"}},
+		`foo.*foo`:             {{"foo"}},
+		`foo.*(foo|bar)`:       {{"foo"}},
+		`(foo|bar).*foo`:       {{"foo"}},
+		`(foo|bar).*(bar|baz)`: {{"bar", "foo"}, {"bar", "baz"}},
+		`foo.*(?i:foo)`:        {{"foo"}, {"foo"}},
+	} {
+		if got := Required(regexp.MustCompile(pattern)).Clauses(); !sameClauses(got, want) {
+			t.Errorf("Required(%s) = %q, want %q", pattern, got, want)
+		}
+	}
+}
+
 // NOTHING A PATTERN CAN MATCH IS EVER SKIPPED.
 //
 // The argument for soundness is in the package doc, rule by rule; this is

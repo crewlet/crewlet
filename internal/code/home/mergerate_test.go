@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE QUEUE PRICES ITS MERGE RATE AT THE ROUNDS IT TIMED (M5-D28, ADR-0015):
@@ -178,4 +179,124 @@ type rateHalf struct {
 func merged(r statelog.Reading) rateHalf {
 	return rateHalf{r.CodeMergeRateOver, r.CodeMergeRateOverAsked, r.CodeMergeRateOverCapacity,
 		r.CodeMergeRateOverTarget, r.CodeMergeRateOverRound, r.CodeMergeRateWindow}
+}
+
+// THE QUEUE COUNTS ITS ROUNDS, ITS LANDINGS AND ITS EJECTIONS (M5 §2.10):
+// what an operator reads of a queue before code_merge_rate_over_capacity
+// fires is the home's own instruments, each recorded where the round it
+// counts ends —
+//
+//   - a train of two landed green, ten minutes after it was built: two
+//     changes landed, one round `landed`, timed at ten minutes;
+//   - a train of two whose tip failed, bisected to its first entry: that
+//     entry ejected `check_failed`, one round `bisected`;
+//   - the train built of what was left, given up under a person's push:
+//     one round `abandoned`, counted once although the turn after builds
+//     again;
+//   - the train rebuilt on the pushed tip landed by a land answered PENDING
+//     — durable, every node applies it — while another change waits: its
+//     change counted landed and its round `landed` where it was appended,
+//     never read as abandoned by the turn after.
+//
+// Mutation: drop the landed count → no change landed, red; time a round from
+// the land rather than its build → not ten minutes, red; drop the ejected
+// count → no check_failed, red; never count a replaced train abandoned → no
+// abandoned round, red; count only a land answered applied → the pending
+// one's change uncounted and its train abandoned, red.
+func TestTheQueueCountsItsRoundsLandingsAndEjections(t *testing.T) {
+	t.Parallel()
+	c := &clock{now: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)}
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := newQueueRows(oid("a"), 1, 2)
+	l, err := home.New(home.Options{Chart: noChart,
+		Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
+		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
+		Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now, Metrics: rec})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rounds := func(outcome string) uint64 {
+		return counted(rec, metrics.CodeQueueRounds, metrics.Attrs{"outcome": outcome})
+	}
+
+	rows.enqueue(t, 2)
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 {
+		t.Fatalf("the premise: two changes at depth 1 and batch 2 built %d candidates, want 1", len(train))
+	}
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	c.advance(10 * time.Minute)
+	turn(t, l, rows)
+	if got := counted(rec, metrics.CodeQueueLanded, nil); got != 2 {
+		t.Fatalf("the green train counted %d changes landed, want 2", got)
+	}
+	if n, sum := observed(rec, metrics.CodeQueueRoundDuration, nil); n != 1 ||
+		sum != float64(10*time.Minute/time.Millisecond) {
+		t.Fatalf("the landed round was timed %d times at %v ms in all, want once at ten minutes", n, sum)
+	}
+	if got := rounds("landed"); got != 1 {
+		t.Fatalf("the green train counted %d rounds landed, want 1", got)
+	}
+
+	entries := rows.enqueue(t, 2)
+	turn(t, l, rows)
+	train, _ = rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 2 {
+		t.Fatalf("the premise: the second train is %+v, want one candidate of two", train)
+	}
+	commits := train[0].Commits
+	rows.ended(commits[1].Commit, "unit", code.CheckStateFailed)
+	turn(t, l, rows)
+	rows.ended(commits[0].Commit, "unit", code.CheckStateFailed)
+	turn(t, l, rows)
+	if got := counted(rec, metrics.CodeQueueEjected,
+		metrics.Attrs{"reason": string(code.EjectCheckFailed)}); got != 1 {
+		t.Fatalf("the bisect counted %d ejections check_failed, want its culprit's 1", got)
+	}
+	if got := rounds("bisected"); got != 1 {
+		t.Fatalf("the red train counted %d rounds bisected, want 1", got)
+	}
+	if _, live := rows.snapshot(); len(live) != 1 || live[0].EntryID != entries[1].EntryID {
+		t.Fatalf("the premise: %+v are live after the bisect, want the second entry alone", live)
+	}
+
+	turn(t, l, rows)
+	rows.mu.Lock()
+	rows.tip = oid("d")
+	rows.mu.Unlock()
+	turn(t, l, rows)
+	turn(t, l, rows)
+	if got := rounds("abandoned"); got != 1 {
+		t.Fatalf("a train given up under a person's push counted %d rounds abandoned, want 1", got)
+	}
+	if got := rounds("landed") + rounds("bisected") + rounds("ejected"); got != 2 {
+		t.Fatalf("the other rounds count %d after the push, want the 2 before it", got)
+	}
+
+	rows.mu.Lock()
+	rows.pending = true
+	rows.mu.Unlock()
+	rows.enqueue(t, 1)
+	train, _ = rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 1 || train[0].Commits[0].EntryID != entries[1].EntryID {
+		t.Fatalf("the premise: the train on the pushed tip is %+v, want the second entry's alone", train)
+	}
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	turn(t, l, rows)
+	turn(t, l, rows)
+	if got := counted(rec, metrics.CodeQueueLanded, nil); got != 3 {
+		t.Fatalf("a landing answered pending counted %d changes landed in all, want its 1 beside the 2 before",
+			got)
+	}
+	if got := rounds("landed"); got != 2 {
+		t.Fatalf("a landing answered pending counted %d rounds landed in all, want 2", got)
+	}
+	if got := rounds("abandoned"); got != 1 {
+		t.Fatalf("a train landed by a landing answered pending counted %d rounds abandoned in all, want the "+
+			"push's 1", got)
+	}
 }

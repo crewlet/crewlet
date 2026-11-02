@@ -30,13 +30,19 @@ import (
 // private artifact asks it as a colleague.
 type turnRequesters struct{ engine *Engine }
 
+// errNoSuchSeat is a requester's handle the organisation holds no seat for:
+// a definitive answer, which a caller asking on somebody's behalf long after
+// they asked (the merge queue's close, codequeue.go) tells apart from a read
+// that failed.
+var errNoSuchSeat = errors.New("engine: the organisation holds no seat")
+
 func (r turnRequesters) Requester(ctx context.Context, handle string) (iam.Principal, error) {
 	seat, found, err := SeatViewOf(r.engine).Seat(ctx, handle)
 	switch {
 	case err != nil:
 		return iam.Principal{}, err
 	case !found:
-		return iam.Principal{}, fmt.Errorf("engine: the organisation holds no seat %q", handle)
+		return iam.Principal{}, fmt.Errorf("%w %q", errNoSuchSeat, handle)
 	}
 	p := iam.Principal{Seat: seat.Handle, Position: seat.Unit, Stage: iam.StageActive,
 		Grants: slices.Clone(iam.Apps)}

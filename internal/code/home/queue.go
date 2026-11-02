@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // WorkerQueue is the merge queue's worker's name, as crewlet.code.home.passes
@@ -29,9 +31,32 @@ type Chains interface {
 // of a queued merge that asked it (M5-D27): the engine wires the company's
 // tracker, which decides the close as that principal, as it decides every
 // write of theirs. The queue never closes a work item on its own account.
+//
+// CloseWorkItem answers nil for an item closed, or finished already; a
+// [*NotClosed] for a close that will not be made however often it is asked,
+// which the home settles not_closed and names on the change; and any other
+// error for a close whose end is not known yet — the tracker unreachable,
+// its answer unknown — which leaves the close OWED on the entry's row
+// (code_queue.close_op), for the next turn on whichever home holds the
+// repository.
 type Tasks interface {
 	CloseWorkItem(ctx context.Context, c TaskClose) error
 }
+
+// NotClosed is a close [Tasks] will not make however often it is asked: the
+// item is a vendor's, which is closed where it lives; the enqueuer is bound
+// to no seat, has left the chart, or may no longer update it; the tracker
+// refuses the close for good (the item gone, or refusing to be set done). Why
+// is the sentence the change's authors and its enqueuer read beside `merged`
+// (code.CloseSettled.Detail), and Err the cause, for errors.Is.
+type NotClosed struct {
+	Why string
+	Err error
+}
+
+func (n *NotClosed) Error() string { return n.Why }
+
+func (n *NotClosed) Unwrap() error { return n.Err }
 
 // TaskClose is one landed change's work item to close: the step's operation
 // id — derived from its landing's, so the step asked again is the same write,
@@ -65,7 +90,10 @@ type TaskClose struct {
 //     to the last whose tip passed every required check with none failed
 //     before it — a candidate's tip holds every change before it, so its pass
 //     is the whole prefix's — each entry landed as its ENQUEUER, and step 2
-//     run for each that asked its work item closed (Tasks);
+//     run for each that asked its work item closed (Tasks), the close OWED
+//     on the entry's row from the landing's apply until a close_settled
+//     record says how it ended, so a later turn on any home makes it where
+//     this one could not ([queue.closeOwed]);
 //   - the train's FIRST candidate red: its batch BISECTED over its entries'
 //     own commits, each the batch's merge up to that entry — probed midway
 //     between the last commit known good (the train's base, the target's tip,
@@ -116,9 +144,12 @@ type queue struct {
 	// rate is the queue's merge rate, measured from each target's queue
 	// work and the rounds this node timed (mergerate.go).
 	rate mergeRate
-	node string
-	log  *slog.Logger
-	now  func() time.Time
+	// metrics is where its rounds, landings and ejections are counted
+	// (crewlet.code.queue.*); nil records nothing.
+	metrics *metrics.Recorder
+	node    string
+	log     *slog.Logger
+	now     func() time.Time
 }
 
 // AlarmReading fills the reading's merge-rate half from the queues this node
@@ -155,6 +186,13 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 // record nudges, reads them as the live train's and cancels only the rest.
 // Cancelled one turn early, such a run would be cut and queued again
 // (code.CheckReason.GivenUp), which costs its cell the run so far.
+//
+// The closes the first page answers OWED — landed entries whose work item is
+// not closed yet, by a landing answered pending, a home that stopped or
+// handed the repository on before its close, or a tracker that could not
+// answer (M5-D27) — are closed and settled last ([queue.closeOwed]), so a
+// close no turn could make is asked again by every turn after, on whichever
+// home, until it ends.
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := code.ReadQuery{Kind: code.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &code.QueueDueQuery{
 		RepoID: repoID, EnqueuedSince: w.now().Add(-code.MergeRateWindow)}}
@@ -163,6 +201,7 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 		failed    []error
 		met       []string
 		abandoned []code.AbandonedCheck
+		owed      []code.QueueWorkEntry
 		readAt    statelog.Position
 		built     bool
 	)
@@ -173,7 +212,7 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 				err))...)
 		}
 		if q.Cursor == "" {
-			abandoned, readAt = a.QueueAbandoned, a.Position
+			abandoned, owed, readAt = a.QueueAbandoned, a.QueueOwedCloses, a.Position
 		}
 		if a.DueQueue != nil {
 			met = append(met, a.DueQueue.TargetRef)
@@ -196,6 +235,9 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 			failed = append(failed, err)
 		}
 	}
+	if err := w.closeOwed(ctx, repoID, owed, readAt); err != nil {
+		failed = append(failed, err)
+	}
 	return errors.Join(append(failed, ctx.Err())...)
 }
 
@@ -204,7 +246,9 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo *defsMemo,
 	at statelog.Position) (bool, error) {
 
-	w.rate.measure(repoID, d, w.now())
+	if w.rate.measure(repoID, d, w.now()) {
+		w.round(roundAbandoned)
+	}
 	switch {
 	case len(d.Entries) == 0:
 		return false, nil
@@ -238,7 +282,7 @@ func (w *queue) shed(ctx context.Context, repoID string, d code.QueueDue, at sta
 	for i, e := range d.Entries {
 		ejected[i] = code.Ejection{EntryID: e.EntryID, Reason: code.EjectRepoMirrored}
 	}
-	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), ejected, at)
+	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), nil, ejected, at)
 }
 
 // BatchOf is how many entries one candidate of a target's train takes, of
@@ -327,7 +371,7 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		}
 	}
 	if len(ejected) > 0 {
-		if err = w.eject(ctx, repoID, about, ejected, at); err != nil {
+		if err = w.eject(ctx, repoID, about, nil, ejected, at); err != nil {
 			return false, err
 		}
 	}
@@ -358,7 +402,9 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	}
 	applied = res.Outcome == statelog.OutcomeApplied
 	if applied && res.Refusal == "" {
-		w.rate.built(repoID, d.TargetRef, train, w.now())
+		if w.rate.built(repoID, d.TargetRef, train, w.now()) {
+			w.round(roundAbandoned)
+		}
 	}
 	if res.Refusal != "" {
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "candidate",
@@ -448,7 +494,7 @@ func (w *queue) trainDefs(ctx context.Context, repoID string, d code.QueueDue, m
 				Checks: undefined})
 		}
 	}
-	return nil, w.eject(ctx, repoID, about, ejected, at)
+	return nil, w.eject(ctx, repoID, about, endOf(d, roundEjected), ejected, at)
 }
 
 // probe queues on commit of candidate c what s says it owes of the required
@@ -528,31 +574,124 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "land",
 			"refusal", res.Refusal, "detail", res.Detail, "ejecting", len(ejected))
 		if len(ejected) > 0 {
-			return w.eject(ctx, repoID, about, ejected, at)
+			return w.eject(ctx, repoID, about, endOf(d, roundEjected), ejected, at)
 		}
 		return nil
-	case res.Outcome != statelog.OutcomeApplied:
-		// NOT YET APPLIED HERE: its changes are not merged on this node's
-		// rows, so no work item of theirs is closed on its word.
-		w.log.Warn("code_queue_close_not_run", "repo", repoID, "about", about, "outcome", res.Outcome,
-			"detail", "the landing is appended and not applied here, so its work items are not closed")
+	case res.Outcome == statelog.OutcomeUnknown:
+		// NOTHING ESTABLISHED HERE: the landing may be on no log at all, so
+		// it is neither counted nor timed nor closed on its word; the next
+		// turn reads its entries landed, their closes owed on their rows,
+		// or its train still testing them.
+		w.log.Debug("code_queue_close_owed", "repo", repoID, "about", about, "outcome", res.Outcome,
+			"detail", "nothing is known here of the landing, so its work items are closed by the turn "+
+				"that reads it applied")
 		return nil
 	}
-	w.rate.landed(repoID, d.TargetRef, l.Train, w.now())
-	var failed []error
+	// DURABLE, applied here or pending — every node applies a pending
+	// record — so the round ENDED at the landing's append, and is counted
+	// and timed there: a landing answered pending and left uncounted would
+	// read as its train abandoned on the next turn, its changes never
+	// counted landed.
+	took, timed := w.rate.landed(repoID, d.TargetRef, l.Train, w.now())
+	w.count(metrics.CodeQueueLanded, uint64(len(l.Entries)), nil)
+	w.round(roundLanded)
+	if timed && w.metrics != nil {
+		w.metrics.Observe(metrics.CodeQueueRoundDuration, took, nil)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		// NOT YET APPLIED HERE: its changes are not merged on this node's
+		// rows, so no work item of theirs is closed on its word. The
+		// landing's apply leaves each close it owes on its entry's row,
+		// which the next turn's read answers ([queue.closeOwed]).
+		w.log.Debug("code_queue_close_owed", "repo", repoID, "about", about, "outcome", res.Outcome,
+			"detail", "the landing is appended and not applied here, so its work items are closed by the "+
+				"turn that reads it applied")
+		return nil
+	}
+	// THE CLOSES IT OWES AT ONCE, as the rows the landing wrote owe them —
+	// the same operations and the same settling a later turn's read would
+	// give them, so whichever runs first, the other is answered done.
+	var owed []code.QueueWorkEntry
 	for _, e := range landed {
-		if !e.CloseTask || e.WorkItem == nil {
-			continue
+		if e.CloseTask && e.WorkItem != nil {
+			e.CloseOp = code.CloseWorkItemOpID(opID, e.EntryID)
+			owed = append(owed, e)
 		}
-		if err := w.tasks.CloseWorkItem(ctx, TaskClose{OpID: statelog.StepOpID(opID, "close-work-item",
-			e.EntryID), RepoID: repoID, Change: e.Change, WorkItem: *e.WorkItem, As: e.EnqueuedBy}); err != nil {
-			w.log.Warn("code_queue_close_failed", "repo", repoID, "about", about, "change", e.Change.Number,
-				"work_item", e.WorkItem.ID, "err", err)
-			failed = append(failed, fmt.Errorf("home: close the work item of change %d landed on %s: %w",
-				e.Change.Number, d.TargetRef, err))
+	}
+	return w.closeOwed(ctx, repoID, owed, res.Position)
+}
+
+// closeOwed closes the work item each of owed — a landed entry still owing
+// its close (code.ReadAnswer.QueueOwedCloses) — asked closed, AS ITS
+// ENQUEUER under the operation its landing named (code.CloseWorkItemOpID,
+// so a close a home asked before it stopped is the same tracker write
+// asked again, which the tracker's ledger answers once), and settles each
+// whose close ENDED with a close_settled record: closed, or not_closed with
+// the sentence its change's authors and enqueuer read. A close whose end is
+// not known yet is left owed, for the next turn on whichever home holds the
+// repository, and is this turn's failure.
+func (w *queue) closeOwed(ctx context.Context, repoID string, owed []code.QueueWorkEntry,
+	at statelog.Position) error {
+
+	var failed []error
+	for _, e := range owed {
+		if ctx.Err() != nil {
+			break
+		}
+		outcome, why := code.CloseClosed, ""
+		if e.WorkItem == nil {
+			// THE CHANGE NAMES NO WORK ITEM ANY MORE, or the repository
+			// holds the change no more: nothing is left to close.
+			outcome, why = code.CloseNotClosed, "the change no longer names a work item to close"
+		} else {
+			err := w.tasks.CloseWorkItem(ctx, TaskClose{OpID: e.CloseOp, RepoID: repoID, Change: e.Change,
+				WorkItem: *e.WorkItem, As: e.EnqueuedBy})
+			var refused *NotClosed
+			switch {
+			case errors.As(err, &refused):
+				outcome, why = code.CloseNotClosed, refused.Why
+			case err != nil:
+				w.log.Warn("code_queue_close_failed", "repo", repoID, "change", e.Change.Number,
+					"work_item", e.WorkItem.ID, "err", err,
+					"detail", "the close stays owed, and the next turn asks it again")
+				failed = append(failed, fmt.Errorf("home: close the work item of change %d: %w",
+					e.Change.Number, err))
+				continue
+			}
+		}
+		if err := w.settle(ctx, repoID, e, outcome, why, at); err != nil {
+			failed = append(failed, err)
 		}
 	}
 	return errors.Join(failed...)
+}
+
+// settle records how entry e's owed close ended — the record that takes it
+// out of every home's queue work. A settle refused stale is one another
+// home's reached first; one appended and not yet applied is applied by the
+// committer, and a turn that reads the close still owed meanwhile asks the
+// same close again, which the tracker answers done.
+func (w *queue) settle(ctx context.Context, repoID string, e code.QueueWorkEntry, outcome code.CloseOutcome,
+	why string, at statelog.Position) error {
+
+	s := code.CloseSettled{RepoID: repoID, EntryID: e.EntryID, Outcome: outcome,
+		Detail: textcut.Within(why, code.MaxCloseDetail)}
+	// A FRESH OPERATION, never one derived from the landing's: a settle is
+	// guarded by the row it clears, so asked twice the second is refused
+	// stale, and an id minted at the landing's instant would be one the
+	// log's ledger cannot vouch for once its retention passes it.
+	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: statelog.NewOpID(w.now(), ""), Seen: at,
+		CloseSettled: &s})
+	switch {
+	case err != nil:
+		return fmt.Errorf("home: settle the close of change %d's work item: %w", e.Change.Number, err)
+	case res.Refusal != "":
+		w.log.Debug("code_queue_record_refused", "repo", repoID, "write", "close_settled",
+			"entry", e.EntryID, "refusal", res.Refusal, "detail", res.Detail)
+	case outcome == code.CloseNotClosed:
+		w.log.Info("code_queue_close_not_made", "repo", repoID, "change", e.Change.Number, "detail", s.Detail)
+	}
+	return nil
 }
 
 // bisect finds which entry of d's first candidate the checks named failed
@@ -596,7 +735,7 @@ func (w *queue) bisect(ctx context.Context, repoID string, d code.QueueDue, fail
 			}
 		}
 		return w.eject(ctx, repoID, fmt.Sprintf("target %s candidate %d at %s", d.TargetRef, c.Ordinal,
-			short(culprit.Commit)), []code.Ejection{x}, at)
+			short(culprit.Commit)), endOf(d, roundBisected), []code.Ejection{x}, at)
 	}
 	mid := c.Commits[(good+red+1)/2]
 	s := commitStates(mid, failed)
@@ -613,8 +752,11 @@ func (w *queue) bisect(ctx context.Context, repoID string, d code.QueueDue, fail
 // eject asks the repository's committer to put entries out of their queue —
 // which abandons the train each was in — about what it is for: a refusal is
 // the rows answering, read again next turn, and only an error of the write
-// itself fails the turn.
-func (w *queue) eject(ctx context.Context, repoID, about string, entries []code.Ejection,
+// itself fails the turn. ends, where set, is the train the ejection ENDS and
+// how ([endOf]): counted once its first record is appended, and its round
+// left untimed ([mergeRate.ended]); nil for entries no train of the target's
+// was testing — a chain's skipped merges, a pull mirror's entries.
+func (w *queue) eject(ctx context.Context, repoID, about string, ends *trainEnd, entries []code.Ejection,
 	at statelog.Position) error {
 
 	for start := 0; start < len(entries); start += code.MaxLandEntries {
@@ -627,9 +769,57 @@ func (w *queue) eject(ctx context.Context, repoID, about string, entries []code.
 		case res.Refusal != "":
 			w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "eject",
 				"refusal", res.Refusal, "detail", res.Detail)
+			continue
+		}
+		// APPENDED, applied here or not yet: the log applies it in order,
+		// and the next turn reads its entries gone.
+		for _, x := range part {
+			w.count(metrics.CodeQueueEjected, 1, metrics.Attrs{"reason": string(x.Reason)})
+		}
+		if ends != nil {
+			w.rate.ended(repoID, ends.target, ends.train)
+			w.round(ends.outcome)
+			ends = nil
 		}
 	}
 	return nil
+}
+
+// How a train of a target's queue ended, as crewlet.code.queue.rounds
+// counts it.
+const (
+	roundLanded    = "landed"
+	roundBisected  = "bisected"
+	roundEjected   = "ejected"
+	roundAbandoned = "abandoned"
+)
+
+// trainEnd is the train an eject ends, and how.
+type trainEnd struct {
+	target, train, outcome string
+}
+
+// endOf is the end of d's train an eject of its entries makes, outcome being
+// how.
+func endOf(d code.QueueDue, outcome string) *trainEnd {
+	e := &trainEnd{target: d.TargetRef, outcome: outcome}
+	if len(d.Train) > 0 {
+		e.train = d.Train[0].Train
+	}
+	return e
+}
+
+// round counts a train of a target's queue ended, outcome being how.
+func (w *queue) round(outcome string) {
+	w.count(metrics.CodeQueueRounds, 1, metrics.Attrs{"outcome": outcome})
+}
+
+// count adds n to the counter name under attrs, where the node records
+// metrics at all.
+func (w *queue) count(name string, n uint64, attrs metrics.Attrs) {
+	if w.metrics != nil {
+		w.metrics.Add(name, n, attrs)
+	}
 }
 
 // cancelAbandoned ends each of attempts — an attempt its queue queued, of a

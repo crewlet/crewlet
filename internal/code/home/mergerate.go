@@ -103,34 +103,55 @@ func (r *mergeRate) target(repoID, target string) *rateTarget {
 }
 
 // built records train built onto repoID's target at at: the round it
-// begins.
-func (r *mergeRate) built(repoID, target, train string, at time.Time) {
+// begins. abandoned is an earlier train of this node's it replaces, which
+// ended without landing — a target moved under it, a train its rows still
+// held that a new one gives up.
+func (r *mergeRate) built(repoID, target, train string, at time.Time) (abandoned bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t := r.target(repoID, target)
+	abandoned = t.train != "" && t.train != train
 	t.train, t.built = train, at
+	return abandoned
 }
 
 // landed records train's green prefix landed on repoID's target at at: the
-// round it ends, timed where this node built it.
-func (r *mergeRate) landed(repoID, target, train string, at time.Time) {
+// round it ends, timed where this node built it — took, and timed true, for
+// a train this node built; nothing for one it did not.
+func (r *mergeRate) landed(repoID, target, train string, at time.Time) (took time.Duration, timed bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t, ok := r.targets[repoID][target]
 	if !ok || t.train != train || t.train == "" {
-		return
+		return 0, false
 	}
-	t.rounds = append(t.rounds, timedRound{ended: at, took: at.Sub(t.built)})
+	took = at.Sub(t.built)
+	t.rounds = append(t.rounds, timedRound{ended: at, took: took})
 	t.train = ""
+	return took, true
+}
+
+// ended records train ended on repoID's target WITHOUT LANDING, by an eject
+// the worker itself appended — a bisect's culprit, or entries its landing
+// would not land: no round is timed (the queue landed nothing in it), and
+// [mergeRate.measure] does not count it again as abandoned.
+func (r *mergeRate) ended(repoID, target, train string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.targets[repoID][target]; ok && t.train == train {
+		t.train = ""
+	}
 }
 
 // measure takes d's merge rate at now, from repoID's queue work d: its
 // enqueues within the window against its capacity at the mean round this
 // node timed — none where it has timed no round, and none for a target whose
-// gate requires no check, which has no queue to price.
-func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
+// gate requires no check, which has no queue to price. abandoned is a train
+// this node built that d no longer holds and nothing this node appended
+// ended ([mergeRate.ended]): a round that ended without a landing.
+func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) (abandoned bool) {
 	if len(d.Required) == 0 {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -138,9 +159,9 @@ func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
 	from := now.Add(-code.MergeRateWindow)
 	t.rounds = slices.DeleteFunc(t.rounds, func(x timedRound) bool { return x.ended.Before(from) })
 	if t.train != "" && (len(d.Train) == 0 || d.Train[0].Train != t.train) {
-		// ABANDONED, never landed: an ejection or a moved tip ended the
-		// train, and the next one built begins the next round.
-		t.train = ""
+		// ABANDONED, never landed: a moved tip, a dequeue or a newer train
+		// ended it, and the next one built begins the next round.
+		t.train, abandoned = "", true
 	}
 	var sum time.Duration
 	for _, x := range t.rounds {
@@ -154,7 +175,7 @@ func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
 	}
 	if n == 0 {
 		t.at = time.Time{}
-		return
+		return abandoned
 	}
 	repo := d.Repo
 	if repo == "" {
@@ -165,6 +186,7 @@ func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
 	t.asked = d.Enqueued
 	t.capacity = config.LandingCapacity(d.Depth, d.Batch, t.round, code.MergeRateWindow)
 	t.at = now
+	return abandoned
 }
 
 // seen drops every target of repoID a turn that read all of its queue work

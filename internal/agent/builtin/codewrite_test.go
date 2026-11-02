@@ -1183,31 +1183,41 @@ func TestTheWriteToolsFollowARename(t *testing.T) {
 
 // ---- refusals ---------------------------------------------------------------- //
 
-// EVERY REFUSAL OF A WRITE IS IN A CLASS EVERY SURFACE RENDERS, and the class
-// says what it tells its reader: a rule of the repository forbidden, a change
-// to make another way invalid, a head that moved stale, a repository gone not
-// found, what waiting clears unavailable. Every code the code host answers a
-// push with is classified, so one added later fails here until it is — the
-// six no engine write can be answered (an --atomic push, a tag moved, more
-// changes than a record holds, a commit claiming the engine's committer, which
-// only a coding box's pack is read for, and the two outcomes) excepted.
+// EVERY REFUSAL OF A WRITE IS IN A CLASS EVERY SURFACE RENDERS, by internal/mcp's
+// one rule: a rule refusing the caller forbidden, the repository in a state
+// that refuses the push until somebody changes it (archived, a pull mirror)
+// conflict, the repository at a limit on what it keeps quota_exceeded, a push
+// to make another way invalid, a ref whose path another holds exists, a head
+// that moved stale, a repository gone not found, what waiting clears
+// unavailable. Every code the code host answers a push with is classified, so
+// one added later fails here until it is — the six no engine write can be
+// answered (an --atomic push, a tag moved, more changes than a record holds, a
+// commit claiming the engine's committer, which only a coding box's pack is
+// read for, and the two outcomes) excepted. The lifecycle's refusals follow
+// the same rule.
 //
 // Mutation: drop push_quota from pushClass → it is answered the engine's own
-// fault, red.
+// fault, red; answer repo_archived forbidden again, as a rule of the
+// repository → red.
 func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	unreachable := []code.Refusal{code.RefusalAtomic, code.RefusalTagMoved, code.RefusalTooManyChanges,
 		code.RefusalForgedCommitter, code.RefusalUnknown, code.RefusalPending}
 	want := map[code.Refusal]tools.Refusal{
 		code.RefusalStale: tools.RefusalStaleVersion, code.RefusalPushQuota: tools.RefusalForbidden,
-		code.RefusalRepoArchived: tools.RefusalForbidden, code.RefusalReservedRef: tools.RefusalInvalid,
+		code.RefusalRepoArchived: tools.RefusalConflict, code.RefusalReservedRef: tools.RefusalInvalid,
 		code.RefusalBadRef: tools.RefusalInvalid, code.RefusalPackTooLarge: tools.RefusalInvalid,
+		code.RefusalBlobTooLarge: tools.RefusalInvalid, code.RefusalRefConflict: tools.RefusalExists,
+		code.RefusalRepoSize: tools.RefusalQuotaExceeded, code.RefusalRepoRefs: tools.RefusalQuotaExceeded,
 		code.RefusalRepoDeleted: tools.RefusalNotFound, code.RefusalBusy: tools.RefusalUnavailable,
 		code.RefusalUnavailable: tools.RefusalUnavailable, code.RefusalNotApplied: tools.RefusalUnavailable,
 		code.RefusalStoreFull: tools.RefusalStoreFull, code.RefusalNotPermitted: tools.RefusalForbidden,
-		// A PULL MIRROR is the repository's rule, as an archive is; an
-		// IMPORT clears with waiting, as a busy repository does.
-		code.RefusalRepoMirrored: tools.RefusalForbidden, code.RefusalRepoImporting: tools.RefusalUnavailable,
+		code.RefusalProtectedForce: tools.RefusalForbidden, code.RefusalProtectedDelete: tools.RefusalForbidden,
+		code.RefusalProtectedDirect: tools.RefusalForbidden,
+		// A PULL MIRROR is the repository's state, as an archive is, which a
+		// person changes; an IMPORT clears with waiting, as a busy repository
+		// does.
+		code.RefusalRepoMirrored: tools.RefusalConflict, code.RefusalRepoImporting: tools.RefusalUnavailable,
 	}
 	for _, refusal := range code.Refusals() {
 		writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
@@ -1247,8 +1257,8 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 	}
 	lifeWant := map[code.LifecycleRefusal]tools.Refusal{
 		code.LifecycleNotPermitted: tools.RefusalForbidden, code.LifecycleConfigManaged: tools.RefusalForbidden,
-		code.LifecycleNameTaken: tools.RefusalExists, code.LifecycleScratchLimit: tools.RefusalForbidden,
-		code.LifecycleRepoLimit: tools.RefusalForbidden, code.LifecycleRepoDeleted: tools.RefusalNotFound,
+		code.LifecycleNameTaken: tools.RefusalExists, code.LifecycleScratchLimit: tools.RefusalQuotaExceeded,
+		code.LifecycleRepoLimit: tools.RefusalQuotaExceeded, code.LifecycleRepoDeleted: tools.RefusalNotFound,
 		code.LifecycleStale: tools.RefusalStaleVersion, code.LifecycleRefDeleted: tools.RefusalNotFound,
 	}
 	for _, refusal := range code.LifecycleRefusals() {

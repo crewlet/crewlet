@@ -66,6 +66,9 @@ import (
 //     theirs; and, the check passed, the train's tested prefix landed in one
 //     land record, routed to the change's authors, whom it tells the change
 //     merged, its source's deletion stamped by the decide;
+//   - close_settled: a queued change's owed close settled closed by its
+//     home once the enqueuer's close of its work item landed (M5-D27),
+//     carrying no routing;
 //   - check_dispatched: a head's dispatch as its home records it, naming
 //     the head and carrying the attempts it queues — the reference
 //     company's three checks, each its definition carried and required by
@@ -118,6 +121,7 @@ var changeRecordBytes = map[string]int64{
 	"candidate":              1_290,
 	"candidate_check_queued": 1_010,
 	"land":                   1_530,
+	"close_settled":          680,
 	"check_dispatched":       2_290,
 	"check_started":          780,
 	"check_named":            840,
@@ -358,6 +362,16 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	took("land", func() {
 		res, err := c.ProposeQueue(t.Context(), landingOf(queue, train.Candidate.Train, oidOf("A"),
 			code.LandEntry{EntryID: enqueued.Enqueue.EntryID, ChangeID: queued, Commit: oidOf("M")}))
+		requireRecorded(t, res, err)
+	})
+	// A QUEUED CHANGE'S CLOSE SETTLED: the record its home appends once the
+	// enqueuer's close of the change's work item has landed, carrying no
+	// routing, since a closed item tells nobody.
+	owing, _, owingEntry, _ := landedOwingClose(t, n, c, w, "owing", open.Open.WorkItem)
+	took("close_settled", func() {
+		res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
+			p.CloseSettled = &code.CloseSettled{RepoID: owing, EntryID: owingEntry, Outcome: code.CloseClosed}
+		}))
 		requireRecorded(t, res, err)
 	})
 

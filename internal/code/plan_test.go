@@ -858,6 +858,18 @@ func registeredStatements() map[string]statement {
 			[]string{"code_checks_train_idx (repo_id=?)", untestedKey, dequeuedKey}},
 		"repositories holding a given-up train's checks": {abandonedReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_checks_train_idx (repo_id>?)", untestedKey, repoKey + " (id=?)"}},
+		// AN OWED CLOSE (queuework.go, decide_queue.go): a repository's landed
+		// entries owing their work item's close, and the repositories holding
+		// one, by the index partial on exactly those; an entry's owed close
+		// read and settled by its key.
+		"a repository's owed closes": {owedClosesSQL, []any{"repo-1", MaxOwedCloses},
+			[]string{"code_queue_close_owed_idx (repo_id=?)"}},
+		"repositories owing a close": {closeOwedReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_queue_close_owed_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"an entry's owed close": {owedEntrySQL, []any{"repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"settle an entry's close": {settleCloseSQL, []any{"repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"a target's green": {greenSQL, []any{"repo-1", "refs/heads/main"},

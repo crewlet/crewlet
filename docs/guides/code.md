@@ -496,7 +496,13 @@ the same operation, so the same call made again is the same close, and the
 tracker's write, so it is decided as `update_work_item` is: a person who does
 not use the tracker has the change merged and the item left as it was. A
 close that fails or is refused leaves the change merged and says why
-(`merged; ENG-42 not closed: …`), and a queued change's landing closes it. `override_reason` is a
+(`merged; ENG-42 not closed: …`). A queued change's landing closes it as
+whoever queued it, once the landing has applied: the close stays owed on the
+queue's rows until it is made, so a home that stops or a tracker that does not
+answer delays it to the next turn rather than losing it, and a close that will
+never be made (a vendor's item, a queuer who may no longer update it, an item
+Worklet no longer holds or will not set done) is told
+to the change's authors and the queuer under `merged`. `override_reason` is a
 person's reason to merge past the gate, merged directly and recorded on the
 change; a seat cannot override.
 

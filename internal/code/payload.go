@@ -2041,6 +2041,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Green](rec)
 	case kind == KindRepo && op == OpBroken:
 		return decodePayload[Broken](rec)
+	case kind == KindRepo && op == OpCloseSettled:
+		return decodePayload[CloseSettled](rec)
 	case kind == KindRepo && op == OpQueueSweep:
 		return decodePayload[QueueSweep](rec)
 	case kind == KindChange && op == OpReviewers:

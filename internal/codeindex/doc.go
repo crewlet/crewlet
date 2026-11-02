@@ -80,8 +80,9 @@
 // one clause or of several, is decoded once for them all, as far as the
 // furthest blob one of them needs; and a list one place reads, it reads
 // alone, into nothing, as far as what it keeps reaches. A clause another
-// implies — a part a pattern repeats is a clause each time to
-// regexlit.Required — is not looked up at all.
+// implies — regexlit.Required drops its own, but two that differ only in case
+// are two to it and one to an index that lowers them both — is not looked up
+// at all.
 //
 // Candidates are CONFIRMED with Go's regexp, line by line, and only on a line
 // that holds what every match needs (Plan.Confirm): an answer is RE2's

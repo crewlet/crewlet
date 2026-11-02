@@ -311,7 +311,7 @@ func New(o Options) (*Loop, error) {
 		metrics: o.Metrics, log: l.log, now: l.now, rechecks: newRecheckBudget()}
 	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}
 	l.merges = &queue{estate: o.Estate, chains: o.Chains, tasks: o.Tasks, checks: l.checks, node: o.NodeID,
-		log: l.log, now: l.now}
+		metrics: o.Metrics, log: l.log, now: l.now}
 	l.workers = []Worker{l.changes, l.checks, l.merges}
 	l.changes.factsRecorded = func(repoID string, at statelog.Position) { l.follow(l.checks, repoID, at) }
 	return l, nil

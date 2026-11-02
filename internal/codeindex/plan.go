@@ -307,10 +307,10 @@ func indexable(terms []regexlit.Term) (clause, bool) {
 // same without it, and a lookup reads none of its lists: each literal of the
 // other, as the index holds it, is one of its own, and it admits an escape
 // where the other does. Of two alike, the first stays. regexlit.Required
-// requires a part once for every time a pattern repeats it — (foo.*){100}
-// is a hundred clauses of foo, each of which would read foo's lists and hold
-// their every blob — and two clauses whose literals differ only in case are
-// one to an index that lowers them both.
+// keeps no clause another of its own implies, a part a pattern repeats among
+// them, but it compares substrings as they are: two clauses whose literals
+// differ only in case are two to it and one to an index that lowers them
+// both, and each would read the same lists and hold their every blob.
 func unimplied(index []clause) []clause {
 	texts := make([]map[string]bool, len(index))
 	for i, c := range index {

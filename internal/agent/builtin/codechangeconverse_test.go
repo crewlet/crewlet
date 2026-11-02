@@ -198,13 +198,15 @@ func TestAReviewNamesTheFindingsItCarries(t *testing.T) {
 }
 
 // EVERY CONVERSATION REFUSAL IS IN AN EXISTING CLASS: a rule of the change
-// refusing the caller forbidden, a revision the node has not reached stale, a
-// write only a live change takes conflict, what is gone not found, an ask past
-// its bounds invalid, and what waiting clears unavailable — each with the
-// decide's own sentence — and superseded, the home's own refusal, which no
-// caller is ever answered, the engine's fault.
+// refusing the caller forbidden, a revision the node has not reached stale,
+// the change or its repository in a state that refuses the write until
+// somebody changes it (closed, merged, archived) conflict, what is gone not
+// found, an ask past its bounds invalid, and what waiting clears unavailable —
+// each with the decide's own sentence — and superseded, the home's own
+// refusal, which no caller is ever answered, the engine's fault.
 //
-// Mutation: drop not_raiser from conversationClass → red.
+// Mutation: drop not_raiser from conversationClass → red; answer repo_archived
+// forbidden again → red.
 func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	want := map[code.ConversationRefusal]tools.Refusal{
@@ -213,6 +215,7 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 		code.ConversationRefusalNotAuthor:       tools.RefusalForbidden,
 		code.ConversationRefusalUnknownRevision: tools.RefusalStaleVersion,
 		code.ConversationRefusalChangeClosed:    tools.RefusalConflict,
+		code.ConversationRefusalRepoArchived:    tools.RefusalConflict,
 		code.ConversationRefusalFindingGone:     tools.RefusalNotFound,
 		code.ConversationRefusalThreadGone:      tools.RefusalNotFound,
 		code.ConversationRefusalNoReviewer:      tools.RefusalInvalid,

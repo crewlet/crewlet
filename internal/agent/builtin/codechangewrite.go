@@ -261,32 +261,83 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 // entry leaves it out (toolargs.Of).
 func workItemAsked(args map[string]any) bool { return args["work_item"] != nil }
 
-// workItemOf is the work item named names: a Worklet item's key or id,
-// resolved by Worklet's own read ([CodeDeps.Tasks]) — bare, or under
-// Worklet's backend (`native:`) — or any other tracker's item by its
+// workItemOf is the work item a change write names: a Worklet item's key or
+// id, resolved by Worklet's own read ([CodeDeps.workletItem]) — bare, or
+// under Worklet's backend (`native:`) — or any other tracker's item by its
 // identity, `<backend>:<id>`; or the refusal, naming arg, of a name that is
-// none. The change writes resolve `work_item` through it and
-// code_list_changes its `work`, so ONE PART'S TOOLS NAME AN ITEM ONE WAY: the
-// key a seat was woken on lists the changes a write filed under it, where the
-// listing's reader takes the identity alone (`native:<task id>`), which no
-// Worklet answer spells. Every field is FITTED to the bound a change's row
-// holds a label to (code.FitProvenance), as the run a seat's write names is:
-// an item is another system's label, copied as it arrived, and never a reason
-// to refuse a write — and a listing asks for the item as its rows hold it.
+// none. A WORKLET ID IS READ TOO, never taken as named: a write files the
+// change under the item, and a change carrying an item that does not exist
+// names nothing it implements, so the write proves the task is there.
+// code_list_changes names its `work` the same way and resolves only what needs
+// resolving ([CodeDeps.listedWorkItem]).
 func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
-	if backend, id, ok := strings.Cut(named, ":"); ok && types.WorkBackend(backend).Valid() {
-		if strings.TrimSpace(id) == "" {
-			r := failed(fmt.Sprintf("%s: `%s` %q names a tracker and no item in it.", tool, arg, clip(named)))
-			return nil, &r
-		}
-		if types.WorkBackend(backend) != types.WorkWorklet {
-			return fittedItem(types.WorkItem{Backend: types.WorkBackend(backend), ID: strings.TrimSpace(id)}), nil
-		}
-		named = strings.TrimSpace(id)
+	item, local, refusal := namedWorkItem(tool, arg, named)
+	if item != nil || refusal != nil {
+		return item, refusal
 	}
-	// A WORKLET ITEM, by its key or its id: read, so the change carries the
-	// item's identity — its id, which a key renamed or moved does not change
-	// — beside the key a reader is shown.
+	return d.workletItem(ctx, tool, arg, local,
+		"a change carrying an item that does not exist names nothing it implements")
+}
+
+// listedWorkItem is the work item code_list_changes' `work` names, spelled as
+// a change's row holds it, which is all the listing's reader takes. It is
+// named as a change write names one ([CodeDeps.workItemOf]), so ONE PART'S
+// TOOLS NAME AN ITEM ONE WAY and the key a seat was woken on lists the changes
+// a write filed under it.
+//
+// ONLY A KEY IS RESOLVED, through Worklet's own read. An identity — any
+// tracker's `<backend>:<id>`, or a Worklet id, bare or under `native:`
+// ([worklet.IsTaskID]) — is listed as named, with no read of the tracker,
+// because the write's proof that the task exists is no listing's business:
+// it would cost every listing by the identity a seat copied off a change's
+// row a second linearizable barrier, and a hop over the estate router on a
+// node that does not hold the estate, to prove nothing the listing uses. And
+// it would refuse a true answer: the code host does not follow a tracker
+// purge, so a change still carries an item whose task is gone, and that
+// change's siblings are listed by the item it carries.
+func (d CodeDeps) listedWorkItem(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
+	item, local, refusal := namedWorkItem(tool, arg, named)
+	switch {
+	case item != nil || refusal != nil:
+		return item, refusal
+	case worklet.IsTaskID(local):
+		return fittedItem(types.WorkItem{Backend: types.WorkWorklet, ID: local}), nil
+	}
+	return d.workletItem(ctx, tool, arg, local,
+		"a key is listed through the task that holds it, and an item named as a change prints it, "+
+			"`native:<id>`, is listed as named")
+}
+
+// namedWorkItem parses a work item's name and reads nothing: another
+// tracker's item, `<backend>:<id>`, which is its identity and comes back
+// fitted; or the Worklet name, a key or an id, bare or under `native:`, left
+// as local for the caller to resolve; or the refusal, naming arg, of a
+// tracker named with no item in it. Every field is FITTED to the bound a
+// change's row holds a label to (code.FitProvenance), as the run a seat's
+// write names is: an item is another system's label, copied as it arrived,
+// and never a reason to refuse a write — and a listing asks for the item as
+// its rows hold it.
+func namedWorkItem(tool, arg, named string) (item *types.WorkItem, local string, refusal *tools.Result) {
+	backend, id, ok := strings.Cut(named, ":")
+	if !ok || !types.WorkBackend(backend).Valid() {
+		return nil, named, nil
+	}
+	if id = strings.TrimSpace(id); id == "" {
+		r := failed(fmt.Sprintf("%s: `%s` %q names a tracker and no item in it.", tool, arg, clip(named)))
+		return nil, "", &r
+	}
+	if types.WorkBackend(backend) != types.WorkWorklet {
+		return fittedItem(types.WorkItem{Backend: types.WorkBackend(backend), ID: id}), "", nil
+	}
+	return nil, id, nil
+}
+
+// workletItem is the Worklet item named, a key or an id, read by Worklet's
+// own read ([CodeDeps.Tasks]) so the item carries its identity — its id,
+// which a key renamed or moved does not change — beside the key a reader is
+// shown; or the refusal, naming arg, of a name no task holds, which why
+// closes.
+func (d CodeDeps) workletItem(ctx context.Context, tool, arg, named, why string) (*types.WorkItem, *tools.Result) {
 	if d.Tasks == nil {
 		r := failed(fmt.Sprintf("%s: %q is no item this company's tracker can name here — Worklet "+
 			"is not served on this surface. Name an item as `<backend>:<id>`.", tool, clip(named)))
@@ -295,9 +346,8 @@ func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*typ
 	detail, err := d.Tasks.Task(ctx, named, worklet.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):
-		r := failed(fmt.Sprintf("%s: `%s` %q names no work item. Check its key with "+worklet.ListWorkItemsTool+" "+
-			"rather than guessing — a change carrying an item that does not exist names nothing it implements.",
-			tool, arg, clip(named)))
+		r := failed(fmt.Sprintf("%s: `%s` %q names no work item. Check its key with %s rather than guessing — %s.",
+			tool, arg, clip(named), worklet.ListWorkItemsTool, why))
 		return nil, &r
 	case err != nil:
 		r := readFailure(ctx, tool, err)
@@ -872,20 +922,25 @@ func (d CodeDeps) converse(ctx context.Context, w code.ConversationWrite) (code.
 	return d.Writer.Converse(ctx, w)
 }
 
-// changeClass is the class a refusal of a change's lifecycle is answered in —
-// chosen by what each class tells its reader, as a push's are ([pushClass]):
-// a rule of the repository or the change refusing the caller FORBIDDEN — a
-// pull mirror's among them, as a push's repo_mirrored is; a change that moved since the caller read it STALE_VERSION; a branch already
-// heading a live change EXISTS; a write naming branches no change can be
-// about INVALID — the fix is another call; a write only a live change takes,
-// of one that is not, CONFLICT; a repository or a change gone NOT_FOUND; and
-// what waiting clears UNAVAILABLE, the same call again being the same write —
-// an import finishing among it, as a push's repo_importing is. The two only a push's receiver answers (ambiguous_source, bad_option) are
-// INVALID on the same reading, though no tool's write is ever refused either.
+// changeClass is the class a refusal of a change's lifecycle is answered in, by
+// the one rule a push's are ([pushClass]): a rule of the repository or the
+// change refusing the caller FORBIDDEN; a change that moved since the caller
+// read it STALE_VERSION; a branch already heading a live change EXISTS; a
+// write naming branches no change can be about INVALID — the fix is another
+// call; the change or its repository in a state that refuses the write until
+// somebody changes it CONFLICT — a change closed or merged, a repository
+// archived or a pull mirror, as a push's repo_archived and repo_mirrored are;
+// a repository or a change gone NOT_FOUND; and what waiting clears
+// UNAVAILABLE, the same call again being the same write — an import finishing
+// among it, as a push's repo_importing is. The two only a push's receiver
+// answers (ambiguous_source, bad_option) are INVALID on the same reading,
+// though no tool's write is ever refused either.
 func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
 	switch r {
-	case code.ChangeRefusalNotPermitted, code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
+	case code.ChangeRefusalNotPermitted:
 		return tools.RefusalForbidden, true
+	case code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
+		return tools.RefusalConflict, true
 	case code.ChangeRefusalStale:
 		return tools.RefusalStaleVersion, true
 	case code.ChangeRefusalChangeExists:
@@ -920,6 +975,10 @@ func changeRefused(tool string, res code.ChangeResult) tools.Result {
 		said += " Nothing was written; make the same call again — it is the same write."
 	case tools.RefusalForbidden:
 		said += " That is a rule of the repository or the change, so the same call is refused again."
+	case tools.RefusalConflict:
+		said += fmt.Sprintf(" That is the change's or the repository's state, which the sentence names: read "+
+			"the change again with %s before you decide, since the same call does not land while it stands.",
+			CodeGetChangeTool)
 	default:
 		said += " The same call is refused again; change what it asks for."
 	}

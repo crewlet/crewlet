@@ -114,6 +114,9 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			code.ReasonChangesRequested, nil},
 		"conflicted": {func(r *code.ChangeRouting) { r.Conflicted = true }, code.ReasonConflicted, nil},
 		"merged":     {func(r *code.ChangeRouting) { r.Merged = true }, code.ReasonMerged, nil},
+		"merged, its work item not closed": {func(r *code.ChangeRouting) {
+			r.Merged, r.NotClosed = true, "ENG-7 is a jira work item"
+		}, code.ReasonMerged, []string{"e:merged"}},
 		"review submitted": {func(r *code.ChangeRouting) { r.Verdict = code.VerdictApprove },
 			code.ReasonReviewSubmitted, nil},
 		"checks failed": {func(r *code.ChangeRouting) { r.ChecksFailed = true }, code.ReasonChecksFailed, nil},

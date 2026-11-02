@@ -301,6 +301,11 @@ type ChangeRouting struct {
 	// merged the change.
 	Conflicted bool `json:"conflicted,omitempty"`
 	Merged     bool `json:"merged,omitempty"`
+	// NotClosed is, on a close_settled that ended not_closed, why the merged
+	// change's work item was not closed (M5-D27): its authors and its
+	// Enqueuer hear it under `merged`, the sentence beside. Under the
+	// condition this file's head states, it rides CloseSettled.Routing's row.
+	NotClosed string `json:"not_closed,omitempty"`
 	// ChecksFailed is a check of the change's head that failed, or errored
 	// past the home's own requeue: its authors and its actor hear.
 	ChecksFailed bool `json:"checks_failed,omitempty"`
@@ -374,7 +379,12 @@ func (r *ChangeRouting) heard(reason Reason) []string {
 	case ReasonReadyToMerge:
 		return r.ReadyFor
 	case ReasonMerged:
-		if r.Merged {
+		switch {
+		case r.Merged && r.NotClosed != "":
+			// THE ENQUEUER TOO: the close was asked in their name, so the
+			// item left open is theirs to close.
+			return withOnce(r.Authors, r.Enqueuer)
+		case r.Merged:
 			return r.Authors
 		}
 	case ReasonReviewSubmitted:
@@ -612,6 +622,8 @@ func RoutingsOf(payload any) []*ChangeRouting {
 		r = p.Routing
 	case CheckFinished:
 		r = p.Routing
+	case CloseSettled:
+		r = p.Routing
 	case Eject:
 		return pointersTo(p.Routing)
 	case Land:
@@ -751,6 +763,9 @@ func withRouting(payload any, r *ChangeRouting) any {
 	case CheckFinished:
 		p.Routing = r
 		return p
+	case CloseSettled:
+		p.Routing = r
+		return p
 	}
 	panic(fmt.Sprintf("code: a %T carries no routing — every record about a change does (RoutingsOf)", payload))
 }
@@ -788,6 +803,8 @@ type concerning struct {
 	// dequeued the op's facts.
 	verdict                                            Verdict
 	conflicted, merged, checksFailed, broken, dequeued bool
+	// notClosed is a close_settled's not_closed detail.
+	notClosed string
 	// enqueuer is who put the change in its queue, and ownerLead the
 	// effective lead of the repository's owner, each a zero Reviewer for
 	// none.
@@ -814,7 +831,7 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
 		Title: row.title, Actor: c.actor, Owner: row.owner, OwnerKind: row.ownerKind, Verdict: c.verdict,
 		Conflicted: c.conflicted, Merged: c.merged, ChecksFailed: c.checksFailed, Broken: c.broken,
-		Dequeued: c.dequeued}
+		Dequeued: c.dequeued, NotClosed: c.notClosed}
 	if row.work != (types.WorkItem{}) {
 		work := row.work
 		r.WorkItem = &work

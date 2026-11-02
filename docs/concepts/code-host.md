@@ -1719,8 +1719,10 @@ answer that holds every record the code log had committed when it was asked.
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
   `<backend>:<id>`, such as `native:<task id>`, which is what a change's row
-  holds; the code tools also take a Worklet item's key or id, as the change
-  writes do, and ask for the identity it resolves to — a **state**, a **reviewer**
+  holds; the code tools also take a Worklet item's key, as the change writes
+  do, and ask for the identity it resolves to, while an identity (a Worklet
+  task's id, bare or under `native:`) is listed as named, with no read of the
+  tracker — a **state**, a **reviewer**
   or **what its changes wait on**, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
@@ -1828,7 +1830,11 @@ the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code
 `code_list_changes` is the listing — its `work` named as `code_open_change`
 names the item a change carries, so a seat woken on `ENG-42` lists that
 item's changes by the key it holds, resolved through Worklet's own read to the
-item's identity before the listing is asked — and `code_get_change` one change a part at
+item's identity before the listing is asked. Only a key is resolved: an item
+named by its identity, as a change prints it (`native:<task id>`, or the id
+alone), is listed as named, so it costs no second read and still lists the
+changes that carry an item whose task was purged, which a purge leaves in
+place — and `code_get_change` one change a part at
 a time — its summary, its [merge readiness](#merge-readiness), a revision's
 files and a file's patch from the base its facts record or, since an earlier
 revision, what changed between the two ([What changed between two
@@ -6514,9 +6520,27 @@ holds.
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
-  landing's, so a close asked again is the same write. An item already
-  finished is left as it is; one on a vendor's tracker is closed there, by
-  whoever closes it, and the home logs that it closed nothing.
+  landing's, so a close asked again is the same write. The close is
+  **owed on the entry's row** from the landing's apply until its home
+  settles it: the landing records the close's operation on each entry it
+  lands that asked it (`code_queue.close_op`), and every home's queue work
+  lists the repositories owing one. So a landing answered `pending`, a home
+  that stops or hands the repository on between the landing and the close,
+  and a close the tracker could not answer are each closed by the next
+  turn on whichever home holds the repository, and never lost (an
+  archived repository's wait until it is unarchived, since nothing is
+  recorded on one). A close
+  that ENDED is settled by one `close_settled` record on the repository's
+  subject: `closed` (the item closed, or already finished) or
+  `not_closed`, for a close no asking again changes — the item is on a
+  vendor's tracker, which is closed there by whoever closes it; the
+  enqueuer is bound to no seat, has left the chart or may no longer update
+  it; or Worklet refuses the close for good, the item gone or its content
+  or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
+  under `merged`, why the item was left open (`Change … was merged through
+  its queue, and its work item was not closed: …`). A close no home could
+  make for `code.QueueHistory` is given up with its row, which the queue's
+  history removes.
 
 #### How fast a queue lands
 
@@ -6558,6 +6582,18 @@ rate of its own:
 The remedy for both is the same: a deeper queue or a larger batch lands more
 a round, faster or fewer required checks shorten it, and more branches or
 repositories each have a queue of their own.
+
+Before the alarm fires, the home's own instruments show how its queues are
+going ([Metrics](../reference/metrics.md)): `crewlet.code.queue.landed`
+counts the changes its land records landed, which against the enqueues
+`crewlet.code.queue.proposals` counts is the queue's throughput;
+`crewlet.code.queue.rounds` counts its trains by how each ended — `landed`,
+`bisected` down to a culprit, `ejected` by a landing that would not land
+them, or `abandoned` under a person's push, a dequeue or a newer train —
+so a rising share of `bisected` is changes queued red; and
+`crewlet.code.queue.ejected` counts what it put out, by reason.
+`crewlet.code.queue.round.duration` is each landed round, timed from the
+same two instants the alarm prices a round at.
 
 ### Tip checks and code_green
 

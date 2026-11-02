@@ -215,6 +215,11 @@ func excerptOf(payload any) string {
 		text = p.Body
 	case Review:
 		text = p.Summary
+	case CloseSettled:
+		// THE ENGINE'S OWN SENTENCE, why a merged change's work item was
+		// left open — what the person reads beside `merged`, as the direct
+		// merge's answer says it (`merged; ENG-42 not closed: …`).
+		text = p.Detail
 	}
 	return textcut.Within(text, MaxNoticeExcerpt)
 }
