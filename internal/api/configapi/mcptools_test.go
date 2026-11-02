@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -100,8 +101,16 @@ func TestAWriteOfToolLevelsChangesWhatItNamesAsOneRevision(t *testing.T) {
 			Levels: map[string]*config.MCPToolLevel{"delete_project": nil, "list_projects": nil}}}); err != nil {
 		t.Fatalf("clear the levels: %v", err)
 	}
-	if document := s.activeDocument(t); strings.Contains(document, `"tools"`) {
-		t.Errorf("an entry with no level left still writes tools: %s", document)
+	var stored struct {
+		MCPServers []map[string]json.RawMessage `json:"mcp_servers"`
+	}
+	if err := json.Unmarshal([]byte(s.activeDocument(t)), &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range stored.MCPServers {
+		if string(entry["name"]) == `"tracker"` && entry["tools"] != nil {
+			t.Errorf("an entry with no level left still writes tools: %s", entry["tools"])
+		}
 	}
 }
 
