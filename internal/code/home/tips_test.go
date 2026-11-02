@@ -251,3 +251,53 @@ func TestEveryTargetsTipIsWorkedWithinOneTurn(t *testing.T) {
 		t.Fatalf("one turn queued unit on the tips of %v, want main's and release's", tips)
 	}
 }
+
+// A CULPRIT PAST THE WINDOW IS WARNED OF ONCE A TIP: main's tip failed unit,
+// and the landing before it in the window passed unit, but the window was
+// read past a gap, so that landing is not the one before the tip on the
+// branch and no culprit can be named. Every check record of the repository
+// asks the home a turn, and the gap stands for as long as nothing moves, so
+// two turns of one loop warn code_tip_culprit_past_the_window ONCE; a new tip
+// past the same gap is warned of afresh.
+//
+// Mutation: warn on every turn that finds the gap — two warnings for one tip,
+// red; or forget the tip warned of whatever the turn found — the same, red.
+func TestACulpritPastTheWindowIsWarnedOfOnceATip(t *testing.T) {
+	t.Parallel()
+	green := oid("1")
+	e := newCheckEstate()
+	e.files[green] = checksFile("unit")
+	e.logs = &lines{}
+	main := code.TipDue{TargetRef: "refs/heads/main", Required: []string{"unit"}, More: true,
+		Green: &code.GreenRow{RepoID: repoA, TargetRef: "refs/heads/main", CommitOID: green,
+			Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 9}},
+		Landings: []code.TipLanding{landedAt(10, green, oid("2"), ran("unit", code.CheckStatePassed)),
+			landedAt(400, oid("7"), oid("3"), ran("unit", code.CheckStateFailed))}}
+	e.tips = []code.TipDue{main}
+	l := checkLoop(t, e)
+	warned := func(turns int) int {
+		t.Helper()
+		for range turns {
+			if err := home.CheckWork(t.Context(), l, repoA, statelog.Position{}); err != nil {
+				t.Fatalf("the check work: %v", err)
+			}
+		}
+		return strings.Count(e.logs.String(), "code_tip_culprit_past_the_window")
+	}
+	if n := warned(2); n != 1 {
+		t.Fatalf("two turns past the same gap warned %d times, want once", n)
+	}
+	main.Landings[1] = landedAt(401, oid("3"), oid("4"), ran("unit", code.CheckStateFailed))
+	e.mu.Lock()
+	e.tips = []code.TipDue{main}
+	e.mu.Unlock()
+	if n := warned(1); n != 2 {
+		t.Fatalf("a new tip past the gap brought the warnings to %d, want a second", n)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.writes) != 0 || len(e.records) != 0 {
+		t.Fatalf("a culprit past the window asked %d check writes and records %+v, want nothing",
+			len(e.writes), e.records)
+	}
+}

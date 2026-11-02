@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -47,7 +48,17 @@ import (
 // (code.queue), each refusing what its own snapshot does not prove, so a step
 // decided from a snapshot the log has moved past is refused and read again
 // next turn rather than recorded wrong.
-func (k *checks) tip(ctx context.Context, repoID string, t code.TipDue, memo *defsMemo, at statelog.Position) error {
+func (k *checks) tip(ctx context.Context, repoID string, t code.TipDue, memo *defsMemo,
+	at statelog.Position) error {
+
+	// THE CULPRIT PAST THE WINDOW is warned of once a tip: forgotten on any
+	// turn that finds the target out of that state.
+	pastWindow := false
+	defer func() {
+		if !pastWindow {
+			k.culprits.forget(repoID, t.TargetRef)
+		}
+	}()
 	newest := t.Newest()
 	about := fmt.Sprintf("target %s at %s", t.TargetRef, short(newest.OID))
 	if len(t.Required) == 0 {
@@ -76,7 +87,9 @@ func (k *checks) tip(ctx context.Context, repoID string, t code.TipDue, memo *de
 	case len(states.pending) > 0:
 		return nil
 	case len(states.failed) > 0:
-		return k.bisect(ctx, repoID, t, states.failed, memo, at)
+		var err error
+		pastWindow, err = k.bisect(ctx, repoID, t, states.failed, memo, at)
+		return err
 	case states.passed():
 		return k.green(ctx, repoID, t, newest, at)
 	}
@@ -112,9 +125,13 @@ func (k *checks) green(ctx context.Context, repoID string, t code.TipDue, l code
 //
 // A probe still running, or one ended in a way only a person's rerun moves,
 // waits; so does a culprit the window cannot name — the window's last landing
-// good and the tip, read past a gap, red — which a green tip beyond it clears.
+// good and the tip, read past a gap, red — which a green tip beyond it clears,
+// and which bisect answers true for: a condition that stands for as long as
+// the gap does, which every check record of the repository asks a turn
+// about, so it is WARNED ONCE A TIP (code_tip_culprit_past_the_window) and
+// never once a turn, a new tip warned of afresh.
 func (k *checks) bisect(ctx context.Context, repoID string, t code.TipDue, failed []string, memo *defsMemo,
-	at statelog.Position) error {
+	at statelog.Position) (bool, error) {
 
 	red := slices.IndexFunc(t.Landings, func(l code.TipLanding) bool {
 		return slices.ContainsFunc(failed, func(name string) bool {
@@ -133,15 +150,17 @@ func (k *checks) bisect(ctx context.Context, repoID string, t code.TipDue, faile
 	if red == good+1 {
 		switch {
 		case culprit.Broken:
-			return nil
+			return false, nil
 		case t.More && red == len(t.Landings)-1:
 			// THE GAP: the tip is read past the window, so the landing
 			// before it in the list is not the one before it on the branch.
-			k.log.Warn("code_tip_culprit_past_the_window", "repo", repoID, "target", t.TargetRef,
-				"tip", culprit.OID, "landings", code.MaxTipLandings,
-				"detail", "more landings lie above the green than one bisect reads; a green tip past them "+
-					"clears them, or a person reverts to the last green")
-			return nil
+			if k.culprits.first(repoID, t.TargetRef, culprit.OID) {
+				k.log.Warn("code_tip_culprit_past_the_window", "repo", repoID, "target", t.TargetRef,
+					"tip", culprit.OID, "landings", code.MaxTipLandings,
+					"detail", "more landings lie above the green than one bisect reads; a green tip past "+
+						"them clears them, or a person reverts to the last green")
+			}
+			return true, nil
 		}
 		var names []string
 		for _, name := range failed {
@@ -149,7 +168,7 @@ func (k *checks) bisect(ctx context.Context, repoID string, t code.TipDue, faile
 				names = append(names, name)
 			}
 		}
-		return k.queueRecord(ctx, fmt.Sprintf("target %s at %s", t.TargetRef, short(culprit.OID)),
+		return false, k.queueRecord(ctx, fmt.Sprintf("target %s at %s", t.TargetRef, short(culprit.OID)),
 			code.QueueProposal{OpID: statelog.NewOpID(k.now(), ""), Seen: at,
 				Broken: &code.Broken{RepoID: repoID, TargetRef: t.TargetRef, Position: culprit.Position,
 					Ordinal: culprit.Ordinal, OID: culprit.OID, Checks: names}},
@@ -160,14 +179,51 @@ func (k *checks) bisect(ctx context.Context, repoID string, t code.TipDue, faile
 	mid := t.Landings[(good+red+1)/2]
 	states := tipStates(mid, failed)
 	if len(states.missing) == 0 && len(states.invalid) == 0 && len(states.requeue) == 0 {
-		return nil
+		return false, nil
 	}
 	defs, err := k.baseDefs(ctx, repoID, t, memo, at)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = k.probe(ctx, repoID, t, mid, code.PurposeBisect, states, defs, at)
-	return err
+	return false, err
+}
+
+// culpritsPastWindow is, by repository and target, the tip a culprit past
+// its bisect window was last warned of on this node: what makes the warning
+// once a tip rather than once a turn. An entry goes on the first turn that
+// finds its target out of that state, so it holds the targets standing in it
+// now, a few at most; one whose target is never turned here again (its
+// repository deleted, or homed elsewhere) stays, a key and a commit id, until
+// this node restarts. Kept in this node's memory, not the rows, because it
+// decides nothing but a log line: a restarted node, or a new home, warns of
+// a standing gap once more.
+type culpritsPastWindow struct {
+	mu   sync.Mutex
+	tips map[[2]string]string
+}
+
+// first records tip as target's on repoID and reports whether it is new: not
+// the tip last warned of.
+func (c *culpritsPastWindow) first(repoID, target, tip string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := [2]string{repoID, target}
+	if c.tips[key] == tip {
+		return false
+	}
+	if c.tips == nil {
+		c.tips = map[[2]string]string{}
+	}
+	c.tips[key] = tip
+	return true
+}
+
+// forget drops target's entry on repoID: it is out of that state.
+func (c *culpritsPastWindow) forget(repoID, target string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.tips, [2]string{repoID, target})
 }
 
 // baseDefs is the checks file t's tip checks are defined by: the one t's base

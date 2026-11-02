@@ -6552,7 +6552,9 @@ broke it is still named.
 branch holding more is read as its oldest 256 and its newest: its newest is
 still dispatched, and a culprit past those 256 is named once a green tip clears
 the landings before it — or a person reverts to the last green; the home logs
-`code_tip_culprit_past_the_window` meanwhile.
+`code_tip_culprit_past_the_window` meanwhile, once for each tip that meets the
+gap rather than on every turn that finds it standing, and once more after the
+home restarts or moves.
 
 **The home finds the work from the rows.** A branch holding a landing above
 its green row that no bisect found broken holds one row of tip work, which

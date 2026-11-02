@@ -53,6 +53,10 @@ type checks struct {
 	node   string
 	log    *slog.Logger
 	now    func() time.Time
+	// culprits is the tip each target's culprit past its bisect window was
+	// last warned of (tips.go), so the warning is once a tip, never once a
+	// turn.
+	culprits culpritsPastWindow
 }
 
 // Name is [WorkerChecks].

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -35,10 +36,12 @@ type checkEstate struct {
 	// naming the target it ended at (code.ReadAnswer.TipsNext) and the next
 	// going on after it (code.ChecksDueQuery.TipsAfter), before any head.
 	tipsPerPage int
-	files       map[string]string
-	read        []string
-	writes      []code.ChecksRequest
-	records     []code.QueueProposal
+	// logs, where set, is what a loop over the estate logs to.
+	logs    *lines
+	files   map[string]string
+	read    []string
+	writes  []code.ChecksRequest
+	records []code.QueueProposal
 }
 
 func newCheckEstate() *checkEstate {
@@ -140,10 +143,14 @@ func blobOf(raw string) string {
 // turns itself (home.CheckWork).
 func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 	t.Helper()
-	l, err := home.New(home.Options{Chart: noChart,
+	o := home.Options{Chart: noChart,
 		Estate: e, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
-		Tasks: unqueued{t: t}, Share: units(2), NodeID: "git-a"})
+		Tasks: unqueued{t: t}, Share: units(2), NodeID: "git-a"}
+	if e.logs != nil {
+		o.Logger = slog.New(slog.NewTextHandler(e.logs, nil))
+	}
+	l, err := home.New(o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
