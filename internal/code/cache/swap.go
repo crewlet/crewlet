@@ -77,7 +77,10 @@ import (
 // drops no commit, so a retirement keeps the commit-graph (X04): the next
 // incarnation holds the very same inode; a stray drops it, and so does an
 // expunge, whose commits are gone from the repository — the memo with it, its
-// answers perhaps about what was purged.
+// answers perhaps about what was purged. A round that crosses an expunge's
+// begin AND its commit never places the dropping pack, so the begin's inputs
+// are what take the purged commits out of the copy, and they leave as the
+// commit's (sync.go's crossedACommit), never as a retirement.
 //
 // WHAT CARRIES OVER. A linked file is the same inode, its bytes those this
 // process wrote, checked or scrubbed, so the promote carries every per-file

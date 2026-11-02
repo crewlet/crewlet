@@ -210,12 +210,17 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 // and the memo with it, whose answers may quote what was purged. Whichever
 // round takes the dropping pack out: a delta's, whose swap links neither into
 // the copy it promotes, and a boot's first, full, over a copy whose node was
-// down while the commit landed, which drops both in place.
+// down while the commit landed, which drops both in place — and either one
+// crossing the begin as well, over a copy that never placed the dropping
+// pack: the begin's inputs leave it holding the commits the commit took out,
+// so they leave as the commit's.
 //
 // Mutations: declare the commit-graph kept on an expunge (OnPackExpunged
 // Keep), and a fresh `git log` over the dropped commit answers it from the
 // graph; declare the memo kept, and its answer outlives the purge; take a
-// full round's dropping stray for a retirement, and the boot keeps both.
+// full round's dropping stray for a retirement, and the boot keeps both;
+// take the inputs of a begin a round crossed with its commit for a
+// retirement, and the copy that never held the view keeps both.
 func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
@@ -223,7 +228,12 @@ func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 		// down: the node stops before the commit lands, so the round that
 		// takes the dropping pack out is its next boot's first.
 		down bool
-	}{{"a delta's swap", false}, {"a boot's full round", true}} {
+		// lagged: the copy is not synced between the begin and the commit,
+		// so one round crosses both and never places the dropping pack.
+		lagged bool
+	}{{"a delta's swap", false, false}, {"a boot's full round", true, false},
+		{"a delta's swap crossing the begin too", false, true},
+		{"a boot's full round crossing the begin too", true, true}} {
 		t.Run(arm.name, func(t *testing.T) {
 			t.Parallel()
 			w := newSyncWorld(t, onMemory)
@@ -247,13 +257,16 @@ func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 			}
 
 			merged := w.compacted(t, repo, first, third)
-			if s := w.sync(t, c, repo); !graphed(s) {
-				t.Fatal("a compaction's swap dropped the commit-graph: a merge drops no commit (X04)")
-			}
-			w.expungeBegin(t, repo, []string{gone}, merged, second)
 			s := w.sync(t, c, repo)
 			if !graphed(s) {
-				t.Fatal("an expunge's begin dropped the commit-graph: every commit of its inputs is still in the copy")
+				t.Fatal("a compaction's swap dropped the commit-graph: a merge drops no commit (X04)")
+			}
+			if !arm.lagged {
+				w.expungeBegin(t, repo, []string{gone}, merged, second)
+				s = w.sync(t, c, repo)
+				if !graphed(s) {
+					t.Fatal("an expunge's begin dropped the commit-graph: every commit of its inputs is still in the copy")
+				}
 			}
 			answer := memoKeys("expunged", 1)
 			memoize(t, c, s, answer)
@@ -263,6 +276,9 @@ func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 
 			if arm.down {
 				c.Stop(t.Context())
+			}
+			if arm.lagged {
+				w.expungeBegin(t, repo, []string{gone}, merged, second)
 			}
 			w.log.expungeCommit(repo)
 			if arm.down {
