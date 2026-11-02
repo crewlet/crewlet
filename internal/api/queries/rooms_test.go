@@ -110,9 +110,14 @@ func everySeam(t *testing.T) queries.Sources {
 		// fleet record, which answers every run `not_running`.
 		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
 			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
-		Config: surface,
-		Work:   emptyWork{},
-		Pages:  emptyPages{},
+		// A SEAT'S EXECUTOR SESSIONS: the rows, and the store their sealed
+		// objects open through — two seams, because a node with no object
+		// store still lists the rows.
+		ExecutorSessions: &stubSessions{},
+		SessionObjects:   failingObjects{},
+		Config:           surface,
+		Work:             emptyWork{},
+		Pages:            emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},

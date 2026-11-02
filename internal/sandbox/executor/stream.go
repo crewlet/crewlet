@@ -88,9 +88,41 @@ const maxLineBytes = sandbox.MaxFileBytes
 // is complete wherever it stops, and a running one's is the decoder's to
 // recognise as partial.
 func eachLine(r io.Reader, dec Decoder, bound int) error {
-	br := bufio.NewReaderSize(r, 64<<10)
+	return readLines(bufio.NewReaderSize(r, lineChunkBytes), bound,
+		func(line []byte) error {
+			dec.Line(line)
+			return nil
+		},
+		func(n int64) error {
+			dec.Skipped(n, bound)
+			return nil
+		})
+}
+
+// lineChunkBytes is the buffer a record is read through a chunk at a time: a
+// line longer than it is gathered across chunks, up to the bound a line is
+// held to, so it bounds how many reads a line takes rather than how long one
+// may be.
+const lineChunkBytes = 64 << 10
+
+// readLines is the one way a run's record is read a line at a time: line is
+// handed every line br reads up to bound bytes, without its line break (the
+// slice reused once it returns), and skipped the size of every line past
+// bound, which is never held — its bytes are counted as they pass. The first
+// error either returns ends the read and is returned, which is how a reader
+// that has what it came for stops ([ReadTranscript]); so is a failure of the
+// reader beneath br, and the line it cut short is handed to neither.
+//
+// THE BUFFER IS THE CALLER'S, so a reader of many records in a row — a
+// session's archive holds a transcript per subagent — resets one rather than
+// allocating one per record.
+//
+// ONE IMPLEMENTATION for a stream's decoder ([eachLine]) and a captured
+// session's transcript, because a second copy of the bound is a second answer
+// to how long a line may be.
+func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
 	var (
-		line []byte
+		held []byte
 		over int64 // the size of a line already past the bound
 	)
 	for {
@@ -98,30 +130,38 @@ func eachLine(r io.Reader, dec Decoder, bound int) error {
 		switch {
 		case over > 0:
 			over += int64(len(chunk))
-		case len(line)+len(chunk) > bound:
-			over = int64(len(line) + len(chunk))
+		case len(held)+len(chunk) > bound:
+			over = int64(len(held) + len(chunk))
 			// RELEASED, not truncated: a line that reached the bound has
 			// grown the buffer to it, and keeping that buffer would hold
 			// the bound's worth of memory for the rest of the read.
-			line = nil
+			held = nil
 		default:
-			line = append(line, chunk...)
+			held = append(held, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
-		if over > 0 {
-			dec.Skipped(over, bound)
-			over = 0
-		} else if len(line) > 0 {
-			dec.Line(bytes.TrimRight(line, "\r\n"))
-		}
-		line = line[:0]
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
+		// A READ THAT FAILED PART WAY THROUGH A LINE HANDS NOTHING ON: what it
+		// holds is not the line, and a reader handed it would take a record
+		// cut in two — by a budget, a store that stopped answering — for a
+		// line that is no record, said where a whole one was.
+		if err != nil && !errors.Is(err, io.EOF) {
 			return err
+		}
+		var stop error
+		if over > 0 {
+			stop = skipped(over)
+			over = 0
+		} else if len(held) > 0 {
+			stop = line(bytes.TrimRight(held, "\r\n"))
+		}
+		held = held[:0]
+		switch {
+		case stop != nil:
+			return stop
+		case errors.Is(err, io.EOF):
+			return nil
 		}
 	}
 }

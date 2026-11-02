@@ -279,18 +279,25 @@ func TestTheSealedCensusCountsWhatTheRowsName(t *testing.T) {
 }
 
 // A TURN IS READ BY ITS ONE SPELLING, and a turn with no row is not found
-// rather than answered empty.
+// rather than answered empty. The row is answered with where it was read: the
+// checkpoint the read served, and the read's own word that nothing is missing
+// from it.
 //
 // Mutation: drop the canonical check from Session and a braced spelling reads
-// as a turn nobody holds rather than as a mistake.
+// as a turn nobody holds rather than as a mistake; drop the read's position
+// from the answer and the row reads as read nowhere.
 func TestATurnIsReadByItsOneSpelling(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
 	run := newTurn()
 	e.capture(capturing("ana", "chat:room", run, 1, 1, 100, budget))
 	got, err := e.reader().Session(t.Context(), "ana", run, stale)
-	if err != nil || got.Turn != run || !got.HasObject() {
+	if err != nil || got.Session.Turn != run || !got.Session.HasObject() {
 		t.Fatalf("the turn read back as (%+v, %v)", got, err)
+	}
+	if got.Position != e.at() || !got.Complete {
+		t.Errorf("the turn was read at %s, complete %v, want the position this node had applied, %s, "+
+			"whole", got.Position, got.Complete, e.at())
 	}
 	if _, err := e.reader().Session(t.Context(), "ana", newTurn(), stale); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a turn with no row: %v, want ErrNotFound", err)

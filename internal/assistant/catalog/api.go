@@ -724,13 +724,16 @@ func queryValues(v any) (url.Values, error) {
 
 // outsideRoutes are the read routes whose answers carry text from outside the
 // company, by path prefix: conversations on chat surfaces this engine does not
-// own, and the transcripts and executors that quoted them. An answer of one is
-// fenced as external; every other route's as a colleague's, unless it carries an
-// executor's question (the decisions waiting on a person, and the ones they
-// answered: [decisionRows]) or names a connected knowledge base as its
-// backend.
+// own, the transcripts and executors that quoted them, and a seat's executor
+// sessions — a harness's whole record of a run, every file it read and every
+// command's output, and the listing beside it, whose asks and endings quote
+// them. An answer of one is fenced as external; every other route's as a
+// colleague's, unless it carries an executor's question (the decisions waiting
+// on a person, and the ones they answered: [decisionRows]) or names a
+// connected knowledge base as its backend.
 var outsideRoutes = []string{
-	"/agents/{id}/conversations", "/events", "/turns", "/executors", "/query/{what}",
+	"/agents/{id}/conversations", "/agents/{id}/sessions", "/agents/{id}/sessions/{turn_id}",
+	"/events", "/turns", "/executors", "/query/{what}",
 }
 
 // decisionRows is where a decisions answer keeps an executor's question: on

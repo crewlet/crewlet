@@ -1508,12 +1508,17 @@ const (
 	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
 	// page is all in the settings chunk, so the initial load only lost that
 	// 0.4 KiB. 5329 KiB.
-	// What waits in a seat's inbox, on Live's running-turn and In a box rows
-	// and on each seat's card on the Agents page ("1 person waiting", "4
-	// waiting"), took it from 5328.4 KiB to 5329.0 KiB (+0.6 KiB): the
-	// shared components chunk the seat card ships in +0.4 KiB, Live's +0.1
-	// KiB and the running-turn row's under 0.1 KiB. 5330 KiB.
-	treeBudget = 5<<20 + 210<<10
+	// The Sessions view under an agent's Memory tab (the seat's executor
+	// sessions, the latest begun first, and one session's transcript a page
+	// at a time: its entries, the states a session that cannot be read is
+	// answered in, and the account of how its turn ended) took it from
+	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
+	// view loads in. The initial load is unchanged: keepInView, which
+	// Conversations and Sessions share, is a module of the Memory tab's own
+	// rather than of lib/scroller.ts, which the shell imports, and a
+	// transcript's prose takes the shared .prose rule rather than a rule of
+	// its own in the one sheet. 5339 KiB.
+	treeBudget = 5<<20 + 219<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
