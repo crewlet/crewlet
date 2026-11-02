@@ -1527,7 +1527,12 @@ const (
 	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
 	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
 	// +0.3 KiB. 5341 KiB.
-	treeBudget = 5<<20 + 221<<10
+	// A team's MCP limits in the Remove dialog (each seat's and unit's
+	// mcp_limits block a removal clears, listed and counted with the other
+	// fields that name the server) took it from 5341.0 KiB to 5341.2 KiB
+	// (+0.2 KiB), all of it the settings chunk, which the initial load does
+	// not fetch. 5342 KiB.
+	treeBudget = 5<<20 + 222<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
