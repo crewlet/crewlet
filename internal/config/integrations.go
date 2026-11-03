@@ -35,7 +35,7 @@ type Integrations struct {
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
 	Datadog    *Datadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
 	Cloudflare *Cloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"Cloudflare account and provisioner token, used to mint one account API token per agent. Absent = disabled."`
-	Expo       *Expo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."`
+	Expo       *Expo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"Expo account the agents' robot users act for: a person creates each agent's robot and pastes its token. Absent = disabled."`
 	Atlassian  *Atlassian  `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
