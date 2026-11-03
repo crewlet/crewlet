@@ -3014,7 +3014,7 @@ func testManyBridgedWritersAllLand(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 	if !slices.Equal(names, want) {
-		t.Fatalf("the row holds %d calls after %d concurrent appends, want every one exactly once: %v",
+		t.Fatalf("the log holds %d calls after %d concurrent appends, want every one exactly once: %v",
 			len(names), len(want), names)
 	}
 	if got.Owner != "node-b" || got.OwnerEpoch != each {
