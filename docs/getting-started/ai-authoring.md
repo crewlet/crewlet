@@ -131,7 +131,10 @@ Review** (with **Onboarding** before them on its very first turn), and
 returns to `Idle` — every prompt and tool call
 inspectable. That's the engine, your model, and your config all
 confirmed working, with no external account involved. Delete the
-schedule once real work arrives.
+schedule once real work arrives: every fire continues, and pays for, the
+session the last one left
+([Scheduling](../concepts/scheduling.md#each-fire-continues-the-last-fires-session)),
+so each fire costs more as that session grows, up to the harness's window.
 
 ### 8. Add one integration at a time
 
