@@ -160,7 +160,7 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 		if !kind.Ingests() {
 			// NO SOURCE OF ITS OWN ([integration.Kind.Ingests]): Atlassian's
 			// events arrive as Jira's and Confluence's, fenced by their
-			// prompts, and Cloudflare delivers none in this build.
+			// prompts, and Cloudflare and Expo deliver none in this build.
 			continue
 		}
 		want[string(kind)] = true

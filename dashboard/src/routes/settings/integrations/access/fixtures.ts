@@ -2,8 +2,9 @@
  * Per-seat access answers as the engine sends them, for the Agents tab's
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
- * old tier registered) and its Cloudflare (SRE able to purge, the rest off),
- * built from the fields a case names.
+ * old tier registered), its Cloudflare (SRE able to purge, the rest off) and
+ * its Expo (QA's robot a Developer, the rest off), built from the fields a
+ * case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -65,6 +66,19 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
   ],
 };
 
+/** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
+const EXPO_OPTIONS: AccessOptions = {
+  lane: "expo",
+  live: false,
+  rotatable: true,
+  levels: [
+    { id: "viewer", name: "Viewer" },
+    { id: "runner", name: "Runner" },
+    { id: "developer", name: "Developer" },
+    { id: "release_manager", name: "Release Manager" },
+  ],
+};
+
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
@@ -112,6 +126,7 @@ export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
+export const EXPO_LANE = laneOf(EXPO_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -297,6 +312,37 @@ export function cloudflareAnswer(): AccessAnswer {
             level: "operate",
             credential: { variable: "CLOUDFLARE_API_TOKEN_SRE", minted_at: ago(DAY) },
           },
+        }),
+      }),
+    ],
+  };
+}
+
+/**
+ * Expo with QA's robot on Developer, its token named in its sandbox env so its
+ * tool is live, and PM off at the default level.
+ */
+export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "expo",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [EXPO_OPTIONS],
+    seats: [
+      seat("pm", "PM", { expo: offLane("viewer") }),
+      seat("qa", "QA", {
+        expo: onLane({
+          variable: "EXPO_TOKEN_QA",
+          desired: { enabled: true, level: "developer" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-qa",
+            level: "developer",
+            credential: { variable: "EXPO_TOKEN_QA", minted_at: ago(DAY) },
+          },
+          ...qa,
         }),
       }),
     ],

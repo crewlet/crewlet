@@ -14,6 +14,11 @@ import (
 var ErrNoCloudflareLevel = errors.New("the token's permissions are neither Read nor Operate: " +
 	"save the level it should hold here, and Crewlet narrows it to that")
 
+// ErrNoExpoLevel refuses keeping an Expo robot's permissions when they are no
+// level's: a seat names a level, and none of them holds what it holds.
+var ErrNoExpoLevel = errors.New("the robot's Expo permissions match no level: " +
+	"save the level it should hold here, and Crewlet moves it to that")
+
 // ErrSeveralRoles refuses keeping a Datadog account's roles when it holds more
 // than one: a seat names one role, and keeping one of several would take the
 // others away.
@@ -50,6 +55,11 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneCloudflare:
 		if !slices.Contains(config.CloudflareLevels(), have.Level) {
 			return Desired{}, ErrNoCloudflareLevel
+		}
+		kept.Level = have.Level
+	case LaneExpo:
+		if !slices.Contains(config.ExpoLevels(), have.Level) {
+			return Desired{}, ErrNoExpoLevel
 		}
 		kept.Level = have.Level
 	default:

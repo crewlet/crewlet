@@ -861,6 +861,56 @@
         "null"
       ]
     },
+    "Expo": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/ExpoProvisioning",
+          "description": "The Expo account and the provisioner token the engine creates each agent's robot user with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ExpoProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "access_token": {
+          "description": "Expo access token whose user or robot holds the Admin role on the account, so it can manage robot users and their tokens.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "account_name": {
+          "description": "Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users are created on.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GitHub": {
       "additionalProperties": false,
       "properties": {
@@ -1214,6 +1264,10 @@
         "datadog": {
           "$ref": "#/$defs/Datadog",
           "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
+        },
+        "expo": {
+          "$ref": "#/$defs/Expo",
+          "description": "Expo account and provisioner token, used to create one Expo robot user per agent. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
@@ -2946,6 +3000,35 @@
         "null"
       ]
     },
+    "RoleExpo": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Expo robot user. Off deletes the robot and its token.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "viewer (the default): reads projects, builds, submissions and updates. runner: viewer plus low-risk actions such as starting builds. developer: runner plus publishing updates. release_manager: developer plus publishing to protected channels.",
+          "enum": [
+            "viewer",
+            "runner",
+            "developer",
+            "release_manager",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGitHub": {
       "additionalProperties": false,
       "properties": {
@@ -3098,6 +3181,10 @@
         "datadog": {
           "$ref": "#/$defs/RoleDatadog",
           "description": "This seat's Datadog service account: whether it is on and its role."
+        },
+        "expo": {
+          "$ref": "#/$defs/RoleExpo",
+          "description": "This seat's own Expo robot user: whether it is on and its level."
         },
         "github": {
           "$ref": "#/$defs/RoleGitHub",
@@ -3753,6 +3840,7 @@
             "atlassian",
             "cloudflare",
             "datadog",
+            "expo",
             "github",
             "gitlab",
             "mattermost",

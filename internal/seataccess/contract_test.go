@@ -25,6 +25,7 @@ func TestDesiredRoundTripsThroughTheDocument(t *testing.T) {
 		seataccess.LaneConfluence: {Enabled: false, Level: "create:page read:space", Scope: []string{"ENG"}},
 		seataccess.LaneMattermost: {Enabled: true, Level: "system_user system_post_all", Scope: []string{"town-square"}},
 		seataccess.LaneSlack:      {Enabled: true},
+		seataccess.LaneExpo:       {Enabled: true, Level: "release_manager"},
 		seataccess.LaneGitHub: {Enabled: true, Scope: []string{"acme/api"},
 			Permissions: seataccess.Permissions{"contents": seataccess.AccessRead, "workflows": seataccess.AccessWrite}},
 	}
@@ -185,7 +186,7 @@ func TestToolStateOf(t *testing.T) {
 		{"its only server turned off, still off", turnedOff, dd, seataccess.Desired{}, live, seataccess.ToolOff},
 	}
 	for _, tc := range cases {
-		if got := seataccess.ToolStateOf(tc.c, tc.lane, tc.want, tc.have); got != tc.tool {
+		if got := seataccess.ToolStateOf(tc.c, "sre", tc.lane, tc.want, tc.have); got != tc.tool {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.tool)
 		}
 	}
