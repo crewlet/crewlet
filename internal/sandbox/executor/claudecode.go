@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -92,6 +93,16 @@ const ClaudeCodeName = "claude-code"
 // ([claudeCarryFloor]); and every resumed run renders its system prompt afresh
 // ([claudeSnapshotFloor]), so a later launch's standing instructions are the
 // ones it reads.
+//
+// # Its end, on request
+//
+// A run's script records its pid before anything else, once it traps SIGUSR1
+// (end.go), and runs the harness in the background, waited for: the request
+// ends the harness — SIGTERM, then SIGKILL past [sandbox.JobStopGrace] — and the
+// script packs the session as its own exit does ([claudeCapture]), records that
+// it was ended ([Paths.JobEnded]) and exits with the harness's status. A
+// SIGTERM to the job's group is still a teardown's, which the script does not
+// trap: it goes with its harness, as it always did.
 type ClaudeCode struct{}
 
 var _ Harness = ClaudeCode{}
@@ -128,10 +139,13 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 
 // Command builds the headless `claude -p` invocation: ONE SCRIPT, so the
 // wrapper's redirections — the brief on stdin, the stream, the error file —
-// reach every step of it alike. It reads the box's `claude --version` once
-// ([claudeRelease]) and decides by it what the harness is started with; names the
-// session the harness runs in and records it ([Paths.SessionRecord]); runs the harness;
-// and once the harness has exited, packs its session to be carried to another box
+// reach every step of it alike. It opens with the end protocol (end.go): its
+// pid recorded once it traps the request that ends its job. It reads the box's
+// `claude --version` once ([claudeRelease]) and decides by it what the harness
+// is started with; names the session the harness runs in and records it
+// ([Paths.SessionRecord]); runs the harness, in the background and waited for,
+// so a request can end it ([launchHarness]); and once the harness has exited —
+// by itself or ended — packs its session to be carried to another box
 // ([claudeCapture]), exiting with the harness's own status.
 //
 // Pure and deterministic given its session, so the exact flags can be pinned by
@@ -190,6 +204,14 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // the assistant's deep work's included, is told what THIS launch's standing
 // instructions say.
 func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
+	return "sh -c " + shellQuote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
+}
+
+// claudeScript is a Claude Code run's script — see [ClaudeCode.Command] —
+// giving its harness stop to go once it is asked to end: [sandbox.JobStopGrace],
+// or a case's shorter one.
+func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPath string,
+	stop time.Duration) string {
 	parts := []string{
 		"claude", "-p",
 		"--output-format", "stream-json", "--verbose",
@@ -230,6 +252,11 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	// THE END PROTOCOL BEFORE ANYTHING ELSE, its pid published only once its
+	// request is trapped (end.go): the release gate below runs a harness, which
+	// a request may come during.
+	b.WriteString(endPrologue(paths, stop))
+	b.WriteString(endHarness(""))
 	b.WriteString(claudeRelease)
 	// THE TRANSCRIPT KEPT NEAR ITS SIZE, on a release whose trim loses nothing
 	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
@@ -261,11 +288,10 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellQuote(paths.SessionRecord()))
-	line(`%s`, strings.Join(parts, " "))
-	line(`code=$?`)
+	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
-	return "sh -c " + shellQuote(b.String())
+	return b.String()
 }
 
 // claudeRelease opens every Claude Code run's script: it reads the box's

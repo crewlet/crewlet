@@ -49,7 +49,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 		p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
-		p.SessionPackStaging(), p.ClaudeConfigDir(),
+		p.SessionPackStaging(), p.ClaudeConfigDir(), p.JobScript(), p.JobEnded(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -141,7 +141,14 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 }
 
 // A reused box carries the prior run's marker; without clearing it the poll
-// fires immediately and collect reads the old result.
+// fires immediately and collect reads the old result. And the last job's END
+// RECORDS go too: the pid its script published, which a request read before
+// this run's script publishes its own would go to a process that is not this
+// run's, and the record of how that job was ended, which this run's collection
+// would otherwise read as its own — each with the file it was written beside.
+//
+// Mutation: leave either record, or the file beside it, out of the clear, and
+// its row goes red.
 func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -171,6 +178,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// collected with the last run's capture as its own, nor restore the
 		// last run's carried archive.
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(),
+		// And the last job's end records, and what each was written beside.
+		"'" + p.JobScript() + "'", "'" + p.JobScript() + ".next'", "'" + p.JobEnded() + "'",
+		"'" + p.JobEnded() + ".next'",
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)

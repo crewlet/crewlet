@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -478,6 +479,13 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
 // continued context, and it is the whole reason to reuse a box.
 //
+// AND THE END PROTOCOL'S RECORDS: the pid the previous run's script published
+// ([Paths.JobScript]) — a request read through it would go to a process that
+// is not this run's — and the record of how that job was ended
+// ([Paths.JobEnded]), which this run's collection would otherwise read as its
+// own; each with the file it was written beside, which a script killed before
+// its move leaves.
+//
 // AND THE SESSION'S PIECES: the previous run's record of its session, its
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
@@ -496,7 +504,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh()}
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh(),
+		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -1108,6 +1117,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
+
+	// WHETHER THE JOB WAS ENDED ON REQUEST, as its script recorded the moment
+	// its harness was over ([Paths.JobEnded]): a run ended so did not finish,
+	// whatever it wrote and however its harness exited — a harness that
+	// exits 0 on SIGTERM included — so it never reads as a success, and its
+	// failure says so first. A word this build does not know is no end.
+	endedText, refusal, err := readWhole(ctx, box, paths.JobEnded(), "the record of how its job was ended")
+	if err != nil {
+		return sandbox.Result{}, err
+	}
+	if refusal != "" {
+		refused = append(refused, refusal)
+	}
+	if ended := sandbox.JobEnd(strings.TrimSpace(endedText)); ended.Valid() {
+		result.JobEnd = ended
+	}
 	// AND WHETHER ITS HARNESS EXITED CLEANLY, for the session its script
 	// packed after it whatever its status: one killed while the wrapper lived
 	// on — a signal, its memory limit — may end mid-record, and so may one
@@ -1156,7 +1181,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// than a silent stall. The harness's error used to be REPLACED by the
 		// stderr whenever the stderr held anything at all, so a run that
 		// hit its turn cap and printed one warning reported the warning.
-		if crashed {
+		// A run ended on request says its status in saying so (below).
+		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
 		said = append(said, result.Error)
@@ -1172,7 +1198,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// a reader cannot find anywhere else.
 		result.Success = false
 	}
-	result.Error = failureDetail(append(refused, said...), errStream, unread, r.failureBound)
+	// A RUN ENDED ON REQUEST says so before anything else, for the same
+	// reason: nothing it wrote says it was stopped.
+	var sentences []string
+	if result.JobEnd != "" {
+		result.Success = false
+		sentences = append(sentences, endedSentence(result.JobEnd, code))
+	}
+	sentences = append(append(sentences, refused...), said...)
+	result.Error = failureDetail(sentences, errStream, unread, r.failureBound)
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
@@ -1186,6 +1220,72 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// after redacting it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// endedSentence is what a run's failure opens with where its job was ended on
+// request ([sandbox.Result.JobEnd]), its harness's exit status code where the
+// box recorded one.
+func endedSentence(ended sandbox.JobEnd, code string) string {
+	const opening = "the run was ended on request before it finished: "
+	switch ended {
+	case sandbox.JobEndKilled:
+		return opening + fmt.Sprintf("its harness did not stop within %s and was killed", sandbox.JobStopGrace)
+	case sandbox.JobEndBefore:
+		return opening + "before its harness started"
+	}
+	if code == "" {
+		return opening + "its harness was told to stop"
+	}
+	return opening + "its harness was told to stop and exited " + code
+}
+
+// AskEnd asks the job handle names to end ([sandbox.JobEnder]): the end
+// protocol its script recorded in box ([Paths.JobScript]) read, and its script
+// sent the request through the box ([sandbox.Sandbox.EndJob]).
+//
+// NOTHING IS ASKED OF A SCRIPT THAT RECORDED NO PROTOCOL THIS BUILD SPEAKS —
+// an older build's script, one that has not reached its first line, a record
+// that is not `1 <pid>` with a pid above 1 — and the answer says so
+// ([sandbox.EndUnheard]): the read kills such a job instead. A pid the box
+// says is no process of the job is [sandbox.EndGone], for the same end. The
+// record is the job's own file, read whole and parsed, never handed on as text.
+func (r *Runner) AskEnd(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.EndAsk, error) {
+	paths := PathsFor(box)
+	recorded, refusal, err := readWhole(ctx, box, paths.JobScript(), "the end protocol its script recorded")
+	if err != nil {
+		return "", fmt.Errorf("executor: reading the end protocol the job's script recorded: %w", err)
+	}
+	script, ok := parseJobScript(recorded)
+	if refusal != "" || !ok {
+		return sandbox.EndUnheard, nil
+	}
+	switch err := box.EndJob(ctx, handle.CommandID, script); {
+	case err == nil:
+		return sandbox.EndAsked, nil
+	case errors.Is(err, sandbox.ErrNotJobProcess):
+		log.InfoContext(ctx, "harness_end_unheard", "harness", r.harness.Name(), "pid", script,
+			"error", err.Error())
+		return sandbox.EndGone, nil
+	default:
+		return "", fmt.Errorf("executor: asking %s's script to end its job: %w", r.harness.Name(), err)
+	}
+}
+
+var _ sandbox.JobEnder = (*Runner)(nil)
+
+// parseJobScript reads a script's record of its end protocol
+// ([Paths.JobScript]): `1 <pid>`, one line, the protocol this build speaks and
+// a pid above 1 — false for anything else.
+func parseJobScript(recorded string) (int, bool) {
+	fields := strings.Fields(recorded)
+	if len(fields) != 2 || fields[0] != strconv.Itoa(jobScriptProtocol) {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(fields[1])
+	if err != nil || pid < 2 {
+		return 0, false
+	}
+	return pid, true
 }
 
 // failureDetail composes a run's failure: the engine's own sentences in the

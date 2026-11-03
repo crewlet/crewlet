@@ -72,7 +72,7 @@ func hostFleetOn(t *testing.T) (store sandbox.PendingStore, a, b *hostNode, brok
 		}); err != nil {
 			t.Fatalf("newBoxReads: %v", err)
 		}
-		n.reads.budget = 2 * time.Second
+		n.reads.budget = flatBudget(2 * time.Second)
 		if n.coordinator, err = sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 			Answers: testAnswers(),
 			Queue:   q, Pending: store, Manager: manager, Resume: nilResumer{},
@@ -89,6 +89,51 @@ func hostFleetOn(t *testing.T) (store sandbox.PendingStore, a, b *hostNode, brok
 		return n
 	}
 	return store, node("node-a"), node("node-b"), broker
+}
+
+// flatBudget is a box read budget of d for every kind of read, so a case can
+// watch a host stay silent without waiting minutes for it.
+func flatBudget(d time.Duration) func(sandbox.BoxRead) time.Duration {
+	return func(sandbox.BoxRead) time.Duration { return d }
+}
+
+// A BOX READ WAITS AS LONG AS ITS KIND TAKES: a stop's and a loss's read end the
+// job before they take its session, so their ask waits for that end on top of
+// a collection's — the budget for the read asked, never one figure for every
+// read, which a node's asks are built with.
+//
+// Mutation: ask with one budget whatever the read, and the stop's ask is made
+// under the collection's.
+func TestABoxReadWaitsAsLongAsItsKindTakes(t *testing.T) {
+	t.Parallel()
+	store, a, b := hostFleet(t)
+	fresh, err := newBoxReads(hostRing, "node-c", nil, func() *sandbox.Coordinator { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range sandbox.BoxReads {
+		if got, want := fresh.budget(read), sandbox.BoxReadBudget(read); got != want {
+			t.Errorf("a node's %s ask waits %v, want %v", read, got, want)
+		}
+	}
+	if fresh.budget(sandbox.BoxReadStop) <= fresh.budget(sandbox.BoxReadCollect) {
+		t.Errorf("a stop's ask waits %v, no longer than a collection's %v: nothing waits for the job's end",
+			fresh.budget(sandbox.BoxReadStop), fresh.budget(sandbox.BoxReadCollect))
+	}
+
+	run := runOnHost(t, store, a, "t1")
+	run.LaunchNode = "node-z"
+	var asked []sandbox.BoxRead
+	b.reads.budget = func(read sandbox.BoxRead) time.Duration {
+		asked = append(asked, read)
+		return 100 * time.Millisecond
+	}
+	if _, _, err := b.reads.ReadBox(t.Context(), run, sandbox.BoxReadStop); !errors.Is(err, sandbox.ErrBoxHostSilent) {
+		t.Fatalf("ReadBox of a node nobody serves = %v; want a silent host", err)
+	}
+	if len(asked) == 0 || asked[0] != sandbox.BoxReadStop {
+		t.Fatalf("the stop's ask took the budget of %v, want the stop's own", asked)
+	}
 }
 
 // runOnHost seeds a running job host launched, its box on host's own backend,
@@ -176,7 +221,7 @@ func TestAHostThatDoesNotAnswerIsSilent(t *testing.T) {
 	store, a, b := hostFleet(t)
 	run := runOnHost(t, store, a, "t1")
 	run.LaunchNode = "node-c"
-	b.reads.budget = 200 * time.Millisecond
+	b.reads.budget = flatBudget(200 * time.Millisecond)
 
 	if _, _, err := b.reads.ReadBox(t.Context(), run, sandbox.BoxReadCollect); !errors.Is(err, sandbox.ErrBoxHostSilent) {
 		t.Errorf("ReadBox of a node nobody serves = %v; want a silent host", err)
@@ -320,7 +365,7 @@ func TestOnlyTheAskedHostsSignedReplyIsTheAnswer(t *testing.T) {
 			// THE BOX'S HOST answers nobody here: the run names node-z,
 			// which serves nothing, and the third party answers for it.
 			run.LaunchNode = "node-z"
-			b.reads.budget = 500 * time.Millisecond
+			b.reads.budget = flatBudget(500 * time.Millisecond)
 			fleet, err := newBoxReads(hostRing, "node-c", nil, func() *sandbox.Coordinator { return nil })
 			if err != nil {
 				t.Fatal(err)

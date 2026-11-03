@@ -48,12 +48,19 @@ import (
 // whoever acquires it, before its mailbox opens. A node with no sandbox runtime
 // has no runs to stop.
 //
-// SYNCHRONOUS, on the caller's frame: a stop is a reclaim of a box and a few
-// writes, bounded by the coordinator's own teardown grace, and the pause it
-// follows is rare — a watch that waits on it delivers the next change a moment
-// later, where a goroutine per stop would have a lifetime nobody owns. What
-// would wait on ANOTHER node — the read of a box on its host — is left to the
-// coordinator's own retry, which it owns ([sandbox.Coordinator.StopSeat]).
+// SYNCHRONOUS, on the caller's frame, which waits on no job: the frame DECIDES
+// each stop — a few writes under the seat's lease — and closes the run's
+// tool-bridge session. A run whose job started in a box is finished by the
+// coordinator's own retry, which it arms at once and owns: the job's end,
+// which is waiting for it (at most [sandbox.JobEndBudget]), the read of what
+// it spent and of its session, the box's reclaim and the stop's announcement
+// — on this node's host or another's, and whatever
+// `conversation_session.enabled` says ([sandbox.Coordinator.StopSeat]). Only a
+// stop with no job to end, a launch stopped before its command was recorded,
+// is finished on the frame, its box reclaimed within the coordinator's
+// teardown grace. The pause it follows is rare — a watch that waits on it
+// delivers the next change a moment later — where a goroutine per stop would
+// have a lifetime nobody owns.
 func (e *Engine) stopSeatRuns(ctx context.Context, seat uuid.UUID, p coord.SeatPause) {
 	if !p.StopRunning {
 		return

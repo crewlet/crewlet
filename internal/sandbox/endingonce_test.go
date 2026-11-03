@@ -372,9 +372,10 @@ func TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt(t *testing.T) {
 }
 
 // A RUN GONE BEFORE THE NEXT HOLDER'S FENCE IS NOT TAKEN OVER. The seat's last
-// holder, not yet aware its lease lapsed, stops a running job and finishes the
-// stop on its own frame — the box reclaimed, the record deleted — between the
-// next holder's listing of the seat's runs and that holder's fence of the row.
+// holder, not yet aware its lease lapsed, stops a running job and its retry
+// finishes the stop at once — the job ended, the box reclaimed, the record
+// deleted — between the next holder's listing of the seat's runs and that
+// holder's fence of the row.
 // The fence found no row to move, and the run listed as running was taken over
 // all the same: counted as holding, it held the next holder's mail behind a run
 // that no longer existed, with nothing left to recount the seat.
@@ -392,6 +393,7 @@ func TestARunGoneBeforeTheNextHoldersFenceIsNotTakenOver(t *testing.T) {
 		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
 			t.Errorf("the old holder's stop: %v", err)
 		}
+		rig.fireRetries()
 		if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
 			t.Errorf("the premise: the old holder finished its stop, record and all (found %v, %v)",
 				found, err)
