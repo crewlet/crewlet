@@ -209,21 +209,27 @@ describe("credentials", () => {
     ).toEqual(["PADDED", "SLACK_BOT"]);
   });
 
-  // An account exists at a provisioning vendor only for a seat enrolled with
-  // it, by a credential for the vendor's mcp_env server, its own or its home
-  // unit's; and nothing exists anywhere for a seat this draft created.
+  // An account exists at a provisioning vendor only for a seat that is on
+  // there in its own `roles[].integrations` block, at a company that
+  // provisions it; a credential in `mcp_env` enrols nobody. A Cloudflare
+  // token is deleted with its seat, and a seat this draft created has nothing.
   test("a vendor account is named only for an enrolled, saved seat", () => {
     const doc = fixtureCompany();
     doc.integrations = {
       ...doc.integrations,
       atlassian: { org_id: "acme" },
       datadog: { route_to: "sre", provisioning: { site: "datadoghq.eu" } },
+      cloudflare: { enabled: true, account_id: "acct", api_token: "${CLOUDFLARE_API_TOKEN}" },
     };
-    doc.units![0]!.roles![1]!.mcp_env = {
-      confluence: { CONFLUENCE_API_TOKEN: "${DEV_WIKI}" },
-      datadog: { DD_APP_KEY: "${DEV_DD}" },
+    doc.units![0]!.roles![1]!.integrations = {
+      confluence: { enabled: true },
+      datadog: { enabled: true, role: "r-ro" },
+      cloudflare: { enabled: true, level: "operate" },
     };
-    doc.units![1]!.mcp_env = { gitlab: { GITLAB_TOKEN: "${SALES_GITLAB}" } };
+    doc.units![1]!.roles![0]!.integrations = { gitlab: { enabled: true, access_level: 30 } };
+    // The engine refuses a seat key in mcp_env, so it names no account.
+    doc.units![0]!.children![0]!.roles![0]!.mcp_env = { datadog: { DD_APP_KEY: "${SRE_DD}" } };
+    doc.units![0]!.children![0]!.roles![0]!.integrations = { jira: { enabled: false } };
     const state = keyedState(doc);
     const seat = (key: string) => {
       const found = locate(state.draft, key);
@@ -234,11 +240,10 @@ describe("credentials", () => {
       "its Datadog service account",
       "its Atlassian account",
     ]);
-    // Through the unit's mcp_env, which every direct member receives.
     expect(vendorIdentities(state, seat("seat:account-executive"))).toEqual([
       "its GitLab service account",
     ]);
-    // Connected tools, no enrolment.
+    // Connected tools, a block that is off and a stale credential: no enrolment.
     expect(vendorIdentities(state, seat("seat:sre"))).toEqual([]);
 
     const added = builderReducer(state, {
