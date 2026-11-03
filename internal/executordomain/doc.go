@@ -144,8 +144,9 @@
 // read showed it — at the cost, while the hold lasts, of a later read showing
 // it a second time.
 //
-// The siblings a read offers are not held: no launch opens one yet, and
-// holding up to [MaxSiblings] of them is a table's job rather than a column's.
+// The siblings a read offers are not held, and opening one never holds it: a
+// hold on a session a run opens would be a write the model's read triggers,
+// which ADR-0073 bars. A read of a sibling released meanwhile says so instead.
 //
 // # A removed seat stays removed
 //

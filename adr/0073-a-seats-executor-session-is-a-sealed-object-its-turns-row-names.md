@@ -371,9 +371,11 @@ its begin's alone holds no session that could stand in for what its read handed
 out, as a turn with no row at all does not, so the gate on an end's absorption
 is a landed capture rather than a row.
 
-**The siblings a read offers are not held.** No launch opens one, and holding
-the offered siblings, up to eight, is a table's job rather than a column's,
-which belongs with the first change that opens one.
+**The siblings a read offers are not held, and opening one never holds it.**
+A hold on a session a run opens would be a write the model's read triggers,
+which this record bars, and it would contend with the reader's own capture.
+A read of a sibling released meanwhile reads its row again and says that it
+was released, rather than holding it.
 
 **Record version 2.** The `begin`, and a capture's context and cut-off — the
 whole input of its session's last request and whether its harness was cut off,
