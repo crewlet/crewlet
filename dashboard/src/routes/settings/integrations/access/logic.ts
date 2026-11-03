@@ -327,9 +327,12 @@ export function boxSettings(saved: AccessSeatLane): string | null {
 
 /** The tool, as one value: whether it works, and what it works through. */
 export function toolWords(lane: Lane, saved: AccessSeatLane): string {
-  const words = laneWords(lane.key);
   const names = andList(boxLines(saved).map((line) => line.name));
-  const through = names ? `${words.tool}, as ${names}` : words.tool;
+  const through = names ? `${laneWords(lane.key).tool}, as ${names}` : laneWords(lane.key).tool;
+  const server = lane.tool_server ? `${lane.tool_server} tool server` : "tool server";
+  // A LANE WITH BOTH ROUTES is live through either, so a seat with neither is
+  // told both, the server first.
+  const andBox = names ? `, and its sandbox env does not set ${names}` : "";
   switch (saved.tool) {
     case "live":
       return `Live, ${through}`;
@@ -338,11 +341,11 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "waiting":
       return `Waiting for the credential, ${through}`;
     case "no_server":
-      return names
+      return names && !lane.tool_server
         ? `Not set up: its sandbox env does not set ${names}`
-        : `Not set up: no ${words.server} tool server is declared`;
+        : `Not set up: no ${server} is declared${andBox}`;
     case "server_off":
-      return `Not running: the ${words.server} tool server is turned off`;
+      return `Not running: the ${server} is turned off${andBox}`;
     case "off":
       return "None while off";
   }
@@ -351,24 +354,34 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
 /**
  * What agents with an account and no tool lack, and how to give them one, said
  * once above the table after "... nothing to use it with: ". A box tool's
- * remedy is each agent's own lines, exactly as the engine sends them.
+ * remedy is each agent's own lines, exactly as the engine sends them; a lane
+ * with a tool server too offers the server first.
  */
 export function noToolRemedy(
   lane: Lane,
   seats: readonly { name: string; saved: AccessSeatLane }[],
 ): string {
-  const words = laneWords(lane.key);
+  const server = lane.tool_server;
+  const where = "under Settings › MCP & tools as one instance per agent";
   const boxed = seats.filter((s) => boxLines(s.saved).length > 0);
-  if (boxed.length > 0) {
-    const lines = (s: (typeof boxed)[number]) =>
-      andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
-    const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
-    if (boxed.length === 1)
-      return `its sandbox env does not set ${names}. Add ${lines(boxed[0]!)} to ${boxed[0]!.name}'s sandbox.env in the company document, and its tool signs in as the agent.`;
-    const each = boxed.map((s) => `${s.name}, ${lines(s)}`).join("; ");
-    return `their sandbox env does not set ${names}. In the company document, add each agent's own lines to its sandbox.env: ${each}. Each tool then signs in as its agent.`;
-  }
-  return `the company declares no ${words.server} tool server. Add it under Settings › MCP & tools as one instance per agent, and each agent's own credential is sent with it.`;
+  if (boxed.length === 0)
+    return server
+      ? `the company declares no ${server} tool server. Add it ${where}, and each agent's own credential is sent with it.`
+      : `the company declares no tool server for it. Add one ${where}, and each agent's own credential is sent with it.`;
+  const one = boxed.length === 1 ? boxed[0]! : null;
+  const lines = (s: (typeof boxed)[number]) =>
+    andList(boxLines(s.saved).map(({ name, value }) => `${name}: "${value}"`));
+  const names = andList([...new Set(boxed.flatMap((s) => boxLines(s.saved).map((l) => l.name)))]);
+  const unset = `${one ? "its" : "their"} sandbox env does not set ${names}`;
+  const lineup = one
+    ? `${lines(one)} to ${one.name}'s sandbox.env in the company document`
+    : `each agent's own lines to its sandbox.env in the company document: ${boxed
+        .map((s) => `${s.name}, ${lines(s)}`)
+        .join("; ")}`;
+  const signsIn = one ? "its tool signs in as the agent" : "each tool signs in as its agent";
+  return server
+    ? `the company declares no ${server} tool server, and ${unset}. Add the ${server} tool server ${where}, or add ${lineup}. Either way ${signsIn}.`
+    : `${unset}. Add ${lineup}. Then ${signsIn}.`;
 }
 
 /** The last sync, as one value. */

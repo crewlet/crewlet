@@ -106,6 +106,12 @@ export interface AccessOptions {
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
   /**
+   * The `mcp_servers` entry a per-seat tool server for this lane is started
+   * from, where one takes the seat's credential; absent where none does
+   * (Expo, whose CLI in the agent's box is its only tool).
+   */
+  tool_server?: string;
+  /**
    * The lane's access is a SET of levels rather than one (Confluence's space
    * permissions by operation, on a site without space roles): a seat's level
    * is the chosen ids, sorted and space-separated.

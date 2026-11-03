@@ -26,6 +26,7 @@ export const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 const DATADOG_OPTIONS: AccessOptions = {
   lane: "datadog",
+  tool_server: "datadog",
   live: true,
   rotatable: true,
   levels: [
@@ -38,6 +39,7 @@ const DATADOG_OPTIONS: AccessOptions = {
 
 const GITHUB_OPTIONS: AccessOptions = {
   lane: "github",
+  tool_server: "github",
   live: false,
   permissions: [
     { key: "contents", name: "Contents", administers_on_write: true },
@@ -68,6 +70,7 @@ const MATTERMOST_OPTIONS: AccessOptions = {
 /** A GitLab group whose connection lists no projects, so any project in it may be typed. */
 const GITLAB_OPTIONS: AccessOptions = {
   lane: "gitlab",
+  tool_server: "gitlab",
   live: true,
   rotatable: true,
   levels: [
@@ -83,6 +86,7 @@ const GITLAB_OPTIONS: AccessOptions = {
 /** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
+  tool_server: "cloudflare",
   live: false,
   rotatable: true,
   levels: [

@@ -35,8 +35,6 @@ export interface LaneWords {
   scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
-  /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
-  server: string;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
 }
@@ -50,7 +48,6 @@ const GENERIC: LaneWords = {
   rotate:
     "Crewlet mints a new credential and revokes the old one. Anything still using the old one stops working.",
   tool: "Its tool server, one per agent",
-  server: "vendor",
 };
 
 export const LANE_WORDS: Record<string, LaneWords> = {
@@ -64,7 +61,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet mints a new application key for the service account and deletes the old one. Anything still using the old key stops working.",
     tool: "Datadog MCP server, one per agent",
-    server: "datadog",
   },
   github: {
     name: "GitHub",
@@ -77,7 +73,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate: "GitHub issues the app's tokens hourly, so there is nothing to rotate.",
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
-    server: "github",
   },
   gitlab: {
     name: "GitLab",
@@ -90,7 +85,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new token for the service account and revokes the old one. Anything still using the old token stops working.",
     scope: { noun: "Projects", singular: "project", empty: "The whole group" },
     tool: "GitLab MCP server, one per agent",
-    server: "gitlab",
   },
   jira: {
     name: "Jira",
@@ -104,7 +98,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Projects", singular: "project", empty: "No project" },
     tool: "Crewlet's own Jira tools",
-    server: "jira",
   },
   confluence: {
     name: "Confluence",
@@ -118,7 +111,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
-    server: "confluence",
   },
   slack: {
     name: "Slack",
@@ -131,7 +123,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet revokes the app's bot token. The agent stays off Slack until a person approves the install again.",
     tool: "Slack MCP server, one per agent",
-    server: "slack",
     install: "Install in Slack",
   },
   mattermost: {
@@ -149,7 +140,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       emptyOn: "In no channel yet, so it cannot read or post anywhere. Choose its channels.",
     },
     tool: "Crewlet's chat transport",
-    server: "mattermost",
   },
   cloudflare: {
     name: "Cloudflare",
@@ -162,7 +152,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet rolls the token to a new value and seals it. Anything still using the old value stops working.",
     tool: "Cloudflare MCP server, one per agent",
-    server: "cloudflare",
   },
   expo: {
     name: "Expo",
@@ -175,7 +164,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     rotate:
       "Crewlet creates a new access token for the robot, seals it, then deletes the old one. Anything still using the old token stops working.",
     tool: "EAS CLI in its box",
-    server: "expo",
   },
 };
 
