@@ -320,6 +320,7 @@ func TestAnExpoPasteIsRefusedForEachCheck(t *testing.T) {
 	_, developer := w.expo.robot("crewlet-acme-qa", expo.RoleDeveloper)
 	_, admin := w.expo.robot("crewlet-acme-qa", expo.RoleAdmin)
 	_, custom := w.expo.robot("crewlet-acme-qa", expo.RoleCustom)
+	_, unsaid := w.expo.robot("crewlet-acme-qa", "")
 	_, revoked := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
 	w.expo.revoke(revoked)
 	person := w.expo.person("Avery", expo.RoleRunner)
@@ -332,6 +333,7 @@ func TestAnExpoPasteIsRefusedForEachCheck(t *testing.T) {
 		{"another role", developer.value, "is a Developer on example-org, and you chose Runner"},
 		{"Admin", admin.value, "Agents never hold Admin"},
 		{"a custom role", custom.value, "custom role"},
+		{"a role Expo does not say", unsaid.value, "Expo did not say this robot's role"},
 	} {
 		if _, err := w.paste(tc.value); !refused(err, tc.says) {
 			t.Errorf("%s: %v, want a refusal saying %q", tc.name, err, tc.says)
@@ -385,5 +387,94 @@ func TestAnExpoDisconnectKeepsNoToken(t *testing.T) {
 	}
 	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
 		t.Errorf("record = %+v, want the robot let go", rec)
+	}
+}
+
+// A ROBOT'S OTHER LIVE TOKENS ARE ASKED FOR ON EVERY PASS until Expo shows them
+// gone, after a first paste of a robot that already had one as after a rotate.
+func TestAnExpoRobotsOtherTokensAreAskedForUntilDeleted(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	robot, old := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	pasted := w.expo.mint(robot.id)
+	if _, err := w.paste(pasted.value); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		w.sync()
+		if said := w.waitingOn(seataccess.VerbRevoke); !strings.Contains(said, old.prefix+"…") {
+			t.Errorf("%q does not name the old token", said)
+		}
+		retired := w.lane().Observed.Retired
+		if len(retired) != 1 || retired[0].Label != old.prefix+"…" || retired[0].Since.IsZero() {
+			t.Fatalf("observed retired = %+v, want the old token with its creation time", retired)
+		}
+		if plan := w.lane().Sync.Steps; len(plan) != 1 || plan[0].Step.Op != seataccess.OpRetire {
+			t.Errorf("steps = %+v, want the retire op alone", plan)
+		}
+	}
+	w.expo.revoke(old)
+	w.sync()
+	w.inSync()
+	if retired := w.lane().Observed.Retired; len(retired) != 0 {
+		t.Errorf("observed retired = %+v after the old token was revoked", retired)
+	}
+}
+
+// TURNED BACK ON, a seat forgets its old robot's token: the robot comes back
+// only through a paste, never by reusing what was kept to watch it.
+func TestAnExpoSeatTurnedBackOnForgetsTheRetiredToken(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	off, on := false, true
+	w.seat().Enabled = &off
+	w.sync()
+	if _, ok := w.sink.Held(retiredQA); !ok {
+		t.Fatal("the turned-off token was not kept to watch its robot")
+	}
+	w.seat().Enabled = &on
+	w.sync()
+	for _, name := range []string{sealedQA, retiredQA} {
+		if _, ok := w.sink.Held(name); ok {
+			t.Errorf("%s is sealed after the seat was turned back on", name)
+		}
+	}
+	w.waitingOn(seataccess.VerbMint)
+	again := w.expo.mint(robot.id)
+	if _, err := w.paste(again.value); err != nil {
+		t.Fatalf("the old robot's new token: %v", err)
+	}
+	if sealed, _ := w.sink.Held(sealedQA); sealed != again.value {
+		t.Error("the new token was not sealed")
+	}
+}
+
+// KEEPING THE ROBOT AT EXPO closes the delete step, forgets the retired token
+// and says it was the person's choice.
+func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	w.seat().Enabled = &off
+	w.sync()
+	w.waitingOn(seataccess.VerbRemove)
+	w.syncAsking(map[string]seataccess.Ask{"qa": {Release: true, Lane: seataccess.LaneExpo}})
+	if _, ok := w.sink.Held(retiredQA); ok {
+		t.Error("the retired token outlived the person keeping the robot")
+	}
+	steps := w.lane().Sync.Steps
+	if last := steps[len(steps)-1]; !last.Done || !strings.Contains(last.Text, "as you chose") {
+		t.Errorf("steps = %+v, want the delete step closed as the person's choice", steps)
+	}
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
+		t.Errorf("record = %+v, want the kept robot no longer tracked", rec)
 	}
 }

@@ -632,9 +632,11 @@ func (s *Service) accessCredential(w http.ResponseWriter, r *http.Request) {
 		s.accessFault(w, r, kind, "setup_access_credential_unchecked", err)
 		return
 	}
+	// THE AUDIT NAMES THE ACCOUNT AND WHAT THE VENDOR SHOWS OF THE CREDENTIAL,
+	// never the value.
 	log.InfoContext(r.Context(), "setup_access_credential_sealed", "kind", kind, "seat", handle,
-		"lane", lane, "rotate", handed.Rotate,
-		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+		"lane", lane, "rotate", handed.Rotate, "account", handed.Account, "account_id", handed.AccountID,
+		"credential", handed.Label, "by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	answer, err := s.access.Answer(r.Context(), q)
 	if err != nil {
 		s.accessFault(w, r, kind, "setup_access_unread", err)
@@ -644,7 +646,7 @@ func (s *Service) accessCredential(w http.ResponseWriter, r *http.Request) {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
 	w.Header().Set("ETag", `"`+answer.Revision+`"`)
-	httpjson.Write(w, http.StatusOK, map[string]any{"detail": handed.Detail, "access": answer})
+	httpjson.Write(w, http.StatusOK, seataccess.CredentialAnswer{Detail: handed.Detail, Access: answer})
 }
 
 // handInProblem is why a pasted value cannot be a credential, "" where it can
@@ -683,8 +685,8 @@ const accessElsewhere = "an agent's access is set on an integration that manages
 // accessAct serves POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}.
 //
 // Every action but `keep` is an ask carried by a sync, which none of them can
-// come from otherwise: a rotate, a remove, a turn back on, a retry and a
-// re-read after a person's step at the vendor. `keep` writes the vendor's state
+// come from otherwise: a rotate, a remove, a turn back on, a retry, a re-read
+// after a person's step at the vendor, and a person keeping an account there. `keep` writes the vendor's state
 // into the document as a revision, so nothing is restored.
 func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	kind, ok := accessKind(w, r)
@@ -698,7 +700,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	case !action.Valid():
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
 			"detail": "no seat action " + string(action),
-			"hint":   "one of rotate, remove, keep, restore, retry, done",
+			"hint":   "one of rotate, remove, keep, restore, retry, done, release",
 		})
 		return
 	case !slices.Contains(seataccess.LanesOf(kind), lane):
@@ -769,6 +771,18 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ask.Reenable = true
+	case seataccess.ActionRelease:
+		// ONLY A STEP WAITING FOR THE ACCOUNT'S DELETION is closed by
+		// keeping it: the person's choice, recorded below.
+		if sync := held.Sync; sync == nil || sync.Outcome != seataccess.OutcomeWaiting ||
+			sync.Error == nil || sync.Error.Step != seataccess.VerbRemove {
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+				"detail": seat.Handle + " is not waiting for its account to be deleted at the vendor",
+				"hint":   "keep an account only when the row asks you to delete it",
+			})
+			return
+		}
+		ask.Release = true
 	}
 	// A RETRY AND A RE-READ ASK NOTHING: they run the sync for the one seat.
 	var asks []SeatAsk
@@ -801,6 +815,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	}
 	log.InfoContext(r.Context(), "setup_access_asked",
 		"kind", kind, "seat", seat.Handle, "lane", lane, "action", action,
+		"account", held.Observed.Account, "account_id", held.Observed.AccountID,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	s.writeAccess(w, r, q)
 }

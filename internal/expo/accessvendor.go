@@ -2,6 +2,7 @@ package expo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -42,54 +43,70 @@ func (accessVendor) Catalog() seataccess.Catalog {
 // Steps is each op as it is taken, in order. Pure.
 func (accessVendor) Steps(
 	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
-	want seataccess.Desired, _ seataccess.Observed,
+	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	out := expoSteps(seat, op, want)
+	out := expoSteps(seat, op, want, have)
 	for i := range out {
 		out[i].Index = i
 	}
 	return out
 }
 
-func expoSteps(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired) []seataccess.Step {
-	sink := seataccess.SinkName(integration.KindExpo, TokenField, seat.Handle)
+func expoSteps(
+	seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+) []seataccess.Step {
+	sink := "`" + seataccess.SinkName(integration.KindExpo, TokenField, seat.Handle) + "`"
 	you := func(verb seataccess.StepVerb, text string) seataccess.Step {
 		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByYou, Text: text}
 	}
 	role := LevelName(want.Level)
-	paste := you(seataccess.VerbMint, "Create an access token for its robot, then paste it here")
+	// The robot by name where the pass knows it: before it exists, the name
+	// to give it.
+	robot := "its robot"
+	if have.Account != "" {
+		robot = "robot `" + have.Account + "`"
+	}
+	paste := you(seataccess.VerbMint, "Create a new access token for "+robot+", then paste it here")
 	seal := seataccess.Step{Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
 		Text: "Check the token and seal it as " + sink}
 	clear := seataccess.Step{Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
 		Text: "Clear " + sink + ", so the agent loses Expo at once"}
 	switch op {
 	case seataccess.OpCreate:
+		named := "a robot for this agent"
+		if have.Account != "" {
+			named = "a robot named `" + have.Account + "`"
+		}
+		paste.Text = "Create an access token for it, then paste it here"
 		return []seataccess.Step{
-			you(seataccess.VerbCreate, "Add a robot for this agent with the "+role+" role at Expo"),
+			you(seataccess.VerbCreate, "Add "+named+" with the "+role+" role at Expo"),
 			paste, seal}
 	case seataccess.OpEnable:
 		return []seataccess.Step{you(seataccess.VerbEnable,
-			"Give its robot the "+role+" role again with Edit robot at Expo")}
+			"Give "+robot+" the "+role+" role again with Edit robot at Expo")}
 	case seataccess.OpLevel:
 		return []seataccess.Step{you(seataccess.VerbRerole,
-			"Change its robot's role to "+role+" with Edit robot at Expo")}
+			"Change "+robot+"'s role to "+role+" with Edit robot at Expo")}
 	case seataccess.OpMint:
-		// THE REFUSED TOKEN GOES FIRST, so Expo is never asked with it again.
+		// WHAT IS SEALED NOW GOES FIRST: a token Expo refused is never sent
+		// again, and a turned-off robot's is never reused once back on.
 		drop := clear
-		drop.Text = "Clear " + sink + ", which Expo no longer accepts"
-		paste.Text = "Create a new access token for its robot, then paste it here"
+		drop.Text = "Clear the turned-off robot's old token, so it is never reused"
+		if have.CredentialGone {
+			drop.Text = "Clear " + sink + ", which Expo no longer accepts"
+		}
 		return []seataccess.Step{drop, paste, seal}
 	case seataccess.OpRotate:
-		paste.Text = "Create a new access token for its robot, then paste it here"
-		return []seataccess.Step{paste, seal,
-			you(seataccess.VerbRevoke, "Delete its robot's other tokens at Expo")}
+		return []seataccess.Step{paste, seal, you(seataccess.VerbRevoke, "Delete "+robot+"'s other tokens at Expo")}
+	case seataccess.OpRetire:
+		return []seataccess.Step{you(seataccess.VerbRevoke, "Delete "+robot+"'s other tokens at Expo")}
 	case seataccess.OpDisable:
-		return []seataccess.Step{clear, you(seataccess.VerbRemove, "Delete its robot at Expo")}
+		return []seataccess.Step{clear, you(seataccess.VerbRemove, "Delete "+robot+" at Expo")}
 	case seataccess.OpRevoke:
 		return []seataccess.Step{clear}
 	case seataccess.OpRemove:
 		return []seataccess.Step{clear,
-			you(seataccess.VerbRemove, "Delete its robot at Expo, so Crewlet stops tracking it")}
+			you(seataccess.VerbRemove, "Delete "+robot+" at Expo, so Crewlet stops tracking it")}
 	default:
 		// OpScope: a robot acts on the whole account.
 		return nil
@@ -162,7 +179,7 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 	for _, id := range Levels() {
 		out = append(out, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id)})
 	}
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true}, nil
+	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: AccessTokensURL(s.account)}, nil
 }
 
 // Observe reads each seat's robot with the seat's own sealed token. A seat
@@ -226,8 +243,14 @@ func (s *accessSession) observe(ctx context.Context, handle string, rec *seatacc
 	}
 	out := seataccess.Observed{Exists: true, Account: me.Name, AccountID: me.ID,
 		CreatedAt: recorded.CreatedAt, Credential: sink}
+	for _, t := range othersOf(me, token) {
+		out.Retired = append(out.Retired, seataccess.Retired{Label: t.Prefix + "…", Since: t.Created})
+	}
 	role, err := c.RoleOn(ctx, s.account)
 	switch status := Status(err); {
+	case errors.Is(err, ErrRoleUnsaid):
+		return seataccess.Observed{}, fmt.Errorf("expo: Expo did not say robot %s's role on %s: %w",
+			me.Name, s.account, err)
 	case status == http.StatusForbidden || status == http.StatusNotFound:
 		// NO ROLE ON THE ACCOUNT: somebody took it away at Expo.
 		out.DisabledBy = seataccess.DisabledByHand
@@ -246,7 +269,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	case in.Step.By == seataccess.ByCrewlet && in.Step.Verb == seataccess.VerbMint:
 		return s.seal(ctx, in)
 	case in.Step.By == seataccess.ByCrewlet && in.Step.Op == seataccess.OpMint:
-		return seataccess.StepResult{Revoked: []string{TokenField}}, nil
+		return seataccess.StepResult{Revoked: []string{TokenField, RetiredField}}, nil
 	case in.Step.By == seataccess.ByCrewlet:
 		return s.clear(in), nil
 	case in.Step.Verb == seataccess.VerbCreate || in.Step.Verb == seataccess.VerbMint:
@@ -383,12 +406,9 @@ func (s *accessSession) awaitOtherTokens(ctx context.Context, in seataccess.Appl
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	own := prefixOf(me, token)
 	var others []string
-	for _, t := range me.Tokens {
-		if !t.Revoked && t.Prefix != own {
-			others = append(others, t.Prefix+"…")
-		}
+	for _, t := range othersOf(me, token) {
+		others = append(others, t.Prefix+"…")
 	}
 	if len(others) == 0 {
 		return seataccess.StepResult{}, nil
@@ -400,9 +420,14 @@ func (s *accessSession) awaitOtherTokens(ctx context.Context, in seataccess.Appl
 // awaitDeleted is done once the turned-off robot's token answers 401, which is
 // Expo saying the robot or its token is gone.
 func (s *accessSession) awaitDeleted(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	if in.Disconnect {
+	switch {
+	case in.Disconnect:
 		return seataccess.StepResult{Gone: true, Did: fmt.Sprintf("Crewlet no longer tracks robot %s; "+
 			"delete it on %s's access tokens page at Expo.", in.Have.Account, s.account)}, nil
+	case in.Release:
+		return seataccess.StepResult{Gone: true, Revoked: []string{RetiredField},
+			Did: fmt.Sprintf("Robot %s stays at Expo, as you chose. Crewlet no longer tracks it.",
+				in.Have.Account)}, nil
 	}
 	retired := s.sealed(in.Seat.Handle, RetiredField)
 	if retired == "" {
@@ -421,6 +446,19 @@ func (s *accessSession) awaitDeleted(ctx context.Context, in seataccess.ApplyInp
 	}
 	return s.waiting(fmt.Sprintf("Robot %s still exists at Expo. Delete it with Delete robot on "+
 		"%s's access tokens page.", in.Have.Account, s.account)), nil
+}
+
+// othersOf is every live token of the robot me but the one value, which the
+// robot's own token reads.
+func othersOf(me Actor, value string) []Token {
+	own := prefixOf(me, value)
+	var out []Token
+	for _, t := range me.Tokens {
+		if !t.Revoked && t.Prefix != own {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // waiting is a person's step at Expo, pointing at the account's access tokens
@@ -445,7 +483,7 @@ func (s *accessSession) CheckHandIn(ctx context.Context, in seataccess.HandInInp
 		return seataccess.HandedIn{}, err
 	}
 	return seataccess.HandedIn{
-		Rotate: held,
+		Rotate: held, Account: nameOf(checked.Robot), AccountID: checked.Robot.ID, Label: checked.Prefix + "…",
 		Detail: fmt.Sprintf("Works. Robot %s, %s on %s. Sealed as %s.", nameOf(checked.Robot),
 			roleName(checked.Role), s.account, seataccess.SinkName(integration.KindExpo, TokenField, in.Seat.Handle)),
 	}, nil

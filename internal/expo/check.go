@@ -69,6 +69,11 @@ func Check(ctx context.Context, c *Client, in CheckInput) (Checked, error) {
 			Hint: fmt.Sprintf("Add the robot on %s's access tokens page, or paste a token of a "+
 				"robot on %s.", in.Account, in.Account)}
 	}
+	if errors.Is(err, ErrRoleUnsaid) {
+		return Checked{}, &Refusal{Detail: "Expo did not say this robot's role.",
+			Hint: "Nothing was stored. Check the robot's role at Expo and paste the token again; " +
+				"if this persists, Expo has retired the role field Crewlet reads."}
+	}
 	if err != nil {
 		return Checked{}, err
 	}

@@ -214,6 +214,11 @@ func walk(
 				ops = append(ops, planned{op: OpRotate})
 				rotated = true
 			}
+			// A CREDENTIAL LEFT LIVE BESIDE THE SEALED ONE is a person's to
+			// delete, asked on every pass until the vendor stops showing it.
+			if owned && len(have.Retired) > 0 && len(ops) == 0 && have.Enabled && cred != nil && !gone {
+				ops = append(ops, planned{op: OpRetire})
+			}
 		}
 		var steps []Step
 		for _, p := range ops {

@@ -35,6 +35,8 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessDesired", reflect.TypeFor[seataccess.Desired]()},
 		{"AccessObserved", reflect.TypeFor[seataccess.Observed]()},
 		{"AccessCredential", reflect.TypeFor[seataccess.Credential]()},
+		{"AccessRetired", reflect.TypeFor[seataccess.Retired]()},
+		{"AccessCredentialAnswer", reflect.TypeFor[seataccess.CredentialAnswer]()},
 		{"AccessStep", reflect.TypeFor[seataccess.Step]()},
 		{"AccessStepOutcome", reflect.TypeFor[seataccess.StepOutcome]()},
 		{"AccessFailure", reflect.TypeFor[seataccess.Failure]()},
@@ -112,6 +114,7 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 			string(seataccess.ActionRotate), string(seataccess.ActionRemove),
 			string(seataccess.ActionKeep), string(seataccess.ActionRestore),
 			string(seataccess.ActionRetry), string(seataccess.ActionDone),
+			string(seataccess.ActionRelease),
 		), func(v string) bool { return seataccess.SeatAction(v).Valid() }},
 		{"AccessToolState", strs(
 			string(seataccess.ToolLive), string(seataccess.ToolBuiltin),
@@ -121,7 +124,7 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		{"AccessOp", strs(
 			string(seataccess.OpCreate), string(seataccess.OpEnable), string(seataccess.OpLevel),
 			string(seataccess.OpScope), string(seataccess.OpMint), string(seataccess.OpDisable),
-			string(seataccess.OpRemove), string(seataccess.OpRotate),
+			string(seataccess.OpRemove), string(seataccess.OpRotate), string(seataccess.OpRetire),
 		), func(v string) bool { return seataccess.Op(v).Valid() }},
 		{"AccessVerb", strs(
 			string(seataccess.VerbCreate), string(seataccess.VerbGrant), string(seataccess.VerbMint),

@@ -315,6 +315,7 @@ func (a Actor) Robot() bool { return a.Kind == "Robot" }
 type Token struct {
 	ID      string
 	Prefix  string
+	Created time.Time
 	Revoked bool
 }
 
@@ -329,12 +330,13 @@ func (c *Client) Viewer(ctx context.Context) (Actor, error) {
 			AccessTokens []struct {
 				ID        string     `json:"id"`
 				Prefix    string     `json:"visibleTokenPrefix"`
+				CreatedAt time.Time  `json:"createdAt"`
 				RevokedAt *time.Time `json:"revokedAt"`
 			} `json:"accessTokens"`
 		} `json:"meActor"`
 	}
 	const q = `query CrewletViewer { meActor { __typename id displayName ` +
-		`... on Robot { accessTokens { id visibleTokenPrefix revokedAt } } } }`
+		`... on Robot { accessTokens { id visibleTokenPrefix createdAt revokedAt } } } }`
 	if err := c.do(ctx, "CrewletViewer", q, nil, &data); err != nil {
 		return Actor{}, err
 	}
@@ -345,16 +347,21 @@ func (c *Client) Viewer(ctx context.Context) (Actor, error) {
 	me := data.MeActor
 	out := Actor{ID: me.ID, Kind: me.Typename, Name: me.DisplayName}
 	for _, t := range me.AccessTokens {
-		out.Tokens = append(out.Tokens, Token{ID: t.ID, Prefix: t.Prefix, Revoked: t.RevokedAt != nil})
+		out.Tokens = append(out.Tokens, Token{ID: t.ID, Prefix: t.Prefix, Created: t.CreatedAt,
+			Revoked: t.RevokedAt != nil})
 	}
 	return out, nil
 }
 
+// ErrRoleUnsaid is Expo answering a membership with no role, or no longer
+// answering the role field at all. Never guessed from permissions.
+var ErrRoleUnsaid = errors.New("expo: Expo did not say the robot's role")
+
 // RoleOn is the role the token's actor holds on the account named name. An
-// account the actor holds no role on answers a 403 or a 404.
+// account the actor holds no role on answers a 403 or a 404, and a role Expo
+// does not say answers [ErrRoleUnsaid].
 //
-// Expo carries the Role only on the deprecated viewerUserPermission; the
-// current viewerUserPermission2 answers permissions alone.
+// LIVE DEPENDENCY: Role exists only on the deprecated viewerUserPermission.role.
 func (c *Client) RoleOn(ctx context.Context, name string) (Role, error) {
 	var data struct {
 		Account struct {
@@ -367,13 +374,21 @@ func (c *Client) RoleOn(ctx context.Context, name string) (Role, error) {
 	}
 	const q = `query CrewletRole($name: String!) { account { byName(accountName: $name) { ` +
 		`viewerUserPermission { role } } } }`
-	if err := c.do(ctx, "CrewletRole", q, map[string]any{"name": name}, &data); err != nil {
+	err := c.do(ctx, "CrewletRole", q, map[string]any{"name": name}, &data)
+	if apiErr, ok := errors.AsType[*APIError](err); ok && apiErr.Code == "GRAPHQL_VALIDATION_FAILED" {
+		// THE FIELD RETIRED at Expo: the query no longer validates.
+		return "", fmt.Errorf("%w (%s)", ErrRoleUnsaid, apiErr.Detail)
+	}
+	if err != nil {
 		return "", err
 	}
 	v := data.Account.ByName.Viewer
-	if v == nil || v.Role == "" {
+	switch {
+	case v == nil:
 		return "", &APIError{Op: "CrewletRole", Status: http.StatusForbidden,
 			Detail: "the token's actor holds no role on " + strconv.Quote(name)}
+	case v.Role == "":
+		return "", ErrRoleUnsaid
 	}
 	return v.Role, nil
 }

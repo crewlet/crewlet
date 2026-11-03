@@ -180,6 +180,9 @@ type ApplyInput struct {
 	// Disconnect is a step of the integration's disconnect, after which no
 	// pass reads this seat again ([SyncInput.Disconnect]).
 	Disconnect bool
+
+	// Release is a person keeping the account at the vendor ([Ask.Release]).
+	Release bool
 }
 
 // HandsIn is a session whose seat credential a person creates at the vendor
@@ -213,6 +216,11 @@ type HandedIn struct {
 
 	// Rotate reports a replacement for a credential the seat already holds.
 	Rotate bool
+
+	// Account and AccountID are the vendor account the credential proved,
+	// and Label what the vendor shows of the credential (a token's prefix):
+	// what an audit line records in place of the value.
+	Account, AccountID, Label string
 }
 
 // StepResult is what one step did.
@@ -382,6 +390,10 @@ type Options struct {
 	// lane to be rotated ([LaneSpec.Rotatable]).
 	Rotatable bool `json:"rotatable,omitempty"`
 
+	// ActionURL is where a person takes the lane's [ByYou] steps at the
+	// vendor, which each such step drawn without one of its own carries.
+	ActionURL string `json:"action_url,omitempty"`
+
 	// Managed is [ManagedExternal] where the engine does not provision this
 	// lane for the company (D4b): a seat's switch still binds its tool to
 	// the credential handed in, and its access is managed outside Crewlet.
@@ -470,10 +482,18 @@ type NamedSteps interface {
 
 // drawSteps is a vendor's steps for one op, named where the vendor can.
 func drawSteps(v Vendor, in StepsInput) []Step {
+	var out []Step
 	if named, ok := v.(NamedSteps); ok {
-		return named.StepsFor(in)
+		out = named.StepsFor(in)
+	} else {
+		out = v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
 	}
-	return v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
+	for i := range out {
+		if out[i].By == ByYou && out[i].ActionURL == "" {
+			out[i].ActionURL = in.Options.ActionURL
+		}
+	}
+	return out
 }
 
 // Level is one level a vendor offers, as the vendor defines it.

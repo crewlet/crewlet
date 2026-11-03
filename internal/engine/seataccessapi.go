@@ -220,6 +220,13 @@ func (a *SeatAccessAPI) HandIn(ctx context.Context, q setupapi.AccessQuery, hand
 	if after[handle].Credential == nil {
 		return seataccess.HandedIn{}, fmt.Errorf("engine: %s's %s sync sealed no credential", handle, q.Kind)
 	}
+	// READ BACK WITH THE SEALED VALUE, so the answer already shows what the
+	// account holds besides it (a robot's older tokens). The seal stands
+	// either way; the next pass reads it again.
+	if err := a.syncNow(ctx, q.Kind, by, nil, []string{handle}, nil); err != nil {
+		log.WarnContext(ctx, "seat_access_reread_deferred", "kind", q.Kind, "seat", handle,
+			"error", err.Error())
+	}
 	return handed, nil
 }
 

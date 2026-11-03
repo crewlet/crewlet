@@ -2,6 +2,7 @@ package expo_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -27,8 +28,8 @@ type fakeActor struct {
 // fakeToken is one access token: its value, its owner and the prefix Expo
 // shows for it.
 type fakeToken struct {
-	id, value, owner, prefix string
-	revoked                  bool
+	id, value, owner, prefix, created string
+	revoked                           bool
 }
 
 // fakeRefusal is how the fake refuses one operation: an HTTP status, or a
@@ -117,7 +118,8 @@ func (f *fakeExpo) mintLocked(actorID string) *fakeToken {
 	f.seq++
 	n := strconv.Itoa(f.seq)
 	// The prefix Expo shows is the value's own beginning.
-	t := &fakeToken{id: "token-" + n, value: "fake" + n + "-expo-seat-token", owner: actorID, prefix: "fake" + n + "-"}
+	t := &fakeToken{id: "token-" + n, value: "fake" + n + "-expo-seat-token", owner: actorID, prefix: "fake" + n + "-",
+		created: fmt.Sprintf("2026-11-03T00:%02d:00Z", f.seq%60)}
 	f.tokens[t.value] = t
 	return t
 }
@@ -231,7 +233,7 @@ func (f *fakeExpo) serve(w http.ResponseWriter, r *http.Request) {
 					revoked = "2026-11-03T00:00:00Z"
 				}
 				tokens = append(tokens, map[string]any{"id": t.id, "visibleTokenPrefix": t.prefix,
-					"revokedAt": revoked})
+					"createdAt": t.created, "revokedAt": revoked})
 			}
 			me["accessTokens"] = tokens
 		}
