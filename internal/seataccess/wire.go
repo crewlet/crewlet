@@ -176,3 +176,37 @@ func (a SeatAction) Valid() bool {
 		ActionRotate, ActionRemove, ActionKeep, ActionRestore, ActionRetry, ActionDone,
 	}, a)
 }
+
+// RefusalField is the part of a seat lane's setting an access refusal is
+// about, so the Agents tab can place the refusal beside that control.
+type RefusalField string
+
+// The parts of a seat lane's setting a refusal names.
+const (
+	FieldLevel       RefusalField = "level"
+	FieldPermissions RefusalField = "permissions"
+	FieldScope       RefusalField = "scope"
+)
+
+// Valid reports whether f is a part this build names.
+func (f RefusalField) Valid() bool {
+	switch f {
+	case FieldLevel, FieldPermissions, FieldScope:
+		return true
+	}
+	return false
+}
+
+// OfferRefusal is a seat lane's setting the vendor does not offer now: the
+// fields of an `access_not_offered` refusal, beside the envelope's own.
+type OfferRefusal struct {
+	Seat   string       `json:"seat"`
+	Lane   Lane         `json:"lane"`
+	Field  RefusalField `json:"field"`
+	Detail string       `json:"detail"`
+
+	// Offered is what the vendor offers instead, where a list says it;
+	// Required is the level a set must hold ([Options.RequiredLevel]).
+	Offered  []string `json:"offered,omitempty"`
+	Required string   `json:"required,omitempty"`
+}

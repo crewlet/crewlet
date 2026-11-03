@@ -855,10 +855,9 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 			}
 			if refusal := notOffered(kind, lane, offers[lane], within(company, lane),
 				draft.Seats[handle][lane]); refusal != nil {
-				refusal["seat"] = handle
-				refusal["lane"] = string(lane)
+				refusal.Seat, refusal.Lane = handle, lane
 				httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeAccessNotOffered,
-					refusal)
+					refusalFields(*refusal))
 				return false
 			}
 		}
@@ -866,8 +865,8 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 	return true
 }
 
-// notOffered is why want is not something o offers on lane, as a refusal's
-// detail, or nil where it is. under is the path every scope entry must sit
+// notOffered is why want is not something o offers on lane, as a refusal
+// naming the part of the setting it is about, or nil where it is. under is the path every scope entry must sit
 // under where the connection does not list its reach, empty where any entry
 // the vendor accepts is within it ([within]).
 //
@@ -879,7 +878,11 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 // ([seataccess.Options.ScopeLive]); an empty scope where the lane requires one
 // is refused whatever was read.
 func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Options,
-	under string, want seataccess.Desired) httpjson.Detail {
+	under string, want seataccess.Desired) *seataccess.OfferRefusal {
+
+	refuse := func(field seataccess.RefusalField, detail string) *seataccess.OfferRefusal {
+		return &seataccess.OfferRefusal{Field: field, Detail: detail}
+	}
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
 		// A SET OF LEVELS where the lane takes one (Confluence's space
@@ -889,14 +892,16 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			for _, level := range o.Levels {
 				offered = append(offered, level.ID+" ("+level.Name+")")
 			}
-			return httpjson.Detail{"detail": fmt.Sprintf("level %q is not one the vendor "+
-				"lists", want.Level), "offered": offered}
+			r := refuse(seataccess.FieldLevel, fmt.Sprintf("level %q is not one the vendor lists", want.Level))
+			r.Offered = offered
+			return r
 		}
 	}
 	if required, missing := o.MissingRequired(want.Level); missing {
-		return httpjson.Detail{"detail": fmt.Sprintf("%s grants nothing else without %s "+
-			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID),
-			"required": required.ID}
+		r := refuse(seataccess.FieldLevel, fmt.Sprintf("%s grants nothing else without %s "+
+			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID))
+		r.Required = required.ID
+		return r
 	}
 	for key, grant := range want.Permissions {
 		i := slices.IndexFunc(o.Permissions, func(p seataccess.PermissionSpec) bool {
@@ -908,19 +913,21 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			for _, p := range o.Permissions {
 				keys = append(keys, p.Key)
 			}
-			return httpjson.Detail{"detail": fmt.Sprintf("permission %q is not one an "+
-				"agent's app can hold", key), "offered": keys}
+			r := refuse(seataccess.FieldPermissions, fmt.Sprintf("permission %q is not one an "+
+				"agent's app can hold", key))
+			r.Offered = keys
+			return r
 		case !grant.Valid():
-			return httpjson.Detail{"detail": fmt.Sprintf("permission %q is %q, and "+
-				"GitHub grants read or write", key, grant)}
+			return refuse(seataccess.FieldPermissions, fmt.Sprintf("permission %q is %q, and "+
+				"GitHub grants read or write", key, grant))
 		case o.Permissions[i].WriteOnly && grant != seataccess.AccessWrite:
-			return httpjson.Detail{"detail": fmt.Sprintf("GitHub grants %s as write "+
-				"or not at all", o.Permissions[i].Name)}
+			return refuse(seataccess.FieldPermissions, fmt.Sprintf("GitHub grants %s as write "+
+				"or not at all", o.Permissions[i].Name))
 		}
 	}
 	if o.ScopeRequired && want.Enabled && len(want.Scope) == 0 {
-		return httpjson.Detail{"detail": fmt.Sprintf("an agent turned on at %s must have at least "+
-			"one scope entry chosen, since one with none can reach nothing", seataccess.LaneName(lane))}
+		return refuse(seataccess.FieldScope, fmt.Sprintf("an agent turned on at %s must have at least "+
+			"one scope entry chosen, since one with none can reach nothing", seataccess.LaneName(lane)))
 	}
 	if o.ScopeLive {
 		// A SCOPE IS JUDGED ON WHAT WAS READ, as a live-listed level is: an
@@ -928,8 +935,10 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 		// entry against the vendor instead of a refusal on a guess.
 		for _, entry := range want.Scope {
 			if !o.Reaches(entry) {
-				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
-					"company's connection reaches", entry), "offered": o.Scope}
+				r := refuse(seataccess.FieldScope, fmt.Sprintf("%q is outside what the "+
+					"company's connection reaches", entry))
+				r.Offered = o.Scope
+				return r
 			}
 		}
 	}
@@ -937,12 +946,25 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 		prefix := strings.ToLower(strings.Trim(under, "/")) + "/"
 		for _, entry := range want.Scope {
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry)), prefix) {
-				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside %s, the group "+
-					"the company's connection reaches", entry, under)}
+				return refuse(seataccess.FieldScope, fmt.Sprintf("%q is outside %s, the group "+
+					"the company's connection reaches", entry, under))
 			}
 		}
 	}
 	return nil
+}
+
+// refusalFields is r as the refusal envelope's fields, under r's own JSON names
+// (a test holds the two together), each optional one only where it is set.
+func refusalFields(r seataccess.OfferRefusal) httpjson.Detail {
+	out := httpjson.Detail{"seat": r.Seat, "lane": string(r.Lane), "field": string(r.Field), "detail": r.Detail}
+	if len(r.Offered) > 0 {
+		out["offered"] = r.Offered
+	}
+	if r.Required != "" {
+		out["required"] = r.Required
+	}
+	return out
 }
 
 // within is the path a lane's scope entries must sit under where its

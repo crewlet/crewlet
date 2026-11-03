@@ -4205,9 +4205,12 @@ it leaves out keeps its setting. Its fields are `enabled`, `level`,
 `permissions` (GitHub only, each `read` or `write`) and `scope`; any other
 field is refused `400 invalid_body`, so a body cannot name a variable. A
 person's seat or a seat the company does not hold is `404 no_such_seat`; a
-lane the integration does not grant, or a level, permission or scope entry the
-vendor does not offer now, is `400 access_not_offered` with the lane, the value
-and what is offered. A live-listed level (a Datadog role, a Jira project role)
+lane the integration does not grant is `400 no_seat_access`, and a level,
+permission or scope entry the vendor does not offer now is
+`400 access_not_offered`, naming the first such `seat`, its `lane`, the
+`field` it is about (`level`, `permissions` or `scope`) and the `detail`, with
+what is `offered` instead where a list says it, or the level a set is
+`required` to hold. A live-listed level (a Datadog role, a Jira project role)
 is judged only when the vendor answered just now; otherwise the sync reports
 an id it does not hold as a finding. A scope entry is judged the same way, only
 when `scope_live` says the list was read. On a lane with `scope_required`, a

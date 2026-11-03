@@ -374,6 +374,20 @@ func TestADraftNamesOnlyWhatTheTabOffers(t *testing.T) {
 	}
 }
 
+// A REFUSED ACCESS NAMES ITS SEAT, LANE AND CONTROL, so the Agents tab draws it
+// beside the control it is about.
+func TestARefusedAccessNamesItsSeatLaneAndControl(t *testing.T) {
+	t.Parallel()
+	s := newAccessSurface(t)
+	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/access/plan",
+		`{"seats": {"cto": {"datadog": {"enabled": true, "level": "role-root"}}}}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest || body["error"] != string(httpjson.CodeAccessNotOffered) ||
+		body["seat"] != "cto" || body["lane"] != "datadog" || body["field"] != "level" {
+		t.Fatalf("refusal = %d %v, want access_not_offered naming cto, datadog and level", res.Code, body)
+	}
+}
+
 // A RAISE TO AN ADMINISTRATION ROLE NEEDS A PERSON PRESENT (D10).
 //
 // The plan says the draft hands out an administration grant. A machine token
