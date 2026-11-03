@@ -2,6 +2,7 @@ package org
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,49 @@ func TestScheduleValidation(t *testing.T) {
 			}
 			if tc.mentions != "" && !strings.Contains(err.Error(), tc.mentions) {
 				t.Errorf("error does not mention %q: %v", tc.mentions, err)
+			}
+		})
+	}
+}
+
+// A SCHEDULE'S NAME IS BOUNDED AS ITS CONVERSATION'S KEY SPELLS IT, and
+// refused at its field past the bound. Every fire is filed on its runner
+// seat's executor log under a key that spells the name escaped, and the log
+// refuses a key past its own bound — so the name is measured escaped, never as
+// it reads: sixty-seven accented letters read short and escape to more than
+// the bound.
+//
+// Mutation: measure the name as it reads rather than escaped, or report the
+// refusal at another field, and a row goes red.
+func TestAScheduleNameIsBoundedAsItsKeySpellsIt(t *testing.T) {
+	t.Parallel()
+	at := ScheduleNameMaxBytes
+	for name, tc := range map[string]struct {
+		name    string
+		refused bool
+	}{
+		"nothing escaped, at the bound":     {name: strings.Repeat("s", at)},
+		"nothing escaped, a byte past it":   {name: strings.Repeat("s", at+1), refused: true},
+		"every slash escaped, at the bound": {name: strings.Repeat("/", at/3) + strings.Repeat("s", at%3)},
+		"short to read, past the bound escaped": {
+			name: strings.Repeat("é", at/6+1), refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := Schedule{Name: tc.name, Cron: "0 9 * * 1-5", Task: "post the standup"}
+			var atName []fieldError
+			for _, f := range s.faults("unit \"Team\"") {
+				if len(f.field) == 1 && f.field[0] == "name" && errors.Is(f.err, ErrInvalidSchedule) {
+					atName = append(atName, f)
+				}
+			}
+			switch {
+			case tc.refused && (len(atName) != 1 ||
+				!strings.Contains(atName[0].err.Error(), fmt.Sprintf("limit is %d", at))):
+				t.Fatalf("a name past the bound once escaped was refused at its field %v, want once, "+
+					"saying the limit", atName)
+			case !tc.refused && len(atName) != 0:
+				t.Fatalf("a name within the bound once escaped was refused: %v", atName[0].err)
 			}
 		})
 	}

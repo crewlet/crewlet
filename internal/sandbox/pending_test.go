@@ -54,7 +54,7 @@ func TestPendingStoreContract(t *testing.T) {
 // NOTHING EMPTY EVER ANSWERS ANYTHING, and that is a rule of the value rather
 // than of the store that reads it.
 //
-// A run launched by a schedule tick or an A2A wake carries no conversation,
+// A run launched by an A2A wake or a task assignment carries no conversation,
 // and a wake that could not name one carries none either — so two absences
 // comparing equal would make every such delivery the answer to every such run,
 // and the first thing a person said to a seat would splice into somebody

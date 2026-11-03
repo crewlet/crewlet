@@ -32,6 +32,16 @@
 //     one broker refusal must not stop the other nineteen schedules. Every
 //     error path in a tick logs and continues.
 //
+// # Each schedule is a conversation of each seat that runs it
+//
+// A fire is stamped with its schedule's conversation ([FirePartition]), so one
+// seat's fires of one schedule are one conversation on that seat's executor
+// log: the next fire continues the session the last one left, told how the
+// earlier fires ended, as a conversation's next turn continues its last
+// turn's. The schedule's identity keys it — its scope, the scope's id and its
+// name — so renaming a schedule starts it afresh, and editing its task or its
+// cron does not.
+//
 // # What it is NOT
 //
 // Not a job runner: the scheduler always dispatches to an agent turn, and a
@@ -46,7 +56,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/url"
 	"sync"
 	"time"
 
@@ -716,9 +725,12 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
 	}, trace)
 	task.Source = "scheduler"
-	// ONE PARTITION PER SCHEDULE, so fires that wait in the seat's inbox
-	// together reach it together and run once. See [FirePartition].
-	notify.Stamp(task, FirePartition(e), "")
+	// ONE CONVERSATION PER SCHEDULE, stamped as both keys: the partition, so
+	// fires that wait in the seat's inbox together reach it together and run
+	// once, and the identity, so each fire's turn continues the session the
+	// schedule's last fire left on this seat. See [FirePartition].
+	key := FirePartition(e)
+	notify.Stamp(task, key, key)
 
 	if err := s.pub.Publish(ctx, topics.AgentInbox(agentID), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of
@@ -754,9 +766,12 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	return fireSent
 }
 
-// FirePartition is the inbox partition every fire of one schedule shares.
+// FirePartition is the inbox partition every fire of one schedule shares, and
+// the conversation every fire of it is: the schedule's conversation
+// (internal/notify's ScheduleConversation), which a fire is stamped with as
+// both keys.
 //
-// # Why fires share one
+// # Why fires share one partition
 //
 // A seat that cannot work (a provider limit, a budget, an executor holding
 // it) leaves its inbox held, and a schedule keeps firing into it. Each fire
@@ -767,17 +782,28 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 // handler call, and the dispatcher runs only the latest of them
 // (internal/engine, mergeScheduledFires) and records the rest as superseded.
 //
+// # Why they are one conversation
+//
+// A schedule's work is one line of work: a health check reads what the last
+// one found, a standup what the last one said. Each fire's turn is a turn of
+// the schedule's conversation, so the executor log keys its session under the
+// schedule, the next fire's dispatch reads the head the last fire left, and
+// its run continues that session and is told how the earlier fires ended
+// (internal/engine's readConversation) — as a conversation's next turn does.
+// A fire is still nobody's reply: a schedule's conversation is one nobody can
+// reply into, so a fire is never taken for the answer to a question the last
+// fire's run parked on (internal/notify's Derived).
+//
 // The runner is not part of the key because the key is read inside one
-// seat's inbox, and a unit schedule fanned out to several seats fires into
-// several inboxes.
+// seat's inbox and on one seat's executor log, and a unit schedule fanned out
+// to several seats fires into several inboxes: one conversation of each seat.
 //
 // ESCAPED, each part, for the reason [FireKey] is a struct: a joined key
 // collides the moment a separator appears in a name, and a unit "Q3:Launch"
 // with a schedule "Launch" must not merge with a unit "Q3" and a schedule
 // ":Launch".
 func FirePartition(e Entry) string {
-	return "schedule/" + url.PathEscape(string(e.Scope)) + "/" +
-		url.PathEscape(e.ScopeID) + "/" + url.PathEscape(e.Schedule.Name)
+	return notify.ScheduleConversation(e.Scope, e.ScopeID, e.Schedule.Name)
 }
 
 // recordMissed records the first tick's most recent fire as missed, if it was.

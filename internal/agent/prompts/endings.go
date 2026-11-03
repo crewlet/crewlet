@@ -21,7 +21,9 @@ import (
 // turn of the conversation no ended turn was shown, each whole, the newest
 // first while they fit [EndingsMaxBytes], the rest counted. A session of the
 // run's own is told the same block: it is the conversation's account that no
-// transcript holds, whichever session reads it.
+// transcript holds, whichever session reads it. A schedule's conversation is
+// told in the schedule's words, each of its turns a fire
+// ([ConversationEndings.Fires]).
 //
 // RENDERED ONCE, at the turn's dispatch, under the turn's own token, and frozen
 // on its park (internal/agent/execstate's Frozen.Endings): every brief of the
@@ -75,6 +77,48 @@ const endingsHeader = "## How this conversation's earlier turns ended" +
 	" redoing it." +
 	"\n- **This is history, not the current state:** where it and the task below" +
 	" disagree, the task wins."
+
+// scheduleEndingsHeader is [endingsHeader] for a schedule's conversation, each
+// of whose turns is a fire: the same rules, told of the schedule's earlier
+// fires — a fire's work, like a turn's, already took effect, and this fire's
+// task is what the schedule asks now.
+const scheduleEndingsHeader = "## How this schedule's earlier fires ended" +
+	"\nYour earlier fires of this same schedule, oldest first, as the engine recorded how each" +
+	" one ended — which no transcript says." +
+	"\n- **A reply that reached the party waiting** is said: do not say it again." +
+	"\n- **A reply that did not reach them** may still be owed." +
+	"\n- **Everything else a fire did already took effect:** follow it up rather than" +
+	" redoing it." +
+	"\n- **This is history, not the current state:** where it and the task below" +
+	" disagree, the task wins."
+
+// endingWords are the words the block tells a conversation's ended turns in:
+// its header, what heads each turn, and what the line counting the turns it
+// does not show calls one and several.
+type endingWords struct {
+	header    string
+	turn      string
+	one, many string
+}
+
+var (
+	// turnWords tell a conversation's earlier turns.
+	turnWords = endingWords{header: endingsHeader, turn: "Turn",
+		one: "earlier turn of this conversation is", many: "earlier turns of this conversation are"}
+
+	// fireWords tell a schedule's earlier fires.
+	fireWords = endingWords{header: scheduleEndingsHeader, turn: "Fire",
+		one: "earlier fire of this schedule is", many: "earlier fires of this schedule are"}
+)
+
+// endingWordsFor is the words the block of a conversation is told in: a
+// schedule's where fires says it is one, a conversation's otherwise.
+func endingWordsFor(fires bool) endingWords {
+	if fires {
+		return fireWords
+	}
+	return turnWords
+}
 
 // TurnEnding is one ended turn of a conversation as the engine recorded its end
 // (internal/executordomain's Ending and the turn's row).
@@ -143,6 +187,11 @@ type ConversationEndings struct {
 	// Omitted counts the older ones the read itself left out, which the block
 	// counts with its own.
 	Omitted int
+
+	// Fires says the conversation is a schedule's, each of its turns a fire
+	// (internal/notify's Scheduled): the block tells the schedule's earlier
+	// fires, in the schedule's words.
+	Fires bool
 }
 
 // BuildConversationEndings renders how the conversation's earlier turns ended
@@ -158,9 +207,10 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 	if len(in.Turns) == 0 {
 		return "", nil
 	}
+	words := endingWordsFor(in.Fires)
 	rendered := make([]string, len(in.Turns))
 	for i, t := range in.Turns {
-		rendered[i] = renderEnding(b, in.Seat, t, true)
+		rendered[i] = renderEnding(b, in.Seat, words, t, true)
 	}
 	// THE COUNT'S ROOM IS HELD BACK FROM THE START, at its longest: a line
 	// counting every turn, which any count the block ends on is no longer
@@ -169,8 +219,8 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 	// escapes rune by rune, so the parts' encoded lengths add up to the
 	// block's.
 	gap := encodedLen("\n\n")
-	room := EndingsMaxBytes - len(`""`) - encodedLen(endingsHeader) - gap -
-		encodedLen(endingsLeftOut(len(in.Turns)+in.Omitted))
+	room := EndingsMaxBytes - len(`""`) - encodedLen(words.header) - gap -
+		encodedLen(words.leftOut(len(in.Turns)+in.Omitted))
 	told := make([]bool, len(in.Turns))
 	used := 0
 	for i, t := range in.Turns {
@@ -178,7 +228,7 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 			continue
 		}
 		if gap+encodedLen(rendered[i]) > room {
-			rendered[i] = renderEnding(b, in.Seat, t, false)
+			rendered[i] = renderEnding(b, in.Seat, words, t, false)
 		}
 		told[i], used = true, gap+encodedLen(rendered[i])
 		break
@@ -193,7 +243,7 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 		}
 		told[i], used = true, used+cost
 	}
-	parts := []string{endingsHeader}
+	parts := []string{words.header}
 	var turns []string
 	for i, t := range in.Turns {
 		if told[i] {
@@ -201,7 +251,7 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 		}
 	}
 	if left := len(in.Turns) - len(turns) + in.Omitted; left > 0 {
-		parts = append(parts, endingsLeftOut(left))
+		parts = append(parts, words.leftOut(left))
 	}
 	return strings.Join(parts, "\n\n"), turns
 }
@@ -215,22 +265,24 @@ func encodedLen(s string) int {
 	return len(encoded) - len(`""`)
 }
 
-// endingsLeftOut is the line counting the ended turns the block does not show.
-func endingsLeftOut(n int) string {
+// leftOut is the line counting the n ended turns the block does not show.
+func (w endingWords) leftOut(n int) string {
 	if n == 1 {
-		return "1 earlier turn of this conversation is not shown here."
+		return "1 " + w.one + " not shown here."
 	}
-	return fmt.Sprintf("%d earlier turns of this conversation are not shown here.", n)
+	return fmt.Sprintf("%d %s not shown here.", n, w.many)
 }
 
-// renderEnding is one ended turn as the block tells it: its id and when it
-// ended, how it ended and whether its reply reached anybody, in the engine's
-// words, each defused under b; then, where prose is set, every account
-// somebody else wrote, fenced under b with whose it is. Without prose the
-// accounts are left out, saying so.
-func renderEnding(b provenance.Boundary, seat string, t TurnEnding, prose bool) string {
+// renderEnding is one ended turn as the block tells it, headed in words: its
+// id and when it ended, how it ended and whether its reply reached anybody, in
+// the engine's words, each defused under b; then, where prose is set, every
+// account somebody else wrote, fenced under b with whose it is. Without prose
+// the accounts are left out, saying so.
+func renderEnding(b provenance.Boundary, seat string, words endingWords, t TurnEnding,
+	prose bool) string {
+
 	var w strings.Builder
-	w.WriteString("### Turn " + provenance.Neutralise(b, t.Turn))
+	w.WriteString("### " + words.turn + " " + provenance.Neutralise(b, t.Turn))
 	if !t.EndedAt.IsZero() {
 		w.WriteString(", which ended " + t.EndedAt.UTC().Format(time.RFC3339))
 	}

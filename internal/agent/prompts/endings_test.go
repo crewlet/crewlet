@@ -188,3 +188,60 @@ func TestTheEndingsFitTheirShareOfTheRunRecordAsEncoded(t *testing.T) {
 			len(turns))
 	}
 }
+
+// A SCHEDULE'S EARLIER FIRES ARE TOLD IN ITS WORDS, WITHIN THE SAME BOUND. A
+// schedule is a conversation of each seat that runs it, every turn of it a
+// fire, so its block is headed as the schedule's earlier fires, each told as a
+// fire and the ones left out counted as fires, held to the block's bound as
+// encoded; a conversation's block says none of it. And the lead of a run that
+// continues the session the schedule's last fire left says a new fire of the
+// schedule begins, which the schedule firing again woke — never a message.
+//
+// Mutation: tell a schedule's block or lead in a conversation's words, or a
+// conversation's in a schedule's, and a check goes red.
+func TestAScheduleIsToldItsEarlierFires(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	markup := strings.Repeat("if a < b && c > d {}\n", 2000/21)
+	var fires []TurnEnding
+	for i := range 10 {
+		fires = append(fires, TurnEnding{Turn: fmt.Sprintf("f-%d", i), Outcome: "completed",
+			EndedAt: time.Date(2026, 10, 1, 9, i, 0, 0, time.UTC), CompletedWork: markup})
+	}
+	block, told := BuildConversationEndings(b, ConversationEndings{Seat: "sre", Head: "f-9", Turns: fires,
+		Fires: true})
+	encoded, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("encoding the block: %v", err)
+	}
+	switch {
+	case !strings.HasPrefix(block,
+		"## How this schedule's earlier fires ended\nYour earlier fires of this same schedule"):
+		t.Fatalf("a schedule's block is headed as another's:\n%s", block)
+	case !strings.Contains(block, "### Fire f-9") || strings.Contains(block, "### Turn"):
+		t.Fatalf("a schedule's block does not tell each of its fires as one:\n%s", block)
+	case len(told) == len(fires) || !strings.Contains(block, "earlier fires of this schedule are not shown here."):
+		t.Fatalf("a schedule's block told %v of %d fires, want the rest counted as fires:\n%s", told,
+			len(fires), block)
+	case len(encoded) > EndingsMaxBytes:
+		t.Fatalf("a schedule's block encodes in %d bytes, past its bound of %d", len(encoded), EndingsMaxBytes)
+	case strings.Contains(block, "this conversation"):
+		t.Fatalf("a schedule's block speaks of a conversation:\n%s", block)
+	}
+	plain, _ := BuildConversationEndings(b, ConversationEndings{Seat: "sre", Head: "f-9", Turns: fires})
+	if strings.Contains(plain, "schedule") || strings.Contains(plain, "### Fire") ||
+		!strings.Contains(plain, "earlier turns of this conversation are not shown here.") {
+		t.Fatalf("a conversation's block is told in a schedule's words:\n%s", plain)
+	}
+
+	lead := BuildNextTurn(NextTurn{BaseTurn: "f-9", Fire: true})
+	for _, said := range []string{"## A new fire of this schedule begins here", "through fire `f-9`",
+		"The schedule has fired again", "set up anew for this fire", "## This fire is in a new box"} {
+		if !strings.Contains(lead, said) {
+			t.Errorf("a fire's lead does not say %q:\n%s", said, lead)
+		}
+	}
+	if strings.Contains(lead, "message") || strings.Contains(BuildNextTurn(NextTurn{BaseTurn: "t-1"}), "fire") {
+		t.Errorf("a lead is told in the other's words:\n%s", lead)
+	}
+}

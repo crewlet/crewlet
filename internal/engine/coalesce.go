@@ -50,10 +50,15 @@ func mergePartition(prompts notify.Prompts, evs []*events.Event) (*events.Event,
 //
 // # Why the latest and not a digest
 //
-// A fire carries no conversation to summarise: every fire of a schedule asks
-// for the same work, and the work is done as of now whichever tick asked for
-// it. What a seat needs from the earlier ones is only that they existed, so
-// it does the duty once and does not read a late run as an anomaly.
+// A fire carries no messages to summarise: every fire of a schedule asks for
+// the same work, and the work is done as of now whichever tick asked for it.
+// What a seat needs from the earlier ones is only that they existed, so it
+// does the duty once and does not read a late run as an anomaly.
+//
+// ON THE SCHEDULE'S ONE CONVERSATION: every fire carries it as both keys
+// (internal/notify's ScheduleConversation), so the merged fire is stamped with
+// it like its constituents, and the run reads the head the schedule's last run
+// left once, for every fire it stands for.
 //
 // THE LATEST BY THE INSTANT IT CAME DUE, and the envelope's own instant only
 // for a fire that carries none, so a fire republished by a park cannot pass

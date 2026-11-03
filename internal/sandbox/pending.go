@@ -936,8 +936,11 @@ type PendingRun struct {
 	// this is the only field that says which thread each was asked in. See
 	// [ConversationRef.Best].
 	//
-	// Empty on a run launched by a wake that named no conversation (a
-	// schedule tick, an A2A ask).
+	// Empty on a run launched by a wake that named no conversation (an A2A
+	// ask, a task assignment). A run a schedule's fire launched names its
+	// schedule's conversation here and as its ConversationKey: every fire of
+	// the schedule shares the one partition (internal/notify's
+	// ScheduleConversation).
 	PartitionKey string `json:"partition_key,omitempty"`
 
 	// ConversationKey is the durable conversation this run belongs
@@ -2274,10 +2277,16 @@ type ConversationRef struct {
 // — and admitting is not choosing: [ConversationRef.Best] picks between what
 // this admits, on the partition first and recency second.
 //
-// AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by a schedule
-// tick or an A2A wake stored no conversation, and a wake that could not name
+// AN EMPTY VALUE NEVER MATCHES, on either side. A run launched by an A2A wake
+// or a task assignment stored no conversation, and a wake that could not name
 // one carries none — so two absences comparing equal would make every such
-// delivery the answer to every such run.
+// delivery the answer to every such run. A run a schedule's fire launched
+// stored the schedule's conversation, which every later fire of the schedule
+// carries too and which this would match: the engine never offers a delivery
+// whose conversation nobody can reply into (internal/notify's Derived, asked by
+// internal/engine's Dispatcher.answered), so no fire is taken for the answer to
+// the last one's question. This package cannot ask notify itself, which
+// reaches it through internal/tracing.
 //
 // A HELD CALL IS NEVER A CONVERSATION'S TO ANSWER (ADR-0077): whoever speaks
 // on the line the run was launched from is not, for that, somebody who may

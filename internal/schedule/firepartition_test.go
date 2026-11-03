@@ -1,10 +1,15 @@
 package schedule
 
 import (
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -74,5 +79,146 @@ func TestAFirePartitionCannotCollideAcrossScopes(t *testing.T) {
 		Schedule: org.Schedule{Name: "Launch/review"}})
 	if a == b {
 		t.Fatalf("two different schedules share the partition %q", a)
+	}
+}
+
+// EACH FIRE OF A SCHEDULE IS ONE CONVERSATION OF ITS RUNNER SEAT.
+//
+// A fire is stamped with its schedule's conversation as BOTH keys: the
+// partition, so the fires that wait in a seat's inbox together reach it
+// together and run once, on that one key (the dispatcher's half,
+// internal/engine's TestFiresOfOneScheduleThatWaitedTogetherRunOnce); and the
+// identity, so the fire's turn reads the head the schedule's last fire left on
+// its seat's executor log and continues that session. The log keys a session
+// on its seat and its conversation, so a unit schedule fanned out to two seats
+// is two conversations, one per seat: each seat's fire reaches its own inbox
+// under the one key. The schedule's identity keys it and nothing else: an edit
+// to its task, its cron and its timeout keeps the conversation, and a renamed
+// schedule's next fire starts one of its own. And it is no conversation
+// anybody can reply into, so no fire is taken for the reply to a question the
+// last fire's run parked on.
+//
+// Mutation: stamp the partition alone, put the runner, the fire, the task or
+// the cron in the key, or leave the name out of it, and a check goes red.
+func TestEachFireOfAScheduleIsOneConversationOfItsRunner(t *testing.T) {
+	t.Parallel()
+	check := org.Schedule{Name: "health check", Cron: "0 * * * *", Task: "check the services"}
+	h := build(t, roleOrg(check))
+	h.seed(tickAt(8, 59, 30))
+	h.tick(tickAt(9, 0, 30))
+	edited := check
+	edited.Task, edited.Cron, edited.TimeoutSeconds = "check the services and the queues", "0 */2 * * *", 600
+	h.reload(roleOrg(edited))
+	h.tick(tickAt(10, 0, 30))
+
+	want := notify.ScheduleConversation(types.ScheduleScopeRole, seatScopeID("qa"), "health check")
+	fires := h.q.inboxTasks()
+	if len(fires) != 2 {
+		t.Fatalf("the schedule fired %d times, want twice: before and after its edit", len(fires))
+	}
+	for i, p := range fires {
+		identity := notify.ConversationIdentityOfAll([]*events.Event{p.ev})
+		if identity != want || notify.KeyOf(p.ev) != want || p.topic != seatInbox("qa") {
+			t.Errorf("fire %d reached %s as conversation %q in partition %q, want both %q, on the "+
+				"runner's inbox", i, p.topic, identity, notify.KeyOf(p.ev), want)
+		}
+	}
+	if notify.Derived(want) {
+		t.Errorf("the schedule's conversation %q reads as one somebody could reply into", want)
+	}
+
+	renamed := edited
+	renamed.Name = "service check"
+	h.reload(roleOrg(renamed))
+	h.tick(tickAt(12, 0, 30))
+	fires = h.q.inboxTasks()
+	fresh := notify.ScheduleConversation(types.ScheduleScopeRole, seatScopeID("qa"), "service check")
+	if len(fires) != 3 {
+		t.Fatalf("the schedule fired %d times in all, want a third fire once renamed", len(fires))
+	}
+	if got := notify.ConversationIdentityOfAll([]*events.Event{fires[2].ev}); got != fresh || got == want {
+		t.Fatalf("the renamed schedule's fire is on conversation %q, want one of its own %q", got, fresh)
+	}
+
+	unit := build(t, unitOrg(org.TargetEach))
+	unit.seed(tickAt(8, 59, 30))
+	unit.tick(tickAt(9, 0, 30))
+	standup := notify.ScheduleConversation(types.ScheduleScopeUnit, "Quality", "standup")
+	bySeat := map[string]string{}
+	for _, p := range unit.q.inboxTasks() {
+		bySeat[p.topic] = notify.ConversationIdentityOfAll([]*events.Event{p.ev})
+	}
+	if len(bySeat) != 2 || bySeat[seatInbox("qa-lead")] != standup || bySeat[seatInbox("qa-dev")] != standup {
+		t.Fatalf("the unit's standup reached %v, want each member's own inbox under %q", bySeat, standup)
+	}
+}
+
+// THE LONGEST SCHEDULE NAME A COMPANY ADMITS KEYS A CONVERSATION THE EXECUTOR
+// LOG TAKES.
+//
+// Every fire is filed on its runner seat's executor log under its schedule's
+// conversation, a key the log refuses past its bound rather than cut — so a
+// schedule a company admits must key a conversation within it, or none of its
+// fires would keep a session or leave an ending. The longest such key is a
+// unit schedule's: the unit's key at the longest the company document's id
+// grammar admits, and a name at org.ScheduleNameMaxBytes once escaped, whether
+// nothing in it escapes, every byte does, or its letters lie outside ASCII; a
+// role schedule's scope is its seat's agent id, shorter. A name one byte longer
+// is refused, at its field, on either.
+//
+// Mutation: raise org.ScheduleNameMaxBytes past the room the log's bound
+// leaves the name, measure the name unescaped, or widen the unit id grammar,
+// and a check goes red.
+func TestTheLongestScheduleNameFitsTheLogsKey(t *testing.T) {
+	t.Parallel()
+	document := func(unitID, name string) []byte {
+		schedule := func(task string) string {
+			return "      - {name: " + strconv.Quote(name) + ", cron: \"0 9 * * *\", task: " + task + "}\n"
+		}
+		return []byte("name: Acme\nroles:\n  - name: Ops\n    schedules:\n" + schedule("check the services") +
+			"units:\n  - name: Eng\n    id: " + unitID + "\n    roles:\n      - name: Dev\n    schedules:\n" +
+			schedule("post the standup"))
+	}
+	// THE LONGEST UNIT KEY a company document admits, and one byte more the
+	// premise refuses: the key no escape touches spends its whole length.
+	unitID := "u" + strings.Repeat("0", 63)
+	if _, err := config.ParseCompany(document(unitID+"0", "standup")); err == nil {
+		t.Fatal("the premise: a unit id one byte past sixty-four was admitted, so this case does not " +
+			"build the longest key a company admits")
+	}
+	at := org.ScheduleNameMaxBytes
+	for shape, name := range map[string]string{
+		"nothing escaped":       strings.Repeat("s", at),
+		"every byte escaped":    strings.Repeat("/", at/3) + strings.Repeat("s", at%3),
+		"letters outside ASCII": strings.Repeat("é", at/6) + strings.Repeat("s", at%6),
+	} {
+		cfg, err := config.ParseCompany(document(unitID, name))
+		if err != nil {
+			t.Fatalf("%s: a name at the bound was refused: %v", shape, err)
+		}
+		o, err := cfg.Organization()
+		if err != nil {
+			t.Fatalf("%s: Organization: %v", shape, err)
+		}
+		entries := Entries(o)
+		if len(entries) != 2 {
+			t.Fatalf("%s: the company declares %d schedules, want the role's and the unit's", shape, len(entries))
+		}
+		for _, e := range entries {
+			if key := FirePartition(e); len(key) > executordomain.ConversationKeyMaxBytes {
+				t.Errorf("%s: the %s schedule's conversation is %d bytes, past the executor log's %d",
+					shape, e.Scope, len(key), executordomain.ConversationKeyMaxBytes)
+			}
+		}
+		_, err = config.ParseCompany(document(unitID, name+"s"))
+		var refused []string
+		for _, p := range config.Problems(err) {
+			refused = append(refused, p.Path)
+		}
+		for _, want := range []string{"roles[0].schedules[0].name", "units[0].schedules[0].name"} {
+			if !slices.Contains(refused, want) {
+				t.Errorf("%s: a name a byte past the bound was refused at %v, want at %s", shape, refused, want)
+			}
+		}
 	}
 }

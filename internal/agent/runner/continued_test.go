@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -664,6 +665,48 @@ func TestAConversationsNextTurnIsToldWhereItBegins(t *testing.T) {
 	}
 	if strings.Contains(s.Replaced, "[untrusted:x]") || strings.Contains(s.Replaced, "same session") {
 		t.Errorf("the lead carries a live marker or the same-turn lead:\n%s", s.Replaced)
+	}
+}
+
+// A SCHEDULED FIRE IS TOLD WHERE IT BEGINS, IN ITS SCHEDULE'S WORDS. A fire's
+// conversation is its schedule's, so its first launch continues the session
+// the schedule's last fire left, and the lead says so as a fire: the schedule
+// fired again, the session above is as the schedule's fires left it, what they
+// set up is set up anew for this fire, and this fire is in a new box. Its lead
+// never says a message woke it, and a conversation's turn is never told it is
+// a fire ([TestAConversationsNextTurnIsToldWhereItBegins]).
+//
+// Mutation: lead a fire in a conversation's words, or decide the words by
+// anything but the turn's conversation, and a check goes red.
+func TestAScheduledFireIsToldWhereItBegins(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launcher := &probingLauncher{basis: baseBasis}
+	fire, _ := buildWith(t, entries, buildOpts{launcher: launcher, calls: turnctx.NewCallLog(),
+		conversation: notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")})
+	work, _, err := fire.Execute(t.Context(), 1, "", nil)
+	if err != nil || !work.Suspended {
+		t.Fatalf("the fire's first launch: %+v, %v", work, err)
+	}
+	req := launcher.last(t)
+	s := req.Session
+	if s == nil || !s.Basis.ContinuesBase() {
+		t.Fatalf("the fire's first launch continues %+v, want the schedule's last fire's session", s)
+	}
+	lead := strings.TrimSuffix(s.Replaced, strings.TrimSpace(req.Brief))
+	for _, said := range []string{
+		"## A new fire of this schedule begins here", "as your fires left it", "through fire `t-0`",
+		"The schedule has fired again", "the task below is this fire's", "set up anew for this fire",
+		"## This fire is in a new box",
+	} {
+		if !strings.Contains(lead, said) {
+			t.Errorf("the fire's lead does not say %q:\n%s", said, lead)
+		}
+	}
+	for _, unsaid := range []string{"A new message has woken you", "of this conversation", "this turn"} {
+		if strings.Contains(lead, unsaid) {
+			t.Errorf("the fire's lead says %q, a conversation's words:\n%s", unsaid, lead)
+		}
 	}
 }
 

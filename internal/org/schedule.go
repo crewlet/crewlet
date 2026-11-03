@@ -2,6 +2,7 @@ package org
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -81,6 +82,26 @@ const (
 // data.
 const DefaultScheduleTimeout = 30 * time.Minute
 
+// ScheduleNameMaxBytes bounds a schedule's name AS ITS CONVERSATION'S KEY
+// SPELLS IT: escaped as a URL path segment is, a space, a slash and every byte
+// of a letter outside ASCII written as three (internal/notify's
+// ScheduleConversation). Every fire is filed under that key on its runner
+// seat's executor log, which refuses a key longer than its bound
+// (internal/executordomain's ConversationKeyMaxBytes, 512) rather than cut one
+// — a cut key would merge two conversations — so a fire's session and its
+// ending would be kept nowhere.
+//
+// FOUR HUNDRED BYTES: a fire's key spends at most seventy-nine before the name
+// — `schedule/`, a scope of four, a unit's key of at most sixty-four bytes of a
+// grammar no escape touches (a seat's agent id is thirty-six), and two
+// separators — so four hundred leaves the log's bound room to spare and still
+// admits every name a person writes, every Kubernetes object name among them
+// (at most 253 ASCII bytes, none of which escapes); a name of a hundred and
+// thirty-three bytes always fits, whatever it holds.
+// internal/schedule's TestTheLongestScheduleNameFitsTheLogsKey holds the
+// longest key a company admits to the log's bound.
+const ScheduleNameMaxBytes = 400
+
 // Schedule is recurring work a seat or a unit owns, fired on a cron
 // expression.
 //
@@ -91,7 +112,11 @@ const DefaultScheduleTimeout = 30 * time.Minute
 type Schedule struct {
 	// Name identifies the schedule within its role or unit. It forms part
 	// of the idempotency key, so renaming one lets a fire at the same
-	// minute run once more.
+	// minute run once more; and part of the conversation every fire of it
+	// is on its runner seat, so a renamed schedule's next fire starts a
+	// session of its own rather than continuing the last fire's. At most
+	// [ScheduleNameMaxBytes] once escaped as that conversation's key spells
+	// it.
 	Name string `yaml:"name" json:"name"`
 
 	// Cron is a standard 5-field expression (minute hour dom month dow),
@@ -174,6 +199,17 @@ func (s Schedule) faults(owner string) []fieldError {
 	name := strings.TrimSpace(s.Name)
 	if name == "" {
 		add("name", fmt.Errorf("%s: %w: name must not be empty", owner, ErrInvalidSchedule))
+	}
+	// THE NAME AS IT IS SPELLED IN THE KEY every fire is filed under — the
+	// raw name, escaped — never as it reads: a name of short runes that
+	// each escape to several bytes would otherwise pass here and overrun
+	// the executor log's bound. See [ScheduleNameMaxBytes].
+	if escaped := len(url.PathEscape(s.Name)); escaped > ScheduleNameMaxBytes {
+		add("name", fmt.Errorf(
+			"%s: schedule %q: %w: name is %d bytes as the key its fires are filed under spells it, "+
+				"and the limit is %d — shorten it (escaped, a space or a slash takes three bytes, "+
+				"and a letter outside ASCII six or more)",
+			owner, name, ErrInvalidSchedule, escaped, ScheduleNameMaxBytes))
 	}
 	if strings.TrimSpace(s.Task) == "" {
 		add("task", fmt.Errorf("%s: schedule %q: %w: task must not be empty", owner, name, ErrInvalidSchedule))

@@ -198,10 +198,12 @@ var modelCalls = map[string]modelCall{
 	}},
 	// THE CONTINUATION OF THE SESSION A CONVERSATION'S LAST TURN LEFT: the
 	// engine's own lead — the turn boundary and the new box, the base's turn
-	// and home defused under the launching segment's token — then the
-	// launch's own fresh brief whole, whose fences its own entries hold.
+	// and home defused under the launching segment's token, in a schedule's
+	// words for a schedule's fire — then the launch's own fresh brief whole,
+	// whose fences its own entries hold.
 	"internal/agent/runner/continued.go:baseSession": {tests: []string{
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins",
+		"internal/agent/runner.TestAScheduledFireIsToldWhereItBegins",
 		"internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},

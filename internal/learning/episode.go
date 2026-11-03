@@ -106,8 +106,9 @@ type Episode struct {
 	Count int
 
 	// WorkKey is the identity of the work this turn did. Empty when the
-	// turn had no ledgerable trigger — a scheduled fire, a sub-agent, a
-	// sandbox resume.
+	// turn had no ledgerable trigger — a sub-agent, a sandbox resume. A
+	// scheduled fire has one: it is a task assignment, which the completion
+	// ledger records.
 	WorkKey string
 
 	// ConversationKey is which conversation the turn served. Empty for

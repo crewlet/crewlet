@@ -61,9 +61,10 @@ func TestAnEmptyKeyIsNotStamped(t *testing.T) {
 		t.Fatal("the fallback did not apply")
 	}
 	// BOTH READS FALL BACK TO THE SAME VALUE, which is what keeps
-	// [notify.Derived] gating recording and the answerable-in-chat column
-	// identically: an event that can be "derived" under one key and not the
-	// other writes a row no later message can read back.
+	// [notify.Derived] answering the answer route and the answerable-in-chat
+	// column identically: an event that can be "derived" under one key and
+	// not the other would be offered a reply on one route that the other
+	// says nobody can give.
 	if notify.ConversationIdentityOf(ev) != notify.KeyOf(ev) {
 		t.Fatalf("an event naming neither key fell back to %q and %q",
 			notify.KeyOf(ev), notify.ConversationIdentityOf(ev))
@@ -100,17 +101,57 @@ func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
 }
 
 // The question a parked executor asks before telling somebody to reply in
-// a thread that may not exist.
+// a thread that may not exist — and before taking a delivery for the reply to
+// its question. A schedule's conversation is nobody's to reply into: every
+// fire of the schedule carries it.
+//
+// Mutation: answer true for a schedule's key, and its row goes red.
 func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {
 	cases := map[string]bool{
 		"chat:C1:1718.003": true,
 		"jira:ENG-42":      true,
 		"event:018f-abc":   false,
 		"":                 false,
+		notify.ScheduleConversation(types.ScheduleScopeUnit, "eng", "standup"): false,
 	}
 	for key, want := range cases {
 		if got := notify.Derived(key); got != want {
 			t.Fatalf("Derived(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
+// A SCHEDULE'S CONVERSATION IS KNOWN BY ITS PREFIX, AND NOTHING ELSE CARRIES
+// IT. Every fire of a schedule is stamped with one key, its scope, its scope's
+// id and its name escaped part by part, so a separator inside one part merges
+// no two schedules; and no key a source derives, nor the per-event fallback,
+// reads as a schedule's — a source's key is its source and a colon, which a
+// schedule's prefix is not.
+//
+// Mutation: join the parts unescaped, spell the prefix with a colon, or let
+// [notify.Scheduled] match a source's key, and a check goes red.
+func TestAScheduleConversationIsKnownByItsPrefixAlone(t *testing.T) {
+	standup := notify.ScheduleConversation(types.ScheduleScopeUnit, "eng", "standup")
+	if want := "schedule/unit/eng/standup"; standup != want {
+		t.Fatalf("a unit's standup keys %q, want %q", standup, want)
+	}
+	split := notify.ScheduleConversation(types.ScheduleScopeUnit, "q3/launch", "review")
+	joined := notify.ScheduleConversation(types.ScheduleScopeUnit, "q3", "launch/review")
+	if split == joined {
+		t.Fatalf("two schedules share the conversation %q", split)
+	}
+	for _, key := range []string{standup, split, joined,
+		notify.ScheduleConversation(types.ScheduleScopeRole, "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11", "a b")} {
+		if !notify.Scheduled(key) {
+			t.Errorf("Scheduled(%q) = false, want a schedule's", key)
+		}
+	}
+	for _, key := range []string{
+		notify.Namespaced("schedule", "unit/eng/standup"), "chat:C1", "jira:ENG-42",
+		notify.Fallback("018f-abc"), "",
+	} {
+		if notify.Scheduled(key) {
+			t.Errorf("Scheduled(%q) = true, want no schedule's", key)
 		}
 	}
 }

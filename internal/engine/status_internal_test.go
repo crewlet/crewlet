@@ -504,7 +504,8 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
-	// A scheduled fire has no conversation and nobody watching a composer.
+	// A scheduled fire's conversation is its schedule's, no chat surface's,
+	// and nobody is watching a composer.
 	e.raisedNothing(t, ws)
 }
 
