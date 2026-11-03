@@ -28,6 +28,7 @@ import {
   joinLevels,
   levelName,
   boxSettings,
+  credentialNote,
   noToolRemedy,
   onlyScope,
   productOnly,
@@ -509,4 +510,67 @@ test("a box lane that also has a tool server names both routes, the server first
   );
   expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
   expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
+});
+
+// WHAT CREWLET PUTS IN THE BOX FOR A CLI names its files too, after its
+// variables, so a token file a CLI reads is said where it lives.
+test("the settings Crewlet puts in a box name its files after its variables", () => {
+  const boxed = {
+    ...onLane({ variable: "VENDOR_TOKEN_SRE" }),
+    box: {
+      env: [
+        { name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token", by: "crewlet" },
+      ],
+      files: [
+        {
+          path: ".config/crewlet/token",
+          value: "${VENDOR_TOKEN_SRE}",
+          rewritten: true,
+          by: "crewlet",
+        },
+      ],
+    },
+  } satisfies AccessSeatLane;
+  expect(boxSettings(boxed)).toBe("VENDOR_TOKEN_FILE and .config/crewlet/token");
+  expect(boxSettings({ ...boxed, box: { env: [], files: boxed.box.files } })).toBe(
+    ".config/crewlet/token",
+  );
+});
+
+// A CREDENTIAL CREWLET ISSUES AT USE has no time any node shares, so it reads
+// as how it is issued; a minted one keeps its time, and one provided from
+// outside says so.
+test("a credential reads as issued at use, minted when, or provided externally", () => {
+  const now = Date.now();
+  const minted = onLane({ variable: "DATADOG_APP_KEY_SRE" }).observed;
+  const issued = {
+    ...minted,
+    credential: { variable: "VENDOR_TOKEN_SRE", source: "issued" as const },
+  };
+  expect(credentialNote(DATADOG_LANE, issued, now)).toBe(", issued for an hour at a time, at use");
+  expect(credentialNote(DATADOG_LANE, minted, now)).toBe(", minted 1d ago");
+  expect(
+    credentialNote(
+      DATADOG_LANE,
+      { ...minted, credential: { ...minted.credential!, source: "external" } },
+      now,
+    ),
+  ).toBe(", provided externally");
+});
+
+// A WAIT THE ENGINE CAN NAME says whose it is, so a vendor still applying a
+// grant is never read as a credential somebody owes, nor as Needs you.
+test("a tool waiting with the engine's reason says the reason", () => {
+  const sre = onLane({ variable: "DATADOG_APP_KEY_SRE" });
+  expect(
+    toolWords(DATADOG_LANE, {
+      ...sre,
+      tool: "waiting",
+      tool_reason: "the vendor is still applying the grant",
+    }),
+  ).toBe("Waiting: the vendor is still applying the grant, Datadog MCP server, one per agent");
+  expect(toolWords(DATADOG_LANE, { ...sre, tool: "waiting" })).toBe(
+    "Waiting for the credential, Datadog MCP server, one per agent",
+  );
+  expect(statusOf(DATADOG_LANE, { ...sre, tool: "waiting" }, false, false).label).toBe("In sync");
 });

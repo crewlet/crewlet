@@ -399,10 +399,27 @@ export function boxLines(saved: AccessSeatLane): AccessBoxLine[] {
   return (saved.box?.env ?? []).filter((line) => line.by === "you");
 }
 
-/** The settings Crewlet puts in a seat's box itself, by name, or null where it puts none. */
+/**
+ * The settings Crewlet puts in a seat's box itself, its variables by name and
+ * then its files by path, or null where it puts none.
+ */
 export function boxSettings(saved: AccessSeatLane): string | null {
-  const names = (saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name);
+  const names = [
+    ...(saved.box?.env ?? []).filter((l) => l.by === "crewlet").map((l) => l.name),
+    ...(saved.box?.files ?? []).filter((f) => f.by === "crewlet").map((f) => f.path),
+  ];
   return names.length > 0 ? andList(names) : null;
+}
+
+/**
+ * What the details say after a seat's credential variable: who provides it,
+ * that Crewlet issues it at use for an hour (never sealed, so no time is a
+ * fleet fact), or when it was minted.
+ */
+export function credentialNote(lane: Lane, o: AccessObserved, now: number): string {
+  if (providedExternally(lane, o)) return ", provided externally";
+  if (o.credential?.source === "issued") return ", issued for an hour at a time, at use";
+  return o.credential?.minted_at ? `, minted ${relTime(o.credential.minted_at, now)}` : "";
 }
 
 /** The tool, as one value: whether it works, and what it works through. */
@@ -419,7 +436,11 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
     case "builtin":
       return through;
     case "waiting":
-      return `Waiting for the credential, ${through}`;
+      // THE ENGINE'S REASON WHERE IT SENDS ONE (a vendor still applying a new
+      // grant), since a wait the person did not cause should say who it is on.
+      return saved.tool_reason
+        ? `Waiting: ${saved.tool_reason}, ${through}`
+        : `Waiting for the credential, ${through}`;
     case "no_server":
       return names && !lane.tool_server
         ? `Not set up: its sandbox env does not set ${names}`
