@@ -25,14 +25,19 @@ import {
   joinLevels,
   levelName,
   noToolRemedy,
+  onlyScope,
   productOnly,
   refusedLevel,
+  refusedScope,
   scopeApplies,
   offSentence,
   sameDesired,
+  scopeChoices,
+  scopeUnavailable,
   scopeWords,
   statusOf,
   toolWords,
+  type Lane,
 } from "./logic.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
@@ -288,8 +293,84 @@ test("an agent that left the company reads as such when its details open, not as
   );
 });
 
+// A SCOPE ENTRY IS STORED BY ITS IDENTIFIER AND READ BY ITS NAME: where the
+// vendor names it apart from its ID, the picker labels it by name with the ID
+// beneath, and every sentence names it. One the seat holds and the connection
+// no longer reaches is still offered, by its ID, so a person can clear it.
+describe("a scope entry's name", () => {
+  const named: Lane = {
+    ...JIRA_LANE,
+    scope_names: { ENG: "Engineering", OPS: "Operations" },
+  };
+
+  test("labels the picker by name, with the identifier beneath", () => {
+    expect(scopeChoices(named, ["ENG"])).toEqual([
+      { value: "ENG", label: "Engineering", description: "ENG" },
+      { value: "OPS", label: "Operations", description: "OPS" },
+    ]);
+    expect(scopeChoices(JIRA_LANE, [])).toEqual([
+      { value: "ENG", label: "ENG" },
+      { value: "OPS", label: "OPS" },
+    ]);
+  });
+
+  test("keeps an entry the connection no longer reaches, by its identifier", () => {
+    expect(scopeChoices(named, ["ENG", "GONE"]).at(-1)).toEqual({ value: "GONE", label: "GONE" });
+  });
+
+  test("names the entries in every sentence", () => {
+    expect(scopeWords(named, ["OPS", "ENG"])).toBe("Operations and Engineering");
+    expect(scopeWords(named, ["ENG", "OPS", "GONE"])).toBe("Engineering, Operations and GONE");
+    expect(scopeWords(JIRA_LANE, ["ENG"])).toBe("ENG");
+  });
+});
+
+// A PICKER WITH NOTHING TO OFFER SAYS WHY: the list could not be read, which
+// says nothing about what exists, or it was read and holds nothing. An open
+// connection takes typed entries, so it always has something to offer.
+test("a scope picker with nothing to offer says whether the list was read", () => {
+  const empty: Lane = { ...GITHUB_LANE, scope: undefined };
+  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toBe(
+    "Crewlet could not read your repositories",
+  );
+  expect(scopeUnavailable(empty, [])).toBe("No repositories to choose from");
+  expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
+  expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
+  expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
+});
+
+// A LANE WHERE AN EMPTY SCOPE REACHES NOTHING refuses an agent that is on with
+// none, as the engine would, and says so under the row before the review.
+test("a lane whose empty scope reaches nothing refuses an agent that is on with none", () => {
+  const required: Lane = { ...GITHUB_LANE, scope_required: true };
+  expect(refusedScope(required, { enabled: true, scope: [] })).toBe(
+    "Choose at least one GitHub repository for every agent that is on.",
+  );
+  expect(refusedScope(required, { enabled: true, scope: ["gophrase/backend"] })).toBeNull();
+  expect(refusedScope(required, { enabled: false })).toBeNull();
+  expect(refusedScope(GITHUB_LANE, { enabled: true, scope: [] })).toBeNull();
+  expect(emptyScopeHint(required, { enabled: true })).toBe(
+    "Not in any repository yet, so it can reach nothing. Choose its repositories.",
+  );
+  expect(emptyScopeHint(GITHUB_LANE, { enabled: true })).toBeNull();
+});
+
 // A LANE THAT IS NOT SCOPED offers no scope, whatever an answer lists.
 test("a scope is offered only on a lane that narrows by scope", () => {
   expect(scopeApplies(GITHUB_LANE, { enabled: true })).toBe(true);
   expect(scopeApplies({ ...GITHUB_LANE, scoped: false }, { enabled: true })).toBe(false);
+});
+
+// THE ONLY ENTRY THERE IS: on a lane where an empty scope reaches nothing, a
+// seat turned on takes the one entry a list read just now holds, and nowhere
+// else: not on a lane without the rule, not from several entries or a list
+// that could not be read, and never for a seat that is already on.
+test("a seat turned on takes the only entry there is, and only then", () => {
+  const one: Lane = { ...GITHUB_LANE, scope: ["gophrase/backend"], scope_required: true };
+  expect(onlyScope(one, { enabled: false })).toEqual(["gophrase/backend"]);
+  expect(onlyScope({ ...one, scope_required: false }, { enabled: false })).toBeUndefined();
+  expect(onlyScope({ ...one, scope_live: false }, { enabled: false })).toBeUndefined();
+  expect(onlyScope({ ...one, scope: ["a/b", "a/c"] }, { enabled: false })).toBeUndefined();
+  expect(onlyScope(one, { enabled: true })).toBeUndefined();
+  expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
 });

@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
+import { pick } from "~/testing.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
   cloudflareAnswer,
@@ -40,6 +41,8 @@ const calls = vi.hoisted(() => ({
   stale: false,
   /** The revision the engine's plan is drawn from: the document as it stands now. */
   planRevision: "rev-7",
+  /** The body of a refusal the plan answers instead, once set. */
+  planRefusal: null as Record<string, unknown> | null,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -50,6 +53,10 @@ vi.mock("./api.ts", async (actual) => {
       read: vi.fn(),
       plan: vi.fn(async (kind: string, seats: unknown) => {
         calls.plan.push({ kind, seats });
+        if (calls.planRefusal) {
+          const { RestError } = await import("~/protocol/rest.ts");
+          throw new RestError(400, calls.planRefusal);
+        }
         return {
           kind,
           revision: calls.planRevision,
@@ -108,6 +115,7 @@ beforeEach(() => {
   calls.stepUp = false;
   calls.stale = false;
   calls.planRevision = "rev-7";
+  calls.planRefusal = null;
 });
 afterEach(cleanup);
 
@@ -805,6 +813,24 @@ test("the table is the kit's: a named table of real rows, with column headers an
     expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
 });
 
+// A SCOPE ENTRY IS READ BY ITS NAME: where the vendor names an entry apart from
+// the identifier stored (a project's ID), the picker labels it by name with the
+// identifier beneath, and the review names it too.
+test("a scope entry is picked by its name, with its identifier beneath, and the review names it", async () => {
+  const data = jiraAnswer();
+  data.options[0]!.scope_names = { ENG: "Engineering", OPS: "Operations" };
+  draw(data);
+  const picker = document.querySelector<HTMLElement>(`[aria-label="QA's Jira projects"]`)!;
+  expect(picker.textContent).toContain("Engineering");
+  pick(picker, /Operations/);
+  expect(screen.getByRole("option", { name: /Operations/ }).textContent).toContain("OPS");
+  fireEvent.keyDown(picker, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("option")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const review = await screen.findByRole("dialog");
+  expect(within(review).getByText("Engineering and Operations")).toBeTruthy();
+});
+
 // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation on every
 // repository, a GitLab group with no project list), so its picker takes a
 // typed entry. The tab once keyed its scope on the list alone and never read
@@ -838,4 +864,95 @@ test.each([
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(calls.plan).toHaveLength(1));
   expect(calls.plan[0]).toMatchObject({ seats: sent });
+});
+
+// A PICKER WITH NOTHING TO OFFER SAYS WHY in its place: the list could not be
+// read, which says nothing about what exists, or it was read and holds none.
+test("a scope list that could not be read, or holds nothing, says so in place of a picker", () => {
+  const data = githubAnswer();
+  data.seats[0]!.lanes.github!.desired.scope = [];
+  data.options[0] = { ...data.options[0]!, scope: undefined, scope_live: false };
+  const { redraw } = draw(data);
+  expect(screen.getByText("Crewlet could not read your repositories")).toBeTruthy();
+  expect(document.querySelector(`[aria-label="QA's GitHub repositories"]`)).toBeNull();
+  redraw({ ...data, options: [{ ...data.options[0]!, scope_live: true }] });
+  expect(screen.getByText("No repositories to choose from")).toBeTruthy();
+});
+
+// A LANE WHERE AN EMPTY SCOPE REACHES NOTHING holds an agent turned on with
+// none at the review, and says under its row what to choose.
+test("an agent turned on with no scope where none reaches nothing is held at the review", () => {
+  const data = githubAnswer();
+  data.options[0] = { ...data.options[0]!, scope_required: true };
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  expect(
+    screen.getByText(
+      "Not in any repository yet, so it can reach nothing. Choose its repositories.",
+    ),
+  ).toBeTruthy();
+  const review = screen.getByRole("button", { name: "Review changes" });
+  expect(review.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(review);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// THE ONLY ENTRY THERE IS is taken as a seat is turned on, where an empty scope
+// reaches nothing and the list was read just now, so it shows in the review
+// like any other change. A seat turned on anywhere else takes nothing.
+test("an agent turned on where one entry is all there is takes it", async () => {
+  const data = githubAnswer();
+  data.options[0] = { ...data.options[0]!, scope: ["gophrase/backend"], scope_required: true };
+  data.seats.push(seat("pm", "PM", { github: offLane() }));
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(calls.plan).toHaveLength(1));
+  expect(calls.plan[0]).toMatchObject({
+    seats: { pm: { github: { enabled: true, scope: ["gophrase/backend"] } } },
+  });
+  cleanup();
+  calls.plan = [];
+  draw({ ...data, options: [{ ...data.options[0]!, scope: ["a/b", "a/c"] }] });
+  fireEvent.click(screen.getByRole("switch", { name: "PM on GitHub" }));
+  expect(screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+});
+
+// A REFUSAL ABOUT ONE SEAT'S CONTROL closes the review and is said beside that
+// control, which is marked refused and points at the sentence; a change to the
+// seat clears it. Mutation: keep it in the review's banner and this goes red.
+test("a refusal about one seat's projects closes the review and is said beside that picker", async () => {
+  calls.planRefusal = {
+    error: "access_not_offered",
+    detail: "Choose at least one project for qa: an agent in no project can reach nothing",
+    seat: "qa",
+    lane: "jira",
+    field: "scope",
+  };
+  draw(jiraAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const said = await screen.findByText(
+    "Choose at least one project for qa: an agent in no project can reach nothing.",
+  );
+  expect(said.getAttribute("role")).toBe("alert");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const marked = document.querySelector<HTMLElement>(`[aria-describedby="${said.id}"]`)!;
+  expect(marked.getAttribute("aria-invalid")).toBe("true");
+  expect(marked.closest(`[aria-label="QA's Jira projects"]`) ?? marked).toBeTruthy();
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Jira" }));
+  expect(screen.queryByText(/Choose at least one project for qa/)).toBeNull();
+});
+
+// A REFUSAL NAMING NO CONTROL stays in the review, where the save was asked for.
+test("a refusal naming no control stays in the review", async () => {
+  calls.planRefusal = { error: "access_not_offered", detail: "atlassian grants no lane forge" };
+  draw(jiraAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const review = await screen.findByRole("dialog");
+  expect(await within(review).findByText("Atlassian grants no lane forge.")).toBeTruthy();
 });

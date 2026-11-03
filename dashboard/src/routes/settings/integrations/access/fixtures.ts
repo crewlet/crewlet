@@ -43,6 +43,7 @@ const GITHUB_OPTIONS: AccessOptions = {
     { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
   scoped: true,
+  scope_live: true,
   scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
 };
 
@@ -54,6 +55,7 @@ const MATTERMOST_OPTIONS: AccessOptions = {
     { id: "system_user system_post_all_public", name: "Member who posts in any public channel" },
   ],
   scoped: true,
+  scope_live: true,
   scope: ["town-square", "incidents", "releases"],
 };
 
@@ -68,6 +70,7 @@ const GITLAB_OPTIONS: AccessOptions = {
     { id: "40", name: "Maintainer", administers: true },
   ],
   scoped: true,
+  scope_live: true,
   scope_open: true,
 };
 
@@ -117,6 +120,7 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
     { id: "administer:space", name: "Admin", administers: true },
   ],
   scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -135,6 +139,7 @@ const JIRA_OPTIONS: AccessOptions = {
     { id: "10004", name: "Administrator", administers: true },
   ],
   scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 

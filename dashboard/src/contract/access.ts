@@ -91,8 +91,18 @@ export interface AccessOptions {
   scoped?: boolean;
   /** What a seat may be scoped to (repositories, projects, spaces, channels), from the company's connection. */
   scope?: string[];
+  /**
+   * A person's name for each `scope` entry, keyed by the identifier stored,
+   * where the two differ (a Scaleway project's ID). Absent where the
+   * identifier is the name.
+   */
+  scope_names?: Record<string, string>;
+  /** Whether `scope` was read just now, so an empty one means the vendor has none to offer. */
+  scope_live?: boolean;
   /** Whether a scope entry outside `scope` may be typed. */
   scope_open?: boolean;
+  /** Whether a seat that is on must name at least one entry: an empty scope reaches nothing. */
+  scope_required?: boolean;
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
   /**
@@ -285,6 +295,9 @@ export interface AccessPlanAnswer {
   /** Saving this draft asks for a fresh step-up (D10). */
   step_up?: boolean;
 }
+
+/** The control of one seat's lane an `access_not_offered` refusal is about. */
+export type AccessRefusalField = "level" | "permissions" | "scope";
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
 export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
