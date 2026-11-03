@@ -19,15 +19,35 @@ import (
 // as [sessionHarness] does and then WORKS ON — becomes a sleep that only a
 // signal ends — rather than printing its result: a harness a run's end request
 // finds mid-run. ignoreTerm makes it a harness that will not go when told to.
+//
+// IT SAYS WHEN IT IS WORKING, as the last thing before the sleep, and a case
+// asks the end only once it has ([harnessWorking]). By then the session is
+// filed whole, and a harness that ignores SIGTERM has made it ignored. The
+// transcript is the FIRST thing the harness files, before its sidecars, its
+// task list and the ignore, so an end asked once the transcript appears could
+// land before any of them: the capture then lacks sidecars it was meant to
+// hold, or the harness meant to outlive its grace dies of the SIGTERM it was
+// meant to ignore, recorded as asked with 143 rather than as killed with 137.
 func endingHarness(release string, ignoreTerm bool) string {
 	harness := sessionHarness(release)
-	work := "exec sleep 300\n"
+	work := `echo working > "$HOME/` + workingMarker + "\"\nexec sleep 300\n"
 	if ignoreTerm {
 		// IGNORED, never trapped: an ignored signal stays ignored across the
 		// exec, and the sleep is what the end has to stop.
 		work = "trap '' TERM\n" + work
 	}
 	return strings.Replace(harness, `printf '{"type":"result"`, work+`printf '{"type":"result"`, 1)
+}
+
+// workingMarker is the file, in the box's home, an [endingHarness] writes once
+// it is working.
+const workingMarker = "harness-working"
+
+// harnessWorking waits for the [endingHarness] in box to be working: its
+// session filed whole and, where it ignores SIGTERM, the ignore in place.
+func harnessWorking(t *testing.T, box sandbox.Sandbox) {
+	t.Helper()
+	boxFileAppears(t, box, box.Home()+"/"+workingMarker, "the harness to file its session and work on")
 }
 
 // timedClaude is Claude Code with its harness given stop to go once its run is
@@ -113,7 +133,7 @@ func TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		harnessWorking(t, box)
 		askEnd(t, runner, box, handle)
 		awaitOver(t, runner, box, handle, 15*time.Second, "the end gives its harness five seconds")
 
@@ -183,7 +203,7 @@ func TestAClaudeCodeHarnessThatOutlivesItsGraceIsKilledThenPacked(t *testing.T) 
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		harnessWorking(t, box)
 		askEnd(t, runner, box, handle)
 		awaitOver(t, runner, box, handle, 10*time.Second, "the harness is given a third of a second here")
 
@@ -353,7 +373,7 @@ func TestASecondEndRequestLeavesAClaudeCodePackWhole(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		harnessWorking(t, box)
 		askEnd(t, runner, box, handle)
 		waitForFile(t, begun, "the ended run to pack")
 		askEnd(t, runner, box, handle)
@@ -398,7 +418,7 @@ func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		harnessWorking(t, box)
 		// THE REPORT A HARNESS WRITES before it stops, which reads as a
 		// success where nothing says the run was ended.
 		if err := box.WriteFile(t.Context(), p.Findings(), []byte("fixed the flake")); err != nil {
