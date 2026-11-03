@@ -372,6 +372,49 @@ test("a line the patch does not draw offers the file at the head on that line", 
   expect(region.querySelectorAll(".diff-view__line[data-picked]").length).toBe(0);
 });
 
+// THE PATCH IS FOLLOWED TO THE LINE, a page at a time with no press, and no
+// further: a line on a later page is marked once the page holding it is
+// read, and a line the hunks read reach past is outside the diff as soon as
+// they do, with the pages after it left unread. Mutation: wait for the
+// reader's press, judge "outside" only once the whole patch is read, or read
+// past the line, and this fails.
+const PAGED_PATCH = [
+  `${["--- a/app.go", "+++ b/app.go", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
+  `${["@@ -40,2 +40,2 @@", " still", "-alpha", "+omega"].join("\n")}\n`,
+  ["@@ -90,2 +90,2 @@", " later", "-beta", "+gamma"].join("\n"),
+];
+
+test("a line on a later page of the patch is read to and marked with no press", async () => {
+  const { asked } = stubEngine({ patch: PAGED_PATCH });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=app.go&line=41`);
+
+  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  expect(await within(region).findByText("omega")).toBeTruthy();
+  const marked = region.querySelectorAll(".diff-view__line[data-picked]");
+  expect(marked.length).toBe(1);
+  expect(marked[0]?.textContent).toContain("omega");
+  expect(within(region).queryByText(/outside what this diff changes/)).toBeNull();
+  const cursors = reads(asked, "code_diff")
+    .filter((u) => u.searchParams.get("file") === "app.go")
+    .map((u) => u.searchParams.get("cursor"));
+  expect(cursors).toEqual([null, "p:1"]);
+});
+
+test("a line between two hunks is outside the diff once a hunk past it is read", async () => {
+  const { asked } = stubEngine({ patch: PAGED_PATCH });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}?file=app.go&line=20`);
+
+  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  expect(await within(region).findByRole("link", { name: "Open app.go at line 20" })).toBeTruthy();
+  expect(within(region).getByText("omega")).toBeTruthy();
+  expect(within(region).queryByText("gamma")).toBeNull();
+  expect(within(region).getByRole("button", { name: "Load more lines" })).toBeTruthy();
+  const cursors = reads(asked, "code_diff")
+    .filter((u) => u.searchParams.get("file") === "app.go")
+    .map((u) => u.searchParams.get("cursor"));
+  expect(cursors).toEqual([null, "p:1"]);
+});
+
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty
 // tree. Mutation: skip the diff of a root commit, or diff it against itself,
 // and this fails.

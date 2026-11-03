@@ -12,10 +12,10 @@
  * `layout=` how, each a filter of the page it is on.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
 import { useParam } from "~/app/router.tsx";
-import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
+import { DiffView, type DiffHunk, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
@@ -28,6 +28,26 @@ import { repoHref } from "../paths.ts";
 /** A `line=` as the address spells it: a line number, or 0 for none. */
 function lineOf(param: string): number {
   return /^[1-9][0-9]*$/.test(param) ? Number(param) : 0;
+}
+
+/**
+ * Where the hunks read so far stand to a line of the newer side: whether one
+ * draws it, and the furthest newer line any of them reaches (0 for none).
+ * Git writes a file's hunks in the newer side's order, each over a run of its
+ * lines, so a line the hunks reach past without drawing lies between two of
+ * them: unchanged, outside what the diff changes.
+ */
+function placeOf(hunks: readonly DiffHunk[], line: number): { drawn: boolean; reached: number } {
+  let drawn = false;
+  let reached = 0;
+  for (const hunk of hunks) {
+    for (const l of hunk.lines) {
+      if (l.after === null) continue;
+      if (l.after === line) drawn = true;
+      if (l.after > reached) reached = l.after;
+    }
+  }
+  return { drawn: line > 0 && drawn, reached };
 }
 
 /** What git's status letter says of a file. */
@@ -171,10 +191,12 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
  * A LINE THE ADDRESS NAMES (`line`, of the newer side) is marked where the
  * patch draws it and brought into view once, as it is first drawn, by the
  * diff itself, which knows which of its blocks holds it however long the
- * patch is (`DiffView`'s `reveal`). One the
- * patch does not draw, read to its end, is outside what the diff changes:
- * said, with the file itself at `head` offered on that line, rather than a
- * patch drawn as if it held the line.
+ * patch is (`DiffView`'s `reveal`). The patch is read on to the page that
+ * holds it, a page at a time with no press, and no further. One the patch
+ * does not draw is outside what the diff changes — known once a line past it
+ * is read, or the whole patch was read short of it: said, with the file
+ * itself at `head` offered on that line, rather than a patch drawn as if it
+ * held the line.
  */
 function FilePatch({
   repo,
@@ -202,9 +224,28 @@ function FilePatch({
   // ONE PREDICATE FOR THE LINE, kept across renders: the diff marks what it
   // accepts and reveals it once for it, wherever its window is (`DiffView`).
   const at = useCallback((l: DiffLine) => l.after === line, [line]);
-  const drawn = line > 0 && hunks.some((h) => h.lines.some(at));
+  const { drawn, reached } = useMemo(() => placeOf(hunks, line), [hunks, line]);
+  // THE PATCH IS FOLLOWED TO THE LINE: its hunks are in the newer side's
+  // order, so while every line read ends before it and git wrote more, the
+  // page holding it is still to come, and it is asked for without a press —
+  // only up to that page, never the rest of the file. A page that failed
+  // stops it, its pager offering the press that asks again.
+  const short = line > 0 && !drawn && reached < line;
+  const follow = short && paged.more && !paged.paging && !paged.pageError;
+  const { next } = paged;
+  useEffect(() => {
+    if (follow) next();
+  }, [follow, next]);
+  // OUTSIDE AS SOON AS THE ORDER SAYS SO: a line read past it, or the whole
+  // patch read short of it, never the reader paging to the end by hand.
   const outside =
-    line > 0 && !drawn && !!entry && !entry.binary && !!read.data && !read.loading && !paged.more;
+    line > 0 &&
+    !drawn &&
+    !!entry &&
+    !entry.binary &&
+    !!read.data &&
+    !read.loading &&
+    (!short || !paged.more);
   return (
     <section aria-label={`Changes to ${path}`} className="code-file">
       {entry?.binary ? (
