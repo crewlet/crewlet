@@ -176,10 +176,11 @@ func TestTheTranscriptRidesTheLaunchsRecordRedacted(t *testing.T) {
 // question is redacted where its ask is recorded ([Ask.Redacted]), so the
 // question's case asks through the store with the tokens in its context.
 //
-// Mutation: skip the publish's redaction of a box's result (collectedRecord's), or
-// the ask's where it is recorded, and the report's, the failure's and the
-// question's records carry the tokens; drop the run-token rule from
-// internal/redact, and every case does.
+// Mutation: skip the coordinator's redaction of a box's report and failure —
+// where they are fitted ([Coordinator.fitText]) and where they are published
+// (collectedRecord's), each enough alone — or the ask's where it is recorded,
+// and the report's, the failure's and the question's records carry the
+// tokens; drop the run-token rule from internal/redact, and every case does.
 func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	t.Parallel()
 	const engine = "https://engine.example.com"

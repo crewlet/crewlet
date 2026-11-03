@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // A REF IS REDACTED BEFORE ANYTHING READS IT. It is whatever word a report
@@ -108,6 +109,59 @@ func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
 			t.Errorf("a box that named session %.40q (%d bytes) and release %.40q (%d bytes) is recorded "+
 				"as %.40q and %.40q; want %.40q and %.40q", tc.session, len(tc.session), tc.release,
 				len(tc.release), rec.HarnessSession, rec.HarnessVersion, tc.wantSession, tc.wantRelease)
+		}
+	}
+}
+
+// A PIECE IS MEASURED AS THE RECORD CARRIES IT: REDACTED. A redaction can
+// lengthen a text — a password's value written in pieces between escaped
+// breaks becomes a marker a piece, seven times its bytes — and the record is
+// redacted as it is published, so a report or a failure measured before its
+// last redaction rode the record at up to seven times its bound: a runner's
+// that redacted nothing, which the coordinator trusts no runner not to hand
+// over, and a model's rewrite, which no runner ever saw. Each is redacted as
+// it is fitted, a rewrite before it is measured, and one the redaction puts
+// past the bound is refused as a long one is: whole lines of the redacted text
+// stand in its place.
+//
+// Mutation: fit the report or the failure before redacting it, or measure the
+// rewrite before redacting it, and a case goes red.
+func TestAPieceIsMeasuredAsTheRecordCarriesIt(t *testing.T) {
+	t.Parallel()
+	// LINES OF A VALUE IN PIECES, just inside the bound as written and seven
+	// times it redacted, in lines a fallback can keep whole.
+	line := "pwd=" + strings.Repeat(`x\n`, 20) + "\n"
+	grows := strings.Repeat(line, MaxRunTextBytes/len(line))
+	if redacted := redact.Secrets(grows); len(redacted) < 4*MaxRunTextBytes {
+		t.Fatalf("the case's text redacts to %d bytes, which is not far past the %d-byte bound", len(redacted),
+			MaxRunTextBytes)
+	}
+	controls := strings.Repeat(strings.Repeat("\x01", 99)+"\n", 2*MaxRunTextBytes/100+1)
+	failure := strings.Repeat(strings.Repeat("\x01", 99)+"\n", MaxCondenseBytes/100+2)
+	noModel := &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
+		return "", errors.New("no model")
+	}}
+	// A REWRITE OF THAT SHAPE, inside the budget as the model wrote it.
+	growingRewrite := &fakeCondenser{answer: func(_ RunPart, _ string, budget int) (string, error) {
+		return grows[:budget/len(line)*len(line)], nil
+	}}
+	for name, tc := range map[string]struct {
+		condense Condenser
+		result   Result
+	}{
+		"a runner that redacted nothing": {noModel, Result{Text: grows, Error: grows}},
+		"a rewrite a redaction grows":    {growingRewrite, Result{Text: controls, Error: failure}},
+	} {
+		c := &Coordinator{condense: tc.condense}
+		rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.fitResult(t.Context(), PendingRun{}, tc.result),
+			time.Now())
+		// THE NOTE saying what was left out is not counted against the bound
+		// ([wholeLines]); a KiB holds it.
+		for piece, text := range map[string]string{"report": rec.Response, "failure": rec.Error} {
+			if len(text) > MaxRunTextBytes+1<<10 {
+				t.Errorf("%s: the record's %s is %d bytes, past the %d it is held to", name, piece, len(text),
+					MaxRunTextBytes)
+			}
 		}
 	}
 }
