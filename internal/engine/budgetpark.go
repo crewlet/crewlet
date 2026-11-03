@@ -90,11 +90,28 @@ var budgetParkSpec = parkSpec{
 }
 
 // budgetParks is every seat inbox this node holds for want of budget, by the
-// seat's id, each with the ceilings it was decided under.
-type budgetParks = seatParks[budgetBasis]
+// seat's id, each with what it was decided under.
+type budgetParks = seatParks[budgetHeld]
+
+// budgetHeld is what one budget park was decided under: the ceilings and the
+// clock the seat's spend is judged by (basis), which a change of the company
+// releases the park on, and the floor its delivery's launch needs (floor) —
+// the static floor, or the larger one a launch that continues its
+// conversation's session was refused below — which the park waits for room
+// for, and which an ask waiting behind the park is judged by
+// ([Engine.budgetParked]).
+type budgetHeld struct {
+	basis budgetBasis
+	floor launchFloor
+}
 
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
-// of its capped windows is refusing, reporting the deferral reason.
+// of its capped windows is refusing, or leaves less room than the delivery's
+// launch needs, reporting the deferral reason. refused is the budget refusal the
+// delivery's turn met, nil before any turn ran: the floor the park waits for
+// room for is the one that launch was refused below ([floorOf]) — a first
+// launch that continues its conversation's session needs that session's context
+// beside its brief — and the static floor otherwise.
 //
 // What it does NOT do is decide an unknown: a counter that cannot be read
 // lets the delivery through, logged, because the turn's own meter is the gate
@@ -103,14 +120,15 @@ type budgetParks = seatParks[budgetBasis]
 // the hold that could not be taken, which the dispatcher DEFERS (see
 // [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
 // the delivery's place at the head of the seat's inbox.
-func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
+func (e *Engine) budgetPark(ctx context.Context, handle string, refused error) (string, bool, error) {
 	c := e.Company()
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	r, refusing, starved, err := m.parks(ctx)
+	floor := floorOf(c, refused)
+	r, refusing, starved, err := m.parks(ctx, floor)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
 			"detail", "the counters could not be read, so the delivery runs and "+
@@ -127,8 +145,8 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	// THE RACE WITH THE RELEASE is closed by ordering, as the no-model
 	// pause closes its own: the hold is taken and recorded under the lock
 	// ([seatParks.take]), and the basis is read again after that.
-	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, m.basis, r.Window.End,
-		"the window turned over"); err != nil {
+	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, budgetHeld{basis: m.basis, floor: floor},
+		r.Window.End, "the window turned over"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
 	reason := refusingReason(r)
@@ -143,11 +161,11 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// none, so there is no refusal of a charge to record.
 		m.turnAway(ctx, r)
 	} else {
-		reason = starvedReason(r, launchFloor{static: m.basis.floor})
+		reason = starvedReason(r, floor)
 	}
 	log.InfoContext(ctx, "seat_budget_parked", "seat", handle, "scope", r.Scope,
 		"period", string(r.Window.Period), "window", r.Window.Label,
-		"used", r.Used, "limit", r.Limit, "floor", m.basis.floor, "starved", starved,
+		"used", r.Used, "limit", r.Limit, "floor", floor.tokens(), "starved", starved,
 		"resets_at", rfc3339(r.Window.End),
 		"detail", "this seat's mail waits on its inbox until the window turns "+
 			"over or a revision raises the ceiling")
@@ -170,7 +188,8 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 
 // parks reports the window that parks a seat's mail, and which of the two
 // conditions holds it there: a capped window refusing outright, or — where none
-// is — one leaving less room than an executor launch needs ([meter.starved]).
+// is — one leaving less room than floor, the room the delivery's launch needs
+// ([meter.starved]).
 //
 // AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a seat with room
 // left but less than the executor floor refuses every turn at its launch
@@ -183,12 +202,15 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 // waiting in that mail is still owed its answer ([colleagueOwed]). Three-valued
 // as both its halves are.
 //
-// THE STATIC FLOOR, because what both readers hold mail for is a turn's first
-// launch, which continues no session of the turn's own ([launchFloor]).
-func (m *meter) parks(ctx context.Context) (r refusal, refusing, starved bool, err error) {
+// THE FLOOR IS THE CALLER'S: the static one for a delivery no launch has been
+// refused for yet, and the one a launch was refused below where one was — a
+// turn's first launch that continues its conversation's session needs that
+// session's context beside its brief ([launchFloor]), and a window with room
+// for the static floor alone holds that launch back as surely as a full one.
+func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
-		r, starved, err = m.starved(ctx, m.basis.floor)
+		r, starved, err = m.starved(ctx, floor.tokens())
 	}
 	return r, refusing, starved, err
 }
@@ -276,8 +298,8 @@ func (e *Engine) releaseBudgetPark(ctx context.Context, seat uuid.UUID, why stri
 // cost of one delivery, which is cheaper than deciding here what only the
 // counters know.
 func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
-	for _, seat := range e.budgetParks.changed(func(seat uuid.UUID, basis budgetBasis) bool {
-		return budgetBasisOf(next, seat).equal(basis)
+	for _, seat := range e.budgetParks.changed(func(seat uuid.UUID, held budgetHeld) bool {
+		return budgetBasisOf(next, seat).equal(held.basis)
 	}) {
 		e.releaseBudgetPark(ctx, seat, "a change of the company moved the ceilings it parked on")
 	}

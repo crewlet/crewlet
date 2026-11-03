@@ -523,6 +523,44 @@ func TestALaunchRefusedBelowTheFloorParksTheSeat(t *testing.T) {
 	}
 }
 
+// A FIRST LAUNCH HELD BELOW ITS CONTINUED FLOOR PARKS THE SEAT ON THAT FLOOR. A
+// turn's first launch that continues its conversation's session needs that
+// session's context beside its brief, more than the static floor; refused
+// between the two, the delivery is parked — never NAKed into the same refusal —
+// on the floor the launch was refused below, where a window with room for the
+// static floor alone is not a window with room. And a colleague's ask waiting
+// behind the park is still owed: the park is judged on its own floor.
+//
+// Mutation: park on the static floor, or judge an ask behind the park on it,
+// and a check goes red.
+func TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "30")
+	r.mu.Lock()
+	r.turnFn = func() (turn.Result, error) {
+		// FIFTY LEFT: room for the static floor of thirty, and none for a
+		// launch whose session's last request carried fifty beside a brief
+		// of ten.
+		r.spend(t, 50)
+		return turn.Result{}, executorHeadroom(t.Context(), staticRemaining{left: 50},
+			launchFloor{static: 30}.continuing(50, 10))
+	}
+	r.mu.Unlock()
+	r.deliver(t)
+	r.mu.Lock()
+	handed := r.handed
+	r.mu.Unlock()
+	if r.runs() != 1 || handed != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("a first launch refused below its continued floor: runs %d, handed %d, holds %v; want the "+
+			"seat parked", r.runs(), handed, r.holds())
+	}
+	parked, err := r.e.budgetParked(t.Context(), r.e.Company(), "lead")
+	if err != nil || !parked {
+		t.Fatalf("an ask behind the park reads the seat parked = %v (%v), want parked on the launch's floor",
+			parked, err)
+	}
+}
+
 // THE REFUSING WINDOW IS THE ONE THAT ENDS LAST, across both scopes, and a
 // spent window counts whether or not the gate has stamped it yet.
 func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {

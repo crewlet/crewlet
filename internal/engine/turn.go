@@ -97,14 +97,20 @@ type Dispatcher struct {
 	HoldSandbox func(ctx context.Context, handle string)
 
 	// Budget parks the seat when one of its capped token windows is
-	// refusing, and reports the deferral reason naming the window — see
-	// budgetpark.go. An error is a park that could not be taken, which
+	// refusing, or leaves less room than the delivery's launch needs, and
+	// reports the deferral reason naming the window — see budgetpark.go.
+	// refused is the budget refusal the delivery's turn met, nil before any
+	// turn ran: a launch refused below its own floor — one that continues the
+	// session its conversation's last turn left, whose context it sends first
+	// — carries that floor, and the park waits for room for it rather than
+	// for the static floor a fresh launch needs, which the window may already
+	// have ([floorOf]). An error is a park that could not be taken, which
 	// DEFERS the delivery rather than running a turn the counter refuses:
 	// the refusal is the node's, and a deferral keeps the message's place.
 	//
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
-	Budget func(ctx context.Context, handle string) (reason string, parked bool, err error)
+	Budget func(ctx context.Context, handle string, refused error) (reason string, parked bool, err error)
 
 	// Provider parks the seat when every member of the chain a turn ran on
 	// refused for a rate limit, until the first is tried again, and reports
@@ -577,7 +583,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	//
 	// AFTER THE SCREENING, whose every non-proceeding outcome already hands
 	// the delivery on without running anything, so it costs those no read.
-	if result, parked := d.parkOnBudget(ctx, handle); parked {
+	if result, parked := d.parkOnBudget(ctx, handle, nil); parked {
 		return result
 	}
 
@@ -841,8 +847,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// out. Below [turn.Abandon] for the reason the seat-moved
 			// branch is: a turn that proved an outward write is
 			// recorded, not run again when the window resets.
+			//
+			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
+			// refusal carries: a first launch that continues its
+			// conversation's session needs that session's context beside
+			// its brief, and parked on the static floor it found the
+			// window not starved, and was NAKed into the same refusal.
 			if errors.Is(err, toolloop.ErrBudgetExhausted) {
-				if result, parked := d.parkOnBudget(ctx, handle); parked {
+				if result, parked := d.parkOnBudget(ctx, handle, err); parked {
 					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
 						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 					return result
@@ -887,18 +899,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 }
 
 // parkOnBudget runs the budget stage, reporting the disposition when it parked
-// the seat or could not take the park it decided on.
+// the seat or could not take the park it decided on. refused is the budget
+// refusal the delivery's turn met, nil before any ran ([Dispatcher.Budget]).
 //
 // A PARK IS A DEFERRAL, and noted as one, so the seat host resumes the
 // attachment the deferral quiesces on its next renew — the park's own hold is
 // what keeps the resumed attachment from being handed anything until the
 // window turns over. See budgetpark.go for why the two stops have two owners.
-func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Result, bool) {
+func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string, refused error) (queue.Result, bool) {
 	if d.Budget == nil {
 		return queue.Result{}, false
 	}
 	return d.parkOn(ctx, handle, "budget park", func(ctx context.Context) (string, bool, error) {
-		return d.Budget(ctx, handle)
+		return d.Budget(ctx, handle, refused)
 	})
 }
 

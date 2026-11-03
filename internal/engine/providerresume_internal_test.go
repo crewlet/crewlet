@@ -845,7 +845,7 @@ func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 			1000, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
 			t.Fatalf("PostCharge: %v", err)
 		}
-		if _, parked, err := e.budgetPark(t.Context(), "swe"); err != nil || !parked {
+		if _, parked, err := e.budgetPark(t.Context(), "swe", nil); err != nil || !parked {
 			t.Fatalf("budgetPark = %v, %v", parked, err)
 		}
 		if parking := e.budgetParks.parking(seatIn(t, e, "swe")); parking != nil {

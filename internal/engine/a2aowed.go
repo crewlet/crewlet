@@ -105,14 +105,27 @@ func holdsInbox(run sandbox.PendingRun) bool {
 }
 
 // budgetParked reports whether handle's seat's mail waits on its budget — the
-// conditions the budget stage parks it on ([meter.parks]). A seat with no
-// counter, or nothing capped, is never parked.
+// conditions the budget stage parks it on ([meter.parks]), on the floor the park
+// this node holds for the seat waits for room for, and the static floor where
+// it holds none. A seat with no counter, or nothing capped, is never parked.
+//
+// THE PARK'S FLOOR, NEVER A STATIC RECOUNT: a seat parked because its
+// delivery's launch continues its conversation's session, whose context the
+// window cannot carry beside its brief, has room for the static floor all the
+// while, and a recount on that floor read it as not parked — the ask waiting
+// behind it as not owed, and its channel closed under an answer still coming.
 func (e *Engine) budgetParked(ctx context.Context, c *Company, handle string) (bool, error) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return false, nil
 	}
-	_, refusing, starved, err := m.parks(ctx)
+	floor := launchFloor{static: m.basis.floor}
+	if seat, err := e.seatID(handle); err == nil {
+		if parking := e.budgetParks.parking(seat); parking != nil {
+			floor = floor.atLeast(parking.basis.floor)
+		}
+	}
+	_, refusing, starved, err := m.parks(ctx, floor)
 	if err != nil {
 		return false, err
 	}
