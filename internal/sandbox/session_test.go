@@ -353,9 +353,12 @@ func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheLog(t *testing.T) {
 	ctx := t.Context()
 	rig.launch("t1")
 	if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
+		if !found {
+			return nil, errors.New("the launch opened no log to seed")
+		}
 		var held BridgeLog
-		if err := json.Unmarshal(current.Value, &held); err != nil || !found {
-			return nil, fmt.Errorf("the launch opened no log to seed (found %v): %v", found, err)
+		if err := json.Unmarshal(current.Value, &held); err != nil {
+			return nil, fmt.Errorf("decoding the log the launch opened: %w", err)
 		}
 		held.Calls = []BridgeCall{{Name: "chat_post", Seq: 1}, {Name: "ticket_comment", Failed: true, Seq: 2}}
 		held.Elided = 3
