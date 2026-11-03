@@ -99,7 +99,7 @@ func parseSessionRecord(text string) sessionRecord {
 		rec                                         sessionRecord
 		readID, readContinued, readWhy, readRelease bool
 	)
-	for text != "" && !(readID && readContinued && readWhy && readRelease) {
+	for text != "" && (!readID || !readContinued || !readWhy || !readRelease) {
 		var line string
 		line, text, _ = strings.Cut(text, "\n")
 		key, value, _ := strings.Cut(line, " ")
