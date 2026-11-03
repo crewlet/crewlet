@@ -149,6 +149,17 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	created := run
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
+	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
+	// what a person reads the run by, twice, and the question of the
+	// colleague its turn answers, which nothing else bounds below the
+	// broker's payload. Here, in the write that creates the row, because the
+	// identity fields are never written again: a relaunch keeps the row's.
+	created.TaskDescription, created.Label = keptTitle(run.TaskDescription), keptTitle(run.Label)
+	if ask := run.ColleagueAsk; ask != nil {
+		held := *ask
+		held.Question = keptTitle(ask.Question)
+		created.ColleagueAsk = &held
+	}
 	raw, err := encodeRun(created)
 	if err != nil {
 		return PendingRun{}, err
@@ -298,13 +309,13 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		//
 		// WHAT A NEW ROUND TAKES OFF THE ROW IS FOLDED INTO THE TURN'S
 		// EARLIER CALLS FIRST ([PendingRun.PriorCalls]): by name and outcome,
-		// which is all the run's own ending needs to know whether an earlier
-		// round delivered the turn's reply.
+		// the calls it kept and the identities of the ones it dropped, which
+		// is all the run's own ending needs to know whether an earlier round
+		// delivered the turn's reply.
 		switch {
 		case !run.Continues:
-			existing.PriorCalls, existing.PriorCallsElided = foldPriorCalls(existing.PriorCalls,
-				existing.BridgeCalls, existing.PriorCallsElided || existing.BridgeCallsElided > 0)
-			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+			existing.PriorCalls, existing.PriorCallsElided = foldPriorCalls(*existing)
+			existing.BridgeCalls, existing.BridgeCallsElided, existing.ElidedCalls = nil, 0, nil
 			existing.AnsweredThrough = 0
 		case continuesAnswer:
 			existing.AnsweredThrough = existing.LastBridgeSeq()
@@ -416,23 +427,40 @@ func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawM
 	return cleared, err
 }
 
-// foldPriorCalls is the turn's earlier successful calls, by name, with calls'
-// successful ones added, and whether any of what they came from was elided
-// ([PendingRun.PriorCalls]).
+// foldPriorCalls is the turn's earlier successful calls, by name, with the
+// successful ones of run's round added — the calls its row kept and the
+// identities of the ones it dropped — and whether any call of the turn's is
+// not accounted for by name ([PendingRun.PriorCalls]).
 //
 // A SET OF NAMES, sorted, never a log: whether a round delivered is whether a
 // call to a delivering tool succeeded, which a name and an outcome answer, and
 // a set is bounded by the seat's catalogue rather than by how many calls a
-// turn makes.
-func foldPriorCalls(prior []string, calls []BridgeCall, elided bool) ([]string, bool) {
-	names := slices.Clone(prior)
-	for _, call := range calls {
-		if !call.Failed && call.Name != "" && !slices.Contains(names, call.Name) {
-			names = append(names, call.Name)
+// turn makes — and held to [MaxPriorCalls] all the same, past which it says
+// its record is incomplete rather than grow.
+func foldPriorCalls(run PendingRun) ([]string, bool) {
+	names := slices.Clone(run.PriorCalls)
+	incomplete := run.PriorCallsElided || !run.ElisionKnown()
+	add := func(name string) {
+		switch {
+		case name == "" || slices.Contains(names, name):
+		case len(names) >= MaxPriorCalls:
+			incomplete = true
+		default:
+			names = append(names, name)
+		}
+	}
+	for _, call := range run.BridgeCalls {
+		if !call.Failed {
+			add(call.Name)
+		}
+	}
+	for _, e := range run.ElidedCalls {
+		if e.Calls > e.Failed {
+			add(e.Name)
 		}
 	}
 	slices.Sort(names)
-	return names, elided
+	return names, incomplete
 }
 
 // ClaimForResume flips a run holding the tail's launch, in one of the tail's
@@ -746,7 +774,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 		call.Name, call.Approved, call.At = held.Tool, true, now
 		call.Args, call.Output, call.Held = "", "", false
 		call.Seq = run.LastBridgeSeq() + 1
-		run.BridgeCalls, run.BridgeCallsElided = appendBounded(run.BridgeCalls, run.BridgeCallsElided, call)
+		run.appendCall(call)
 		return true
 	})
 	switch {
@@ -1157,8 +1185,9 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		if a.Launch != run.LaunchID {
 			return false
 		}
-		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
-			run.BridgeCalls, run.BridgeCallsElided, call)
+		// HELD TO THE LOG'S SHARE OF THE ROW, the call within its own and the
+		// middle dropped by identity ([PendingRun.appendCall]).
+		run.appendCall(call)
 		// Onto THIS job's record: the append names the job the row holds,
 		// or it was dropped above.
 		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
@@ -1221,7 +1250,9 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 	return refusal, nil
 }
 
-// appendBounded adds one call and drops from the MIDDLE past the cap.
+// appendBounded adds one call and drops from the MIDDLE past the cap,
+// answering the calls it dropped so their identities are kept
+// ([PendingRun.appendCall]).
 //
 // The start and the end are what explain a run (how it set about the work and
 // how it finished), so a log truncated to its last N loses the half a reader
@@ -1236,10 +1267,10 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 // head, never the one just made; and only a log with no ordinary call left
 // there gives up the oldest of the others, so the log stays at its cap
 // whatever the run calls.
-func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
+func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int, []BridgeCall) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
-		return calls, elided
+		return calls, elided, nil
 	}
 	head := MaxBridgeCalls / 2
 	drop := len(calls) - MaxBridgeCalls
@@ -1255,18 +1286,21 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	dropAny := drop - dropOrdinary
 	kept := make([]BridgeCall, 0, MaxBridgeCalls)
 	kept = append(kept, calls[:head]...)
+	var dropped []BridgeCall
 	for _, call := range candidates {
 		switch {
 		case !call.Ends() && dropOrdinary > 0:
 			dropOrdinary--
+			dropped = append(dropped, call)
 		case call.Ends() && dropAny > 0:
 			dropAny--
+			dropped = append(dropped, call)
 		default:
 			kept = append(kept, call)
 		}
 	}
 	kept = append(kept, next)
-	return kept, elided + drop
+	return kept, elided + drop, dropped
 }
 
 // MarkSuspended writes the parked turn's state and opens the run to the
@@ -1275,6 +1309,10 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 // THROUGH THE LIVE WRITE, so a run whose ending was decided under its launch is
 // told [ErrRunEnding] rather than a plain false: see the contract.
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
+	if n := len(suspension.State); n > ExecuteStateBytes {
+		return false, fmt.Errorf("sandbox: the parked state of run %s is %d bytes, and its share of "+
+			"the row is %d: %w", turnID, n, ExecuteStateBytes, ErrStateTooLarge)
+	}
 	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusLaunching {
 			return false

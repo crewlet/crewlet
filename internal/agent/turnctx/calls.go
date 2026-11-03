@@ -69,8 +69,20 @@ import (
 // its resume seeds a fresh log with what the run already called ([Seed]); a
 // RE-RUN after a crash is a new run and starts empty, which is correct: it
 // makes its calls again, and each count comes out as it did the first time.
-// Seeding can only over-count (a call that failed before deriving an id is
-// recorded anyway), and over-counting is safe for the reason above.
+//
+// A SEED IS BY IDENTITY, NEVER BY WHAT A RECORD KEPT. The record a resume
+// seeds from — a bridged run's row, a parked turn's closed rounds — is bounded
+// in bytes, so it may keep a call's arguments in part, and in count, so it may
+// keep a long run's middle only as a tally of identities. Each call it keeps
+// carries the digest its run admitted it under ([SeededCall.Digest]), and each
+// it dropped is a count of that digest, so neither moves a count; one whose
+// identity the record could not keep at all is seeded as a call matching no
+// other ([SeededCall.Unknown], [CallLog.SeedUnknown]). Seeding can therefore
+// only over-count (a call that failed before deriving an id is recorded
+// anyway, and so is a call whose identity is unknown), and over-counting is
+// safe for the reason above. An under-count — a call the run made that the
+// seed leaves out — is the hazard this log exists to close, and is never one
+// a record's bound may cost.
 //
 // A DELEGATED WORKER forks the log ([Fork]) and its calls are absorbed back
 // ([Absorb]) once its wave is done. Workers write under the parent's unit of
@@ -88,6 +100,12 @@ import (
 type CallLog struct {
 	mu      sync.Mutex
 	entries []callEntry
+
+	// unknown is how many calls the run made whose tool and arguments its
+	// record could not keep ([CallLog.SeedUnknown]): each counts against
+	// every later call, of every tool, as a call that asked for something
+	// else.
+	unknown int
 
 	// base is how many entries this log inherited when it was forked, so
 	// [Absorb] hands back only the calls made on the fork itself.
@@ -115,28 +133,80 @@ func (l *CallLog) Record(tool string, args toolargs.Args) {
 	if l == nil {
 		return
 	}
-	digest := ArgsDigest(args.Map())
+	l.record(tool, ArgsDigest(args.Map()))
+}
+
+// SeededCall is one call a run made before this log held it: a resumed run's
+// record of a call made before this segment (the bridge's log of its executor
+// run's calls, a closed round).
+type SeededCall struct {
+	Tool string
+
+	// Digest is the call's identity as the run's own log admitted it
+	// ([ArgsDigest] of its canonical arguments, whole), carried on the record
+	// beside the call. WHERE SET IT IS WHAT THE CALL IS RECORDED BY, and Args
+	// is not read: the record may keep the arguments in part, and a count
+	// read against what it kept would take the call for another.
+	Digest string
+
+	// Args is the call's canonical arguments ([toolargs.Args]), which a call
+	// with no Digest is recorded by: one a build before the digest recorded,
+	// whose arguments it kept whole. Canonical rather than as the record
+	// holds them, which is the model's spelling, and a count read against the
+	// canonical form would take a repeat spelt "Draft" after "draft" for
+	// another call.
+	Args toolargs.Args
+
+	// Unknown is a call to Tool whose identity the record could not keep —
+	// a long run's elided middle past what its tally holds — recorded as
+	// asking for something no later call asks for: an over-count of Tool,
+	// the safe direction ([CallLog]).
+	Unknown bool
+}
+
+// unkept is the digest a call whose identity is unknown is recorded under: no
+// [ArgsDigest] is ever this (a digest is hex, or a fresh uuid where the
+// arguments do not encode), so it is a call no later one repeats.
+const unkept = "unkept"
+
+// Seed records calls the run made before this log existed — a resumed run's
+// calls from before this segment, each by its identity where its record kept
+// one ([SeededCall]).
+func (l *CallLog) Seed(calls ...SeededCall) {
+	if l == nil {
+		return
+	}
+	for _, call := range calls {
+		switch {
+		case call.Unknown:
+			l.record(call.Tool, unkept)
+		case call.Digest != "":
+			l.record(call.Tool, call.Digest)
+		default:
+			l.Record(call.Tool, call.Args)
+		}
+	}
+}
+
+// SeedUnknown records n calls the run made whose tool and arguments its record
+// could not keep: each counts against every later call, of every tool, as one
+// that asked for something else — an over-count of every ordinal, the safe
+// direction ([CallLog]), and the one a record that kept neither the name nor
+// the identity of what it dropped can still promise.
+func (l *CallLog) SeedUnknown(n int) {
+	if l == nil || n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.unknown += n
+}
+
+// record appends one call by its tool and digest.
+func (l *CallLog) record(tool, digest string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
-}
-
-// SeededCall is one call a run made before this log held it, by the
-// canonical arguments its tool read ([toolargs.Args]): a resumed run's record
-// of a call made before this segment (the bridge's log of its executor run's
-// calls, a closed round) holds the model's spelling, which a count read
-// against the canonical form would take for another call.
-type SeededCall struct {
-	Tool string
-	Args toolargs.Args
-}
-
-// Seed records calls the run made before this log existed — a resumed run's
-// calls from before this segment, by their canonical arguments.
-func (l *CallLog) Seed(calls ...SeededCall) {
-	for _, call := range calls {
-		l.Record(call.Tool, call.Args)
-	}
 }
 
 // Ordinal is how many calls to tool earlier in this run asked for something
@@ -160,7 +230,7 @@ func (l *CallLog) OrdinalAmong(family []string, tool string, args map[string]any
 	digest := ArgsDigest(args)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n := 0
+	n := l.unknown
 	for _, entry := range l.entries {
 		if entry.tool == tool && entry.digest == digest {
 			// THIS SAME CALL, made before: a repeat, which keeps
@@ -183,7 +253,8 @@ func (l *CallLog) Fork() *CallLog {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+	return &CallLog{entries: append([]callEntry(nil), l.entries...), unknown: l.unknown,
+		base: len(l.entries)}
 }
 
 // Admit records one call the moment it is ADMITTED and returns the log that
@@ -211,7 +282,8 @@ func (l *CallLog) Admit(tool string, args toolargs.Args) *CallLog {
 	digest := ArgsDigest(args.Map())
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fork := &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+	fork := &CallLog{entries: append([]callEntry(nil), l.entries...), unknown: l.unknown,
+		base: len(l.entries)}
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
 	return fork
 }

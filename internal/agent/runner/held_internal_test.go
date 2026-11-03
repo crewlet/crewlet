@@ -71,7 +71,8 @@ func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
 	return l.prior(), nil
 }
 
-func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
+func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, answered toolloop.ToolResult,
+	_ string) error {
 	if l.result == nil {
 		l.result, l.answered = &result, answered
 	}

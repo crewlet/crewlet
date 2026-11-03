@@ -1582,6 +1582,7 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
 		case found && latest.LaunchID == run.LaunchID:
 			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
+			run.ElidedCalls = latest.ElidedCalls
 		}
 		// AND NO QUESTION, whatever it asked on its way: a run that is being
 		// stopped is not one a person's answer could continue

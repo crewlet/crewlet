@@ -394,6 +394,7 @@ var runKeys = map[string]runShown{
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
+	"bridge_elided_calls": runBody,   // what was cut, by tool and argument digest: the seat's trail
 	"session_id":          runStatus,
 	"command_id":          runStatus,
 	"delegation_chain":    runStatus,
@@ -586,6 +587,12 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		// reader is told only by the key being absent (a withheld body).
 		"bridge_calls":        nonNil(run.BridgeCalls),
 		"bridge_calls_elided": run.BridgeCallsElided,
+		// AND WHAT THOSE WERE, by tool and argument digest with how many
+		// calls had each and how many failed: the count bound costs the board
+		// the calls themselves, never which tools the run called how often.
+		// Always an array beside `bridge_calls`, empty where nothing was cut
+		// or an older build cut it without keeping this.
+		"bridge_elided_calls": nonNil(run.ElidedCalls),
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led

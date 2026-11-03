@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -445,8 +446,9 @@ func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
 }
 
 // THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
-// waiting on it, what it called through the bridge, and the identifiers that
-// find it in somebody else's system.
+// waiting on it, what it called through the bridge — what its record kept of
+// each call, and by tool what it dropped from a long log's middle — and the
+// identifiers that find it in somebody else's system.
 //
 // `reply` is persisted precisely because the resumed turn does not see its
 // trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
@@ -463,8 +465,11 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		DelegationChain: []string{"agent-pm", "agent-swe"},
 		BridgeCalls: []sandbox.BridgeCall{
 			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
+			{Name: "code_commit_files", Args: `{"content":"(1.0 MiB not kept on the run's record, digest 1a2b3c4d)"}`,
+				ArgsBytes: 1 << 20, OutputBytes: 70 << 10, Digest: "d1", At: called},
 		},
 		BridgeCallsElided: 4,
+		ElidedCalls:       []sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 4}},
 	})
 	row := askRuns(t, store)[0]
 	switch {
@@ -479,8 +484,23 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 			"log that lies about what the run did", row["bridge_calls_elided"])
 	}
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
-	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
+	if !ok || len(calls) != 2 || calls[0].Name != "get_work_item" {
 		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
+	}
+	// WHAT THE RECORD KEPT OF A CALL, on the wire: the sizes a reader decides
+	// "partly kept" by, and the call's identity.
+	wire, err := json.Marshal(calls[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"args_bytes":1048576`, `"output_bytes":71680`, `"digest":"d1"`} {
+		if !strings.Contains(string(wire), key) {
+			t.Errorf("the partly kept call is served as %s, want %s in it", wire, key)
+		}
+	}
+	dropped, ok := row["bridge_elided_calls"].([]sandbox.ElidedCall)
+	if !ok || len(dropped) != 1 || dropped[0].Name != "read_file" || dropped[0].Calls != 4 {
+		t.Errorf("bridge_elided_calls = %#v, want the dropped calls by tool", row["bridge_elided_calls"])
 	}
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
@@ -665,7 +685,7 @@ func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]an
 func TestAnExecutorRowsBodyIsItsSeatsTrail(t *testing.T) {
 	t.Parallel()
 	body := []string{"task_description", "question", "question_context", "decision",
-		"reply", "bridge_calls"}
+		"reply", "bridge_calls", "bridge_elided_calls"}
 	for _, c := range []struct {
 		name     string
 		ctx      context.Context
@@ -724,7 +744,7 @@ func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 			"question with its context and its options", asked["question"],
 			asked["question_context"], asked["decision"])
 	}
-	for _, key := range []string{"task_description", "reply", "bridge_calls"} {
+	for _, key := range []string{"task_description", "reply", "bridge_calls", "bridge_elided_calls"} {
 		if _, shown := asked[key]; shown {
 			t.Errorf("the person asked was shown the run's %s, which is its seat's trail", key)
 		}

@@ -722,6 +722,31 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 	}
 }
 
+// A RECORDED CALL CARRIES THE IDENTITY IT WAS ADMITTED UNDER. The run's call
+// log counts a call by the digest of its canonical arguments, and the record
+// a later segment seeds that log from keeps a call's arguments only in part
+// past its share of the run's row — so the record carries the digest the
+// admission counted, taken here before anything is cut: the canonical form's,
+// whatever spelling the model sent. A call never admitted carries none.
+//
+// Mutation: record no digest, or one of the arguments as sent, and the cut or
+// differently spelt call is seeded as another.
+func TestARecordedCallCarriesTheIdentityItWasAdmittedUnder(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sess := dial(t, f.open(t))
+
+	callTool(t, sess, "post_message", map[string]any{"text": "two"})
+	rows := f.ledger.rows()
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want 1: %+v", len(rows), rows)
+	}
+	want := turnctx.ArgsDigest(f.surface.ArgsOf("post_message", map[string]any{"text": "two"}).Map())
+	if rows[0].Digest == "" || rows[0].Digest != want {
+		t.Errorf("the recorded call carries identity %q, want the admission's %q", rows[0].Digest, want)
+	}
+}
+
 // A LOST LEDGER ROW COSTS ONE LINE OF EVIDENCE. Failing the call instead would
 // tell a harness to retry work that has already happened — the
 // duplicate-side-effect failure the whole delivery machinery exists to stop.

@@ -336,6 +336,11 @@ type Surface interface {
 	// Admit fixes one call's place in the run's call log and returns it,
 	// to be run once ([toolloop.Surface.Admit]).
 	Admit(name string, args map[string]any) toolloop.Admitted
+	// DigestOf is the identity a call is admitted under in the run's call
+	// log ([tools.Surface.DigestOf]), which the record of the call carries
+	// ([Call.Digest]); empty for a surface that keeps no call log a later
+	// segment is seeded from.
+	DigestOf(name string, args map[string]any) string
 }
 
 // Caller is who a session's every call is decided as.
@@ -410,6 +415,14 @@ type Call struct {
 	// recorded as the run's question rather than made
 	// ([toolloop.ToolResult.Held], ADR-0077): the call that ends the job.
 	Held bool
+
+	// Digest is the identity the call was ADMITTED under in the run's call
+	// log ([tools.Surface.DigestOf]), taken under the lock that orders the
+	// admission, before anything records it; empty for a call never admitted
+	// (made after the run's tools closed, or whose arguments did not parse).
+	// The record of the call carries it so a later segment seeds the log by
+	// the identity it counted, whatever that record keeps of the arguments.
+	Digest string
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -1608,8 +1621,10 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		return refused(out)
 	}
 	// ITS PLACE IN THE RUN'S CALL LOG, fixed here, under the lock that
-	// orders admissions — see [tools.Surface.Admit].
+	// orders admissions — see [tools.Surface.Admit] — and the identity it is
+	// counted by there, which the record of the call carries.
 	admitted := s.Surface.Admit(in.Name, args)
+	digest := s.Surface.DigestOf(in.Name, args)
 	o.mu.Unlock()
 
 	started := time.Now()
@@ -1673,6 +1688,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
+		Digest: digest,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }

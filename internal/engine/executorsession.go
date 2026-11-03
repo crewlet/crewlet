@@ -332,26 +332,30 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 // runDelivered is whether the party waiting on run's turn has its answer, as
 // the run's own record of the turn's bridged calls says — [turn.Answered], the
 // rule a turn's loop answers it by, over every round's calls: the earlier
-// launches' ([sandbox.PendingRun.PriorCalls]) and the current one's — for an
-// ending no frame of the turn reaches: a loss, a stop. KNOWN is false where the
-// record is incomplete — calls were elided from it — and what it kept shows no
-// delivery: a definite "did not reply" read off half a record is the false
-// account the end exists to prevent.
+// launches' ([sandbox.PendingRun.PriorCalls]) and the current one's, the calls
+// its row kept and the identities of the ones it dropped from their middle
+// ([sandbox.PendingRun.ElidedCalls]) — for an ending no frame of the turn
+// reaches: a loss, a stop. KNOWN is false where the record is incomplete —
+// calls not accounted for by name, on a row an older build elided or past
+// what its tally of identities holds ([sandbox.PendingRun.ElisionKnown]) — and
+// what it kept shows no delivery: a definite "did not reply" read off half a
+// record is the false account the end exists to prevent.
 func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (reply turn.Reply, delivered, known bool) {
 	reply = turn.ParseReply(run.Reply)
 	if !reply.Valid() {
 		return reply, false, true
 	}
-	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls))
+	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls)+len(run.ElidedCalls))
 	for _, name := range run.PriorCalls {
 		calls = append(calls, ledger.Call{Name: name})
 	}
 	for _, call := range run.BridgeCalls {
 		calls = append(calls, ledger.Call{Name: call.Name, Failed: call.Failed})
 	}
+	calls = append(calls, ledger.Called(elidedCalls(run.ElidedCalls))...)
 	delivered = turn.Answered(calls, deliverySurface(e.seatRegistry(c, run.AgentHandle)), reply)
-	elided := run.PriorCallsElided || run.BridgeCallsElided > 0
-	return reply, delivered, delivered || !elided
+	incomplete := run.PriorCallsElided || !run.ElisionKnown()
+	return reply, delivered, delivered || !incomplete
 }
 
 // deliverySurface is the delivery surface a seat's calls are judged against, as

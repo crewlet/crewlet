@@ -30,6 +30,19 @@ type Call struct {
 	// "error:" is not a failure, and a phase that reads it as one loops
 	// trying to fix something that worked.
 	Failed bool
+
+	// Digest is the call's identity as its run's call log admitted it — the
+	// digest of its whole canonical arguments (internal/agent/turnctx's
+	// ArgsDigest) — and empty where none was recorded: a call nothing
+	// admitted, or one a build before it recorded.
+	//
+	// CARRIED BESIDE ARGS BECAUSE ARGS MAY NOT BE WHOLE. An executor run's
+	// calls are recorded on a row bounded in bytes, which keeps a value past
+	// its share as a marker (internal/kept), and a parked turn's closed
+	// rounds are condensed the same way to fit theirs; a later segment that
+	// seeds its call log from the arguments it holds would take the call for
+	// another, and derive another operation's id. Seeded by this, it cannot.
+	Digest string `json:"Digest,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -171,8 +184,16 @@ type Iteration struct {
 	// Intent is what the round set out to do, in the executor's own words.
 	Intent string `json:"intent,omitempty"`
 
-	// Calls is everything the round invoked, engine-recorded.
+	// Calls is everything the round invoked, engine-recorded — every call
+	// its run's record kept.
 	Calls []Call `json:"tool_calls,omitempty"`
+
+	// Elided is the round's calls its run's record did not keep, by identity
+	// ([Elided]): carried with the round so the turn's later segments still
+	// count them — a resumed call log seeds them, and a delivery check reads
+	// them as calls of the turn ([Called]) — where the calls themselves are
+	// gone.
+	Elided []Elided `json:"elided_calls,omitempty"`
 
 	// Reads are the names among the calls above that MCP annotations
 	// positively mark read-only. Carried per-record rather than looked up
@@ -230,6 +251,9 @@ func RenderIterations(records []Iteration, skip []string, fitted Fitted) string 
 		opts := Format(skip, rec.Reads)
 		opts.Fitted = fitted
 		lines = append(lines, "Called:", FormatCalls(rec.Calls, opts))
+		if elided := FormatElided(rec.Elided, skip); elided != "" {
+			lines = append(lines, elided)
+		}
 		if rec.Text != "" {
 			// FITTED at render, whole in the record. See
 			// RenderedArtifactLimit: this text is a whole tool loop's

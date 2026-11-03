@@ -377,6 +377,17 @@ func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
 	return s.universe.ArgsOf(name, raw)
 }
 
+// DigestOf is the identity a call to name with raw arguments is admitted
+// under in its run's call log: [turnctx.ArgsDigest] of the canonical arguments
+// ([Surface.ArgsOf]), the value [Surface.Admit] records.
+//
+// ONE RULE, called beside the admission by a caller that records the call
+// somewhere the log is later seeded from — a bridged run's row — so the record
+// carries the identity the log counted, whatever it keeps of the arguments.
+func (s *Surface) DigestOf(name string, raw map[string]any) string {
+	return turnctx.ArgsDigest(s.ArgsOf(name, raw).Map())
+}
+
 // Admit records a call in its run's call log NOW, in the order calls arrive,
 // for a caller that runs calls side by side — see [turnctx.CallLog.Admit] for
 // why a count read against the order calls RETURN in is one a re-run does not

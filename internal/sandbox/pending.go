@@ -603,9 +603,33 @@ type BridgeCall struct {
 	// Args is what the caller passed, as JSON text rather than a decoded
 	// map: the map's values would round-trip through the store's own
 	// encoder a second time, and a large id survives one pass and not two.
+	//
+	// AS THE ROW KEEPS IT, which is not always the whole: past the call's
+	// share of the row ([MaxBridgeArgsBytes]) its largest values are left out,
+	// each replaced by a marker naming its size and digest, and ArgsBytes
+	// says how large the whole was. Output likewise keeps its opening past
+	// [MaxBridgeOutputBytes], ending in a marker, and OutputBytes says how
+	// large the whole was. Zero is a payload kept whole — every call before
+	// this bound, and every call within it — so a reader decides by the two
+	// sizes and never by parsing a marker; the marker is for a reader that
+	// reads only the text.
 	Args   string `json:"args,omitempty"`
 	Output string `json:"output,omitempty"`
 	Failed bool   `json:"failed,omitempty"`
+
+	ArgsBytes   int `json:"args_bytes,omitempty"`
+	OutputBytes int `json:"output_bytes,omitempty"`
+
+	// Digest is the call's IDENTITY: the digest its run's call log admitted
+	// it under (internal/agent/turnctx's ArgsDigest of its whole canonical
+	// arguments), taken by the bridge as it admitted the call, before
+	// anything was recorded or cut. What a resumed segment seeds its call log
+	// by, so neither a cut argument nor a call dropped from the middle
+	// ([PendingRun.ElidedCalls]) moves an operation id it derives. Empty for a
+	// call nothing admitted (one refused after the run's tools closed, or
+	// whose arguments did not parse) and for one a build before it recorded,
+	// whose arguments are whole and are seeded from instead.
+	Digest string `json:"digest,omitempty"`
 
 	// At is when the row recorded the call, on the store's clock — what the
 	// Executors board lists a run's calls by. Always set: the store stamps it.
@@ -686,7 +710,9 @@ type BridgeAppend struct {
 	Spent EngineSpend
 }
 
-// MaxBridgeCalls bounds the durable log of a bridged run.
+// MaxBridgeCalls bounds the durable log of a bridged run in COUNT, and the
+// share each call has of the row ([MaxBridgeCallBytes]) bounds it in bytes:
+// together, the log's share of the row ([BridgeLogBytes], rowbytes.go).
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
 // every mutation, and an executor can make hundreds of calls — so an
@@ -696,7 +722,9 @@ type BridgeAppend struct {
 //
 // The MIDDLE is what gets dropped, never the start: how a run began and how it
 // ended are what explain it, and a log truncated to its last N loses the
-// former entirely.
+// former entirely. And what is dropped is kept as IDENTITIES
+// ([PendingRun.ElidedCalls]): the count bound costs the reviewer evidence, and
+// never a resumed segment an operation id.
 const MaxBridgeCalls = 200
 
 // The two tools whose calls END an executor's run, as the bridge records them:
@@ -858,13 +886,15 @@ type PendingRun struct {
 	EndRecorded bool `json:"end_recorded,omitempty"`
 
 	// PriorCalls is every tool the turn's EARLIER launches called through
-	// the bridge and that succeeded, by name, each once, and PriorCallsElided
-	// that some of their calls were elided from the row before they were
-	// folded in ([BridgeCall], [PendingRun.BridgeCallsElided]) — what a
-	// launch that starts a new round takes off the row, so the run's own
-	// ending, for a loss or a stop no frame of the turn reaches, still knows
-	// whether an earlier round delivered the turn's reply ([turn.Answered]
-	// reads names and outcomes alone). Folded in by
+	// the bridge and that succeeded, by name, each once — the calls their
+	// rows kept and the ones their identities counted
+	// ([PendingRun.ElidedCalls]) — and PriorCallsElided that some of their
+	// calls are not accounted for by name: dropped from a row that kept no
+	// identity of them, or folded where their tool was not kept, or past
+	// [MaxPriorCalls] names — what a launch that starts a new round takes off
+	// the row, so the run's own ending, for a loss or a stop no frame of the
+	// turn reaches, still knows whether an earlier round delivered the turn's
+	// reply ([turn.Answered] reads names and outcomes alone). Folded in by
 	// [PendingStore.BeginLaunch]; the turn's, kept by every launch after.
 	PriorCalls       []string `json:"prior_calls,omitempty"`
 	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
@@ -889,11 +919,17 @@ type PendingRun struct {
 	// turn's own words and with no fence: what the turn was asked, or the
 	// line a feed shows its trigger by ([LaunchRequest.Task]). A resume reads
 	// the brief it re-enters with off the turn's park, never off this.
+	//
+	// HELD TO [MaxRunTitleBytes] as the row holds it, by the write that
+	// creates the row, past which it keeps its opening with the cut said: a
+	// trigger's words, which nothing else bounds below the broker's payload,
+	// and the turn's own record keeps the whole.
 	TaskDescription string `json:"task_description"`
 
 	// Label is what the run is named by on the running-runs panel — the
 	// label its launch announced ([LaunchRequest.Label]) — so a process that
 	// learns of the run from this row after a restart names it the same way.
+	// Held as TaskDescription is.
 	Label string `json:"label,omitempty"`
 
 	// Reply is who is waiting for the suspended turn — [turn.Reply]'s wire
@@ -1182,6 +1218,11 @@ type PendingRun struct {
 	// WITHOUT one is a row the launch path did not write, which the
 	// coordinator fails rather than resuming into nothing.
 	//
+	// HELD TO [ExecuteStateBytes], its share of the row: the park condenses
+	// a state past it (internal/agent/execstate's EncodeWithin), and
+	// [PendingStore.MarkSuspended] refuses one still past it
+	// ([ErrStateTooLarge]) rather than write a row the broker refuses.
+	//
 	// RAW BYTES, because this package carries the conversation and never
 	// reads it. Held as a decoded map it was decoded twice on every
 	// suspension — once for the row and once more off the coordination
@@ -1210,6 +1251,20 @@ type PendingRun struct {
 	// was cut. Reported rather than hidden, because a log that silently
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
+
+	// ElidedCalls is WHAT those dropped calls were, by identity — each
+	// tool and argument digest with how many calls had it and how many of
+	// them failed ([ElidedCall]) — held to [MaxElidedIdentityBytes]. What a
+	// resumed segment seeds its call log with beside the kept calls, so a
+	// call made after the drop derives the operation id the run's own
+	// process would have; and what a reader of whether the turn replied
+	// counts a dropped reply by ([PendingRun.ElisionKnown]).
+	//
+	// KEPT AND CLEARED WITH THE LIST: by every relaunch that carries the
+	// round on, folded into [PendingRun.PriorCalls] by one that starts a new
+	// round. A row an older build elided holds a count and no identities,
+	// which every reader takes for an incomplete record.
+	ElidedCalls []ElidedCall `json:"bridge_elided_calls,omitempty"`
 
 	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
 	// round made before a person's answer carried it on, and zero for a
@@ -1897,6 +1952,12 @@ type PendingStore interface {
 	// it — a person stopped its seat between the launch and the park
 	// ([Coordinator.StopSeat]) — and the caller reports its turn as ended
 	// that way rather than as a suspension that failed.
+	//
+	// A STATE PAST ITS SHARE OF THE ROW ([ExecuteStateBytes]) IS REFUSED with
+	// [ErrStateTooLarge] before anything is written: the park condenses its
+	// state to fit (internal/agent/execstate's EncodeWithin), so a state past
+	// it is one the turn's own context will not fit, and a row that big would
+	// be refused by the broker on this write and every write after it.
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the
@@ -1925,6 +1986,13 @@ type PendingStore interface {
 	// segment that pays for a job pays what the job's record held at its
 	// claim ([ResumeRequest.Engine]). So a late call can leave the task short
 	// of the turn's cost, never past it.
+	//
+	// HELD TO THE LOG'S SHARE OF THE ROW ([BridgeLogBytes]): the call is
+	// kept within its own share ([MaxBridgeCallBytes]) — its largest argument
+	// values left out and its output cut, each said, past what the row keeps
+	// — and a call dropped from the middle by the count bound is kept as an
+	// identity ([PendingRun.ElidedCalls]). The caller hands the call whole,
+	// its digest taken first ([BridgeCall.Digest]).
 	//
 	// Reports whether the call was recorded. FALSE IS NOT AN ERROR: it is a
 	// run whose row is gone, or a job that is over — the ordinary shape of a

@@ -83,7 +83,7 @@ func (c *firstCommit) Begin(context.Context) (runner.HeldPrior, error) {
 	return c.prior(), nil
 }
 
-func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult, _ toolloop.ToolResult) error {
+func (c *firstCommit) Record(_ context.Context, result sandbox.HeldResult, _ toolloop.ToolResult, _ string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.result == nil {

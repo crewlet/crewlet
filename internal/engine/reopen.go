@@ -142,7 +142,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	// ITS GUARD THE SESSION'S ITS BOX STARTED, as the job's record says the box
 	// said it ([sandbox.LaunchRecord.SessionStart]): a box that has not said
 	// yet says it on its first request here, which the reopened run is told.
-	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls),
+	reopened, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls), elidedCalls(run.ElidedCalls),
 		bridgedOf(run.Launch.Bridged), run.Launch.SessionStart == sandbox.SessionStartContinued)
 	if err != nil {
 		refuse("the run's tool surface could not be rebuilt", "error", err.Error())

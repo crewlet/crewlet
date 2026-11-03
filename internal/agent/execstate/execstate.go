@@ -48,6 +48,11 @@
 // without a bump. The notes a turn has read are on its run's record now, read
 // there by every segment that resumes it (internal/engine, runsteer.go), and a
 // second copy here would be a second answer to the same question.
+//
+// AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
+// coordination store and so one broker message: [EncodeWithin] condenses the
+// closed rounds' payloads past it, never a call's identity or outcome, and
+// refuses a state whose own context will not fit. See within.go.
 package execstate
 
 import (

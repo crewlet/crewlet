@@ -52,8 +52,16 @@ type Work struct {
 	Text string
 
 	// Calls is what the phase actually invoked, engine-recorded — for the
-	// executor, the calls its run made to the seat's tools over the bridge.
+	// executor, the calls its run made to the seat's tools over the bridge,
+	// as many as its run's record kept.
 	Calls []ledger.Call
+
+	// Elided is the calls the run's record did not keep, by identity: a long
+	// run's middle (internal/sandbox's MaxBridgeCalls). Calls of the round
+	// all the same — the delivery checks read them as such ([Record]), the
+	// round closes with them ([ledger.Iteration.Elided]) so a later segment's
+	// call log counts them, and the reviewer is told how many there were.
+	Elided []ledger.Elided
 
 	// Inherited is how many of Calls, at the front, an EARLIER ATTEMPT
 	// made. A resumed executor's record is its run's calls over the bridge,
@@ -556,7 +564,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
-		res.Delivered = Answered(work.Calls, surface, in.Reply)
+		res.Delivered = Answered(work.Called(), surface, in.Reply)
 		if err != nil {
 			return broke(res, fmt.Errorf("turn: %s round %d: %w", entered, round, err))
 		}
@@ -662,6 +670,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			Iteration: round,
 			Intent:    work.Summary,
 			Calls:     work.Calls,
+			Elided:    work.Elided,
 			// Only the reads actually CALLED, not the whole surface's
 			// annotation set. Rendering is a membership test either way,
 			// so the block reads the same — but the row is persisted

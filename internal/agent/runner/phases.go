@@ -325,6 +325,13 @@ type Resume struct {
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
+	// Elided is what the row dropped from the middle of a long run's calls,
+	// by identity (sandbox.PendingRun.ElidedCalls): calls of the round all
+	// the same, which the turn's call log is seeded with beside Bridged
+	// ([seedCalls]), the delivery checks count, and the round's record
+	// carries on ([turn.Work.Elided]).
+	Elided []ledger.Elided
+
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
 	// has: off the run's row (sandbox.PendingRun.AnsweredThrough). Only a
@@ -420,6 +427,15 @@ type BridgedCall struct {
 	// [toolloop.Execution]).
 	Source  string
 	Refusal mcp.Refusal
+
+	// ArgsBytes and OutputBytes are the size of the call's whole arguments
+	// and whole output where the run's record kept less than them
+	// (sandbox.BridgeCall.ArgsBytes), and zero where it kept them whole. What
+	// a reader that ACTS on a payload decides by: the collection never
+	// replays a submission its record did not keep whole
+	// ([replaySubmission]). A reader that only shows the payload reads the
+	// marker in its text.
+	ArgsBytes, OutputBytes int
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:
@@ -812,7 +828,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Evidence:          w.Evidence,
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
-		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
+		ToolLog:           reviewLog(w, r.cfg.SkipNames),
 		Delivered:         prompts.DeliveredRefs(w.Refs, w.RefsElided),
 		EarlierIterations: r.priorWork(ctx, history),
 		OffersA2A:         offersA2A,
@@ -1843,6 +1859,20 @@ func (r *Runner) taskFor(notes string) string {
 		return r.cfg.Task
 	}
 	return r.cfg.Task + "\n\nThe previous round was reviewed. What to do differently:\n" + notes
+}
+
+// reviewLog is the round's calls as its reviewer reads them, verbatim
+// ([ledger.FormatCalls] with no budget), and then what the run's record did
+// not keep of them, said rather than hidden ([ledger.FormatElided]): a
+// reviewer handed a long run's record with its middle silently gone judges an
+// elision and calls it the run. A value the record left out reads as left out
+// in the line it stands in.
+func reviewLog(w turn.Work, skip []string) string {
+	text := ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: skip})
+	if elided := ledger.FormatElided(w.Elided, skip); elided != "" {
+		text += "\n" + elided
+	}
+	return text
 }
 
 // calls converts a surface's record into ledger calls.

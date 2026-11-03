@@ -126,7 +126,7 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 			if tc.records {
 				if err := first.Commit.Record(ctx, sandbox.HeldResult{Output: "posted"}, toolloop.ToolResult{
 					Output: "posted", Origin: tools.Origin("vendor"), Server: "vendor",
-					Source: tools.Origin("vendor")}); err != nil {
+					Source: tools.Origin("vendor")}, ""); err != nil {
 					t.Fatalf("Record: %v", err)
 				}
 			}

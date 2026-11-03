@@ -709,6 +709,11 @@ func (b *deepBridge) AnnotationsOf(name string) mcp.Annotations { return b.inner
 // Admit binds one bridged call to run once ([DeepSurface]).
 func (b *deepBridge) Admit(string, map[string]any) toolloop.Admitted { return b.Execute }
 
+// DigestOf is the turn's own surface's: none ([surface.DigestOf]).
+func (b *deepBridge) DigestOf(name string, args map[string]any) string {
+	return b.inner.DigestOf(name, args)
+}
+
 // deepWaitingNote is what a run is told once its change waits for the person.
 const deepWaitingNote = "Proposed: the change is shown to the person for their approval, " +
 	"and nothing has changed yet. Make no other call. End your run now with two " +

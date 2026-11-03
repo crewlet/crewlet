@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -57,7 +58,11 @@ func TestARunPastItsTurnsDeadlineIsEnded(t *testing.T) {
 // when the poll ended it, so what is collected is what it had done by then —
 // never a success, since it did not get to say it was done — and the resumed
 // turn judges it on every call it made, those that landed after the claim read
-// the row included.
+// the row included — and the identities of those its log dropped from its
+// middle with them, which the resumed turn's call log is seeded by.
+//
+// Mutation: read back the calls without the identities of the dropped ones,
+// and the resumed turn counts two calls its run made as none.
 func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -66,12 +71,20 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	// The job is still working: the fake reports a result only for what it
 	// streamed so far, and nothing finished it.
 	rig.runner.CollectFunc = func(ctx context.Context) error {
-		// A call the run made while its completion was being claimed.
+		// A call the run made while its completion was being claimed, and
+		// then enough more that its log dropped two from its middle.
 		row := rig.getIn(ctx, "t1")
-		if _, err := rig.pending.AppendBridgeCall(ctx, "t1", BridgeAppend{
-			Launch: row.LaunchID, Call: BridgeCall{Name: "comment_on_work_item", At: rig.now},
-		}); err != nil {
-			t.Errorf("AppendBridgeCall: %v", err)
+		for i := range MaxBridgeCalls + 2 {
+			call := BridgeCall{Name: "read_file", At: rig.now, Digest: fmt.Sprintf("%064x", i)}
+			if i == 0 {
+				call = BridgeCall{Name: "comment_on_work_item", At: rig.now}
+			}
+			if _, err := rig.pending.AppendBridgeCall(ctx, "t1", BridgeAppend{
+				Launch: row.LaunchID, Call: call,
+			}); err != nil {
+				t.Errorf("AppendBridgeCall: %v", err)
+				return nil
+			}
 		}
 		return nil
 	}
@@ -93,6 +106,10 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 	}) {
 		t.Errorf("the resume judges the run on %+v, missing the call it made as it was ended",
 			calls[0].Run.BridgeCalls)
+	}
+	if run := calls[0].Run; run.BridgeCallsElided != 2 || !run.ElisionKnown() {
+		t.Errorf("the resume reads %d calls dropped from the log's middle, accounted for by %+v; "+
+			"want the two with their identities", run.BridgeCallsElided, run.ElidedCalls)
 	}
 }
 

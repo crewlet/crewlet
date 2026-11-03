@@ -1,0 +1,100 @@
+package ledger
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// A DROPPED CALL IS STILL A CALL TO A DELIVERY CHECK. What a run's record kept
+// only as identities reads as calls by name and outcome: a tool that succeeded
+// at least once among them as a successful call, one none of whose calls
+// succeeded as a failed one, and a count whose tool was not kept as no call
+// of any tool — never a call a renderer could draw with no arguments.
+//
+// Mutation: read a tool as failed when any of its dropped calls failed, and a
+// reply posted once among two attempts reads as never posted.
+func TestADroppedCallIsStillACallToADeliveryCheck(t *testing.T) {
+	t.Parallel()
+	got := Called([]Elided{
+		{Name: "post_message", Digest: "a", Calls: 2, Failed: 1},
+		{Name: "read_file", Digest: "b", Calls: 3},
+		{Name: "jira_comment", Digest: "c", Calls: 2, Failed: 2},
+		{Name: "jira_comment", Digest: "d", Calls: 1, Failed: 1},
+		{Calls: 9},
+	})
+	want := []Call{{Name: "post_message"}, {Name: "read_file"}, {Name: "jira_comment", Failed: true}}
+	if len(got) != len(want) {
+		t.Fatalf("Called = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].Name != want[i].Name || got[i].Failed != want[i].Failed || got[i].Args != nil {
+			t.Errorf("call %d = %+v, want %+v with no arguments", i, got[i], want[i])
+		}
+	}
+}
+
+// WHAT A RECORD DID NOT KEEP IS SAID, NOT HIDDEN. A reviewer handed a long run's
+// record, and a later round handed its ledger, are told how many calls it
+// dropped and by tool how many and how many failed — the skipped meta-tools
+// counted in the total and not named — and a round that dropped nothing says
+// nothing more; a round's ledger block carries the line under its calls.
+//
+// Mutation: return "" for a tally, and the reviewer judges an elision as the
+// run; name a skipped meta-tool, and the line carries noise the ledger drops.
+func TestWhatARecordDidNotKeepIsSaid(t *testing.T) {
+	t.Parallel()
+	elided := []Elided{
+		{Name: "read_file", Digest: "a", Calls: 100},
+		{Name: "read_file", Digest: "b", Calls: 20, Failed: 3},
+		{Name: "post_message", Digest: "c", Calls: 1},
+		{Name: "activate_tool", Calls: 4},
+		{Calls: 5},
+	}
+	line := FormatElided(elided, []string{"activate_tool"})
+	for _, want := range []string{"+130 further call(s)", "read_file ×120 (3 failed)", "post_message ×1",
+		"5 to tools the record did not keep either"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line %q does not say %q", line, want)
+		}
+	}
+	if strings.Contains(line, "activate_tool") {
+		t.Errorf("the line names a skipped meta-tool: %q", line)
+	}
+	if FormatElided(nil, nil) != "" {
+		t.Error("a record that dropped nothing says something")
+	}
+	block := RenderIterations([]Iteration{{Iteration: 1, Calls: []Call{{Name: "post_message"}},
+		Elided: elided}}, []string{"activate_tool"}, nil)
+	if !strings.Contains(block, line) {
+		t.Errorf("the round's ledger block does not carry its tally:\n%s", block)
+	}
+}
+
+// A CLOSED ROUND CARRIES ITS CALLS' IDENTITIES AND ITS DROPPED ONES ACROSS A
+// PARK. The round rides the parked turn's state as JSON, and a later segment
+// seeds its call log from it: a call's digest and the round's tally must come
+// back as they went, and a call with none writes no key a build before them
+// would not have written.
+//
+// Mutation: drop either tag's omitempty, or the field itself, and the round
+// comes back without what a seed counts.
+func TestAClosedRoundCarriesItsIdentitiesAcrossAPark(t *testing.T) {
+	t.Parallel()
+	in := Iteration{Iteration: 2, Calls: []Call{{Name: "set_status", Digest: "abc"}, {Name: "read_file"}},
+		Elided: []Elided{{Name: "set_status", Digest: "def", Calls: 2, Failed: 1}}}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Iteration
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Calls[0].Digest != "abc" || len(out.Elided) != 1 || out.Elided[0] != in.Elided[0] {
+		t.Errorf("the round came back %+v from %s", out, raw)
+	}
+	if strings.Count(string(raw), `"Digest"`) != 1 {
+		t.Errorf("a call with no identity wrote one: %s", raw)
+	}
+}

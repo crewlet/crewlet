@@ -894,7 +894,7 @@ person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
 `partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and an executor's `task_description`, `question`,
-`question_context`, `decision`, `held_call`, `held_arguments`, `reply` and `bridge_calls` (`held_call` also
+`question_context`, `decision`, `held_call`, `held_arguments`, `reply`, `bridge_calls` and `bridge_elided_calls` (`held_call` also
 to the person the question is put to, `held_arguments` never). A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
 call stale and asks for a body it will not be sent. A work item a call or a
@@ -11257,6 +11257,26 @@ for that approval comes before it, marked `held: true`, with no `args`, which
 ride the run's row sealed beside its question, and with `failed: true`, since
 nothing it asked for happened: it is the run's question, not a failure, and
 the executors board draws it so.
+
+A call's `args` and `output` are what the run's record keeps of them, which is
+held to the call's share of the record ([what a run's record
+keeps](../concepts/code-sandbox.md#what-a-runs-record-keeps)): past it, the
+arguments keep their shape with their largest values left out, each replaced
+by a string marker such as `(1.0 MiB not kept on the run's record, digest
+1a2b3c4d)`, and the output keeps its opening followed by `…` and how much more
+was not kept. `args_bytes` and `output_bytes` are set only on such a call, to
+the size in bytes of the whole arguments and the whole output, and absent where
+the record keeps the call whole: decide "partly kept" by them, never by
+reading a marker. `digest` is the call's identity, the SHA-256 of its whole
+arguments as the run counts its calls, absent on a call no tool admitted (one
+refused after the run's tools closed, or whose arguments did not parse).
+`bridge_calls_elided` counts the calls dropped from the middle of a long run's
+log, and `bridge_elided_calls` says what they were: one entry per tool and
+argument digest, `{name, digest, calls, failed}`, sent to whom the run's body
+is sent and always an array beside `bridge_calls`. An entry with no `digest`
+counts calls to its tool whose arguments' identity was not kept, and one with
+no `name` calls whose tool was not kept either; an elision an older engine made
+has a count and no entries.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

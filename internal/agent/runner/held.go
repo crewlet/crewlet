@@ -69,8 +69,12 @@ type HeldCommit interface {
 	// whether it failed and why, and who answered it), in one write
 	// ([sandbox.PendingStore.RecordHeldResult]): every reader of whether the
 	// turn replied reads the round's calls, and a call made and recorded
-	// nowhere among them was a reply that read as never sent.
-	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error
+	// nowhere among them was a reply that read as never sent. digest is the
+	// identity the surface made the call under in the run's call log
+	// ([tools.Surface.DigestOf]), which the record carries in place of the
+	// arguments it never holds, so a later segment's log counts the call as
+	// the one it was.
+	Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult, digest string) error
 }
 
 // HeldPrior is how a held call stood: as [HeldCommit.Begin] found it when it
@@ -192,7 +196,7 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error
 	}
 	result := sandbox.HeldResult{Output: textcut.Within(res.Output, sandbox.MaxHeldResultBytes),
 		Failed: res.Failed}
-	if err := held.Commit.Record(ctx, result, res); err != nil {
+	if err := held.Commit.Record(ctx, result, res, surface.DigestOf(held.Tool, held.Args)); err != nil {
 		// THE CALL IS MADE, and the run is told what it returned whatever
 		// the record says: only a later attempt at the same answer, which
 		// would then say the result is unknown, reads the record.

@@ -27,7 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -113,6 +116,38 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 			}
 		}
 		return w, nil
+	}
+}
+
+// keptWhole is decode for a submission a run is MAKING, held to what the run's
+// record keeps whole.
+//
+// THE COLLECTION REPLAYS A RUN'S SUBMISSION FROM ITS ROW ([replaySubmission]),
+// so a submission is the run's outcome only as the row holds it, and the row
+// is bounded in bytes: it keeps the newest successful submission whole up to
+// sandbox.MaxSubmissionArgsBytes, and every other call's arguments with their
+// largest values left out. A submission past what it keeps would be collected
+// as a round that submitted nothing. So the tool refuses it here, while the
+// run can still shorten it, naming its size: past sandbox.MaxSubmissionBytes,
+// measured as the row would hold it (its arguments as the engine records them
+// and the row escapes them), which is half what the row keeps — the run's own
+// spelling of what the tool reads in canonical form can only add to it, and
+// never past the other half.
+//
+// LIVE ONLY. The replay decodes without it: the submission is made, and one a
+// build before this bound recorded whole is replayed as it stands.
+func keptWhole(decode func(map[string]any) (workPayload, error)) func(map[string]any) (workPayload, error) {
+	return func(args map[string]any) (workPayload, error) {
+		text, err := tools.RecordArgs(args)
+		if err == nil {
+			if n := kept.Quoted(text); n > sandbox.MaxSubmissionBytes {
+				return workPayload{}, fmt.Errorf("this submission is %s as the run's record holds it, and "+
+					"the record keeps a submission whole up to %s: shorten the summary, the evidence or "+
+					"the open questions (the long form belongs where you delivered the work) and submit "+
+					"again", kept.Size(n), kept.Size(sandbox.MaxSubmissionBytes))
+			}
+		}
+		return decode(args)
 	}
 }
 

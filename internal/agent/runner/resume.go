@@ -125,7 +125,9 @@ func submitted(calls []ledger.Call) bool {
 
 // seedCalls records into a resumed run's log every call the turn made before
 // this segment: the rounds that closed and whatever its executor run called
-// over the bridge.
+// over the bridge — the calls their records kept (bridged, and each closed
+// round's), and the ones those records dropped from a long run's middle, by
+// identity (elided, and each closed round's [ledger.Iteration.Elided]).
 //
 // THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED. A collection,
 // a continuation after a person's answer and a reopen are the same turn in a
@@ -134,30 +136,60 @@ func submitted(calls []ledger.Call) bool {
 // operation id. See [turnctx.CallLog]. Order does not matter to a count, and
 // a call recorded twice only raises one, which is safe.
 //
-// BY THE CANONICAL ARGUMENTS, made through the surface the segment serves
-// ([tools.Surface.ArgsOf]), so the seeding and every call made after it read
-// one universe by construction, the tools the surface adds (submit_work, the
-// discovery pair) included. The records hold the model's own spelling, which
-// they keep: the closed rounds and the bridge's log of the run's calls are
-// what the model sent, and a count read against them as written took a
-// repeat spelt "Draft" after "draft" for another call and wrote it twice.
+// BY IDENTITY: the digest each call was admitted under ([ledger.Call.Digest]),
+// which its record carries whatever it kept of its arguments — a run's row
+// keeps a value past its share as a marker, and a parked turn's closed rounds
+// are condensed the same way — and a dropped call's identity seeded as many
+// times as it was made. Seeded from the arguments a record kept, a cut call
+// counted as another call, and a dropped one as none: a later call that asked
+// for something else derived an earlier call's operation id and was answered
+// `applied` without landing. A dropped identity the record could not keep —
+// its arguments' digest, or its tool too — is seeded as a call matching no
+// other ([turnctx.SeededCall.Unknown], [turnctx.CallLog.SeedUnknown]): an
+// over-count, the safe direction.
 //
-// A tool the surface does not hold (one removed since the run was launched)
-// is seeded by its arguments as sent, and logged at debug so the fallback is
-// visible: no call made now can reach it to be counted anyway.
+// A CALL WITH NO DIGEST — one a build before it recorded, whose arguments it
+// kept whole — is seeded by its canonical arguments, made through the surface
+// the segment serves ([tools.Surface.ArgsOf]), so the seeding and every call
+// made after it read one universe by construction, the tools the surface adds
+// (submit_work, the discovery pair) included. The records hold the model's own
+// spelling, which they keep: the closed rounds and the bridge's log of the
+// run's calls are what the model sent, and a count read against them as
+// written took a repeat spelt "Draft" after "draft" for another call and wrote
+// it twice. A tool the surface does not hold (one removed since the run was
+// launched) is seeded by its arguments as sent, and logged at debug so the
+// fallback is visible: no call made now can reach it to be counted anyway.
 func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration,
-	groups ...[]ledger.Call) {
+	bridged []ledger.Call, elided []ledger.Elided) {
 
+	groups := [][]ledger.Call{bridged}
+	tallies := [][]ledger.Elided{elided}
 	for _, iteration := range history {
 		groups = append(groups, iteration.Calls)
+		tallies = append(tallies, iteration.Elided)
 	}
 	universe := surface.Universe()
 	for _, group := range groups {
 		for _, call := range group {
+			if call.Digest != "" {
+				calls.Seed(turnctx.SeededCall{Tool: call.Name, Digest: call.Digest})
+				continue
+			}
 			if _, known := universe.Lookup(call.Name); !known {
 				log.Debug("agent_resume_seed_unknown_tool", "tool", call.Name)
 			}
 			calls.Seed(turnctx.SeededCall{Tool: call.Name, Args: surface.ArgsOf(call.Name, call.Args)})
+		}
+	}
+	for _, tally := range tallies {
+		for _, e := range tally {
+			if e.Name == "" {
+				calls.SeedUnknown(e.Calls)
+				continue
+			}
+			for range e.Calls {
+				calls.Seed(turnctx.SeededCall{Tool: e.Name, Digest: e.Digest, Unknown: e.Digest == ""})
+			}
 		}
 	}
 }

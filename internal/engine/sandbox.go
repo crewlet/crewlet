@@ -1500,6 +1500,9 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// them over the bridge, possibly in another process, so this list is
 		// the only record of what the phase did, its submission included.
 		Bridged: bridgedCalls(in.Run.BridgeCalls),
+		// AND WHAT THE ROW DROPPED FROM THEIR MIDDLE, by identity, which the
+		// turn's call log is seeded with beside them.
+		Elided: elidedCalls(in.Run.ElidedCalls),
 		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the row recorded it
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
@@ -1607,9 +1610,11 @@ func (h heldCommit) prior(ctx context.Context, call sandbox.HeldCall) runner.Hel
 }
 
 // Record seals and records what the held call returned, and the call itself as
-// a call of its run's round, as the surface that made it answered it; see
-// [runner.HeldCommit].
-func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
+// a call of its run's round, as the surface that made it answered it and under
+// the identity it made it with (digest); see [runner.HeldCommit].
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult,
+	digest string) error {
+
 	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
 	if err != nil {
 		return err
@@ -1617,7 +1622,7 @@ func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answe
 	return h.held.Record(ctx, sandbox.HeldMade{Result: sealed, Call: sandbox.BridgeCall{
 		Name: h.held.Call.Tool, Failed: answered.Failed,
 		Origin: answered.Origin, Server: answered.Server, Source: answered.Source,
-		Refusal: string(answered.Refusal()),
+		Refusal: string(answered.Refusal()), Digest: digest,
 	}})
 }
 
@@ -1862,11 +1867,29 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.AskProvenance = tel.askLabel
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
-	blob, err := execstate.Encode(suspension.State)
-	if err != nil {
+	// HELD TO ITS SHARE OF THE RUN'S ROW ([sandbox.ExecuteStateBytes]): the
+	// closed rounds' payloads condensed where the state is past it, and a
+	// state still past it — the turn's own context, which no resume can do
+	// without — refused by name rather than by the broker, which would refuse
+	// this write and every write of the row after it.
+	blob, condensed, err := execstate.EncodeWithin(suspension.State, sandbox.ExecuteStateBytes)
+	switch {
+	case errors.Is(err, execstate.ErrTooLarge):
+		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_too_large",
+			"the parked turn state is past its share of the run's row even with its closed rounds' "+
+				"payloads left out: the turn's own context (its ask, its trigger's words, its "+
+				"turn-start context) is too large for a run's row", err)
+		return false, nil
+	case err != nil:
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
 			"the parked turn state could not be serialized", err)
 		return false, nil
+	case condensed.Any():
+		log.InfoContext(ctx, "sandbox_suspension_condensed", "turn_id", turnID, "seat", tel.handle,
+			"results_dropped", condensed.Results, "payloads_left_out", condensed.LeftOut,
+			"texts_cut", condensed.Texts, "bytes", len(blob),
+			"detail", "the parked turn's closed rounds were condensed to fit its share of the run's "+
+				"row; every call keeps its name, its identity and its outcome")
 	}
 	// The iteration rides BESIDE the blob: the coordinator files each
 	// launch's own record under it and never decodes the state.

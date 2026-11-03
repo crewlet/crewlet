@@ -105,13 +105,15 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 	}
 }
 
-// A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER AND WHO
-// ANSWERED — everything the bridge measured, in the row's own shape, so a
-// resumed executor's record can place its calls on a timeline, in the order
-// the run made them, and name the server each came from — read off the row,
-// which is the only place a collection, often another process, can read them.
+// A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER, WHO
+// ANSWERED AND WHAT IT WAS — everything the bridge measured, in the row's own
+// shape, so a resumed executor's record can place its calls on a timeline, in
+// the order the run made them, and name the server each came from — read off
+// the row, which is the only place a collection, often another process, can
+// read them; and the identity the bridge admitted it under, which a later
+// segment's call log counts it by whatever the row keeps of its arguments.
 //
-// Mutation: drop any of the five from the append, and this goes red.
+// Mutation: drop any of the six from the append, and this goes red.
 func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
@@ -121,7 +123,7 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
 		Call: tools.Call{Name: "list_issues", Args: map[string]any{"repo": "core"}, Output: "[]"},
 		Seq:  4, StartedAt: started, Duration: 1500 * time.Millisecond,
-		Origin: "mcp", Server: "github",
+		Origin: "mcp", Server: "github", Digest: "d1",
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -130,9 +132,33 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	}
 	got := store.appends[0].Call
 	want := sandbox.BridgeCall{Name: "list_issues", Args: `{"repo":"core"}`, Output: "[]",
-		Seq: 4, StartedAt: started, DurationMS: 1500, Origin: "mcp", Server: "github"}
+		Seq: 4, StartedAt: started, DurationMS: 1500, Origin: "mcp", Server: "github", Digest: "d1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the row is %+v, want %+v", got, want)
+	}
+}
+
+// WHAT A ROW KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on the
+// turn's record of the call, and the size of the whole arguments and output
+// where the row kept less, which the collection's replay decides by — and the
+// calls the row dropped, by identity, in the turn's own shape.
+//
+// Mutation: drop the digest or either size on the way to the runner, or the
+// tally, and a resumed segment seeds a cut call as another and replays a cut
+// submission as the run's.
+func TestWhatARowKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
+	t.Parallel()
+	got := bridgedCalls([]sandbox.BridgeCall{{Name: "code_commit_files",
+		Args:   `{"content":"(1.0 MiB not kept on the run's record, digest 1a2b3c4d)","path":"a.go"}`,
+		Output: "committed", Seq: 3, Digest: "d1", ArgsBytes: 1 << 20, OutputBytes: 70 << 10}})
+	if len(got) != 1 || got[0].Digest != "d1" || got[0].ArgsBytes != 1<<20 || got[0].OutputBytes != 70<<10 ||
+		got[0].Args["path"] != "a.go" {
+		t.Errorf("the resumed turn reads %+v", got)
+	}
+	tally := elidedCalls([]sandbox.ElidedCall{{Name: "read_file", Digest: "d2", Calls: 7, Failed: 1}})
+	if len(tally) != 1 || tally[0].Name != "read_file" || tally[0].Digest != "d2" || tally[0].Calls != 7 ||
+		tally[0].Failed != 1 {
+		t.Errorf("the dropped calls read %+v", tally)
 	}
 }
 

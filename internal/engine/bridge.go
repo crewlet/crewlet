@@ -41,6 +41,13 @@ import (
 // and in their order, by exactly that. A call the bridge did not measure keeps
 // a zero start, which every reader takes for "not measured". The round is the
 // runner's to state: the run's record has one, and it is not this layer's.
+//
+// AND WITH ITS IDENTITY AND WHAT THE ROW KEPT OF IT: the digest the call was
+// admitted under, which a resumed segment seeds its call log by, and the size
+// of the whole arguments and output where the row kept less
+// ([sandbox.BridgeCall.ArgsBytes]), which the collection's replay decides by.
+// The arguments are the row's, a left-out value's marker included: a reader
+// that shows them shows a left-out payload as left out.
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -50,15 +57,32 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 				Args:   decodeBridgeArgs(call.Args),
 				Result: call.Output,
 				Failed: call.Failed,
+				Digest: call.Digest,
 			},
-			Seq:       call.Seq,
-			StartedAt: call.StartedAt,
-			Duration:  time.Duration(call.DurationMS) * time.Millisecond,
-			Origin:    call.Origin,
-			Server:    call.Server,
-			Source:    call.Source,
-			Refusal:   mcp.Refusal(call.Refusal),
+			Seq:         call.Seq,
+			StartedAt:   call.StartedAt,
+			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
+			Origin:      call.Origin,
+			Server:      call.Server,
+			Source:      call.Source,
+			Refusal:     mcp.Refusal(call.Refusal),
+			ArgsBytes:   call.ArgsBytes,
+			OutputBytes: call.OutputBytes,
 		})
+	}
+	return out
+}
+
+// elidedCalls is what a run's row dropped from the middle of its calls, by
+// identity ([sandbox.PendingRun.ElidedCalls]), in the shape the turn's record
+// carries it ([ledger.Elided]).
+func elidedCalls(ids []sandbox.ElidedCall) []ledger.Elided {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]ledger.Elided, 0, len(ids))
+	for _, e := range ids {
+		out = append(out, ledger.Elided{Name: e.Name, Digest: e.Digest, Calls: e.Calls, Failed: e.Failed})
 	}
 	return out
 }
@@ -175,6 +199,11 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			Source:     call.Source,
 			Refusal:    string(call.Refusal()),
 			Held:       call.Held,
+			// THE CALL'S IDENTITY, as the bridge admitted it and before the
+			// row keeps any of it: the arguments above go whole, and the
+			// store holds them to the call's share of the row, so this is
+			// what a later segment's call log counts the call by.
+			Digest: call.Digest,
 		},
 		Spent: l.spent(),
 	})

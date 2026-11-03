@@ -165,6 +165,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
 	cases = append(cases, heldCases...)
+	cases = append(cases, bytesCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -180,6 +181,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 	}
 	raw = append(raw, noteRawCases...)
+	raw = append(raw, bytesRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
