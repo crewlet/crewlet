@@ -2443,7 +2443,13 @@ type PendingStore interface {
 	// the log is not open for the job. FALSE IS NOT AN ERROR: it is a run
 	// whose row is gone, or a job that is over — the ordinary shape of a late
 	// call from a box that is shutting down — and the caller must not fail
-	// the box's call over it.
+	// the box's call over it. TRUE BESIDE AN ERROR IS THE SPEND'S: the calls
+	// are in the log, and only what they cost did not reach the job's record.
+	// Nothing a later ask answers takes them out of the log — asked again, the
+	// append lists none of them twice and writes the spend once more — so a
+	// caller that asks again for the spend owes none of them, and names none
+	// of them as on no record, whatever that ask meets (internal/engine's
+	// bridgeLedger.appendRetrying).
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
 
 	// BridgeLog reads the bridged tool log of run's job: the calls of the
