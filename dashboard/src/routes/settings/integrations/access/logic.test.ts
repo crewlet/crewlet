@@ -287,3 +287,9 @@ test("an agent that left the company reads as such when its details open, not as
     "This agent left the company and has no account here.",
   );
 });
+
+// A LANE THAT IS NOT SCOPED offers no scope, whatever an answer lists.
+test("a scope is offered only on a lane that narrows by scope", () => {
+  expect(scopeApplies(GITHUB_LANE, { enabled: true })).toBe(true);
+  expect(scopeApplies({ ...GITHUB_LANE, scoped: false }, { enabled: true })).toBe(false);
+});

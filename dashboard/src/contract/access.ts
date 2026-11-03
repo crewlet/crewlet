@@ -87,6 +87,8 @@ export interface AccessOptions {
   live: boolean;
   /** GitHub only: the permissions a seat's app can hold. */
   permissions?: AccessPermission[];
+  /** Whether the lane narrows a seat by scope at all, whatever `scope` lists now. */
+  scoped?: boolean;
   /** What a seat may be scoped to (repositories, projects, spaces, channels), from the company's connection. */
   scope?: string[];
   /** Whether a scope entry outside `scope` may be typed. */

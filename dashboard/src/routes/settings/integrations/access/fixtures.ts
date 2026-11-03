@@ -2,9 +2,9 @@
  * Per-seat access answers as the engine sends them, for the Agents tab's
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
- * old tier registered), its Cloudflare (SRE able to purge, the rest off) and
- * its Expo (QA's robot a Developer, the rest off), built from the fields a
- * case names.
+ * old tier registered), its GitLab (Dev a Developer in a group that lists no
+ * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
+ * (QA's robot a Developer, the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -42,6 +42,7 @@ const GITHUB_OPTIONS: AccessOptions = {
     { key: "deployments", name: "Deployments" },
     { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
+  scoped: true,
   scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
 };
 
@@ -52,7 +53,22 @@ const MATTERMOST_OPTIONS: AccessOptions = {
     { id: "system_user", name: "Member" },
     { id: "system_user system_post_all_public", name: "Member who posts in any public channel" },
   ],
+  scoped: true,
   scope: ["town-square", "incidents", "releases"],
+};
+
+/** A GitLab group whose connection lists no projects, so any project in it may be typed. */
+const GITLAB_OPTIONS: AccessOptions = {
+  lane: "gitlab",
+  live: true,
+  rotatable: true,
+  levels: [
+    { id: "20", name: "Reporter" },
+    { id: "30", name: "Developer" },
+    { id: "40", name: "Maintainer", administers: true },
+  ],
+  scoped: true,
+  scope_open: true,
 };
 
 /** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
@@ -100,6 +116,7 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
     { id: "create:comment", name: "Add comments" },
     { id: "administer:space", name: "Admin", administers: true },
   ],
+  scoped: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -117,6 +134,7 @@ const JIRA_OPTIONS: AccessOptions = {
     { id: "10003", name: "Member" },
     { id: "10004", name: "Administrator", administers: true },
   ],
+  scoped: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -124,6 +142,7 @@ export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
 export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
+export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
@@ -218,6 +237,32 @@ export function githubAnswer(): AccessAnswer {
             ceiling: { ...REVIEW },
             scope: ["gophrase/backend"],
             credential: { variable: "GITHUB_APP_KEY_QA", minted_at: ago(12 * DAY) },
+          },
+        }),
+      }),
+    ],
+  };
+}
+
+/** GitLab with Dev a Developer on one project, in a group that lists none. */
+export function gitlabAnswer(): AccessAnswer {
+  return {
+    kind: "gitlab",
+    revision: "rev-7",
+    syncing: false,
+    options: [GITLAB_OPTIONS],
+    seats: [
+      seat("dev", "Dev", {
+        gitlab: onLane({
+          variable: "GITLAB_TOKEN_DEV",
+          desired: { enabled: true, level: "30", scope: ["gophrase/backend"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-dev",
+            level: "30",
+            scope: ["gophrase/backend"],
+            credential: { variable: "GITLAB_TOKEN_DEV", minted_at: ago(DAY) },
           },
         }),
       }),

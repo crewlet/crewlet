@@ -139,12 +139,13 @@ export function productOnly(lane: Lane, id: string | undefined): string | null {
 }
 
 /**
- * Whether a seat's scope is offered: never on a lane managed outside Crewlet,
- * and not with product access only, unless a list is already held there
- * (which the document refuses), so it can be cleared.
+ * Whether a seat's scope is offered: only on a lane that narrows by scope,
+ * never on one managed outside Crewlet, and not with product access only,
+ * unless a list is already held there (which the document refuses), so it
+ * can be cleared.
  */
 export function scopeApplies(lane: Lane, want: AccessDesired): boolean {
-  if (lane.scope === undefined || managedOutside(lane)) return false;
+  if (!lane.scoped || managedOutside(lane)) return false;
   return productOnly(lane, want.level) === null || (want.scope ?? []).length > 0;
 }
 
