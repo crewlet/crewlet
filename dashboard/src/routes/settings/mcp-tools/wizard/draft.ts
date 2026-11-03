@@ -17,6 +17,15 @@
  * does not draw (timeouts, annotations, `optional_keys`, `enabled`) is
  * written back as it was.
  *
+ * AN OAUTH SIGN-IN IS THE ENTRY'S `oauth` BLOCK: a person's sign-in names how
+ * the engine registers (`client`), with the company's own client's id, and
+ * the scopes; a service identity (`grant: client_credentials`) names its
+ * client's id and scopes. Its client's secret is a value like any other,
+ * stored through the values route under `oauth.client_secret`: a stored one
+ * keeps the pointer the entry has, and a service identity written with none
+ * is pointed by the engine where the route will store it. Nobody signs in
+ * here: a person's sign-in is made on the server's page once it is saved.
+ *
  * THE ENGINE DECIDES. Nothing here judges a name, an address or a key: the
  * engine's dry run and its test do, and their problems land on the fields
  * by the paths they name (`stepOf`, `problemAt`). A pasted configuration is
@@ -24,17 +33,37 @@
  */
 
 import type { KeyValueRow } from "@crewlethq/ui";
-import type { McpAuthMethod, McpCatalogueEntry, McpValueState } from "~/contract/mcp.ts";
+import type {
+  McpAuthMethod,
+  McpCatalogueEntry,
+  McpCheckedTool,
+  McpOAuthClient,
+  McpToolLevel,
+  McpValueState,
+} from "~/contract/mcp.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
+import { CLIENT_SECRET } from "../api.ts";
+import { accessEntity, accessOf, EVERY, type Access } from "../GrantPicker.tsx";
+import { LEVELS, type SignInChoice } from "../words.ts";
 
 /** Where a new server comes from. */
 export type Source = "catalogue" | "url" | "json" | "community";
 
 /** The wizard's steps, in order. An edit has no Source: a saved server is not re-sourced. */
-export type Step = "source" | "name" | "connection" | "signin" | "test" | "review";
+export type Step =
+  "source" | "name" | "connection" | "signin" | "access" | "approvals" | "test" | "review";
 
-const ADD_STEPS: readonly Step[] = ["source", "name", "connection", "signin", "test", "review"];
-const EDIT_STEPS: readonly Step[] = ["name", "connection", "signin", "test", "review"];
+const ADD_STEPS: readonly Step[] = [
+  "source",
+  "name",
+  "connection",
+  "signin",
+  "access",
+  "approvals",
+  "test",
+  "review",
+];
+const EDIT_STEPS: readonly Step[] = ADD_STEPS.filter((s) => s !== "source");
 
 /** The steps the wizard walks, adding or editing. */
 export function stepsFor(editing: boolean): readonly Step[] {
@@ -78,6 +107,11 @@ export interface Detected {
   from: "server" | "catalogue";
   /** The vendor's name where the catalogue knows the address, else null. */
   title: string | null;
+  /**
+   * For OAuth, how the engine would register there, from its authorization
+   * server's metadata or the catalogue; "" where nobody read it.
+   */
+  client: McpOAuthClient | "";
 }
 
 export interface Draft {
@@ -94,17 +128,37 @@ export interface Draft {
   /** Added before every tool name, with nothing between. */
   toolPrefix: string;
   /** How the engine proves who it is to the server. */
-  signIn: McpAuthMethod;
+  signIn: SignInChoice;
+  /** How a person's OAuth sign-in registers the engine. */
+  oauthClient: McpOAuthClient;
+  /** The company's own client's id: `client: own`'s, or a service identity's. */
+  clientId: string;
+  /** Its secret as typed, stored write-only after the entry and never shown back. */
+  clientSecret: string;
+  /** An edit's entry names its client's secret already, so "" keeps it. */
+  secretStored: boolean;
+  /** The scopes asked for, space separated; "" asks for the server's default. */
+  scopes: string;
   /** A remote server's headers. */
   headers: ValueRow[];
   /** A local server's variables. */
   env: ValueRow[];
   /**
-   * One instance for the company, or one per agent. Not chosen here: a
-   * server an integration signs in for each agent runs one per agent, and an
-   * edit keeps what the entry says.
+   * One instance for the company, or one per agent, chosen on Who gets it. A
+   * server an integration signs in for each agent runs one per agent.
    */
   shared: boolean;
+  /** Who gets it: every agent, or the teams and agents its `access` names. */
+  access: Access;
+  /**
+   * The level of every tool `levels` does not name (`tools.default`), or null
+   * to leave each such tool at the level its hints start it at.
+   */
+  baseline: McpToolLevel | null;
+  /** Each tool's own level, by the server's own name for it (`tools.levels`). */
+  levels: Readonly<Record<string, McpToolLevel>>;
+  /** The tools the draft's test listed, which the approvals step sets levels on. */
+  listed: readonly McpCheckedTool[];
   /**
    * The keys an integration fills for each agent, which an edit writes back
    * as the entry spells them and draws as no row.
@@ -127,9 +181,18 @@ export function emptyDraft(): Draft {
     args: "",
     toolPrefix: "",
     signIn: "none",
+    oauthClient: "cimd",
+    clientId: "",
+    clientSecret: "",
+    secretStored: false,
+    scopes: "",
     headers: [],
     env: [],
     shared: true,
+    access: EVERY,
+    baseline: null,
+    levels: {},
+    listed: [],
     bound: [],
     detected: null,
     supported: null,
@@ -138,12 +201,12 @@ export function emptyDraft(): Draft {
 
 /**
  * The sign-in a catalogue entry starts on: its integration where it has one,
- * then the first of the methods it offers this wizard can draw. An OAuth-only
- * entry starts on none, which its Sign-in step says it cannot use.
+ * else the first method it lists, which the catalogue orders by what it
+ * recommends.
  */
 function firstSignIn(entry: McpCatalogueEntry): McpAuthMethod {
   if (entry.integration) return "integration";
-  return entry.auth.find((a) => a === "headers" || a === "none") ?? "none";
+  return entry.auth[0] ?? "none";
 }
 
 /**
@@ -169,10 +232,11 @@ export function fromCatalogue(entry: McpCatalogueEntry, base: Draft): Draft {
     args: entry.args.join("\n"),
     toolPrefix: entry.tool_prefix,
     signIn,
+    oauthClient: entry.oauth_client || "cimd",
     headers: rows(entry.headers),
     env: rows(entry.env),
     shared: !entry.integration,
-    detected: { auth: signIn, from: "catalogue", title: entry.title },
+    detected: { auth: signIn, from: "catalogue", title: entry.title, client: entry.oauth_client },
     supported: entry.auth,
   };
 }
@@ -186,6 +250,21 @@ export function fixedValues(entry: McpCatalogueEntry | null): Record<string, str
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
+
+const isLevel = (v: unknown): v is McpToolLevel =>
+  typeof v === "string" && (LEVELS as readonly string[]).includes(v);
+
+/** An entry's `tools` block as the draft holds it: its default and each tool's own level. */
+function levelsOf(block: unknown): Pick<Draft, "baseline" | "levels"> {
+  if (!isRecord(block)) return { baseline: null, levels: {} };
+  const levels = isRecord(block.levels)
+    ? Object.fromEntries(Object.entries(block.levels).filter(([, v]) => isLevel(v)))
+    : {};
+  return {
+    baseline: isLevel(block.default) ? block.default : null,
+    levels: levels as Record<string, McpToolLevel>,
+  };
+}
 
 /**
  * A draft of a saved server, for an edit: the entry as written, each key the
@@ -206,6 +285,8 @@ export function fromServer(
       .map((k) => newRow(k, { stored: true }));
   const http = entity.transport === "http" || (!entity.command && typeof entity.url === "string");
   const text = (v: unknown) => (typeof v === "string" ? v : "");
+  const oauth = isRecord(entity.oauth) ? entity.oauth : null;
+  const client = text(oauth?.client);
   return {
     ...emptyDraft(),
     source: entry ? "catalogue" : "url",
@@ -217,9 +298,18 @@ export function fromServer(
     command: text(entity.command),
     args: Array.isArray(entity.args) ? entity.args.map(String).join("\n") : "",
     toolPrefix: text(entity.tool_prefix),
-    signIn,
+    signIn:
+      signIn === "oauth" && oauth?.grant === "client_credentials" ? "client_credentials" : signIn,
+    oauthClient: client === "dcr" || client === "own" ? client : "cimd",
+    clientId: text(oauth?.client_id),
+    // NAMED BY THE ENTRY, as a header row is stored: what the store holds
+    // for it is the Connection tab's to say.
+    secretStored: typeof oauth?.client_secret === "string" && oauth.client_secret !== "",
+    scopes: Array.isArray(oauth?.scopes) ? oauth.scopes.map(String).join(" ") : "",
     headers: http ? rows(entity.headers) : [],
     env: http ? [] : rows(entity.env),
+    access: accessOf(entity.access),
+    ...levelsOf(entity.tools),
     shared: entity.shared !== false,
     bound: [...bound],
     // The methods the entry offers and the one the server uses, which stays
@@ -236,6 +326,47 @@ export function rowsOf(d: Draft): ValueRow[] {
 /** Whether the draft's rows are sent at all: an integration's server takes none typed here for a remote one. */
 function sendsRows(d: Draft): boolean {
   return d.transport === "stdio" || d.signIn === "headers";
+}
+
+/** Whether the draft signs in with OAuth, as a person or as a service identity. */
+export function signsInWithOAuth(d: Draft): boolean {
+  return d.transport === "http" && (d.signIn === "oauth" || d.signIn === "client_credentials");
+}
+
+/** Whether the draft's sign-in takes a client's secret: the company's own client, or a service identity. */
+export function takesSecret(d: Draft): boolean {
+  return (
+    d.transport === "http" &&
+    ((d.signIn === "oauth" && d.oauthClient === "own") || d.signIn === "client_credentials")
+  );
+}
+
+/** The scopes as the entry lists them. */
+function scopesOf(text: string): string[] {
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The `oauth` block the draft writes, null for a sign-in that is not OAuth. A
+ * client secret the entry reads already keeps its pointer; a new one is left
+ * out, for the values route (and, for a service identity, the write) to point.
+ */
+function oauthOf(d: Draft, base: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!signsInWithOAuth(d)) return null;
+  const before = isRecord(base?.oauth) ? base.oauth : {};
+  const out: Record<string, unknown> =
+    d.signIn === "client_credentials"
+      ? { grant: "client_credentials", client_id: d.clientId.trim() }
+      : {
+          client: d.oauthClient,
+          ...(d.oauthClient === "own" ? { client_id: d.clientId.trim() } : {}),
+        };
+  if (takesSecret(d) && typeof before.client_secret === "string" && before.client_secret) {
+    out.client_secret = before.client_secret;
+  }
+  const scopes = scopesOf(d.scopes);
+  if (scopes.length > 0) out.scopes = scopes;
+  return out;
 }
 
 /** The arguments, one a line, as the entry writes them. */
@@ -258,6 +389,9 @@ const OWNED = [
   "env",
   "tool_prefix",
   "shared",
+  "oauth",
+  "access",
+  "tools",
 ] as const;
 
 /**
@@ -278,6 +412,19 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   if (d.toolPrefix.trim()) out.tool_prefix = d.toolPrefix.trim();
   // `shared` is written only to say false: unset is the shared default.
   if (!d.shared) out.shared = false;
+  // WHO GETS IT, left out for every agent. A server an integration signs in
+  // for takes its agents from the integration, and the engine refuses
+  // `access` on it.
+  const access = d.signIn === "integration" ? undefined : accessEntity(d.access);
+  if (access) out.access = access;
+  // THE LEVELS, left out where none is set: each tool then starts at the
+  // level its hints give it.
+  if (d.baseline !== null || Object.keys(d.levels).length > 0) {
+    out.tools = {
+      ...(d.baseline !== null ? { default: d.baseline } : {}),
+      ...(Object.keys(d.levels).length > 0 ? { levels: { ...d.levels } } : {}),
+    };
+  }
   const written = isRecord(base?.[d.transport === "http" ? "headers" : "env"])
     ? (base![d.transport === "http" ? "headers" : "env"] as Record<string, unknown>)
     : {};
@@ -288,9 +435,9 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   for (const k of d.bound) {
     if (k in written) block[k] = written[k];
   }
-  // AN OAUTH SERVER'S HEADERS are no row here, since this wizard does not set
-  // its sign-in up, so they stay as the entry wrote them.
-  if (d.signIn === "oauth") Object.assign(block, written);
+  // AN OAUTH SERVER'S HEADERS are no row here (its sign-in is the oauth
+  // block), so they stay as the entry wrote them.
+  if (signsInWithOAuth(d)) Object.assign(block, written);
   if (sendsRows(d)) {
     for (const r of rowsOf(d)) {
       const key = r.key.trim();
@@ -301,6 +448,8 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   if (Object.keys(block).length > 0) out[field] = block;
   if (d.transport === "http") {
     out.url = d.url.trim();
+    const oauth = oauthOf(d, base);
+    if (oauth) out.oauth = oauth;
   } else {
     out.command = d.command.trim();
     const args = argsOf(d.args);
@@ -315,14 +464,30 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   return out;
 }
 
-/** The values typed for the draft's keys, trimmed, which are stored after the entry is written. */
+/**
+ * The values typed for the draft's keys, trimmed, which are stored after the
+ * entry is written: its rows', or its client's secret.
+ */
 export function valuesOf(d: Draft): Record<string, string> {
+  if (takesSecret(d)) {
+    const secret = d.clientSecret.trim();
+    return secret ? { [CLIENT_SECRET]: secret } : {};
+  }
   if (!sendsRows(d)) return {};
   return Object.fromEntries(
     rowsOf(d)
       .filter((r) => r.key.trim() && r.value.trim())
       .map((r) => [r.key.trim(), r.value.trim()]),
   );
+}
+
+/**
+ * Whether a value is tested before it is stored: a shared server's are, but
+ * a person's sign-in sends its client's secret only when the grant renews,
+ * which a test does not do, so the engine refuses to test that one.
+ */
+export function testsValue(d: Draft, key: string): boolean {
+  return d.shared && !(key === CLIENT_SECRET && d.signIn === "oauth");
 }
 
 /**
@@ -347,6 +512,11 @@ export function stepOf(p: ConfigProblem, transport: Draft["transport"]): Step {
     case "name":
     case "description":
       return "name";
+    case "access":
+    case "shared":
+      return "access";
+    case "tools":
+      return "approvals";
     case "url":
     case "command":
     case "args":
@@ -357,6 +527,7 @@ export function stepOf(p: ConfigProblem, transport: Draft["transport"]): Step {
     case "optional_keys":
       return transport === "stdio" ? "connection" : "signin";
     case "headers":
+    case "oauth":
       return "signin";
     case "values":
       return transport === "stdio" ? "connection" : "signin";

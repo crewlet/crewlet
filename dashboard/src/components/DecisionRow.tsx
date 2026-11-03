@@ -16,7 +16,12 @@
  *    with one of its options where it asked to choose;
  *  - a SEAT the engine STOPPED for its token budget: which window is spent,
  *    the item it was on, and the two ways out — raise the ceiling, or hand
- *    the item to somebody else.
+ *    the item to somebody else;
+ *  - an executor parked on a CALL it made to a tool at Needs approval: the
+ *    tool, its server and what it would send, answered Allow once, Always
+ *    allow or Deny through the approvals route ([HeldCallRow]), never through
+ *    the run's own answer, which the engine refuses for a held call. The MCP
+ *    page draws the same row for a server's held calls.
  *
  * Shared by Home and My work's Asked of me, which is why it lives here: two
  * copies of the rule for which button is primary would disagree the first
@@ -36,6 +41,8 @@
 
 import { firstLine } from "~/lib/format.ts";
 import { useMemo, useState, type ReactNode } from "react";
+import { CodeBlock, Disclosure } from "@crewlethq/ui";
+import { HeldCallButtons } from "./HeldCallButtons.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { href } from "~/app/router.tsx";
@@ -334,6 +341,7 @@ function Row({
   line,
   meta,
   actions,
+  pinned = false,
 }: {
   who: Who;
   status: "needs" | "stopped";
@@ -343,11 +351,17 @@ function Row({
   /** What the head says after the name: how long ago. */
   meta: ReactNode[];
   actions: ReactNode;
+  /**
+   * The controls stand on the title's line rather than centred on the
+   * words, for a row whose words open (a held call's arguments): centred,
+   * the buttons moved under the pointer as the arguments opened.
+   */
+  pinned?: boolean;
 }) {
   return (
     <li className="decision-group">
       <DecisionHead who={who} status={status} meta={meta} />
-      <div className="decision-item">
+      <div className={pinned ? "decision-item is-pinned" : "decision-item"}>
         <div className="decision-text">
           <span className="decision-title">{title}</span>
           <span className="decision-sub">
@@ -526,6 +540,8 @@ function AnsweredLine({ answer }: { answer: AskAnswer }) {
 }
 
 function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: number }) {
+  const held = heldCallOf(run);
+  if (held) return <HeldCallRow call={held} now={now} />;
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
@@ -554,6 +570,136 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
       meta={joined([relTime(since, now)])}
       line={holdLine(run, now)}
       actions={<AnswerRunButton run={run} seat={who.name} />}
+    />
+  );
+}
+
+/**
+ * A call an agent's run holds for a person's approval, as its row draws it:
+ * off a parked run's row (the Inbox, Home, a seat's work) or off the MCP
+ * answer's `approvals` (a server's page).
+ */
+export interface HeldCall {
+  /** What the approval is answered by. */
+  id: string;
+  /** The agent whose run made the call, by handle. */
+  seat: string;
+  /** The server the tool is on, as a person knows it: its title where the caller has it, else its name. */
+  server: string;
+  /** The tool as the run called it, its prefix applied. */
+  tool: string;
+  /** When the call was held. */
+  at: string;
+  /** The work item the run was on, or null. */
+  item: ItemRef | null;
+  /**
+   * What the call would send. Undefined where this reader is not shown it
+   * (it is the seat's trail: an administrator's and the seat's lead's); null
+   * where its seal did not open on the node that answered.
+   */
+  args: Record<string, unknown> | null | undefined;
+  /** Drawn before the arguments: the tool's risk, where the caller has the tool's row. */
+  extra?: ReactNode;
+  /** What it was answered, said, where somebody answered it already; absent while it waits. */
+  answered?: string;
+}
+
+/** The call a parked run holds for approval, or null for a run parked on a question. */
+export function heldCallOf(run: ExecutorRow): HeldCall | null {
+  const held = run.held_call;
+  if (!held) return null;
+  return {
+    id: held.id,
+    seat: run.agent_handle,
+    server: held.server,
+    tool: held.tool,
+    at: held.held_at || run.paused_at || run.updated_at,
+    item: run.work_item ?? null,
+    args: run.held_arguments,
+  };
+}
+
+/**
+ * One held call, answerable in place: who made it, the tool and its server,
+ * the item, and what it would send, with Allow once, Always allow and Deny.
+ *
+ * THE RUN IS PARKED, not failed: its seat is free, and the answer carries it
+ * on with the call made, or hands the agent a refusal it can work around.
+ * Always allow also sets the tool's level, so the next call runs without
+ * asking; it is a configuration write, so the engine asks for a fresh
+ * step-up first, which the transport asks for and replays.
+ *
+ * AN ANSWERED CALL STAYS as the line saying what was answered, until the
+ * list is drawn afresh without it (an ask's rule). An answer whose delivery
+ * the engine could not confirm says so and keeps its buttons: answering
+ * again is safe, since the seat records one answer.
+ */
+export function HeldCallRow({
+  call,
+  now,
+  onAnswered,
+}: {
+  call: HeldCall;
+  now: number;
+  onAnswered?: () => void;
+}) {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const who = seatOf(index, call.seat);
+  const [said, setSaid] = useState<{ words: string; settled: boolean } | null>(
+    call.answered ? { words: call.answered, settled: true } : null,
+  );
+  const settled = said?.settled ?? false;
+  const args =
+    call.args === undefined ? null : (
+      <Disclosure title="Arguments" size="compact" headingLevel="none" flush>
+        {call.args === null ? (
+          "What it would send could not be opened on this node."
+        ) : (
+          <CodeBlock language="json" code={JSON.stringify(call.args, null, 2)} />
+        )}
+      </Disclosure>
+    );
+  return (
+    <Row
+      who={who}
+      status="needs"
+      pinned
+      title={
+        <>
+          Call <span className="mono">{call.tool}</span> on {call.server}?
+        </>
+      }
+      sub={joined([
+        call.item ? <Key key="k" item={call.item} /> : "",
+        settled ? "" : "its run is parked",
+      ])}
+      meta={joined([relTime(call.at, now)])}
+      line={
+        said || call.extra || args ? (
+          <>
+            {call.extra}
+            {args}
+            {said ? (
+              <span className="decision-answered" role="status">
+                <CheckGlyph size="sm" aria-hidden="true" />
+                <span>{said.words}</span>
+              </span>
+            ) : null}
+          </>
+        ) : undefined
+      }
+      actions={
+        settled ? null : (
+          <HeldCallButtons
+            id={call.id}
+            onAnswered={(words, done) => {
+              setSaid({ words, settled: done });
+              onAnswered?.();
+            }}
+          />
+        )
+      }
     />
   );
 }

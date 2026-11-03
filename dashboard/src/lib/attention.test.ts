@@ -708,6 +708,27 @@ describe("a model at its usage limit", () => {
 // measurement behind the disclosure. Not running is critical for whoever it
 // stops; a wait and a refused name cost their tools and nothing more.
 describe("an MCP server's alarms", () => {
+  // THE ENGINE'S FIX DECIDES WHERE THE ROW OPENS: an alarm a sign-in clears
+  // opens the server's Sign in dialog, every other one the server's page.
+  // Mutation: open the sign-in for every alarm, or for none, and this is red.
+  test("an alarm a sign-in fixes opens the sign-in", () => {
+    const items = attentionQueue(
+      input({
+        mcpAlarms: [
+          mcpAlarm("mcp_oauth_needs_sign_in", "linear", {
+            fix: { kind: "sign_in", server: "linear", seat: "" },
+          }),
+          mcpAlarm("mcp_server_failing", "github"),
+        ],
+      }),
+    );
+    const byKey = new Map(conditionsToDecide(items).map((i) => [i.id, i]));
+    const signIn = byKey.get("mcp-mcp_oauth_needs_sign_in-linear");
+    expect(signIn?.path).toEqual(["settings", "mcp-tools", "servers", "linear"]);
+    expect(signIn?.query).toEqual({ flow: "signin" });
+    expect(byKey.get("mcp-mcp_server_failing-github")?.query).toBeUndefined();
+  });
+
   test("each server an alarm stands on is a row in Needs you", () => {
     const items = attentionQueue(
       input({

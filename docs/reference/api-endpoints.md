@@ -2039,8 +2039,8 @@ before and after (so handing it to another `lead:` is refused), a new `lead:`
 or `manages:` entry has to name something inside it, a seat or unit added
 under a name another object's `lead:` or `manages:` already states has to be
 named only from inside it. A project, space or channel, a seat's email or
-contact identity, a credential, a `${VAR}` in any field and a setting are
-never a lead's. The rule, change by change, is in [Identity and
+contact identity, a credential, a `${VAR}` in any field, a setting and lifting
+or loosening an MCP limit any agent seat is held to are never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
 A write any part of which is not the caller's is refused whole, by the rule
@@ -2083,8 +2083,8 @@ the route accepted never lapses half-way through the write. A
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` — its fields, or where it sits among its siblings, since order decides which of a seat's managers is its own |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
-| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a setting or an unchanged document |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), `widens` (an [MCP limit](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team) the write lifts or loosens for the seat, by editing a block or moving the seat out from under one, with the limit as the seat is held to it in `value`: `mcp_limits.<server>.enabled` or `mcp_limits.<server>.tools.<tool>`), or `unchanged` (the `document` itself) |
+| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a widened MCP limit, a setting or an unchanged document |
 | `grants` | The permissions any one of which would admit this part — `admin` for every part a lead is refused |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
@@ -2458,9 +2458,9 @@ and `400 summary_required`.
 
 #### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
 
-An MCP server is named by its name from two other places: each seat's and
-unit's `mcp_env` block keyed on it, and each seat's `sandbox.mcp.servers` entry
-listing it. Removing the entry alone leaves those naming nothing, which
+An MCP server is named by its name from three other places: each seat's and
+unit's `mcp_env` block keyed on it, each seat's and unit's `mcp_limits` block
+keyed on it, and each seat's `sandbox.mcp.servers` entry listing it. Removing the entry alone leaves those naming nothing, which
 validation refuses. This route takes the removal **and the clearing of every
 field that names the server** as one write, and can delete the stored values
 only that server read. `config.write` (admin, a recent proof), and
@@ -2479,8 +2479,8 @@ both are sent.
 ```
 
 - **`clear: true`** clears every field that names the server: each `mcp_env`
-  block keyed on it, a seat's or a unit's, and each `sandbox.mcp.servers`
-  entry listing it. A mapping left empty is dropped, and so is a seat's
+  and `mcp_limits` block keyed on it, a seat's or a unit's, and each
+  `sandbox.mcp.servers` entry listing it. A mapping left empty is dropped, and so is a seat's
   `sandbox` that held nothing else. An `mcp_env` block the engine reads by its
   own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`, `confluence`)
   is the integration's as well as the server's, so it stays.
@@ -2516,13 +2516,16 @@ write.
   "sandbox": [
     {"seat": "pm", "name": "PM", "segments": ["roles", 0, "sandbox", "mcp", "servers", 0]}
   ],
+  "mcp_limits": [
+    {"kind": "unit", "key": "eng", "name": "Eng", "segments": ["units", 0, "mcp_limits", "linear"]}
+  ],
   "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"],
   "oauth": true
 }
 ```
 
-`kind` is `seat` (its `key` the handle) or `unit` (its `key` the unit's key),
-and `name` is the display name. `secrets` lists the values the store holds
+In `mcp_env` and `mcp_limits`, `kind` is `seat` (its `key` the handle) or
+`unit` (its `key` the unit's key), and `name` is the display name. `secrets` lists the values the store holds
 that nothing reads once the server is gone, which is what `delete_secrets` may
 name: a variable a node takes from its environment is never listed, since the
 store holds nothing to delete. Every list is names, never a value. `oauth` is
@@ -2557,7 +2560,7 @@ and who removed it, as `DELETE /secrets/{name}` does.
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
 dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
 cleared, secrets, oauth}`, where `removed` is the server's name and `cleared` is
-`{mcp_env, sandbox}` as above. Refusals: `404 no_such_entity`,
+`{mcp_env, sandbox, mcp_limits}` as above. Refusals: `404 no_such_entity`,
 `409 revision_advanced`, `403 config_managed` (a managed document),
 `403 unauthorized` for a caller without `secrets.write` (the Dashboard
 Assistant never takes it, so it may remove a server and never its values),
@@ -9729,9 +9732,11 @@ configuration declares whose grant reaches the seat, on or off, in name order:
 `reason` is why, as the server's [`reaches`](#get-mcp-serversname) says it
 (`every_agent`, `unit`, `seat` or `integration`); `tools` is how many tools it
 offers the agent, every tool the live nodes' listings name at a level other
-than `blocked` (a tool refused its name is never listed), the whole listing
-for each agent a per-agent server reaches, and `0` for a server turned off,
-which is granted to nobody; and `state` is the server's own, its row's.
+than `blocked` (a tool refused its name is never listed) but a tool the
+agent's own [limits](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)
+block for it, the whole listing for each agent a per-agent server reaches, and
+`0` for a server turned off, which is granted to nobody, or one a limit turns
+off for the agent; and `state` is the server's own, its row's.
 `mcp_tools` counts each tool name once, so a name two of the agent's servers
 list counts once; `builtin_tools` is how many of the engine's own tools every
 agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
@@ -9741,7 +9746,11 @@ fleet's listings yet, a moment after it starts, which is not an agent holding
 no tools.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [Per-entity read and write](#per-entity-read-and-write).
+see [Per-entity read and write](#per-entity-read-and-write). A service identity
+(`oauth.grant: client_credentials`) written with no `oauth.client_secret` is
+written reading `${MCP_<SERVER>_OAUTH_CLIENT_SECRET}`, where
+[storing its secret](#put-mcp-serversnamevalueskey) puts it, on an add and on a
+replacement alike.
 
 ### `GET /mcp-catalogue`
 
@@ -9956,6 +9965,15 @@ it under, so a node that drained, died or restarted stops counting at once.
   server is on: a server turned off reaches these seats again once it is
   turned back on. Empty for a server the configuration does not declare
   ([Tools and MCP › Choosing which agents get a server](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
+  Each also carries `limited`, what the seat's own `mcp_limits` and every
+  enclosing unit's hold the server to for it, `null` where none does:
+  `{off, off_by, tools}`, `off` whether a limit turns the server off for the
+  seat (its grant stands) and `off_by` the key of the unit whose limit does
+  (`null` for the seat's own, or where none does), and `tools` every tool a
+  limit holds back, sorted, as `{tool, level, by}`: the server's own name,
+  `approve` or `blocked`, and the unit whose limit holds it (`null` for the
+  seat's own). The tool runs at the stricter of that level and its own
+  ([Tools and MCP › Narrowing a server for a team](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)).
   An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
@@ -10034,7 +10052,7 @@ server that lists nothing.
   "tool_count": 42,
   "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
   "instructions": "",
-  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []},
+  "dependants": {"mcp_env": [], "sandbox": [], "mcp_limits": [], "secrets": []},
   "instances": [
     {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
      "restarts": 1, "tools": 42, "failure": null, "wait": "",
@@ -10062,8 +10080,10 @@ server that lists nothing.
                        "turn_id": "6c1f0e2a-5b7d-4e8f-9a1b-2c3d4e5f6a7b", "tool": "get_issue",
                        "outcome": "answered", "refusal": "", "duration_ms": 412}],
             "coverage": {"nodes": [{"id": "node-a", "answered": true}], "complete": true}},
-  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github"},
-              {"seat": "pm", "reason": "integration", "via": "github"}]
+  "reaches": [{"seat": "backend-dev", "reason": "integration", "via": "github",
+               "limited": {"off": false, "off_by": null,
+                           "tools": [{"tool": "delete_issue", "level": "blocked", "by": "eng"}]}},
+              {"seat": "pm", "reason": "integration", "via": "github", "limited": null}]
 }
 ```
 
@@ -10411,7 +10431,10 @@ tested by signing in with it. A person's sign-in sends its client's secret only
 when the grant renews, which a test does not do, so `test=true` is refused
 `400 invalid_query` there: store it with `test=false`. A server whose sign-in
 has no secret (no `oauth` block, `client: cimd` or `dcr`) is refused `409
-conflict`, and so is a `seat`: a sign-in is the company's.
+conflict`, and so is a `seat`: a sign-in is the company's. A service
+identity added through `PUT /config/mcp-servers/{name}` with no `client_secret`
+is written reading the variable this route stores it under (refused, as here,
+where another field reads that variable), so storing it next points nothing.
 
 **Which variable.** The key's own variable where it already reads exactly one
 that nothing else in the document reads, so rotating it changes nobody else's

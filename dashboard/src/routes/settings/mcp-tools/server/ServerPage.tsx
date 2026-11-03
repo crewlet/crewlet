@@ -1,8 +1,9 @@
 /**
  * One MCP server: its condition and what to do about it, how it connects,
- * its tools, and how they were used. Four tabs (`?tab=`), each read from the
- * server's own answer (`GET /mcp-servers/{name}`), its head from the list's
- * row so the page draws at once.
+ * its tools and their levels, who gets it, and how it was used. Five tabs
+ * (`?tab=`), each read from the server's own answer (`GET /mcp-servers/{name}`),
+ * its head from the list's row so the page draws at once. Access is the
+ * administrator's: who a server reaches is on their reading alone.
  */
 
 import { Button, Skeleton, Tabs } from "@crewlethq/ui";
@@ -16,12 +17,13 @@ import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useServerDetail, type McpData } from "../data.ts";
 import { ServerMark, ServerMenu, StateLine, whereWords, type OnFlow } from "../parts.tsx";
+import { AccessTab } from "./AccessTab.tsx";
 import { ActivityTab } from "./ActivityTab.tsx";
 import { ConnectionTab } from "./ConnectionTab.tsx";
 import { OverviewTab } from "./OverviewTab.tsx";
 import { ToolsTab } from "./ToolsTab.tsx";
 
-const TABS = ["overview", "connection", "tools", "activity"] as const;
+const TABS = ["overview", "connection", "tools", "access", "activity"] as const;
 type Tab = (typeof TABS)[number];
 
 export function ServerPage({
@@ -34,8 +36,11 @@ export function ServerPage({
   onFlow: OnFlow;
 }) {
   const [raw, setTab] = useParam("tab", "", "section");
-  const tab: Tab = (TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
   const detail = useServerDetail(server.name);
+  const answer = detail.data;
+  // ACCESS IS THE ADMINISTRATOR'S: a member's reading carries no reach.
+  const tabs: readonly Tab[] = data.admin ? TABS : TABS.filter((t) => t !== "access");
+  const tab: Tab = (tabs as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
   const w = whereWords(server);
   const reach = data.reaches(server.name);
   const toolCount = detail.data?.tool_count ?? server.tools;
@@ -91,7 +96,12 @@ export function ServerPage({
       ? [{ label: "Reaches", value: reach.length > 0 ? plural(reach.length, "agent") : "No agent" }]
       : []),
   ];
-  const answer = detail.data;
+  const waiting =
+    data.answer?.reading === "admin"
+      ? data.answer.approvals.filter((a) => a.server === server.name && a.status === "waiting")
+          .length
+      : 0;
+  const reached = answer?.reading === "admin" ? answer.reaches.length : (reach?.length ?? 0);
   return (
     <div className="mcp-page">
       {gestures ? (
@@ -130,21 +140,35 @@ export function ServerPage({
           value={tab}
           onValueChange={(v) => setTab(v === "overview" ? "" : v)}
           items={[
-            { value: "overview", label: "Overview" },
+            {
+              value: "overview",
+              label: "Overview",
+              ...(waiting > 0
+                ? { marker: { tone: "warning" as const, label: `${waiting} waiting for approval` } }
+                : {}),
+            },
             { value: "connection", label: "Connection" },
             {
               value: "tools",
               label: "Tools",
               count: toolCount || null,
-              ...(server.refused_count > 0
+              ...(answer?.reading === "admin" && answer.changes.length > 0
                 ? {
                     marker: {
-                      tone: "warning" as const,
-                      label: `${server.refused_count} not offered`,
+                      tone: "changed" as const,
+                      label: `${answer.changes.length} changed`,
                     },
                   }
-                : {}),
+                : server.refused_count > 0
+                  ? {
+                      marker: {
+                        tone: "warning" as const,
+                        label: `${server.refused_count} not offered`,
+                      },
+                    }
+                  : {}),
             },
+            ...(data.admin ? [{ value: "access", label: "Access", count: reached || null }] : []),
             { value: "activity", label: "Activity" },
           ]}
         />
@@ -167,7 +191,25 @@ export function ServerPage({
             {tab === "connection" ? (
               <ConnectionTab server={server} detail={answer} data={data} onFlow={onFlow} />
             ) : null}
-            {tab === "tools" ? <ToolsTab server={server} detail={answer} /> : null}
+            {tab === "tools" ? (
+              <ToolsTab
+                server={server}
+                detail={answer}
+                onChanged={() => void detail.reload({ quiet: true })}
+                onFlow={onFlow}
+              />
+            ) : null}
+            {tab === "access" && answer.reading === "admin" ? (
+              <AccessTab
+                server={server}
+                detail={answer}
+                data={data}
+                onSaved={() => {
+                  void detail.reload({ quiet: true });
+                  data.reload();
+                }}
+              />
+            ) : null}
             {tab === "activity" ? <ActivityTab detail={answer} data={data} /> : null}
           </>
         )}

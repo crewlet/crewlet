@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // entityBody reads {kind, id, entity} out of a query-shaped answer.
@@ -709,5 +711,38 @@ func TestAnEntitysPreconditionIsTheEntityNotTheDocument(t *testing.T) {
 	}
 	if res := edit("claude-haiku-5", refusal.ETag); res.Code != http.StatusCreated {
 		t.Errorf("the same edit at the entity's tag now = %d %s", res.Code, res.Body)
+	}
+}
+
+// A SERVICE IDENTITY IS ADDED BEFORE ITS SECRET IS STORED: the write points
+// the secret it leaves out at the variable `PUT .../values/oauth.client_secret`
+// will store it under, so the entry is valid, a draft of it is held to what
+// the write keeps, and the store points nothing again. Mutation: leave the
+// secret out of the written entry, and the add is refused.
+func TestAServiceIdentityIsAddedReadingTheSecretItsStoreWillHold(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, entityDoc)
+	body := `{"name":"vendor","transport":"http","url":"https://mcp.vendor.example.com/mcp",` +
+		`"oauth":{"grant":"client_credentials","client_id":"crewlet-agents","scopes":["read"]}}`
+	create := map[string]string{"If-None-Match": "*", "X-Summary": "add the vendor's server"}
+	if res := s.do(t, http.MethodPut, "/config/mcp-servers/vendor?dry_run=true", body, create); res.Code != http.StatusOK {
+		t.Fatalf("the dry run = %d: %s", res.Code, res.Body.String())
+	}
+	if res := s.do(t, http.MethodPut, "/config/mcp-servers/vendor", body, create); res.Code != http.StatusCreated {
+		t.Fatalf("PUT /config/mcp-servers/vendor = %d: %s", res.Code, res.Body.String())
+	}
+	variable := config.MCPValueVariable("vendor", config.MCPValueClientSecret, "")
+	company, err := config.DecodeCompany([]byte(s.activeDocument(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(company.MCPServers, func(m config.MCPServer) bool { return m.Name == "vendor" })
+	if i < 0 || company.MCPServers[i].OAuth.ClientSecret != "${"+variable+"}" {
+		t.Fatalf("the written entry's secret reads %+v, want ${%s}", company.MCPServers, variable)
+	}
+	slot, err := company.MCPValueSlot("vendor", "", config.MCPValueClientSecret)
+	if err != nil || slot.Variable != variable || slot.Repoint {
+		t.Fatalf("the store's slot = %+v (%v), want %s with nothing to point", slot, err, variable)
 	}
 }

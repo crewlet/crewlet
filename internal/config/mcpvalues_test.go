@@ -175,3 +175,54 @@ func TestAServersValuesAreListedByName(t *testing.T) {
 		t.Error("an undeclared server has values")
 	}
 }
+
+// A SERVICE IDENTITY'S SECRET IS READ FROM THE VARIABLE ITS STORE CHOOSES: an
+// entry written with no secret is pointed where `PUT .../values/oauth.client_secret`
+// will store it, so storing it there points nothing again; a written secret
+// and a person's sign-in are left alone, and a variable another field reads
+// is refused as the store refuses it. Mutation: point a written secret, or
+// choose any other variable, and this is red.
+func TestAServiceIdentitysUnwrittenSecretReadsWhereItWillBeStored(t *testing.T) {
+	t.Parallel()
+	service := func(extra string) *Company {
+		t.Helper()
+		cfg := mustCompany(t, oauthDoc(extra+"    oauth:\n      grant: client_credentials\n      client_id: svc\n"+
+			"      client_secret: ${WRITTEN}\n"))
+		cfg.MCPServers[0].OAuth.ClientSecret = ""
+		return cfg
+	}
+
+	cfg := service("")
+	if err := cfg.PointUnwrittenClientSecret("linear"); err != nil {
+		t.Fatal(err)
+	}
+	want := MCPValueVariable("linear", MCPValueClientSecret, "")
+	if got := cfg.MCPServers[0].OAuth.ClientSecret; got != "${"+want+"}" {
+		t.Fatalf("the unwritten secret reads %q, want ${%s}", got, want)
+	}
+	slot, err := cfg.MCPValueSlot("linear", "", MCPValueClientSecret)
+	if err != nil || slot.Variable != want || slot.Repoint {
+		t.Fatalf("the store's slot is %+v (%v), want %s with nothing to point", slot, err, want)
+	}
+
+	// Written whole, so no rule of the store's would repoint it.
+	written := mustCompany(t, oauthDoc("    oauth:\n      grant: client_credentials\n      client_id: svc\n"+
+		"      client_secret: written-not-real\n"))
+	person := mustCompany(t, oauthDoc("    oauth:\n      client: dcr\n"))
+	for name, c := range map[string]*Company{"a written secret": written, "a person's sign-in": person} {
+		before := c.MCPServers[0].OAuth.ClientSecret
+		if err := c.PointUnwrittenClientSecret("linear"); err != nil || c.MCPServers[0].OAuth.ClientSecret != before {
+			t.Errorf("%s's secret became %q (%v), want %q left alone", name,
+				c.MCPServers[0].OAuth.ClientSecret, err, before)
+		}
+	}
+
+	shared := service("    headers:\n      X-Org: ${" + want + "}\n")
+	var sharedErr *MCPValueSharedError
+	if err := shared.PointUnwrittenClientSecret("linear"); !errors.As(err, &sharedErr) || sharedErr.Variable != want {
+		t.Fatalf("a variable another field reads: %v, want it refused", err)
+	}
+	if err := cfg.PointUnwrittenClientSecret("absent"); !errors.Is(err, ErrNoMCPServerEntry) {
+		t.Errorf("an undeclared server: %v", err)
+	}
+}

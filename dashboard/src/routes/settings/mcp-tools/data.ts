@@ -1,15 +1,15 @@
 /**
  * What Settings › MCP & tools reads, and the one view of it every part of the
- * page draws: each server's condition, the alarms standing on them and the
- * built-in tools (`mcp_servers_status`), which agents each server reaches (the
- * pushed org), and on a server's page that server whole
+ * page draws: each server's condition, the alarms standing on them, the calls
+ * held for approval, each agent's tools and the built-in tools
+ * (`mcp_servers_status`), and on a server's page that server whole
  * (`GET /mcp-servers/{name}`).
  *
  * NOTHING HERE DECIDES A STATE, A RISK OR A REACH. A server's state, its
- * alarms and their fixes, a tool's risk and a failure's class are the
- * engine's answer, and which agents a server reaches is the engine's grant
- * (`config.MCPServer.Grants`), pushed on each agent seat as its
- * `tool_sources`. The page names them.
+ * alarms and their fixes, a tool's risk and level and a failure's class are
+ * the engine's answer, and which agents a server reaches is the engine's
+ * grant, answered for an administrator as each agent's servers (`agents`,
+ * each with its reason). The page names them.
  *
  * TWO READINGS. Whoever the engine answers the administrator's reading
  * (`reading: "admin"`) is the page's admin: every gesture and every launch
@@ -37,11 +37,9 @@ import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { getEntity } from "~/protocol/configWrite.ts";
 import type { LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import { readServer, type ServerDetail } from "./api.ts";
-
-/** The registry's origin for a server's tools, which a seat's `tool_sources` lists. */
-const originOf = (server: string) => `mcp:${server}`;
 
 /** The page's whole reading of the servers. */
 export interface McpData {
@@ -61,13 +59,13 @@ export interface McpData {
   /** A seat's name by its handle; the handle where the chart holds no such seat. */
   seatName: (handle: string) => string;
   /**
-   * The agent seats the engine grants a server, from their `tool_sources`;
-   * null where the engine did not say. It pushes `tool_sources` to an
-   * administrator alone, since they are derived from each seat's credentials,
-   * so a member's org carries none, and an absent list is not "no agent".
+   * The agent seats a server's grant reaches, in the chart's order, read off
+   * the answer's `agents`; null where the engine did not say: a member's
+   * reading carries no reach, and an administrator's says it is still
+   * counting (`agents: null`), which is not "no agent".
    */
   reaches: (name: string) => readonly Seat[] | null;
-  /** Whether the engine pushed the agent seats' grants: an administrator's org carries them. */
+  /** Whether the answer says who each server reaches: an administrator's, once counted. */
   reachKnown: boolean;
   loading: boolean;
   /** Why the list was not answered, as `QueryState` draws it; null while it was. */
@@ -145,7 +143,16 @@ export function mcpViewOf(
   const servers: readonly McpMemberServerStatus[] = answer?.servers ?? [];
   const byName = new Map(servers.map((s) => [s.name, s]));
   const names = new Map(seats.map((s) => [s.handle, s.name]));
-  const reachKnown = seats.some((s) => s.raw.tool_sources !== undefined);
+  const agents = answer?.reading === "admin" ? answer.agents : null;
+  const reachKnown = agents !== null;
+  const reached = new Map<string, Set<string>>();
+  for (const a of agents ?? []) {
+    for (const s of a.servers) {
+      const set = reached.get(s.server) ?? new Set<string>();
+      set.add(a.seat);
+      reached.set(s.server, set);
+    }
+  }
   return {
     admin: answer?.reading === "admin",
     answer,
@@ -158,7 +165,7 @@ export function mcpViewOf(
     agents: seats,
     seatName: (handle) => names.get(handle) ?? handle,
     reaches: (name) =>
-      reachKnown ? seats.filter((s) => (s.raw.tool_sources ?? []).includes(originOf(name))) : null,
+      reachKnown ? seats.filter((s) => reached.get(name)?.has(s.handle) ?? false) : null,
     reachKnown,
   };
 }
@@ -177,4 +184,23 @@ export function useServerDetail(name: string): RestResult<ServerDetail> {
   const quiet = useCallback(() => void reload({ quiet: true }), [reload]);
   useReloadOnChange(quiet);
   return read;
+}
+
+/**
+ * A server's entry as the configuration writes it (`GET /config/mcp-servers/{name}`,
+ * values masked), for an administrator: the form fields no answer carries
+ * (its `access` as written, its `tool_prefix`). `enabled` false asks nothing.
+ */
+export function useServerEntry(
+  name: string,
+  enabled: boolean,
+): RestResult<Record<string, unknown> | null> {
+  return useRest(
+    enabled ? `mcp-entity:${name}` : null,
+    async (signal) => {
+      const read = await getEntity("mcp-servers", name, signal);
+      return read.kind === "entity" ? read.entity : null;
+    },
+    { refetchOnFocus: true },
+  );
 }
