@@ -1696,7 +1696,7 @@ capture a relaunch continues as one the log no longer names: a read at that
 level costs a barrier on the executor log, and a row naming the kept capture
 decides as one read there would. An ended row is decided on its page's own
 snapshot, its conversation's head read in the same transaction as the rows: one
-seek of the conversation's index for each conversation the page names. A
+seek of the conversation's line index for each conversation the page names. A
 transcript's later pages (read with a `cursor`) leave `continuable` null: its
 first page says it.
 
