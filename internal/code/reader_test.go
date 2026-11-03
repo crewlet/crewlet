@@ -1532,6 +1532,102 @@ func TestTheProtectedListingHoldsExactlyTheRepositoriesARuleProtects(t *testing.
 	}
 }
 
+// A LISTING BY PREFIX REACHES THE NAMES IT BEGINS, WHEREVER THEY SORT: a
+// prefix answers exactly the repositories whose names begin with it — the one
+// named by the prefix whole among them, and neither the shorter name before it
+// nor the next name past its end — in name order, paged by name, its first
+// page already past every name before it, where the bare listing's first page
+// stops short of it; with the protected filter beside it, the protected ones
+// among them. A prefix no name could begin is refused, naming it, as is one on
+// a read of one repository, and a cursor that is no name the prefix begins.
+//
+// Mutations: read the first page PAST the prefix (`r.name > ?`) — api, named
+// by the prefix whole, is left out, red; drop the upper bound — apx is listed
+// under api, red; hold a prefix to ValidName alone — api- and a. are refused,
+// red; skip the cursor's check — a cursor outside the prefix answers a page,
+// red; let a second page start from the prefix — api repeats, red; read a
+// protected listing's first page or a later one by the plain index — api-gw,
+// unprotected, is listed among the protected, red.
+func TestAListingByPrefixReachesTheNamesItBegins(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	bare := suiteSettings()
+	bare.Protections = nil
+	for _, name := range []string{"ap", "api-gw", "apiary"} {
+		n.ensure(name, bare, t1)
+	}
+	for _, name := range []string{"api", "api-gw2", "apx", "web"} {
+		n.ensure(name, suiteSettings(), t1)
+	}
+	listed := func(prefix string, protected bool) string {
+		t.Helper()
+		var got []string
+		q := code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Prefix: prefix, Protected: protected, Limit: 1}
+		for range 16 {
+			answer, err := n.reader.Read(t.Context(), q)
+			if err != nil {
+				t.Fatalf("Read(repos, prefix %q, protected %t): %v", prefix, protected, err)
+			}
+			for _, r := range answer.Repos {
+				got = append(got, r.Name)
+			}
+			if answer.Next == "" {
+				return fmt.Sprint(got)
+			}
+			q.Cursor = answer.Next
+		}
+		t.Fatalf("the listing under %q (protected %t) was still paging after 16 pages: %v", prefix, protected,
+			got)
+		return ""
+	}
+	for _, tc := range []struct {
+		prefix    string
+		protected bool
+		want      string
+	}{
+		{"api", false, "[api api-gw api-gw2 apiary]"},
+		{"api-", false, "[api-gw api-gw2]"},
+		{"a", false, "[ap api api-gw api-gw2 apiary apx]"},
+		{"apx", false, "[apx]"},
+		{"zz", false, "[]"},
+		{"a.", false, "[]"},
+		{"api", true, "[api api-gw2]"},
+		{"api-", true, "[api-gw2]"},
+	} {
+		if got := listed(tc.prefix, tc.protected); got != tc.want {
+			t.Errorf("the listing under %q (protected %t) is %s, want %s", tc.prefix, tc.protected, got, tc.want)
+		}
+	}
+
+	// PAST THE FIRST PAGE: a page of two by name stops at api, and the
+	// listing under apiary answers it on its own first page.
+	first, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Limit: 2})
+	if err != nil || len(first.Repos) != 2 || first.Repos[1].Name != "api" {
+		t.Fatalf("the bare listing's first page of two = %+v, %v, want ap and api", first.Repos, err)
+	}
+	under, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Prefix: "apiary",
+		Limit: 2})
+	if err != nil || len(under.Repos) != 1 || under.Repos[0].Name != "apiary" || under.Next != "" {
+		t.Errorf("the listing under apiary = %+v next %q, %v, want apiary alone on its first page", under.Repos,
+			under.Next, err)
+	}
+
+	for _, bad := range []string{"API", "-a", "a.b.", ".a", "a b", "web.git."} {
+		if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
+			Prefix: bad}); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "prefix") {
+			t.Errorf("a listing under %q = %v, want ErrInvalid naming prefix", bad, err)
+		}
+	}
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "web",
+		Prefix: "w"}); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "prefix") {
+		t.Errorf("a read of one repository under a prefix = %v, want ErrInvalid naming prefix", err)
+	}
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Prefix: "api",
+		Cursor: "web"}); !errors.Is(err, code.ErrBadCursor) {
+		t.Errorf("a listing under api past web = %v, want ErrBadCursor", err)
+	}
+}
+
 // THE LISTING FOLLOWS THE NAME: repositories in name order, paged by name,
 // each with its default branch's head — empty for an empty repository — and
 // filtered by status; a limit past a page is refused, never clamped.

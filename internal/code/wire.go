@@ -1262,7 +1262,11 @@ type ReadQuery struct {
 	Protected bool `json:"protected,omitempty"`
 	// Prefix narrows a refs listing to the refs under it: "refs/heads/"
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
-	// seat's own namespace.
+	// seat's own namespace. It narrows a repositories listing to the names
+	// it begins — a name whole, or the opening of one — read as one range
+	// of the index by name, so a page of them costs what they cost however
+	// many repositories sort before them: what a picker asks with what was
+	// typed into it, since a company's repositories outnumber one page.
 	Prefix string `json:"prefix,omitempty"`
 	// Brief asks a push history for its rows IN BRIEF: the commits each push
 	// introduced counted and not listed, and the commands of a push of more

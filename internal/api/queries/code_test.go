@@ -449,6 +449,35 @@ func TestAListingAsksForTheProtectedRepositoriesOnlyWhereItsCallerNamesThem(t *t
 	}
 }
 
+// A REPOSITORIES LISTING ASKS UNDER THE PREFIX ITS CALLER TYPED — a picker's
+// text, trimmed as a refs listing's is — and under none where it names none,
+// so the reader seeks the names the prefix begins (code.ReadQuery.Prefix) and
+// a picker finds a repository however many sort before it.
+//
+// Mutation: read `prefix` for a refs listing alone — the listing naming one
+// asks for every repository, red; leave it untrimmed — " api- " reaches the
+// reader, red.
+func TestARepositoriesListingAsksUnderThePrefixItsCallerTyped(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"nothing", nil, ""},
+		{"a prefix", map[string]any{"prefix": "api"}, "api"},
+		{"a prefix typed with spaces", map[string]any{"prefix": " api- "}, "api-"},
+	} {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_repos", tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := stub.last(); got.Prefix != tc.want {
+			t.Errorf("code_repos naming %s asked under %q, want %q", tc.name, got.Prefix, tc.want)
+		}
+	}
+}
+
 // A CODE QUESTION REFUSES IN THIS SURFACE'S VOCABULARY, which every transport
 // renders: a repository nobody declared is an absence that says which
 // (`not_declared`, the sentence naming the setting that declares one); one the
