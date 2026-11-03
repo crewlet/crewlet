@@ -9,7 +9,7 @@
 
 ## The decision
 
-A repository is ROWS in `code`, the eighth state-log domain and the sixth strict, identity-claiming one (`CREWLET_CODE_LOG`).
+A repository is ROWS in `code`, the eleventh state-log domain and the ninth strict, identity-claiming one (`CREWLET_CODE_LOG`).
 Its refs, its live pack set and its protection rules change ONLY by records on its own subject
 (`repo.<id>`), decided from one snapshot and arbitrated by the broker's per-subject compare-and-set. A
 push's bytes are uploaded first, as one object per push named by a `Required` row (ADR-0026, ADR-0081), so a
