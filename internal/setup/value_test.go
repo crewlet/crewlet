@@ -22,7 +22,7 @@ var provisioner = setup.Requirement{
 func TestASecretWithAStrayCharacterIsRefusedAtItsField(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
-	pasted := "cfat_abcdef ghijkl​mnop"
+	pasted := "cfat_abcdef ghijkl\u200bmnop"
 	_, err := writer(rec).Write(t.Context(), []setup.Requirement{provisioner}, setup.Submission{
 		Kind: integration.KindCloudflare, Values: map[string]string{"api_token": "  " + pasted + "\n"},
 		Summary: "connect cloudflare", By: founder,

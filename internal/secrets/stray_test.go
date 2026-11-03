@@ -17,8 +17,8 @@ func TestStrayProblemNamesWhatAndWhere(t *testing.T) {
 		{"a clean token", "cfat_AbC-123", ""},
 		{"a wrapped paste", "sk-ant-oat01-abc\n  def", "1 line break and 2 spaces (characters 17, 18 and 19)"},
 		{"a tab", "abc\tdef", "1 tab (character 4)"},
-		{"a zero-width space", "abc​def", "1 invisible character (character 4)"},
-		{"a line separator", "abc def", "1 line break"},
+		{"a zero-width space", "abc\u200bdef", "1 invisible character (character 4)"},
+		{"a line separator", "abc\u2028def", "1 line break"},
 		{"many spaces", "a b c d e", "4 spaces (characters 2, 4, 6 and 1 more)"},
 	} {
 		got := secrets.StrayProblem("API key", tc.value)

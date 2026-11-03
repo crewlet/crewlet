@@ -72,7 +72,7 @@ func StrayProblem(noun, value string) string {
 // strayKind names a stray character as a person sees it, or does not.
 func strayKind(r rune) string {
 	switch {
-	case r == '\n' || r == '\r' || r == ' ' || r == ' ':
+	case r == '\n' || r == '\r' || r == '\u2028' || r == '\u2029':
 		return "line break"
 	case r == '\t':
 		return "tab"
