@@ -228,25 +228,28 @@ func (e *Engine) mintedFor(c *Company, handle string) map[string]integration.Kin
 			}
 		}
 	}
-	// AND THE TOKEN THE ENGINE ISSUES THE SEAT AT USE, which no pass seals
-	// and which waits on the same thing a seal does: an integration's step,
-	// here a person creating and installing the agent's app. Declared beside
-	// the plans so a value naming it is held back and told as waiting on
-	// that integration, never reported as a secret the operator forgot.
-	// See githubtoken.go.
-	if name := githubIssued(c, handle); name != "" {
-		if out == nil {
-			out = map[string]integration.Kind{}
+	// AND THE CREDENTIALS THE ENGINE ISSUES THE SEAT AT USE, which no pass
+	// seals and which wait on the same thing a seal does: an integration's
+	// step, such as a person installing the agent's GitHub App. Declared
+	// beside the plans so a value naming one is held back and told as
+	// waiting on that integration, never reported as a secret the operator
+	// forgot. See issued.go.
+	for _, issuer := range e.seatIssuers() {
+		if name := issuer.variable(c, handle); name != "" {
+			if out == nil {
+				out = map[string]integration.Kind{}
+			}
+			out[name] = issuer.kind()
 		}
-		out[name] = integration.KindGitHub
 	}
 	return out
 }
 
 // seatMint is what one seat's values may be waiting for: the variables an
 // integration mints or issues for the seat, by integration
-// ([Engine.mintedFor]), and the seat's own issued token as this read asked
-// for it ([seatToken]), which says why one it could not issue went without.
+// ([Engine.mintedFor]), and the first of the seat's issued tokens as this
+// read asked for them ([seatToken]), which say why one that could not be
+// issued went without.
 //
 // NIL IS A VALUE NOTHING MINTS, which is a shared server's: it acts as no
 // seat, so nothing is minted or issued for it.
@@ -270,20 +273,30 @@ func (m *seatMint) unissued(name string) issueFailure {
 	if m == nil {
 		return issueFailure{}
 	}
-	said := m.token.unissued(name)
-	if said == "" {
-		return issueFailure{}
+	return m.token.failure(name)
+}
+
+// atUse is the words of the integration that issues name at use, and false
+// for a variable a pass seals, whose value arrives with the seal.
+func (m *seatMint) atUse(name string) (issuedWords, bool) {
+	if m == nil {
+		return issuedWords{}, false
 	}
-	return issueFailure{said: said, passes: m.token.passes()}
+	t := m.token.link(name)
+	if t == nil {
+		return issuedWords{}, false
+	}
+	return t.issuer.words(), true
 }
 
 // issueFailure is a credential the engine went to issue a seat at use and
 // could not: the issuer's reason, as the log and a tool server's sentence
-// carry it, and whether a wait clears it ([mintPasses]) or a person's step on
-// the agent's app does.
+// carry it, whether a wait clears it ([seatIssuer.refusal]) or a person's
+// step does, and the issuer's words for each.
 type issueFailure struct {
 	said   string
 	passes bool
+	words  issuedWords
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
@@ -325,11 +338,15 @@ type credentialMissing struct {
 	// and by the integration that mints each.
 	minting map[string]integration.Kind
 
+	// atUse are the integrations among minting's that issue their variable
+	// at use rather than seal it ([seatIssuer]), with their words.
+	atUse map[integration.Kind]issuedWords
+
 	// unissued are the variables the engine went to issue this seat at use
 	// and could not, each with why ([seatToken.unissued]) and whether a wait
 	// clears it: a failure, retried on the restart schedule, which passes
-	// where GitHub did not answer and is a person's step where it refused.
-	// Never a token.
+	// where the vendor did not answer and is a person's step where it
+	// refused. Never a token.
 	unissued map[string]issueFailure
 
 	// stopped is, for each integration that mints one of those and cannot
@@ -545,9 +562,9 @@ func credentialGap(
 			m = &credentialMissing{seat: seat}
 		}
 		// TRIED AND REFUSED IS NOT WAITING. A token the engine went to
-		// issue and GitHub would not give is a failure with GitHub's
-		// reason, retried, never "waiting for the integration", which
-		// would read as a step somebody has yet to take.
+		// issue and its vendor would not give is a failure with the
+		// vendor's reason, retried, never "waiting for the integration",
+		// which would read as a step somebody has yet to take.
 		if failure := mint.unissued(name); failure.said != "" {
 			if m.unissued == nil {
 				m.unissued = map[string]issueFailure{}
@@ -560,6 +577,12 @@ func credentialGap(
 				m.minting = map[string]integration.Kind{}
 			}
 			m.minting[name] = kind
+			if said, atUse := mint.atUse(name); atUse {
+				if m.atUse == nil {
+					m.atUse = map[integration.Kind]issuedWords{}
+				}
+				m.atUse[kind] = said
+			}
 			continue
 		}
 		// SET TO NOTHING IS NOT UNSET, and the two are told apart because
@@ -582,15 +605,22 @@ func (m *credentialMissing) waiting() bool {
 }
 
 // arrival is what a value that is only waiting arrives with: the seal, for
-// a credential a pass seals into the store, or the agent's app being
-// installed, for one the engine issues at use ([issuedAtUse]).
+// a credential a pass seals into the store, or each issuer's own step, for
+// one the engine issues at use ([issuedWords.arrival]).
 func (m *credentialMissing) arrival() string {
+	const sealed = "the seal reaches this node"
+	var steps []words.Said
 	for _, kind := range m.mintingKinds() {
-		if !issuedAtUse(kind) {
-			return "the seal reaches this node"
+		said, atUse := m.atUse[kind]
+		if !atUse {
+			return sealed
 		}
+		steps = append(steps, words.Said(said.arrival))
 	}
-	return "the agent's GitHub App is installed"
+	if len(steps) == 0 {
+		return sealed
+	}
+	return words.And(steps)
 }
 
 // mintingKinds are the integrations that mint what m waits for, in name order.
@@ -734,19 +764,13 @@ func (m *credentialMissing) reason() string {
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
 		failure := m.unissued[name]
+		// REFUSED, which asking again on the restart schedule does not
+		// change, is a person's to fix first; the rest is asked again.
+		then := failure.words.retried
 		if !failure.passes {
-			// REFUSED, which asking again on the restart schedule does not
-			// change: the agent's app is a person's to fix first.
-			parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is "+
-				"not issued until somebody fixes the agent's GitHub App (its key, its "+
-				"installation or the permissions it asks for)", name, failure.said))
-			continue
+			then = failure.words.refused
 		}
-		// NOT "at the next attempt": the issuer holds a failed mint for the
-		// restart schedule's wait, and an attempt inside it is handed the
-		// same answer without a request ([github.Issuer.RetryWait]).
-		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; GitHub is asked "+
-			"for it again on the restart schedule", name, failure.said))
+		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; %s", name, failure.said, then))
 	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
@@ -761,8 +785,8 @@ func (m *credentialMissing) reason() string {
 		}
 		slices.Sort(names)
 		verb := "mint"
-		if issuedAtUse(kind) {
-			verb = "issue"
+		if said, atUse := m.atUse[kind]; atUse {
+			verb = said.verb
 		}
 		if why, stopped := m.stopped[kind]; stopped {
 			parts = append(parts, fmt.Sprintf("the %s integration will not %s %s %s",

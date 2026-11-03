@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -359,6 +360,13 @@ type LaunchRequest struct {
 	// environment for the names they set, and an error abandons the launch
 	// like every failure past the row. Nil adds nothing.
 	RunEnv func(launchID string) (map[string]string, error)
+
+	// HomePaths is each variable the job is handed a path in its box under,
+	// to that path relative to the box's home: a file a CLI is pointed at by
+	// its absolute path, which differs by backend and so is joined only once
+	// the box is known ([jobEnvFor]). Beneath every other source of the job's
+	// environment for the names it shares. Nil sets none.
+	HomePaths map[string]string
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
@@ -727,14 +735,15 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Decided(continued.decision())
 	}
 	// THE ENVIRONMENT THE JOB IS STARTED WITH, the launch's own with the
-	// run's telemetry, read once: it is what the job is handed, and what
-	// its session's capture scrubs out ([HandedSecrets]).
+	// run's telemetry and the paths it is handed in this box, read once: it
+	// is what the job is handed, and what its session's capture scrubs out
+	// ([HandedSecrets]). One construction, a kept box's job's included.
 	//
 	// Its TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, rather than
 	// with the launch's environment above: its token lives a fixed span from
 	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
 	// would come off the job's own.
-	jobEnv := withTelemetry(m, req, box)
+	jobEnv := jobEnvFor(m, req, box)
 	// AND, FOR A RUN THAT CONTINUES A SESSION, HOW ITS BOX IS WIRED WHERE ITS
 	// SCRIPT STARTS ONE OF ITS OWN INSTEAD: the job's other bridge token, so
 	// the token its harness dials is the box's word on which session it
@@ -1254,6 +1263,23 @@ func otelTokenTTL(spec Spec) time.Duration {
 		ttl += pause
 	}
 	return ttl
+}
+
+// jobEnvFor is the environment a job is started with in box: the launch's own
+// with the run's telemetry ([withTelemetry]), and beneath both each of
+// [LaunchRequest.HomePaths] joined onto box's own home, so the path is right
+// in every backend's box. A copy where it adds a path, never the launch's map.
+func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
+	env := withTelemetry(m, req, box)
+	if len(req.HomePaths) == 0 {
+		return env
+	}
+	out := make(map[string]string, len(env)+len(req.HomePaths))
+	for name, rel := range req.HomePaths {
+		out[name] = path.Join(box.Home(), rel)
+	}
+	maps.Copy(out, env)
+	return out
 }
 
 // RunEnvFor is [withTelemetry] under a name a test can reach.

@@ -1795,22 +1795,33 @@ const (
 	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
 	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
 	// the measured size's next KiB: 5487 KiB.
+	// The Agents tab reading an issued credential, a tool's reason and the
+	// box's files, the connect form's public view of a minted value, and a
+	// lane naming its issued token's period took the merged tree from 5486.1
+	// KiB (5,617,793 bytes) to 5486.9 KiB (5,618,603 bytes, +810 bytes), all
+	// of it the integrations model chunk. It stays at 5487 KiB.
+	// Reading a box file's type where the details list it, and the public
+	// view taking the shell's ceiling, took it to 5,618,606 bytes (+3). It
+	// stays at 5487 KiB.
 	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
 	// that is the agent's whole identity: the team to switch to, the name to
 	// type, and a numbered guide to the scope picker derived from the levels'
 	// grants and the lane's refused and unneeded scopes, with Regenerate Token
 	// on a rotate), with Expo's story and builder facts aligned with its
-	// hand-off, took it from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
+	// hand-off, took main's from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
 	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
 	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
 	// initial load unchanged. The measured size's next KiB: 5493 KiB.
+	// Merged again with it, main's +6,031 bytes came to 6,032 bytes on the
+	// merged tree, taking it from 5486.9 KiB (5,618,606 bytes) to 5492.8 KiB
+	// (5,624,638 bytes). It moved by main's own 6 KiB, from 5487 KiB: 5493 KiB.
 	// The Scaleway integration (its catalogue entry, story and Agents tab
-	// words, a two-route lane's live tool line, and the org builder's Scaleway
-	// facts), merged onto that tree with its tool named server first as
-	// DigitalOcean's is, took it from 5492.0 KiB (5,623,824 bytes) to 5493.8
-	// KiB (5,625,610 bytes, +1,786 bytes). The initial load did not grow. It
-	// moved up to the measured size's next KiB: 5494 KiB, 246 bytes clear.
-	treeBudget = 5<<20 + 374<<10
+	// words, its tool named server first as DigitalOcean's is, and the org
+	// builder's Scaleway facts), merged onto that tree, took it from 5492.8 KiB
+	// (5,624,638 bytes) to 5494.6 KiB (5,626,424 bytes, +1,786 bytes). The
+	// initial load did not grow. It moved up to the measured size's next KiB:
+	// 5495 KiB, 456 bytes clear.
+	treeBudget = 5<<20 + 375<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

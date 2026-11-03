@@ -33,6 +33,11 @@ const (
 	// holding any other character is not one the vendor issued.
 	ShapeOpaqueToken Shape = "opaque_token"
 
+	// ShapeES256Key is an ECDSA P-256 private key the engine signs ES256
+	// tokens with, PKCS#8 in PEM, which spans several lines. A vendor is
+	// shown only its public half ([ES256JWKS]). See es256.go.
+	ShapeES256Key Shape = "es256_key"
+
 	// ShapeUUID is a vendor identifier or secret written as a UUID, such as
 	// a Scaleway Organization ID or secret key: 32 hexadecimal digits in
 	// groups of 8, 4, 4, 4 and 12, joined by hyphens.
@@ -49,11 +54,22 @@ var (
 	scalewayAccessKeyShape = regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 )
 
+// Multiline reports a shape whose values span lines, which its own rule
+// judges whole ([Shape.Problem]) in place of a credential's one-line rule.
+func (s Shape) Multiline() bool { return s == ShapeES256Key }
+
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
 // takes. noun names the field's value ("provisioner token"). It never quotes
 // the value, only where the characters it refuses are.
 func (s Shape) Problem(noun, value string) string {
 	switch s {
+	case ShapeES256Key:
+		if _, err := parseES256(value); err != nil {
+			return fmt.Sprintf("This %s is not a key the engine minted: it is one PKCS#8 PEM "+
+				"block holding a P-256 private key. Leave the field to the engine, which mints one "+
+				"on Save.", noun)
+		}
+		return ""
 	case ShapeUUID:
 		if uuidShape.MatchString(value) {
 			return ""
@@ -106,6 +122,8 @@ func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
 		return whsec.Mint()
+	case ShapeES256Key:
+		return mintES256()
 	case ShapeUUID, ShapeScalewayAccessKey:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:

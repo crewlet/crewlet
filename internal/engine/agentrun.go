@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -328,7 +327,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// tool server held back for its credential (toolcredentials.go). The
 	// run starts without what is missing, and the line says why it is.
 	runEnv := e.runEnvironment(ctx, company, l.seat, settings, manager.DefaultSetup(),
-		seataccess.BoxDefaults(company.Config, handle))
+		e.boxDefaults(company.Config, handle))
 	runEnv.logGap(ctx, handle, "the run starts without them")
 	runEnv.logFacts(ctx, handle)
 	// THE SEAT'S OWN SERVERS, and the bridge beside them once the job has a
@@ -431,7 +430,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		MCPServers: servers,
 		// WHAT OF ITS ENVIRONMENT IS A CREDENTIAL, which only this side can
 		// tell, for its session's scrub.
-		Secrets:     launchSecrets(agent, runEnv, run.env),
+		Secrets: launchSecrets(agent, runEnv, run.env),
+		// AND THE PATHS ITS BOX FILES ARE NAMED BY, under the box's home,
+		// joined onto the box's own once the launch has one.
+		HomePaths:   run.homePaths,
 		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,

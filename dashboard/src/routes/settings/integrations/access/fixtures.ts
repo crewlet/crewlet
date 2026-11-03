@@ -15,6 +15,7 @@
 import type {
   AccessAnswer,
   AccessBox,
+  AccessLaneKey,
   AccessOptions,
   AccessSeat,
   AccessSeatLane,
@@ -602,6 +603,66 @@ export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswe
     },
   };
   return answer;
+}
+
+/**
+ * A LANE NO VENDOR IS, for the shared mechanics no vendor sends yet (a
+ * credential issued at use, a tool's reason, the box's files). Its key is one
+ * this build has no words for, so it reads in the generic words, and no case
+ * asserts a shape some vendor's engine does not send.
+ */
+const NEUTRAL_OPTIONS: AccessOptions = {
+  lane: "neutral" as AccessLaneKey,
+  live: false,
+  levels: [{ id: "use", name: "Use" }],
+};
+
+export const NEUTRAL_LANE = laneOf(NEUTRAL_OPTIONS);
+
+/** The lines Crewlet puts in a neutral seat's box: a variable naming a token file, and the file. */
+export const neutralBox = (handle: string): AccessBox => ({
+  env: [{ name: "VENDOR_TOKEN_FILE", value: "/home/crewlet/.config/crewlet/token", by: "crewlet" }],
+  files: [
+    {
+      path: ".config/crewlet/token",
+      value: `\${VENDOR_TOKEN_${handle}}`,
+      rewritten: true,
+      by: "crewlet",
+    },
+  ],
+});
+
+/**
+ * The neutral lane with SRE on, its token issued at use rather than sealed and
+ * a token file in its box, and PM off. `sre` replaces what a case is about.
+ */
+export function neutralAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "neutral",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [NEUTRAL_OPTIONS],
+    seats: [
+      seat("pm", "PM", { [NEUTRAL_OPTIONS.lane]: offLane("use") }),
+      seat("sre", "SRE", {
+        [NEUTRAL_OPTIONS.lane]: onLane({
+          variable: "VENDOR_TOKEN_SRE",
+          desired: { enabled: true, level: "use" },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-sre",
+            level: "use",
+            credential: { variable: "VENDOR_TOKEN_SRE", source: "issued" },
+            created_at: ago(DAY),
+          },
+          box: neutralBox("SRE"),
+          ...sre,
+        }),
+      }),
+    ],
+  };
 }
 
 /** The line doctl needs in a seat's box, as the engine sends it. */

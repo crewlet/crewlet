@@ -89,3 +89,42 @@ func TestTheAuditSummaryCarriesTheCallersWordsWhole(t *testing.T) {
 		t.Errorf("an empty note = %q, want the generated sentence alone", got)
 	}
 }
+
+// A FORM SAVES BEFORE A FIELD THAT WAITS ON ITS MINTED VALUE IS FILLED. A
+// vendor computes such a field's Required from whether the minted value is
+// held (the vendor's setup needs the key's public half before it can name
+// what the field asks for), so the submission that mints it names the other
+// fields alone: the mint is an ES256 key, the dependent field stays absent,
+// and every guard the save path runs before the write takes the submission.
+func TestASaveMintsAKeyBeforeAFieldThatWaitsOnIt(t *testing.T) {
+	t.Parallel()
+	reqs := []setup.Requirement{
+		{Field: "account", Kind: setup.KindID, Required: true, ConfigPath: "integrations.x.account"},
+		{Field: "signing_key", Kind: setup.KindSecret, Mintable: true, Shape: setup.ShapeES256Key,
+			ConfigPath: "integrations.x.signing_key"},
+		{Field: "trust_link", Kind: setup.KindID, ConfigPath: "integrations.x.trust_link"},
+	}
+	values := map[string]string{"account": "acct-1"}
+	if err := mintInto(values, reqs, []string{"signing_key"}); err != nil {
+		t.Fatalf("mintInto: %v", err)
+	}
+	if _, err := setup.ES256KeyID(values["signing_key"]); err != nil {
+		t.Fatalf("the minted value is not an ES256 key: %v", err)
+	}
+	if _, sent := values["trust_link"]; sent {
+		t.Fatal("the mint filled the field that waits on it")
+	}
+	if err := refuseUngated(values, reqs); err != nil {
+		t.Errorf("refuseUngated: %v", err)
+	}
+	if err := refuseEmpty(values, reqs); err != nil {
+		t.Errorf("refuseEmpty: %v", err)
+	}
+	for _, r := range reqs {
+		if value, sent := values[r.Field]; sent {
+			if refused := r.Refusal(strings.TrimSpace(value)); refused != nil {
+				t.Errorf("%s refuses the submission: %s", r.Field, refused.Problem)
+			}
+		}
+	}
+}

@@ -722,3 +722,55 @@ func TestSyncNamesTheLaneOnlyWhereTheKindHasSeveral(t *testing.T) {
 		t.Fatalf("findings = %+v, want the sentence led by its lane", report.Findings)
 	}
 }
+
+// A GRANT ITS VENDOR IS STILL APPLYING HOLDS THE TOOL, NEVER THE SYNC. The sync
+// ends OK with no finding, since a waiting sync means a person's step; the
+// lane's record keeps the settling, fleet-wide; the tool reads waiting with
+// its reason until the settling ends and live after; and the first sync past
+// its end clears it from the record.
+//
+// Mutation: record the settling as a Waiting, and the sync raises the approval
+// finding; drop it from the record, or ToolOf's check, and the tool reads live.
+func TestASettlingGrantHoldsTheToolNotTheSync(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	const why = "the vendor is still applying the grant"
+	until := at.Add(10 * time.Minute)
+	h.v.Settle = map[seataccess.Op]*seataccess.Settling{seataccess.OpCreate: {Reason: why, Until: until}}
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	c.MCPServers = []config.MCPServer{{Name: "datadog", Transport: config.TransportHTTP,
+		URL: "https://mcp.datadoghq.com/v1/mcp", Shared: org.Off()}}
+	if report := h.sync(t, c, nil); len(report.Findings) != 0 {
+		t.Fatalf("findings = %+v, want none: nobody owes a step", report.Findings)
+	}
+	lane := h.record(t).Lanes[dd]
+	if lane.Sync == nil || lane.Sync.Outcome != seataccess.OutcomeOK || lane.Settling == nil ||
+		lane.Settling.Reason != why || !lane.Settling.Until.Equal(until) {
+		t.Fatalf("lane = %+v, want an OK sync whose grant is settling", lane)
+	}
+	want, _ := seataccess.DesiredOf(&c.Roles[0], dd)
+	for name, tc := range map[string]struct {
+		now    time.Time
+		tool   seataccess.ToolState
+		reason string
+	}{
+		"while it settles":    {at, seataccess.ToolWaiting, why},
+		"once it has settled": {until, seataccess.ToolLive, ""},
+	} {
+		tool, reason := seataccess.ToolOf(c, "sre", dd, want, lane.Observed, lane.Settling, tc.now)
+		if tool != tc.tool || reason != tc.reason {
+			t.Errorf("%s: tool %q (%q), want %q (%q)", name, tool, reason, tc.tool, tc.reason)
+		}
+	}
+
+	h.v.Settle = nil
+	if _, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger, Sink: h.sink,
+		Pass: "pass-2", By: "reconcile loop", Now: func() time.Time { return until },
+	}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := h.record(t).Lanes[dd].Settling; got != nil {
+		t.Errorf("a settling past its end is still recorded: %+v", got)
+	}
+}

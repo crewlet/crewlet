@@ -193,6 +193,10 @@ type Vendor struct {
 	// Wait makes Apply answer Waiting for every step of an op.
 	Wait map[seataccess.Op]*seataccess.Waiting
 
+	// Settle makes Apply report every step of an op done with its grant
+	// still settling at the vendor ([seataccess.StepResult.Settling]).
+	Settle map[seataccess.Op]*seataccess.Settling
+
 	// Applied is every step taken, as "handle/lane/op/verb".
 	Applied []string
 
@@ -351,7 +355,7 @@ func (v *Vendor) Apply(_ context.Context, in seataccess.ApplyInput) (seataccess.
 		return seataccess.StepResult{Waiting: w}, nil
 	}
 	acct := v.accounts[in.Seat.Handle]
-	res := seataccess.StepResult{Did: v.Did[in.Step.Op]}
+	res := seataccess.StepResult{Did: v.Did[in.Step.Op], Settling: v.Settle[in.Step.Op]}
 	if in.Step.Index > 0 {
 		// AN OP'S LATER STEPS have done their part in its first.
 		return res, nil

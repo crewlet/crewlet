@@ -14,13 +14,15 @@ import (
 
 // startTrapper starts a shell in process group pgid — a group of its own where
 // pgid is zero — that writes "heard" into path when it is sent SIGUSR1, and
-// exits. It says it is ready, in path's ".ready", once its trap is set, which
-// this waits for: a SIGUSR1 sent before that would end it by the signal's
-// default instead, and the case would be measuring the shell's start.
+// exits; sent SIGUSR2, it writes path's ".witness" instead ([unsignalled]). It
+// says it is ready, in path's ".ready", once its traps are set, which this
+// waits for: a SIGUSR1 sent before that would end it by the signal's default
+// instead, and the case would be measuring the shell's start.
 func startTrapper(t *testing.T, path string, pgid int) *exec.Cmd {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c",
-		`trap 'echo heard > "$1"; exit 0' USR1; : > "$1.ready"; while :; do sleep 0.05; done`, "sh", path)
+		`trap 'echo heard > "$1"; exit 0' USR1; trap ': > "$1.witness"' USR2; : > "$1.ready"; `+
+			`while :; do sleep 0.05; done`, "sh", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: pgid}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting a shell that traps SIGUSR1: %v", err)
@@ -35,6 +37,38 @@ func startTrapper(t *testing.T, path string, pgid int) *exec.Cmd {
 	}
 	awaitFile(t, path+".ready", "the shell to set its trap")
 	return cmd
+}
+
+// unsignalled fails the case, saying what, if the trapper cmd
+// ([startTrapper]), whose heard file is path, was sent SIGUSR1 before now. It
+// sends the trapper SIGUSR2 and waits for what that leaves: its witness, or,
+// where a SIGUSR1 came first, the heard file that trap wrote as it ended the
+// shell. Of two signals pending, the kernel delivers the lower-numbered first,
+// and the shell runs the traps of the signals it caught in the same order, so
+// a SIGUSR1 sent before the witness's signal has written path by the time the
+// witness could be written.
+//
+// NOT A QUIET WINDOW, of any length: a trap that has not run yet is no
+// evidence that nothing was sent, and a loaded runner delays a trap past any
+// window, so a window only sees a signal that is quick to show.
+func unsignalled(t *testing.T, cmd *exec.Cmd, path, what string) {
+	t.Helper()
+	if err := cmd.Process.Signal(syscall.SIGUSR2); err != nil {
+		t.Fatalf("sending the trapper its witness signal: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			t.Fatal(what)
+		}
+		if _, err := os.Stat(path + ".witness"); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 5s for the trapper to write %s.witness", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // awaitFile waits for path to exist, failing the case after five seconds.
@@ -109,10 +143,7 @@ func TestASignalReachesOnlyALivingMemberOfTheGroup(t *testing.T) {
 	}
 	awaitFile(t, filepath.Join(dir, "member"), "the member to hear its signal")
 
-	// THE OUTSIDER HEARD NOTHING, over a window a delivered signal would have
-	// shown in: its trap runs within the 50 ms of a sleep.
-	time.Sleep(300 * time.Millisecond)
-	if _, err := os.Stat(filepath.Join(dir, "outsider")); err == nil {
-		t.Fatal("the process outside the group was signalled")
-	}
+	// THE OUTSIDER HEARD NOTHING, as its witness tells: the witness's signal
+	// goes after every request the case made.
+	unsignalled(t, outsider, filepath.Join(dir, "outsider"), "the process outside the group was signalled")
 }
