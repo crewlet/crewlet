@@ -959,10 +959,14 @@ answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-
   the run that result, or says the call may or may not have taken effect; it
   never makes it again. A tool blocked or changed since the call was held is
   not called, and the run is told why.
-- **The run carries on where it stopped**, in its own session in the box it
-  left where the box was kept, told the answer and the call's result (the
-  first 16 KiB of it); otherwise a fresh run starts and is told the call, the
-  answer and the result.
+- **The run carries on where it stopped**, in its own session, told the
+  answer and the call's result (the first 16 KiB of it): continued from the
+  session the turn kept of it, in whichever box the relaunch gets — its own,
+  or a new one, told what a new box changes — or, where nothing of it was
+  kept, as the box it left holds it while that box is kept. Only where
+  neither can be continued does a fresh run start, told the call, the answer
+  and the result ([A relaunch continues the turn's
+  session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)).
 - **A call that waits raises an alarm.** One that has waited ten minutes, a
   third of the default pause TTL a parked run's box is kept for, raises
   `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),
