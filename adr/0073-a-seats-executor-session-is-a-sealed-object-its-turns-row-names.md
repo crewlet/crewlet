@@ -435,11 +435,13 @@ that job's tree and session, which are the turn's to continue in place. The
 seat's budget pre-check counts the base of every live turn that holds one,
 since the log cannot release it while the hold lasts.
 
-**Every turn of a conversation leaves its ending.** A turn that never launched —
-refused at the delegation cap — and a first launch abandoned once its record was
-written record their ends from the frame that dispatched them, so the
-conversation's next turn is told how they ended, and an abandoned launch's hold
-lifts at once.
+**A turn of a conversation that ends in its own frame leaves its ending too.**
+One that never launched and ended without an error — refused at the delegation
+cap — and a first launch abandoned once its record was written record their ends
+from the frame that dispatched them, so the conversation's next turn is told how
+they ended, and an abandoned launch's hold lifts at once. A turn whose frame
+failed before it launched records none: its delivery is handed back, to be parked
+or run again.
 
 **A seat's sessions say which launch continues each one, as that launch
 decides it.** The read surface (internal/api/queries' `executor_sessions`)

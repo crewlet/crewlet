@@ -3615,11 +3615,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// to end it as lost.
 		e.endTurnNow(ctx, telTurnEnd(tel, launchAbandonedEnding(res, reply, answered, err)))
 	case !res.Suspended && err == nil && req.ConversationKey != "":
-		// A TURN THAT NEVER LAUNCHED its executor and ended here — refused
-		// before its first round, at the delegation cap — still ends on the
-		// executor log, so the conversation's next turn is told how it
-		// ended, as every turn of a conversation leaves its ending. With no
-		// run, and so no session and no read held, its row names neither.
+		// A TURN OF A CONVERSATION THAT NEVER LAUNCHED its executor and
+		// ended here without an error — refused before its first round, at
+		// the delegation cap — still ends on the executor log, so the
+		// conversation's next turn is told how it ended. With no run, and so
+		// no session and no read held, its row names neither. NOT A TURN OF
+		// NO CONVERSATION, which no later turn is told of, and NOT ONE WHOSE
+		// FRAME FAILED: its delivery is handed back to the dispatcher, to be
+		// parked or run again as a turn of its own, and an ending recorded
+		// for the attempt would tell that turn its own work had failed.
 		e.endTurnNow(ctx, telTurnEnd(tel, endingOf(res, reply, answered)))
 	}
 	return res, err

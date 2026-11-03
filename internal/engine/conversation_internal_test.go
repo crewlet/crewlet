@@ -825,14 +825,17 @@ func TestAnUnreadableConversationIsLessContextNotAFailedTurn(t *testing.T) {
 	}
 }
 
-// A TURN THAT NEVER LAUNCHED TELLS THE NEXT TURN HOW IT ENDED. A turn refused
-// before its first round — at the delegation cap — ends in its own frame with
-// no run, and its end is recorded on the executor log under its conversation:
-// failed, saying which guard, so the conversation's next turn is told how it
-// ended, as of every turn of a conversation.
+// A TURN THAT NEVER LAUNCHED TELLS THE NEXT TURN HOW IT ENDED. A turn of a
+// conversation refused before its first round — at the delegation cap — ends in
+// its own frame with no run, and its end is recorded on the executor log under
+// its conversation: failed, saying which guard, so the conversation's next turn
+// is told how it ended. A turn of no conversation refused the same way — an
+// agent-to-agent ask, which most delegation chains are — leaves no row: no
+// later turn is told how it ended, and no reader asks.
 //
-// Mutation: record an end only for a turn that launched, and this one ends
-// nowhere.
+// Mutation: record an end only for a turn that launched, and the conversation's
+// turn ends nowhere; record one for a turn of no conversation too, and that
+// turn leaves a row.
 func TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded(t *testing.T) {
 	t.Parallel()
 	e, spy := loggingEngine(t)
@@ -851,6 +854,19 @@ func TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded(t *testing.T) {
 	if end := ends[0]; end.ConversationKey != "chat:D1" || end.Ending.Outcome != executordomain.OutcomeFailed ||
 		!strings.Contains(end.Ending.Failure, string(types.GuardDepthCap)) {
 		t.Fatalf("the end is %+v, want the conversation's turn failed at the delegation cap", end)
+	}
+
+	keyless, keylessLog := loggingEngine(t)
+	rigRuns(t, keyless, halfwayPlay)
+	res, err = keyless.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-2", RunID: "run-2", WorkSince: time.Now().UTC(), Depth: 2,
+		Events: []*events.Event{taskWake("task-9", "ENG-9")},
+	})
+	if err != nil || res.Suspended || res.Breach == nil || res.Breach.Kind != types.GuardDepthCap {
+		t.Fatalf("runTurn = %+v, %v; want the turn of no conversation refused at the delegation cap", res, err)
+	}
+	if ends := awaitEnds(t, keylessLog, "run-2", 0); len(ends) != 0 {
+		t.Fatalf("a turn of no conversation refused at the delegation cap recorded ends %+v, want none", ends)
 	}
 }
 
