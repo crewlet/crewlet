@@ -148,6 +148,7 @@ const SURFACE_NAMES: Record<string, string> = {
   cloudflare: "Cloudflare",
   expo: "Expo",
   google_cloud: "Google Cloud",
+  aws: "AWS",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -232,6 +233,14 @@ export const CATALOG: Entry[] = [
     vendor: "google-cloud",
     surfaces: surfacesOf("google_cloud"),
     doc: "google-cloud",
+  },
+  {
+    key: "aws",
+    name: "AWS",
+    description: "EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, an IAM role per agent.",
+    vendor: "aws",
+    surfaces: surfacesOf("aws"),
+    doc: "aws",
   },
 ];
 

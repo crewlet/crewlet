@@ -148,6 +148,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create an empty project for Crewlet's accounts and run the setup block the form gives you. Then, on each project agents may use, run the project block from the docs, which creates Crewlet's Operator role and its limited grants.",
   },
+  aws: {
+    does: [
+      "Read EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, log contents included, in the Regions you allow",
+      "Restart and scale instances and services, and manage alarms, where you allow it",
+      "Use the AWS MCP Server and the AWS CLI as themselves, with no access key to keep",
+    ],
+    identity:
+      "Crewlet makes an IAM role for each agent, limited by a permissions boundary, so CloudTrail names the agent for every call.",
+    byHand:
+      "Run the setup block the form gives you in AWS CloudShell. It creates one CloudFormation stack with Crewlet's sign-in, its provisioner role, the boundary and the level policies, and prints the line you paste back.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */
