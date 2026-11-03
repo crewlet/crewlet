@@ -145,7 +145,7 @@ type TurnDetail struct {
 
 	// Nodes is every node that PUBLISHED any of this turn's events, sorted —
 	// where the turn RAN. More than one for a turn resumed on another node
-	// after a restart, or one whose seat moved while a coding run was out.
+	// after a restart, or one whose seat moved while its executor was out.
 	//
 	// READ OFF THE ROWS ([store.EventRecord.Node]), never off which node
 	// answered: a node without the `data` role keeps no event log, and the
@@ -608,8 +608,10 @@ func turnNodes(g gathered[turnPart]) []string {
 	return slices.Compact(nodes)
 }
 
-// Phases answers the company's phase records, newest first, payload included —
-// or one seat's, named by the id every node derives for its handle.
+// Phases answers the company's phase records — every phase's own, and every
+// collected launch of an executor's run ([store.EventLog.Phases]) — newest
+// first, payload included, or one seat's, named by the id every node derives
+// for its handle.
 func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)
@@ -1008,6 +1010,34 @@ func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) 
 	merged := MergeOutcomes(parts)
 	f.report(QuestionNotificationOutcomes, coverage, started)
 	return merged, coverage, nil
+}
+
+// ToolCalls answers one MCP server's newest calls across the fleet, at most
+// q.Limit ([store.MaxToolCalls] when it names none or more), newest first.
+//
+// EVERY DATA NODE'S, because a call is on the phase record of the phase that
+// made it, in the event log of the node that ran it or kept its events in
+// custody: a seat that moved, or ran on a node without `data`, called the
+// server from another node's log. Each node answers its own newest, read out
+// of its own records ([store.EventLog.ToolCalls]), and the asker merges them
+// ([MergeToolCalls]).
+func (f *Fleet) ToolCalls(ctx context.Context, q store.ToolCallQuery) ([]store.ToolCall, Coverage, error) {
+	started := time.Now()
+	q.At = f.askedAt(q.At)
+	if q.Limit <= 0 || q.Limit > store.MaxToolCalls {
+		q.Limit = store.MaxToolCalls
+	}
+	g, err := gather(ctx, f, QuestionToolCalls, toolCallsParamsOf(q), nil,
+		func(ctx context.Context) (toolCallsPart, error) {
+			calls, err := f.Local.ToolCalls(ctx, q)
+			return toolCallsPart{Calls: calls}, err
+		})
+	if err != nil {
+		return nil, Coverage{}, err
+	}
+	calls := MergeToolCalls(g.parts(), q.Limit)
+	f.report(QuestionToolCalls, g.coverage, started)
+	return calls, g.coverage, nil
 }
 
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no

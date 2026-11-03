@@ -19,8 +19,8 @@
 //
 // A single node's leases are rightly this process's: it has nobody to fence
 // against, and it re-claims everything at boot. Its fencing tokens are not,
-// because the rows they are compared with (a sandbox run's owner_epoch above
-// all) are the fleet store's and outlive the process. So the counter is
+// because the rows they are compared with (the owner_epoch on an executor's row
+// above all) are the fleet store's and outlive the process. So the counter is
 // pluggable ([Backend.Epochs]): the engine hands a single node the same
 // persistent counter a fleet's lease store mints from (coord/kv.Epochs), and
 // a token minted after a restart is strictly above every token minted before

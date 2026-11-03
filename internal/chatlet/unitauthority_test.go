@@ -38,7 +38,7 @@ func TestAUnitsRoomRefusesEveryMembershipGestureButTheCharts(t *testing.T) {
 		},
 		"set the members": func() error {
 			_, err := r.store.SetMembers(t.Context(), person("jane"),
-				made.Channel.ID, members("jane"))
+				made.Channel.ID, members("jane"), nil)
 			return err
 		},
 	} {

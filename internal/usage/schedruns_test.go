@@ -124,3 +124,54 @@ func TestScheduleRunsNarrowToOneOutcome(t *testing.T) {
 		t.Errorf("the fired runs read %s, want %s", got, want)
 	}
 }
+
+// ONE SCHEDULE'S FIRES ARE ALL THREE PARTS OF ITS IDENTITY: two units can each
+// declare a `standup`, and a role and a unit can both, so each part narrows on
+// its own. A read naming only some of them is refused rather than read as a
+// filter on what it named.
+//
+// Mutation: drop any one of the three predicates from scheduleRunsSQL, and the
+// page holds another schedule's fire.
+func TestScheduleRunsNarrowToOneSchedule(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	at := time.Date(2031, 4, 16, 9, 0, 0, 0, time.UTC)
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for i, s := range [][3]string{
+			{"role", "pm", "standup"},
+			{"unit", "pm", "standup"},  // another scope type
+			{"role", "cto", "standup"}, // another scope
+			{"role", "pm", "retro"},    // another name
+		} {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO usage_schedule_runs
+					(day, node, scope_type, scope_id, name, fired_at, target,
+					 outcome, trace_id, turn_id, version)
+				VALUES (?, 'n1', ?, ?, ?, ?, 'pm', 'fired', ?, '', 1)`,
+				at.Format("2006-01-02"), s[0], s[1], s[2], store.EncodeTime(at),
+				fmt.Sprintf("trace-%d", i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	runs, more, err := usage.ScheduleRuns(t.Context(), db.Replicated(), usage.ScheduleRunsQuery{
+		ScopeType: "role", ScopeID: "pm", Name: "standup", Limit: 10})
+	if err != nil {
+		t.Fatalf("ScheduleRuns: %v", err)
+	}
+	if more || len(runs) != 1 || runs[0].TraceID != "trace-0" {
+		t.Errorf("one schedule's fires are %+v (more %v), want trace-0 alone", runs, more)
+	}
+	for _, q := range []usage.ScheduleRunsQuery{
+		{ScopeType: "role", ScopeID: "pm", Limit: 10},
+		{ScopeType: "role", Name: "standup", Limit: 10},
+		{ScopeID: "pm", Name: "standup", Limit: 10},
+	} {
+		if _, _, err := usage.ScheduleRuns(t.Context(), db.Replicated(), q); err == nil {
+			t.Errorf("%+v was read, want it refused for naming part of a schedule", q)
+		}
+	}
+}

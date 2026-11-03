@@ -1,7 +1,7 @@
 package config
 
 // TurnEngine configures the two-stage turn: an executor that decides and acts
-// in one agentic run — the seat's coding CLI's own, in a box — and a reviewer
+// in one agentic run — the seat's harness's own, in a box — and a reviewer
 // that judges the record it left, in the engine's own tool loop.
 //
 // Almost every field here is a CAP, and every cap is a trade between a turn
@@ -20,7 +20,7 @@ type TurnEngine struct {
 	// failed with a guard-breach event.
 	//
 	// EACH ITERATION IS A WHOLE EXECUTOR RUN — a box, its setup, a fresh
-	// launch of the CLI — so this bounds what a turn may spend on
+	// launch of the harness — so this bounds what a turn may spend on
 	// re-doing its work, not merely how many reviews it gets.
 	MaxIterations int `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty" js:"min=0" desc:"Execute/review iterations per turn."`
 
@@ -55,9 +55,10 @@ type TurnEngine struct {
 	// or falls through to the rescue path.
 	//
 	// Onboarding only, because it is the one pass with a round budget the
-	// engine sets and a loop the engine runs: the executor is its CLI's own
-	// run, capped by providers.sandbox.default_max_turns, and the reviewer
-	// holds a single submission tool.
+	// engine sets and a loop the engine runs: the executor is its harness's own
+	// run, capped only where the company or the seat sets a turn cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns), and the
+	// reviewer holds a single submission tool.
 	ExtensionEnabled Toggle `yaml:"extension_enabled,omitempty" json:"extension_enabled,omitzero" desc:"Round-cap extension judge for the onboarding pass (default on)."`
 
 	// OnboardingMaxToolRoundsCeiling is what the judge may grant the
@@ -95,12 +96,12 @@ type TurnEngine struct {
 const (
 	// defaultExecutorMinBudgetTokens is 25000 because the floor has to
 	// cover the FIRST REQUEST of a run, which the launch cannot shrink: the
-	// CLI's own harness prompt and tool definitions (about 15k input tokens
+	// harness's own prompt and tool definitions (about 15k input tokens
 	// for Claude Code), the seat's bridged tool array beside them, and the
 	// seat's system prompt. A floor below one such request refuses nothing
-	// it was meant to — the 2000 it replaced was sized for a delegated
-	// coding job's brief, and passed every run that then died on its first
-	// round.
+	// it was meant to — the 2000 it replaced was sized for the brief the
+	// old `run_sandbox` tool handed a second agent, and passed every run
+	// that then died on its first round.
 	defaultExecutorMinBudgetTokens = 25000
 
 	// defaultOnboardingRounds is the pass's own budget: activate the
@@ -240,14 +241,69 @@ type ConversationSession struct {
 	// conversation and the telemetry showing what it did there forget
 	// together.
 	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0" desc:"How long a conversation is remembered."`
+
+	// MaxBytesPerSeat is the most object-store bytes one seat's captured
+	// executor sessions may hold (internal/executordomain): past it a new
+	// capture releases the seat's oldest ENDED turns' sessions, keeping how
+	// each ended, and a capture the seat's live turns leave no room for is
+	// refused, so that turn's next launch starts fresh.
+	//
+	// SIXTY-FOUR MEBIBYTES BY DEFAULT ([DefaultSessionBytesPerSeat]), which
+	// says why. The engine reads it off the revision the fleet runs, and
+	// every node applies the one number a capture carries.
+	MaxBytesPerSeat int64 `yaml:"max_bytes_per_seat,omitempty" json:"max_bytes_per_seat,omitempty" js:"min=34603008;max=68719476736" desc:"Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released (default 64 MiB, 33 MiB..64 GiB)."`
 }
+
+// The per-seat session budget's default and bounds.
+const (
+	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
+	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two
+	// mebibytes for a day's work and is bounded at thirty-two
+	// (executordomain.SessionMaxBytes), so 64 MiB holds a live turn's
+	// session at that bound beside about twenty ordinary ones, or thirty to
+	// forty ordinary sessions alone — a month of one conversation's head a
+	// working day. (A live turn's capped session never needs the head it
+	// continued beside it: its own capture holds that transcript and more,
+	// so releasing the head then loses nothing.) It is shared with every
+	// other object: on the default nats backend
+	// the bucket is a quarter of the broker's limit, about 2.6 GiB at the
+	// smallest data volume crewlet-operator admits, beside project files,
+	// artifacts and Ask Crewlet's files; ten seats at their budget take a
+	// quarter of it, and a company of forty seats or more belongs on S3
+	// (store.objects.backend), where the bound is the bucket's own.
+	DefaultSessionBytesPerSeat int64 = 64 << 20
+
+	// SessionBytesPerSeatFloor is the least a seat may be given: ONE
+	// SESSION AT ITS BOUND, sealed (executordomain.SealedMaxBytes, a little
+	// over 32 MiB), rounded up to a whole mebibyte, so a capture the
+	// session bound admits is never one the budget refuses outright. A test
+	// in internal/executordomain holds the two together, since this package
+	// cannot import that one.
+	SessionBytesPerSeatFloor int64 = 33 << 20
+
+	// SessionBytesPerSeatCeiling is a typo guard: a thousand times the
+	// default is past any bucket a seat could be given.
+	SessionBytesPerSeatCeiling int64 = 64 << 30
+)
 
 // DefaultConversationSession is the ledger's shipped defaults.
 func DefaultConversationSession() ConversationSession {
 	return ConversationSession{
-		MaxEntries:    20,
-		RetentionDays: 30,
+		MaxEntries:      20,
+		RetentionDays:   30,
+		MaxBytesPerSeat: DefaultSessionBytesPerSeat,
 	}
+}
+
+// SessionBudget is the per-seat session budget. A document is decoded onto the
+// defaults and validation refuses anything outside the bounds, so a validated
+// company always states one; the default stands in for a block built in code
+// with none, which is unset rather than a budget of nothing.
+func (c *ConversationSession) SessionBudget() int64 {
+	if c.MaxBytesPerSeat <= 0 {
+		return DefaultSessionBytesPerSeat
+	}
+	return c.MaxBytesPerSeat
 }
 
 // Records reports whether the ledger is on, applying the true default.
@@ -261,6 +317,11 @@ func (c *ConversationSession) validate(path Path) error {
 	if c.RetentionDays < 1 {
 		p.add(at(path, "retention_days"), ErrOutOfRange,
 			"must be at least 1, got %d", c.RetentionDays)
+	}
+	if b := c.MaxBytesPerSeat; b < SessionBytesPerSeatFloor || b > SessionBytesPerSeatCeiling {
+		p.add(at(path, "max_bytes_per_seat"), ErrOutOfRange,
+			"must be between %d (one executor session at its bound, sealed) and %d, got %d",
+			SessionBytesPerSeatFloor, SessionBytesPerSeatCeiling, b)
 	}
 	return p.err()
 }

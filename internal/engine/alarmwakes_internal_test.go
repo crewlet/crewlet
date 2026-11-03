@@ -58,7 +58,7 @@ func TestAnAlarmWakesExactlyTheSeatsTheHealthToolsAdmit(t *testing.T) {
 	}
 	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	w, err := alarmwake.Encode(statelog.AlarmTransition{
-		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", statelog.TransitionFired, at),
+		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, at),
 		Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired, Since: at, At: at,
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestAnAlarmsWakeIsNobodysErrand(t *testing.T) {
 	}
 	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	w, err := alarmwake.Encode(statelog.AlarmTransition{
-		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", statelog.TransitionFired, at),
+		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, at),
 		Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired,
 		Detail: "this node is 4m12s behind the log", Since: at, At: at,
 	})
@@ -290,7 +290,7 @@ func TestAFullAlarmOutboxDropsItsOldestFirst(t *testing.T) {
 	transition := func(i int) statelog.AlarmTransition {
 		since := at.Add(time.Duration(i) * time.Second)
 		return statelog.AlarmTransition{
-			ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", statelog.TransitionFired, since),
+			ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", "", statelog.TransitionFired, since),
 			Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired,
 			Since: since, At: since,
 		}
@@ -360,7 +360,7 @@ func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
 // generated from it) and the concept page's paragraph on the outbox each name
 // the figure an operator reads a drop against, and nothing else ties them to
 // the constant — the bound has moved once already (1024 to 2048, when the code
-// log became the tenth domain), and a figure left behind tells an operator the
+// log joined the register), and a figure left behind tells an operator the
 // outbox holds what it does not. So each is read where it states the bound and
 // held to the constant.
 //

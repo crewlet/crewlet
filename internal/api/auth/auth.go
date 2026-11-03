@@ -66,7 +66,7 @@
 // # A git client is answered in git's own terms, as a person
 //
 // git is the third person transport beside the dashboard's act route and the
-// operator's MCP (ADR-0078): a person's own token, presented by their git
+// operator's MCP (ADR-0085): a person's own token, presented by their git
 // client, pushes as that person where it is bound to their seat and fetches
 // only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is
@@ -80,8 +80,8 @@
 //
 // A BOX is git's other client, and the code host's third edge a coding box
 // reaches beside /mcp/ and /otlp/: /box/git/ ([BoxGitPrefix]), public and
-// exempt from the guard like them, admitted by the box's own token — a coding
-// run's or a check's, a Basic password this guard never reads — and
+// exempt from the guard like them, admitted by the box's own token — an
+// executor's or a check's, a Basic password this guard never reads — and
 // classified by the same [GitAccess]. A check's box reads its commit by object
 // id under /box/code/ ([BoxCodePrefix]), public and exempt on the same terms.
 // Neither transport takes the other's credential: a person's token is no box

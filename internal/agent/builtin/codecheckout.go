@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// CodeCheckoutTool is the tool a seat's coding run checks a repository of the
+// CodeCheckoutTool is the tool a seat's executor checks a repository of the
 // company's own code host out through, declared in internal/toolname: like
 // `ask_and_wait` it is a tool the executor run's surface offers of its own,
 // which no row of the authority table names, because what it may grant is
@@ -43,12 +43,12 @@ type Checkout struct {
 	Steps   []sandbox.SetupStep
 }
 
-// NewCodeCheckout is the tool a seat's coding run checks a repository out
+// NewCodeCheckout is the tool a seat's executor checks a repository out
 // through, or nil without the engine's checkouts.
 //
 // # Why one repository per call, made from inside the run
 //
-// A coding run is the seat's own CLI in a box (ADR-0066), launched with no
+// An executor is the seat's own harness run in a box (ADR-0066), launched with no
 // repository: what it needs is decided while it works, by the agent that does
 // the work. So the box holds the code host's address and the run's credential
 // from its launch, and nothing else, and each checkout is a call over the
@@ -56,7 +56,7 @@ type Checkout struct {
 // engine resolves the repository for the seat and for whoever woke its turn,
 // writes the grant onto the job's row, and the code host's box admission,
 // which reads that row on every request, lets the box clone it from the next
-// request on (ADR-0086). Nothing the run did not check out is ever reachable
+// request on (ADR-0093). Nothing the run did not check out is ever reachable
 // from its box, and what it may push is decided per checkout — the branch,
 // the access and a change to open at its collection — rather than for every
 // repository the seat can reach.
@@ -145,7 +145,7 @@ func (t *CodeCheckout) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// on. The tool is offered on an executor run's surface alone, so
 		// this is a wiring fault, said as one rather than as the model's.
 		return refusedBy(tools.RefusalUnavailable, waitless(), tool+" is unavailable here: it gives a "+
-			"repository to a coding run, and this call was not made by one. Read the repository with "+
+			"repository to an executor, and this call was not made by one. Read the repository with "+
 			CodeReadTool+" instead."), nil
 	}
 	req, refusal := checkoutArgs(args)

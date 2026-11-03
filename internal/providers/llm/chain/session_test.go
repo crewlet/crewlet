@@ -17,7 +17,7 @@ import (
 )
 
 // The chain as a seat at work meets it: walked by the tool loop, every member a
-// CLI run over the phase's real session (llmtest), so what one member did is on
+// harness run over the phase's real session (llmtest), so what one member did is on
 // the host's record when the next is tried.
 
 // surface answers every call with "<name> ok" and remembers what ran.
@@ -75,7 +75,7 @@ func opening() []llm.Message {
 	}
 }
 
-// diesMidRun is a member whose CLI makes a call, starts writing its next
+// diesMidRun is a member whose harness makes a call, starts writing its next
 // response, and dies: the call is on the host's record, the prose is not.
 type diesMidRun struct {
 	mu   sync.Mutex
@@ -96,7 +96,7 @@ func (d *diesMidRun) Complete(ctx context.Context, req llm.Request) (*llm.Comple
 	req.Send(llm.Delta{Content: "half an ans"})
 	c.Close()
 	return nil, &llm.Error{Kind: llm.KindServer, Provider: "p", Model: "dies",
-		Err: errors.New("the CLI exited mid-response")}
+		Err: errors.New("the harness exited mid-response")}
 }
 
 // continues is a member that reads what it was handed, then submits.
@@ -236,7 +236,7 @@ func TestAFallbackContinuesFromTheSessionsRecord(t *testing.T) {
 }
 
 // THE WALK STOPS WHERE THE PHASE IS DECIDED. A member submitted, the host
-// ended its run, and its CLI — stopped mid-run — reports a failure the chain
+// ended its run, and its harness — stopped mid-run — reports a failure the chain
 // would otherwise walk on from: a second model asked to redo a phase that is
 // over. The loop reads the submission off its own record.
 //
@@ -247,7 +247,7 @@ func TestTheChainStopsWhereThePhaseIsDecided(t *testing.T) {
 	first := &llmtest.Script{Runs: []llmtest.Run{{
 		Responses: []llmtest.Response{{Calls: []llmtest.Call{{Name: "submit_work"}}}},
 		Err: &llm.Error{Kind: llm.KindServer, Provider: "p", Model: "first",
-			Err: errors.New("the CLI was stopped")},
+			Err: errors.New("the harness was stopped")},
 	}}}
 	second := &llmtest.Script{}
 	fired := 0
@@ -263,7 +263,7 @@ func TestTheChainStopsWhereThePhaseIsDecided(t *testing.T) {
 		TerminateAfter: []string{"submit_work"},
 	})
 	if err != nil {
-		t.Fatalf("Run: %v — a phase its submission ended was failed over the CLI stopped after it", err)
+		t.Fatalf("Run: %v — a phase its submission ended was failed over the harness stopped after it", err)
 	}
 	if n := len(second.Seen()); n != 0 {
 		t.Errorf("the second member was asked %d times after the phase submitted", n)

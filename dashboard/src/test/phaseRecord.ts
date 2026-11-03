@@ -5,7 +5,7 @@
 
 import type { Invocation, PhaseRecord, ToolCall } from "~/lib/phases.ts";
 
-/** One CLI run that made round 1, observed and ended by its model, unless the
+/** One harness run that made round 1, observed and ended by its model, unless the
  *  suite says otherwise. */
 export function invocation(over: Partial<Invocation> = {}): Invocation {
   return {
@@ -33,6 +33,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     workKey: "",
     phase: "execute",
     iteration: 1,
+    launch: false,
     role: "SWE",
     agentId: "",
     model: "stub-sonnet",
@@ -65,8 +66,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
@@ -74,6 +74,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     pushedRefsElided: 0,
     pushedRefsUnread: "",
     launchId: "",
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,

@@ -187,10 +187,10 @@ type LiveCall struct {
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
 	// and for the whole of an executor, whose rounds run inside its coding
-	// CLI's run.
+	// harness's run.
 	Rounds []any `json:"rounds"`
 
-	// Invocations is the phase's CLI runs that have ENDED — when each was
+	// Invocations is the phase's harness runs that have ENDED — when each was
 	// launched and how long it lived, who served it, how it ended, the
 	// rounds it made (`first_round`, `last_round`) and what it spent — as
 	// the progress frame carries them ([types.PhaseInvocation]). The run in
@@ -211,7 +211,7 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
-	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// RunStartedAt is when the harness run in flight was launched: the run whose
 	// rounds are past every entry in Invocations. Empty between runs, and on
 	// a frozen call.
 	RunStartedAt string `json:"run_started_at,omitempty"`
@@ -220,7 +220,7 @@ type LiveCall struct {
 	// order they arrived — `{id, round, name, arguments, started_at}`, each
 	// listed by the frame published before the call is handed to its tool
 	// and gone from the frame after it returns ([types.RunningCall]). A
-	// LIST because a coding CLI may run a response's calls at once. Absent
+	// LIST because a harness may run a response's calls at once. Absent
 	// between calls. Never merged into ToolExecutions, which lists calls
 	// that ANSWERED: a reader has to be able to tell a call in flight from
 	// one that returned nothing — and `id` is what the answered row's
@@ -265,7 +265,7 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 
 	// Versions numbers the copy of each heavy field — the prompt, the
-	// response, the narration, the tool calls, the rounds' timing, the CLI
+	// response, the narration, the tool calls, the rounds' timing, the harness
 	// runs — this call holds, so an `agents` push can leave out what a tab
 	// already has and a tab can tell when it missed a change (see
 	// detail.go). ALWAYS PRESENT, on every surface that carries a call.
@@ -357,7 +357,7 @@ type Overlay struct {
 	Budget *BudgetMeter `json:"budget"`
 
 	// Turn is the turn the seat is on — running, or parked on a detached
-	// coding run — and null when it is on none. ALWAYS PRESENT: the
+	// executor — and null when it is on none. ALWAYS PRESENT: the
 	// overlay is merged into a client's row rather than replacing it, so an
 	// omitted key reads as "unchanged" and would leave a finished turn on
 	// the client's row.
@@ -381,6 +381,12 @@ type Overlay struct {
 	// present, as null when there is none, so a merged overlay never leaves
 	// a seat wearing a limit that lifted. See provider.go.
 	ProviderLimit *ProviderLimit `json:"provider_limit"`
+
+	// Waiting is what waits in the seat's inbox that no turn is running on
+	// yet, per mailbox, as the node holding the seat reports it; nil when no
+	// holder has reported it. ALWAYS present, as null when there is none,
+	// so a merged row never keeps a count nobody refreshes. See waiting.go.
+	Waiting *Waiting `json:"waiting"`
 }
 
 // Stage is where in a turn a seat is.
@@ -396,7 +402,7 @@ const (
 	// StagePhase — a phase is running: a model is being called or a tool
 	// is running on its behalf.
 	StagePhase Stage = "phase"
-	// StageParked — the turn launched a detached coding run and SUSPENDED:
+	// StageParked — the turn launched a detached executor and SUSPENDED:
 	// nothing runs on the seat's behalf until the run is collected, and
 	// the same turn resumes then — possibly on another node, possibly
 	// after a restart. Not idle, and not an end: the turn has not
@@ -449,11 +455,11 @@ const (
 	OutcomeCompleted TurnOutcome = "completed"
 	// OutcomeFailed — the turn ended and at least one of its events was a
 	// failure: a failed phase, an unavailable provider, a breached guard,
-	// a lost coding run. The same rule the turn list's `failed` applies, so
+	// a lost executor. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
 	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
-	// reached it at a round, or ended the coding run it was parked on. Not a
+	// reached it at a round, or ended the executor it was parked on. Not a
 	// failure, whatever else went wrong in it — the turn list's `stopped`.
 	OutcomeStopped TurnOutcome = "stopped"
 )
@@ -476,22 +482,22 @@ type LastTurn struct {
 	Outcome TurnOutcome `json:"outcome"`
 }
 
-// SandboxEntry is one in-flight detached coding run.
+// ExecutorEntry is one in-flight detached executor.
 //
 // AgentID is what pairs a run with its seat's row. Role and AgentHandle are
 // what the seat was called when the run started, for a reader with no roster
 // row to name it from — never a key, since a name is shared and a handle moves.
-type SandboxEntry struct {
+type ExecutorEntry struct {
 	TurnID      string `json:"turn_id"`
 	Role        string `json:"role"`
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
-	CodingAgent string `json:"coding_agent"`
+	Harness     string `json:"harness"`
 	// ProviderKey and Model are the executor-chain member the run was
 	// launched on and the model it runs under — see
-	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
+	// [types.ExecutorLaunched.ProviderKey]. Empty on a run whose
 	// announcement and record named none. The key is the company's
-	// configuration and reaches an admin alone ([SandboxEntry.For]); the
+	// configuration and reaches an admin alone ([ExecutorEntry.For]); the
 	// model is everybody's.
 	ProviderKey string `json:"provider_key,omitempty"`
 	Model       string `json:"model,omitempty"`
@@ -499,8 +505,8 @@ type SandboxEntry struct {
 	Task        string `json:"task"`
 
 	// Status is the run record's own word for where the run is — see
-	// [SandboxStatus].
-	Status SandboxStatus `json:"status"`
+	// [ExecutorStatus].
+	Status ExecutorStatus `json:"status"`
 
 	StartedAt string `json:"started_at"`
 
@@ -509,7 +515,7 @@ type SandboxEntry struct {
 	// context is ALWAYS on the wire, empty where it gave none, as every
 	// reader of a run's ask sends it, so a client never reads its absence
 	// as a different kind of question. The question and both of those are
-	// the run's body, withheld together ([SandboxEntry.For]).
+	// the run's body, withheld together ([ExecutorEntry.For]).
 	Question        string             `json:"question,omitempty"`
 	QuestionContext string             `json:"question_context"`
 	Decision        *decision.Decision `json:"decision,omitempty"`
@@ -518,7 +524,7 @@ type SandboxEntry struct {
 	// AudienceHandles are the seats the parked question may be answered by
 	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the
 	// question whatever their reach to the seat that asked it
-	// ([SandboxEntry.For]). NEVER ON THE WIRE: it names people, and what a
+	// ([ExecutorEntry.For]). NEVER ON THE WIRE: it names people, and what a
 	// reader is told is only whether they were shown the question. Filled
 	// from the durable run record; an entry built from the events alone
 	// holds none until the next reconcile reads it.
@@ -526,7 +532,7 @@ type SandboxEntry struct {
 
 	// BodyWithheld is whether this entry reached its reader without what
 	// the run was asked, and the question it parked on, because neither is
-	// theirs to read — see [SandboxEntry.For].
+	// theirs to read — see [ExecutorEntry.For].
 	BodyWithheld bool `json:"body_withheld,omitempty"`
 
 	// WorkItem is the item the launching turn is charged to, absent when
@@ -545,7 +551,7 @@ type SandboxEntry struct {
 	PausedAt string `json:"paused_at,omitempty"`
 }
 
-// SandboxStatus is where a detached run is, in the RUN RECORD'S OWN WORDS.
+// ExecutorStatus is where a detached run is, in the RUN RECORD'S OWN WORDS.
 //
 // It used to be two words of this projection's own, `running` and
 // `awaiting_input`, and the second is not one the run record can write — so
@@ -553,41 +559,41 @@ type SandboxEntry struct {
 // never once saw a live run that was waiting on somebody: the state this panel
 // most needs to surface reached no screen through it. One vocabulary, held
 // against sandbox's own constants by internal/observe, which sees both.
-type SandboxStatus string
+type ExecutorStatus string
 
 const (
-	// SandboxLaunching — the job has started and the turn that started it
+	// ExecutorLaunching — the job has started and the turn that started it
 	// is still unwinding.
-	SandboxLaunching SandboxStatus = "launching"
-	// SandboxRunning — the coding agent is working in its box.
-	SandboxRunning SandboxStatus = "running"
-	// SandboxAwaiting — the agent asked a person and stopped; its box is
+	ExecutorLaunching ExecutorStatus = "launching"
+	// ExecutorRunning — the harness is working in its box.
+	ExecutorRunning ExecutorStatus = "running"
+	// ExecutorAwaiting — the agent asked a person and stopped; its box is
 	// held paused until the answer arrives.
-	SandboxAwaiting SandboxStatus = "awaiting_clarification"
-	// SandboxReseed — the box was reclaimed past its pause TTL while the
+	ExecutorAwaiting ExecutorStatus = "awaiting_clarification"
+	// ExecutorReseed — the box was reclaimed past its pause TTL while the
 	// run waited. The question survives and an answer relaunches it.
-	SandboxReseed SandboxStatus = "reseed"
-	// SandboxAnswered — a person's reply is recorded as the answer to the
+	ExecutorReseed ExecutorStatus = "reseed"
+	// ExecutorAnswered — a person's reply is recorded as the answer to the
 	// question, and the resume it drives is owed: the engine is working on
 	// it, and nobody is being waited on any more.
-	SandboxAnswered SandboxStatus = "answered"
+	ExecutorAnswered ExecutorStatus = "answered"
 )
 
-// SandboxStatuses is the closed set a live entry can carry. The record's
+// ExecutorStatuses is the closed set a live entry can carry. The record's
 // `resumed` is deliberately not in it: the run itself is over and the turn
 // that launched it has taken its result back, so it is not a run in flight.
-var SandboxStatuses = []SandboxStatus{
-	SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed, SandboxAnswered,
+var ExecutorStatuses = []ExecutorStatus{
+	ExecutorLaunching, ExecutorRunning, ExecutorAwaiting, ExecutorReseed, ExecutorAnswered,
 }
 
 // Valid reports whether s is a status a live entry can carry.
-func (s SandboxStatus) Valid() bool { return slices.Contains(SandboxStatuses, s) }
+func (s ExecutorStatus) Valid() bool { return slices.Contains(ExecutorStatuses, s) }
 
-// SandboxRecord is one run as the DURABLE record states it, for
-// [LiveState.ReconcileSandboxes]: the entry it becomes, plus the two facts the
+// ExecutorRecord is one run as the DURABLE record states it, for
+// [LiveState.ReconcileExecutors]: the entry it becomes, plus the two facts the
 // reconcile needs to tell a run that has ended since from one that has not.
-type SandboxRecord struct {
-	Entry SandboxEntry
+type ExecutorRecord struct {
+	Entry ExecutorEntry
 
 	// LaunchID is the job the record describes. A completion names the job
 	// it finished, so a record still describing that job after its
@@ -618,7 +624,7 @@ type OrgBudget struct {
 type Change struct {
 	// Agents are the agent ids of the seats that moved.
 	Agents    map[string]struct{}
-	Sandboxes bool
+	Executors bool
 	Tokens    bool
 	Events    bool
 	Budget    bool
@@ -626,7 +632,7 @@ type Change struct {
 
 // Moved reports whether anything changed at all.
 func (c Change) Moved() bool {
-	return len(c.Agents) > 0 || c.Sandboxes || c.Tokens || c.Events || c.Budget
+	return len(c.Agents) > 0 || c.Executors || c.Tokens || c.Events || c.Budget
 }
 
 func (c *Change) agentMoved(agentID string) {

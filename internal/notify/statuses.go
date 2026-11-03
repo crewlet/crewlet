@@ -76,7 +76,7 @@ func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
 // Release drops ONE turn's hold on its indicator, wherever that hold is.
 //
 // It is what the engine calls when a turn that was kept alive has STOPPED
-// without ending: a detached coding run that parked on a question is waiting
+// without ending: a detached executor that parked on a question is waiting
 // on a person, not working, and an indicator still saying "is thinking…" over
 // that wait is worse than no indicator at all.
 //
@@ -92,6 +92,32 @@ func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
 // seat ([Statuses.ClearFor]).
 func (s *Statuses) Release(ctx context.Context, handle, turnID string) {
 	s.Rejoin(handle, turnID).End(ctx, false)
+}
+
+// Queue raises a queued indicator for a person's message waiting behind the
+// seat's current work, on whichever backend the message came from
+// ([StatusDriver.Queue]); it reports whether any did.
+func (s *Statuses) Queue(ctx context.Context, handle, wake string, metadata map[string]string) bool {
+	if s == nil {
+		return false
+	}
+	for _, d := range s.drivers {
+		if d.Queue(ctx, handle, wake, metadata) {
+			return true
+		}
+	}
+	return false
+}
+
+// Dequeue takes the waits of these wakes away on every backend
+// ([StatusDriver.Dequeue]): a driver that queued none of them does nothing.
+func (s *Statuses) Dequeue(ctx context.Context, handle string, wakes []string) {
+	if s == nil {
+		return
+	}
+	for _, d := range s.drivers {
+		d.Dequeue(ctx, handle, wakes)
+	}
 }
 
 // ClearFor takes down every indicator either backend holds for one seat.

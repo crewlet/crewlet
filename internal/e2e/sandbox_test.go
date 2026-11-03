@@ -29,7 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -62,12 +62,12 @@ func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
 // GATE G6 — the golden coding turn.
 //
 // A real local sandbox, a real detached process, the real suspend and the real
-// resume. Every agent seat's executor is its coding CLI's own run, so this is
+// resume. Every agent seat's executor is its harness's own run, so this is
 // the path every turn takes; what this gate adds is the box's whole life seen
 // from outside — its argv, its stream, its park on a question, the reaper, and
 // a restart in the middle of a run.
 //
-// The coding CLI is the stand-in of codingcli_test.go: this binary, installed
+// The harness is the stand-in of codingcli_test.go: this binary, installed
 // as `claude` on the box's PATH by the catalogue's setup step, asking the same
 // scripted model the seat's phases on this host do. That makes the whole detached
 // protocol real — a process group, a background job, a done marker, a result
@@ -88,7 +88,7 @@ providers:
     llm: [scripted, coder]
     sandbox:
       # The seat's own round cap. What is under test is that a number
-      # written HERE reaches the coding CLI's argv, which is the whole of
+      # written HERE reaches the harness's argv, which is the whole of
       # "wired".
       max_turns: 7
       env:
@@ -114,7 +114,7 @@ turn_engine:
 `
 
 // sandboxCompany is the coding company's document: its phases on this host on model's
-// scripted CLI, and its executor's boxes under stateDir, each running the
+// scripted harness, and its executor's boxes under stateDir, each running the
 // stand-in that asks model.
 func sandboxCompany(t *testing.T, model *scriptedModel, stateDir string) string {
 	t.Helper()
@@ -129,29 +129,29 @@ type codingNode struct {
 	argvPath string
 }
 
-// agentArgv is what the stand-in coding CLI was actually invoked with.
+// agentArgv is what the stand-in harness was actually invoked with.
 func (n *codingNode) agentArgv(t *testing.T) []string {
 	t.Helper()
 	return n.invocation(t).Argv
 }
 
-// agentBrief is the brief the stand-in coding CLI read on its stdin — the
+// agentBrief is the brief the stand-in harness read on its stdin — the
 // prompt it ran.
 func (n *codingNode) agentBrief(t *testing.T) string {
 	t.Helper()
 	return n.invocation(t).Stdin
 }
 
-// invocation is how the stand-in coding CLI last recorded it was started.
+// invocation is how the stand-in harness last recorded it was started.
 func (n *codingNode) invocation(t *testing.T) codingInvocation {
 	t.Helper()
 	raw, err := os.ReadFile(n.argvPath)
 	if err != nil {
-		t.Fatalf("the coding agent recorded no invocation: %v", err)
+		t.Fatalf("the harness recorded no invocation: %v", err)
 	}
 	var out codingInvocation
 	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("the coding agent's invocation does not read: %v\n%s", err, raw)
+		t.Fatalf("the harness's invocation does not read: %v\n%s", err, raw)
 	}
 	return out
 }
@@ -319,7 +319,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 			if json.Unmarshal(row.Payload, &rec) != nil {
 				continue
 			}
-			if rec["phase"] == "execute" && rec["backend"] == "sandbox" {
+			if rec["phase"] == "execute" && collectedARun(rec) {
 				launch, _ = rec["launch_id"].(string)
 				return true
 			}
@@ -327,25 +327,26 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		return false
 	})
 	if launch == "" {
-		t.Error("the resumed sandbox phase names no launch_id")
+		t.Error("the resumed execute phase names no launch_id")
 	}
 	// THE RUN'S STREAM REACHED ITS RECORD: the transcript the runner built
 	// from the stand-in's stream-json messages — its bridged submission
 	// among them — and the spend its result line, the stream's last, copied
 	// out by the wrapper, reported: Claude Code's input is its uncached
 	// remainder, and the record's is the whole prompt, both cache figures
-	// folded in. End to end because the halves are the CLI's flags, the
+	// folded in. End to end because the halves are the harness's flags, the
 	// box's shell and the record's publisher, and each compiles without the
-	// others.
+	// others. Read through the phase list, which answers a launch's record
+	// beside the phase records of the round that launched it.
 	var record map[string]any
-	waitFor(t, "the run's own phase record", func() bool {
+	waitFor(t, "the launch's own record", func() bool {
 		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
 		for _, row := range rows {
 			var rec map[string]any
-			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "sandbox" {
+			if row.Type == "executor_collected" && json.Unmarshal(row.Payload, &rec) == nil {
 				record = rec
 				return true
 			}
@@ -367,15 +368,15 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if boxes := n.liveBoxes(t); len(boxes) != 0 {
 		t.Fatalf("%d box directories survived the turn: %v", len(boxes), boxes)
 	}
-	// THE SEAT'S ROUND CAP REACHED THE CODING AGENT'S ARGV. This is the
+	// THE SEAT'S ROUND CAP REACHED THE HARNESS'S ARGV. This is the
 	// whole of "wired": role.sandbox.max_turns, through the config, the
-	// spec overlay, the launch and the runner, to the flag the CLI reads.
+	// spec overlay, the launch and the runner, to the flag the harness reads.
 	// The field existed and rendered long before anything filled it in, so
 	// only an end-to-end assertion tells a wired knob from a decorative one.
 	argv := n.agentArgv(t)
 	i := slices.Index(argv, "--max-turns")
 	if i < 0 || i == len(argv)-1 {
-		t.Fatalf("the coding agent was invoked uncapped: %v", argv)
+		t.Fatalf("the harness was invoked uncapped: %v", argv)
 	}
 	if argv[i+1] != "7" {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
@@ -383,11 +384,11 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// AND THE MODEL OF THE ENTRY THE LAUNCH PICKED, which is the half of a
 	// run's pairing the seat's phases on this host cannot show: those run on the
 	// chain's head, a different entry altogether, so a run handed their
-	// model — or none, on the CLI's own default — would look the same from
+	// model — or none, on the harness's own default — would look the same from
 	// everywhere else.
 	m := slices.Index(argv, "--model")
 	if m < 0 || m == len(argv)-1 || argv[m+1] != codingModel {
-		t.Fatalf("the coding agent was not handed the coder entry's model %s: %v", codingModel, argv)
+		t.Fatalf("the harness was not handed the coder entry's model %s: %v", codingModel, argv)
 	}
 	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
 	// resume path ends a thread's turn as surely as one that ends on the
@@ -434,7 +435,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // asserted the last two and assumed the first — which was the one that was
 // false, for the whole life of the feature, so the answer ran as an unrelated
 // turn and the box waited out its pause TTL.
-func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
+func TestAnExecutorThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
 	n := startCoding(t, codingModeAsk)
 	waitFor(t, "the seat to be claimed", func() bool {
@@ -513,8 +514,10 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	// asking run's own conversation, resumed in its box with the person's
 	// words as its next prompt — the last argv the box recorded.
 	argv := n.agentArgv(t)
-	if !slices.Contains(argv, "--resume") || !slices.Contains(argv, codingSession) {
-		t.Fatalf("the answered run was not resumed in its own session: argv = %v", argv)
+	if i := slices.Index(argv, "--resume"); parked.SessionID == "" || i < 0 || i+1 >= len(argv) ||
+		argv[i+1] != parked.SessionID {
+		t.Fatalf("the answered run was not resumed in the session the asking run parked in (%q): "+
+			"argv = %v", parked.SessionID, argv)
 	}
 	if brief := n.agentBrief(t); !strings.Contains(brief, "target main, please") {
 		t.Fatalf("the resumed run was not given the answer: its prompt = %q", brief)
@@ -531,7 +534,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 // (ADR-0068). The run asks through `ask_and_wait` over its bridge, with its
 // options as options; the board the Inbox reads carries the question as a
 // decision; a person answers by choosing one, through the route the Inbox's
-// option button presses (`answer_run` with `choice`); and the run resumes in
+// option button presses (`answer_executor` with `choice`); and the run resumes in
 // its own session told the option it was given, in its own words and by its
 // id, then submits its work.
 //
@@ -567,12 +570,12 @@ func TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes(t *testing.T) {
 		t.Fatalf("the board carries %v, want the question with its decision", row)
 	}
 
-	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerRunTool,
+	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerExecutorTool,
 		map[string]any{"args": map[string]any{"turn_id": parked.TurnID,
 			"launch_id": parked.LaunchID, "choice": "main"}},
 		map[string]string{opkey.Header: uuid.Must(uuid.NewV7()).String()})
 	if status != http.StatusOK {
-		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerRunTool, status, raw)
+		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerExecutorTool, status, raw)
 	}
 	waitFor(t, "the answered run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
@@ -616,7 +619,7 @@ func (n *codingNode) settledOutcome(t *testing.T, turnID string) string {
 }
 
 // withBoxRepo is the coding company hosting code, as
-// [TestACodingRunChecksOutPushesAndIsHeldToItsGrant] runs it: one repository,
+// [TestAnExecutorChecksOutPushesAndIsHeldToItsGrant] runs it: one repository,
 // `web`, the coding seat's own, and the seat's code access full, so a
 // checkout that names no access is given write.
 func withBoxRepo(doc string) string {
@@ -633,10 +636,10 @@ func withBoxRepo(doc string) string {
 `
 }
 
-// A CODING RUN CHECKS A REPOSITORY OUT, PUSHES IT AND IS HELD TO ITS GRANT
-// (ADR-0086), end to end: the run is launched with the box's git environment
+// AN EXECUTOR CHECKS A REPOSITORY OUT, PUSHES IT AND IS HELD TO ITS GRANT
+// (ADR-0093), end to end: the run is launched with the box's git environment
 // and no repository; its model calls `code_checkout` for web over the bridge,
-// the row is granted web to write, and the stand-in CLI runs the commands the
+// the row is granted web to write, and the stand-in harness runs the commands the
 // answer gave, commits one file and pushes its branch by git alone. The code
 // host records the push as the agent's, through this launch, on the seat's
 // branch for the run, its commit carrying the run's trailers; and once the
@@ -646,7 +649,7 @@ func withBoxRepo(doc string) string {
 // credential and the run fails, red; code_checkout granting nothing on the
 // row → the clone is refused not_granted, red; the run's token minted for
 // another launch → refused run_superseded, red.
-func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
+func TestAnExecutorChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	t.Parallel()
 	// THE NODE'S OWN ADDRESS, KNOWN BEFORE IT BOOTS: CREWLET_BOX_GIT_URL is
 	// read once at boot, and the box dials it from the same host, so the
@@ -729,9 +732,9 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	case push.Via != code.ViaGit || push.ActorKind != string(code.PrincipalAgent) || push.ActorSeat != "swe":
 		t.Errorf("the push is recorded via %s by %s %q; want via git by the agent swe", push.Via,
 			push.ActorKind, push.ActorSeat)
-	case push.Run.RunID != run.LaunchID || push.Run.CodingAgent != codingagent.ClaudeCodeName:
+	case push.Run.RunID != run.LaunchID || push.Run.Harness != executor.ClaudeCodeName:
 		t.Errorf("the push is recorded as run %q by %q; want this launch, %s, by %s", push.Run.RunID,
-			push.Run.CodingAgent, run.LaunchID, codingagent.ClaudeCodeName)
+			push.Run.Harness, run.LaunchID, executor.ClaudeCodeName)
 	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != code.ResultOK:
 		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
 	}
@@ -750,8 +753,10 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	}
 
 	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
-	// each asked as a literal of the pushed commit's whole message.
-	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.LaunchID,
+	// each asked as a literal of the pushed commit's whole message. The run
+	// is named by its turn, as the executors board names it, since a turn's
+	// launches are one executor's work.
+	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.TurnID,
 		"Crewlet-Work-Item: none"} {
 		got, err := seam.GitRead(t.Context(), code.GitQuery{Kind: code.GitLog, RepoID: repo.ID,
 			Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"},
@@ -767,7 +772,7 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	// AND ITS TOKEN ADMITS NOTHING ONCE THE RUN HAS ENDED.
 	token, err := os.ReadFile(tokenPath)
 	if err != nil || len(token) == 0 {
-		t.Fatalf("the coding CLI kept no git token (%v)", err)
+		t.Fatalf("the harness kept no git token (%v)", err)
 	}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		base+"/web.git/info/refs?service=git-upload-pack", nil)
@@ -894,6 +899,15 @@ func countOf(list []string, want string) int {
 	return n
 }
 
+// collectedARun reports whether a phase record names the run it collected —
+// the harness that did the work or the box it ran in — which only the executor's
+// record that collected one does.
+func collectedARun(rec map[string]any) bool {
+	agent, _ := rec["harness"].(string)
+	box, _ := rec["sandbox_id"].(string)
+	return agent != "" || box != ""
+}
+
 // The board an operator looks at when a run needs somebody.
 //
 // The DURABLE record, over the same query channel every other read uses: a run
@@ -925,7 +939,7 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	if parked["question"] != codingQuestion {
 		t.Fatalf("question = %v", parked["question"])
 	}
-	if parked["agent_handle"] != "swe" || parked["coding_agent"] != "claude-code" {
+	if parked["agent_handle"] != "swe" || parked["harness"] != "claude-code" {
 		t.Fatalf("row = %v", parked)
 	}
 	if parked["box_exists"] != true || parked["paused_at"] == "" {
@@ -939,12 +953,12 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	}
 }
 
-// board reads the sandbox-runs answer over the query surface, exactly as the
+// board reads the executors answer over the query surface, exactly as the
 // dashboard does.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		n.server.URL+"/query/sandbox_runs", nil)
+		n.server.URL+"/query/executors", nil)
 	if err != nil {
 		t.Fatalf("build the request: %v", err)
 	}
@@ -954,7 +968,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("GET /query/sandbox_runs = %d", res.StatusCode)
+		t.Fatalf("GET /query/executors = %d", res.StatusCode)
 	}
 	var payload struct {
 		Runs []map[string]any `json:"runs"`
@@ -965,7 +979,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 	return payload.Runs
 }
 
-// THE RESTART LEG of the gate. A coding job outlives the engine that started
+// THE RESTART LEG of the gate. An executor outlives the engine that started
 // it, so the state that matters is the row: a fresh process picks the run up
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // turn the dead process parked.
@@ -973,7 +987,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // AND THE RUN KEEPS ITS TOOLS. The box goes on dialing the URL it was handed,
 // on the node's own address, and the process now listening there never opened
 // its session: it rebuilds it from the run's park under the token the box
-// holds, and the run's submission — made after the restart, as a real CLI's
+// holds, and the run's submission — made after the restart, as a real harness's
 // last call is — lands on the row and decides the turn's outcome. Refused, the
 // run that did its work was rescued as `incomplete`.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
@@ -1067,7 +1081,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 		for _, row := range rows {
 			var rec map[string]any
 			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "execute" &&
-				rec["backend"] == "sandbox" {
+				collectedARun(rec) {
 				collected, _ = rec["launch_id"].(string)
 				return true
 			}
@@ -1132,11 +1146,11 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	if box.Home() != sandbox.DefaultHome {
 		t.Fatalf("home = %q, want %q", box.Home(), sandbox.DefaultHome)
 	}
-	runner := codingagent.NewClaudeCode()
+	runner := executor.NewClaudeCode()
 	if err := runner.Install(t.Context(), box); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	p := codingagent.PathsFor(box)
+	p := executor.PathsFor(box)
 
 	// A file written from the host side of the mount is visible inside.
 	if err := box.WriteFile(t.Context(), p.WorkDir()+"/probe", []byte("hello")); err != nil {

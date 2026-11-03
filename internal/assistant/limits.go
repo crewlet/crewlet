@@ -106,7 +106,7 @@ const (
 	PersonBudgetScope = "person"
 )
 
-// assistantHome is the per-person home a CLI-backed model runs each of the
+// assistantHome is the per-person home a harness-backed model runs each of the
 // person's rounds in (llm.WithSeat): `assistant:` and the first twelve hex
 // digits of their id. A COLON, which no seat handle may carry (a seat handle
 // is one segment, internal/iam), so a person's assistant home can never be a

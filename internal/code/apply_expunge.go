@@ -342,7 +342,7 @@ func topOf(chain []LayerRow, ids []string) bool {
 // repository's expunge state, its counters and its clean scan by its key;
 // whether a pack of
 // the repository dates its content from before a request, one seek of the
-// packs' content index (replicated 0090) that stops at its first row.
+// packs' content index (replicated 0094) that stops at its first row.
 const (
 	expungeStateSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position,
 		expunged_at, expunge_dropped_objects, expunge_dropped_bytes FROM code_repos WHERE id = ?`

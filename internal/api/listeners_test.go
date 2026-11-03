@@ -149,9 +149,16 @@ var publishedRoutes = []string{
 	"POST /webhooks/forge",
 	"GET /webhooks/slack-oauth",
 	"GET /webhooks/github-app",
+	// AN MCP SERVER'S SIGN-IN: the page a vendor sends the person back to,
+	// which trusts nothing but the state's signature, and the engine's
+	// client metadata document a vendor reads its client id from.
+	"GET /webhooks/mcp-oauth",
+	"GET /webhooks/mcp-oauth/client-metadata.json",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	mcpbridge.ServerPattern,
 	mcpbridge.SteerPattern,
+	mcpbridge.SkillPattern,
 	host.PatternBoxInfoRefs,
 	host.PatternBoxUploadPack,
 	host.PatternBoxReceivePack,
@@ -396,7 +403,7 @@ func TestBothListenersDrain(t *testing.T) {
 	}
 }
 
-// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a coding CLI inside a box
+// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a harness inside a box
 // polls it with the run's token alone, so it is served on the public listener
 // and never on api.port, asks for no operator token — an unminted token gets
 // the bridge's own 401 — and is served through a drain, which cannot wait for
@@ -446,7 +453,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 }
 
 // GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
-// with their own bound token (ADR-0078), and api.public is the socket whose
+// with their own bound token (ADR-0085), and api.public is the socket whose
 // premise is that it serves only outside parties and asks no operator token —
 // so /git/ and /code/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach

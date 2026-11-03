@@ -110,6 +110,59 @@ describe("Activity", () => {
     });
   });
 
+  // A CONVERSATION OF THE READER AND THE ACTOR ALONE IS NOT NAMED: its title
+  // is the actor's own name, which the row has just said. A group
+  // conversation and a named room still are.
+  test("a line names the room, except a conversation of the reader and the actor alone", async () => {
+    const summary = (id: string, kind: string, participants: string[]) => ({
+      channel: { v: 1, id, kind, created_at: "2026-10-01T00:00:00Z" },
+      participants,
+      unread: 0,
+      mentions: 0,
+    });
+    const row = (key: string, kind: string, channel: string, channelKind: string) => ({
+      ...item,
+      key,
+      kind,
+      emoji: "👍",
+      message_id: key,
+      channel_id: channel,
+      channel_kind: channelKind,
+      channel_name: channelKind === "public" ? "launch" : undefined,
+      unread: false,
+    });
+    mount(<ActivityView />, "#/chatlet/activity", {
+      chat_channels: {
+        ...RAIL,
+        channels: [
+          summary("dm-1", "dm", ["ada", "bo"]),
+          summary("grp-1", "group", ["ada", "bo", "ops"]),
+        ],
+      },
+      chat_activity: {
+        ...FEED,
+        items: [
+          row("reply-dm", "reply", "dm-1", "dm"),
+          row("mention-dm", "mention", "dm-1", "dm"),
+          row("reaction-dm", "reaction", "dm-1", "dm"),
+          row("reply-group", "reply", "grp-1", "group"),
+          row("reply-room", "reply", ROOM, "public"),
+        ],
+      },
+      chat_message: { ...SERVED, channel_kind: "dm", view: view("reply-dm", "bo") },
+    });
+    const qualifiers = async () =>
+      (await screen.findAllByText(/^(replied|mentioned|reacted)/)).map((el) => el.textContent);
+    await waitFor(async () => expect(await qualifiers()).toHaveLength(5));
+    expect(await qualifiers()).toEqual([
+      "replied to a thread",
+      "mentioned you",
+      "reacted 👍 to your message",
+      "replied to a thread in Bo Chen, Ops Agent",
+      "replied to a thread in #launch",
+    ]);
+  });
+
   test("Unread only asks the engine for the unread rows", async () => {
     const { socket } = mount(<ActivityView />, "#/chatlet/activity", {
       chat_activity: FEED,

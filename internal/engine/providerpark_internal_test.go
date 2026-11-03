@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -39,7 +40,7 @@ type limitedModel struct {
 	mu    sync.Mutex
 	reset time.Time
 	// retry is when the backend tries the entry again, where it caps the
-	// vendor's reset as cliagent does at an hour; zero is the reset.
+	// vendor's reset as harness does at an hour; zero is the reset.
 	retry time.Time
 	now   func() time.Time
 	calls int
@@ -60,9 +61,9 @@ func (m *limitedModel) Complete(context.Context, llm.Request) (*llm.Completion, 
 		default:
 			retry = now.Add(time.Hour)
 		}
-		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "opus", Key: "default", RetryAt: retry, ResetsAt: m.reset,
-			Agent: "claude-code", Subscription: true,
+			Harness: "claude-code", Subscription: true,
 			Err: errors.New("You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)")}
 	}
 	return &llm.Completion{Content: "done", Model: "opus"}, nil
@@ -205,7 +206,7 @@ func TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce(t *testing.T) {
 	parks := r.parks()
 	if len(parks) != 1 || parks[0].ResetsAt == nil || !parks[0].ResetsAt.Equal(reset) ||
 		!slices.Equal(parks[0].ProviderKeys, []string{"default"}) || parks[0].AgentHandle != "lead" ||
-		parks[0].CLI != "claude-code" || !parks[0].Subscription {
+		parks[0].Harness != "claude-code" || !parks[0].Subscription {
 		t.Fatalf("parks published = %+v, want one naming the reset and the chain", parks)
 	}
 
@@ -409,7 +410,7 @@ func newEmptyRegistry(t *testing.T) *phase.Registry {
 }
 
 // knownLimit is a model whose entry already knows it is at its limit until
-// retry, as cliagent's does once its CLI reported it ([chain.Unready]).
+// retry, as harness's does once its harness reported it ([chain.Unready]).
 type knownLimit struct{ retry time.Time }
 
 func (knownLimit) Model() string { return "opus" }
@@ -549,7 +550,7 @@ func (r *probeRig) park(t *testing.T, handle string, retry time.Time) {
 // ONE PROBE PER LIMITED CHAIN, HOWEVER MANY SEATS IT HOLDS. Three seats parked
 // on one spent entry for 40 hours are probed once an hour, not three times,
 // and the answer that ends the limit releases all three: the limit is the
-// entry's, and each probe is a full, charged run of its CLI.
+// entry's, and each probe is a full, charged run of its harness.
 //
 // Mutation: give each seat's park an alarm and a probe of its own, and every
 // tick asks the model three times.
@@ -623,9 +624,11 @@ func TestSeatsOnOneLimitedEntryShareOneProbe(t *testing.T) {
 }
 
 // heldCall is a model whose calls the case scripts: the first `limited` calls
-// refuse for a limit at once, and every later one is held until its context
-// ends (or the case does), lingering a moment after, so a case can see who
-// waited for it. started is told of each held call, and ended counts them.
+// refuse for a limit at once, naming a next try later than the one a case
+// parks on (so the renewal is news, which is published), and every later one
+// is held until its context ends (or the case does), lingering a moment after,
+// so a case can see who waited for it. started is told of each held call, and
+// ended counts them.
 type heldCall struct {
 	limited int
 	linger  time.Duration
@@ -644,7 +647,7 @@ func (*heldCall) Model() string { return "opus" }
 func (m *heldCall) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
 	if int(m.calls.Add(1)) <= m.limited {
 		return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default",
-			RetryAt: parkedAt.Add(time.Hour), Err: errors.New("You've hit your 5-hour limit")}
+			RetryAt: parkedAt.Add(2 * time.Hour), Err: errors.New("You've hit your 5-hour limit")}
 	}
 	m.started <- struct{}{}
 	select {
@@ -826,5 +829,64 @@ func TestAParkItsSeatsReleaseForgotFirstIsUndoneWhole(t *testing.T) {
 	}
 	if got := released.Load(); got != 1 {
 		t.Fatalf("%d releases published, want the one saying the seat was released", got)
+	}
+}
+
+// pastLimit is a model that refuses every call for a limit naming a next try
+// already past: what an entry kept on the monotonic clock said after its host
+// slept inside its window. calls counts what reached it.
+type pastLimit struct{ calls atomic.Int32 }
+
+func (*pastLimit) Model() string { return "opus" }
+
+func (m *pastLimit) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	m.calls.Add(1)
+	return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default",
+		RetryAt: parkedAt.Add(-time.Minute), Err: errors.New("You've hit your 5-hour limit")}
+}
+
+// A PROBE REFUSED WITH A NEXT TRY ALREADY PAST WAITS BEFORE IT ASKS AGAIN.
+// Armed for the instant its models named, a probe whose models named one
+// already past was due at once: it asked, was refused and asked again as fast
+// as the call returned, renewing every parked seat's park on each pass. After
+// a host slept inside a limit's window that was thousands of probes a second,
+// with a WARN per seat per probe while the broker was down. So the renewal
+// waits the shortest window an entry sits out, and says when it is tried
+// again by that.
+//
+// Mutation: arm the renewal for the instant the models named, and its alarm
+// is due at once.
+func TestAProbeRefusedWithANextTryAlreadyPastWaitsBeforeItAsksAgain(t *testing.T) {
+	t.Parallel()
+	model := &pastLimit{}
+	r := newProbeRig(t, model)
+	var parks []types.SeatProviderParked
+	var mu sync.Mutex
+	r.q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if p, ok := events.DataAs[*types.SeatProviderParked](ev); ok && p != nil {
+			mu.Lock()
+			parks = append(parks, *p)
+			mu.Unlock()
+		}
+	})
+	r.park(t, "lead", parkedAt.Add(-time.Minute))
+	live := r.alarms.live()
+	if len(live) != 1 || live[0].wait != 0 {
+		t.Fatalf("alarms = %+v, want the park's one probe due now", live)
+	}
+	live[0].fire()
+	if got := model.calls.Load(); got != 1 {
+		t.Fatalf("the probe asked the models %d times, want once", got)
+	}
+	next := r.alarms.live()
+	if len(next) != 1 || next[0].wait != harness.ShortestSitOut {
+		t.Fatalf("alarms = %+v, want the renewal's one armed %s on, not at once",
+			next, harness.ShortestSitOut)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(parks) != 2 || !parks[1].RetryAt.Equal(parkedAt.Add(harness.ShortestSitOut)) {
+		t.Errorf("parks = %+v, want the renewal saying the seat is tried again %s on",
+			parks, harness.ShortestSitOut)
 	}
 }

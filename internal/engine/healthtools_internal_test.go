@@ -115,7 +115,7 @@ func shownTools(t *testing.T, c *Company, handle string, reg *tools.Registry) []
 // launched with beside them — its standing instructions and its brief — the
 // run launching nothing.
 //
-// THE SURFACE THE LAUNCH IS HANDED, since the executor is its coding CLI's own
+// THE SURFACE THE LAUNCH IS HANDED, since the executor is its harness's own
 // run: the bridge serves that surface and nothing else, so what is active on
 // it is exactly what the run may call.
 func shownExecutor(t *testing.T, c *Company, handle string, reg *tools.Registry) ([]string, string) {

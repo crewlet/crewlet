@@ -44,7 +44,7 @@ func (whoami) Call(ctx context.Context, _ map[string]any) (tools.Result, error) 
 // arrives as the development principal. The MCP SDK keeps the context of the
 // request that opened a session for that session's whole life, and the turn's
 // own principal defers to any answer already on the context. So every gated
-// builtin a coding agent called over the bridge was refused as needing a
+// builtin a harness called over the bridge was refused as needing a
 // credential: a seat's executor could not read the board, look a colleague up
 // or submit its work.
 //

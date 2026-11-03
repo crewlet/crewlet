@@ -44,7 +44,7 @@
 // (internal/toolname/toolnametest), so a tool built outside both sources
 // fails there rather than dropping out of the walk unread. A hook's own name
 // that no surface lists to a model, the tool bridge's `steer_take`, which a
-// coding CLI's hook calls, is no tool of a surface, and stays with its owner.
+// harness's hook calls, is no tool of a surface, and stays with its owner.
 package toolname
 
 // The discovery pair: the two meta-tools the executor reaches MCP tools
@@ -205,7 +205,7 @@ const (
 	CodeGetCheckFailures = "code_get_check_failures"
 	// CodeRerunChecks runs a commit's errored checks again.
 	CodeRerunChecks = "code_rerun_checks"
-	// CodeCheckout checks a repository out into a coding run's box, which
+	// CodeCheckout checks a repository out into an executor's box, which
 	// the code host's refusals send a run to: offered on the executor run's
 	// surface of its own, beside [AskAndWait], and named by no authority row
 	// — the code host's read verb and each repository's grant decide it.

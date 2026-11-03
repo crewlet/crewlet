@@ -632,8 +632,8 @@ func (b askedBoxes) Box(ctx context.Context, turn *turnctx.Turn) (builtin.Artifa
 }
 
 // A BOX IS READ FOR A SEAT'S OWN RUN, AND FOR NO OTHER CALLER. A person, or
-// their own assistant, calling through the operator catalogue has no coding
-// run: both box sources are refused `forbidden`, and the node's box source is
+// their own assistant, calling through the operator catalogue has no executor:
+// both box sources are refused `forbidden`, and the node's box source is
 // never asked, whatever box it could hand over. A seat's call on a node that
 // runs no sandbox is refused `unavailable`, never answered as though the seat's
 // run had stopped. Mutation: drop the caller check from fileSources.openBox and
@@ -713,7 +713,7 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 		waits bool
 	}{
 		{name: "a path naming no file", box: &fakeBox{files: map[string]string{}},
-			class: tools.RefusalInvalid, says: "isn't a file in your coding run's workspace"},
+			class: tools.RefusalInvalid, says: "isn't a file in your workspace"},
 		{name: "a provider that did not answer", box: &fakeBox{err: sandbox.Because(
 			sandbox.WhyProviderUnavailable, errors.New(detail))},
 			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
@@ -796,7 +796,7 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 	got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
 		"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
 	if tools.RefusalOf(got) != tools.RefusalInvalid ||
-		!strings.Contains(got.Output, "dist isn't a directory in your coding run's workspace") ||
+		!strings.Contains(got.Output, "dist isn't a directory in your workspace") ||
 		len(r.f.publishes) != 0 {
 		t.Errorf("a directory the workspace does not hold: %v %q", tools.RefusalOf(got), got.Output)
 	}

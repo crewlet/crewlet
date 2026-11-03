@@ -118,7 +118,7 @@ func TestTheGuidesStockImageRecipeIsToldByWhoClearsIt(t *testing.T) {
 }
 
 // stockImageRecipe is the guide's stock-image setup step as the page writes
-// it: the step that installs the coding CLI with npm and gh with curl.
+// it: the step that installs the harness with npm and gh with curl.
 func stockImageRecipe(t *testing.T) sandbox.SetupStep {
 	t.Helper()
 	page, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-sandbox.md"))

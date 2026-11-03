@@ -93,7 +93,7 @@ type Channel struct {
 	Purpose string `json:"purpose,omitempty" untrusted:"fence"`
 
 	// Unit is the unit whose room this is, empty for every other kind. It
-	// is IDENTITY — what the lead fallback resolves through — and never a
+	// is IDENTITY (what the room's answerer resolves through) and never a
 	// read scope and never a credential. It is the org chart's, like the
 	// room's membership: recorded at the create and moved only by the
 	// chart's own write, to the unit that declares the room now
@@ -198,6 +198,18 @@ type Message struct {
 	// newest hundred messages on every poll.
 	Collective bool `json:"collective,omitempty"`
 
+	// Reach is who a PERSON'S post reached and why: the seats its record
+	// routed it to ([Notify.Recipients]), in the order the routing reached
+	// them, written by the applier from that record. Nil on everything
+	// else, an agent's post and a room event included, so a reader can tell
+	// a post that reached nobody (a Reach with no recipients) from one
+	// nobody recorded the reach of.
+	//
+	// ON THE DOCUMENT because it is a fact about the post, read with it,
+	// pruned and erased with it. Whether each seat has ANSWERED changes
+	// with later messages, so that is `chat_receipts` ([MessageView.Answered]).
+	Reach *Reach `json:"reach,omitempty"`
+
 	// CreatedAt is the BROKER's own instant. A message's displayed time
 	// is the broker's for the reason the ordering is: two people posting
 	// a second apart on nodes whose clocks disagree by a minute would
@@ -226,6 +238,77 @@ type Message struct {
 	Event *RoomEvent `json:"event,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// Reach is who a person's post reached.
+type Reach struct {
+	// Recipients are the seats the post woke, each under the strongest
+	// reason it reached them for, in routing order: at most
+	// [MaxRecipients]. Empty is a post that reached no agent.
+	Recipients []Reached `json:"recipients,omitempty"`
+
+	// Truncated says a routing cap left seats out ([Notify.WakesTruncated]).
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Reached is one seat a post reached, and why.
+//
+// NOT [Recipient], whose tags are the record's compact wire form: this is
+// what a reader of the message renders, so it spells its fields out. The two
+// hold the same fields, so a record's recipient converts to one directly, and
+// a field added to either stops that conversion compiling until the other
+// follows.
+type Reached struct {
+	Handle string `json:"handle"`
+	Reason Reason `json:"reason"`
+}
+
+// reachOf is the reach a post's record carries, for the applier to write onto
+// the message: the routed set of a PERSON'S post, or nil.
+//
+// NIL WHERE NOTHING WAS ROUTED FOR A PERSON: an agent's post, which a receipt
+// is not shown on, and a record with no routing snapshot (a system line).
+func reachOf(author AuthorKind, n *Notify) *Reach {
+	if author != AuthorHuman || n == nil {
+		return nil
+	}
+	out := &Reach{Truncated: n.WakesTruncated}
+	for _, r := range n.Recipients {
+		out.Recipients = append(out.Recipients, Reached(r))
+	}
+	return out
+}
+
+// widen adds the seats an EDIT newly reached to a post's reach, each once and
+// after the seats it already reached, keeping the reason a seat was first
+// reached for; and reports the seats it added.
+//
+// An edit wakes only whom it newly names ([ResolveMentions]), so its record's
+// recipients are new mentions, and a seat already reached for another reason
+// (it follows the room in full) was told about the message when it was posted.
+func (r *Reach) widen(n *Notify) []string {
+	if r == nil || n == nil {
+		return nil
+	}
+	held := make(map[string]bool, len(r.Recipients))
+	for _, seat := range r.Recipients {
+		held[seat.Handle] = true
+	}
+	r.Truncated = r.Truncated || n.WakesTruncated
+	var added []string
+	for _, rec := range n.Recipients {
+		if held[rec.Handle] {
+			continue
+		}
+		if len(r.Recipients) >= MaxRecipients {
+			r.Truncated = true
+			break
+		}
+		held[rec.Handle] = true
+		r.Recipients = append(r.Recipients, Reached(rec))
+		added = append(added, rec.Handle)
+	}
+	return added
 }
 
 // EventKind is what a room event says happened.

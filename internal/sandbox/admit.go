@@ -60,7 +60,7 @@ type TurnGate func(ctx context.Context, handle string, route ResumeRoute) (conte
 type ResumeRoute string
 
 const (
-	// ResumeCompletion is a coding run's completion: its job collected,
+	// ResumeCompletion is a launch's completion: its job collected,
 	// and its turn re-entered for the engine's delivery check and the
 	// reviewer, whose send-back launches the run again.
 	ResumeCompletion ResumeRoute = "completion"
@@ -160,7 +160,7 @@ func waitingRefusal(err error) (Refusal, bool) {
 // kept until the condition clears.
 type refusedCompletion struct {
 	cond    Condition
-	ev      types.SandboxRunCompleted
+	ev      types.ExecutorFinished
 	trigger *events.Event
 
 	// heldUntil, where set, is the instant before which this node refuses the
@@ -177,11 +177,12 @@ type refusedCompletion struct {
 //
 // # Why it is kept, when the waiter announces it again anyway
 //
-// The waiter that drives the run's box — the fleet's, or the box host's own
-// (boxhost.go) — re-announces a finished run on every poll for as long as its
-// row is running, and that is what makes acknowledging a refused completion
-// safe: nothing is lost with the delivery. But the next poll is up to one
-// [DefaultPollInterval] away, and the end of a condition is an event the
+// The waiter that drives the run's box (the fleet's, or the box host's own,
+// boxhost.go) re-announces a finished run for as long as its row is
+// running, on its schedule (reannounce.go), and that is what makes
+// acknowledging a refused completion safe: nothing is lost with the delivery.
+// But the next announcement is up to [reannounceCeilingPolls] poll intervals
+// away, and the end of a condition is an event the
 // engine already observes (a seat's turn ending, a renew proving ownership
 // again, a provider's limit lifting). So the clearing re-fires the completion
 // itself, and the poll is the backstop for a clearing nothing signals. Both
@@ -218,7 +219,7 @@ type refusedCompletion struct {
 // benched for. Held here, it goes with the node: its restart forgets it, and
 // so does its letting go of the seat ([Coordinator.ReleaseSeat]), so the job's
 // next announcement asks whoever holds the seat then. The waiter announces the
-// job on every poll meanwhile, as it does for any refused completion; each
+// job on its schedule meanwhile, as it does for any refused completion; each
 // announcement costs this node a lookup, not a collection and a review, and
 // the job's box, which the collection paused, is left asleep, since the job was
 // read back already ([Waiter.reach]). A seat's budget, which every node reads
@@ -258,7 +259,7 @@ type refusedCompletion struct {
 // the seat host lets go of a seat before the release drops what is kept for
 // it, so a keep that finds the seat held is one the release drops, and one
 // that finds it gone is dropped now.
-func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, refusal Refusal,
+func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Event, refusal Refusal,
 	held bool, seen map[signal]uint64,
 ) {
 	if refusal.Condition == "" {
@@ -300,7 +301,7 @@ const stopLanded Condition = "stop"
 // ANOTHER JOB OF THE SAME TURN IS NOT HELD: a hold is the one job's whose
 // resume met the refusal, and a turn that launched again since has a new job,
 // whose own completion is the next question. The stale keep is dropped.
-func (c *Coordinator) stillRefused(ev types.SandboxRunCompleted) (Refusal, bool) {
+func (c *Coordinator) stillRefused(ev types.ExecutorFinished) (Refusal, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept, ok := c.refused[ev.TurnID]

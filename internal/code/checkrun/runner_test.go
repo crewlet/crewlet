@@ -70,7 +70,7 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 // A CHECK'S BOX HOLDS NO MODEL'S CREDENTIAL: its environment is EXACTLY the
 // company's check secrets its definition names — resolved — what the check is,
 // and the code host's base and the check's own token with git's configuration
-// for them; no secret it did not name, no coding agent's sign-in, no login's
+// for them; no secret it did not name, no harness's sign-in, no login's
 // files and no commit identity.
 //
 // Mutation: hand the box every code.checks.env entry, or the process's own
@@ -89,9 +89,9 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	key := f.queue(oidOf("c"), d)
 	box := f.container.box(t)
 	spec := f.container.spec(0)
-	if spec.CodingAgent != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 {
+	if spec.Harness != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 {
 		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
-			spec.CodingAgent, len(spec.CredentialFiles), len(spec.Repos))
+			spec.Harness, len(spec.CredentialFiles), len(spec.Repos))
 	}
 	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT"},
 		config.ReservedCheckEnv()...)

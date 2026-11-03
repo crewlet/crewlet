@@ -20,8 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the tenth domain
-// to run it, and the eighth that claims identity: every promise the framework
+// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the eleventh
+// domain to run it, and the ninth that claims identity: every promise the framework
 // makes about a strict log (stamping, deferral, the gates, the eviction
 // census, the trimmed record) is held here by the cases that hold it for
 // Worklet and Doclet, never by a copy of them.
@@ -199,8 +199,8 @@ func suitePack(id string) *code.PackRef {
 // suitePush is four pushes of id: a person's of its main branch with its
 // pack, received by git; a seat's of a branch in its namespace, built by the
 // engine, whose run carries every field at its bound; the seat's coding
-// box's of another, received by git, whose run names as well the coding run
-// that pushed — its launch's UUID — and its coding agent at its bound; and the
+// box's of another, received by git, whose run names as well the executor
+// that pushed — its launch's UUID — and its harness at its bound; and the
 // ref lifecycle's expiry of the first seat branch, on the engine's own
 // account, whose row keeps the commit it deleted (its Old). Its
 // committer counted both of the seat's on the company day of the suite's
@@ -237,7 +237,7 @@ func suitePush(id string) code.PushBatch {
 		PushID: "push-box-" + id,
 		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: "suite-seat",
 			Run: code.RunProvenance{TurnID: bound, WorkBackend: bound, WorkKey: bound, Model: bound,
-				RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: bound}},
+				RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: bound}},
 		Via:  code.ViaGit,
 		Node: "suite-node",
 		Commands: []code.Command{{

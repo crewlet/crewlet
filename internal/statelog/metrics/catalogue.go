@@ -452,8 +452,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left on every log that claims identity (Worklet's, Doclet's, " +
-				"the code log's, the identity estate's, the artifacts log's, the " +
-				"artifact datastore's, Ask Crewlet's and Chatlet's): the ceiling " +
+				"the identity estate's, the artifacts log's, the artifact " +
+				"datastore's, Ask Crewlet's, Chatlet's, the executor log's and " +
+				"the code log's): the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -470,7 +471,7 @@ func Catalogue() []Instrument {
 			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Arbitration anchors this node's applier removed under the " +
-				"trim's `trimmed` records (ADR-0073), counted once the " +
+				"trim's `trimmed` records (ADR-0080), counted once the " +
 				"transaction that removed them commits. Every node applies " +
 				"every record, so every data node counts the same removals. " +
 				"Flat is the normal reading of a log whose purged objects all " +
@@ -2607,13 +2608,13 @@ func Catalogue() []Instrument {
 			Attributes: []string{"outcome"},
 			Shows: "How long an Ask Crewlet turn segment runs from the question to its " +
 				"end, by outcome. A three-step read is held to 15 s at the median; a " +
-				"distribution reaching the turn's own timeout is a model or a CLI too " +
+				"distribution reaching the turn's own timeout is a model or a harness too " +
 				"slow for an interactive drawer.",
 		},
 		{
 			Name: AssistantFirstOutputLatency, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Shows: "How long a person waits from asking to the first step or text the " +
-				"drawer shows. Held to 4 s at the median; a rise is a CLI's cold start " +
+				"drawer shows. Held to 4 s at the median; a rise is a harness's cold start " +
 				"or its slots queued behind other turns.",
 		},
 		{

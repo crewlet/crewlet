@@ -13,14 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CODING RUN'S QUESTION, ONCE ANSWERED, IS ONE OF A PERSON'S ANSWERED
+// AN EXECUTOR'S QUESTION, ONCE ANSWERED, IS ONE OF A PERSON'S ANSWERED
 // DECISIONS (ADR-0068).
 //
 // A run asks in the shape a work item's decision is asked, and the person who
 // answered reads it back beside the work item asks they answered: what was
 // asked, what they chose or said, who answered and when. The run's own row
 // forgets its question once the run moves on, so the one account that outlives
-// it is the record of the answer, `sandbox_run_answered`, which carries the
+// it is the record of the answer, `executor_answered`, which carries the
 // question, its decision and the answer, and which every data node's event log
 // keeps for the window this read covers ([worklet.AnsweredWindow]). Read from
 // the FLEET's event log, never one node's ([FleetEvents]).
@@ -28,7 +28,7 @@ import (
 // ONLY ANSWERS THE RUN TOOK (`resumed`): an answer the run could not use was
 // not the decision, and the question it was given to waited for another.
 
-// AnsweredRunAsk is one coding run's question a person answered, as
+// AnsweredRunAsk is one executor's question a person answered, as
 // `answered_decisions` lists it beside a work item's ([worklet.AnsweredAsk]):
 // the same `at` and `answer`, and the run's ask where a work item's carries
 // its `ask`, so the Inbox draws both with one pane.
@@ -76,7 +76,7 @@ func (s Sources) answeredRuns(ctx context.Context, handle string, since time.Tim
 	reach := s.runReach(ctx)
 	for {
 		listing, _, err := s.Events.List(ctx, store.ListQuery{
-			Type: types.SandboxRunAnswered{}.EventType(), AnsweredBy: handle,
+			Type: types.ExecutorAnswered{}.EventType(), AnsweredBy: handle,
 			Since: since, Limit: MaxEventPage, Before: before,
 		})
 		if err != nil {
@@ -117,11 +117,11 @@ type answeredRunItem struct {
 	run sandbox.PendingRun
 }
 
-// answeredRunOf reads one `sandbox_run_answered` record as an answered run
+// answeredRunOf reads one `executor_answered` record as an answered run
 // ask, or false for one that is not: an answer the run did not take, or a
 // record from before answers carried their question.
 func answeredRunOf(rec store.EventRecord) (answeredRunItem, bool) {
-	var e types.SandboxRunAnswered
+	var e types.ExecutorAnswered
 	if json.Unmarshal(rec.Payload, &e) != nil || e.Outcome != types.AnswerResumed ||
 		e.Question == "" {
 		return answeredRunItem{}, false

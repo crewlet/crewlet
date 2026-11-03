@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -92,7 +93,7 @@ func collectorReferences(t *testing.T) collect.References {
 	return refs
 }
 
-// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0072.
+// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0079.
 //
 // A fleet-singleton duty that decides from a domain's rows decides for the
 // whole fleet: the embedding duty publishes the vectors every node applies —
@@ -131,9 +132,10 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 		},
 		"the object collector": {
 			// Every domain a Required table is declared in: a person's
-			// conversation files are Ask Crewlet's.
+			// conversation files are Ask Crewlet's, and a seat's sealed
+			// executor session is the executor log's (ADR-0073).
 			decidesFrom: []string{trackerName, codeName, artifactsdomain.Domain{}.Name(),
-				assistantdomain.Domain{}.Name()},
+				assistantdomain.Domain{}.Name(), executordomain.Domain{}.Name()},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				e.collectorTurn(t.Context(), claim.claim,
 					newCollectorDuty(nil, copiesNamedBy(refs), claim.giveBack))

@@ -381,7 +381,7 @@ func checkInvalid(name string) string {
 // lets it through on less. Each is the phrase a refusal names it by, which
 // names its field; nil where g holds every merge to all old did. THE ONE
 // JUDGEMENT of a gate's loosening, read by the lifecycle decide
-// ([loosenings]), which leaves a loosening to a person (ADR-0081) — field by
+// ([loosenings]), which leaves a loosening to a person (ADR-0088) — field by
 // field, so a change that tightens one field and opens another loosens by the
 // one it opens:
 //

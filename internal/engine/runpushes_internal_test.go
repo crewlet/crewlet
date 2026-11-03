@@ -329,7 +329,7 @@ func TestRunPushesRefusesWhatItCannotRead(t *testing.T) {
 func TestAResumedRecordCarriesTheRunsWholeAccount(t *testing.T) {
 	t.Parallel()
 	run := pushedRun()
-	run.CodingAgent, run.SandboxID = "claude-code", "box-1"
+	run.Harness, run.SandboxID = "claude-code", "box-1"
 	pushed := []sandbox.PushedRef{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: code.ZeroOID,
 		New: oidOf("3"), Pushes: 3}}
 	got := runRecordOf(run, accountOf(sandbox.ResumeRequest{
@@ -338,7 +338,7 @@ func TestAResumedRecordCarriesTheRunsWholeAccount(t *testing.T) {
 	}))
 	want := []types.PushedRefRecord{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-42", Old: code.ZeroOID,
 		New: oidOf("3"), Pushes: 3}}
-	if got.CodingAgent != "claude-code" || got.SandboxID != "box-1" || got.LaunchID != runLaunch ||
+	if got.Harness != "claude-code" || got.SandboxID != "box-1" || got.LaunchID != runLaunch ||
 		!slices.Equal(got.DeliveredRefs, []string{"https://example.com/pr/9"}) || got.RefsElided != 1 ||
 		!slices.Equal(got.Pushed, want) || got.PushedElided != 2 || got.PushedUnread != "" {
 		t.Errorf("the resumed record = %+v, want the run's box and its whole account", got)

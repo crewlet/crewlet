@@ -430,8 +430,8 @@ indicator. Generic ("is thinking…") or plainly figurative ("is finding
 the coffee machine…") is safe; plausible-and-specific is not.
 
 **When it goes up, when it is held and when it comes down is the turn's, not
-this page's.** Every point in that lifecycle — including what a detached
-[sandbox](../concepts/code-sandbox.md) run does to it, which is where most of
+this page's.** Every point in that lifecycle — including what an executor in
+its [box](../concepts/code-sandbox.md) does to it, which is where most of
 its rules are — is the table in
 [Turn Engine § The working status](../concepts/turn-engine.md#the-working-status),
 and that table is the only copy of it. It is identical on Mattermost; what

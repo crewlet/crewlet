@@ -11,6 +11,7 @@ package catalog
 // act tool is read off its verb, see [write]), and internal/toolname's walk,
 // which refuses a copy of one, exempts this file alone for these words.
 const (
+	answerExecutorTool  = "answer_executor"
 	searchKnowledgeTool = "search_knowledge"
 	listProjectsTool    = "list_projects"
 	getPageTool         = "get_page"

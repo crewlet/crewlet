@@ -37,17 +37,16 @@ const (
 	OutcomeSkippedPaused Outcome = "skipped_paused"
 )
 
-// FireKey is the identity of one dispatch, and the whole of the at-most-once
-// guarantee.
+// FireMinute is one schedule's fire at one local minute, whoever it was
+// addressed to: a [FireKey] without its runner.
 //
-// It is a STRUCT rather than a joined string, and that is load-bearing in both
-// backends: SQL keys the row on the column tuple, and Go's comparable structs
-// let the memory twin use this value directly as a map key. A delimiter-joined
-// identity collides the moment a delimiter appears in a name — a unit called
-// "Q3:Launch" and a schedule called "Launch" would produce the same joined key
-// as a unit "Q3" and a schedule ":Launch", and one of the two fires would then
-// be silently suppressed by the other.
-type FireKey struct {
+// It is what the first tick after a restart asks about before it records a
+// missed fire ([Claimer.MinuteClaimed]), because a minute is missed only when
+// NOBODY holds it. One a runner was fired for, or recorded paused, or that an
+// earlier catchup pass already recorded, was not missed, and a skip written
+// for it puts the same tick in the schedule's history twice: once as what
+// happened and once as a miss that did not.
+type FireMinute struct {
 	// Scope is whether a role or a unit owns the schedule.
 	Scope types.ScheduleScope
 	// ScopeID is the owning scope's IDENTITY — see [Entry.ScopeID]. It is
@@ -66,6 +65,20 @@ type FireKey struct {
 	// local cron minute maps to two UTC instants, and both share a label,
 	// so the run fires once rather than twice. See [FireLabel].
 	FireLabel string
+}
+
+// FireKey is the identity of one dispatch, and the whole of the at-most-once
+// guarantee: a [FireMinute] and the runner it was addressed to.
+//
+// It is a STRUCT rather than a joined string, and that is load-bearing in both
+// backends: SQL keys the row on the column tuple, and Go's comparable structs
+// let the memory twin use this value directly as a map key. A delimiter-joined
+// identity collides the moment a delimiter appears in a name: a unit called
+// "Q3:Launch" and a schedule called "Launch" would produce the same joined key
+// as a unit "Q3" and a schedule ":Launch", and one of the two fires would then
+// be silently suppressed by the other.
+type FireKey struct {
+	FireMinute
 	// TargetHandle is the runner this fire was addressed to, and empty for
 	// a skipped catchup, which resolved no runner. An `each` fan-out mints
 	// one identity per member, so a slow or failing member cannot suppress
@@ -87,23 +100,27 @@ type Run struct {
 	FiredAt time.Time
 
 	// Outcome is [OutcomeFired], [OutcomeSkippedCatchup] or
-	// [OutcomeSkippedPaused]. The zero value
+	// [OutcomeSkippedPaused]. A fired run its seat later did not run, because
+	// a later fire of the schedule ran in its place, stays fired here: the
+	// seat's node records that on the event log, and the schedule's history
+	// reads it as types.ScheduleOutcomeSuperseded. The zero value
 	// is empty rather than "fired": a caller that forgot to say what it
 	// recorded should read back as unset, not as a dispatch.
 	Outcome Outcome
 
 	// TraceID links the row to the turn the fire caused. Each fire gets its
-	// own trace, so the dashboard can go from a ledger row to exactly that
-	// turn's calls.
+	// own trace, so the schedule's history can go from a fire to exactly
+	// that turn's calls, and find a fire its seat did not run.
 	TraceID string
 }
 
-// Claimer is the ledger surface the [Scheduler] itself needs: one call, made
-// before every publish.
+// Claimer is the ledger surface the [Scheduler] itself needs: the claim made
+// before every publish, and the one read the first tick after a restart makes
+// before it records a missed fire.
 //
 // Declared separately from [Ledger] because that is all the scheduler uses,
-// and a dispatcher that could also read history and delete rows is a
-// dispatcher whose blast radius nobody can see from its type.
+// and a dispatcher that could also delete rows is a dispatcher whose blast
+// radius nobody can see from its type.
 type Claimer interface {
 	// Claim atomically records a fire, reporting whether THIS call wrote
 	// the row.
@@ -119,62 +136,53 @@ type Claimer interface {
 	// its safe answer is to re-run; this one asks "may I start", so its
 	// safe answer is to wait for the next tick.
 	Claim(ctx context.Context, run Run) (bool, error)
+
+	// MinuteClaimed reports whether ANY identity of this minute is claimed:
+	// a fire or a paused record for any runner, or a catchup skip.
+	//
+	// The skip's own identity names no runner, so that it never collides
+	// with a runner's fire for the same minute ([Scheduler.recordSkip]).
+	// That is exactly why claiming the skip cannot also answer whether the
+	// minute ran: a claim on it succeeds beside a fire row, so only a read
+	// across every runner tells a missed minute from one that was handled.
+	//
+	// An error is UNKNOWN, and the caller records nothing: a skip row
+	// missing for a minute that really was missed is a gap in the history,
+	// while one written on a guess is a miss that never happened.
+	MinuteClaimed(ctx context.Context, minute FireMinute) (bool, error)
 }
 
 // Ledger is the full contract a scheduled-run store must satisfy, and the one
 // certified by internal/schedule/scheduletest.
 //
-// It is wider than [Claimer] because two other callers exist and neither is
-// the scheduler: the dashboard reads Recent to draw the dispatch history, and
-// the retention sweep calls Purge. A backend the contract suite has not
-// certified does not exist as far as the engine is concerned.
+// It is wider than [Claimer] by one call, for the one other caller: the
+// retention sweep calls Purge. Nothing reads a schedule's HISTORY through this
+// contract: [Claimer.MinuteClaimed] answers one yes or no for the catchup
+// pass, and the history is the usage domain's fires (internal/usage), every
+// data node's, derived from this node's `scheduled_runs` rows by the store and
+// joined there with what became of each fire, which this ledger cannot know:
+// it records `fired` when the scheduler sends a fire, and the seat's node
+// decides later whether a later fire runs in its place. A backend the contract
+// suite has not certified does not exist as far as the engine is concerned.
 type Ledger interface {
 	Claimer
-
-	// Recent returns the newest rows first, at most limit of them.
-	//
-	// Ordering is (FiredAt descending, then the identity tuple ascending).
-	// The tiebreak is part of the contract rather than an implementation
-	// detail: two rows can share a millisecond, and without one the SQL
-	// backend and the memory twin would answer a dashboard differently for
-	// the same data — which is the class of divergence a twin exists to
-	// prevent, not to introduce.
-	//
-	// A limit of zero or below returns nothing. That is the honest reading
-	// of "give me no rows"; treating it as unbounded would make a caller
-	// whose page size arrived as 0 pull the whole table.
-	Recent(ctx context.Context, limit int) ([]Run, error)
-
-	// RecentFor is [Ledger.Recent] narrowed to ONE schedule, in the same
-	// order and under the same limit rule.
-	//
-	// Because `Recent` is the whole company's, and a company-wide page of
-	// fifty is not a history of anything: twenty schedules firing hourly
-	// fill it in two and a half hours, so "did the standup fire this
-	// week" was unanswerable while every row of the answer sat in the
-	// table. A screen wanting one schedule's history had to page the
-	// company's and filter, which is the shape that makes a reader
-	// conclude a schedule stopped running.
-	//
-	// The scope tuple is the identity a [Row] carries, so a caller hands
-	// back exactly what the schedule listing gave it.
-	RecentFor(ctx context.Context, scope types.ScheduleScope,
-		scopeID, name string, limit int) ([]Run, error)
 
 	// Purge drops rows whose FiredAt is strictly before `before`, returning
 	// how many went.
 	//
 	// The cutoff is an INSTANT rather than an age because the caller owns
 	// the policy, and here the policy has a floor that is not obvious: the
-	// ledger is a claim table first and a dashboard feed second, so nothing
+	// ledger is a claim table first and an audit record second, so nothing
 	// may be deleted while a tick could still evaluate the fire it records.
-	// That floor is the catchup window's upper clamp — see
-	// [Scheduler.RetentionFloor]. Sweeping inside it does not merely lose
+	// That floor is the catchup window's upper clamp (see
+	// [Scheduler.RetentionFloor]). Sweeping inside it does not merely lose
 	// history, it lets that fire run a second time.
 	//
 	// Dropping a row MUST drop its claim key with it. A purge that kept the
 	// key would go on refusing a fire the store has no evidence of, which
 	// is worse than never sweeping at all because the refusal is silent.
+	// The same holds for [Claimer.MinuteClaimed]: a minute whose every row
+	// went reads unclaimed.
 	Purge(ctx context.Context, before time.Time) (int, error)
 }
 

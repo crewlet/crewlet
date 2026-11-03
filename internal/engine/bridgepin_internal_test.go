@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -63,20 +64,35 @@ type bridgedRun struct {
 	launcher *agentLauncher
 	surface  *tools.Surface
 	jobs     *sandbox.FakeRunner
+	// skills are the Tool Skills each launch hands the run's harness as its
+	// own ([runner.AgentRunRequest.Skills]); nil hands none.
+	skills runner.HandedSkills
 }
 
 // launchBridged launches turnID's executor over a surface offering the given
-// tools, and dials its bridge the way the box's own coding agent would.
+// tools, and dials its bridge the way the box's own harness would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
+	return bridgedRig(t, turnID, offered...).launch(t, nil)
+}
+
+// bridgedRig is [launchBridged]'s run before its first launch.
+func bridgedRig(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
+	t.Helper()
 	c, seat := executorCompany(t)
-	return launchBridgedOn(t, c, launcherOn(nil, c, seat, turnID).turn, offered...)
+	return bridgedRigOn(t, c, launcherOn(nil, c, seat, turnID).turn, offered...)
 }
 
 // launchBridgedOn is [launchBridged] for turn, a turn of c's seat, as the
 // engine builds the turn it launches — its holds included, where a case gives
 // it some.
 func launchBridgedOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools.Callable) bridgedRun {
+	t.Helper()
+	return bridgedRigOn(t, c, turn, offered...).launch(t, nil)
+}
+
+// bridgedRigOn is [launchBridgedOn]'s run before its first launch.
+func bridgedRigOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools.Callable) bridgedRun {
 	t.Helper()
 	seat := turn.Seat
 	if turn.Org == nil {
@@ -107,18 +123,19 @@ func launchBridgedOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...to
 		// phase surface: the bridge acts as that turn's seat on every call
 		// and refuses a surface that names none.
 		surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn)}
-	return run.launch(t, nil)
+	return run
 }
 
 // launch launches the run's executor job — the turn's next job when one has
 // run, carrying on the one that asked a person where cont is set — and dials
-// the bridge of the job it started, the way that job's coding agent would.
+// the bridge of the job it started, the way that job's harness would.
 func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 	t.Helper()
 	before := len(b.jobs.Started())
 	if _, err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
 		Surface:    b.surface,
+		Skills:     b.skills,
 		OnFallback: func(chain.Fallback) {},
 		Fence:      b.engine.seatFence(b.handle),
 		Continue:   cont,
@@ -249,6 +266,61 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 	}
 }
 
+// A LAUNCH HANDS ITS RUN'S HARNESS THE SKILLS ITS RUNNER HANDED, and the run's
+// bridge hears every load of one: the box is given the skills and where to
+// report a load — the bridge's own tool for it, under the names the bridge
+// serves — the bridge lists no load_tool_skill to a harness with a loader of
+// its own, and a load the harness reports is on the run's row as its
+// load_tool_skill call of the skill's key, which a rebuild of the run replays.
+// Driven through the real launcher and bridge, because each is a line of
+// wiring in LaunchExecutor and openBridge that nothing else can show was made.
+//
+// Mutation: leave the skills off the session the launch opens, and the report
+// is recorded nowhere; leave the wiring off the opening, and the box is handed
+// skills with nowhere to report a load.
+func TestALaunchHandsItsHarnessItsSkillsAndHearsTheirLoads(t *testing.T) {
+	t.Parallel()
+	loader := newHeldTool(toolname.LoadToolSkill)
+	close(loader.release)
+	run := bridgedRig(t, "t-skills", newHeldTool("read_page"), loader)
+	run.skills = runner.HandedSkills{{Key: "chat-conventions", Skill: sandbox.Skill{
+		Name: "chat-conventions", Description: "how to post", Body: "Always thread.", Required: true}}}
+	run = run.launch(t, nil)
+
+	started := run.jobs.Started()
+	job := started[len(started)-1]
+	if !slices.Equal(job.Skills, run.skills.Box()) {
+		t.Errorf("the box is handed the skills %+v, want %+v", job.Skills, run.skills.Box())
+	}
+	endpoint := job.MCPServers[config.ToolServerName].URL
+	if want := (sandbox.SkillWiring{Server: config.ToolServerName, Tool: mcpbridge.SkillTool,
+		URL: mcpbridge.SkillURL(endpoint)}); job.SkillLoads != want {
+		t.Errorf("the box reports a load to %+v, want %+v", job.SkillLoads, want)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := run.session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name == toolname.LoadToolSkill || tool.Name == mcpbridge.SkillTool {
+			t.Errorf("the bridge lists %s to a harness with a loader of its own", tool.Name)
+		}
+	}
+	if _, err := run.session.CallTool(ctx, &mcp.CallToolParams{Name: mcpbridge.SkillTool,
+		Arguments: map[string]any{"skill": "crewlet:chat-conventions"}}); err != nil {
+		t.Fatalf("the hook's report: %v", err)
+	}
+	calls := run.calls(t, "t-skills").Calls
+	if len(calls) != 1 || calls[0].Name != toolname.LoadToolSkill ||
+		calls[0].Args != `{"key":"chat-conventions"}` {
+		t.Fatalf("the run's log holds %+v, want the reported load as its load_tool_skill call",
+			calls)
+	}
+}
+
 // A RUN CARRIED ON AFTER A PERSON'S ANSWER NUMBERS ITS CALLS AFTER THE ASKING
 // RUN'S. The row keeps the asking job's calls as the round's, and the
 // collection that closes the round reads them by their place: a continuation
@@ -291,8 +363,8 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 
 // A SESSION'S FIRST CALL, OUTLIVING ITS JOB, IS NOT THE NEXT JOB'S.
 //
-// The case a session that learned its job from the row got wrong: the coding
-// agent opens with a delegate call, which is still running engine-side when the
+// The case a session that learned its job from the row got wrong: the harness
+// opens with a delegate call, which is still running engine-side when the
 // box is collected and the reviewer relaunches the run — the row now holds the
 // next job. A session that had not yet landed an append learned that job's
 // name from the row and filed the late call, and its spend, on the next job's

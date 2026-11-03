@@ -60,7 +60,7 @@ func systemOf(t *testing.T, prov *scriptedProvider, phaseName string) string {
 }
 
 // launchedSystem is the system text the executor's run was launched with, on
-// a runner over the given blocks: what its coding CLI appends to its own.
+// a runner over the given blocks: what its harness appends to its own.
 func launchedSystem(t *testing.T, blocks prefetch.Blocks) string {
 	t.Helper()
 	_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},

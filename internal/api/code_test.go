@@ -1055,7 +1055,7 @@ func aCheckRef() host.CheckRunRef {
 // git (/box/git/) and on its reads of its commit (/box/code/) alike — only once
 // the request presents a check's token this fleet signed, as `check`, and then
 // in exactly the words a person is told on /git/. A check's token presented as
-// a coding run's (`run`), a run's presented as a check's, and a check's token
+// an executor's (`run`), a run's presented as a check's, and a check's token
 // another fleet signed are each answered the code host's own challenge, in the
 // bytes the box admission's credential step answers — so the reason reaches
 // nobody holding no credential this fleet signed for that user name.
@@ -1411,7 +1411,7 @@ func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
 // under the credential it came through, and the human seat it holds — the one
 // the identity directory binds a token to — or none. A REST caller is a person
 // or a credential, never a seat, so the reader judges what it answers by a
-// person's grant (ADR-0081); and the conversion is the code tools' own
+// person's grant (ADR-0088); and the conversion is the code tools' own
 // (builtin.CodeAskerOf), so a person's REST read and their assistant's code
 // tool ask as one asker.
 //

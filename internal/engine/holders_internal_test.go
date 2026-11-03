@@ -121,7 +121,7 @@ func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 
 // THE GIT PLACEMENT IS THE LIVE GIT NODES: every node the router's WATCHED view
 // names whose profile has the git role, sorted — the set a repository's git
-// order is computed over (ADR-0082) — a node that declares no roles among
+// order is computed over (ADR-0089) — a node that declares no roles among
 // them, since such a node has every role, and never a data node that lists its
 // roles without git or a node with seats alone; off the same view as the data
 // placement, so the two cannot disagree about who is live, and UNKNOWN before

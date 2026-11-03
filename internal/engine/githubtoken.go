@@ -266,7 +266,7 @@ func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGi
 //
 // # A run outlives the token it was launched with
 //
-// A coding run's environment is fixed when its box starts, and its token in
+// An executor's environment is fixed when its box starts, and its token in
 // that environment is issued good for [github.RunTokenLife]. A run is never
 // stopped on a clock, so a long one would push with a token GitHub refuses,
 // halfway through its work. What can change under a running process is a

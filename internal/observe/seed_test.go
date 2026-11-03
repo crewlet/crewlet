@@ -32,7 +32,7 @@ func openStore(t *testing.T) *store.DB {
 // storePhase writes one completed phase the way the publish listener would,
 // which is what puts its spend in the promoted columns — a review, one call of
 // the engine's own loop. (Not an executor's record: every executor is its
-// coding CLI's run, and its calls and spend are the run's own record.)
+// harness's run, and its calls and spend are the run's own record.)
 func storePhase(t *testing.T, log *store.EventLog, role string, tokenCount int, at time.Time) string {
 	t.Helper()
 	ev := events.New(types.AgentPhaseCompleted{

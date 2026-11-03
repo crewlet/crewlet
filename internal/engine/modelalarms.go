@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -24,7 +25,7 @@ import (
 // as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
 // a wait and a stored credential's age read the same whichever node a person
 // asks. Two inputs are this node's own reading, and say so: whether anything
-// signs an entry in here, and its CLI's token lifetime.
+// signs an entry in here, and its harness's token lifetime.
 //
 // A READ THAT FAILS CARRIES THE LAST GOOD ONE. The lease table and the secret
 // store are read on every evaluation, and a blip in either must not read as
@@ -33,40 +34,96 @@ import (
 // entry per blip, and a health count that flickered. So each input that cannot
 // be read is the last one that could, and the failure is logged. Only a node
 // that has never read the leases judges nothing about models.
+//
+// ONE LISTING OF THE LEASES FEEDS THE MCP ALARMS TOO ([mcpConditions]), read
+// here once per evaluation, so a model's and a server's conditions are judged
+// on the same beat of every node, and a blip carries both on the last good
+// listing.
 
-// modelInputs is the last good read of each fleet-wide model input.
-type modelInputs struct {
-	mu     sync.Mutex
-	nodes  map[string][]coord.ModelStatus
+// entryInputs is the last good read of each fleet-wide input the per-entry
+// alarms judge.
+type entryInputs struct {
+	mu sync.Mutex
+	// statuses is every live node's heartbeat, by node id.
+	statuses map[string]coord.NodeStatus
+	// stored is when the secret store last wrote each secret, by name.
 	stored map[string]time.Time
+	// grants are the MCP servers' OAuth grants, by server.
+	grants map[string]coord.MCPGrant
+	// runs is the fleet's active runs, read for the calls they hold for a
+	// person's approval ([heldConditions]).
+	runs []sandbox.PendingRun
 }
 
-// modelsReading fills the model half of an alarm reading.
-func (e *Engine) modelsReading(ctx context.Context, now time.Time, out *statelog.Reading) {
+// entriesReading fills the per-entry half of an alarm reading: each model
+// entry's condition and each MCP server's, across the fleet.
+func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelog.Reading) {
 	c := e.Company()
-	if c == nil || c.Config == nil || len(c.Config.Providers.LLM) == 0 {
+	if c == nil || c.Config == nil || (len(c.Config.Providers.LLM) == 0 && len(c.Config.MCPServers) == 0) {
 		return
 	}
-	in := &e.modelInputs
-	nodes, err := e.liveModelRows(ctx)
+	in := &e.entryInputs
+	statuses, err := e.liveStatuses(ctx)
 	in.mu.Lock()
 	if err != nil {
-		log.WarnContext(ctx, "model_alarms_leases_unread", "error", err,
-			"detail", "the model alarms are judged on the last heartbeats this node read")
-		nodes = in.nodes
+		log.WarnContext(ctx, "entry_alarms_leases_unread", "error", err,
+			"detail", "the model and MCP alarms are judged on the last heartbeats this node read")
+		statuses = in.statuses
 	} else {
-		in.nodes = nodes
+		in.statuses = statuses
 	}
 	in.mu.Unlock()
-	if nodes == nil {
+	if statuses == nil {
 		return
 	}
-	nodes = maps.Clone(nodes)
-	if _, reported := nodes[e.selfNode()]; !reported {
+	statuses = maps.Clone(statuses)
+	if _, reported := statuses[e.selfNode()]; !reported {
 		// THIS NODE'S OWN ROWS, read now where its lease did not carry
 		// them yet (a node in its first beat).
-		nodes[e.selfNode()] = e.modelStatus(ctx)
+		statuses[e.selfNode()] = coord.NodeStatus{Models: e.modelStatus(ctx), MCP: e.mcpStatus(ctx)}
 	}
+	if len(c.Config.Providers.LLM) > 0 {
+		e.modelsReading(ctx, c, statuses, now, out)
+	}
+	if len(c.Config.MCPServers) > 0 {
+		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
+		heldConditions(out.MCPServers, e.heldRuns(ctx))
+		e.changedConditions(ctx, c, out.MCPServers)
+		out.MCPServersAt = now
+	}
+}
+
+// heldRuns is the fleet's active runs, for the calls they hold for a person's
+// approval: the last good read where this one fails, as the heartbeats are,
+// so a blip neither clears a standing `mcp_approval_waiting` nor raises it
+// again on the next tick.
+func (e *Engine) heldRuns(ctx context.Context) []sandbox.PendingRun {
+	in := &e.entryInputs
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActive(ctx)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if err != nil {
+		log.WarnContext(ctx, "entry_alarms_runs_unread", "error", err,
+			"detail", "the calls waiting for approval are judged on the runs this node last read")
+		return in.runs
+	}
+	in.runs = runs
+	return runs
+}
+
+// modelsReading fills the model half of an alarm reading from the heartbeats
+// [Engine.entriesReading] read.
+func (e *Engine) modelsReading(ctx context.Context, c *Company, statuses map[string]coord.NodeStatus,
+	now time.Time, out *statelog.Reading) {
+
+	nodes := make(map[string][]coord.ModelStatus, len(statuses))
+	for node, status := range statuses {
+		nodes[node] = status.Models
+	}
+	in := &e.entryInputs
 	stored, err := e.storedAt(ctx)
 	in.mu.Lock()
 	if err != nil {
@@ -176,12 +233,12 @@ func (e *Engine) storedAt(ctx context.Context) (map[string]time.Time, error) {
 	return out, nil
 }
 
-// tokenLifetimes is each coding-CLI entry's headless-token lifetime, zero where
-// its CLI declares none.
+// tokenLifetimes is each harness entry's headless-token lifetime, zero where
+// its harness declares none.
 func (e *Engine) tokenLifetimes(c *Company) map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for key := range c.Config.Providers.LLM {
-		if agent, ok := e.cliEntry(key); ok {
+		if agent, ok := e.harnessEntry(key); ok {
 			out[key] = agent.TokenLifetime()
 		}
 	}

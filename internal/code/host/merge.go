@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A CHANGE'S MERGE IS BUILT HERE AND LANDS AS ONE MERGE RECORD (ADR-0089,
+// A CHANGE'S MERGE IS BUILT HERE AND LANDS AS ONE MERGE RECORD (ADR-0096,
 // M5-D11): a merge_change (code.WriteMergeChange) is an engine write — the
 // same admission, the same sync to its caller's floor, the same scratch named
 // by its push id, the same one budget of git run time, the same self-contained

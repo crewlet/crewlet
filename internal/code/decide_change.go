@@ -1276,8 +1276,8 @@ type changeRow struct {
 	// operator is the credential a person opened it with, "" for a seat's.
 	operator string
 	work     types.WorkItem
-	// turn and run are the turn and the sandbox run that opened it, each ""
-	// where there was none.
+	// turn and run are the turn and the executor's launch that opened it,
+	// each "" where there was none.
 	turn, run string
 	// openedAt is the broker instant (store.EncodeTime) the change was opened
 	// at, and opened the packed position of the record that opened it.
@@ -1301,7 +1301,7 @@ type changeRow struct {
 	version        int64
 	// position is the packed position of the last record that wrote it, and
 	// updatedAt its broker instant (store.EncodeTime): when the change last
-	// moved on its repository's subject (replicated 0142).
+	// moved on its repository's subject (replicated 0146).
 	position, updatedAt int64
 	// moved and openFindings are what a READ of changes adds from the
 	// change's conversation ([withConversations] on a listing's page, the

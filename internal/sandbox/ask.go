@@ -11,7 +11,7 @@ import (
 
 // A RUN ASKS A PERSON IN THE SHAPE A DECISION IS ASKED: ADR-0068.
 //
-// A coding run that cannot go on without a person's answer asks through one
+// An executor that cannot go on without a person's answer asks through one
 // tool over its bridge (`ask_and_wait`, internal/agent/builtin), and what it
 // asked is an [Ask]: the question in one sentence, its context in Markdown,
 // and, where the person is to choose, a [decision.Decision] whose options the
@@ -38,7 +38,7 @@ const (
 	// written whole on every status flip and every listing of active runs
 	// for as long as it waits; the park's announcement; the pane a person
 	// answers it from; and, once answered, the prompt of the run that
-	// carries the work on, which that run's CLI re-sends with every request
+	// carries the work on, which that run's harness re-sends with every request
 	// it makes from then on. 16 KiB is about four thousand tokens: a page of
 	// prose, the bound a run's whole free-text question was held to before
 	// asks were structured, so no context that fitted then is refused now.
@@ -62,7 +62,7 @@ const (
 	AskToManager   = "manager"
 )
 
-// Ask is what a coding run asked a person.
+// Ask is what an executor asked a person.
 type Ask struct {
 	// Question is what the run needs answered, in one sentence: the title
 	// a person reads first. Held to [decision.MaxQuestion], the bound a
@@ -89,6 +89,12 @@ type Ask struct {
 	// asking: what a re-seeded run is told to check out once the answer
 	// arrives ([PendingRun.Branch]). Empty where it pushed nothing.
 	Branch string
+
+	// Held is the call to a tool at Needs approval the question asks a
+	// person about, nil for a question the run asked itself (ADR-0077).
+	// Its Decision is [HeldDecision], and it is recorded onto the row with
+	// the question ([PendingRun.HeldCall]), its LaunchID the job's.
+	Held *HeldCall
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
@@ -133,6 +139,9 @@ func (a Ask) ownFaults() []error {
 		note(fieldRefusal("branch", fmt.Sprintf("is %q, which is not a branch name git "+
 			"accepts (or is not UTF-8, or is past %d bytes): name the branch exactly as you "+
 			"pushed it, or leave it out", a.Branch, gitref.MaxBranchBytes)))
+	}
+	if a.Held != nil {
+		found = append(found, a.Held.validate(a.Decision)...)
 	}
 	if d := a.Decision; d != nil {
 		if d.Question != a.Question {
@@ -201,7 +210,7 @@ type AskOutcome string
 
 const (
 	// AskRecorded is an ask on the job's row, which the run parks on once
-	// its CLI ends.
+	// its harness ends.
 	AskRecorded AskOutcome = "recorded"
 	// AskAlreadyAsked is a job that asked a question already, which stands.
 	// A run asks one question at a time, because one answer resumes it.
@@ -232,10 +241,11 @@ func (r PendingRun) AskedBy(launch string) bool {
 }
 
 // withoutQuestion is the row as a collection that parks nothing reads it: the
-// job's question, its context, its decision, its audience and its branch
-// gone, whatever the job asked on its way out.
+// job's question, its context, its decision, its audience, its branch and any
+// call it held gone, whatever the job asked on its way out.
 func withoutQuestion(r PendingRun) PendingRun {
 	r.Question, r.QuestionContext, r.Decision, r.Audience, r.Branch = "", "", nil, "", ""
+	r.HeldCall = nil
 	return r
 }
 

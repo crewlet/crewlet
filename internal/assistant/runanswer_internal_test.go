@@ -11,10 +11,10 @@ import (
 )
 
 // A RUN ANSWER'S RECEIPT IS READ AT THE RUN'S TRUST. The approval that sends
-// the assistant's answer to a parked coding run resumes the turn that proposed
+// the assistant's answer to a parked executor resumes the turn that proposed
 // it, which reads what the request answered: the run's receipt, carrying the
-// question the run asked, a coding CLI's words, read by the one rule for them
-// ([provenance.CodingRun]) as every other door to that question reads it. Any
+// question the run asked, a harness's words, read by the one rule for them
+// ([provenance.Executor]) as every other door to that question reads it. Any
 // other write's answer is the engine's own records, a colleague's. And the
 // turn is told each answer it reads at the trust it is fenced at, a page's
 // report included, which is what taints it (D25).
@@ -34,8 +34,8 @@ func TestARunAnswersReceiptIsReadAtTheRunsTrust(t *testing.T) {
 		reported bool
 		want     []told
 	}{
-		{tool: "answer_coding_run",
-			want: []told{{provenance.SourceAPIAnswer, provenance.CodingRun("").Trust}}},
+		{tool: "answer_executor",
+			want: []told{{provenance.SourceAPIAnswer, provenance.Executor("").Trust}}},
 		{tool: "create_task",
 			want: []told{{provenance.SourceAPIAnswer, provenance.TrustColleague}}},
 		{tool: "create_task", reported: true, want: []told{

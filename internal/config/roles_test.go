@@ -112,6 +112,8 @@ name: Acme
 providers:
   sandbox:
     fake: true
+mcp_servers:
+  - {name: gitlab, command: glab, args: [mcp, serve], shared: false, tools: {default: allow}}
 roles:
   - name: Agent SWE
     handle: swe
@@ -128,6 +130,7 @@ roles:
     project: ENGP
     integrations:
       mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot}
+      gitlab: {enabled: true}
     sandbox:
       max_turns: 40
       pause_ttl_seconds: 0
@@ -457,7 +460,7 @@ func TestAReferenceInANodePinSaysItIsNotResolved(t *testing.T) {
 
 // EVERY BAD KEY IS REPORTED, IN THE SAME ORDER ON EVERY RUN. A document with
 // several is reported in full rather than one fix at a time, and a problem
-// list that reshuffled with map order would make a CLI's output and a
+// list that reshuffled with map order would make a harness's output and a
 // dashboard's marker list differ between two validations of one file.
 func TestEveryBadPlacementKeyIsReportedInOneStableOrder(t *testing.T) {
 	t.Parallel()

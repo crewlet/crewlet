@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// CheckBudget is the longest the doctor over the API may take: three CLI runs
+// CheckBudget is the longest the doctor over the API may take: three harness runs
 // at most (the smoke run, the shell probe and the web probe), each measured at
 // 3 to 20 s, beside the version and executor checks, which are local.
 const CheckBudget = 180 * time.Second
@@ -48,7 +48,7 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request, _ *types.ModelAc
 		// it is checked as the company would run it once written.
 		next, err := s.config.CheckEntity(r.Context(), configapi.EntityLLMProviders, key,
 			req.Entity, active == nil, actor(r))
-		if !refuseDraft(w, err) {
+		if !configapi.RefuseDraft(w, err) {
 			return
 		}
 		entry := next.Providers.LLM[key]

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -70,10 +71,13 @@ type Spec struct {
 	// keeping two servers' identically-named tools apart in one catalogue.
 	ToolPrefix string
 
-	// ExcludeTools names tools to skip. Matched against the SERVER's own tool
-	// name, before ToolPrefix is applied — an operator excluding a tool has
-	// the server's listing in front of them, not the engine's catalogue.
-	ExcludeTools []string
+	// Levels is the level each tool the server lists runs at ([Levels]): a
+	// tool at [LevelBlocked] is never filed, so no catalogue holds it and
+	// no model is offered, lists or calls it. Matched against the SERVER's
+	// own tool name, before ToolPrefix is applied: an operator setting a
+	// level has the server's listing in front of them, not the engine's
+	// catalogue.
+	Levels Levels
 
 	// AnnotationOverrides are operator-supplied behavioural hints layered over
 	// what the server advertises, for servers that under-annotate.
@@ -91,7 +95,41 @@ type Spec struct {
 
 	// RequestTimeout bounds one tools/call. Zero means DefaultRequestTimeout.
 	RequestTimeout time.Duration
+
+	// Bearer, for an HTTP server signed in to with OAuth, answers the access
+	// token each request carries ([BearerSource]); nil for every other
+	// server. COMPARED BY IDENTITY, never by what it holds ([Spec.equal]):
+	// the source is the grant, and the token it holds now is not part of
+	// what the server was started from.
+	Bearer BearerSource
 }
+
+// BearerSource answers the access token an HTTP server signed in to with OAuth
+// is sent, at each request rather than once at the start: the engine renews
+// it as it expires, and the connection never holds one past its life.
+//
+// A SOURCE IS A POINTER, compared by identity ([Spec.equal]): one source is
+// one grant, and the engine hands every start of a server under that grant the
+// same one.
+type BearerSource interface {
+	// Token is the access token to send now. An error wrapping
+	// [ErrSignInNeeded] is a grant nobody holds, or one the vendor refused
+	// to renew: the server is classed [FailNeedsSignIn] and nothing is
+	// sent to it.
+	Token(ctx context.Context) (string, error)
+
+	// Rejected is told that the server answered 401 to a request that
+	// carried token, and answers the token to retry with: a renewed one,
+	// or the one already renewed since token was sent. At most one renewal
+	// per token: every request the same token was refused on is answered
+	// by that one renewal.
+	Rejected(ctx context.Context, token string) (string, error)
+}
+
+// ErrSignInNeeded is a server signed in to with OAuth whose grant nobody holds,
+// or whose vendor refused to renew it: what a [BearerSource] says when it has
+// no token to give, and what a person ends by signing in again.
+var ErrSignInNeeded = errors.New("mcp: the server needs somebody to sign in to it")
 
 func (s Spec) kind() TransportKind {
 	if s.Transport == "" {
@@ -122,7 +160,17 @@ func (s Spec) requestTimeout() time.Duration {
 // than field by field precisely so a field ADDED to Spec is covered the day
 // it is added; a hand-written comparison would silently keep answering "same"
 // for the one thing nobody remembered to list.
-func (s Spec) equal(other Spec) bool { return reflect.DeepEqual(s, other) }
+//
+// THE BEARER SOURCE BY IDENTITY, the one field read otherwise: a deep
+// comparison would read the token it holds now, which renews on its own and
+// is not what the server was started from, while a new grant is a new source.
+func (s Spec) equal(other Spec) bool {
+	if s.Bearer != other.Bearer {
+		return false
+	}
+	s.Bearer, other.Bearer = nil, nil
+	return reflect.DeepEqual(s, other)
+}
 
 func (s Spec) validate() error {
 	if s.Name == "" {
@@ -169,6 +217,7 @@ func (s Spec) SameProcess(other Spec) bool {
 		maps.Equal(s.Env, other.Env) &&
 		s.URL == other.URL &&
 		maps.Equal(s.Headers, other.Headers) &&
+		s.Bearer == other.Bearer &&
 		s.StartupTimeout == other.StartupTimeout &&
 		s.RequestTimeout == other.RequestTimeout
 }
@@ -178,8 +227,8 @@ func (s Spec) SameProcess(other Spec) bool {
 //
 // This is what a live config diff should branch on, not SameProcess. Three of
 // these fields change nothing about the child and everything about the
-// catalogue — the prefix renames every tool, the exclusions remove some, and
-// the annotation overrides decide whether a sub-agent may call one. A diff
+// catalogue: the prefix renames every tool, the levels block some, and the
+// annotation overrides decide whether a sub-agent may call one. A diff
 // that compares only the process fields gives an operator who adds
 // tool_annotations to a running server no effect at all and no way to tell
 // why: the edit activates, the revision advances, and the guard goes on
@@ -187,6 +236,6 @@ func (s Spec) SameProcess(other Spec) bool {
 func (s Spec) SameCatalogue(other Spec) bool {
 	return s.SameProcess(other) &&
 		s.ToolPrefix == other.ToolPrefix &&
-		slices.Equal(s.ExcludeTools, other.ExcludeTools) &&
+		s.Levels.same(other.Levels) &&
 		maps.Equal(s.AnnotationOverrides, other.AnnotationOverrides)
 }

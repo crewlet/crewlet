@@ -451,7 +451,7 @@ func (a *Applier) applyMembers(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	// A RE-HOME OVER THE SAME SEATS — a unit renamed without an `id` — is
 	// still a change somebody can see: the room answers to another unit,
-	// and its lead fallback with it. Its members' rows are already right.
+	// and its answerer with it. Its members' rows are already right.
 	members := 0
 	frame := at.live(room.ID)
 	if moved {

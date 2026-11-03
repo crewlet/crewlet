@@ -392,7 +392,7 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 	})
 	t.Run("a maintenance mode", func(t *testing.T) {
 		t.Parallel()
-		if e, _ := aNodeInModeOf(t, statelog.ModeMaintenance, codeHostCompany); e.codeRetention != nil {
+		if e, _ := aNodeOf(t, codeHostCompany, statelog.ModeMaintenance); e.codeRetention != nil {
 			t.Error("a node in a maintenance mode armed a code-retention duty, whose every " +
 				"purge step is a publish the mode exists to rule out")
 		}

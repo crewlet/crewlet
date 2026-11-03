@@ -2,9 +2,9 @@
  * Saying a list in a sentence: "a", "a and b", "a, b and c".
  *
  * ONE JOINER, because the dashboard had four private copies of it (the retention
- * banner's, the inbox's quiet band's, a work item's change row's and a coding
- * run's audience line), two with the serial comma and two without, so the same
- * list read differently on two screens and differently again from the CLI,
+ * banner's, the inbox's quiet band's, a work item's change row's and an
+ * executor's audience line), two with the serial comma and two without, so the same
+ * list read differently on two screens and differently again from the harness,
  * which says a list through the engine's `internal/words`. The default is that
  * package's rule, so a list of logs or nodes reads alike on both surfaces.
  *

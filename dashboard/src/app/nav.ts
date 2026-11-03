@@ -18,7 +18,7 @@
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
  * Settings is what the ENGINE runs, and nothing the company decides: a column
- * of four groups, Runtime (Models, MCP Tools, Secrets, Limits), Spend
+ * of four groups, Runtime (Models, MCP & tools, Secrets, Limits), Spend
  * (the readings, never the ceilings), Access (People, Service accounts, API
  * tokens, Sign-in policy, Audit log) and Engine (Nodes, Configuration,
  * Backups & retention, File storage). It lists only what lives in it: a row
@@ -444,7 +444,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // question about somebody's work items, so EACH of those names Worklet —
     // locked without the Worklet permission, hidden where the company runs no
     // Worklet — and Reviews names the code host, which no app gates
-    // (ADR-0081). A person without Worklet still has a day: the reviews asked
+    // (ADR-0088). A person without Worklet still has a day: the reviews asked
     // of them, where the landing sends them ([landingPath]).
     sections: [
       {
@@ -766,7 +766,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // set `code.native`.
     //
     // AND NO PERMISSION, because no app gates code (ADR-0033): every person
-    // reads every repository (ADR-0081), and the engine holds each answer to
+    // reads every repository (ADR-0088), and the engine holds each answer to
     // the asker's own grant on the repository, leaving out of a listing what
     // a seat may not read. So nothing waits on the reader's access before a
     // section mounts, and a write here carries its own reason where it is
@@ -1071,11 +1071,11 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["admin"],
       },
       {
-        key: "runs",
-        label: "Coding runs",
+        key: "executors",
+        label: "Executors",
         icon: "square-terminal",
-        path: ["live", "runs"],
-        hint: "Coding runs, live and finished",
+        path: ["live", "executors"],
+        hint: "Every executor in its box, live and finished",
       },
       {
         key: "a2a",
@@ -1121,7 +1121,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Models",
         icon: "cpu",
         path: ["settings", "models"],
-        hint: "Models, the CLIs they run through, and how each signs in",
+        hint: "Models, the harnesses they run through, and how each signs in",
         keywords: ["models", "keys", "llm", "provider", "cli", "api key", "subscription"],
         group: "Runtime",
         // EVERY MEMBER'S: each model's condition is what tells a member why
@@ -1130,16 +1130,16 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "mcp-tools",
-        label: "MCP Tools",
+        label: "MCP & tools",
         icon: "wrench",
         path: ["settings", "mcp-tools"],
         hint: "The MCP servers the engine runs and every tool its agents call",
-        keywords: ["mcp", "tools", "mcp servers", "agent tools"],
+        keywords: ["mcp", "tools", "mcp servers", "agent tools", "built-in tools"],
         group: "Runtime",
-        // ADMIN'S: the page is where MCP servers are added and their
-        // templates read, and the overview's own `tools` push already says
-        // which tools each seat has on its page.
-        grants: ["admin"],
+        // EVERY MEMBER'S: a server's condition and its tools are what tell a
+        // member why an agent lacks a tool. The member's reading names no
+        // launch line, header, failure sentence or call, and every gesture on
+        // the page is an admin's (`mcp_servers_status`' two readings).
       },
       {
         key: "secrets",
@@ -1392,7 +1392,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "edit",
   "seats",
   "turns",
-  "runs",
+  "executors",
   "a2a",
   "traces",
   "events",
@@ -1562,6 +1562,18 @@ export function sectionOpen(
 ): boolean {
   if (section.personal) return true;
   return holdsAny(held, section.grants);
+}
+
+/**
+ * Whether a reader holding `held` may open the Settings section `key`, by
+ * [sectionOpen]: what asks a guarded answer outside its own screen (a figure in
+ * the Settings column, the engine panel's alarm names, the Inbox's MCP alarms)
+ * asks only a reader the section opens for, since every one of those answers is
+ * the section's and a refusal on a timer is a refusal nobody reads.
+ */
+export function settingsSectionOpen(key: string, held: readonly string[]): boolean {
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, held);
 }
 
 /**

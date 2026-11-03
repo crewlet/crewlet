@@ -1,0 +1,85 @@
+package harness
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+)
+
+// A harness with no model flag cannot honour a model, and silently ignoring one
+// would run every phase on the harness's default while the config said otherwise.
+func TestAProfileWithoutAModelFlagRefusesAModel(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{
+		Key: "sub", Model: "sonnet", Harness: "custom", StateDir: t.TempDir(),
+		Timeout: 1, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "x", "complete_args": []any{"-p"},
+			"output": "text", "model_args": []any{},
+		},
+	})
+	if err == nil {
+		t.Fatal("a model was accepted by a profile with no model flag")
+	}
+	if !strings.Contains(err.Error(), "model_args") {
+		t.Errorf("error %q does not name the field to declare", err)
+	}
+}
+
+// A MODEL FLAG WITHOUT {model} TAKES NO MODEL. `["--model", "fixed"]` passes
+// `fixed` on every call whatever the entry's model says, which drops the model
+// exactly as silently as declaring no flag — so it is refused beside a model,
+// like an empty one.
+func TestModelArgsWithNoPlaceholderTakeNoModel(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{
+		Key: "oc", Harness: "opencode", Model: "anthropic/claude-sonnet-5",
+		Overrides: map[string]any{"model_args": []any{"--model", "anthropic/fixed"}},
+		StateDir:  t.TempDir(), Timeout: 1, MaxConcurrent: 1,
+	})
+	if err == nil {
+		t.Fatal("an entry whose model never reaches its harness was built")
+	}
+	if !strings.Contains(err.Error(), "{model}") {
+		t.Errorf("error %q does not name the placeholder", err)
+	}
+}
+
+// `crewlet llm doctor` exists to settle one question — are these token counts
+// the vendor's or this engine's guess — so the predicate behind it has to ask
+// what the EXTRACTOR asks, not a narrower question that happens to agree on
+// the built-in profiles.
+func TestReadsUsageAgreesWithWhatTheExtractorActuallyReads(t *testing.T) {
+	t.Parallel()
+	usage := harnessprofile.UsagePaths{
+		Input:  []harnessprofile.Path{{"usage", "input_tokens"}},
+		Output: []harnessprofile.Path{{"usage", "output_tokens"}},
+	}
+	for _, tc := range []struct {
+		name string
+		p    harnessprofile.Profile
+		want bool
+	}{
+		{"json with usage paths", harnessprofile.Profile{Output: harnessprofile.OutputJSON, TextPaths: []harnessprofile.Path{{"result"}}, Usage: usage}, true},
+		{"jsonl with usage paths", harnessprofile.Profile{Output: harnessprofile.OutputJSONL, TextPaths: []harnessprofile.Path{{"result"}}, Usage: usage}, true},
+		{"json with none", harnessprofile.Profile{Output: harnessprofile.OutputJSON, TextPaths: []harnessprofile.Path{{"result"}}}, false},
+		// The one that was wrong: `output: text` is a one-line override,
+		// and the JSON paths it inherits are then walked by nothing —
+		// extract never decodes a document in that mode.
+		{"text, inheriting a json profile's usage paths", harnessprofile.Profile{Output: harnessprofile.OutputText, Usage: usage}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.p.ReadsUsage(); got != tc.want {
+				t.Errorf("ReadsUsage() = %v, want %v", got, tc.want)
+			}
+			// The claim is only worth anything if it matches reality.
+			out := extract(tc.p, `{"result":"hi","usage":{"input_tokens":3,"output_tokens":4}}`)
+			if out.reported != tc.p.ReadsUsage() {
+				t.Errorf("ReadsUsage() = %v but a real extraction reported = %v",
+					tc.p.ReadsUsage(), out.reported)
+			}
+		})
+	}
+}

@@ -85,7 +85,7 @@ func (e *Engine) beginWorkingStatus(ctx context.Context, handle, turnID string,
 //
 // THE KEEP-ALIVE RULE, written once because both turn frames need it and a
 // second reading of it would be a second answer: an indicator survives a turn
-// if and only if SOMETHING IS STILL WORKING behind it — a detached coding run
+// if and only if SOMETHING IS STILL WORKING behind it — a detached executor
 // this turn is actually coming back from. Every other ending clears: done,
 // failed, skipped, a guard breach, a runner that could not be built.
 //

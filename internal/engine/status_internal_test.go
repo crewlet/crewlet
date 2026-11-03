@@ -224,15 +224,15 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 // asserts a post the teardown is racing, which is the flake this fixture is
 // written against; see "WHAT IS PROMISED, AND WHEN" above.
 //
-// A coding CLI on the real session ([phasedCLI]): the phase's tools reach it
-// over MCP and it calls the submission there, so `waiting` runs as the CLI
+// A harness on the real session ([phasedHarness]): the phase's tools reach it
+// over MCP and it calls the submission there, so `waiting` runs as the harness
 // run starts — still on the turn's goroutine, and still before the answer.
 type scripted struct{ waiting func(reviewing bool) }
 
 func (scripted) Model() string { return "scripted" }
 
 func (s scripted) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	return phasedCLI{model: "scripted", pick: s.run}.Complete(ctx, req)
+	return phasedHarness{model: "scripted", pick: s.run}.Complete(ctx, req)
 }
 
 func (s scripted) run(offered []string) llmtest.Run {
@@ -531,7 +531,7 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 
 // AN INDICATOR SURVIVES A TURN ONLY WHILE SOMETHING IS STILL WORKING.
 //
-// The keep-alive case is a turn that suspended into a detached coding run the
+// The keep-alive case is a turn that suspended into a detached executor the
 // engine has established is coming back: the box is running, the same turn
 // resumes when it reports, and the person who asked is still waiting — so
 // taking it down would say the agent had stopped in the middle of the longest
@@ -709,7 +709,7 @@ func TestASuspendedTurnsIndicatorIsHeldUnderItsRun(t *testing.T) {
 	t.Parallel()
 	for name, settle := range map[string]func(*testing.T, *Engine){
 		"a box's completion takes the hold back": func(t *testing.T, e *Engine) {
-			completion := events.New(types.SandboxRunCompleted{TurnID: "run-code"},
+			completion := events.New(types.ExecutorFinished{TurnID: "run-code"},
 				events.TraceContext{})
 			session, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-code", completion)
 			if !rejoined || session == nil {
@@ -883,7 +883,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The run is settled rather than resumed: its record is deleted, its box
 	// reclaimed, and the turn suspended into it is over.
 	if err := rt.coordinator.FailRun(t.Context(), "run-code",
-		types.SandboxFailureSuspensionUnrecorded,
+		types.ExecutorFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	// A completion carries no chat conversation, and with no hold left to
 	// take back there is nothing to raise: a parked run's row deliberately
 	// keeps no chat metadata.
-	completion := events.New(types.SandboxRunCompleted{TurnID: "run-box"}, events.TraceContext{})
+	completion := events.New(types.ExecutorFinished{TurnID: "run-box"}, events.TraceContext{})
 	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-box", completion); s != nil || rejoined {
 		t.Errorf("a box's completion raised %v (rejoined %v), want neither",
 			s.Conversation(), rejoined)
@@ -1208,7 +1208,7 @@ func TestTheIndicatorsConversationComesOffTheTrigger(t *testing.T) {
 // A NODE THAT HANDS A SEAT ON TAKES ITS INDICATORS DOWN.
 //
 // The kept-alive session is why this has to exist. A turn suspended into a
-// detached coding run leaves its indicator up deliberately, and the resume
+// detached executor leaves its indicator up deliberately, and the resume
 // lands on whichever node holds the seat WHEN THE BOX REPORTS — so a node that
 // released the seat in between would otherwise re-assert "is thinking…" every
 // refresh interval, for a turn it is not running, until the process died. It is

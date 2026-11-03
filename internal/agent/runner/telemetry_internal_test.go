@@ -6,11 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -69,7 +77,7 @@ func TestTheApproximationCoversEveryTermMeasured(t *testing.T) {
 // {name, description, parameters} object per tool.
 //
 // The compact form is the definitions' own JSON in no vendor's wrapping, which
-// is what makes the figure comparable across CLIs: each one reads them over
+// is what makes the figure comparable across harnesses: each one reads them over
 // MCP, annotations and all, and hands them to its model in its own vendor's
 // shape, so the model is sent strictly more — which is why the choice is
 // written down rather than left to be inferred from a number.
@@ -168,7 +176,7 @@ func TestTheTallyNamesThePhaseThatFailed(t *testing.T) {
 }
 
 // A BOX THAT COULD NOT BE STARTED IS NAMED BY ITS CLASS. Every executor
-// runs in a coding sandbox, as its coding CLI's own run, and a box its
+// runs in a coding sandbox, as its harness's own run, and a box its
 // provider would not start failed the phase and the turn as `error`, while
 // the backend that met it had said what clears it. The kind is the sandbox's
 // class, read before a deadline its chain carries; a provider's own kind and
@@ -214,3 +222,76 @@ func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
 type refusedTransport struct{ err error }
 
 func (r refusedTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }
+
+// A TURN'S CALLS TO EACH MCP TOOL ARE COUNTED ONCE, IN ONE OUTCOME, every
+// phase's and every delegated worker's and an executor run's as its bridge
+// recorded them: the tally the record ending the turn states
+// ([types.TurnTally.Tools]) and the usage domain counts a seat's calls from.
+// Each call is filed under the server whose tool it NAMED, so a call the
+// engine refused before any tool ran counts against that server; a builtin's
+// call and a name nothing registered are no server's.
+//
+// And the phase record's row carries the same two facts, `source` and
+// `refusal`, for a reader of the turn's own calls.
+//
+// Mutation: file a call by its Origin rather than its Source, and the refused
+// call vanishes; count an unavailable call as failed, or a refusal as failed,
+// and its outcome moves; drop the worker's executions from recordWorker, and
+// github_search counts one call.
+func TestATurnsMCPCallsAreCountedOncePerOutcome(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	answered := func(name, server string, failed bool, refusal mcp.Refusal, ms int) toolloop.Execution {
+		return toolloop.Execution{Name: name, Failed: failed, Refusal: refusal,
+			Origin: mcp.Origin(server), Server: server, Source: mcp.Origin(server),
+			StartedAt: at.Add(time.Duration(ms) * time.Second), Duration: time.Duration(ms) * time.Millisecond}
+	}
+	execute := []toolloop.Execution{
+		answered("github_get_issue", "github", false, "", 100),
+		answered("github_get_issue", "github", true, "", 200),
+		answered("github_get_issue", "github", true, mcp.RefusalUnavailable, 5),
+		// REFUSED BEFORE ANY TOOL RAN: no origin, untimed, and still
+		// github's tool.
+		{Name: "github_close_issue", Failed: true, Refusal: mcp.RefusalForbidden,
+			Source: mcp.Origin("github")},
+		// NO SERVER'S: a builtin, and a name nothing registered.
+		{Name: "remember", Origin: mcp.OriginBuiltin, Source: mcp.OriginBuiltin},
+		{Name: "ghost", Failed: true, Refusal: mcp.RefusalNotFound},
+	}
+	var s Spend
+	var mu sync.Mutex
+	s.record(phaseRecord{Phase: phase.Execute, Result: toolloop.Result{Executions: execute}})
+	s.recordWorker(&mu, subagent.Result{Executions: []toolloop.Execution{
+		answered("github_search", "github", false, "", 50),
+	}})
+	bridged := agentRunResult("done", []BridgedCall{{
+		Call: ledger.Call{Name: "github_search"}, StartedAt: at.Add(time.Hour),
+		Duration: 70 * time.Millisecond, Origin: mcp.Origin("github"), Server: "github",
+		Source: mcp.Origin("github"),
+	}}, RunRecord{}, at, at.Add(2*time.Hour))
+	s.record(phaseRecord{Phase: phase.Execute, Result: bridged.Result})
+
+	want := []types.ToolTally{
+		{Server: "github", Tool: "github_close_issue", Calls: 1, Refused: 1},
+		{Server: "github", Tool: "github_get_issue", Calls: 3, Failed: 1, Unavailable: 1,
+			TotalMS: 305, LastAt: at.Add(200 * time.Second)},
+		{Server: "github", Tool: "github_search", Calls: 2, TotalMS: 120, LastAt: at.Add(time.Hour)},
+	}
+	if !reflect.DeepEqual(s.Tools, want) {
+		t.Errorf("the tally is\n%+v\nwant\n%+v", s.Tools, want)
+	}
+
+	rows := toolExecutions(execute)
+	for i, wantRow := range []map[string]any{
+		{"source": "mcp:github"}, {"source": "mcp:github"},
+		{"source": "mcp:github", "refusal": "unavailable"},
+		{"source": "mcp:github", "refusal": "forbidden"},
+		{"source": "builtin"}, {"refusal": "not_found"},
+	} {
+		for _, key := range []string{"source", "refusal"} {
+			if got, want := rows[i][key], wantRow[key]; got != want {
+				t.Errorf("%s's row %d: %s = %v, want %v", execute[i].Name, i, key, got, want)
+			}
+		}
+	}
+}

@@ -113,6 +113,26 @@ func act(tool string, args Args) (exec.Request, error) {
 	return req, nil
 }
 
+// withActArg is an act request's body with one argument more: one its preview
+// fills from what it read rather than one the model writes, so the model's
+// schema for the tool never offers it and the call the model made is checked
+// against that schema before this is added. The body is [act]'s own shape,
+// `{"args": {...}}`; anything else is a request this was not built for.
+func withActArg(body []byte, key string, value any) ([]byte, error) {
+	var call struct {
+		Args map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(body, &call); err != nil || call.Args == nil {
+		return nil, fmt.Errorf("catalog: add %s to an act request that sends no args", key)
+	}
+	call.Args[key] = value
+	encoded, err := json.Marshal(map[string]any{"args": call.Args})
+	if err != nil {
+		return nil, fmt.Errorf("catalog: encode the request with %s: %w", key, err)
+	}
+	return encoded, nil
+}
+
 // ActRoute is the act transport's route (internal/api/operator's
 // ActPattern), the one every approved operator-catalogue write is sent to.
 const ActRoute = "POST /operator/act/{tool}"

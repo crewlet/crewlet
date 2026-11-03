@@ -114,7 +114,7 @@ func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	}
 }
 
-// THE CODING AGENT IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES, AND TO
+// THE HARNESS IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES, AND TO
 // GIVE ITS OPTIONS AS OPTIONS. The roster and the manager it is given are
 // handles, so a `to` copied from either resolves exactly rather than falling
 // back; and a run told only to ask wrote its choices into the question as
@@ -125,11 +125,11 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	seat := o.SeatByHandle("swe")
 	brief := askBrief(o, seat)
 	if !strings.Contains(brief, "`"+builtin.AskAndWaitTool+"`") {
-		t.Fatalf("the brief does not tell the coding agent how to ask:\n%s", brief)
+		t.Fatalf("the brief does not tell the harness how to ask:\n%s", brief)
 	}
 	for _, field := range []string{"`options`", "`recommended`", "`rationale`", "`branch`"} {
 		if !strings.Contains(brief, field) {
-			t.Errorf("the brief does not tell the coding agent to fill %s:\n%s", field, brief)
+			t.Errorf("the brief does not tell the harness to fill %s:\n%s", field, brief)
 		}
 	}
 	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
@@ -137,7 +137,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	// run told only of the park parks, holding its box, on every question.
 	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
 		!strings.Contains(brief, runner.SubmitWorkTool) {
-		t.Fatalf("the brief does not tell the coding agent to ask with its tools and "+
+		t.Fatalf("the brief does not tell the harness to ask with its tools and "+
 			"finish when it can go on without the answer:\n%s", brief)
 	}
 	if !strings.Contains(brief, "Teammates you can name: cto, ada, qa.") ||

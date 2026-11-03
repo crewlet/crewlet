@@ -243,7 +243,7 @@ consequences worth knowing before you script against it:
   no collection of its own, so add the two together with `PUT /config` — and an
   entry or a seat's `llm` that leaves a seat's executor chain with no
   `claude-code` or `opencode` member is refused, at the seat's `llm` or at the
-  `agent` of the entry a seat with none falls to.
+  `harness` of the entry a seat with none falls to.
 - **An unknown field is refused, not dropped.** A body carrying `heders`
   where you meant `headers` is `400 invalid_body` naming the field, exactly as
   the whole-document parser refuses an unknown key. A decoder that ignored what
@@ -283,18 +283,23 @@ consequences worth knowing before you script against it:
   splice. A body that leaves `handle` (or a unit's `id`) out keeps the one the
   path names, so editing a display name is never a rename. Keep the identity
   and change whatever else you like.
-- **`PUT` is the only verb, but for a model's removal.** There is no `DELETE
-  /config/mcp-servers/tracker`; the path answers `405`. Removal is a
-  whole-document edit, unlike a create: adding a server changes nothing that
-  already names one, while deleting a server leaves every `mcp_env` block keyed
-  on it read by nothing. If that is going to happen, it should happen in a
-  document you looked at, and land as one reviewable revision: export, edit,
-  `PUT /config`. A model is the one exception, because what names it has a
-  shape the route can ask for: `DELETE /config/llm-providers/{key}` takes the
-  repoint of every seat job and Ask Crewlet target that names the entry, by seat
-  and job, and refuses with the list of them while one is unanswered, so the
-  removal and every repoint land as one revision
+- **`PUT` is the only verb, but for removing a model or an MCP server.** A
+  seat or a unit is removed by a whole-document edit, unlike a create: adding
+  one changes nothing that already names it, while deleting one leaves every
+  `manages:`, `lead:` and `unit:` that names it pointing at nothing. If that
+  is going to happen, it should happen in a document you looked at, and land
+  as one reviewable revision: export, edit, `PUT /config`. A model and a
+  server are the two exceptions, because what names each has a shape the
+  route can ask for. `DELETE /config/llm-providers/{key}` takes the repoint of
+  every seat job and Ask Crewlet target that names the entry, by seat and job,
+  and refuses with the list of them while one is unanswered, so the removal
+  and every repoint land as one revision
   ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
+  `DELETE /config/mcp-servers/{name}` with `"clear": true` takes every
+  `mcp_env` block and box entry that names the server with it, refuses with
+  the list of them otherwise, and can delete the stored values only the
+  server read
+  ([the route](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)).
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
@@ -479,6 +484,12 @@ unchanged document:
 printf %s "$NEW_VALUE" | curl -X PUT $CREWLET_URL/secrets/GITLAB_TOKEN -H "$AUTH" --data-binary @-
 curl -X POST $CREWLET_URL/config/reload -H "$AUTH" -H "X-Summary: rotate the leaked GitLab token"
 ```
+
+An MCP server's header or variable stored from its page
+([`PUT /mcp-servers/{name}/values/{key}`](../reference/api-endpoints.md#put-mcp-serversnamevalueskey))
+is refused too (`403 config_managed`), since it writes the key's `${VAR}` into
+the document: the managing system names the variable, and a rotation of its
+value goes through `/secrets` as above.
 
 The full list of what is refused and what stays open, and why, is in
 [Managed configuration](../concepts/configuration.md#managed-configuration).

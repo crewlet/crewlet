@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A LAUNCHED RUN IS TOLD WHAT A FENCE IS, in the standing instructions its CLI
+// A LAUNCHED RUN IS TOLD WHAT A FENCE IS, in the standing instructions its harness
 // is launched with, whether the run is the round's first or carries on one a
 // person's answer reached: every foreign word it reads, in its brief or from
 // its tools over the bridge, is inside a fence, and a fence means something

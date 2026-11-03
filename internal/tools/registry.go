@@ -154,28 +154,61 @@ type Entry struct {
 	// itself carries that answer back. A positive value set at registration
 	// is the only form that says what it means.
 	Surface string
+
+	// ServerDescription is what the operator says this tool's MCP server is
+	// for, in their words ([Registry.DescribeServers]): the line the prompt
+	// lists beside the server's name, which is all a model is shown of a
+	// server before it asks for its tools. Empty for a builtin, and for a
+	// server nobody described.
+	//
+	// ON EVERY ENTRY rather than in a table beside them, because a phase's
+	// universe is a snapshot cut from the registry and recut again (a
+	// worker's grant is built entry by entry, [Snapshot.With]), and a table
+	// kept beside the entries is one each cut would have to remember to
+	// carry. On the entry, it goes wherever the tool goes.
+	ServerDescription string
+
+	// NeedsApproval is whether a call to this tool waits for a person's
+	// answer before it runs: an MCP tool its server's entry sets at approve,
+	// by its own level, the entry's default, or the level its hints start it
+	// at ([mcp.Definition.Level]). Decided by the surface a call reaches
+	// ([Surface]), on the entry for the reason ServerDescription is: it goes
+	// wherever the tool goes, through every cut of a phase's universe. Never
+	// set on a builtin, which no level governs.
+	NeedsApproval bool
+
+	// Unreviewed reports, at each call, whether the tool's definition is not
+	// the one its level was decided on, so that a call to it asks a person
+	// first though its level is allow ([mcp.Tool.Unreviewed], ADR-0078).
+	// A function rather than a flag because it moves when a person accepts
+	// a change, which refiles nothing. Nil for every tool no change can
+	// hold: a builtin, and an MCP tool that asks before each call anyway.
+	Unreviewed func() bool
+}
+
+// asksFirst reports whether a call to the tool waits for a person's answer:
+// its level says so, or its definition changed since that level was decided.
+func (e Entry) asksFirst() (asks, changed bool) {
+	if e.NeedsApproval {
+		return true, false
+	}
+	if e.Unreviewed != nil && e.Unreviewed() {
+		return true, true
+	}
+	return false, false
 }
 
 // Name is the tool's catalogue name.
 func (e Entry) Name() string { return e.Tool.Name() }
 
 // FromMCP is the server name for an MCP-served tool, and "" with false
-// otherwise.
+// otherwise ([mcp.OriginServer]).
 //
-// THE EMPTY NAME ON A MISS IS THE CONTRACT, not a courtesy: [strings.CutPrefix]
-// hands back its whole input when the prefix is absent, and returning that
-// unchecked gave every builtin the "server" `builtin` wherever the name was read
-// without the flag — the skill guard's check among them, whose server triggers
-// are documented as covering no builtin because a builtin's server is "", and
-// which a required skill naming a server called `builtin` would therefore have
-// matched against every engine tool.
-func (e Entry) FromMCP() (string, bool) {
-	server, ok := strings.CutPrefix(e.Origin, OriginMCPPrefix)
-	if !ok {
-		return "", false
-	}
-	return server, true
-}
+// THE EMPTY NAME ON A MISS IS THE CONTRACT, not a courtesy: a builtin's server
+// read as `builtin` gave the skill guard's check, whose server triggers are
+// documented as covering no builtin because a builtin's server is "", a match
+// against every engine tool for a required skill naming a server `builtin`.
+func (e Entry) FromMCP() (string, bool) { return mcp.OriginServer(e.Origin) }
 
 // Registry holds every tool the engine can offer.
 //
@@ -189,6 +222,9 @@ type Registry struct {
 	// invalidate the provider's prefix cache on a prompt that did not
 	// change.
 	order []string
+	// servers is what each MCP server is for, by its configured name
+	// ([Registry.DescribeServers]), stamped on every tool it serves.
+	servers map[string]string
 }
 
 // NewRegistry builds an empty registry.
@@ -213,13 +249,37 @@ func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := &Registry{
-		byName: make(map[string]Entry, len(r.byName)),
-		order:  slices.Clone(r.order),
+		byName:  make(map[string]Entry, len(r.byName)),
+		order:   slices.Clone(r.order),
+		servers: maps.Clone(r.servers),
 	}
 	for name, e := range r.byName {
 		out.byName[name] = e
 	}
 	return out
+}
+
+// DescribeServers records what each MCP server is for, keyed by its configured
+// name, and stamps it on every tool of that server the registry holds or is
+// later given ([Entry.ServerDescription]); a server it does not name is
+// described by nothing. A clone carries the descriptions, so a seat's own
+// registry, cloned from its epoch's, stamps its own children's tools too.
+//
+// ON THE REGISTRY because the registry is what every phase is built from: the
+// epoch's is new on every apply and is described from that revision, so a
+// description edited without a restart reaches the next turn like any other
+// change to the revision, and no registration path can file a server's tool
+// without it.
+func (r *Registry) DescribeServers(descriptions map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.servers = maps.Clone(descriptions)
+	for name, e := range r.byName {
+		if server, ok := e.FromMCP(); ok {
+			e.ServerDescription = r.servers[server]
+			r.byName[name] = e
+		}
+	}
 }
 
 // ErrDuplicate reports a name already registered.
@@ -241,7 +301,8 @@ func (r *Registry) Register(tool Callable, origin string) error {
 }
 
 // Option is a registration detail that is neither the tool, its origin nor
-// its annotations — today only [DeliversTo].
+// its annotations: [DeliversTo] for a first-party tool, and an MCP tool's
+// approval ([Registry.RegisterMCP]).
 type Option func(*Entry)
 
 // DeliversTo marks a first-party tool as one whose successful call reaches
@@ -273,6 +334,9 @@ func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, o
 		return &ErrDuplicate{Name: name, Existing: existing.Origin, Incoming: origin}
 	}
 	entry := Entry{Tool: tool, Origin: origin, Annotations: ann}
+	if server, ok := entry.FromMCP(); ok {
+		entry.ServerDescription = r.servers[server]
+	}
 	for _, opt := range opts {
 		opt(&entry)
 	}
@@ -281,13 +345,22 @@ func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, o
 	return nil
 }
 
-// RegisterMCP adds a bridged MCP registration, carrying its annotations.
+// RegisterMCP adds a bridged MCP registration, carrying its annotations and
+// whether a call to it waits for a person's answer: by its level
+// ([Entry.NeedsApproval]), and, for a tool its level allows, by whether its
+// definition changed since ([Entry.Unreviewed]).
 func (r *Registry) RegisterMCP(reg mcp.Registration) error {
-	ann := Annotations{}
+	ann, approval := Annotations{}, false
+	var unreviewed func() bool
 	if t, ok := reg.Tool.(*mcp.Tool); ok {
-		ann = t.Annotations()
+		ann, approval = t.Annotations(), t.Level() == mcp.LevelApprove
+		if t.Level() == mcp.LevelAllow {
+			unreviewed = t.Unreviewed
+		}
 	}
-	return r.RegisterWith(reg.Tool, reg.Origin, ann)
+	return r.RegisterWith(reg.Tool, reg.Origin, ann, func(e *Entry) {
+		e.NeedsApproval, e.Unreviewed = approval, unreviewed
+	})
 }
 
 // Unregister removes a tool, reporting whether it was there.
@@ -400,6 +473,17 @@ func (r *Registry) Deliveries() map[string]string {
 	return out
 }
 
+// MCPDelivery is where a call to one of server's tools delivers, by the
+// predicate the registry answers with ([deliverySurface]): the server, unless
+// the tool is proven read-only.
+//
+// FOR A TOOL NO REGISTRY HERE HOLDS: one only another node's instance of a
+// per-agent server lists, whose catalogue row must say what a registry
+// holding it would, rather than a second reading of its hints.
+func MCPDelivery(server string, ann Annotations) string {
+	return deliverySurface(Entry{Origin: mcp.Origin(server), Annotations: ann})
+}
+
 // deliverySurface is the one predicate both the registry and a snapshot answer
 // with, so a tool cannot deliver through one view and not the other. It
 // returns "" for a tool that reaches nobody.
@@ -489,10 +573,11 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // Discoverable renders what a phase can reach but does not yet hold: every
 // first-party tool of the snapshot that active does not name, by name and
 // description, and every MCP server with a tool active does not name, by name
-// only — in registration order, or "" when there is nothing to discover.
+// and what the operator says it is for ([Entry.ServerDescription]), in
+// registration order, or "" when there is nothing to discover.
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — as a tool of the CLI's `crewlet` MCP
+// reaches the model with every request — as a tool of the harness's `crewlet` MCP
 // server, over the tool bridge to the executor's run in its box and over its
 // phase's tool session for every phase on this host — and a second copy of its
 // description in the system prompt is the same words paid for twice. On the
@@ -504,7 +589,10 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // MCP servers are named rather than expanded because a real server publishes
 // dozens of tools and a model shown all of them decides against a wall of
 // text. Discovery is a tool call — which is also what keeps the prompt prefix
-// stable while a server's catalogue changes underneath.
+// stable while a server's catalogue changes underneath. A server's description
+// is the one line that tells a model which server to look in before it spends
+// a call listing one: a name like `internal` says nothing about what is behind
+// it.
 //
 // OVER A SNAPSHOT, so a phase is shown the universe its own surface was built
 // from: a tool its snapshot leaves out is one it cannot activate, and a
@@ -515,15 +603,15 @@ func (s Snapshot) Discoverable(active []string) string {
 		held[name] = true
 	}
 	var lines []string
-	servers := map[string]bool{}
+	servers := map[string]string{}
 	var serverOrder []string
 	for _, e := range s.entries {
 		if held[e.Name()] {
 			continue
 		}
 		if server, ok := e.FromMCP(); ok {
-			if !servers[server] {
-				servers[server] = true
+			if _, seen := servers[server]; !seen {
+				servers[server] = strings.TrimSpace(e.ServerDescription)
 				serverOrder = append(serverOrder, server)
 			}
 			continue
@@ -531,7 +619,11 @@ func (s Snapshot) Discoverable(active []string) string {
 		lines = append(lines, CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	for _, server := range serverOrder {
-		lines = append(lines, "- MCP server `"+server+"`")
+		line := "- MCP server `" + server + "`"
+		if description := servers[server]; description != "" {
+			line += ": " + description
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

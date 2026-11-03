@@ -187,14 +187,14 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 // event broker this node could not reach — its connection reconnecting, or the
 // broker not answering in time ([queue.ErrUnavailable]); a note the node
 // running its turn could not verify because the two nodes do not hold the same
-// keys ([steer.ErrUnverified]), and a coding run's record naming its seat under
+// keys ([steer.ErrUnverified]), and an executor's record naming its seat under
 // a key this node does not hold ([steer.ErrSeatKeyUnknown]), neither of which a
 // wait clears; a coding sandbox that
 // failed for a reason its backend classed ([sandbox.WhyOf]: its provider not
 // answering, at a limit, refusing the company's key or wanting its account
 // paid, or a setup a person has to change), told by the class and never the
 // provider's own words, whose wait follows the class ([sandbox.Why.Waits]); the
-// node running a coding run unable to answer about it for a reason of its own
+// node running an executor's box unable to answer about it for a reason of its own
 // ([sandbox.ErrTailUnanswered]); a wait that ran out of time or was abandoned. Everything else that reaches a
 // tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
@@ -311,7 +311,7 @@ type conditionSaid struct {
 }
 
 // waitsUntil is the cause of an unavailable refusal a wait clears at a known
-// instant and no condition names: a model at a usage limit its CLI reported,
+// instant and no condition names: a model at a usage limit its harness reported,
 // which its backend sits out until at (ADR-0064). [RetryAfter] answers the
 // wait left until then, never less than a second, where this node's undecided
 // hint told a person to come back in two seconds to a limit lifting in an
@@ -333,7 +333,7 @@ var errWaitless = errors.New("builtin: no wait clears this")
 
 // waitless is the cause of an unavailable refusal no wait clears and no
 // condition names: a company that runs no model for the call, a login the
-// model's CLI reports refused or missing, a call the engine itself cannot make
+// model's harness reports refused or missing, a call the engine itself cannot make
 // (llm.KindFatal). The class says "this node cannot serve it", which is true,
 // and it was answered as every unavailable refusal is, under this node's
 // undecided hint, so a person told "an administrator needs to set one up" was
@@ -443,13 +443,13 @@ func condition(err error) (conditionSaid, bool) {
 			person: "This node lost touch with the rest of the fleet. " +
 				statelog.TryAgainSoon}, true
 	case errors.Is(err, sandbox.ErrTailUnanswered):
-		// THE NODE RUNNING A CODING RUN COULD NOT READ IT FOR A REASON OF
-		// ITS OWN a wait clears: the run's seat moving, the node stopping,
-		// or what it reads the run's record from not answering. Its own
-		// log has which.
-		return conditionSaid{clause: "the node running the coding run couldn't " +
+		// THE NODE RUNNING AN EXECUTOR'S BOX COULD NOT READ IT FOR A REASON
+		// OF ITS OWN a wait clears: the executor's seat moving, the node
+		// stopping, or what it reads the executor's record from not
+		// answering. Its own log has which.
+		return conditionSaid{clause: "the node running the executor's box couldn't " +
 			"answer just now",
-			person: "The node running this coding run couldn't answer just now. " +
+			person: "The node running this executor's box couldn't answer just now. " +
 				statelog.TryAgainSoon}, true
 	case errors.Is(err, steer.ErrUnverified):
 		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
@@ -536,8 +536,8 @@ var sandboxConditions = map[sandbox.Why]conditionSaid{
 		"company's account",
 		person: "The sandbox provider is at the company's account limit. " +
 			statelog.TryAgainLater, after: sandboxLaterWait},
-	sandbox.WhyProviderUnavailable: {clause: "the sandbox provider or the coding " +
-		"run's box didn't answer, or failed on its side",
+	sandbox.WhyProviderUnavailable: {clause: "the sandbox provider or the executor's " +
+		"box didn't answer, or failed on its side",
 		person: "The coding sandbox didn't answer. " + statelog.TryAgainSoon},
 }
 

@@ -50,8 +50,8 @@ export const deviceEnded = (status: ModelDeviceStatus) =>
 /**
  * The host a sign-in address points at, for the button that opens it, or
  * null where it is not an https address. The address is the engine's, read
- * off the CLI's output, and the page opens it in a new tab: only a secure
- * one is offered, so a CLI's output can never hand a person a plain-http or
+ * off the harness's output, and the page opens it in a new tab: only a secure
+ * one is offered, so a harness's output can never hand a person a plain-http or
  * script address to follow.
  */
 function hostOf(url: string): string | null {

@@ -55,11 +55,11 @@ import (
 // FileObjectReferences is the table whose rows keep a conversation's files'
 // objects alive: the declaration internal/objstore/references collects.
 //
-// REQUIRED (ADR-0074): a kept file is an image a person attached or a file a
+// REQUIRED (ADR-0081): a kept file is an image a person attached or a file a
 // run delivered to them, bytes nothing builds again, so its objects are
 // audited and every backup carries them until a purge or an erasure removes
 // the row. The declaration therefore names the log a restore replays and how
-// one record of it names the table's rows (ADR-0075).
+// one record of it names the table's rows (ADR-0082).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "assistant_files",
 	Key: "object", Hash: "hash", Size: "object_size",

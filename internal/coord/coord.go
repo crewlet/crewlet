@@ -34,7 +34,9 @@
 // tri-state below is ADR-0005, why [ProtocolVersion] REFUSES a lower-protocol
 // peer where an event envelope round-trips one is ADR-0016, and why a token
 // budget is counted per calendar window — rolled inside the charge that
-// crosses a boundary, with no reset — is ADR-0019 (budget.go).
+// crosses a boundary, with no reset — is ADR-0019 (budget.go). Why every node
+// publishes what its MCP servers list, under its presence epoch, and the fleet
+// reads the union of the live nodes' listings is ADR-0074 (mcplisting.go).
 //
 // Three rules carry the correctness of everything above:
 //
@@ -45,10 +47,10 @@
 //     previous one is still using.
 //
 //     What is actually fenced BY THE WRITE is every coordination write here
-//     and the sandbox run state, whose rows carry an owner_epoch a lower
-//     one cannot outrank. A seat-scoped SQL write is not: those are made
-//     safe by being keyed on the work rather than on the writer, and the
-//     per-table inventory is in docs/concepts/seat-ownership.md rather
+//     and each executor's row in the sandbox runs bucket, whose owner_epoch
+//     a lower one cannot outrank. A seat-scoped SQL write is not: those are
+//     made safe by being keyed on the work rather than on the writer, and
+//     the per-table inventory is in docs/concepts/seat-ownership.md rather
 //     than restated here. What stops the zombie MAKING them is the seat
 //     fence — [seat.Host.Fence], checked at the top of every tool-loop
 //     round and before each of that round's calls — which is a different

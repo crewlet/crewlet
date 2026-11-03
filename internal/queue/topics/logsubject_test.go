@@ -17,11 +17,12 @@ func everyLogPrefix() []string {
 		topics.PagesLogPrefix,
 		topics.IamLogPrefix,
 		topics.UsageLogPrefix,
-		topics.CodeLogPrefix,
 		topics.ArtifactsLogPrefix,
 		topics.ArtifactDataLogPrefix,
 		topics.AssistantLogPrefix,
 		topics.ChatLogPrefix,
+		topics.ExecutorLogPrefix,
+		topics.CodeLogPrefix,
 	}
 }
 
@@ -167,6 +168,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.ChatLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the chat log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.ExecutorLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.ExecutorLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the executor log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 	}
 }
 
@@ -233,8 +238,6 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_IAM_LOG", "crewlet.iam.log"},
 		{"usage", topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard,
 			"CREWLET_USAGE_LOG", "crewlet.usage.log"},
-		{"code", topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard,
-			"CREWLET_CODE_LOG", "crewlet.code.log"},
 		{"artifacts", topics.ArtifactsLogStream, topics.ArtifactsLogPrefix, topics.ArtifactsLogWildcard,
 			"CREWLET_ARTIFACTS_LOG", "crewlet.artifacts.log"},
 		{"artifactdata", topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,
@@ -243,6 +246,10 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			topics.AssistantLogWildcard, "CREWLET_ASSISTANT_LOG", "crewlet.assistant.log"},
 		{"chat", topics.ChatLogStream, topics.ChatLogPrefix, topics.ChatLogWildcard,
 			"CREWLET_CHAT_LOG", "crewlet.chat.log"},
+		{"executor", topics.ExecutorLogStream, topics.ExecutorLogPrefix,
+			topics.ExecutorLogWildcard, "CREWLET_EXECUTOR_LOG", "crewlet.executor.log"},
+		{"code", topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard,
+			"CREWLET_CODE_LOG", "crewlet.code.log"},
 	} {
 		if tc.stream != tc.wantStream || tc.prefix != tc.wantPrefix ||
 			tc.wildcard != tc.wantPrefix+".>" {

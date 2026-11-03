@@ -42,6 +42,18 @@ type estate struct {
 	group   string
 	openErr error
 	opens   int
+
+	// openFails is how many opens still fail with openErr before one
+	// succeeds; zero with openErr set fails every open.
+	openFails int
+
+	// readErr is what the next read returns instead of a record, once: a
+	// broker's own failure, which ends the consumer. closeNext is the
+	// consumer closing under its reader, once, as a nil message with a
+	// nil error. stops counts the consumers the feed stopped.
+	readErr   error
+	closeNext bool
+	stops     int
 }
 
 // nakRedeliveries is how many times this fixture hands a naked record back.
@@ -64,9 +76,58 @@ func (e *estate) Open(_ context.Context, group string) (changefeed.Records, erro
 	e.opens++
 	e.group = group
 	if e.openErr != nil {
-		return nil, e.openErr
+		err := e.openErr
+		if e.openFails > 0 {
+			e.openFails--
+			if e.openFails == 0 {
+				e.openErr = nil
+			}
+		}
+		return nil, err
 	}
 	return e, nil
+}
+
+// failOpens makes the next n opens fail with err, and every one after them
+// succeed; n of zero fails every open until the case clears it.
+func (e *estate) failOpens(n int, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.openErr, e.openFails = err, n
+}
+
+// failNextRead makes the open consumer's next read fail with err.
+func (e *estate) failNextRead(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.readErr = err
+}
+
+// closeNextRead makes the open consumer close under its reader.
+func (e *estate) closeNextRead() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.closeNext = true
+}
+
+// opened and stopped count the consumers opened and stopped.
+func (e *estate) opened() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.opens
+}
+
+// openedGroup is the group the latest open named.
+func (e *estate) openedGroup() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.group
+}
+
+func (e *estate) stopped() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.stops
 }
 
 // deliver queues one record, exactly as an estate's own consumer would.
@@ -83,6 +144,16 @@ func (e *estate) deliver(rec changefeed.Record) {
 func (e *estate) Next(ctx context.Context) (*changefeed.Message, error) {
 	for {
 		e.mu.Lock()
+		if err := e.readErr; err != nil {
+			e.readErr = nil
+			e.mu.Unlock()
+			return nil, err
+		}
+		if e.closeNext {
+			e.closeNext = false
+			e.mu.Unlock()
+			return nil, nil
+		}
 		// THE DELAY IS HONOURED, because the feed's whole retry
 		// behaviour is built on it: a fixture that handed a naked record
 		// straight back would burn its redelivery budget in microseconds
@@ -133,4 +204,11 @@ func (e *estate) Next(ctx context.Context) (*changefeed.Message, error) {
 	}
 }
 
-func (e *estate) Stop() error { return nil }
+// Stop ends a consumer. The pending records survive it, as a durable group's
+// position does, so a reopened consumer resumes where the last one stopped.
+func (e *estate) Stop() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.stops++
+	return nil
+}

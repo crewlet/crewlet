@@ -141,7 +141,7 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
 // Visibility is who may read a repository besides persons and the tokens of
-// Tier A (ADR-0081): a SEAT'S standing narrows by it, and a person's never
+// Tier A (ADR-0088): a SEAT'S standing narrows by it, and a person's never
 // does — a credential presented by a person, or a token bound to nobody, reads
 // every repository, because a CI token that could not read a unit repository
 // breaks its builds and a Tier A token is the operator's own credential.
@@ -268,7 +268,7 @@ func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p
 
 // readsChart reports a principal whose push is judged from the CHART: a
 // seat's alone. A person maintains every repository and a token bound to
-// nobody reads every one — rules that need no chart (ADR-0078), so [GrantOf]
+// nobody reads every one — rules that need no chart (ADR-0085), so [GrantOf]
 // never consults one for them — and the engine's own expiry deletes a seat's
 // idle branch by a rule of its own ([Grant.RefRule]), while a seat's standing
 // is its relation on the chart, and so is everything the push decide holds a
@@ -1088,7 +1088,7 @@ type PushEntry struct {
 	// Landings is every LANDING the entry makes on a protected branch: each
 	// ok command that moves a branch a protection rule matches onto a
 	// commit — a person's own push under direct_push persons, their recorded
-	// override (ADR-0089), since no seat's push moves a protected branch —
+	// override (ADR-0096), since no seat's push moves a protected branch —
 	// in command order, STAMPED BY ITS DECIDE from the rules its snapshot
 	// holds, so the record's apply writes the branch's landing row, and its
 	// green row where the branch's gate requires no check, without matching
@@ -1119,14 +1119,13 @@ type Principal struct {
 	OperatorID string        `json:"operator_id,omitempty"`
 	Seat       string        `json:"seat,omitempty"`
 	// Run is what made a SEAT'S PUSH — the turn, the work item it was charged
-	// to and the model, and for a coding box's push its run and its coding
-	// agent ([RunProvenance.RunID]) — and nothing on any other principal: an
-	// operator acts with a credential and no run, and a seat that only READS
-	// names none (a read's asker is judged by who it is, never by what it is
-	// doing).
-	// THE ZERO VALUE IS "NO RUN", and a value, not a pointer: one spelling of
-	// the absence, omitted from the encoding whole, and a principal stays a
-	// value the cases and the index of pushes compare with ==.
+	// to and the model, and for a coding box's push its run and its harness
+	// ([RunProvenance.RunID]) — and nothing on any other principal: an operator
+	// acts with a credential and no run, and a seat that only READS names none
+	// (a read's asker is judged by who it is, never by what it is doing). THE
+	// ZERO VALUE IS "NO RUN", and a value, not a pointer: one spelling of the
+	// absence, omitted from the encoding whole, and a principal stays a value
+	// the cases and the index of pushes compare with ==.
 	//
 	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
 	// domain has run without this field — none of the domain is on main, so
@@ -1171,7 +1170,7 @@ func (p Principal) systemInvalid() string {
 	case p.Seat != "":
 		return "principal.seat: the engine acts on its own account, for no seat"
 	case !p.Run.IsZero():
-		return "principal.run: the engine's own push is no turn's and no coding run's"
+		return "principal.run: the engine's own push is no turn's and no executor's"
 	}
 	return ""
 }
@@ -1228,9 +1227,9 @@ func (p Principal) Actor() string {
 
 // RunProvenance is what made a seat's push, as the SERVER stamps it from the
 // call that made it — the tool call's turn, its work item and its model, and
-// for a coding box's push the run that pushed and its coding agent — and
+// for a coding box's push the run that pushed and its harness — and
 // never as a commit says it: a commit's headers and trailers are written by
-// whoever made the commit, a seat or the coding agent in its box, and the
+// whoever made the commit, a seat or the harness in its box, and the
 // engine trusts nothing it did not see itself. Every field is bounded
 // ([MaxProvenanceBytes]) and spelled as the push row stores it.
 type RunProvenance struct {
@@ -1287,9 +1286,9 @@ type RunProvenance struct {
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
 	Model string `json:"model,omitempty"`
-	// RunID is the CODING RUN behind a box's push — its launch, the id the
+	// RunID is the LAUNCH behind a box's push — its executor's, the id the
 	// engine minted when it launched the box (sandbox.PendingRun.LaunchID), a
-	// UUID in its canonical spelling — and CodingAgent the coding agent the
+	// UUID in its canonical spelling — and Harness the harness the
 	// box ran ("claude-code", "opencode"). The code host stamps both from the
 	// run's row when it admits the box: what the engine's account of a run's
 	// delivery reads its pushes by (the `run_pushes` read). BOTH OR NEITHER,
@@ -1303,16 +1302,16 @@ type RunProvenance struct {
 	// that meets a push record reads them. Once a build without them has run,
 	// they take {Name: "RunProvenance.RunID", Since: 3, Op: "push", Path:
 	// []string{"mutation", "pushes", "principal", "run", "run_id"}} and
-	// {Name: "RunProvenance.CodingAgent", Since: 3, Op: "push", Path:
-	// []string{"mutation", "pushes", "principal", "run", "coding_agent"}} in
+	// {Name: "RunProvenance.Harness", Since: 3, Op: "push", Path:
+	// []string{"mutation", "pushes", "principal", "run", "harness"}} in
 	// versionedFields, with RecordVersion at 3, its line under "What each
 	// version added" and a Carrying record in the statelogtest candidate. A
 	// version of their own, after Principal.Run's 2: a record carrying them
 	// carries the turn's run too, so a reader at version 2 would apply a box's
-	// push as one no coding run made — its row without run_id and coding_agent
+	// push as one no executor made — its row without run_id and harness
 	// on that node alone, which no run_pushes read of that node finds.
-	RunID       string `json:"run_id,omitempty"`
-	CodingAgent string `json:"coding_agent,omitempty"`
+	RunID   string `json:"run_id,omitempty"`
+	Harness string `json:"harness,omitempty"`
 }
 
 // IsZero reports a principal's run that names nothing: no run at all, the
@@ -1322,19 +1321,19 @@ func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
 // MaxProvenanceBytes bounds each [RunProvenance] field: a turn id and a run id
 // are UUIDs (36 bytes), a work key a tracker's or a vendor's (Jira's are under
 // 32), a model id a provider's (the longest Bedrock ARN form is about 120), a
-// coding agent a name the sandbox configuration chose ("claude-code"), a work
-// item's id its tracker's (a native task's UUID, `<repository id>#<number>` on
-// GitHub), its project the tracker's key for one (Worklet's and Jira's a short
-// key, GitLab's a group path, fitted where a nested one runs longer). 256 is
-// past every one of them but that path's deepest, and what the bound buys is a
-// push entry whose size is known before it is measured: eight fields at it are
-// twelve kibibytes of a record's mebibyte even where JSON spells every byte in
-// six.
+// harness a name the model entry chose ("claude-code",
+// providers.llm.<key>.harness), a work item's id its tracker's (a native task's
+// UUID, `<repository id>#<number>` on GitHub), its project the tracker's key
+// for one (Worklet's and Jira's a short key, GitLab's a group path, fitted
+// where a nested one runs longer). 256 is past every one of them but that
+// path's deepest, and what the bound buys is a push entry whose size is known
+// before it is measured: eight fields at it are twelve kibibytes of a record's
+// mebibyte even where JSON spells every byte in six.
 const MaxProvenanceBytes = 256
 
 // Validate refuses a run no push may carry ([ErrInvalid], naming the field):
 // one that names no turn, a run id that is not a UUID in its canonical
-// spelling, a coding run without its coding agent or an agent without its run,
+// spelling, a launch without its harness or a harness without its launch,
 // a work item's id naming no tracker, or a field past [MaxProvenanceBytes],
 // not valid UTF-8, or holding a control
 // character. A stamping site passes every field it copies from outside the
@@ -1358,12 +1357,12 @@ func (r RunProvenance) invalid() string {
 	case r.TurnID == "":
 		return "turn_id: a seat's push names the turn that made it"
 	case r.RunID != "" && !canonicalUUID(r.RunID):
-		return fmt.Sprintf("run_id: %q is not a UUID in its canonical lowercase spelling — a coding run is "+
-			"named by the launch id the engine minted", r.RunID)
-	case r.RunID != "" && r.CodingAgent == "":
-		return "coding_agent: a coding run's push names the coding agent its box ran"
-	case r.RunID == "" && r.CodingAgent != "":
-		return "run_id: a coding agent's push names the coding run it pushed for"
+		return fmt.Sprintf("run_id: %q is not a UUID in its canonical lowercase spelling — an executor's "+
+			"launch is named by the launch id the engine minted", r.RunID)
+	case r.RunID != "" && r.Harness == "":
+		return "harness: an executor's push names the harness its box ran"
+	case r.RunID == "" && r.Harness != "":
+		return "run_id: a push naming its harness names the launch it pushed for"
 	case r.WorkID != "" && r.WorkBackend == "":
 		return "work_backend: a work item's id is its identity in one tracker, and names that tracker"
 	case r.WorkProject != "" && r.WorkBackend == "":
@@ -1371,7 +1370,7 @@ func (r RunProvenance) invalid() string {
 	}
 	for _, f := range []struct{ name, value string }{
 		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_id", r.WorkID}, {"work_key", r.WorkKey},
-		{"work_project", r.WorkProject}, {"model", r.Model}, {"coding_agent", r.CodingAgent},
+		{"work_project", r.WorkProject}, {"model", r.Model}, {"harness", r.Harness},
 	} {
 		switch {
 		case len(f.value) > MaxProvenanceBytes:
@@ -1461,7 +1460,7 @@ type Purge struct {
 // committer ([Committer.ProposeCompaction]) and applied as ONE record that adds
 // the outputs' rows and moves the inputs' into code_packs_retired.
 //
-// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0083): its outputs hold every
+// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0090): its outputs hold every
 // object its inputs held, so no push decided against the inputs can land a ref
 // whose closure a compaction removed, and no fence is needed beside the decide's own
 // check that every input is still live. The outputs are built over the inputs
@@ -1524,7 +1523,7 @@ type Compaction struct {
 // LayerRef is ONE published layer of a repository's multi-pack-index chain:
 // git's own incremental multi-pack-index layer, its bitmap, and the
 // commit-graph layer over the same packs, written ONCE by the repository's
-// maintainer and installed by every git node (ADR-0074's Derived standing).
+// maintainer and installed by every git node (ADR-0081's Derived standing).
 // Its bytes are the three files back to back — the multi-pack-index, its
 // bitmap, the commit-graph layer — cut into Parts, each one stored object.
 //

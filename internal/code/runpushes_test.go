@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The two coding runs the cases push for: each a launch's id, as the engine
+// The two executors the cases push for: each a launch's id, as the engine
 // mints one.
 const (
 	runA = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
@@ -22,18 +22,18 @@ const (
 
 // boxPush is one push of cmds by seat handle's coding box for run: the run
 // behind it — the turn that launched it, its work item, its model, the run's
-// launch and its coding agent — received by git, counted on the harness's day.
+// launch and its harness — received by git, counted on the harness's day.
 func boxPush(id, handle, run string, cmds ...code.Command) code.PushEntry {
 	e := entry(id, cmds...)
 	e.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: handle, Run: code.RunProvenance{
 		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-42",
-		Model: "claude-sonnet-4-5", RunID: run, CodingAgent: "claude-code"}}
+		Model: "claude-sonnet-4-5", RunID: run, Harness: "claude-code"}}
 	e.Day = harnessAt.Format(time.DateOnly)
 	return e
 }
 
 // A PUSH ROW NAMES THE RUN THAT MADE IT: a coding box's push writes the run
-// that pushed — its launch's id — and its coding agent into its row, beside the
+// that pushed — its launch's id — and its harness into its row, beside the
 // turn, the work item and the model, as its record's entry carries them; a
 // person's push writes neither; and the history reads both back as the entry
 // said them.
@@ -52,7 +52,7 @@ func TestAPushRowNamesTheRunThatMadeIt(t *testing.T) {
 	for push, want := range map[string][2]string{"p-person": {"", ""}, "p-box": {runA, "claude-code"}} {
 		var got [2]string
 		if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(), `SELECT run_id, coding_agent FROM code_pushes WHERE push_id = ?`,
+			return tx.QueryRowContext(t.Context(), `SELECT run_id, harness FROM code_pushes WHERE push_id = ?`,
 				push).Scan(&got[0], &got[1])
 		}); err != nil {
 			t.Fatalf("read push %s's row: %v", push, err)
@@ -142,8 +142,8 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 			t.Fatalf("page %d holds %d pushes, past its limit of 3 read", pages+1, len(answer.Pushes))
 		}
 		for _, p := range answer.Pushes {
-			if p.Run.RunID != runA || p.Run.CodingAgent != "claude-code" {
-				t.Errorf("push %s names the run %q by %q, want %s's", p.PushID, p.Run.RunID, p.Run.CodingAgent, runA)
+			if p.Run.RunID != runA || p.Run.Harness != "claude-code" {
+				t.Errorf("push %s names the run %q by %q, want %s's", p.PushID, p.Run.RunID, p.Run.Harness, runA)
 			}
 			got = append(got, p.PushID)
 		}

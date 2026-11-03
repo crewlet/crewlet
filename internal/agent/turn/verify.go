@@ -329,6 +329,11 @@ func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
 func Remedy(s Surface, reply Reply) string {
 	on := reply.Surface
 	if on == "" || !s.Reaches(on) {
+		// DISCOVERY ONLY WHERE THE PHASE HAS IT: an executor holds every
+		// tool it can reach, and was sent to two tools it does not hold.
+		if len(s.Discoverable) == 0 {
+			return "Call the tool that delivers on the surface the request came from."
+		}
 		return "Call the tool that delivers on the surface the request came from — " +
 			"`" + toolname.ListMCPServerTools + "` and `" + toolname.Activate +
 			"` will find one you do not have yet."

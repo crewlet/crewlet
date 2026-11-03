@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -33,7 +34,7 @@ import (
 // Every registered domain reaches it through [statelogtest.Run] as well,
 // which runs the same check as one of its four suites, but the check itself
 // needs only a migrated estate and a declaration, and the migrated estate is
-// this package's. Running all ten here also makes
+// this package's. Running all eleven here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
 // domains (the vectors and each data node's usage) included, whose ledgerless
@@ -46,6 +47,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		search.Domain{}, usage.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
 		assistantdomain.Domain{},
 		chatlet.Domain{},
+		executordomain.Domain{},
 		code.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
@@ -103,6 +105,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"iam_", iamdomain.Domain{}},
 		{"assistant_", assistantdomain.Domain{}},
 		{"chat_", chatlet.Domain{}},
+		{"executor_", executordomain.Domain{}},
 		{"code_", code.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {

@@ -1520,8 +1520,8 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //     (`native`, `ENG-1234`) and a model id of a provider's usual length —
 //     so the difference from typical is what a seat's provenance costs;
 //   - push=box: the same commit pushed by the seat's coding box, received by
-//     git, its run naming as well the coding run that pushed (its launch, a
-//     UUID) and its coding agent (`claude-code`) — so the difference from
+//     git, its run naming as well the executor that pushed (its launch, a
+//     UUID) and its harness (`claude-code`) — so the difference from
 //     agent is what a box's two fields cost;
 //   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
 //     MaxIntroduced introduced ids — the widest row a push stores.
@@ -1607,7 +1607,7 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		{"box", 4_000, func(int) string { return typicalRef }, 1, 1, func(e *PushEntry, r int) {
 			run := seatRun(r)
 			run.RunID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("launch-", r))).String()
-			run.CodingAgent = "claude-code"
+			run.Harness = "claude-code"
 			e.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: run}
 			e.Via = ViaGit
 		}},

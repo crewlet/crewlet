@@ -165,6 +165,39 @@ type Service struct {
 	now  func() time.Time
 	// raises is which agent seats a write raises ([Options.Raises]).
 	raises Raises
+
+	// secrets is the company's credential store ([Options.Secrets]).
+	secrets Secrets
+	// grants is the engine's hold on each MCP server's OAuth grant
+	// ([Options.Grants]).
+	grants Grants
+}
+
+// Secrets is the company's credential store as a removal reads and writes it:
+// whether a value is stored under a name, and deleting one (mcpremoval.go).
+// The fleet's store, fleetsecrets.Store, in `crewlet run`.
+type Secrets interface {
+	// Describe answers what is stored under name, never the value, and
+	// whether anything is.
+	Describe(ctx context.Context, name string) (secrets.Record, bool, error)
+	// Unset deletes the value stored under name, reporting whether there
+	// was one.
+	Unset(ctx context.Context, name string) (bool, error)
+}
+
+// Grants is the engine's hold on each MCP server's OAuth grant, as a removal of
+// the server reads and gives it up (mcpremoval.go). The engine itself, in
+// `crewlet run`.
+type Grants interface {
+	// HeldMCPGrant reports whether anybody holds a grant for server.
+	HeldMCPGrant(ctx context.Context, server string) (bool, error)
+	// RevokeMCPServerGrant revokes the grant of entry's server at its
+	// vendor where it offers that and forgets it, answering what the
+	// vendor was asked (`revoked`, `not_offered`, `failed`), its words
+	// where it refused, and whether there was a grant. entry is the server
+	// as the document before the removal configured it.
+	RevokeMCPServerGrant(ctx context.Context, entry *config.MCPServer) (revocation, said string,
+		held bool, err error)
 }
 
 // Options wire the service.
@@ -243,6 +276,18 @@ type Options struct {
 	// offer. Nil judges with no vendor asked, failing closed: every turn-on
 	// or change of level on a lane the engine provisions is a raise.
 	Raises Raises
+
+	// Secrets is the company's credential store: what a removal of an MCP
+	// server reads to offer the values only that server read, and deletes
+	// the ones the caller names. Required, for Plane's reason: every node
+	// serving this surface opens the fleet's coordination store that holds
+	// the rows, and a surface built without it would answer a removal that
+	// asked for a credential to go by keeping it.
+	Secrets Secrets
+
+	// Grants is the engine's hold on each MCP server's OAuth grant: what a
+	// removal of the server revokes. Required.
+	Grants Grants
 }
 
 // New builds the service.
@@ -278,6 +323,13 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Node is required: a write whose " +
 			"activation goes unanswered names the node whose history alone holds " +
 			"the revision it stored, and the engine's node id is that name")
+	case opts.Grants == nil:
+		return nil, errors.New("configapi: Options.Grants is required: removing an MCP server " +
+			"revokes the OAuth grant the engine holds for it")
+	case opts.Secrets == nil:
+		return nil, errors.New("configapi: Options.Secrets is required: removing an " +
+			"MCP server deletes the stored values only it read, and those live in " +
+			"the fleet's credential store")
 	}
 	now := opts.Now
 	if now == nil {
@@ -288,7 +340,7 @@ func New(opts Options) (*Service, error) {
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers:      config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
 		tierWarnings: opts.TierWarnings,
-		node:         opts.Node, raises: opts.Raises,
+		node:         opts.Node, raises: opts.Raises, secrets: opts.Secrets, grants: opts.Grants,
 	}
 	if s.raises == nil {
 		s.raises = failClosedRaises(s.Managed)
@@ -429,12 +481,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 		entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionConfigWrite),
 			s.putEntity(kind))
 	}
-	// A MODEL IS REMOVED WITH ITS DEPENDANTS REPOINTED, in one revision
-	// (removal.go): the one collection whose members everything else names
-	// by key, so a removal by itself would leave the company invalid.
-	entity("DELETE /config/"+EntityLLMProviders+"/{id}",
-		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
-		s.deleteEntity(EntityLLMProviders))
+	// A MODEL OR AN MCP SERVER IS REMOVED WITH ITS DEPENDANTS, in one
+	// revision (removal.go): the two collections whose members other parts
+	// of the document name by key, so a removal by itself would leave the
+	// company invalid. A model's are repointed, a server's cleared
+	// (mcpremoval.go).
+	for _, route := range removalRoutes {
+		entity("DELETE /config/"+route.kind+"/{id}",
+			authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
+			s.deleteEntity(route))
+	}
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))
@@ -953,18 +1009,30 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 // built on learns about a write that landed between its read and this check
 // without a second request.
 func writeChecked(w http.ResponseWriter, p *prepared) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, checkedAnswer(p))
+}
+
+// checkedAnswer is [writeChecked]'s body, for a route whose check answers
+// more beside it (a server's removal names what it takes with it).
+func checkedAnswer(p *prepared) map[string]any {
+	return map[string]any{
 		"valid": true, "base_revision_id": p.base.ID,
 		"warnings": checkedWarnings(p), "derived": p.derived,
-	})
+	}
 }
 
 // writeApplied answers a write that stored and activated a revision.
 func writeApplied(w http.ResponseWriter, applied Applied) {
-	writeJSON(w, http.StatusCreated, map[string]any{
+	writeJSON(w, http.StatusCreated, appliedAnswer(applied))
+}
+
+// appliedAnswer is [writeApplied]'s body, for a route whose write answers
+// more beside it.
+func appliedAnswer(applied Applied) map[string]any {
+	return map[string]any{
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
 		"warnings": applied.Warnings, "derived": applied.Derived,
-	})
+	}
 }
 
 // refuseWrite is [Service.refuseApply] for a write that may have been
@@ -1797,6 +1865,36 @@ func (e *UnreadableRevisionError) Remedy() string {
 // remedy as the hint; the keyring's own error goes to the log.
 func RefuseUnreadable(w http.ResponseWriter, err error) bool {
 	return RefuseUnreadableWith(w, err, nil)
+}
+
+// RefuseDraft answers a draft entity [Service.CheckEntity] refused, and
+// reports whether it was admitted: the routes that run a draft entry before it
+// is written (a model's check and credential test, an MCP server's test) answer
+// its refusal as a write of it would be answered.
+func RefuseDraft(w http.ResponseWriter, err error) bool {
+	var managed *ManagedError
+	var invalid *ValidationError
+	var entity *EntityError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &managed):
+		RefuseManaged(w, managed)
+	case errors.As(err, &invalid):
+		fields := RefusalFields(err)
+		fields["detail"] = invalid.Err.Error()
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
+	case errors.As(err, &entity):
+		fields := RefusalFields(&DocumentError{Err: entity.Err})
+		fields["detail"] = entity.Err.Error()
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
+	case errors.Is(err, ErrNoActiveRevision):
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNoActiveRevision)
+	default:
+		log.Error("draft_check_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+	return false
 }
 
 // RefuseUnreadableWith is [RefuseUnreadable] with a surface's own detail beside

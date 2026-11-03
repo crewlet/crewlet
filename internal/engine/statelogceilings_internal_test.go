@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -124,6 +125,7 @@ func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 		iamdomain.Domain{}.Name():       "identity estate",
 		assistantdomain.Domain{}.Name(): "Ask Crewlet",
 		chatlet.Domain{}.Name():         "chat",
+		executordomain.Domain{}.Name():  "executor",
 	}
 	keys := streamKeys(t)
 	held := map[string]bool{}
@@ -617,29 +619,31 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // headroom alarm is designed not to fire on: the peak has to leave
 // [statelog.HeadroomAlarmFraction] of the created ceiling free. On a 64 GiB
 // volume no division does that any more — the artifacts log's and the
-// datastore's quarter-ratio asks, and the Dashboard Assistant's 512 MiB scaled
-// beside them, already took the changelog to 8.1 GiB there, 2.6 % headroom
-// with no chat log at all — so the case is held at 75 GiB, measured as the
-// smallest volume where the derived changelog cleared the alarm with the chat
-// log's quarter-share cap ([config.DerivedChatLogDivisor]): asked for at a
-// third of the share, chat left the changelog clear only from 77 GiB, and
-// asked for in full from 79.
+// datastore's quarter-ratio asks, and the Dashboard Assistant's and the
+// executor log's 512 MiB scaled beside them, already took the changelog to
+// 8.0 GiB there, 1.5 % headroom with no chat log at all — so the case is held
+// at 76 GiB, measured as the smallest volume where the derived changelog
+// cleared the alarm with the chat log's quarter-share cap
+// ([config.DerivedChatLogDivisor]): asked for at a third of the share, chat
+// left the changelog clear only from 78 GiB, and asked for in full from 79.
+// (It was 75 GiB until the executor log joined the register, which the
+// changelog's share paid for.)
 //
 // AND ON THE DEFAULT DOCUMENT'S OWN FIRST BOOT, where the object store's nats
 // bucket reserves a quarter of the broker's limit before any log is sized
 // ([derivedObjectsReservation]): the logs share less, and the smallest volume
 // where the changelog cleared the alarm was 100 GiB with the quarter-share
-// cap, against 102 at a third or with the whole ask (and 92 with no chat log).
+// cap, against 102 at a third or with the whole ask (and 93 with no chat log).
 // A broker that states its limit with no bucket beside the logs was the only
 // boot this held, and it is not the boot most deployments make. Mutation: set
 // the divisor to 3, or drop the cap, and the derived case fails on both.
 //
-// Those volumes were measured at a half share with nine logs registered. The
-// tenth, the code log, asks two thirds of the mutation log's ceiling, and at
-// half it took the changelog under the peak itself (6.6 GiB on a 64 GiB volume
-// with nothing else reserved), which is why the share is five eighths
-// ([StreamBudgetShare]); the case holds both volumes under that share with the
-// code log registered.
+// Those volumes were measured at a half share without the code log. The code
+// log asks two thirds of the mutation log's ceiling, and at half it took the
+// changelog under the peak itself (6.6 GiB on a 64 GiB volume with nothing
+// else reserved), which is why the share is five eighths
+// ([StreamBudgetShare]); the case holds both volumes under that share with
+// every log registered, the code log's and the executor log's included.
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	for _, boot := range []struct {
@@ -647,7 +651,7 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 		free   int64
 		bucket bool
 	}{
-		{"a broker that states its limit and holds no bucket", 75 * gib, false},
+		{"a broker that states its limit and holds no bucket", 76 * gib, false},
 		{"the default document, its bucket reserved first", 100 * gib, true},
 	} {
 		limit := boot.free / 4 * 3
@@ -729,15 +733,15 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	// a volume where the tracker's ask equals what it holds, counting it at
 	// either reads the same, and neither mistake shows: at 15 the rows that
 	// read no limit would measure nothing.) And what it leaves of the share
-	// has to hold every other log at its floor — 7.5625 GiB, the code log's
-	// and the chat log's gibibytes and the assistant's 64 MiB among them — or
-	// no sizing could keep to the share and the case would fail every correct
-	// one: what is measured is the counting and not the floors, which the
-	// division may exceed by design. Five eighths of 44 GiB is 27.5, which
-	// leaves 11.5 beside the tracker; that is why the rows that read no limit
-	// measure 60 GiB, whose stand-in limit (three quarters, [unstatedLimit])
-	// grants 45 and leaves 12.125, where 44 GiB's would grant 33 and leave 4.6,
-	// less than the floors take.
+	// has to hold every other log at its floor — 7.625 GiB, the code log's
+	// and the chat log's gibibytes and the assistant's and the executor log's
+	// 64 MiB each among them — or no sizing could keep to the share and the
+	// case would fail every correct one: what is measured is the counting and
+	// not the floors, which the division may exceed by design. Five eighths of
+	// 44 GiB is 27.5, which leaves 11.5 beside the tracker; that is why the
+	// rows that read no limit measure 60 GiB, whose stand-in limit (three
+	// quarters, [unstatedLimit]) grants 45 and leaves 12.125, where 44 GiB's
+	// would grant 33 and leave 4.6, less than the floors take.
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
@@ -1045,16 +1049,16 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // their floors.
 //
 // THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
-// deployment guide states: ten logs hold 8.5625 GiB at their smallest, so the
+// deployment guide states: eleven logs hold 8.625 GiB at their smallest, so the
 // 7.6 GiB host that was measured no longer boots by its logs alone (it is
-// refused naming the log it could not reserve), and 11.42 GiB, whose broker
+// refused naming the log it could not reserve), and 11.50 GiB, whose broker
 // grants three quarters of it, is where the same single budget has to fit
 // them. A log added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 11.42 GiB, in hundredths so the arithmetic stays in integers: the
+	// 11.50 GiB, in hundredths so the arithmetic stays in integers: the
 	// first hundredth of a gibibyte whose three quarters hold the logs.
-	free := 1142 * gib / 100
+	free := 1150 * gib / 100
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {

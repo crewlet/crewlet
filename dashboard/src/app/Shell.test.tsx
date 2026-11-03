@@ -495,7 +495,7 @@ describe("the sidebar's figures", () => {
     location.hash = "#/home";
     const { store, socket } = answering({
       work_workload: { rows: [] },
-      sandbox_runs: { runs: [] },
+      executors: { runs: [] },
       work_projects: { projects: [], complete: true },
     });
     mountShell(store, socket, <Home key="home" />);
@@ -769,7 +769,7 @@ describe("the sidebar's figures", () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     location.hash = hash;
     const { store, socket } = answering(
-      { work_workload: { rows: [] }, sandbox_runs: { runs: [] } },
+      { work_workload: { rows: [] }, executors: { runs: [] } },
       asked,
     );
     mountShell(store, socket, child);
@@ -789,7 +789,7 @@ describe("the sidebar's figures", () => {
     location.hash = "#/home";
     const { store, socket } = answering({
       work_workload: { rows: [] },
-      sandbox_runs: { runs: [] },
+      executors: { runs: [] },
       work_projects: { projects: [], complete: true },
     });
     mountShell(store, socket, <Home key="home" />);

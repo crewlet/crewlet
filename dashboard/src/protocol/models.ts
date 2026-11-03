@@ -25,7 +25,7 @@ export interface ModelNode {
   reported: boolean;
 }
 
-/** A host CLI login on one node: its state as the CLI's own status command reports it. */
+/** A host harness login on one node: its state as the harness's own status command reports it. */
 export interface ModelHostLogin {
   node: string;
   state: "signed_in" | "signed_out" | "unknown" | (string & {});
@@ -113,7 +113,7 @@ export interface ModelDevice {
 /** One model in an admin's reading. */
 export interface ModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   /** The sign-in the model shares a plan with others on; "" where none. */
@@ -131,7 +131,7 @@ export interface ModelEntry {
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
 export interface MemberModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   sign_in: { route: ModelSignInRoute; resolves: boolean };
@@ -181,14 +181,14 @@ export interface RunnerNodeCell {
   checked_at: string | null;
 }
 
-/** `llm_runners`: where a model's coding runs can happen, and on which nodes each is ready. */
+/** `llm_runners`: where a model's executors can run, and on which nodes each is ready. */
 export interface RunnersAnswer {
   default_run_in: RunnerCellName;
   cells: Record<RunnerCellName, { declared: boolean; ready_on: string[]; not_ready_on: string[] }>;
   nodes: Array<{ id: string; reported: boolean } & Record<RunnerCellName, RunnerNodeCell | null>>;
 }
 
-/** One model in the catalogue, by the id the CLI takes. */
+/** One model in the catalogue, by the id the harness takes. */
 export interface CatalogueModel {
   id: string;
   name: string;
@@ -196,7 +196,7 @@ export interface CatalogueModel {
   released?: string;
 }
 
-/** `llm_models`: the models a CLI can run, from models.dev, with its own aliases and docs. */
+/** `llm_models`: the models a harness can run, from models.dev, with its own aliases and docs. */
 export interface ModelsAnswer {
   source: "models.dev" | "none";
   fetched_at: string | null;
@@ -214,7 +214,7 @@ export interface CheckLine {
   detail: string;
   kind?: string;
   remedy?: string;
-  /** On an auth failure: the vendor refused the credential, or the CLI never used it. */
+  /** On an auth failure: the vendor refused the credential, or the harness never used it. */
   meaning?: "refused" | "unread";
 }
 

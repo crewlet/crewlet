@@ -119,7 +119,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 // A RE-RUN OF A RESTORED REANCHOR THAT FAILED AFTER ITS APPEND FINISHES.
 //
 // The first attempt's generation record is on the log and nothing else moved —
-// a CLI that gave up after ten seconds while the consumer was being rebuilt is
+// a harness that gave up after ten seconds while the consumer was being rebuilt is
 // enough. The re-run reads the log's end after that record, and its walk for
 // records written after the restore met the node's own record first: it
 // refused naming it, hiding every real one beneath it, and with the discard

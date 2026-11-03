@@ -523,6 +523,10 @@ const (
 	// key, a blind-index key — which no caller of `/secrets` may address,
 	// whatever it holds. The detail names the gesture that does.
 	CodeReservedName Code = "reserved_name"
+
+	// CodeWriteOnly is a reveal of a value stored write-only, which no route
+	// answers. 403, its `names` listed.
+	CodeWriteOnly Code = "write_only"
 )
 
 // THE IDENTITY CODES, and why there are so few of them.
@@ -1218,7 +1222,7 @@ const (
 	// --- the model routes (internal/api/llmapi) --- //
 
 	// CodeCredentialRejected is a candidate credential that did not sign
-	// the model in when it was tested (the vendor refused it, or the CLI did
+	// the model in when it was tested (the vendor refused it, or the harness did
 	// not use it): nothing was stored, and the model keeps its current
 	// credential. 422, its problem at the value. Not
 	// `credential_refused`, which is an artifact's content carrying a
@@ -1228,6 +1232,9 @@ const (
 	// answer the test of (a timeout, a server error): nothing was stored.
 	// 502.
 	CodeCredentialUntested Code = "credential_untested"
+	// CodeValueTestFailed is an MCP server's value whose test failed, so
+	// nothing was stored. 422, with the `stage` and `class` it stopped at.
+	CodeValueTestFailed Code = "value_test_failed"
 	// CodeAlreadyExists is a create-only credential write (`If-None-Match:
 	// *`) naming a secret that is already stored, its `names` listed. 412.
 	CodeAlreadyExists Code = "already_exists"
@@ -1236,14 +1243,14 @@ const (
 	// CodeSignInInProgress is a device sign-in started while another for the
 	// same model is running, which the answer carries. 409.
 	CodeSignInInProgress Code = "sign_in_in_progress"
-	// CodeNoDeviceSignIn is a device sign-in for a model whose CLI has
+	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has
 	// none, or whose sign-in reads no login. 422.
 	CodeNoDeviceSignIn Code = "no_device_sign_in"
-	// CodeDeviceSignInUnavailable is a device sign-in whose CLI printed no
+	// CodeDeviceSignInUnavailable is a device sign-in whose harness printed no
 	// code in time, its first line beside it. 502.
 	CodeDeviceSignInUnavailable Code = "device_sign_in_unavailable"
 	// CodeNoHostLogin is a host login check of a model that signs in with
-	// no CLI login. 422.
+	// no harness login. 422.
 	CodeNoHostLogin Code = "no_host_login"
 	// CodeUnknownProvider is a model catalogue question about a provider
 	// the catalogue lists nothing under. 422.
@@ -1288,7 +1295,7 @@ const (
 	// running check instead.
 	CodeVerifyRunning Code = "verify_running"
 	// CodeNotPermitted is a code read the asker's grant on the repository
-	// does not cover (ADR-0081): the same word a refused push prints, so
+	// does not cover (ADR-0088): the same word a refused push prints, so
 	// one refusal has one spelling on every surface that names it. 403,
 	// the detail naming who asked, the repository and what would admit
 	// them.
@@ -1645,6 +1652,8 @@ var codes = map[Code]string{
 		"is back.",
 	CodeReservedName: "That name is reserved for the engine. The detail " +
 		"names the command that can change it.",
+	CodeWriteOnly: "That value is write-only: the engine uses it, and it is " +
+		"never shown again. Store a new value to replace it.",
 
 	CodeArtifactTrashed: "This artifact is in the trash. Its owner can " +
 		"restore it, then try again.",
@@ -1757,6 +1766,8 @@ var codes = map[Code]string{
 		"stored. The model still uses its current credential.",
 	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
 		"Try again.",
+	CodeValueTestFailed: "The server did not work with this value, so nothing was stored. " +
+		"The detail names where the test stopped and why.",
 	CodeAlreadyExists: "A secret with that name is already stored, so nothing was " +
 		"written. Choose another name, or rotate that one.",
 	CodeNotSittingOut: "This model isn't sitting out on any node. Nothing to retry; " +
@@ -1764,8 +1775,8 @@ var codes = map[Code]string{
 	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
 		"cancel that one first.",
 	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
-	CodeDeviceSignInUnavailable: "The CLI didn't print a sign-in code in time. Try again.",
-	CodeNoHostLogin:             "This model signs in without a CLI login, so there is none to check.",
+	CodeDeviceSignInUnavailable: "The harness didn't print a sign-in code in time. Try again.",
+	CodeNoHostLogin:             "This model signs in without a harness login, so there is none to check.",
 	CodeUnknownProvider:         "The model catalogue lists no provider by that name.",
 }
 

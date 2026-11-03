@@ -179,8 +179,8 @@ func (r RunProvenance) encodedBytes() int {
 	if r.RunID != "" {
 		n += field("run_id", stringBytes(r.RunID), false)
 	}
-	if r.CodingAgent != "" {
-		n += field("coding_agent", stringBytes(r.CodingAgent), false)
+	if r.Harness != "" {
+		n += field("harness", stringBytes(r.Harness), false)
 	}
 	return n
 }

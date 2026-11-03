@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A PERSON'S STOP ENDS THE CODING RUN THE SEAT HAS OUT, END TO END.
+// A PERSON'S STOP ENDS THE EXECUTOR THE SEAT HAS OUT, END TO END.
 //
-// The run is the stand-in coding CLI in a real `direct` box, held: nothing
+// The run is the stand-in harness in a real `direct` box, held: nothing
 // will ever release it, so it would run for ever. A pause with `stop_running`
 // lands in the fleet's record, and the node holding the seat must carry it out
 // on the run itself: the run's record gone, its box reclaimed off the disk, its
@@ -25,9 +25,9 @@ import (
 // the person who paused the seat.
 //
 // Mutations: leave the pause watch's stop call out and the run is never ended;
-// announce the stop as a loss and a `sandbox_run_failed` is on the turn; close
+// announce the stop as a loss and an `executor_failed` is on the turn; close
 // no turn and its last turn_completed is still the park.
-func TestAStopEndsTheRunningCodingRunAndClosesItsTurnAsStopped(t *testing.T) {
+func TestAStopEndsTheRunningExecutorAndClosesItsTurnAsStopped(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	// NOTHING WRITES THIS FILE: the run holds until something ends it.
@@ -89,11 +89,11 @@ func TestAStopEndsTheRunningCodingRunAndClosesItsTurnAsStopped(t *testing.T) {
 			}
 			_ = json.Unmarshal(ev.Payload, &rec)
 			switch ev.Type {
-			case "sandbox_run_stopped":
+			case "executor_stopped":
 				if rec.StoppedBy == "e2e" {
 					stops++
 				}
-			case "sandbox_run_failed":
+			case "executor_failed":
 				losses++
 			case "agent_turn_stopped":
 				if rec.StoppedBy == "e2e" {

@@ -73,7 +73,8 @@ beside it. An empty work key is still the honest default for a turn with no
 ledgerable trigger.
 
 It says nothing about a SUSPENDED turn, which is not a re-run: a detached
-coding run re-enters the run that parked it, keeping the id from its own row.
+executor's collection re-enters the run that parked on it, keeping the id from
+its own row.
 
 And it does not decide the `turn_id` column's history. Rows written before the
 split carry a work key there, which is what `schema/0029` backfilled into the

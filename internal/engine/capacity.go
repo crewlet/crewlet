@@ -1126,7 +1126,7 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 //
 // FROM `opened` IT CLEARS OUTRIGHT — no request has been issued, so there is
 // nothing to retire — and answers no operation, since there is no window left
-// to show: answered at the phase it cleared from, the CLI printed a window at
+// to show: answered at the phase it cleared from, the harness printed a window at
 // `opened` and told the operator to run set-capacity again for the window they
 // had just abandoned. From everywhere else it ENTERS THE SEAL: abandoning
 // changes what the operation is trying to reach, never the barrier it must
@@ -1136,7 +1136,7 @@ func (e *Engine) release(ctx context.Context, op coord.MaintenanceOperation) (
 // OPERATIONID IS THE CONFIRMATION, checked against the operation this read
 // finds BEFORE anything changes: it says the person read which window they are
 // abandoning, so one that names another operation abandons nothing
-// ([ConfirmMismatchError]). Checked by the caller after the fact, as the CLI
+// ([ConfirmMismatchError]). Checked by the caller after the fact, as the harness
 // did, it reported a mismatch for an abandonment that had already run.
 //
 // BY IS WHO ABANDONED IT, recorded on the operation while it lives

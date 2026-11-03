@@ -171,7 +171,7 @@
 //
 // This is ADR-0031. The broker's admission vouches for a connection, never a
 // record — an embedded fleet's route credential crosses its network in clear
-// (ADR-0087), and an external cluster admits whom its operator chooses — and a
+// (ADR-0094), and an external cluster admits whom its operator chooses — and a
 // record is what the next node APPLIES, so the framework frames and signs on
 // the way to the appender and verifies before any domain decodes. The key is
 // Tier A's keyring (ADR-0011), and a node with no keyring refuses to start.
@@ -198,7 +198,7 @@
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
 // halts, health goes false immediately, and the node takes its copy of THAT
-// DOMAIN out of service (ADR-0072) — that domain's operations go to another
+// DOMAIN out of service (ADR-0079) — that domain's operations go to another
 // data node that can decode it, and its seats stay. A deferred gate does not
 // postpone one record's effect on one node; it silently licenses every record
 // above it.
@@ -214,7 +214,7 @@
 // level, and a node whose copy of one of them is out of service routes its
 // seats through its peers. Whether a copy is judged is never declared, because
 // a domain allowed to opt out is a domain whose wrong copy is served for ever.
-// This is ADR-0072; the engine computes the verdict per domain and the
+// This is ADR-0079; the engine computes the verdict per domain and the
 // estate's router asks it of each operation's own domain.
 //
 // The consequence every reader of an ABSENCE inherits: the checkpoint moves
@@ -388,7 +388,7 @@
 // Below the floor an anchor names a record the log no longer holds, so all it
 // can do is send its subject's next write to be refused before the
 // discriminator takes the zero path — and kept, the table grows by every
-// subject the log ever carried. The trim removes them (ADR-0073): after each
+// subject the log ever carried. The trim removes them (ADR-0080): after each
 // tick's purge it appends a framework [TrimmedKind] record naming the log's
 // first surviving sequence ([PlanSweep], [SweepPlan.Sweep]), and every node's
 // applier removes that log's anchors below it in the transaction that applies
@@ -435,7 +435,7 @@
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
 // domain's log would key it to a stream it never read. WHICH instant
-// identifies a stream is ADR-0076: the one its creator stamped into its
+// identifies a stream is ADR-0083: the one its creator stamped into its
 // configuration ([CreatedAtKey]), which a snapshot restore keeps and the
 // broker's own does not, read by every consumer through [StreamCreatedAt] and
 // by nothing else.
@@ -684,7 +684,10 @@
 // ([PerEntryKinds], [Alarm.Entries]): a credential coming due, a refused
 // sign-in or a limit is one entry's, evaluated from fleet-wide inputs every
 // data node gathers alike, at thresholds the owner fixed rather than ones
-// borrowed from another decision.
+// borrowed from another decision. The MCP kinds are the same move over the
+// configured MCP SERVERS: an outage, a wait for a minted credential or a tool
+// refused its name is one server's, read off every live node's heartbeat, at
+// the thresholds the restart schedule and the provisioning pass already keep.
 //
 // # A node's alarm transition is the record its wake derives from
 //
@@ -693,7 +696,7 @@
 // node, the alarm, the log, the change and the instant the instance was raised
 // ([TransitionID]). The engine publishes it as an inbound delivery, retried
 // until the broker takes it, and the seats whose role carries the health grant
-// are woken by it (internal/alarmwake). That is ADR-0088: the publish IS the
+// are woken by it (internal/alarmwake). That is ADR-0095: the publish IS the
 // write, so no publish trails a commit, and a republish collapses on the ids
 // derived from the transition's. A transition is one node's fact about
 // itself, never a record on a log — the alarms most worth a wake are about the

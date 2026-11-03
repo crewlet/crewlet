@@ -231,7 +231,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS ELEVEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS NINETEEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -241,13 +241,32 @@ type PositionRegister interface {
 // publish, and [MaintenanceAckKey], which is one participant's evidence that
 // its process restarted for one log's window. The eighth is [SeatPauseKey], a person's decision
 // that a seat stops taking work, which an age would lift on a timer nobody
-// set. The last two are a model entry's: [ModelRetryKey], a person's request
+// set. The ninth and tenth are a model entry's: [ModelRetryKey], a person's request
 // to stop sitting it out, which ages out of meaning by its own stamp, and
 // [DeviceSignInKey], a sign-in in progress, whose lifetime is a field of the
 // record that its readers keep ([DeviceSignIn.Lapsed]) because a bucket age
 // would restart at every update. The eleventh is [SeatAccessKey], the ledger
 // of accounts the engine created at a vendor, which an age would forget while
-// the account still exists there.
+// the account still exists there. The twelfth and thirteenth are an MCP server's: [MCPListingKey], one node's listing of
+// one server, which an age would forget while the server lists exactly that,
+// and [MCPSchemaKey], one tool definition's schemas, which go when no listing
+// names them; both are removed by a decision, the node's own or the
+// maintenance sweep's (mcplisting.go). The fourteenth is [MCPRestartKey], a
+// person's request to restart an MCP server, which ages out of meaning by its
+// own stamp as a model retry does (mcprestart.go). The fifteenth is
+// [MCPCheckKey], an MCP server's latest test, which an age would take off the
+// server's page while it is still the latest; the apply that removes the
+// server removes it (mcpcheck.go). The sixteenth and seventeenth are an MCP
+// server's OAuth: [MCPGrantKey], the public half of its grant, good until
+// somebody signs out or removes the server, and [MCPSignInKey], a sign-in in
+// progress, lapsed by its own field as a device sign-in is (mcpoauth.go). The
+// eighteenth is [MCPAcceptedKey], the definition one MCP tool's level was
+// decided on, which an age would put back in front of a person for every tool
+// of a server that changed nothing; the maintenance sweep removes those of a
+// server nothing declares or lists (mcpaccepted.go). The nineteenth is
+// [FeedMarkKey], how far a wake feed's fleet-wide group had acknowledged,
+// which an age would turn into a group never consumed and so a replay of its
+// log's whole retention (feedmarks.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
@@ -263,7 +282,7 @@ type PositionRegister interface {
 // and pins the floor at zero for ever.
 //
 // The chat read state wants the same retention and is deliberately NOT a
-// ninth class: it is the busiest record the fleet writes, and as a class here
+// class here: it is the busiest record the fleet writes, and as one
 // every person's flush would be ordered through the one raft group, and every
 // chat screen's read answered by the one leader, that serve the trim's inputs
 // and the capacity window. [ChatReads] has a bucket of its own for that (see

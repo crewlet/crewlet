@@ -62,7 +62,7 @@ func handedBackPublication(p publication) bool {
 	if p.topic == sweInbox() {
 		return true
 	}
-	_, answer := events.DataAs[*types.SandboxAnswerGiven](p.event)
+	_, answer := events.DataAs[*types.ExecutorAnswerGiven](p.event)
 	return answer && p.topic == sweControl()
 }
 

@@ -212,6 +212,26 @@ func applyPostRecord(channelID, messageID, body, threadRoot string,
 		}, chatlet.ScopeSet{Subject: true})
 }
 
+// routedTo is a person's post with the routing snapshot its writer would have
+// carried, waking handles by mention: what the applier writes its reach and
+// its receipts from.
+func routedTo(rec chatlet.MutationRecord, handles ...string) chatlet.MutationRecord {
+	post, err := chatlet.DecodeMutation(rec)
+	if err != nil {
+		panic(err)
+	}
+	p := post.(chatlet.MessagePost)
+	n := &chatlet.Notify{MessageID: p.MessageID, ChannelID: rec.Subject.ID,
+		ChannelKind: chatlet.KindPublic, ThreadRoot: p.ThreadRoot,
+		Author: p.Author, AuthorKind: p.AuthorKind, Mentions: p.Mentions}
+	for _, h := range handles {
+		n.Recipients = append(n.Recipients, chatlet.Recipient{Handle: h,
+			Reason: chatlet.ReasonMention})
+	}
+	rec.Notify = n
+	return rec
+}
+
 // applyEraseRecord builds one operator erase.
 func applyEraseRecord(channelID, opID, by string, ids ...string) chatlet.MutationRecord {
 	rec := applyRecord(chatlet.ChannelSubject(channelID), chatlet.OpErase, opID,
@@ -596,17 +616,20 @@ func TestAnErasedMessageIsNeverResurrectedByAReplay(t *testing.T) {
 	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	post := applyPostRecord("room-1", "msg-1", "the key is in the runbook", "",
-		"grace")
+	post := routedTo(applyPostRecord("room-1", "msg-1", "the key is in the runbook", "",
+		"grace"), "grace")
 	if _, _, err := h.apply(post); err != nil {
 		t.Fatalf("post: %v", err)
+	}
+	if got := h.count("chat_receipts"); got != 1 {
+		t.Fatalf("the routed post wrote %d receipts, want 1", got)
 	}
 	if _, gate, err := h.apply(applyEraseRecord("room-1", "op-erase-a", "ops-on-call",
 		"msg-1")); err != nil || gate != "" {
 		t.Fatalf("erase: %v (gate %q)", err, gate)
 	}
 	for table, want := range map[string]int{
-		"chat_messages": 0, "chat_mentions": 0, "chat_deletions": 1,
+		"chat_messages": 0, "chat_mentions": 0, "chat_deletions": 1, "chat_receipts": 0,
 	} {
 		if got := h.count(table); got != want {
 			t.Fatalf("%s holds %d rows after an erase, want %d", table, got, want)
@@ -875,8 +898,8 @@ func TestAPruneDeletesTheSameRowsInTwoEstates(t *testing.T) {
 		// TWO MESSAGES BELOW THE CUTOFF, one of them a thread with a
 		// reply, a mention and a reaction hanging off it — so every
 		// table the prune ranges over has a row to lose.
-		if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-1",
-			"last year's incident", "", "grace"), old); err != nil {
+		if _, _, err := h.applyStoredAt(routedTo(applyPostRecord("room-1", "msg-1",
+			"last year's incident", "", "grace"), "grace"), old); err != nil {
 			h.t.Fatalf("post: %v", err)
 		}
 		if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-2",
@@ -921,7 +944,7 @@ func TestAPruneDeletesTheSameRowsInTwoEstates(t *testing.T) {
 	}
 	for _, table := range []string{
 		"chat_mentions", "chat_reactions", "chat_thread_participants",
-		"chat_follows",
+		"chat_follows", "chat_receipts",
 	} {
 		if got := one.count(table); got != 0 {
 			t.Errorf("%s holds %d rows after the prune — each carries the "+

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // Equipping an epoch: putting this NODE's tools into it.
@@ -138,6 +139,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}); tool != nil {
 		c.AskTool = tool
 	}
+	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
+	// sealed under the fleet keyring.
+	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher)); hold != nil {
+		c.HoldTool = hold
+	}
 	// THE EXECUTOR RUN'S CHECKOUT, where the code tools serve on this
 	// epoch: it resolves through the same seams they read through, and
 	// grants on the run's row through whatever sandbox runtime this node
@@ -210,8 +216,8 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 	if c == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
 	}
-	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.backends.Queue,
-		a2a.Options{Directory: agentSeats{org: c.Org}})
+	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.wakes(),
+		a2a.Options{Directory: agentSeats{org: c.Org}, Mailboxes: e.mailboxConfirmer()})
 	if err != nil {
 		// Logged rather than returned: a company without agent-to-agent
 		// messaging is a real deployment, and refusing to boot over an

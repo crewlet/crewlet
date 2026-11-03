@@ -8,17 +8,17 @@ import (
 
 // How a box is given a repository on the engine's own code host.
 //
-// THE ONE WAY, for every caller: a coding run's launch and, later, a check's
+// THE ONE WAY, for every caller: an executor's launch and, later, a check's
 // both ask [CloneRecipe] for the step, so what a box's git is asked to do, and
 // the floor that git is held to ([GitVersionStep]), are written once. Each is
 // an ordinary [SetupStep] — one shell command, run with the launch's own
 // environment, where the box's shell expands the code host's base URL
 // ("$CREWLET_GIT_URL") — so a step fails the launch loudly, naming itself,
-// like any provisioning step, rather than leaving the coding agent to find a
+// like any provisioning step, rather than leaving the harness to find a
 // missing checkout.
 //
 // THE CHECKOUT IS RELATIVE TO WHERE THE BOX'S COMMANDS START: a setup command
-// and the coding agent are both given no directory of their own, so they run
+// and the harness are both given no directory of their own, so they run
 // in the one default their backend has (the box's workspace on the local
 // ones), and `./<repo>` is the same directory to the clone and to the agent —
 // whichever directory that default is.
@@ -29,17 +29,18 @@ import (
 type ClonePurpose string
 
 const (
-	// CloneCoding is a coding run: a blobless clone of the repository's
+	// CloneCoding is an executor's: a blobless clone of the repository's
 	// default branch — every commit and tree of its history, each file's
 	// contents fetched as git needs them, because the agent rebases, logs
 	// and blames — and of the base, wherever it is; no other branch; with an
-	// optional cone. The branch is created at the base and the
-	// commit-trailer hook written ([TrailerHook]).
+	// optional cone. The branch is created at the base. No hook is written:
+	// what a commit made in the box carries is the run's own attribution,
+	// which the run's runner gives every repository the run commits in
+	// ([RunRequest.Attribution]), not a property of this checkout.
 	CloneCoding ClonePurpose = "coding"
 	// CloneSingleSHA is a check: depth one at one commit, blobless, with an
 	// optional cone, because a build that deletes its checkout afterwards
-	// needs the tree at one commit and nothing of its history. A check box
-	// commits nothing, so no hook is written.
+	// needs the tree at one commit and nothing of its history.
 	CloneSingleSHA ClonePurpose = "single-sha"
 )
 
@@ -101,7 +102,7 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 // 2.40.9.
 const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }`
 
-// CodingSteps is every step the engine runs to give a coding run's box its
+// CodingSteps is every step the engine runs to give an executor's box its
 // repositories on the engine's own code host, in order: [GitVersionStep],
 // each repository's [CloneRecipe] for [CloneCoding] in the order given, and,
 // in a cell whose boxes have a kernel of their own ([Placement.OwnsKernel]),
@@ -112,7 +113,7 @@ const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 10000
 // THE CELL DECIDES THE MONITOR, never the box alone: a monitor's daemon takes
 // a watch of the kernel's for every directory of its checkout, and on the
 // engine host every box spends the engine user's ([Placement.OwnsKernel]),
-// beside the other seats' coding CLIs and their own file watchers — a budget
+// beside the other seats' harnesses and their own file watchers — a budget
 // no box can see the rest of, so no box may decide to spend it.
 func CodingSteps(p Placement, repos []RunRepo) ([]SetupStep, error) {
 	steps := []SetupStep{GitVersionStep()}
@@ -174,8 +175,8 @@ const (
 // the user's whole remaining budget each time (internal/code/host's
 // BenchmarkBoxWorktree, its fsmonitor=starved arm, measured in
 // docs/concepts/code-sandbox.md's "What a clone costs"). The other half is
-// what the tree may grow by, and what the box's other watchers — its coding
-// CLI's — are left.
+// what the tree may grow by, and what the box's other watchers — its
+// harness's — are left.
 //
 // ADOPTED ON ITS MEASUREMENT, by the rule a box-side setting is
 // (docs/concepts/code-sandbox.md, "What a clone costs"): at 100 000 files a
@@ -264,8 +265,8 @@ func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {
 	}, nil
 }
 
-// cloneStepName is the name a step's failure is reported under: a coding
-// run's clone, or a check's checkout of its one commit.
+// cloneStepName is the name a step's failure is reported under: an
+// executor's clone, or a check's checkout of its one commit.
 func cloneStepName(r RunRepo, purpose ClonePurpose) string {
 	if purpose == CloneCoding {
 		return "clone " + r.Repo
@@ -340,8 +341,7 @@ func wordsOf(r RunRepo) cloneWords {
 // codingClone is [CloneCoding]'s command: a blobless clone of the default
 // branch alone with no checkout, the cone, the base fetched by id
 // ([cloneWords.fetchBase]), the branch made at the base and checked out —
-// only the cone's files, fetched as the checkout needs them — and the
-// commit-trailer hook written. An EMPTY repository (no base) has its branch
+// only the cone's files, fetched as the checkout needs them. An EMPTY repository (no base) has its branch
 // named as the unborn HEAD instead. git's file-system monitor is no clone's:
 // whether a box may keep one is its cell's and every checkout's together
 // ([CodingSteps], [MonitorStep]).
@@ -378,14 +378,8 @@ func wordsOf(r RunRepo) cloneWords {
 // log and rebase against — what a person's clone gives them, and what an
 // agent reaches for first — where a fetch by id leaves a repository holding
 // one commit's history and no name for anything in it but the run's branch.
-//
-// The hook is written only where no entry of its name exists — a box's git
-// whose template directory put a prepare-commit-msg there keeps its own —
-// and never through core.hooksPath, which would take a project's own hooks
-// away ([TrailerHook]).
 func codingClone(r RunRepo) string {
 	w := wordsOf(r)
-	hook := w.dir + "/.git/hooks/prepare-commit-msg"
 	lines := []string{
 		"if [ ! -e " + w.dir + "/.git ]; then",
 		"  git clone --quiet --single-branch --filter=blob:none --no-checkout -- " + w.url + " " + w.dir + " &&",
@@ -394,17 +388,13 @@ func codingClone(r RunRepo) string {
 		lines = append(lines, cone)
 	}
 	if r.Base == "" {
-		lines = append(lines, "  git -C "+w.dir+" symbolic-ref HEAD "+w.ref+" &&")
+		lines = append(lines, "  git -C "+w.dir+" symbolic-ref HEAD "+w.ref)
 	} else {
 		lines = append(lines,
 			w.fetchBase(""),
-			"  git -C "+w.dir+" checkout --quiet -B "+w.branch+" "+w.base+" &&")
+			"  git -C "+w.dir+" checkout --quiet -B "+w.branch+" "+w.base)
 	}
-	lines = append(lines,
-		"  { [ -e "+hook+" ] || [ -L "+hook+" ] ||",
-		"    { mkdir -p "+w.dir+"/.git/hooks && printf '%s' "+ShellQuote(TrailerHook)+" > "+hook+" &&",
-		"      chmod 755 "+hook+"; }; }",
-		"fi")
+	lines = append(lines, "fi")
 	return strings.Join(lines, "\n")
 }
 
@@ -431,7 +421,7 @@ func singleSHAClone(r RunRepo) string {
 	return strings.Join(lines, "\n")
 }
 
-// cloneBrief is what the coding agent is told the step made true: where the
+// cloneBrief is what the harness is told the step made true: where the
 // repository is, at what, how much of it, and how it pushes — "Your
 // environment" is where a run learns it, so it never spends rounds
 // rediscovering how its git reaches the code host.

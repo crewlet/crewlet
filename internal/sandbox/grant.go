@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0086): its
+// A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0093): its
 // launch gives it none, and every `code_checkout` its box calls through the
 // bridge resolves one repository for the seat and adds it to the job's row
 // ([PendingStore.GrantRepo]). The code host's box admission reads the row on
@@ -56,7 +56,7 @@ const (
 )
 
 // Validate refuses a grant no row could carry: a repository that is not a
-// coding run's ([RunRepo.ValidateFor] [CloneCoding]), or one read at no
+// executor's ([RunRepo.ValidateFor] [CloneCoding]), or one read at no
 // position, or no way to raise the floor by it.
 func (g RepoGrant) Validate() error {
 	switch {

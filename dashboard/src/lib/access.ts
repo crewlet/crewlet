@@ -17,7 +17,7 @@
  * `[admin]` is reported as admin plus every app — so a screen reading the
  * viewer needs nothing more. A STORED row is another matter: a person's
  * directory row, an invitation or a token may hold `[admin]` alone (a Tier A
- * file, a CLI create), and reading it raw would draw an administrator as
+ * file, a harness create), and reading it raw would draw an administrator as
  * holding no app. Every comparison here therefore goes through [expand],
  * the engine's own `iam.Expand`, so a lock, a picker and a People row read
  * one answer however the set was stored.
@@ -103,7 +103,7 @@ export function holdsAny(held: readonly string[], needs: readonly Grant[] | unde
  *
  * Admin's sentence says it is HOST ACCESS, because it is: the configuration
  * an admin writes runs commands on every engine host (an MCP server, a coding
- * CLI, a sandbox on the host). Ticking it is giving somebody a shell there,
+ * harness, a sandbox on the host). Ticking it is giving somebody a shell there,
  * and the picker is the last place to say so before it is given.
  */
 export const ACCESS_WORDS: Record<Grant, { label: string; description: string }> = {
@@ -160,7 +160,7 @@ export function accessLine(grants: readonly string[]): string {
 
 /**
  * What a seat's withheld BODY is drawn as — a prompt, an answer, a tool's
- * arguments, a coding run's task — where the engine sent only its status
+ * arguments, an executor's task — where the engine sent only its status
  * (`body_withheld`). Said, never drawn as an empty value, because "the prompt
  * was empty" and "you may not read the prompt" are opposite facts.
  */
@@ -169,14 +169,15 @@ export const WITHHELD_WORDS = "Hidden";
 /** Why, in one sentence: whose a seat's trail is to read. */
 export const WITHHELD_WHY = "Only this seat’s lead and admins can see it.";
 
-/** What a coding run's question is drawn as where the engine withheld it. */
+/** What an executor's question is drawn as where the engine withheld it. */
 export const QUESTION_WITHHELD = "Its question is hidden";
 
 /**
- * Whether a coding run's QUESTION was withheld from this reader: the engine
- * sent no question and said it withheld the run's body (`body_withheld`). The
- * people a question is put to are always sent it, so this is a reader looking
- * at somebody else's run — told so, never shown a run that asked nothing.
+ * Whether an executor's QUESTION was withheld from this reader: the engine
+ * sent no question and said it withheld the executor's body (`body_withheld`).
+ * The people a question is put to are always sent it, so this is a reader
+ * looking at somebody else's executor — told so, never shown one that asked
+ * nothing.
  */
 export function questionWithheld(run: { question?: string; body_withheld?: boolean }): boolean {
   return !run.question && run.body_withheld === true;

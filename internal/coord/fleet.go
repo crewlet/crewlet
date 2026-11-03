@@ -43,7 +43,7 @@ import (
 //   - The scheduled-fire claim is what makes a cron dispatch at-most-once. The
 //     scheduler is a singleton DUTY, so it moves; the new holder read an empty
 //     ledger and its catchup pass re-fired what the old one had claimed.
-//   - A detached coding run outlives its turn, its process and sometimes its
+//   - A detached executor outlives its turn, its process and sometimes its
 //     node, and is recovered by whichever node owns the seat NEXT. That node
 //     read its own database, found nothing, and left a billed sandbox running
 //     with a parked turn nothing could re-enter.
@@ -55,8 +55,11 @@ import (
 // The rest never lived on a node's own database and are here because the
 // question they answer is a company's from the start: the company's sealed
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
-// may still have, the [SeatPauses] a person set, the [ModelRetries] a person
-// asked for and the [DeviceSignIns] in progress, the windowed token [Budgets]
+// may still have, the [SeatPauses] a person set, the [ModelRetries] and
+// [MCPRestarts] a person asked for, each server's latest test ([MCPChecks]),
+// each server's OAuth grant ([MCPGrants]) and the sign-ins that make one
+// ([MCPSignIns]), the definition each MCP tool's level was decided on
+// ([MCPAccepted]), and the [DeviceSignIns] in progress, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -270,7 +273,7 @@ const (
 	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
-	// bucket's, one step sharper: a detached coding run can sit parked on
+	// bucket's, one step sharper: a detached executor can sit parked on
 	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
 	// record is the only thing that knows a billed box exists. A bucket
 	// age would reap it and leak the box for ever. The run's own reaper
@@ -1008,28 +1011,47 @@ type Channels interface {
 
 // Fires is the fleet's at-most-once guard for scheduled work.
 //
-// One key per DISPATCH IDENTITY — scope, owner, schedule name, the local
-// wall-clock minute and the runner it was addressed to — so the guarantee the
-// scheduler docs make ("a restart, a slow tick, or a re-evaluated minute can
-// never fire the same run twice") holds across the fleet rather than within
-// one process. It was the node's own table, so the `scheduler` singleton duty
-// moving to a peer handed the new node an empty ledger and its catchup pass
-// re-fired what the previous holder had already claimed: every company got two
-// standups.
+// One claim per DISPATCH IDENTITY, a minute and the runner it was addressed
+// to, so the guarantee the scheduler docs make ("a restart, a slow tick, or a
+// re-evaluated minute can never fire the same run twice") holds across the
+// fleet rather than within one process. It was the node's own table, so the
+// `scheduler` singleton duty moving to a peer handed the new node an empty
+// ledger and its catchup pass re-fired what the previous holder had already
+// claimed: every company got two standups.
+//
+// The MINUTE is the schedule's own opaque key: scope, owner, schedule name and
+// the local wall-clock minute, joined injectively by the scheduler. A store
+// keeps a minute's claims together, because the catchup pass asks one question
+// about a minute as a whole ([Fires.FireMinuteClaimed]).
 //
 // The node's own scheduled_runs table STAYS, as this node's audit record of
-// what it dispatched — the same split migration 0011 made for the token
-// counter. What the fleet has to agree on is "may I start", and nothing more.
+// what it dispatched: the same split migration 0011 made for the token
+// counter. What the fleet has to agree on is "may I start", and whether
+// anybody started a given minute.
 type Fires interface {
-	// ClaimFire records one fire identity and reports whether THIS caller
-	// wrote it.
+	// ClaimFire records one runner's claim on a minute and reports whether
+	// THIS caller wrote it. The runner may be empty, which is the claim a
+	// catchup skip makes: it resolved no runner, and an empty runner is a
+	// claim of its own beside every named one.
 	//
 	// FAILS CLOSED, which is the opposite polarity to [Ledger] and
 	// deliberately so. That one asks "has this work been done", whose safe
 	// answer is to re-run; this one asks "may I start", whose safe answer
 	// is to wait for the next tick. An error yields (false, err) and the
-	// caller must NOT dispatch.
-	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
+	// caller must NOT dispatch. An empty minute is an error.
+	ClaimFire(ctx context.Context, minute, runner string, at time.Time) (bool, error)
+
+	// FireMinuteClaimed reports whether any claim on the minute is held,
+	// for any runner or for none.
+	//
+	// The scheduler's first tick after a restart asks it before recording
+	// the most recent fire as missed: a minute any runner was claimed for
+	// ran, or was deliberately held back, and was not missed. An error is
+	// UNKNOWN and never a false: a store that could not be read and a
+	// minute nobody claimed are different answers, and the second one
+	// writes a skip into the schedule's history. An empty minute is an
+	// error, because it names no minute at all.
+	FireMinuteClaimed(ctx context.Context, minute string) (bool, error)
 }
 
 // Custody decides which data node keeps each batch of a stateless node's event
@@ -1102,7 +1124,7 @@ var ErrCustodyUndecidable = errors.New("coord: the record of this custody batch'
 // the ids are derived from — the work key, or the run where the turn has none.
 // Every later attempt at the same work reads it back and inherits it: a crash
 // re-run of a dispatched turn, a failed resume retried, the next half of a
-// turn a coding run parked. Each of those can run on another node — a crash
+// turn parked on its executor. Each of those can run on another node — a crash
 // re-run lands wherever the seat's delivery is taken next, a resume on the
 // seat's next owner — so the record has to be the fleet's: on the node's own
 // database the successor found nothing, minted anew, and wrote a second copy
@@ -1187,7 +1209,8 @@ type SandboxRunUpdate struct {
 	Found bool
 }
 
-// SandboxRuns is the fleet's record of detached coding runs.
+// SandboxRuns is the fleet's record of detached executors: one row per turn
+// whose executor is launching, running, parked, answered or being collected.
 //
 // THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
 // record has fields of which coordination understands none: the box and
@@ -1404,6 +1427,10 @@ type SecretRecord struct {
 	// read for a value. Empty for every other write, which clears it.
 	// NEVER ANSWERED: no route, listing, log or audit carries it.
 	OpID string
+
+	// WriteOnly marks a value only the engine's resolver opens; every reveal
+	// refuses it. Kept by later writes and a rekey (internal/fleetsecrets).
+	WriteOnly bool
 
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] is
@@ -1745,9 +1772,16 @@ type Fleet interface {
 	SeatPauses
 	ModelRetries
 	DeviceSignIns
+	MCPListings
+	MCPRestarts
+	MCPChecks
+	MCPGrants
+	MCPSignIns
+	MCPAccepted
 	PositionRegister
 	HoldRegister
 	FloorRegister
+	FeedMarkRegister
 	BackupRegister
 	MaintenanceRegister
 	Markers

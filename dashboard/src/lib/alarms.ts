@@ -6,11 +6,11 @@
  * The engine sends an alarm as its KIND, `backup_age`, which is the name its
  * log line, its gauge and the published alarm reference all use. Its name in
  * words is that identifier read as words, capitalised at the start ("Backup
- * age"), with the two initialisms the vocabulary carries kept whole ("IVF",
- * "WAL"). A table of titles here would be a second copy of the engine's alarm
- * vocabulary, and the copy that drifts is the one that names the next alarm
- * by nothing; the rule names every kind, today's and the next one's, the way
- * the engine's own log line does.
+ * age"), with the initialisms the vocabulary carries kept whole ("IVF",
+ * "WAL", "LLM", "MCP"). A table of titles here would be a second copy of the
+ * engine's alarm vocabulary, and the copy that drifts is the one that names
+ * the next alarm by nothing; the rule names every kind, today's and the next
+ * one's, the way the engine's own log line does.
  *
  * # One alarm per kind, with its logs in it
  *
@@ -27,7 +27,7 @@ import type { RetentionTermName } from "~/contract/retention.ts";
 import type { RetentionAlarm } from "~/protocol/index.ts";
 
 /** The initialisms in the engine's alarm vocabulary, which read as letters. */
-const INITIALISMS = new Set(["ivf", "wal"]);
+const INITIALISMS = new Set(["ivf", "wal", "llm", "mcp"]);
 
 /** An alarm kind in words: `trim_blocked` is "Trim blocked". */
 export function alarmKindTitle(kind: string): string {

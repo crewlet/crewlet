@@ -23,7 +23,7 @@ import (
 // serving none of the code host ([App.boxGitRoute], [App.boxCodeRoute]); the
 // route suites drive a fake of it, so this holds the adapter itself, over a
 // real engine: a git node whose company hosts no code — no code host built,
-// every node such a route answers for. A coding run's token and a check's,
+// every node such a route answers for. An executor's token and a check's,
 // each minted over the keyring the node booted on, as any other node of its
 // fleet mints them, are told the reason — the company hosts no code, 404, in
 // the words a person's /git/ is told — on a box's git route and on a check's

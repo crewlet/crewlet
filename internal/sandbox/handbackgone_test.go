@@ -199,7 +199,7 @@ func TestARetryWhoseRunEndsKeepsItsEndingUntilTheReplyIsRecorded(t *testing.T) {
 		t.Fatalf("handed back %v, want R1's copy once", got)
 	}
 	rig.finished("t1")
-	if got := rig.failures(); len(got) != 1 || got[0].Reason != types.SandboxFailureClaimStranded {
+	if got := rig.failures(); len(got) != 1 || got[0].Reason != types.ExecutorFailureClaimStranded {
 		t.Fatalf("announced %+v, want the run's loss once, under the reason it was decided on", got)
 	}
 	if holds.holding("swe") {
@@ -475,7 +475,7 @@ func TestARetryWhoseTurnGaveItsClaimBackHandsTheReplyBackWhenTheClaimCannotGoBac
 	}
 	rig.finished("t1")
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded ||
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureClaimStranded ||
 		!strings.Contains(failed[0].Detail, "goes back to the seat") {
 		t.Fatalf("announced %+v, want the run's loss once, saying its reply went back", failed)
 	}

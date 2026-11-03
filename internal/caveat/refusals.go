@@ -58,7 +58,7 @@ func AskedSomebodyElse(handle string) Refusal {
 		"only they can answer it.", handle)}
 }
 
-// AnsweredAlready is an answer to a coding run's question that another answer
+// AnsweredAlready is an answer to an executor's question that another answer
 // was recorded against first, by handle. No time: the person's screen says
 // when, on their own clock, off the run's record.
 func AnsweredAlready(handle string) Refusal {
@@ -70,7 +70,7 @@ func AnsweredAlready(handle string) Refusal {
 		"so your answer was not used.", handle)}
 }
 
-// QuestionChanged is an answer to a coding run's question given against a
+// QuestionChanged is an answer to an executor's question given against a
 // question the run no longer asks: it moved on to another since the person
 // read it, which is the one they need to see before they answer.
 func QuestionChanged() Refusal {
@@ -232,6 +232,16 @@ func QueueEntryNotYours() Refusal {
 func ArtifactTrashed() Refusal {
 	return Refusal{person: "This artifact is in the trash. Restore it first, " +
 		"then try again."}
+}
+
+// MembersChanged is a room's membership stated against members that changed
+// before the change landed: somebody added, removed or moved a member while
+// the person was looking, so the whole set they would have written is not
+// written over it.
+func MembersChanged() Refusal {
+	return Refusal{person: "The members of this room changed while you were " +
+		"looking, so nothing was changed. Check the members again, then make " +
+		"the change."}
 }
 
 // ValueInWrongForm is a change refused before it was made because the request

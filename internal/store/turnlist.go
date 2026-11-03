@@ -43,7 +43,7 @@ import (
 //
 // # A completion is not always an end
 //
-// A turn whose executor launches a detached coding run PARKS: the segment
+// A turn that launches its detached executor PARKS: the segment
 // that launched it publishes `turn_completed` with `suspended: true`, and the
 // same turn id completes again — possibly on another node, possibly after a
 // restart — when the run is collected and the loop resumes. So one turn can
@@ -60,7 +60,7 @@ import (
 //
 // A parked turn resumes only when its run is collected, and a run that is LOST
 // — its box unreachable, its claim stranded, its conversation gone — is settled
-// like any other lost turn, announced by `sandbox_run_failed` and never
+// like any other lost turn, announced by `executor_failed` and never
 // resumed. Read by the completions alone that turn was parked for good: the
 // failure is therefore an end, dated when it was announced, and the newest end
 // still decides — a run that failed while still launching is followed by its
@@ -72,7 +72,7 @@ import (
 var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
-	runLost        = types.SandboxRunFailed{}.EventType()
+	runLost        = types.ExecutorFailed{}.EventType()
 	agentTurnEnded = types.AgentTurnCompleted{}.EventType()
 )
 
@@ -82,7 +82,7 @@ var (
 //
 // THE TAG IS ONLY HALF OF IT. The writer stamps `failed` from a payload field,
 // and the four types that ARE a failure by their very name carry no such field:
-// llm_unavailable, budget_exhausted, turn.guard_breach and sandbox_run_failed.
+// llm_unavailable, budget_exhausted, turn.guard_breach and executor_failed.
 // Those are precisely the records a turn that died BEFORE completing a phase
 // leaves behind — a seat refused at the budget gate, a chain whose every model
 // was down, a breached guard — so on the tag alone this aggregate answered "not
@@ -228,7 +228,7 @@ type Turn struct {
 	// end says which is more likely, and the event list says for certain.
 	Complete bool `json:"complete"`
 
-	// Parked is whether the turn is waiting on a detached coding run: its
+	// Parked is whether the turn is waiting on its detached executor: its
 	// newest completion record is a suspension, so it will complete again
 	// when the run is collected. Never true beside Complete — the newest
 	// completion is one or the other.
@@ -236,7 +236,9 @@ type Turn struct {
 
 	// Phases counts the phase completions, and Iterations is the highest
 	// iteration any of them reached: SELF-ITERATE rounds, the executor →
-	// reviewer → executor loop.
+	// reviewer → executor loop. A launch of the executor's run is no phase
+	// and is not counted: it is the work of the executor round that
+	// launched it, which is.
 	//
 	// NOT the tool rounds a phase used — that is `rounds_used`, on each
 	// phase's own record, and it is a per-phase figure this aggregate has
@@ -260,7 +262,7 @@ type Turn struct {
 	// completed still says why. The kind is the record's `error_kind`, or
 	// the failure's own event type for the four types that ARE a failure
 	// (llm_unavailable, budget_exhausted, turn.guard_breach,
-	// sandbox_run_failed).
+	// executor_failed).
 	//
 	// ON THE ROW, so whoever may read the row reads why it failed: the
 	// seat's trail, decided before the listing is read. Before this field
@@ -271,7 +273,7 @@ type Turn struct {
 	ErrorKind string `json:"error_kind,omitempty"`
 
 	// Stopped is whether a PERSON ended the turn — a pause with
-	// `stop_running` reached it at a round, or ended the coding run it was
+	// `stop_running` reached it at a round, or ended the executor it was
 	// parked on — read off its completion's `stopped` flag. Not a failure,
 	// and never counted as one: a stopped turn's completion carries no
 	// `failed`, so Failed says only what else went wrong in it.
@@ -299,6 +301,13 @@ type Turn struct {
 
 	// Trigger is what woke it, from the first phase record.
 	Trigger string `json:"trigger,omitempty"`
+
+	// Origin is WHAT STARTED THE TURN: the object its first trigger named
+	// (a chat message, a work item, a schedule, a colleague's ask) and why
+	// it reached the seat ([types.TriggerOrigin]). The EARLIEST record that
+	// names one decides, so a turn a person's answer resumed later is still
+	// filed under what started it. Absent for a trigger that names none.
+	Origin *types.TriggerOrigin `json:"origin,omitempty"`
 
 	// WorkItem is the one work item the turn is charged to, read off its
 	// completion record, and absent for a turn on nothing — including one
@@ -346,6 +355,24 @@ type TurnQuery struct {
 	// and every record it has is folded, so the row is the same row the
 	// unfiltered list shows. See schema/0033 for the column and its index.
 	WorkItem string
+
+	// Origin narrows to the turns an object started or resumed, by its
+	// identity `<kind>:<id>` ([OriginRef]): "which turn did this message
+	// start". Every object a turn's start named counts, each message a
+	// coalesced trigger took in included. ON THE TURN, like WorkItem, read
+	// off crewlet_turn_origins. See node/0059.
+	Origin string
+
+	// Server narrows to the turns that called one MCP server's tools, and
+	// Tool, beside it, to the turns that called that one tool: ON THE TURN,
+	// like Model, off the tally its ending record states
+	// (types.TurnTally.Tools), which counts every call its segments, its
+	// workers and its executor run made, a refused one included. So a turn
+	// is listed under a tool once it has ended; a turn still running or
+	// parked has stated no calls yet. Tool without Server names no tool,
+	// since two servers can offer one name.
+	Server string
+	Tool   string
 
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
@@ -409,7 +436,7 @@ func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
 		since = now.Add(-time.Duration(days) * 24 * time.Hour)
 	}
 	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
-	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
+	// reason [phaseListSQL]'s own comment gives: a read without it answers
 	// below the retention horizon on a node whose sweep is behind, and a
 	// turns list showing turns the spend rollup excludes is the exact
 	// comparison an operator makes to decide whether a seat went quiet.
@@ -495,14 +522,14 @@ func (c TurnCursor) Before(start time.Time, id string) bool {
 }
 
 // inTurnCost is true of a row that is part of its turn's COST: every row but an
-// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES
-// AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn states it for the live
-// window, and the Turn screen adds the same parts): the reflection after a
-// turn files its spend under the turn's id so the turn's page can draw it, and
-// it is the seat's learning rather than what the work cost — counted here, a
-// turn would grow dearer the more its seat had to remember, and the list's
-// `sort=-tokens` would rank turns by it. Rows that carry no spend have an empty
-// stage and zero tokens, so they change no sum.
+// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES,
+// ITS EXECUTOR'S LAUNCHES AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn
+// states it for the live window, and the Turn screen adds the same parts): the
+// reflection after a turn files its spend under the turn's id so the turn's
+// page can draw it, and it is the seat's learning rather than what the work
+// cost — counted here, a turn would grow dearer the more its seat had to
+// remember, and the list's `sort=-tokens` would rank turns by it. Rows that
+// carry no spend have an empty stage and zero tokens, so they change no sum.
 const inTurnCost = "spend_stage IN ('', 'turn')"
 
 // turnCost sums one spend column over the rows of a turn's cost.
@@ -553,7 +580,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 //
 // A turn's events are written to the event log of the node that PUBLISHED
 // them, and a turn is not always published by one node: a turn parked on a
-// detached coding run resumes wherever its seat is held when the run is
+// detached executor resumes wherever its seat is held when the run is
 // collected, which after a restart or a placement move is another node. So
 // the fleet's row for that turn is spread across two logs, and folding each
 // half into a finished [Turn] loses exactly what the whole needs — whether a
@@ -613,6 +640,33 @@ type TurnPartial struct {
 	Summary  string `json:"summary,omitempty"`
 	WorkItem string `json:"work_item,omitempty"`
 	Trigger  string `json:"trigger,omitempty"`
+
+	// Origin is the EARLIEST record's origin, as the SQL takes it: the
+	// minimum of [originKey]'s text, whose leading instant makes a minimum
+	// the earliest, across logs as within one. [TurnPartial.Turn] decodes it.
+	Origin string `json:"origin,omitempty"`
+}
+
+// originSep separates the parts of an origin's ranked text: the unit
+// separator, which no id, kind or reason this engine mints carries.
+const originSep = "\x1f"
+
+// originKey is the SQL that ranks a row's origin by when it was recorded:
+// the instant, zero-padded so text order is time order, then the origin and
+// its reason, or NULL on a row that names none.
+const originKey = "CASE WHEN COALESCE(json_extract(tags, '$.trigger_origin'), '') <> '' " +
+	"THEN printf('%020d', event_time) || char(31) || json_extract(tags, '$.trigger_origin') " +
+	"|| char(31) || COALESCE(json_extract(tags, '$.trigger_reason'), '') END"
+
+// originOf decodes a partial's ranked origin text, or nil: the tags it was
+// ranked from, read by the one rule a record's tags are ([OriginOfTags]).
+func originOf(ranked string) *types.TriggerOrigin {
+	parts := strings.SplitN(ranked, originSep, 3)
+	if len(parts) != 3 {
+		return nil
+	}
+	return OriginOfTags(map[string]string{"trigger_origin": parts[1],
+		"trigger_reason": parts[2]})
 }
 
 // Turn finishes a partial into the row a listing serves.
@@ -630,6 +684,7 @@ func (p TurnPartial) Turn() Turn {
 		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
 		Models:  strings.Join(p.Models, ","),
 		Summary: p.Summary, Trigger: p.Trigger,
+		Origin: originOf(p.Origin),
 	}
 	t.Complete, t.Parked = segmentState(p.LastEnded, p.LastParked)
 	if p.WorkItem != "" {
@@ -694,6 +749,11 @@ func CombineTurnPartials(parts ...TurnPartial) TurnPartial {
 		out.Summary = max(out.Summary, p.Summary)
 		out.WorkItem = max(out.WorkItem, p.WorkItem)
 		out.Trigger = max(out.Trigger, p.Trigger)
+		// THE EARLIEST, which the ranked text's leading instant makes the
+		// minimum of the ones that name an origin.
+		if p.Origin != "" && (out.Origin == "" || p.Origin < out.Origin) {
+			out.Origin = p.Origin
+		}
 	}
 	return out
 }
@@ -904,6 +964,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 			failed            int
 			models, summary   sql.NullString
 			item, trigger     sql.NullString
+			origin            sql.NullString
 			failure, kind     sql.NullString
 			in, outTok, total sql.NullInt64
 			cacheR, cacheW    sql.NullInt64
@@ -914,7 +975,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		if err := rows.Scan(&p.TurnID, &workKey, &agentID, &role, &started, &ended,
 			&p.Phases, &p.Iterations, &failed, &in, &outTok, &total,
 			&cacheR, &cacheW, &models,
-			&ended1, &parked1, &duration, &summary, &item, &trigger,
+			&ended1, &parked1, &duration, &summary, &item, &trigger, &origin,
 			&failure, &kind, &stopped); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
@@ -933,7 +994,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		if models.String != "" {
 			p.Models = strings.Split(models.String, ",")
 		}
-		p.Summary, p.Trigger = summary.String, trigger.String
+		p.Summary, p.Trigger, p.Origin = summary.String, trigger.String, origin.String
 		p.WorkItem = item.String
 		p.Error, p.ErrorKind = failure.String, kind.String
 		out = append(out, p)
@@ -1042,14 +1103,15 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 	args = append(args, probe)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a phase record carries one. Every turn's group also holds
+	// and only a spend record carries one. Every turn's group also holds
 	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
 	// not empty strings — joined one model as ",claude-opus-5" and handed
 	// every consumer splitting on the comma a nameless band in its legend
 	// and a nameless row in its breakdown.
 	//
 	// THE SPEND AND THE MODELS ARE THE TURN'S COST ([inTurnCost]): its
-	// phases and its in-turn auxiliary calls, never the reflection after it.
+	// phases, its executor's launches and its in-turn auxiliary calls, never
+	// the reflection after it.
 	query := `
 		SELECT turn_id,
 		       MAX(work_key),
@@ -1074,6 +1136,7 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 		       MAX(CASE WHEN event_type = ?
 		                THEN json_extract(payload, '$.work_item') END),
 		       MAX(COALESCE(json_extract(tags, '$.trigger'), '')),
+		       MIN(` + originKey + `),
 		       ` + failureText(failedExpr, errorText) + `,
 		       ` + failureText(failedExpr, kindText) + `,
 		       MAX(CASE WHEN event_type = ? AND ` + stoppedExpr + ` = 1 THEN 1 ELSE 0 END)
@@ -1151,6 +1214,31 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
 				"WHERE model = ? AND "+inTurnCost+" AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
+	}
+	if q.Origin != "" && !shares {
+		// ON THE TURN, for WorkItem's reason: the turn is folded whole,
+		// so the row is the one the unfiltered list shows.
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_turn_origins "+
+				"WHERE origin = ? AND event_time >= ?)")
+		args = append(args, q.Origin, EncodeTime(floor))
+	}
+	if q.Server != "" && !shares {
+		// ON THE TURN, off the record that ENDS it, for the reason its
+		// tally is that record's: the turn counted its own calls, wherever
+		// its phase records were kept. The ending's row is sought by the
+		// (type, time) index over the window, and only those rows' tallies
+		// are walked.
+		calls := "json_extract(t.value, '$.server') = ?"
+		args = append(args, turnCompleted, EncodeTime(floor), q.Server)
+		if q.Tool != "" {
+			calls += " AND json_extract(t.value, '$.tool') = ?"
+			args = append(args, q.Tool)
+		}
+		where = append(where,
+			"turn_id IN (SELECT e.turn_id FROM crewlet_events AS e, "+
+				"json_each(e.payload, '$.turn.tools') AS t "+
+				"WHERE e.event_type = ? AND e.event_time >= ? AND e.turn_id != '' AND "+calls+")")
 	}
 	if q.WorkItem != "" && !shares {
 		// ON THE TURN, not on the row, for Model's reason and one more:

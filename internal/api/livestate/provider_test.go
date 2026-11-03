@@ -13,8 +13,8 @@ func parkedEnv(when, idv string) *livestate.Envelope {
 	return env("seat_provider_parked", map[string]any{
 		"agent_id": "Lead", "provider_keys": []any{"default"},
 		"retry_at": "2026-10-27T23:30:00Z", "resets_at": "2026-10-27T23:30:00Z",
-		"said": "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)",
-		"cli":  "claude-code", "subscription": true,
+		"said":    "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)",
+		"harness": "claude-code", "subscription": true,
 	}, at(when), id(idv))
 }
 
@@ -36,7 +36,7 @@ func TestAParkedSeatReadsStoppedThroughEveryProbe(t *testing.T) {
 	first := overlayOf(t, s, "Lead").ProviderLimit
 	if first == nil || !first.Parked || first.ResetsAt == nil ||
 		*first.ResetsAt != "2026-10-27T23:30:00Z" ||
-		first.CLI != "claude-code" || !first.Subscription {
+		first.Harness != "claude-code" || !first.Subscription {
 		t.Fatalf("provider limit = %+v, want the parked limit naming its reset", first)
 	}
 
@@ -80,11 +80,11 @@ func TestASeatOnItsFallbackSaysSoWithoutStopping(t *testing.T) {
 	s.Apply(env("agent_phase_started", call, at("2026-10-27T23:16:00Z"), id("ps")))
 	s.Apply(env("provider_fallback", with(call, map[string]any{
 		"from_provider_key": "plan", "to_provider_key": "key", "error_kind": "rate_limit",
-		"resets_at": "2026-10-27T23:30:00Z", "from_cli": "claude-code", "from_subscription": true,
+		"resets_at": "2026-10-27T23:30:00Z", "from_harness": "claude-code", "from_subscription": true,
 	}), at("2026-10-27T23:16:01Z"), id("fb")))
 	wantState(t, s, "Lead", livestate.ActivityWorking, "")
 	got := overlayOf(t, s, "Lead").ProviderLimit
-	if got == nil || got.Parked || got.CLI != "claude-code" || !got.Subscription {
+	if got == nil || got.Parked || got.Harness != "claude-code" || !got.Subscription {
 		t.Fatalf("provider limit = %+v, want the plan limited and the seat on its fallback", got)
 	}
 
@@ -142,7 +142,7 @@ func TestTheBroadcastLimitCarriesNoConfigKey(t *testing.T) {
 			"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute",
 			"from_provider_key": "plan-secretkey", "to_provider_key": "metered-secretkey",
 			"error_kind": "rate_limit", "resets_at": "2026-10-27T23:30:00Z",
-			"from_cli": "claude-code", "from_subscription": true,
+			"from_harness": "claude-code", "from_subscription": true,
 		}, at("2026-10-27T23:16:01Z"), id("fb"))},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestTheBroadcastLimitCarriesNoConfigKey(t *testing.T) {
 			}
 			for key := range fields {
 				switch key {
-				case "parked", "resets_at", "since", "cli", "subscription":
+				case "parked", "resets_at", "since", "harness", "subscription":
 				default:
 					t.Errorf("the broadcast carries %q: %s", key, wire)
 				}

@@ -50,7 +50,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
+  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
 };
 
 const seat = (name: string, handle: string, kind: string, managers: string[] = []) => ({
@@ -147,7 +147,7 @@ const QUIET = {
   },
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
-  sandbox_runs: { runs: [] },
+  executors: { runs: [] },
   inbox: { handle: "jane", notices: [], sources: [], unread: 0, primary: 0 },
 };
 
@@ -837,7 +837,7 @@ describe("the decisions", () => {
           total: 2,
           capped: false,
         },
-        sandbox_runs: { runs: [parked, legacy] },
+        executors: { runs: [parked, legacy] },
       },
     });
     await settle();
@@ -864,7 +864,7 @@ describe("the decisions", () => {
     });
     await settle();
     expect(posted).toEqual([
-      { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
+      { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
     ]);
   });
 

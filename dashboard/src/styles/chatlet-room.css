@@ -487,6 +487,11 @@
   margin: var(--spacing-1) 0 0;
 }
 
+/* Whom the draft will reach, under the box it is typed in. */
+.chat-composer-reach {
+  margin-block-start: var(--spacing-1);
+}
+
 .chat-inline-editor {
   padding: var(--spacing-1) 0;
 }

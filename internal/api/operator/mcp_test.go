@@ -41,7 +41,7 @@ import (
 // AND EVERY SEAM OF A CONTROL'S DEPENDENCIES HAS ITS ROW, read off builtin's
 // types themselves, but the actor the surface sets per call and a pause's
 // clock, whose nil is the wall clock. New's refusals are a list written beside
-// builtin's, and it missed the run records a note to a turn's coding run is
+// builtin's, and it missed the run records a note to a turn's executor is
 // filed on: steer_turn was listed, and refused every call, on a surface New
 // built without them.
 //
@@ -132,7 +132,7 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 func TestACompanyWithNoNativeHalfIsStillServedItsSeatControls(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{})})
-	want := []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+	want := []string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool}
 	slices.Sort(want)
 	got := s.Tools()

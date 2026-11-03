@@ -573,7 +573,7 @@ func TestNoWorkIsAdmittedUntilTheAcquireHookReturns(t *testing.T) {
 
 	wantAdmits(t, h, "ceo", false)
 	// It IS leased, though, and the heartbeat renews it throughout: an
-	// acquire spawns MCP children and recovers an interrupted sandbox run,
+	// acquire spawns MCP children and recovers an interrupted executor,
 	// which can outlast a TTL, and a lease that lapsed mid-acquire would
 	// let a peer claim a seat this node is halfway through building.
 	if _, ok := h.EpochFor("ceo"); !ok {

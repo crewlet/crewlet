@@ -11,7 +11,7 @@ import (
 
 // The OTLP receive-and-forward edge.
 //
-// A coding agent inside a sandbox exports its telemetry HERE rather than to
+// A harness inside a sandbox exports its telemetry HERE rather than to
 // the real backend, so the backend's ingest credential never enters a box
 // running generated code. The receiver adds that credential on the way out —
 // see [sandbox.OtelReceiver] for why the hop exists at all.

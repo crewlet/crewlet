@@ -10,7 +10,7 @@ type seatKey struct{}
 //
 // It rides the context rather than the request because [Request] is the
 // contract every backend shares, and today only ONE backend has any use for
-// it: an HTTP provider has no per-seat state to isolate, while the cli-agent
+// it: an HTTP provider has no per-seat state to isolate, while the harness
 // backend keeps a whole home directory per seat. Adding a field to Request
 // that three of four backends must ignore is the worse trade.
 //

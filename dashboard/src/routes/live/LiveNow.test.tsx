@@ -51,7 +51,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["answer_run"],
+  acts: ["answer_executor"],
 };
 
 /** Two unit seats stamped from ONE template: two seats, and the phases they
@@ -119,7 +119,7 @@ function mount({
   const base: Record<string, Answer> = {
     viewer: JANE,
     inbox: { handle: "jane", notices: [], primary_reasons: [] },
-    sandbox_runs: { runs: [] },
+    executors: { runs: [] },
     phases: { phases: [], next: {}, exhausted: true },
     event_series: {
       bucket: "minute",
@@ -195,6 +195,42 @@ test("a turn that has only started is on its Context step, timed from its start"
   expect(row.getAttribute("href")).toBe("#/live/turns/t-start");
   expect(row.querySelector("[aria-current='step']")?.textContent).toContain("Context");
   expect(row.textContent).toMatch(/2m/);
+});
+
+// WHAT WAITS BEHIND A RUNNING TURN IS ON ITS ROW, a person waiting said first
+// and apart, as the node holding the seat counts it. The turn's own mail is
+// not in the count, so a seat with nothing else waiting says nothing.
+//
+// Mutation: drop the waiting tags from the row and neither phrase is drawn.
+test("a running turn's row says who and what waits behind it", async () => {
+  mount({
+    agents: [
+      {
+        agent_id: "a1",
+        id: "a1",
+        role: "Search Engineer",
+        handle: "eng-search",
+        activity: "working",
+        turn: { turn_id: "t-busy", started_at: ago(60_000), stage: "context" },
+        waiting: { priority: 1, background: 4 },
+      },
+      {
+        agent_id: "a2",
+        id: "a2",
+        role: "Docs Writer",
+        handle: "docs",
+        activity: "working",
+        turn: { turn_id: "t-calm", started_at: ago(60_000), stage: "context" },
+        waiting: { priority: 0, background: 0 },
+      },
+    ],
+  });
+  const card = cardOf("Running turns");
+  const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
+  expect(busy.textContent).toContain("1 person waiting");
+  expect(busy.textContent).toContain("4 waiting");
+  const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
+  expect(calm.textContent).not.toMatch(/waiting/);
 });
 
 // A ROUND THAT HAS STOPPED MOVING SAYS SO ON ITS OWN ROW, AND A PARKED TURN
@@ -418,6 +454,52 @@ test("the Activity card names a node the live feed was seeded without", async ()
   expect(note.closest(".coverage-note")?.textContent).toContain("node-c");
 });
 
+// A LAUNCH IS THE EXECUTOR'S ROW. A collected launch of an executor's run is
+// no phase — its round's record is — so its row wears the round's phase word
+// with the harness that ran it, its harness's own turns where a phase has rounds, and
+// an outcome that says it was collected, with the report it wrote on it. A
+// phase filter of `execute` keeps it beside its round's record.
+//
+// Mutation: read the launch as a phase record, and its row has no phase word
+// and a 0 for its rounds; drop the harness badge, and the row reads as a second
+// executor.
+test("a collected launch is listed as the executor's row", async () => {
+  const launch = {
+    ...phaseEvent("l-1", "t-1", "id-search"),
+    type: "executor_collected",
+    category: "system",
+    payload: {
+      turn_id: "t-1",
+      iteration: 1,
+      launch_id: "job-1",
+      role: "Engineer",
+      agent_id: "id-search",
+      model: "scripted",
+      harness: "claude-code",
+      harness_turns: 31,
+      total_tokens: 9_700,
+      response: "Fixed the flake.\nThe pull request is open.",
+    },
+  } as EventEnvelope;
+  const { asked } = mount({
+    hash: "#/live?phase=execute",
+    answers: {
+      phases: {
+        phases: [launch, phaseEvent("p-1", "t-1", "id-search")],
+        next: {},
+        exhausted: true,
+      },
+    },
+  });
+  const card = await phasesCard(asked);
+  const collected = await within(card).findByText("collected");
+  expect(collected.closest("[title]")?.getAttribute("title")).toBe("Fixed the flake.");
+  expect(within(card).getByText("claude-code")).toBeTruthy();
+  expect(within(card).getByText("31")).toBeTruthy();
+  // AND THE ROUND'S OWN RECORD BESIDE IT, kept by the same phase filter.
+  expect(within(card).getByText("delivered")).toBeTruthy();
+});
+
 // OLDER IS THE ENGINE'S CURSOR. It paged the event LIST and read every row
 // back one `event` at a time — sixty-one round trips for sixty rows.
 test("Load older asks phases again with the cursor the page carried", async () => {
@@ -494,12 +576,12 @@ test("Event log links to the log, with the seat when one is chosen", async () =>
 });
 
 // THE EMPTY BOX SAYS WHAT IS TRUE. It promised every finished run was "still
-// in the record under Runs" — a settled run's row is deleted; its record is
-// its turn's trace.
-test("an empty In a box says where a finished run's record is", async () => {
+// in the record under Runs" — a settled executor's row is deleted; its record
+// is its turn's trace.
+test("an empty In a box says where a finished executor's record is", async () => {
   mount();
   const card = cardOf("In a box");
-  expect(card.textContent).toContain("Finished runs are on their turn’s trace.");
+  expect(card.textContent).toContain("What a finished one did is on its turn’s trace.");
   expect(card.textContent).not.toMatch(/still in the record/);
 });
 
@@ -507,7 +589,7 @@ test("an empty In a box says where a finished run's record is", async () => {
 test("a parked run is a row of Waiting on a person with its audience and Answer", async () => {
   mount({
     answers: {
-      sandbox_runs: {
+      executors: {
         runs: [
           {
             turn_id: "t-parked",
@@ -524,7 +606,7 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             pause_ttl_seconds: 7_200,
             task_description: "fleet map",
             placement: "remote",
-            coding_agent: "claude",
+            harness: "claude",
             box_exists: true,
           },
         ],

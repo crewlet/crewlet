@@ -138,7 +138,7 @@ import {
   useSeatSetup,
   type Seat,
 } from "~/lib/seats.ts";
-import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, WORKLET } from "~/lib/access.ts";
 import { RunQuestionLine } from "~/components/RunQuestion.tsx";
@@ -520,7 +520,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
             ))}
-          {/* EVERY READER'S: no app gates code (ADR-0081), and the engine
+          {/* EVERY READER'S: no app gates code (ADR-0088), and the engine
               holds each row to the reader's grant on its repository. */}
           {tab === "code" && <SeatCode seat={seat} human={human} />}
           {tab === "turns" &&
@@ -638,7 +638,7 @@ function Holder({
 
 /**
  * What stops the seat or waits on somebody, above whichever tab is open: a
- * pause (who, when, why), another stop, a failed last turn, and a coding run
+ * pause (who, when, why), another stop, a failed last turn, and its executor
  * parked on a question, with the answer to it one press away.
  *
  * ONE BANNER PER CAUSE. A stop for a fault and the failed turn that came with
@@ -661,12 +661,12 @@ function Notices({
   now: number;
   nameOf: (key: string) => string;
 }) {
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   if (seat.kind === "human" || !agent) return null;
   const state = shownStateOf(agent);
   const paused = agent.paused ?? null;
   const failure = agent.last_error ?? null;
-  const sandbox = seatRun(sandboxes, seat);
+  const sandbox = seatRun(executors, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   if (!failure && state !== "stopped" && state !== "paused" && !asking) return null;
   // The failed turn's own facts: when, in which phase, and the event that
@@ -743,7 +743,7 @@ function Notices({
           icon={<CircleQuestionMarkGlyph size="md" />}
           action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          A coding run is waiting on a question:{" "}
+          This seat's executor is waiting on a question:{" "}
           <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}

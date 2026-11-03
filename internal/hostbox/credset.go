@@ -16,7 +16,7 @@ import (
 
 // A SHARED LOGIN IS A SET OF FILES, AND IT IS WRITTEN AS ONE.
 //
-// A coding CLI may keep its login in more than one file — gemini-cli's OAuth
+// A harness may keep its login in more than one file — gemini-cli's OAuth
 // token beside the account it names, kimi-code's token beside the config.toml
 // that declares its provider, cursor-agent's sign-in beside its settings — and
 // those files are one login only while they come from the same sign-in. Every

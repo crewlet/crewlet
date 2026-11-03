@@ -75,7 +75,7 @@ func TestAChatRoomsTypingLapsesAndAnArtifactsEditingDoesNot(t *testing.T) {
 
 // A SEAT ANSWERING IN A CHAT ROOM IS SHOWN PER THREAD, WITH ITS LINE, UNTIL IT
 // IS WITHDRAWN. A seat answering in two threads of one room — a turn parked
-// behind a coding run and the seat's next turn — is two members, a peer's
+// behind its executor and the seat's next turn — is two members, a peer's
 // sockets see each one's thread, status line and turn as the seat's node set
 // them, and withdrawing one takes it down at once and leaves the other.
 //
@@ -157,4 +157,54 @@ func TestEachKindOfRoomReadsItsOwnFocus(t *testing.T) {
 	if checkMember(RoomChat, long) == nil {
 		t.Error("a status line past its bound was accepted")
 	}
+}
+
+// A SEAT'S QUEUED LINE REACHES A PEER'S ROOM AS QUEUED, AND STOPS BEING QUEUED
+// WHEN THE SAME LINE BECOMES THE TURN'S. The flag is part of what tells a
+// change from a repeat, so a touch that changes it alone goes out.
+//
+// Mutation: leave Queued out of Touch's comparison, and the working touch
+// that follows a queued one with the same line is taken for a repeat, so the
+// room goes on drawing the seat's work as still waiting.
+func TestASeatsQueuedLineIsCarriedUntilTheTurnTakesItOver(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	api, seats := startNode(t, broker, "node-api", c), startNode(t, broker, "node-seats", c)
+	room := ChatRoom(uuid.New())
+	if _, _, err := joined(api.hub, room, dana); err != nil {
+		t.Fatal(err)
+	}
+	waitListening(t, api.hub, room)
+	queued := func() (bool, bool) {
+		api.seen.mu.Lock()
+		defer api.seen.mu.Unlock()
+		for _, m := range api.seen.rooms[room] {
+			if m.Kind == iam.ActorAgent && m.Focus.Thread == "m-1" {
+				return m.Queued, true
+			}
+		}
+		return false, false
+	}
+	waitQueued := func(want bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if got, ok := queued(); ok && got == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				got, ok := queued()
+				t.Fatalf("the seat's line in m-1 is queued=%v (shown %v), want queued=%v", got, ok, want)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	line := "is queued behind its current task"
+	seats.hub.Touch(room, Agent{Seat: "pm", Activity: Editing,
+		Focus: Focus{Thread: "m-1"}, Status: line, Queued: true})
+	waitQueued(true)
+	seats.hub.Touch(room, Agent{Seat: "pm", Activity: Editing,
+		Focus: Focus{Thread: "m-1"}, Status: line})
+	waitQueued(false)
 }

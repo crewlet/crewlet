@@ -82,13 +82,13 @@ func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 // A RESUMED RUN KEEPS ITS SEAT HELD FOR THE WHOLE RESUMED TURN, and lets go of
 // it once the turn is over.
 //
-// What a running engine did: a coding job finished, its completion claimed the
-// run (`resumed`, which holds the seat) and resumed the turn that launched it.
-// The resume gave the seat's count back BEFORE the resumer ran, so the seat's
-// inbox hold lifted for the length of the resumed turn, and the seat's next
-// mail started a second turn beside it 444 ms later: that turn launched a
-// second job, and the seat held two runs at once. A seat busy coding takes no
-// other work (seathold.go), and the resumed turn is that work.
+// What a running engine did: an executor's job finished, its completion
+// claimed the run (`resumed`, which holds the seat) and resumed the turn that
+// launched it. The resume gave the seat's count back BEFORE the resumer ran,
+// so the seat's inbox hold lifted for the length of the resumed turn, and the
+// seat's next mail started a second turn beside it 444 ms later: that turn
+// launched a second job, and the seat held two runs at once. A seat busy
+// coding takes no other work (seathold.go), and the resumed turn is that work.
 //
 // Mutation: give the count back before the resumer runs, and the inbox is not
 // held during the turn; skip the recount after it, and it is never let go of.
@@ -249,7 +249,7 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			// turn that began publishes its own failed completion.
 			broken := false
 			for _, f := range rig.failures() {
-				broken = broken || f.Reason == types.SandboxFailureResumeBroken
+				broken = broken || f.Reason == types.ExecutorFailureResumeBroken
 			}
 			if broken != beforeTurn {
 				t.Fatalf("resume_broken announced %v, want %v: it is the run's only account "+
@@ -298,7 +298,7 @@ func TestAnAnswerWhoseResumeItsBudgetHeldWaitsUncharged(t *testing.T) {
 // member of the chain and sent the run back to runners every one of which sits
 // out, which the gate, asked again, would admit into again. The case gets the
 // completion's payload and event back, as the waiter announces them.
-func limitedAfterClaim(t *testing.T, rig *coordRig, until time.Time) (types.SandboxRunCompleted, *events.Event) {
+func limitedAfterClaim(t *testing.T, rig *coordRig, until time.Time) (types.ExecutorFinished, *events.Event) {
 	t.Helper()
 	gated(rig)
 	rig.launch("t1")
@@ -418,6 +418,7 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 			}
 			keepalives := box.Keepalives()
 			for range 3 {
+				rig.now = rig.now.Add(reannounceCeilingPolls * DefaultPollInterval)
 				if fired := rig.tick(); fired != 1 {
 					t.Fatalf("the poll announced %d completions, want the job's", fired)
 				}
@@ -427,9 +428,16 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 					"want it left asleep", box.Paused(), box.Keepalives()-keepalives)
 			}
 
+			// THE ANNOUNCEMENT IS TAKEN BEFORE THE SIGNAL. Readmit re-fires
+			// the completion this node kept for the limit on a goroutine of
+			// its own, and that resume can finish the run and remove its
+			// row before this goroutine reads it: taken after, the read
+			// raced the re-fire and failed on a row that was rightly gone.
+			// Both deliveries then reach the claim, which is at most once,
+			// so the job is resumed once whichever wins.
 			rig.resumer.failWith(nil)
-			rig.coordinator.Readmit(conditionLimit, "swe")
 			payload, ev := rig.completion("t1")
+			rig.coordinator.Readmit(conditionLimit, "swe")
 			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
 			rig.coordinator.inflight.Wait()
 			if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Ended.Text != "fixed the flake" {
@@ -452,11 +460,11 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 // not resumed before its instant.
 func TestAStopEndsTheWaitOfACollectedJobsResume(t *testing.T) {
 	t.Parallel()
-	for name, held := range map[string]func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event){
-		"held here for a limit": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+	for name, held := range map[string]func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event){
+		"held here for a limit": func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event) {
 			return limitedAfterClaim(t, rig, rig.now.Add(time.Hour))
 		},
-		"held on its row for the budget": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+		"held on its row for the budget": func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
 			rig.resumer.failWith(budgetHeld(rig.now.Add(time.Hour)))
@@ -612,11 +620,11 @@ func TestALimitHeldForASeatLetGoMeanwhileIsForgotten(t *testing.T) {
 
 // A JOB COLLECTED AGAIN IS READ AS IT WAS WHEN IT WAS FIRST COLLECTED. Its
 // ending is handed to the resume with the instant it was first read back
-// ([RunEnding.At]), because a CLI names a reset as a time of day: a resume held
+// ([RunEnding.At]), because a harness names a reset as a time of day: a resume held
 // for hours and collected again, its ending read against that later instant,
 // took a 4:30pm already past for the next day's, and sat the entry out for
 // nothing. The first collection's instant rides the job's record through the
-// hold ([LaunchRecord.CollectedAt]), and so does the CLI's own terminal event.
+// hold ([LaunchRecord.CollectedAt]), and so does the harness's own terminal event.
 //
 // Mutation: date the ending by the collection that reads it, and the second
 // resume's ending carries the later instant.
@@ -652,6 +660,6 @@ func TestARecollectedJobsEndingIsDatedByItsFirstCollection(t *testing.T) {
 	}
 	if ended := calls[0].Ended; !ended.At.Equal(first) || ended.Event != event {
 		t.Fatalf("the second collection hands the resume an ending read at %v carrying %q, "+
-			"want the first collection's %v and the CLI's own event", ended.At, ended.Event, first)
+			"want the first collection's %v and the harness's own event", ended.At, ended.Event, first)
 	}
 }

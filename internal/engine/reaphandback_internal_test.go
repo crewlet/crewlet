@@ -31,7 +31,7 @@ func TestTheEngineStampsALaunchWithItsSeatLease(t *testing.T) {
 		Turn:  sandbox.TurnRef{TurnID: "t-stamped", AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flake",
 		Spec: manager.BuildSpec(sandbox.SpecInput{
-			Placement: sandbox.Direct, CodingAgent: "claude-code",
+			Placement: sandbox.Direct, Harness: "claude-code",
 		}),
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -75,7 +75,7 @@ func TestTheEngineAnswersASeatItDoesNotHoldAsNotHeld(t *testing.T) {
 	_, err := rt.coordinator.Launch(t.Context(), manager, sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: "t-unheld", AgentHandle: "nobody", Role: "SWE"},
 		Brief: "fix the flake",
-		Spec:  manager.BuildSpec(sandbox.SpecInput{Placement: sandbox.Direct, CodingAgent: "claude-code"}),
+		Spec:  manager.BuildSpec(sandbox.SpecInput{Placement: sandbox.Direct, Harness: "claude-code"}),
 	})
 	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
 		t.Fatalf("a launch on a seat this node does not hold = %v, want it refused", err)

@@ -176,7 +176,7 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 // of a check's box's reads of its commit (/box/code/), takes the repository
 // from the same wildcard, the same credential and the same attempt's row —
 // answering the admitted attempt, its repository and its session — and
-// refuses what its git refuses in the same words; and a coding run's token,
+// refuses what its git refuses in the same words; and an executor's token,
 // which the box routes of git admit, is refused here, the API answering a
 // check's box alone.
 //
@@ -227,7 +227,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 		says                   string
 	}{
 		{"no credential", codetest.RepoName, "", "", http.StatusUnauthorized, "as `check` with its check's token"},
-		{"a coding run's token", codetest.RepoName, host.BoxUser, c.Fleet.Runs().Token(live), http.StatusForbidden,
+		{"an executor's token", codetest.RepoName, host.BoxUser, c.Fleet.Runs().Token(live), http.StatusForbidden,
 			"answers a check's box"},
 		{"another repository", "other", code.CheckUser, token, http.StatusForbidden, "was given"},
 		{"a name no repository takes", "Web", code.CheckUser, token, http.StatusNotFound, "not found"},

@@ -6,7 +6,7 @@
 //
 // The fleet's broker vouches for a CONNECTION, never a message (ADR-0031): an
 // embedded broker admits only a route, a leaf link or an operator presenting a
-// key derived from the keyring (ADR-0087), but a route's password crosses the
+// key derived from the keyring (ADR-0094), but a route's password crosses the
 // fleet network in clear once per connection, and an external cluster admits
 // whom its operator chooses — and every connection it admits is bound to the
 // one account the engine's own subjects live in. So a message on a subject a
@@ -45,6 +45,11 @@
 //     answer is written to the box as that node's. So unsigned, anybody on the
 //     broker could call a running seat's tools as that seat, or answer a box in
 //     the holder's place;
+//   - a TEST OF AN MCP SERVER (internal/engine, `mcp.check`): the node asked
+//     starts the server's process or dials its address as the company, with
+//     the credentials it is started with, and a draft's launch travels in the
+//     request. So unsigned, anybody on the broker could have every node run a
+//     command a draft names;
 //   - the ASSISTANT'S REPLAY AND STOP (internal/assistant/live), on two
 //     channels: the node running a person's turn hands over the frames another
 //     node's client missed, or stops the turn, on the asking node's word that

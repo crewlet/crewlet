@@ -105,12 +105,16 @@ func idsOf(routed []notify.Routed) []uuid.UUID {
 // second node's delivery would, routes to the very same wake ids, which is
 // what the inbox's same-id dedupe and the completion ledger collapse; the
 // clear that follows is a transition of its own and wakes under other ids.
-// Each wake is dated by the transition, never by its delivery. A granted seat
-// the company no longer employs is not woken.
+// Each wake is dated by the transition, never by its delivery, and names the
+// alarm instance as what starts its turn — the fire and its clear one
+// instance, each under what it did. A granted seat the company no longer
+// employs is not woken.
 //
 // Mutation: a random wake id, or one derived from the delivery rather than
 // the transition, and the republish's ids differ; routing every seat rather
-// than the granted ones, and the ungranted seat is woken.
+// than the granted ones, and the ungranted seat is woken; name no origin, or
+// the transition rather than the instance, and the fire's and the clear's
+// origins are wrong.
 func TestAnAlarmTransitionWakesEachGrantedSeatOnce(t *testing.T) {
 	t.Parallel()
 	o := companyOf(t, grantedCompany)
@@ -146,6 +150,17 @@ func TestAnAlarmTransitionWakesEachGrantedSeatOnce(t *testing.T) {
 		if r.Source != alarmwake.Source || r.Metadata[alarmwake.TransitionField] != fired.ID {
 			t.Errorf("%s's wake is %s about %q, want %s about %s", r.To.Handle, r.Source,
 				r.Metadata[alarmwake.TransitionField], alarmwake.Source, fired.ID)
+		}
+		if want := (types.TriggerOrigin{Kind: types.OriginAlarm, ID: string(statelog.KindApplyLag),
+			Reason: string(statelog.TransitionFired)}); r.Origin != want {
+			t.Errorf("%s's wake names %+v as what starts its turn, want %+v", r.To.Handle, r.Origin, want)
+		}
+	}
+	for _, r := range parse(t, p, cleared, reg) {
+		if want := (types.TriggerOrigin{Kind: types.OriginAlarm, ID: string(statelog.KindApplyLag),
+			Reason: string(statelog.TransitionCleared)}); r.Origin != want {
+			t.Errorf("%s's wake of the clear names %+v as what starts its turn, want %+v: the fire's "+
+				"instance, cleared", r.To.Handle, r.Origin, want)
 		}
 	}
 	if ids := idsOf(first); ids[0] == ids[1] {
@@ -304,5 +319,133 @@ func TestADeliveryThatIsNoTransitionWakesNobody(t *testing.T) {
 	got, err := alarmwake.Decode(types.RawWebhook{Body: w.Body})
 	if err != nil || got.ID != whole.ID || !got.At.Equal(at) {
 		t.Errorf("the parsed body decoded as %+v (%v), want transition %s", got, err, whole.ID)
+	}
+}
+
+// AN ALARM INSTANCE IS NAMED BY ITS ALARM AND ITS LOG — as the alarms page
+// names it — and by nothing a transition adds: a fire, its clear, a later
+// fire of the same alarm on the same log, and the same alarm on another node
+// are one instance to the turns they start; the same alarm on another log, or
+// node-wide, is another.
+//
+// Mutation: drop the log or the entry, and two instances are one; key on the
+// transition's id, its raising instant or its node, and the fire and its
+// clear, or two nodes' fires, are two.
+func TestAnAlarmInstanceIsNamedByItsAlarmAndLog(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	base := statelog.AlarmTransition{Node: "node-a", Kind: statelog.KindApplyLag, Domain: "code",
+		Change: statelog.TransitionFired, Since: at, At: at}
+	base.ID = statelog.TransitionID(base.Node, base.Kind, base.Domain, base.Entry, base.Change, base.Since)
+	if got := alarmwake.InstanceID(base); got != "apply_lag:code" {
+		t.Errorf("the instance is %q, want apply_lag:code", got)
+	}
+	cleared, later, otherNode := base, base, base
+	cleared.Change, cleared.At = statelog.TransitionCleared, at.Add(time.Minute)
+	later.Since, later.At = at.Add(time.Hour), at.Add(time.Hour)
+	otherNode.Node = "node-b"
+	for _, same := range []statelog.AlarmTransition{cleared, later, otherNode} {
+		if alarmwake.InstanceID(same) != alarmwake.InstanceID(base) {
+			t.Errorf("%s %s on %s since %v is instance %q, want the fire's %q", same.Kind, same.Change,
+				same.Node, same.Since, alarmwake.InstanceID(same), alarmwake.InstanceID(base))
+		}
+	}
+	otherLog, nodeWide, entry := base, base, base
+	otherLog.Domain, nodeWide.Domain = "worklet", ""
+	entry.Domain, entry.Entry = "", "github"
+	seen := map[string]bool{alarmwake.InstanceID(base): true}
+	for _, other := range []statelog.AlarmTransition{otherLog, nodeWide, entry} {
+		id := alarmwake.InstanceID(other)
+		if seen[id] {
+			t.Errorf("%s on log %q is instance %q, which another instance already is", other.Kind, other.Domain, id)
+		}
+		seen[id] = true
+	}
+	if got := alarmwake.InstanceID(nodeWide); got != "apply_lag" {
+		t.Errorf("a node-wide instance is %q, want apply_lag", got)
+	}
+	if got := alarmwake.InstanceID(entry); got != "apply_lag:github" {
+		t.Errorf("a per-entry instance is %q, want apply_lag:github", got)
+	}
+}
+
+// A PER-ENTRY ALARM WAKES PER ENTRY: two MCP servers that go down in one
+// evaluation wake each granted seat twice, under ids of their own so the inbox
+// and the completion ledger do not collapse the second into the first, each
+// wake naming its server in its metadata, its subject, its prompt and its origin.
+//
+// Mutation: drop the entry from the transition's id, and the wake ids collide;
+// from the metadata or [alarmwake.InstanceID], and the prompt or the origin
+// cannot say which server; call every entry a model entry, and the prompt
+// misnames it.
+func TestAPerEntryAlarmWakesPerEntryAndNamesIt(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	down := statelog.Alarm{Kind: statelog.KindMCPServerFailing, Detail: "servers are down",
+		Entries: []statelog.AlarmEntry{{Key: "github", Detail: "github is down"},
+			{Key: "linear", Detail: "linear is down"}}}
+	seen := transitions(t, "node-a", &clock, nil, []statelog.Alarm{down})
+	if len(seen) != 2 {
+		t.Fatalf("the premise: the tracker handed on %+v, want one fire per server", seen)
+	}
+	p := alarmwake.NewParser(alarmwake.ParserOptions{Granted: []string{"sre", "ops"}})
+	prompt := alarmwake.Prompt{}
+	wakes := map[uuid.UUID]bool{}
+	for _, tr := range seen {
+		routed := parse(t, p, tr, nil)
+		if got := handlesOf(routed); !slices.Equal(got, []string{"sre", "ops"}) {
+			t.Fatalf("%s woke %v, want sre and ops", tr.Entry, got)
+		}
+		for _, r := range routed {
+			if wakes[r.WakeID] {
+				t.Errorf("%s's wake about %s repeats the id %s, so it would be dropped as a duplicate",
+					r.To.Handle, tr.Entry, r.WakeID)
+			}
+			wakes[r.WakeID] = true
+			if got := r.Metadata[alarmwake.EntryField]; got != tr.Entry {
+				t.Errorf("%s's wake names the entry %q, want %q", r.To.Handle, got, tr.Entry)
+			}
+			if !strings.Contains(r.Subject, tr.Entry) {
+				t.Errorf("the subject %q does not name %s", r.Subject, tr.Entry)
+			}
+			if body := prompt.Build(r.Inbound, nil); !strings.Contains(body, "for the MCP server `"+tr.Entry+"`") {
+				t.Errorf("the prompt does not name the server %s:\n%s", tr.Entry, body)
+			}
+			if want := "mcp_server_failing:" + tr.Entry; r.Origin.ID != want {
+				t.Errorf("the wake's origin is %q, want %q", r.Origin.ID, want)
+			}
+		}
+	}
+}
+
+// A MODEL ENTRY'S ALARM CALLS ITS ENTRY A MODEL ENTRY, the table's other half
+// of the per-entry kinds, and no other kind names an entry at all.
+//
+// Mutation: read the noun from anything but the table's split, or name an entry
+// for a kind with none, and the case is red.
+func TestAPromptCallsAnEntryWhatTheTableCallsIt(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	limit := statelog.Alarm{Kind: statelog.KindLLMLimit, Detail: "at its limit",
+		Entries: []statelog.AlarmEntry{{Key: "sub", Detail: "sub is at its limit"}}}
+	lag := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "behind"}
+	seen := transitions(t, "node-a", &clock, nil, []statelog.Alarm{limit, lag})
+	if len(seen) != 2 {
+		t.Fatalf("the premise: the tracker handed on %+v, want two fires", seen)
+	}
+	p := alarmwake.NewParser(alarmwake.ParserOptions{Granted: []string{"sre"}})
+	for _, tr := range seen {
+		routed := parse(t, p, tr, nil)
+		if len(routed) != 1 {
+			t.Fatalf("%s routed %d copies, want 1", tr.Kind, len(routed))
+		}
+		body := alarmwake.Prompt{}.Build(routed[0].Inbound, nil)
+		named := strings.Contains(body, "for the model entry `sub`")
+		if want := tr.Kind == statelog.KindLLMLimit; named != want {
+			t.Errorf("%s: the prompt names the model entry: %v, want %v:\n%s", tr.Kind, named, want, body)
+		}
+		if strings.Contains(body, "MCP server") {
+			t.Errorf("%s's prompt speaks of an MCP server:\n%s", tr.Kind, body)
+		}
 	}
 }

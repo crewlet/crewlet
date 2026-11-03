@@ -200,7 +200,7 @@ func (c *Cache) indexSync(ctx context.Context, repoID string) (Synced, error) {
 // starts nothing.
 //
 // It is what a git node asks before a read it was not asked to FILL a copy
-// for (code.GitQuery.Home, ADR-0082): a node that answers false starts
+// for (code.GitQuery.Home, ADR-0089): a node that answers false starts
 // nothing for such a read (code.UnreadyNotHeld), so one read of a repository
 // no git node holds costs the fleet one download, by the walk's effective
 // home, rather than one by every git node the walk reaches — a round, once
@@ -348,7 +348,7 @@ func (c *Cache) entryFor(repoID string) *entry {
 // Only from an incarnation CONVERGED IN THIS PROCESS — never from a state a
 // previous one left: the state's position names a record of the log it was
 // read from, and a log restored from an older copy while the node was down
-// keeps its identity (ADR-0076) and reuses those positions for other
+// keeps its identity (ADR-0083) and reuses those positions for other
 // records, so a stale or session answer from the state would serve a
 // history the log no longer holds. A repository's first caller after a boot
 // pays the full round D3 reads anyway; every one after it is answered here.
@@ -1230,7 +1230,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// it named may have left the log since: a purge removes a
 			// repository's pack rows part by part before the repository
 			// itself, and a retired pack's object outlives its live row only
-			// by its domain's grace (ADR-0074), which a long enough round
+			// by its domain's grace (ADR-0081), which a long enough round
 			// outlives. The collector deletes an object once nothing names
 			// it, so such a round failed every caller for a pack no row
 			// names, and logged code_pack_missing for it. Only a read made

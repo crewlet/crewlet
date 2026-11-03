@@ -217,7 +217,7 @@ func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	group, err := log.Group(t.Context(), "feed")
+	group, _, err := log.Group(t.Context(), "feed", 0)
 	if err != nil {
 		t.Fatalf("open the group: %v", err)
 	}

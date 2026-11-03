@@ -211,11 +211,17 @@ describe("a contract module", () => {
     ).toEqual([]);
   });
 
+  // A MEMBER NAMED `class` IS DATA: the engine's failure views send a key of
+  // that name, and an interface declares it as `class: ...`. Only the keyword
+  // that starts a declaration is behaviour, so a `class` followed by its
+  // member colon is not counted.
   test("declares no behaviour", () => {
     const offenders: string[] = [];
     for (const module of MODULES) {
       const body = code(module.text);
-      for (const m of body.matchAll(/\bfunction\b|\bclass\b|=>|\bnew\s+(?!Set\s*[<(])\w+/g)) {
+      for (const m of body.matchAll(
+        /\bfunction\b|\bclass\b(?!\s*\??\s*:)|=>|\bnew\s+(?!Set\s*[<(])\w+/g,
+      )) {
         offenders.push(`${module.path}:${lineOf(body, m.index)} — ${m[0]}`);
       }
     }

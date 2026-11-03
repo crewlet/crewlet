@@ -79,7 +79,7 @@ func (Domain) Name() string { return "chat" }
 // failure a ceiling exists for: a completely blocked trim spends the fifteen
 // sixteenths ordinary writes may use in about eight months at the census, and
 // in about three and a half at the supported fifty thousand a day — where the
-// whole of it is created, which an embedded broker does from about 662 GiB
+// whole of it is created, which an embedded broker does from about 664 GiB
 // free; on a smaller volume the ask is capped and scaled with the others, and
 // Tier A's field states what that costs. A healthy trim holds the window at
 // days, so a log anywhere near this number is an unmistakable operator failure

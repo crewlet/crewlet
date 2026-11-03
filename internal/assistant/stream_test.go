@@ -81,10 +81,10 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 	}
 }
 
-// A CLI THAT CANNOT STREAM STILL SENDS ONE DELTA, AT THE ROUND'S END. Streaming
+// A HARNESS THAT CANNOT STREAM STILL SENDS ONE DELTA, AT THE ROUND'S END. Streaming
 // is asked for on every turn, and a backend with no streaming mode never sends
 // a fragment: its round is drawn once, whole, when it commits.
-func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
+func TestANonStreamingHarnessSendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	t.Parallel()
 	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{
 		evals.Say("The keys rotate weekly."),
@@ -106,10 +106,10 @@ func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	if req := f.Model.Requests()[0]; !req.Streaming() {
 		t.Error("the turn did not ask its model to stream")
 	}
-	// Its prompt is its whole instruction, so it replaces the CLI's own
-	// rather than running under a coding agent's.
+	// Its prompt is its whole instruction, so it replaces the harness's own
+	// rather than running under a harness's.
 	if f.Model.Requests()[0].Agent {
-		t.Error("the turn was sent as a seat's call, which keeps the CLI's coding-agent prompt")
+		t.Error("the turn was sent as a seat's call, which keeps the harness's coding-agent prompt")
 	}
 }
 

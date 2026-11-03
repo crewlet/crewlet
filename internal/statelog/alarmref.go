@@ -25,19 +25,15 @@ func AlarmReference() string {
 	fmt.Fprintf(&b, alarmHeader,
 		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
-		named := make([]words.Said, len(perLog))
-		for i, kind := range perLog {
-			named[i] = words.Said("`" + string(kind) + "`")
-		}
-		fmt.Fprintf(&b, perLogNote, words.And(named))
+		fmt.Fprintf(&b, perLogNote, saidKinds(perLog))
 	}
-	if perEntry := PerEntryKinds(); len(perEntry) > 0 {
-		named := make([]words.Said, len(perEntry))
-		for i, kind := range perEntry {
-			named[i] = words.Said("`" + string(kind) + "`")
-		}
-		fmt.Fprintf(&b, perEntryNote, words.And(named),
+	if perModel := PerModelKinds(); len(perModel) > 0 {
+		fmt.Fprintf(&b, perModelNote, saidKinds(perModel),
 			CredentialNoticeDays, CredentialWarningDays, spoken(LimitWaitingGrace))
+	}
+	if perServer := PerServerKinds(); len(perServer) > 0 {
+		fmt.Fprintf(&b, perServerNote, saidKinds(perServer),
+			spoken(MCPOutageGrace), spoken(MCPWaitingGrace), spoken(MCPApprovalGrace))
 	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
@@ -50,6 +46,15 @@ func AlarmReference() string {
 	}
 	b.WriteString(alarmFooter)
 	return b.String()
+}
+
+// saidKinds is kinds as the reference lists them: each in backticks, joined.
+func saidKinds(kinds []Kind) string {
+	named := make([]words.Said, len(kinds))
+	for i, kind := range kinds {
+		named[i] = words.Said("`" + string(kind) + "`")
+	}
+	return words.And(named)
 }
 
 // alarmMeaning is the condition in an operator's words.
@@ -69,9 +74,9 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
-		"(Worklet's, Doclet's, the code log's, the identity estate's, the " +
-		"artifacts log's, the artifact datastore's, Ask Crewlet's and " +
-		"Chatlet's) an eviction still lands in the gate reserve above that " +
+		"(Worklet's, Doclet's, the identity estate's, the artifacts log's, the " +
+		"artifact datastore's, Ask Crewlet's, Chatlet's, the executor log's and " +
+		"the code log's) an eviction still lands in the gate reserve above that " +
 		"ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
@@ -128,6 +133,12 @@ var alarmMeaning = map[Kind]string{
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
+	KindFeedStopped: "A change feed on this node has held no consumer for " +
+		"longer than the one-minute stall grace, so this node publishes no " +
+		"wake from it. It opens its group again on its own and is handed every " +
+		"record the group has not acknowledged, so the wakes are late rather " +
+		"than lost; on a single data node nobody in the company is woken until " +
+		"it does. One alarm names every feed that is down, with its cause.",
 	KindMaintenanceOpen: "A capacity window has been open for an hour. While " +
 		"it's open no node starts in service, and every node restarted for it " +
 		"publishes nothing. A window this node last read open and can't read " +
@@ -150,8 +161,8 @@ var alarmMeaning = map[Kind]string{
 		"hosts code now, the git reads its ceiling was sized for: a tenth of " +
 		"it in barriers over the trim's min_age. That rate is 125 a day for " +
 		"the tracker, the knowledge base, the code host, the artifacts and " +
-		"their datastore, 120 for chat, and none for the identity estate and " +
-		"Ask Crewlet.",
+		"their datastore, 120 for chat, 60 for the executor log, and none for " +
+		"the identity estate and Ask Crewlet.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
@@ -173,7 +184,7 @@ var alarmMeaning = map[Kind]string{
 		"in both the long and the short window of one of the two burn-rate pairs.",
 	KindLLMCredentialExpiring: "A model's credential expires in thirty days or less, " +
 		"and more than seven. The expiry is computed from when the credential was " +
-		"stored and the lifetime its CLI declares (a Claude Code setup-token lasts a " +
+		"stored and the lifetime its harness declares (a Claude Code setup-token lasts a " +
 		"year), because the token itself does not say.",
 	KindLLMCredentialExpiresSoon: "A model's credential expires in seven days or less. " +
 		"It replaces `llm_credential_expiring` for that model.",
@@ -271,6 +282,35 @@ var alarmMeaning = map[Kind]string{
 		"asks it for each mirror. A mirror whose attempt waits behind " +
 		"others for one of the node's two slots, or is still running, is " +
 		"not level either, and is counted all the same.",
+	KindMCPServerFailing: "No instance of an MCP server is serving, and one has been down " +
+		"for longer than the restart schedule's ceiling plus a heartbeat. No agent is " +
+		"offered the server's tools.",
+	KindMCPServerPartial: "Some instances of an MCP server serve, and one that does not has " +
+		"been down for longer than the restart schedule's ceiling plus a heartbeat: one " +
+		"node, one agent's credentials or one child that keeps dying, rather than the server.",
+	KindMCPServerWaitingLong: "An agent's instance of an MCP server has been held back, " +
+		"unstarted, for longer than an integration waits between two passes plus a " +
+		"heartbeat, for a credential that integration mints. A wait is no failure and the " +
+		"server's state does not count it as one, but the agent is offered none of the " +
+		"server's tools meanwhile.",
+	KindMCPToolsRefused: "An MCP server lists a tool that cannot be offered under its name: " +
+		"with the server's `tool_prefix` it is longer than the harnesses take, it holds a " +
+		"character a model's tool name cannot, or a built-in has the name.",
+	KindMCPOAuthNeedsSignIn: "An MCP server signed in to with OAuth is not started: nobody has " +
+		"signed in to it, or its vendor refused to renew the sign-in (the detail quotes the " +
+		"vendor). It stands in place of `mcp_server_failing` and `mcp_server_partial` for the " +
+		"server. No agent is offered the server's tools until somebody signs in.",
+	KindMCPOAuthExpiring: "An MCP server's OAuth sign-in runs out within seven days, where its " +
+		"vendor said when. The engine renews the access the sign-in grants, but only a person " +
+		"signing in again renews the sign-in itself.",
+	KindMCPToolsChanged: "An MCP server changed one of its tools since its level was " +
+		"decided (its description, schema, annotations or title), or added one after its " +
+		"first listing, and the tool's level would let it run without asking. It asks a " +
+		"person before each call until somebody accepts the change.",
+	KindMCPApprovalWaiting: "An agent's run called one of an MCP server's tools at Needs " +
+		"approval, and the call has waited for a person's answer for longer than a third " +
+		"of the default pause TTL. The run is parked and its seat free; its work waits on " +
+		"the answer.",
 }
 
 const alarmHeader = `# Alarms
@@ -325,9 +365,9 @@ log it stops standing on its own ` + "`alarm_cleared`" + `, carrying the log as
 one leaving it, are each said.
 `
 
-// perEntryNote says which alarms are about one model entry, rendered from the
-// table's own flag, with the owner's fixed thresholds.
-const perEntryNote = `
+// perModelNote says which alarms are about one model entry, rendered from the
+// table's own rows, with the owner's fixed thresholds.
+const perModelNote = `
 These are about one model entry rather than the node:
 
 %s.
@@ -342,6 +382,37 @@ node's own reading, so a model nothing signs in on one node is said by that
 node. Their thresholds are fixed, with no setting: a credential's expiry
 is said at %d days and again at %d, and a limit turns into
 ` + "`llm_limit_waiting`" + ` once a seat has waited %s on it.
+`
+
+// perServerNote says which alarms are about one MCP server, rendered from the
+// table's own rows, with the thresholds the restart schedule and the
+// provisioning pass set.
+const perServerNote = `
+These are about one MCP server rather than the node:
+
+%s.
+
+Each lists the servers it stands on in ` + "`entries`" + `, carrying the server's
+name as ` + "`key`" + ` and as each log line's ` + "`entry`" + `, and an entry about one
+agent's instance names that agent's seat as ` + "`seat`" + `. Every data node
+evaluates them from every live node's heartbeat, so they read the same on every
+node, and a server the configuration turns off raises none. An instance down for
+%s (the restart schedule's ceiling, past which every further attempt waits that
+long, plus one heartbeat) raises ` + "`mcp_server_failing`" + ` when no instance of
+the server serves and ` + "`mcp_server_partial`" + ` when some do; an agent's
+instance held back %s (the longest an integration waits between two passes it
+still owes, plus one heartbeat) raises ` + "`mcp_server_waiting_long`" + `; and a
+tool no agent can be handed under its name raises ` + "`mcp_tools_refused`" + ` as
+soon as a node lists it. A call an agent's run holds for a person's approval
+raises ` + "`mcp_approval_waiting`" + ` once it has waited %s (a third of the default
+pause TTL a parked run's box is kept for), read off the runs' own records rather
+than the heartbeat, its entry naming the seat whose run waits. A tool a server
+changed since its level was decided, or added after its first listing, that its
+level would let run unasked raises ` + "`mcp_tools_changed`" + ` as soon as the fleet's
+listings name it, read off the listings and what was accepted of them rather than
+the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
+The MCP servers answer (` + "`GET /mcp-servers`" + `) carries each of them with the
+gesture that fixes it.
 `
 
 const alarmFooter = `

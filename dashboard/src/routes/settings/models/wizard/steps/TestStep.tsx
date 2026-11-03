@@ -1,5 +1,5 @@
 /**
- * One run of the CLI with the draft's settings before anything is stored. A
+ * One run of the harness with the draft's settings before anything is stored. A
  * pasted credential is tested by the credential route's dry run, alone in a
  * fresh home, and stored nowhere; a draft with nothing new to sign in with is
  * tested by the model's own check. Either costs a few tokens, and says so.
@@ -86,7 +86,7 @@ export function TestStep({
       {running ? (
         <div className="models-waiting" role="status">
           <Spinner size="sm" />
-          <Text variant="body">Running the CLI once. This can take up to two minutes.</Text>
+          <Text variant="body">Running the harness once. This can take up to two minutes.</Text>
         </div>
       ) : null}
       {stale ? (

@@ -144,7 +144,8 @@ var completedArgs = map[string]map[string]any{
 
 // objectBodies are the bodies of the writes that send the object as the
 // preview read it, changed: set_token_budget's seat as [assistanttest.World]
-// holds it, with only the one window's ceiling moved and the history line.
+// holds it, with only the one window's ceiling moved and the history line, and
+// set_chat_room_members' call with the room's membership as read beside it.
 var objectBodies = map[string]map[string]any{
 	"set_token_budget": {"handle": "qa", "name": "QA Engineer", "goal": "Review the tests.",
 		"token_budget": map[string]any{"day": float64(1500000)},
@@ -152,6 +153,15 @@ var objectBodies = map[string]map[string]any{
 			"to 1,500,000 tokens"},
 	"set_seat_access": {"seats": map[string]any{"qa": map[string]any{"datadog": map[string]any{
 		"enabled": true, "level": "role-ro"}}}},
+	// THE ROOM'S MEMBERSHIP AS THE CARD READ IT rides the call as its
+	// expectation, beside the membership the call states.
+	"set_chat_room_members": {"args": map[string]any{
+		"channel": assistanttest.RecordID,
+		"members": []any{map[string]any{"handle": "pm", "follow_all": true},
+			map[string]any{"handle": "engineer", "follow_all": false}},
+		"expected_members": []any{map[string]any{"handle": "pm", "follow_all": true},
+			map[string]any{"handle": "ada", "follow_all": false}},
+	}},
 }
 
 // A CHANGE PREPARED AGAINST AN OLD VERSION IS STALE, and a revision that moved
@@ -468,7 +478,7 @@ func TestAPreviewReadsTheSeatWithoutItsCalls(t *testing.T) {
 	}
 }
 
-// AN ANSWER TO A CODING RUN IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
+// AN ANSWER TO AN EXECUTOR IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
 // run that moved on to another question since the proposal was drafted is
 // refused before anybody approves an answer to a question it no longer asks,
 // and so is a choice its question does not offer; an offered choice is shown
@@ -480,7 +490,7 @@ func TestARunsAnswerIsPreviewedAgainstItsQuestion(t *testing.T) {
 	read := reader(assistanttest.World())
 	var tool catalog.Tool
 	for _, one := range catalog.Tools() {
-		if one.Name == "answer_coding_run" {
+		if one.Name == "answer_executor" {
 			tool = one
 		}
 	}

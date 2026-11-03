@@ -4,7 +4,7 @@ import { answerFate, type GivenAnswer } from "./answerFate.ts";
 
 /**
  * WHAT BECAME OF AN ANSWER IS READ OFF THE RUN'S RECORD, never assumed from
- * the press. `answer_run` answers `pending`, and the Inbox used to show that
+ * the press. `answer_executor` answers `pending`, and the Inbox used to show that
  * as "Answered" and drop the question: a person whose answer never reached the
  * run was told it had, and the question kept coming back.
  *

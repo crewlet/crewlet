@@ -80,6 +80,7 @@ var companyFields = map[string]classified{
 	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
 	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
 		why: "only a granted server's NAME reaches an admin, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
+	"MCPRegistry":                       {exposure: exposureGuarded, why: "the registry the add flow searches, read by the catalogue route on the configuration's verb"},
 	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
@@ -538,11 +539,12 @@ func (f *filler) company() *config.Company {
 			f.guarded(target, 0)
 		}
 	}
-	// One SHARED server, so every agent seat is granted it and its name
-	// must reach every agent seat's tool_sources while its command, URL,
-	// env and headers — filled with secrets above — reach nothing.
+	// One SHARED server granted to every agent seat (no access), so its
+	// name must reach every agent seat's tool_sources while its command,
+	// URL, env and headers — filled with secrets above — reach nothing.
 	c.MCPServers[0].Name = f.label()
 	c.MCPServers[0].Shared = org.On()
+	c.MCPServers[0].Access = nil
 	c.Tracker.Backend = config.TrackerJira
 	c.Knowledge.Backend = config.KnowledgeConfluence
 	c.Chat.Backend = config.ChatVendor
@@ -1096,9 +1098,9 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 			LLMOrder: []string{"fast", "big", "default"},
 		},
 		MCPServers: []config.MCPServer{
-			{Name: "github", Shared: org.Off()},
+			{Name: "github", Shared: org.Off(), Access: &config.MCPAccess{Units: []string{"Engineering"}}},
 			{Name: "search"},
-			{Name: "jira", Shared: org.Off()},
+			{Name: "jira", Shared: org.Off(), Access: &config.MCPAccess{Seats: []string{"cto"}}},
 		},
 		Roles: []config.Role{
 			{
@@ -1149,8 +1151,8 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 				"execute": {"fast"}, "subagent": {"fast"}, "auxiliary": {"fast"},
 				"judge": {"fast"}, "onboarding": {"fast"},
 			},
-			// Its own jira credentials grant jira; github is its unit's
-			// and it sits in none. Declaration order, builtins first.
+			// jira's grant names it; github's names a unit it does not
+			// sit in. Declaration order, builtins first.
 			tools: []string{"builtin", "mcp:search", "mcp:jira"},
 		},
 		{
@@ -1160,7 +1162,7 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 				"auxiliary": {"default"}, "judge": {"default"},
 				"onboarding": {"default"},
 			},
-			// Inherited from the unit's mcp_env.
+			// Through its unit's grant.
 			tools: []string{"builtin", "mcp:github", "mcp:search"},
 		},
 	} {

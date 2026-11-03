@@ -67,7 +67,7 @@ providers:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
   llm:
-    coder: {agent: claude-code, model: sonnet, run_in: e2b}
+    coder: {harness: claude-code, model: sonnet, run_in: e2b}
 roles:
   - name: SWE
     handle: swe
@@ -546,7 +546,7 @@ providers:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_ROTATED}"
   llm:
-    coder: {agent: claude-code, model: sonnet, run_in: e2b}
+    coder: {harness: claude-code, model: sonnet, run_in: e2b}
 roles:
   - name: SWE
     handle: swe

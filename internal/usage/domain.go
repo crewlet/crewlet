@@ -83,15 +83,29 @@ const (
 	// is a principal of at most 255 bytes, a seat handle of at most 64, two
 	// words and three figures, so under 2 KiB even where JSON escapes every
 	// byte of the principal, and a record at the cap under 2 MiB — a quarter
-	// of the
-	// transport's 8 MiB message and far under the largest record this log
-	// takes ([LogMaxRecordBytes]), as TestAFullRepoReadRecordFitsOneMessage
+	// of the transport's 8 MiB message and far under the largest record this
+	// log takes ([LogMaxRecordBytes]), as TestAFullRepoReadRecordFitsOneMessage
 	// measures. And it is past the readers any unit's repository has: the
 	// seats of its subtree and its leads, the company's persons through
 	// their credentials, and its tokens. The most-read survive, and what was
 	// dropped is counted on the record, so an answer that lost readers says
 	// so.
 	ReadersPerRepoDay = 1_024
+
+	// ToolsPerSeatDay is how many (server, tool) entries one seat-day record
+	// carries.
+	//
+	// FIVE HUNDRED AND TWELVE, and like [ReadsPerSeatDay] what it bounds is
+	// ONE RECORD. An entry is two names and six figures: a server name is at
+	// most 32 characters and a tool name at most the 64 a harness accepts,
+	// both tokens JSON never escapes, so an entry is under 300 bytes and a
+	// seat-day at the cap under 150 KiB beside its reads, as
+	// TestAFullSeatDayRecordFitsOneMessage measures. It is four times the
+	// 128 tools OpenAI's API takes in one request, so a seat would have to
+	// call that many distinct tools four times over in one day to reach it.
+	// The most-called entries survive, and what was dropped is counted on
+	// the record.
+	ToolsPerSeatDay = 512
 
 	// LogMaxBytes is the ceiling this domain declares for its stream, which
 	// the framework's own suites provision it with; a node sizes it from
@@ -101,14 +115,15 @@ const (
 	// for [History], so its size is a census rather than a rate. A
 	// three-node fleet of forty seats and twenty schedules, every seat
 	// working every day, is 60 subjects × 3 nodes × 181 days ≈ 32 600
-	// messages; at a busy seat-day's ≈ 6.5 KiB that is about 217 MB, and a
-	// gibibyte is four times it. A unit repository read on a day adds one
+	// messages; at a busy seat-day's ≈ 9.5 KiB (6.5 KiB of spend, turns and
+	// reads, and about 150 bytes for each of twenty MCP tools it called)
+	// that is about 320 MB. A unit repository read on a day adds one
 	// message for each node that served it, under two hundred bytes a
 	// reader beside its envelope: ten unit repositories read every day on
 	// three nodes by a dozen readers each are 10 × 3 × 181 ≈ 5 400 messages
-	// of about 2.3 KiB, some 13 MB over the history — about 1 % of the
-	// gibibyte. Crossing it REFUSES an append and raises the log's headroom
-	// alarm rather than dropping the oldest day.
+	// of about 2.3 KiB, some 13 MB over the history. A gibibyte is three
+	// times the two together. Crossing it REFUSES an append and raises the
+	// log's headroom alarm rather than dropping the oldest day.
 	LogMaxBytes = 1 << 30
 
 	// LogMaxRecordBytes is the largest record this domain publishes
@@ -201,13 +216,15 @@ func (Domain) NodeGate(statelog.Envelope) bool { return false }
 // them is in the identity claim.
 func (Domain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"usage_turns":          statelog.Divergent,
-		"usage_tokens":         statelog.Divergent,
-		"usage_reads":          statelog.Divergent,
-		"usage_schedule_runs":  statelog.Divergent,
-		"usage_person_tokens":  statelog.Divergent,
-		"usage_repo_read_days": statelog.Divergent,
-		"usage_repo_reads":     statelog.Divergent,
+		"usage_turns":               statelog.Divergent,
+		"usage_tokens":              statelog.Divergent,
+		"usage_reads":               statelog.Divergent,
+		"usage_schedule_runs":       statelog.Divergent,
+		"usage_schedule_superseded": statelog.Divergent,
+		"usage_person_tokens":       statelog.Divergent,
+		"usage_tool_calls":          statelog.Divergent,
+		"usage_repo_read_days":      statelog.Divergent,
+		"usage_repo_reads":          statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,
@@ -229,7 +246,7 @@ func (Domain) OpsTable() string { return "" }
 // copy: a node behind on usage answers spend a flush late, which is a coverage
 // number and never a reason to withhold or move a company's seats. Its copy is
 // still judged, and a wrong one — not one that is behind — goes out of service
-// on its own, its seats untouched — ADR-0072.
+// on its own, its seats untouched — ADR-0079.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to

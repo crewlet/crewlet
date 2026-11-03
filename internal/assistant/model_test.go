@@ -21,7 +21,7 @@ func modelFailure(kind llm.ErrorKind, err error, retryAt time.Time) error {
 
 // EVERY MODEL FAILURE IS TOLD IN ITS OWN WORDS, from the backend's
 // classification and never its prose: a signed-out model, a spent plan with
-// its reset, a CLI that ran out of time, a CLI that cannot start, and anything
+// its reset, a harness that ran out of time, a harness that cannot start, and anything
 // else under the generic code. An administrator is told where to fix it and
 // anybody else whom to ask; Try again is offered only where asking again can
 // help.
@@ -58,10 +58,10 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 		"a timeout, to an administrator": {err: modelFailure(llm.KindTimeout, errors.New("slow"), time.Time{}),
 			admin: true, code: wire.ErrorModelTimeout, message: "took too long",
 			hint: "providers.llm.assistant.timeout_seconds", retryable: true},
-		"a CLI that cannot start": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
+		"a harness that cannot start": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
 			code: wire.ErrorModelUnavailable, message: "cannot be started",
 			hint: "Ask an administrator to check Ask Crewlet's model."},
-		"a CLI that cannot start, to an administrator": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
+		"a harness that cannot start, to an administrator": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
 			admin: true, code: wire.ErrorModelUnavailable, message: "cannot be started",
 			hint: "`crewlet llm doctor assistant`"},
 		"anything else": {err: modelFailure(llm.KindServer, errors.New("exit 1"), time.Time{}),

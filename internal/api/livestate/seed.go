@@ -35,8 +35,8 @@ type History struct {
 	Spend []tokens.Record
 
 	// Turns are each seat's newest turns, in any order: what a seat's last
-	// turn is seeded from, and a turn it left PARKED on a detached coding
-	// run, which is still its turn after the restart.
+	// turn is seeded from, and a turn it left PARKED on a detached executor,
+	// which is still its turn after the restart.
 	Turns []store.Turn
 
 	// Coverage is which nodes the reads above were answered by. Its

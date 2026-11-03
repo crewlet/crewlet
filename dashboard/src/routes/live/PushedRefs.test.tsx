@@ -1,5 +1,5 @@
 /**
- * A collected coding run says what its push record moved on the engine's own
+ * A collected launch says what its push record moved on the engine's own
  * code host: a chip per ref, and the change that ref heads by its reference,
  * opening the change's page. The invariants: the change is named `web!42` and
  * links to its page; a ref heading no change names none; what the record
@@ -10,7 +10,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { fromPhaseEvent } from "~/lib/phases.ts";
-import { PushedRefs } from "./Runs.tsx";
+import { PushedRefs } from "./Executors.tsx";
 
 afterEach(cleanup);
 
@@ -18,13 +18,13 @@ const ZERO = "0000000000000000000000000000000000000000";
 const A = "1111111111111111111111111111111111111111";
 const B = "2222222222222222222222222222222222222222";
 
-/** A sandbox phase record as the engine publishes it, with its push record. */
+/** A launch's `executor_collected` record as the engine publishes it, with its push record. */
 function record(payload: Record<string, unknown>) {
   return fromPhaseEvent({
     id: "e1",
-    type: "agent_phase_completed",
-    created_at: "2026-10-31T10:00:00Z",
-    payload: { phase: "sandbox", turn_id: "t1", ...payload },
+    type: "executor_collected",
+    timestamp: "2026-10-31T10:00:00Z",
+    payload: { turn_id: "t1", iteration: 1, launch_id: "job-1", ...payload },
   } as never)!;
 }
 

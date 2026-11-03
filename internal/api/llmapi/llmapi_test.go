@@ -23,8 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -50,7 +50,7 @@ providers:
       model: sonnet
       auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY_SONNET}"}
     codex-review:
-      agent: codex
+      harness: codex
       model: gpt-6.1-sol
     gateway:
       model: sonnet
@@ -333,7 +333,7 @@ func newRigOver(t *testing.T, caller iam.Principal, store *fakeSecrets) *rig {
 	}
 	r := &rig{engine: &fakeEngine{check: llmapi.Check{At: clock, Node: "node-a", OK: true,
 		Elapsed: 3400 * time.Millisecond, Hints: map[string]string{"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…7d2K"},
-		Lines: []cliagent.Check{{Name: cliagent.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
+		Lines: []harness.Check{{Name: harness.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
 		running: 1},
 		config: &fakeConfig{doc: doc}, secrets: store,
 		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
@@ -390,7 +390,7 @@ const sonnetKey = `{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-not-a-r
 
 // A CREDENTIAL THE VENDOR REFUSES IS NEVER STORED.
 //
-// The value is handed to the entry's own CLI first; a refusal answers 422 at
+// The value is handed to the entry's own harness first; a refusal answers 422 at
 // the value with the vendor's sentence, nothing is sealed or re-activated, and
 // the model goes on signing in with what it had. The refusal is audited.
 func TestACredentialIsTestedBeforeItIsStored(t *testing.T) {
@@ -550,7 +550,7 @@ func TestADraftIsValidatedAndTested(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	body := `{"values": {"OPUS_KEY": "sk-ant-api03-a-brand-new-key-0000"},
-		"entity": {"agent": "claude-code", "model": "opus",
+		"entity": {"harness": "claude-code", "model": "opus",
 		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}"}}}`
 	code, got := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true", body, nil)
 	if code != http.StatusOK {
@@ -560,7 +560,7 @@ func TestADraftIsValidatedAndTested(t *testing.T) {
 		t.Errorf("the test was not handed the draft: %+v", c)
 	}
 	code, got = r.do(t, http.MethodPut, "/llm/providers/opus/credential",
-		`{"values": {"OPUS_KEY": "x"}, "entity": {"agent": "claude-code",
+		`{"values": {"OPUS_KEY": "x"}, "entity": {"harness": "claude-code",
 		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}", "token": "${T}"}}}`, nil)
 	if code != http.StatusUnprocessableEntity || got["error"] != "validation_error" || got["problems"] == nil {
 		t.Errorf("an invalid draft = %d %v, want 422 with problems", code, got)
@@ -690,7 +690,7 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 		}
 	}
 	// A CREDENTIAL'S DRY RUN IS NO CHECK (ADR-0055): it runs the candidate,
-	// and a draft's CLI, so it is decided as the write it tests, never as a
+	// and a draft's harness, so it is decided as the write it tests, never as a
 	// read grant's check.
 	if got := mux.policies["PUT /llm/providers/{key}/credential"]; got.DryRun {
 		t.Errorf("the credential route declares its dry run a check: %+v", got)
@@ -701,12 +701,12 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 }
 
 // draftBody is a check of a draft entry: a model the company does not run yet.
-const draftBody = `{"smoke": false, "entity": {"agent": "claude-code", "model": "opus",
+const draftBody = `{"smoke": false, "entity": {"harness": "claude-code", "model": "opus",
 	"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`
 
 // A DRAFT IS RUN ONLY BY WHO MAY WRITE WHAT IT STANDS FOR.
 //
-// A draft chooses its CLI, its binary, its overrides and its env, and resolves
+// A draft chooses its harness, its binary, its overrides and its env, and resolves
 // its ${VAR}s through the secret store, so checking one runs what a config
 // write could make the company run with the company's credentials. It is asked
 // as `config.write` and `secrets.write`: a person whose proof is stale is told
@@ -738,7 +738,7 @@ func TestADraftIsCheckedOnlyByWhoMayWriteIt(t *testing.T) {
 			}
 			code, body = r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
 				`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
-				"entity": {"agent": "claude-code", "model": "opus",
+				"entity": {"harness": "claude-code", "model": "opus",
 				"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
 			if code != http.StatusForbidden {
 				t.Errorf("a draft credential test = %d %v, want 403", code, body)
@@ -780,7 +780,7 @@ func TestACredentialAsksConfigWriteWhereItWritesTheConfig(t *testing.T) {
 
 	code, body := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
 		`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
-		"entity": {"agent": "claude-code", "model": "opus",
+		"entity": {"harness": "claude-code", "model": "opus",
 		"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
 	if code != http.StatusForbidden || len(r.engine.checks) != 0 {
 		t.Errorf("a draft without config.write = %d %v, ran %d checks", code, body, len(r.engine.checks))
@@ -1123,7 +1123,7 @@ func TestACreatesRetryIsRefusedByTheRouteBeforeTheStore(t *testing.T) {
 }
 
 // A VALUE WITH A SPACE OR AN INVISIBLE CHARACTER INSIDE IS REFUSED AT THE
-// VALUE, BEFORE ANY CLI RUNS. A terminal that wraps `claude setup-token`
+// VALUE, BEFORE ANY HARNESS RUNS. A terminal that wraps `claude setup-token`
 // output turns the break into spaces when it is copied, and Claude Code then
 // ignores the token and says it is not logged in, which read as a refusal to
 // log in again. The whitespace around a value is only trimmed.
@@ -1171,24 +1171,24 @@ func TestAValueWithStrayCharactersIsRefusedBeforeItsTest(t *testing.T) {
 	}
 }
 
-// A REFUSED TEST SAYS WHAT THE CLI'S WORDS MEANT, never the CLI's own advice:
-// a token the CLI never used is named as one the vendor never saw, a refused
+// A REFUSED TEST SAYS WHAT THE HARNESS'S WORDS MEANT, never the harness's own advice:
+// a token the harness never used is named as one the vendor never saw, a refused
 // one with the command that makes a new one, and neither vouches for the
 // stored credential, which may have expired or met its limit.
 func TestARefusedTestSaysWhatItMeant(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	failed := func(meaning cliprofile.AuthMeaning) llmapi.Check {
+	failed := func(meaning harnessprofile.AuthMeaning) llmapi.Check {
 		return llmapi.Check{At: clock, Node: "node-a", Failure: "auth",
 			Said: "Not logged in · Please run /login",
-			Lines: []cliagent.Check{{Name: cliagent.CheckSmoke, Kind: "auth", Meaning: meaning,
+			Lines: []harness.Check{{Name: harness.CheckSmoke, Kind: "auth", Meaning: meaning,
 				Detail: "failed: auth: Not logged in · Please run /login"}}}
 	}
-	for meaning, want := range map[cliprofile.AuthMeaning]string{
-		cliprofile.AuthUnread: "Claude Code did not use this token, so the vendor never saw it. Copy the " +
+	for meaning, want := range map[harnessprofile.AuthMeaning]string{
+		harnessprofile.AuthUnread: "Claude Code did not use this token, so the vendor never saw it. Copy the " +
 			"whole token again as one unbroken line starting with sk-ant-oat01-. Nothing was stored, " +
 			"and the model still uses its current token.",
-		cliprofile.AuthRefused: "The vendor refused this token: it is wrong, expired, or revoked. Make a " +
+		harnessprofile.AuthRefused: "The vendor refused this token: it is wrong, expired, or revoked. Make a " +
 			"new one with claude setup-token and paste it here. Nothing was stored, and the model " +
 			"still uses its current token.",
 	} {

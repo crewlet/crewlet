@@ -137,7 +137,7 @@ const (
 	// AuxAssistantTitle names a person's assistant conversation after its
 	// first answer.
 	AuxAssistantTitle AuxPurpose = "assistant_title"
-	// AuxAssistantDeepWork is a person's deep-work run: a coding CLI's own
+	// AuxAssistantDeepWork is a person's deep-work run: a harness's own
 	// loop, recorded once when it ends with every token it reported, and
 	// charged to the company's windows by the turn's meter (ADR-0054).
 	AuxAssistantDeepWork AuxPurpose = "assistant_deep_work"
@@ -161,7 +161,7 @@ var auxCondenseKinds = []string{
 }
 
 // AuxCondense is the purpose of a compaction of one kind of text:
-// `condense_<kind>`, so a rewrite of a chat thread and one of a coding run's
+// `condense_<kind>`, so a rewrite of a chat thread and one of an executor's
 // report are told apart wherever they are spent.
 func AuxCondense(kind string) AuxPurpose { return AuxPurpose(auxCondensePrefix + kind) }
 

@@ -40,8 +40,8 @@ func (c *capture) reads() []*types.KnowledgeRead {
 }
 
 // skilledRunner builds a runner over two published skills: one about a tool the
-// executor has, and one an operator scoped to Review on an MCP server the seat
-// holds a credential for.
+// executor has, and one an operator scoped to Review on an MCP server the
+// seat's registry holds a tool of.
 func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher runner.AgentLauncher) *runner.Runner {
 	t.Helper()
 	registry := skills.NewRegistry()
@@ -69,6 +69,13 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher 
 		tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	// THE SERVER THE REVIEW SKILL IS KEYED ON, held as a seat holds a
+	// server: by a tool of it in the seat's registry, and by no mcp_env
+	// block, which names credentials rather than a server the seat reaches.
+	if err := reg.Register(stubTool{name: "gh_search", out: "found"},
+		tools.Origin("github")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 	// THE REAL LOADER, publishing through the same capture, so a load made
 	// inside a phase is seen with the phase the surface bound it to — and the
 	// REAL AUTHORITY DECISION, because every builtin is gated at registration
@@ -81,10 +88,7 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher 
 	}); err != nil {
 		t.Fatalf("builtin.Register: %v", err)
 	}
-	role := &org.Role{
-		Name: "CTO", DeclaredHandle: "cto",
-		MCPEnv: org.MCPEnv{"github": {"TOKEN": "${GH}"}},
-	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	company := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: company, Role: role},
@@ -194,7 +198,10 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 	registry.Replace([]skills.Skill{{
 		Key: "research-method", Title: "Research method",
 		Summary: "how this company researches", Body: "Cite sources.",
-		Trigger:      skills.Trigger{MCPServer: "github"},
+		// A TOOL THE WORKER IS GRANTED: a worker's catalogue is matched
+		// against its own grant, which holds what its parent holds active,
+		// and an executor holds no MCP tool until it activates one.
+		Trigger:      skills.Trigger{Tool: "read_file"},
 		Phases:       []prompts.Phase{prompts.PhaseSubagent},
 		SourcePageID: "pg-research", SourceBackend: "native", SourceContainer: "SKILLS",
 		SourceTitle: "Research method page",
@@ -208,10 +215,7 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 	if err := reg.Register(stubTool{name: "read_file", out: "contents"}, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	role := &org.Role{
-		Name: "CTO", DeclaredHandle: "cto",
-		MCPEnv: org.MCPEnv{"github": {"TOKEN": "${GH}"}},
-	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	company := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{

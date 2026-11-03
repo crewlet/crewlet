@@ -65,7 +65,7 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 		builtin.CreateArtifactTool: "makes a new artifact, which has no id to name " +
 			"until it lands — an outcome nobody can vouch for is looked for with " +
 			"list_artifacts, as its answer says",
-		builtin.AnswerRunTool: "answers a parked run's question, named by its turn " +
+		builtin.AnswerExecutorTool: "answers a parked run's question, named by its turn " +
 			"— a run is no object of the company's records",
 		builtin.SteerTurnTool: "hands a note to a running turn, named by its turn — " +
 			"nothing is written to the company's records",

@@ -37,6 +37,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -221,73 +225,81 @@ type NodeRuntime interface {
 	//
 	// A nil slice is "this node serves none", which is a real claim: a
 	// node with no active revision has no catalogue.
-	Tools() []ToolInfo
+	Tools() []queries.ToolRow
+
+	// Builtins is the engine's own tools as this node's seats are offered
+	// them: the registry's built-ins and the discovery pair the runner
+	// hands every phase that discovers, which no registry holds. The MCP
+	// page's built-in catalogue, nil on a node with no active revision.
+	//
+	// NOT Tools filtered by origin, because that is the registry alone,
+	// and a catalogue of what an agent holds that left out the two tools
+	// every executor reaches its MCP servers through would be short by
+	// exactly the pair a reader of the MCP page asks about.
+	Builtins() []queries.ToolRow
+
+	// Listings is the fleet's listings of its MCP servers' tools as this
+	// node's watched copy holds them, and the schemas they name: what a
+	// server's detail (`GET /mcp-servers/{name}`) is read from. Nil on a
+	// node that keeps no copy, whose detail then answers unavailable.
+	Listings() queries.MCPListingReader
+
+	// MCPInstances reads one MCP server's instances from the nodes holding
+	// them, which only the engine can ask: what a server's detail says of
+	// each instance's health.
+	MCPInstances() queries.MCPInstanceReader
+
+	// MCPRestarter asks the fleet to restart an MCP server
+	// (`POST /mcp-servers/{name}/retry`), which only the engine can tell
+	// every node.
+	MCPRestarter() mcpapi.Restarter
+
+	// LatestAlarms is this node's latest alarm evaluation, every kind it
+	// found standing with what it measured, nil before one has run or on a
+	// node that runs no state log: what the MCP servers answer carries of
+	// the MCP kinds, from the evaluation the health count, the gauge and the
+	// log lines were told, so the page cannot disagree with them.
+	LatestAlarms() []statelog.Alarm
+
+	// MCPChecker tests an MCP server where it runs and checks an address
+	// before one is added (`POST /mcp-servers/{name}/check`,
+	// `POST /mcp-checks`, `POST /mcp-probe`), which only the engine can ask
+	// the nodes that run it; MCPChecks reads each server's latest test,
+	// which its detail answers.
+	MCPChecker() mcpapi.Checker
+	MCPChecks() queries.MCPCheckReader
+
+	// MCPValues is the secret store a server's value is sealed in, under
+	// the engine's keyring.
+	MCPValues() mcpapi.ValueStore
+
+	// MCPSignIns starts, reads and ends a server's OAuth sign-in
+	// (`POST` and `DELETE /mcp-servers/{name}/oauth`,
+	// `GET /mcp-sign-ins/{id}`), whose grant only the engine holds;
+	// MCPGrants reads each server's grant and the two addresses a vendor is
+	// given, which the servers' answers carry.
+	MCPSignIns() mcpapi.SignIns
+	MCPGrants() queries.MCPGrantReader
+	// MCPLanding finishes a sign-in where the vendor sends the person back
+	// (`GET /webhooks/mcp-oauth`) and publishes the engine's client
+	// metadata document; nil answers both as an engine that finishes none.
+	MCPLanding() webhooks.MCPSignIns
+
+	// MCPApprovals finds a call held for a person's approval on the
+	// fleet's runs and puts its answer on the control topic of the seat
+	// holding the run (`POST /mcp-approvals/{id}`), nil on a node that
+	// holds no fleet store.
+	MCPApprovals() mcpapi.Approvals
+
+	// MCPAccepted is where a decision about an MCP server's changed tool is
+	// written: the fleet's accepted definitions, the store every node
+	// decides a call by (`POST /mcp-servers/{name}/changes`, and an
+	// approval's Always allow); nil on a node that holds no fleet store.
+	MCPAccepted() AcceptedStore
 }
 
-// ToolInfo is one catalogue entry on the wire.
-//
-// The field names are the CLIENT's — name, description, source — because the
-// dashboard is the compatibility reference for a frame's shape and it
-// groups the tool screen by `source`.
-type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-
-	// Source is the registry's ORIGIN GRAMMAR verbatim — `builtin`, or
-	// `mcp:` and the bare server name — which is what the tool screen
-	// groups on and what the API reference documents.
-	//
-	// The prefix is load-bearing and was once stripped here: a reader
-	// cannot tell a server called `builtin` from the engine's own tools
-	// without it, and every consumer that tests for it — the screen's
-	// origin column, its per-origin counts — silently read a company
-	// running MCP servers as one running none.
-	Source string `json:"source"`
-
-	// Annotations are the behavioural hints recorded at REGISTRATION —
-	// what the engine's own delivery fence, the operator MCP surface and
-	// the sandbox bridge all read, and what the tool screen could not show
-	// because the catalogue on the wire carried three strings.
-	//
-	// It is the difference between a list of names and a surface an
-	// operator can audit: which of a fresh server's tools can write, which
-	// can write IRREVERSIBLY, and which reach outside the company at all.
-	Annotations ToolAnnotations `json:"annotations"`
-
-	// Delivers names WHERE calling this tool puts something in front of
-	// somebody outside the turn, and is empty for a tool that reaches
-	// nobody. The registry's own predicate, never re-derived here: a tool
-	// that delivers through the fence and not on the screen is the drift
-	// this field exists to make visible.
-	Delivers string `json:"delivers"`
-
-	// InputSchema is the tool's JSON Schema, exactly as the model is
-	// offered it. Carried whole rather than summarised, because the screen
-	// that renders "how would I call this" substitutes an object's ids
-	// into the schema's OWN field names — a summary would be a second,
-	// drifting description of the one thing the engine already states.
-	InputSchema map[string]any `json:"input_schema,omitempty"`
-}
-
-// ToolAnnotations is one tool's behavioural hints on the wire.
-//
-// EVERY HINT IS THREE-VALUED and rendered as a word, never as a bool. "The
-// server did not advertise this" and "the server said no" are different facts
-// — the whole reason [mcp.Hint] exists — and a JSON bool cannot hold the
-// difference: an absent hint would arrive as `false` and read as a positive
-// denial, which is exactly how a fresh MCP server's unannotated tools would
-// come to look like proven reads on the one screen an operator audits them on.
-//
-// Words rather than `true | false | null` for the client's sake: all three
-// values are truthy, so a careless `if (!ann.read_only)` cannot silently mean
-// "not read-only" for a tool nobody annotated.
-type ToolAnnotations struct {
-	// Title is the human-readable name a server advertised, empty when it
-	// advertised none.
-	Title string `json:"title,omitempty"`
-
-	ReadOnly    string `json:"read_only"`
-	Destructive string `json:"destructive"`
-	Idempotent  string `json:"idempotent"`
-	OpenWorld   string `json:"open_world"`
+// AcceptedStore writes one tool's accepted definition at a version
+// ([coord.MCPAccepted.PutMCPAccepted]).
+type AcceptedStore interface {
+	PutMCPAccepted(ctx context.Context, a coord.MCPAcceptedTool, version uint64) (coord.MCPAcceptedTool, bool, error)
 }

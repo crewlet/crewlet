@@ -635,6 +635,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.executorWarnings()...)
 	out = append(out, c.budgetWarnings()...)
 	out = append(out, c.codeWarnings()...)
+	out = append(out, c.accessAdvisories()...)
 	return append(out, c.channelAdvisories()...)
 }
 
@@ -882,12 +883,14 @@ func (b *Bootstrap) Warnings() []Warning {
 	// mutation log's alone: the backup term is evaluated per log, and the
 	// ordered logs — the tracker's, the knowledge base's, the artifacts'
 	// and their datastore's, the identity estate's, the Dashboard
-	// Assistant's and chat's — carry no age bound, so nothing else ever
-	// removes a record from them. Naming one field sent an operator to the
-	// wrong ceiling whenever another log filled first: a full identity log
-	// refuses every sign-in and every change to who may do what, a full
-	// assistant log every question somebody asks the assistant, since it
-	// cannot record the turn, and a full chat log a message somebody typed.
+	// Assistant's, chat's, the executor log and the code log — carry no age
+	// bound, so nothing else ever removes a record from them. Naming one
+	// field sent an operator to the wrong ceiling whenever another log filled
+	// first: a full identity log refuses every sign-in and every change to
+	// who may do what, a full assistant log every question somebody asks the
+	// assistant, since it cannot record the turn, a full chat log a message
+	// somebody typed, a full executor log every capture of a seat's session,
+	// and a full code log every push to the company's repositories.
 	//
 	// NO COUNT IN THE SENTENCE: the fields are listed by name, and a test
 	// reads them off [Stream] and holds the message to every one, so a log
@@ -934,7 +937,9 @@ func (b *Bootstrap) Warnings() []Warning {
 				"sign-in, `stream.assistant_log_max_bytes`, where it refuses "+
 				"every question somebody puts to Ask Crewlet, "+
 				"`stream.chat_log_max_bytes`, where it refuses a message "+
-				"somebody typed, and `stream.code_log_max_bytes`, where it "+
+				"somebody typed, `stream.executor_log_max_bytes`, where it "+
+				"refuses to record an executor's session, so the seat's next "+
+				"turn starts fresh, and `stream.code_log_max_bytes`, where it "+
 				"refuses every push to the company's repositories. The two "+
 				"compacted logs "+
 				"(`stream.tracker_vectors_max_bytes`, "+

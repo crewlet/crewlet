@@ -222,14 +222,14 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 // answered, from the index alone, on the sync that folded it, with the whole
 // run its row names — the turn, the work item's tracker and key, the model —
 // and its way; a coding box's push git received with its run's launch and its
-// coding agent beside them; a person's push git received with no run. So what
+// harness beside them; a person's push git received with no run. So what
 // a git node says of who pushed a commit (code_landed_in, every server-side
 // read naming the push behind a commit) is all its push row says, never the
 // credential alone.
 //
 // Mutations: write no work key into a run (pushPayload skipping tag 5) — the
 // seat's push is answered without it; write no run id (skipping tag 7) — the
-// box's push is answered as one no coding run made.
+// box's push is answered as one no executor made.
 func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -258,8 +258,8 @@ func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 			}
 			seat = true
 		case want.Principal.Kind == code.PrincipalAgent:
-			if run.TurnID == "" || run.RunID == "" || run.CodingAgent == "" || want.Via != code.ViaGit {
-				t.Fatalf("the log's box push %+v names no coding run git received: the case holds none", want)
+			if run.TurnID == "" || run.RunID == "" || run.Harness == "" || want.Via != code.ViaGit {
+				t.Fatalf("the log's box push %+v names no launch git received: the case holds none", want)
 			}
 			box = true
 		case want.Principal.Kind == code.PrincipalOperator:

@@ -24,6 +24,7 @@ type poster struct {
 	mu      sync.Mutex
 	set     []string
 	turns   []string
+	queued  []bool
 	cleared int
 }
 
@@ -49,7 +50,15 @@ func (p *poster) SetStatus(_ context.Context, post notify.StatusPost) bool {
 	defer p.mu.Unlock()
 	p.set = append(p.set, post.Text)
 	p.turns = append(p.turns, post.Turn)
+	p.queued = append(p.queued, post.Queued)
 	return !p.fail
+}
+
+// queuedPosted is whether each post said its line was queued, in order.
+func (p *poster) queuedPosted() []bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]bool(nil), p.queued...)
 }
 
 // turnsPosted is the turn every post named, in order.
@@ -326,7 +335,7 @@ func TestAPostNamesTheNewestTurnHoldingTheIndicator(t *testing.T) {
 	second := d.Begin(t.Context(), "swe", "run-2", "plan", chatMeta(nil))
 	second.Phase("execute")
 	p.shownAtLeast(t, 2)
-	second.End(t.Context(), true) // suspended into a coding run
+	second.End(t.Context(), true) // suspended while its executor runs in its box
 	first.Phase("review")
 	p.shownAtLeast(t, 3)
 	back := d.Rejoin("swe", "run-2")
@@ -341,7 +350,7 @@ func TestAPostNamesTheNewestTurnHoldingTheIndicator(t *testing.T) {
 	first.End(t.Context(), false)
 }
 
-// A turn that SUSPENDS for a detached coding run holds its session open: the
+// A turn that SUSPENDS for a detached executor holds its session open: the
 // same turn resumes when the job completes, and the person is still waiting.
 func TestASuspendedTurnKeepsItsIndicator(t *testing.T) {
 	p := newPoster()
@@ -365,7 +374,7 @@ func TestASuspendedTurnKeepsItsIndicator(t *testing.T) {
 // A RESUMED TURN TAKES ITS OWN HOLD BACK rather than raising a second
 // indicator over the one it kept alive.
 //
-// It cannot do what a fresh turn does: a parked coding run's row carries no
+// It cannot do what a fresh turn does: a parked executor's row carries no
 // chat metadata — the message that woke the suspended turn may be days gone —
 // so the resume knows its seat and its turn id and nothing about the
 // conversation. And the hold it is taking back is ONE, not two: the pair is a
@@ -436,7 +445,7 @@ func TestRejoiningWhatThisNodeDoesNotHoldIsNil(t *testing.T) {
 // A NODE THAT STOPS RUNNING A SEAT TAKES THAT SEAT'S INDICATORS DOWN, and the
 // kept-alive session is why it has to.
 //
-// A turn suspended into a detached coding run leaves its indicator up on
+// A turn suspended on a detached executor leaves its indicator up on
 // purpose, and the resume lands on whichever node holds the seat when the box
 // reports. Without this, a node that handed the seat on goes on re-asserting
 // "is thinking…" every refresh interval, for a turn it is not running, for as

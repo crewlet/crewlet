@@ -382,7 +382,7 @@ func (p Proposal) validFields() error {
 	// or a seat, by its handle and the run that made the push — through a
 	// tool, whose write the engine builds and whose run is the turn that
 	// called it, or through the coding box of a run it launched, whose push
-	// git receives and names that run and its coding agent beside the turn.
+	// git receives and names that run and its harness beside the turn.
 	// The decide holds a seat's push to its grant on the chart (rule 2b,
 	// decide.go) before any protection, so a seat's push is a proposal like a
 	// person's; a token bound to nobody fetches only. And the engine, on its
@@ -414,23 +414,23 @@ func (p Proposal) validFields() error {
 	case p.Principal.Kind == PrincipalAgent && p.Via == ViaGit && p.Principal.Run.RunID == "":
 		// A SEAT'S PUSH GIT RECEIVED IS ITS CODING BOX'S — a seat's own
 		// writes are tool calls, which the engine builds — and the code host
-		// stamps the run that pushed and its coding agent from the run's row
+		// stamps the run that pushed and its harness from the run's row
 		// when it admits the box: one naming neither is its proposer's bug,
 		// and its row would be one no read of that run's pushes finds.
 		return fmt.Errorf("%w: principal.run.run_id: a seat's push git received is its coding box's, "+
-			"which names the run that made it and its coding agent, stamped by the engine from the run's row",
+			"which names the run that made it and its harness, stamped by the engine from the run's row",
 			ErrInvalidProposal)
 	case p.Via == ViaEngine && p.Principal.Run.RunID != "":
 		// AN ENGINE-BUILT WRITE IS A TOOL CALL'S, whose run is the turn that
-		// called it — a coding run's box pushes through git — so one naming a
-		// coding run is its proposer's bug, and a read of that run's pushes
+		// called it — an executor's box pushes through git — so one naming an
+		// executor is its proposer's bug, and a read of that run's pushes
 		// would answer a write the run never made.
 		return fmt.Errorf("%w: principal.run.run_id: a push the engine built is a tool call's, whose run "+
-			"is its turn: it names no coding run", ErrInvalidProposal)
+			"is its turn: it names no executor", ErrInvalidProposal)
 	case !p.Via.proposed():
 		// A MERGE'S PUSH IS ITS RECORD'S, never a proposal's: a push naming
 		// via merge would move a branch as a merge does and judge it as a
-		// push, past the gate a merge is decided by (ADR-0089).
+		// push, past the gate a merge is decided by (ADR-0096).
 		return fmt.Errorf("%w: via: %q is not one of %s — a push names how its pack was built, and a "+
 			"merge is decided through its gate, never proposed as a push", ErrInvalidProposal, p.Via,
 			words.Or(proposedVias()))

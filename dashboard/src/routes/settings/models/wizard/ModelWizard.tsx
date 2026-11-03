@@ -1,12 +1,12 @@
 /**
- * Add a model, or edit one, step by step: its name and CLI, how it signs in,
- * the model, where its coding runs, what it is used for, its limits and a
+ * Add a model, or edit one, step by step: its name and harness, how it signs in,
+ * the model, where it runs a seat's executor, what it is used for, its limits and a
  * test call. Review checks the whole change with the engine before anything
  * is stored, and the engine's problems land on the fields they are about,
  * each with the step that fixes it.
  *
  * EDITING IS THE SAME WIZARD, prefilled from the model (`editing`): every step
- * is reachable at once, the name and the CLI are its identity and stay, a
+ * is reachable at once, the name and the harness are its identity and stay, a
  * stored credential is shown as stored and replaced only on request, and
  * Review is a footer button away from any step (design QA Minor 13).
  *
@@ -30,6 +30,13 @@ import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
+import {
+  findOpener,
+  firstInvalid,
+  focusWhenShown,
+  openerNow,
+  pageHeading,
+} from "~/lib/wizardFocus.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -69,14 +76,13 @@ import {
   stepsFor,
   storedCloudSecrets,
   suggestedVariable,
-  type Agent,
+  type Harness,
   type Draft,
   type Kept,
   type NextDocument,
 } from "./draft.ts";
 import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
-import { findOpener, firstInvalid, focusWhenShown, openerNow, pageHeading } from "./focus.ts";
-import { CliStep } from "./steps/CliStep.tsx";
+import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
 import { Review, type ReviewCheck } from "./steps/Review.tsx";
@@ -86,14 +92,15 @@ import { UseItFor } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
 
 const LEADS: Record<WizardStep, string> = {
-  cli: "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
+  harness:
+    "Name the model and choose the harness it runs. Seats and Ask Crewlet name it, so keep it short.",
   signin: "How this model proves who it is to the vendor.",
-  model: "The model the CLI runs, in its own naming.",
-  runs: "Where a seat's coding run happens when it starts on this model.",
+  model: "The model the harness runs, in its own naming.",
+  runs: "Where a seat's executor runs when it launches on this model.",
   assign: "What should this model do, and for which seats?",
   limits:
-    "How many CLI processes run at once, how long one may go without progress, and its web tools.",
-  test: "Run the CLI once with these settings before anything is stored. It costs a few tokens.",
+    "How many harness processes run at once, how long one may go without progress, and its web tools.",
+  test: "Run the harness once with these settings before anything is stored. It costs a few tokens.",
   review: "Everything this saves, as one revision. The engine checks it before you save it.",
 };
 
@@ -231,7 +238,7 @@ function newDraft(data: ModelsData): Draft {
  *
  * THE ADDRESS ONLY PRESELECTS, and only what the company has now: a seat it
  * no longer has (a link kept from before a seat was removed, or typed by
- * hand) is dropped without a word, and so is coding on a CLI that runs none.
+ * hand) is dropped without a word, and so is coding on a harness that runs none.
  * The person still sees every use on Use it for, and Review before a write.
  */
 function withAdded(d: Draft, add: readonly WizardAdd[], seats: ReadonlySet<string>): Draft {
@@ -269,7 +276,7 @@ export function ModelWizard({
   const [draft, setDraft] = useState<Draft>(initial);
   const steps = stepsFor(draft);
   const [step, setStep] = useState<WizardStep>(() =>
-    target && stepsFor(initial).includes(target.step) ? target.step : "cli",
+    target && stepsFor(initial).includes(target.step) ? target.step : "harness",
   );
   // WHAT IS BEING SET UP reaches the Dashboard Assistant, read-only and with no credential (assistantDraft.ts).
   const draftFields = useMemo(
@@ -377,12 +384,12 @@ export function ModelWizard({
     [original, variableTouched, taken],
   );
 
-  const changeAgent = (agent: Agent) => {
-    const executor = canExecute({ agent });
+  const changeHarness = (harness: Harness) => {
+    const executor = canExecute({ harness });
     const dropsCoding = !executor && (draft.intent === "all" || draft.intent === "coding");
     set({
-      agent,
-      method: METHODS[agent][0]!,
+      harness,
+      method: METHODS[harness][0]!,
       credential: "",
       model: "",
       ...(executor ? {} : { runIn: "" }),
@@ -737,18 +744,18 @@ export function ModelWizard({
         stepsLabel={original ? `Steps to edit ${draft.key}` : "Steps to add a model"}
         heading={STEP_LABELS[step]}
         lead={LEADS[step]}
-        wide={step === "cli" || step === "runs" || step === "assign" || reviewing}
+        wide={step === "harness" || step === "runs" || step === "assign" || reviewing}
         footer={footer}
         primaryAction={primary}
       >
         <div className="models-stack">
-          {step === "cli" ? (
-            <CliStep
+          {step === "harness" ? (
+            <HarnessStep
               draft={draft}
               editing={!!original}
-              error={errorWhere((s) => s[0] === "key" || field("agent")(s))}
+              error={errorWhere((s) => s[0] === "key" || field("harness")(s))}
               onName={(key) => set({ key })}
-              onAgent={changeAgent}
+              onHarness={changeHarness}
             />
           ) : null}
           {step === "signin" ? (

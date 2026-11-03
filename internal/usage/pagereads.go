@@ -41,7 +41,7 @@ type PageReadsQuery struct {
 
 // PageReads reads every data node's reads of some pages over q's days, in
 // (page, day, node, seat, via) order — through `usage_reads_page_idx`, which is
-// exactly this question's shape and order (replicated 0073), one page id at a
+// exactly this question's shape and order (replicated 0077), one page id at a
 // time ([PageReadsPage]).
 //
 // EVERY DATA NODE'S ROWS, which is why this is the domain's and not the event

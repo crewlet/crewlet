@@ -21,8 +21,8 @@ const (
 )
 
 // A BOX'S THREE ROUTES: the same three entry points under auth.BoxGitPrefix,
-// behind the box's admission (boxadmit.go) rather than a person's — a coding
-// run's box, or a check's, which fetches alone.
+// behind the box's admission (boxadmit.go) rather than a person's — an
+// executor's box, or a check's, which fetches alone.
 const (
 	PatternBoxInfoRefs    = "GET /box/git/{repo}/info/refs"
 	PatternBoxUploadPack  = "POST /box/git/{repo}" + UploadPackSuffix
@@ -57,7 +57,7 @@ const (
 )
 
 // admitter is how an entry point admits its request: admit for a person's,
-// admitBox for a box's — a coding run's or a check's. Everything after it
+// admitBox for a box's — an executor's or a check's. Everything after it
 // reads the admission alone.
 type admitter func(ctx context.Context, w http.ResponseWriter, r *http.Request, op auth.GitOp) (admission, bool)
 

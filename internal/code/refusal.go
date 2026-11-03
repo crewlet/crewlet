@@ -36,7 +36,7 @@ const (
 	// [RefusalRefConflict]).
 	RefusalReservedRef Refusal = "reserved_ref"
 	// RefusalNotPermitted is a command the principal's grant on the
-	// repository does not cover ([Grant.RefRule], ADR-0081).
+	// repository does not cover ([Grant.RefRule], ADR-0088).
 	RefusalNotPermitted Refusal = "not_permitted"
 	// RefusalBadRef is not a ref.
 	RefusalBadRef Refusal = "bad_ref"
@@ -183,7 +183,7 @@ const (
 	RefusalStoreFull Refusal = "store_full"
 	// RefusalForgedCommitter is a CODING BOX'S push whose pack holds a commit
 	// committed as the engine — `engine@<code.identity_domain>`, the address
-	// only the host's own writes carry (ADR-0085), in whatever case it is
+	// only the host's own writes carry (ADR-0092), in whatever case it is
 	// written — that the repository does not already hold, or more such
 	// commits than one push is checked for: refused whole by the node that
 	// received it before any byte of its bundle was uploaded, so nothing was

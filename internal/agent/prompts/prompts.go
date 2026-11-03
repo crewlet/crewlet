@@ -12,11 +12,13 @@
 //     reports as the ONE roster allowance pays for; then names; then a line
 //     naming the tool that finds the rest — see rosterAllowanceTokens, the
 //     only budget in this package the prompt itself enforces) + the
-//     executor's contract + prefetch blocks + tool-skills catalogue + the
-//     tools it can still discover.
+//     executor's contract + prefetch blocks. No tool list: every tool it
+//     holds reaches its harness over the bridge. No tool-skills catalogue:
+//     its harness is handed its skills as its own, and lists them itself
+//     (internal/agent/runner, handedskills.go).
 //   - Review — one-line identity + the rules that decide its decision + the
-//     round's evidence. No policies, no roster, no catalogue: the reviewer
-//     judges one round's record and needs nothing else.
+//     round's evidence + the skills scoped to review. No policies, no
+//     roster: the reviewer judges one round's record and needs nothing else.
 //   - Onboarding — one-line identity + the one-time setup contract + the
 //     tools it can discover.
 //   - Sub-agent — parent-provided task prompt + the tools it can discover +
@@ -24,17 +26,17 @@
 //
 // # The engine states only what the model cannot know
 //
-// A seat's phase runs inside a vendor's coding CLI, whose own harness and
+// A seat's phase runs inside a vendor's harness, whose own harness and
 // whose model already know how to be an agent. So the prompt carries what
 // nothing else can: the seat's identity and chart, the company's own words,
 // what the engine prefetched for this turn, and the phase's contract — and
 // each rule once. A tool's semantics are its description and a field's are
 // its schema, both of which reach the model with the tool on every round, so
 // a rule about a tool or a field lives there and not here as well. The
-// executor is the CLI's own agentic run in a box, its seat's tools reaching
-// it over the tool bridge; every other phase is the same CLI's own loop on
+// executor is the harness's own agentic run in a box, its seat's tools reaching
+// it over the tool bridge; every other phase is the same harness's own loop on
 // this host, its tools reaching it as one MCP server. The one protocol fact
-// no harness can teach — that the CLI's final text reaches nobody, so an
+// no harness can teach — that the harness's final text reaches nobody, so an
 // action is a tool call and prose performs nothing — is stated here, once.
 // Generic agent behaviour, worked examples and restated emphasis are
 // not: a second copy of a rule is two texts that drift, and a model reads
@@ -82,7 +84,6 @@
 package prompts
 
 import (
-	"maps"
 	"slices"
 	"strings"
 
@@ -188,20 +189,6 @@ func (s Seat) unit() *org.Unit {
 	return s.Org.UnitFor(s.Role)
 }
 
-// mcpServers is the role's MCP-server set, sorted.
-//
-// Sorted because the source is a map: unsorted, the argument handed to a
-// skill catalogue would differ between two builds of the same prompt, and a
-// catalogue that ordered its answer by the surface it was given would emit a
-// different prefix on every round.
-func (s Seat) mcpServers() []string {
-	if !s.ok() {
-		return nil
-	}
-	names := slices.Sorted(maps.Keys(s.Role.MCPEnv))
-	return names
-}
-
 // Skill is one entry in a phase's tool-skill catalogue.
 //
 // Only the three fields the catalogue renders: the body is deliberately
@@ -226,6 +213,18 @@ type Skill struct {
 // Surface is the tool surface a phase will actually have. It scopes which
 // skills the catalogue offers — a skill for a tool this phase cannot call is
 // noise the model has to read past.
+//
+// MCPServers is the servers the seat's tool registry holds a tool of
+// ([github.com/crewlet/crewlet/internal/tools.Snapshot.MCPServers]), which is
+// what the skill guard arms its server triggers against: the two read one set,
+// so a skill the prompt offers is a skill the guard holds the seat to, and the
+// other way round. NEVER the keys of the seat's mcp_env: a block there says
+// which credentials the seat holds, not which servers it reaches. A shared
+// server reaches every agent with no block at all, a vendor's block is read by
+// the engine with no server behind it, and a server the company turned off
+// keeps its blocks while it reaches nobody, so a catalogue read off the keys
+// offered skills for servers the seat could not call and missed the shared
+// servers it could.
 type Surface struct {
 	Tools      []string
 	MCPServers []string

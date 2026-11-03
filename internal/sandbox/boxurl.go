@@ -128,7 +128,7 @@ func ParseBoxURL(variable, raw string) (string, error) {
 
 // boxHostRefusal holds the host url.Parse read out of a box URL to what the
 // URL parser in the box accepts: the WHATWG URL Standard's host parser
-// (https://url.spec.whatwg.org/#host-parsing), by which every coding agent
+// (https://url.spec.whatwg.org/#host-parsing), by which every harness
 // this build launches parses a URL — claude-code on Node, opencode on Bun.
 // net/url reads RFC 3986 and is laxer about a host in four ways, each of which
 // booted a node whose every box failed on its first request; Node 22's and
@@ -170,25 +170,25 @@ func boxHostRefusal(variable string, u *url.URL) error {
 		// parser reads the same addresses, but for a zone.
 		if strings.Contains(host, "%") {
 			return fmt.Errorf("%s names an IPv6 host with a zone, which the URL parser of a "+
-				"box's coding agent refuses; name the host by an address with no zone, or by "+
+				"box's harness refuses; name the host by an address with no zone, or by "+
 				"a name", variable)
 		}
 		return nil
 	}
 	if !utf8.ValidString(host) {
 		return fmt.Errorf("%s names a host that is not valid UTF-8 — a %% escape in it decodes "+
-			"to bytes that spell no character — which the URL parser of a box's coding agent "+
+			"to bytes that spell no character — which the URL parser of a box's harness "+
 			"refuses; write the host as a name or an address", variable)
 	}
 	if strings.ContainsFunc(host, forbiddenInADomain) {
 		return fmt.Errorf("%s names a host holding a character no host may hold — a space, a "+
 			"control character, or one of # %% / : < > ? @ [ \\ ] ^ | — which the URL parser "+
-			"of a box's coding agent refuses, as it does an unfilled placeholder in angle "+
+			"of a box's harness refuses, as it does an unfilled placeholder in angle "+
 			"brackets or an escaped %%; write the host as a name or an address", variable)
 	}
 	if endsInANumber(host) && !isIPv4Address(host) {
 		return fmt.Errorf("%s names a host whose last label is a number, which the URL parser "+
-			"of a box's coding agent reads as an IPv4 address, and it is not one; write an "+
+			"of a box's harness reads as an IPv4 address, and it is not one; write an "+
 			"address as four numbers from 0 to 255 joined by dots, or name the host by a name "+
 			"whose last label is not a number", variable)
 	}

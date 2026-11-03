@@ -50,11 +50,11 @@ import (
 // fails until its entry goes. It replaced a hand list in
 // TestEveryUntrustedReadIsFenced's doc that named the reads somebody had
 // remembered — and the tracker's listings, the inbox, the activity feed, a
-// knowledge answer's sources and a parked coding run's question were the ones
+// knowledge answer's sources and a parked executor's question were the ones
 // nobody had.
 var handsOverWords = map[string]string{
 	builtin.AnswerKnowledgeTool:      "TestEveryUntrustedReadIsFenced/answer_knowledge",
-	builtin.AnswerRunTool:            "TestEveryUntrustedReadIsFenced/answer_run",
+	builtin.AnswerExecutorTool:       "TestEveryUntrustedReadIsFenced/answer_executor",
 	builtin.CodeBlameTool:            "TestEveryUntrustedReadIsFenced/code_blame",
 	builtin.CodeCherryPickTool:       "TestEveryUntrustedReadIsFenced/code_cherry_pick",
 	builtin.CodeDiffTool:             "TestEveryUntrustedReadIsFenced/code_diff",
@@ -117,9 +117,10 @@ var handsOverWords = map[string]string{
 // a tool nobody looked at.
 //
 // Mutation: answer list_work_items through jsonAnswer and its call is refused
-// for carrying words it does not label; drop the foreignRead in answer_run and
-// its question reaches the operator's model with a forged opener bare; delete
-// a handsOverWords entry, or add one, and the table no longer matches.
+// for carrying words it does not label; drop the foreignRead in
+// answer_executor and its question reaches the operator's model with a forged
+// opener bare; delete a handsOverWords entry, or add one, and the table no
+// longer matches.
 func TestEveryToolThatHandsOverSomebodysWordsIsFenced(t *testing.T) {
 	t.Parallel()
 	calls := sweepCalls(t)
@@ -461,7 +462,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	op.Health.Code = op.Code
 	op.Pauses.Org = op.Org
 	// THE RUN RECORDS the operator's steer_turn reads first, where a note
-	// waits once the turn has launched its coding run: "turn-1" has none,
+	// waits once the turn has launched its executor: "turn-1" has none,
 	// so the note goes to the fleet's scatter.
 	op.Steer.Runs = &runRecords{}
 	op.Runs.Desk = &deskFake{runs: map[string]sandbox.PendingRun{"turn-1": {TurnID: "turn-1",
@@ -521,7 +522,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.A2AAskTool:               {"target": "agent-ceo", "brief": "a plain brief"},
 		builtin.AnswerKnowledgeTool:      {"q": "how do we deploy"},
-		builtin.AnswerRunTool:            {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
+		builtin.AnswerExecutorTool:       {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
 		builtin.ArtifactFormatTool:       {"kind": "doc"},
 		builtin.CreateArtifactTool:       {"kind": "html", "title": "Plain title", "content": "<p>plain</p>"},
 		builtin.CreateArtifactFolderTool: {"parent": "Marketing", "name": "Plain folder"},

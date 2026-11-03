@@ -158,7 +158,7 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			// A member no launch picks opens no box, so the default cell
 			// it would otherwise resolve to judges nothing about it.
 			name: "a member a launch skips",
-			doc: setupFileDoc(directOnly, "", defaultLLM+"    codex:\n      model: gpt-5\n      agent: codex\n",
+			doc: setupFileDoc(directOnly, "", defaultLLM+"    codex:\n      model: gpt-5\n      harness: codex\n",
 				"  - name: SWE\n    llm: [main, codex]\n    sandbox:\n      setup:\n"+
 					fileStep("        ", "own", ".npmrc")),
 		},
@@ -300,8 +300,8 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 		"  llm:\n    main:\n      model: claude-golden\n"+
 		"    twin:\n      model: sonnet\n"+
 		"    remote:\n      model: sonnet\n      run_in: e2b\n"+
-		"    boxed:\n      model: anthropic/claude-sonnet-5\n      agent: opencode\n      run_in: container\n"+
-		"    codex:\n      model: gpt-5\n      agent: codex\n"+
+		"    boxed:\n      model: anthropic/claude-sonnet-5\n      harness: opencode\n      run_in: container\n"+
+		"    codex:\n      model: gpt-5\n      harness: codex\n"+
 		"roles:\n"+
 		"  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"+
 		// Every cell the chain can land in, each with the seat's steps.

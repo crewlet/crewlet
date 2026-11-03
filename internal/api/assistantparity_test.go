@@ -36,6 +36,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -370,7 +371,7 @@ func readTools() []catalog.Tool {
 
 // paritySources are one company's sources every parity App shares: a live
 // projection, an event store and a usage estate, a company, a coordination
-// store, a tracker, a knowledge base, a work index, the coding runs, the
+// store, a tracker, a knowledge base, a work index, the executors, the
 // artifacts, the company's own chat and the configuration history, so EVERY
 // catalogue read's question is registered and its answer is the authority's
 // to give.
@@ -402,7 +403,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	}
 	plane := coordmemory.NewFleet()
 	configs, err := configapi.New(configapi.Options{Store: db, Plane: plane,
-		Cipher: cipher, Node: "core-1", Holders: func(context.Context, func(string) bool, time.Time) (
+		Cipher: cipher, Node: "core-1", Secrets: fleetsecrets.New(plane, cipher), Grants: noSignIns{}, Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 			return nil, nil
 		}})
@@ -445,7 +446,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		Company: companySource(t, company), Coord: coordmemory.New(),
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
-		Sandbox: noCodingRuns{}, Config: configs,
+		Sandbox: noExecutors{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
 		Chat:      parityChat{}, ChatSearch: parityChat{},
 	}}
@@ -463,18 +464,18 @@ func (noWorkHits) Search(context.Context, worklet.SearchQuery) (worklet.SearchAn
 	return worklet.SearchAnswer{Hits: []worklet.Ranked{}}, nil
 }
 
-// noCodingRuns is a node running no coding run.
-type noCodingRuns struct{}
+// noExecutors is a node running no executor.
+type noExecutors struct{}
 
-func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+func (noExecutors) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return []sandbox.PendingRun{}, nil
 }
 
-func (noCodingRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+func (noExecutors) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
 	return sandbox.BridgeLog{}, nil
 }
 
-func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+func (noExecutors) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }
 

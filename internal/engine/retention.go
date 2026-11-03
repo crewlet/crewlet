@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -42,7 +43,7 @@ import (
 // write fence knows what may be gone — and only THEN applies the answer to the
 // broker, for the reason [retention.apply] gives. Last, on a log that writes
 // arbitration anchors, it appends the trimmed records that have every node
-// remove the anchors below what the log no longer holds (ADR-0073,
+// remove the anchors below what the log no longer holds (ADR-0080,
 // [retention.sweepAnchors]): an anchor there names a record that is gone, and
 // can only send its subject's next write to be refused.
 //
@@ -154,7 +155,7 @@ type retention struct {
 	alarms *statelog.Tracker
 
 	// wakes publishes every transition alarms makes, for the seats whose
-	// role carries the health grant to be woken by (ADR-0088); nil on a
+	// role carries the health grant to be woken by (ADR-0095); nil on a
 	// node with no broker to publish to.
 	wakes *alarmOutbox
 
@@ -187,9 +188,15 @@ type retention struct {
 	// Measured on the trim's tick alone ([retention.measureRefs]) and read
 	// back by every report. Nil reads as nothing to report.
 	refs func(ctx context.Context, now time.Time) (code.RefsNear, bool, error)
-	// models fills the model alarms' half of a reading: each entry's
-	// condition across the fleet. Nil reads as nothing to report.
-	models func(ctx context.Context, now time.Time, out *statelog.Reading)
+	// entries fills the per-entry alarms' half of a reading: each model
+	// entry's and each MCP server's condition across the fleet. Nil reads
+	// as nothing to report.
+	entries func(ctx context.Context, now time.Time, out *statelog.Reading)
+
+	// feeds fills the change feeds' half of a reading: every feed this
+	// node started that is down ([native.feedsReading]). Nil reads as
+	// nothing to report.
+	feeds func(now time.Time, out *statelog.Reading)
 
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
@@ -315,7 +322,8 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		objects:     e.objectsReading,
 		code:        e.codeReading,
 		refs:        e.refsNearLimit,
-		models:      e.modelsReading,
+		entries:     e.entriesReading,
+		feeds:       e.feedsReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
@@ -499,7 +507,7 @@ func (r *retention) tick(ctx context.Context) {
 		}
 		sweeps = append(sweeps, sweepTarget{running: running, below: below})
 	}
-	// AND THEN THE ANCHORS BELOW WHAT EACH LOG NO LONGER HOLDS — ADR-0073 —
+	// AND THEN THE ANCHORS BELOW WHAT EACH LOG NO LONGER HOLDS — ADR-0080 —
 	// once every log's purge has landed, so the sweeps share their one
 	// interval among the logs that have anything to sweep.
 	r.sweepAnchors(ctx, sweeps)
@@ -1411,9 +1419,10 @@ var (
 	_ evictionLister = iamdomain.Domain{}
 	_ evictionLister = artifactsdomain.Domain{}
 	_ evictionLister = artifactdata.Domain{}
-	_ evictionLister = code.Domain{}
 	_ evictionLister = assistantdomain.Domain{}
 	_ evictionLister = chatlet.Domain{}
+	_ evictionLister = executordomain.Domain{}
+	_ evictionLister = code.Domain{}
 
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
@@ -1423,9 +1432,10 @@ var (
 	_ statelog.EvictionProbe = iamdomain.Domain{}
 	_ statelog.EvictionProbe = artifactsdomain.Domain{}
 	_ statelog.EvictionProbe = artifactdata.Domain{}
-	_ statelog.EvictionProbe = code.Domain{}
 	_ statelog.EvictionProbe = assistantdomain.Domain{}
 	_ statelog.EvictionProbe = chatlet.Domain{}
+	_ statelog.EvictionProbe = executordomain.Domain{}
+	_ statelog.EvictionProbe = code.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

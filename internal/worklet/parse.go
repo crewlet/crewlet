@@ -168,6 +168,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	for _, c := range routed {
 		inbound := base
 		inbound.Metadata = withVia(base.Metadata, string(c.Reason))
+		// WHAT STARTS THE TURN THIS WAKES: the item, under this
+		// recipient's own reason.
+		inbound.Origin = types.TriggerOrigin{Kind: types.OriginWorkItem,
+			ID: record.Notify.Snapshot.Key, Reason: string(c.Reason)}
 		// PER RECIPIENT, because the promise was the asker's alone: the
 		// same answer reaches the item's watchers under their own reasons
 		// and obliges none of them to post anywhere.

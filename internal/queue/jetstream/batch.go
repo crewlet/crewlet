@@ -102,13 +102,26 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 			batch = append(batch, d)
 		}
 	}
-	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
-	if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
-		a.logFetchErr(ctx, err)
-		return nil
+	// THE PRIORITY LANE FIRST, and all of it the cap allows, without
+	// waiting: this is what puts a person's message in the drain while the
+	// topic's own head is a backlog of work nobody is waiting for. What it
+	// takes is dispatched ahead of the rest ([queue.OrderForDispatch]), and
+	// the topic fills the drain behind it as before. The cap is read here,
+	// ahead of the first message, because the lane is asked before anything
+	// is known to be waiting; the window below is still read once a message
+	// is in hand.
+	if err := a.fetchLane(opts.EffectiveMaxBatch(), collect); err != nil {
+		a.logLaneFetchErr(ctx, err)
 	}
 	if len(batch) == 0 {
-		return nil
+		//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
+		if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
+			a.logFetchErr(ctx, err)
+			return nil
+		}
+		if len(batch) == 0 {
+			return nil
+		}
 	}
 	maxBatch := opts.EffectiveMaxBatch()
 	linger := opts.EffectiveLinger()
@@ -192,6 +205,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		}
 
 		a.q.beginHandler()
+		done := a.runningOn(evs...)
 		// EACH MESSAGE'S OWN HEADROOM, and the partition's folded from
 		// them by the contract. Both, because they answer different
 		// questions: one outcome covers the whole partition, so a
@@ -205,6 +219,10 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
+		// AFTER THE OUTCOME IS APPLIED: an acked message leaves the
+		// consumer's unfinished count only then, and released before it
+		// would read as waiting for that moment.
+		done()
 	}
 }
 
@@ -225,8 +243,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			// into a later redelivery of the same sequences, and the
 			// map would otherwise hold every sequence this seat ever
 			// failed for the life of the attachment. That is
-			// ordinary operation here — an answer a parked coding
-			// run is still owed is NAKed and acked on a later pass.
+			// ordinary operation here — an answer a parked executor
+			// is still owed is NAKed and acked on a later pass.
 			if md, err := d.msg.Metadata(); err == nil {
 				a.settled(md.Sequence.Stream)
 			}

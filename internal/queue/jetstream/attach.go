@@ -74,8 +74,8 @@ const defaultNakDelay = time.Second
 // provider that just answered "slow down" receives.
 //
 // Doubling from a second to this spends the budget over about ten minutes,
-// which covers the minute an LLM entry sits out after its CLI reports a spent
-// plan or a rate limit (internal/providers/llm/cliagent, bench.go)
+// which covers the minute an LLM entry sits out after its harness reports a spent
+// plan or a rate limit (internal/providers/llm/harness, bench.go)
 // several times over while still retrying a momentary blip within a second or
 // two. A failure that outlasts
 // that window is not transient, and holding a seat's mailbox behind it is
@@ -134,9 +134,22 @@ func (q *Queue) nakBackoff(failures uint64) time.Duration {
 // because there membership IS ownership, but a fleet-wide worker group may
 // legitimately run more than one member on a node.
 type attachment struct {
-	q      *Queue
-	key    attachKey
-	cons   jetstream.Consumer
+	q    *Queue
+	key  attachKey
+	cons jetstream.Consumer
+
+	// lane is the topic's priority lane, nil on a topic that carries none
+	// ([queue.HasLane]). Fetched before cons on every cycle, and part of
+	// this one attachment rather than one of its own, so every hold,
+	// quiesce, pause and detach of the topic stops both.
+	lane jetstream.Consumer
+
+	// running is the mail a handler of this attachment is running on right
+	// now, per mailbox: what [Queue.Waiting] takes off the consumers'
+	// unfinished counts, because a message a turn is working on is not
+	// waiting for one.
+	running struct{ priority, background atomic.Int64 }
+
 	log    *slog.Logger
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -478,7 +491,59 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// consumer, so the member that made it can still be told it is not
 	// there. Silence and not-yet-visible are different answers with
 	// different remedies, which is why neither verb subsumes the other.
-	name := consumerName(topic, group)
+	cons, err := q.openConsumer(ctx, stream, topic, group, consumerName(topic, group))
+	if err != nil {
+		return err
+	}
+	var lane jetstream.Consumer
+	if queue.HasLane(topic) {
+		// EnsureSubscription above made the lane with the topic's own
+		// consumer, so a laned attachment that cannot open it is refused
+		// the way one that cannot open the topic's is.
+		if lane, err = q.openConsumer(ctx, stream, topic, group,
+			consumerName(queue.LaneOf(topic), group)); err != nil {
+			return err
+		}
+	}
+
+	key := attachKey{topic, group}
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return ErrClosed
+	}
+	// A process-wide delivery pause must apply to an attachment created
+	// during a drain, or a late subscribe would start handlers the drain
+	// is waiting to finish.
+	paused := q.paused
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	fetching, abandon := context.WithCancel(context.WithoutCancel(ctx))
+	a := &attachment{
+		q: q, key: key, cons: cons, lane: lane,
+		log:    q.log.With("topic", topic, "group", group),
+		cancel: cancel, done: make(chan struct{}),
+		fetching: fetching, abandon: abandon,
+	}
+	a.paused.Store(paused)
+	q.attachments[key] = append(q.attachments[key], a)
+	q.mu.Unlock()
+
+	go func() {
+		defer close(a.done)
+		// Released when the loop ends, however it ends: a detached
+		// attachment's loop exits on its own once its fetch runs out, and
+		// nothing else would release the fetch scope it no longer uses.
+		defer abandon()
+		loop(loopCtx, a)
+	}()
+	return nil
+}
+
+// openConsumer opens one durable consumer an attachment reads from, by its
+// durable name: the topic's own, or its priority lane's. The topic and group
+// name it in an error.
+func (q *Queue) openConsumer(ctx context.Context, stream, topic, group, name string) (
+	jetstream.Consumer, error) {
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_attach_slow", "stream", stream,
@@ -499,40 +564,9 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 		cons, err = jsprovision.SettleWith(ctx, q.provisioning(), consumer)
 	}
 	if err != nil {
-		return fmt.Errorf("open consumer %s/%s: %w", topic, group, q.brokerFailed(ctx, err))
+		return nil, fmt.Errorf("open consumer %s/%s: %w", topic, group, q.brokerFailed(ctx, err))
 	}
-
-	key := attachKey{topic, group}
-	q.mu.Lock()
-	if q.closed {
-		q.mu.Unlock()
-		return ErrClosed
-	}
-	// A process-wide delivery pause must apply to an attachment created
-	// during a drain, or a late subscribe would start handlers the drain
-	// is waiting to finish.
-	paused := q.paused
-	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	fetching, abandon := context.WithCancel(context.WithoutCancel(ctx))
-	a := &attachment{
-		q: q, key: key, cons: cons,
-		log:    q.log.With("topic", topic, "group", group),
-		cancel: cancel, done: make(chan struct{}),
-		fetching: fetching, abandon: abandon,
-	}
-	a.paused.Store(paused)
-	q.attachments[key] = append(q.attachments[key], a)
-	q.mu.Unlock()
-
-	go func() {
-		defer close(a.done)
-		// Released when the loop ends, however it ends: a detached
-		// attachment's loop exits on its own once its fetch runs out, and
-		// nothing else would release the fetch scope it no longer uses.
-		defer abandon()
-		loop(loopCtx, a)
-	}()
-	return nil
+	return cons, nil
 }
 
 // Subscribe attaches a competing-consumer handler.
@@ -551,6 +585,19 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 				}
 				continue
 			}
+			// THE LANE FIRST, one message at a time like the rest: a
+			// message it held is this round's delivery, and the topic is
+			// read only when the lane had nothing.
+			took := false
+			if err := a.fetchLane(1, func(msg jetstream.Msg) {
+				took = true
+				a.dispatchOne(ctx, msg, h)
+			}); err != nil {
+				a.logLaneFetchErr(ctx, err)
+			}
+			if took {
+				continue
+			}
 			//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
 			if err := a.fetch(1, a.q.fetchWait(), func(msg jetstream.Msg) {
 				a.dispatchOne(ctx, msg, h)
@@ -559,6 +606,48 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 			}
 		}
 	})
+}
+
+// fetchLane takes what the priority lane holds RIGHT NOW, up to n, and hands
+// each to take; on a topic with no lane it does nothing.
+//
+// WITHOUT WAITING, because the lane is asked first on every cycle and is
+// empty on almost every one: a wait here would be added to every delivery the
+// topic makes. A priority event that lands a moment after this asked is taken
+// on the next cycle, which on an idle consumer is at most one poll away
+// ([Queue.fetchWait]).
+//
+// NOT ON THE FETCH SCOPE ([attachment.fetching]), which only bounds a waiting
+// fetch: a no-wait request is answered at once, and at worst one second after
+// a broker that never answers it, so a stop that lands during one is held no
+// longer than that.
+func (a *attachment) fetchLane(n int, take func(jetstream.Msg)) error {
+	if a.lane == nil || n < 1 {
+		return nil
+	}
+	if err := a.fetching.Err(); err != nil {
+		return err
+	}
+	batch, err := a.lane.FetchNoWait(n)
+	if err != nil {
+		return err
+	}
+	for msg := range batch.Messages() {
+		take(msg)
+	}
+	return batch.Error()
+}
+
+// logLaneFetchErr reports a priority lane that could not be read, and does
+// not sleep: the topic is read next either way, and a lane that failed is
+// asked again on the next cycle. A stop is not a failure.
+func (a *attachment) logLaneFetchErr(ctx context.Context, err error) {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	a.log.Warn("lane_fetch_failed", "error", err.Error(),
+		"detail", "the priority lane could not be read on this cycle; the topic's own "+
+			"mail is read as usual and the lane is asked again on the next one")
 }
 
 func (a *attachment) logFetchErr(ctx context.Context, err error) {
@@ -586,9 +675,32 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	}
 	a.q.beginHandler()
 	held := delivery{msg: msg, ev: ev}
+	done := a.runningOn(ev)
 	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+	done()
+}
+
+// runningOn counts evs as mail a handler of this attachment is running on, per
+// mailbox, until the returned func is called. The lane holds exactly the
+// marked events of a laned topic ([queue.SubjectFor]), so the mark says which
+// mailbox each came from.
+func (a *attachment) runningOn(evs ...*events.Event) func() {
+	var priority, background int64
+	for _, ev := range evs {
+		if a.lane != nil && queue.Prioritized(ev) {
+			priority++
+		} else {
+			background++
+		}
+	}
+	a.running.priority.Add(priority)
+	a.running.background.Add(background)
+	return func() {
+		a.running.priority.Add(-priority)
+		a.running.background.Add(-background)
+	}
 }
 
 // withHeadroom states EACH message's remaining headroom on the handler's

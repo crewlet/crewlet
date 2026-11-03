@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -39,7 +38,7 @@ func agentFixture(t *testing.T, launcher runner.AgentLauncher, resume *runner.Re
 
 // THE EXECUTOR SPENDS NO MODEL CALL OF ITS OWN.
 //
-// This is the whole shape: the CLI's loop drives the model, so the engine's
+// This is the whole shape: the harness's loop drives the model, so the engine's
 // job is to hand it a brief and park. A launch that also called a model here
 // would run the phase twice — once on the engine's tokens and once in the box
 // on the subscription's — and only the second would have the tools.
@@ -74,56 +73,22 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	if !strings.Contains(req.System, "CTO") {
 		t.Errorf("the system prompt does not carry the seat's identity: %q", req.System)
 	}
-	// The SUBMISSION is on the surface, because that is how the CLI ends
+	// The SUBMISSION is on the surface, because that is how the harness ends
 	// its run — over the bridge. Read off the tool DEFINITIONS, which is
 	// what the bridge serves to a tools/list: a submission the surface holds
-	// but does not publish is one the CLI can never call.
+	// but does not publish is one the harness can never call.
 	if !slices.Contains(toolNames(req.Surface.ToolDefs()), runner.SubmitWorkTool) {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
-	}
-}
-
-// THE DISCOVERY PAIR REACHES THE BRIDGED SURFACE PROVEN READ-ONLY. A
-// person's stop refuses a detached run's bridged call of every tool its
-// surface has not proven read-only, and the pair never passes through the
-// registry: it carries only the hints [runner.DiscoveryTools] gives it, and
-// only if the phase surface adds it as built. Unannotated, a stopped run could
-// not list an MCP server's tools or activate a read — while its reads were
-// promised to answer. Read off the surface the launch hands the bridge, which
-// is the one the fence reads.
-//
-// Mutation: rewrap the pair in surfaceWith as a bare builtin entry — both
-// tools read unproven — red.
-func TestTheBridgedDiscoveryPairIsProvenReadOnly(t *testing.T) {
-	t.Parallel()
-	launcher := &playLauncher{}
-	r := agentFixture(t, launcher, nil)
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	req := launcher.last(t)
-	if req.Surface == nil {
-		t.Fatal("the run was launched with no tool surface")
-	}
-	for _, name := range []string{toolname.ListMCPServerTools, toolname.Activate} {
-		if !slices.Contains(req.Surface.Active(), name) {
-			t.Errorf("%s is not on the bridged surface", name)
-			continue
-		}
-		if hints := req.Surface.AnnotationsOf(name); !mcp.ReadOnlyProven(hints) {
-			t.Errorf("%s reaches the bridged surface as %+v, not proven read-only, so a person's "+
-				"stop refuses it", name, hints)
-		}
 	}
 }
 
 // THE PROMPT TRAVELS IN TWO HALVES: the seat's standing instructions as system
 // text, the turn's ask as the brief.
 //
-// The coding CLI appends the first to its own system prompt and runs the
+// The harness appends the first to its own system prompt and runs the
 // second. Joined into one brief, as they once were, the seat's identity,
 // policies and memory reached the model as the opening of the user's request,
-// and the CLI's system prompt said nothing of whose work it was doing.
+// and the harness's system prompt said nothing of whose work it was doing.
 func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -136,7 +101,7 @@ func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 		t.Errorf("the system half is not the seat's contract and identity:\n%s", req.System)
 	}
 	if strings.Contains(req.Brief, "CTO") || strings.Contains(req.Brief, "## Your turn") {
-		t.Errorf("the seat's standing instructions ride the prompt the CLI runs:\n%s", req.Brief)
+		t.Errorf("the seat's standing instructions ride the prompt the harness runs:\n%s", req.Brief)
 	}
 	if strings.Contains(req.System, "post the weekly summary") {
 		t.Errorf("the turn's ask rides the system half:\n%s", req.System)
@@ -551,7 +516,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 
 // THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
 // row holds a run's calls in the order they finished — each is appended once
-// it returns — and a CLI that makes calls at once finishes them in whatever
+// it returns — and a harness that makes calls at once finishes them in whatever
 // order their tools take. So the collection reads them in the order the bridge
 // admitted them, and states each with when it ran, for how long and who
 // answered, as the phase record of any other phase does.
@@ -671,8 +636,8 @@ func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 // half of the prompt contains it.
 //
 // The launcher is handed the system and user text and the surface separately:
-// the definitions reach the coding CLI over the MCP bridge, not in the prompt.
-// The CLI's own model is billed for every one of them all the same, so a
+// the definitions reach the harness over the MCP bridge, not in the prompt.
+// The harness's own model is billed for every one of them all the same, so a
 // meter that counted only the text would report the engine's most tool-heavy
 // phase as its slimmest — and the argument for leaving them out ("they are not
 // in the prompt") is exactly the one a reader will make when deleting the
@@ -740,7 +705,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 				}}},
 			},
 			Run: runner.RunRecord{
-				CodingAgent: "claude-code", SandboxID: "box-7",
+				Harness: "claude-code", SandboxID: "box-7",
 				ProviderKey: "fallback-plan", Model: "claude-sonnet-5",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
 				Pushed: []types.PushedRefRecord{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-9",
@@ -778,18 +743,10 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.RoundNarration[0]["content"] == "" {
 		t.Error("the round carries no content, so its tool rows have nothing above them")
 	}
-	// AND WHICH BOX. `native` on a detached coding run is what made a
-	// twenty-minute remote job and three local rounds indistinguishable.
-	if done.Backend != types.BackendSandbox {
-		t.Errorf("backend = %q, want sandbox", done.Backend)
-	}
-	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
-		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
-	}
-	// The run's cost is on its OWN record, the `sandbox` phase its
-	// collection publishes; stating it here too would count it twice.
-	if done.CostUSD != 0 {
-		t.Errorf("cost_usd = %v on the resumed executor, which the run's own record already carries", done.CostUSD)
+	// AND WHICH BOX: the harness that did the work and the box it ran in, which
+	// only the run knows and nothing on the resuming side could re-derive.
+	if done.Harness != "claude-code" || done.SandboxID != "box-7" {
+		t.Errorf("the box is unnamed: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
@@ -810,37 +767,33 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 // before its first push.
 const zeroOID = "0000000000000000000000000000000000000000"
 
-// A COLLECTED RUN LISTS THE TOOLS IT ACTIVATED. The round's record states what
-// the run held by its end (tools_available) and, apart from that, what it
-// could still have discovered (tool_catalogue); a run holds a tool it
-// activated over the bridge from that call on, so the collection rebuilds the
-// run's surface as the run left it. Rebuilt from the launch's record alone, as
-// it once was, every MCP tool the run had found and called was published as
-// one it never found, on the same record as the calls to it.
+// A COLLECTED RUN LISTS EVERY TOOL IT HELD, AND NOTHING LEFT TO DISCOVER. The
+// round's record states what the run held (tools_available): every tool its
+// launch recorded, which is every tool its seat holds, MCP servers' included.
+// It used to list beside that what the run could still have discovered
+// (tool_catalogue), and an executor has nothing left to discover — its harness
+// keeps a large server's tools out of its requests by itself — so the record
+// carries no such list rather than one a reader would take for tools the run
+// never had.
 //
-// Mutation: build the collection's surface from the state's active tools
-// alone, and jira_create is listed undiscovered; replay the failed activation
-// as well, and slack_history is listed held.
-func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
+// Mutation: put a catalogue back on the executor's record, or rebuild the
+// collection's surface without the launch's record, and this goes red.
+func TestACollectedRunListsEveryToolItHeld(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
+	held := []string{"jira_create", "lookup_colleague", "reflect", "slack_history", "slack_post"}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
 		pub: pub,
 		resume: &runner.Resume{
-			State: execstate.State{Version: execstate.Version, Round: 1,
-				ActiveTools: []string{"lookup_colleague", "reflect"}},
+			State:  execstate.State{Version: execstate.Version, Round: 1, ActiveTools: held},
 			Answer: "filed the flaky test",
 			Bridged: []runner.BridgedCall{
-				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "jira_create"},
-					Result: "jira_create is active"}, Seq: 1},
 				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "flaky test"},
-					Result: "created"}, Seq: 2},
-				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "slack_history"},
-					Result: "no", Failed: true}, Seq: 3},
+					Result: "created"}, Seq: 1},
 				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome": "delivered", "summary": "filed the flaky test",
 					"deliveries": []any{"jira_create"},
-				}}, Seq: 4},
+				}}, Seq: 2},
 			},
 		},
 	})
@@ -850,30 +803,22 @@ func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
 	}
 
 	done := completedPhase(t, pub, "execute")
-	if !slices.Contains(done.ToolsAvailable, "jira_create") {
-		t.Errorf("tools_available = %v, want the tool the run activated and called", done.ToolsAvailable)
+	for _, tool := range held {
+		if !slices.Contains(done.ToolsAvailable, tool) {
+			t.Errorf("tools_available = %v, want every tool the launch recorded, %s among them",
+				done.ToolsAvailable, tool)
+		}
 	}
-	if slices.Contains(done.ToolCatalogue, "jira_create") {
-		t.Errorf("tool_catalogue = %v lists a tool the run held as one it could still discover",
+	if len(done.ToolCatalogue) != 0 {
+		t.Errorf("tool_catalogue = %v, on a run that held every tool it could reach",
 			done.ToolCatalogue)
-	}
-	if !slices.Contains(done.ToolsAvailable, "lookup_colleague") {
-		t.Errorf("tools_available = %v, want what the launch recorded too", done.ToolsAvailable)
-	}
-	// A FAILED ACTIVATION activated nothing: the tool is still the run's to
-	// discover.
-	if slices.Contains(done.ToolsAvailable, "slack_history") {
-		t.Errorf("tools_available = %v holds a tool whose activation failed", done.ToolsAvailable)
-	}
-	if !slices.Contains(done.ToolCatalogue, "slack_history") {
-		t.Errorf("tool_catalogue = %v, want the tool whose activation failed", done.ToolCatalogue)
 	}
 }
 
-// A PHASE THAT RAN HERE IS NATIVE. The backend is a fact about where a phase
-// ran, not a flag the collection sets for everything it touches: the reviewer
-// runs in this process's own loop.
-func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
+// A PHASE THAT RAN HERE NAMES NO BOX. The harness and the box are facts about the
+// run an executor collected, not something the collection stamps on every
+// record it touches: the reviewer runs in this process's own loop.
+func TestAPhaseThatRanHereNamesNoBox(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	prov := &scriptedProvider{review: []llmtest.Response{
@@ -885,10 +830,7 @@ func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 		t.Fatalf("Review: %v", err)
 	}
 	done := completedPhase(t, pub, "review")
-	if done.Backend != types.BackendNative {
-		t.Errorf("backend = %q, want native", done.Backend)
-	}
-	if done.CodingAgent != "" || done.SandboxID != "" {
-		t.Errorf("a native phase named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	if done.Harness != "" || done.SandboxID != "" {
+		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 }

@@ -33,7 +33,7 @@ import (
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
 // fleet per call. Who serves a repository's GIT work is read off the same
-// view — every live node with the git role ([wholeGit], ADR-0082) — and so is
+// view — every live node with the git role ([wholeGit], ADR-0089) — and so is
 // what each of them advertises it can give its background work, read together
 // with them off one listing ([wholeGit.Listing]), which places a repository's
 // maintenance; this node's own git half is asked per request ([engineGit]).
@@ -48,7 +48,7 @@ import (
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
 // domain's copy that is WRONG is out of service for that domain's operations
-// alone ([localEstate.For], ADR-0072), and the node keeps its seats.
+// alone ([localEstate.For], ADR-0079), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -154,7 +154,7 @@ func (w wholeEstate) Holders() ([]string, error) {
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
 // gitPlacement is who serves git as this node routes a repository's git work
-// (ADR-0082): every live node whose presence profile names the git role, from
+// (ADR-0089): every live node whose presence profile names the git role, from
 // the same watched view as the estate's placement — and, read together with
 // them off one listing of that view, what each of them advertises it can give
 // its background work, which places a repository's maintenance
@@ -308,7 +308,7 @@ type heldVerdict struct {
 // copy is out of service.
 //
 // A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
-// alone (ADR-0072). An applier halted at a record it cannot decode or held one
+// alone (ADR-0079). An applier halted at a record it cannot decode or held one
 // past the deferral grace, an eviction, rows below the log's first record, a
 // checkpoint on another stream, a stalled prefix: a domain's copy in any of
 // those states goes OUT OF SERVICE — this node's router sends its own seats'
@@ -359,7 +359,7 @@ func (l *localEstate) serves(ctx context.Context, domain string) bool {
 }
 
 // copyOutOfService is the first of domains, in the order given, whose copy on
-// this node is out of service ([localEstate.serves], ADR-0072) — or false
+// this node is out of service ([localEstate.serves], ADR-0079) — or false
 // where every one serves, or where this node holds no estate to judge. A
 // fleet duty that decides from those domains' rows asks it before it claims
 // ([dutyDecline]).
@@ -446,7 +446,7 @@ func (l *localEstate) peek(ctx context.Context, c *core) (v copyVerdict, known b
 // as far as it can tell WITHOUT WAITING: it runs its core, and the last
 // verdict read of the copy — where one has been — found every domain a seat
 // depends on in service ([estate.SeatCopy]). A wrong copy of any other domain
-// costs that domain's calls a peer and never the seats (ADR-0072).
+// costs that domain's calls a peer and never the seats (ADR-0079).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
@@ -464,7 +464,7 @@ func (l *localEstate) servesUnasked(ctx context.Context) bool {
 
 // outOfService is which of domains this node's copy holds OUT OF SERVICE as far
 // as it can tell without waiting — a verdict read found that domain's copy
-// wrong (ADR-0072), or found the estate file shut, which takes every domain's
+// wrong (ADR-0079), or found the estate file shut, which takes every domain's
 // copy with it — in the order domains names them, and nil for none.
 //
 // FOR A WATCH OVER ONE SUBSYSTEM'S APPLIERS — the inbox relay's sources, the
@@ -548,7 +548,10 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 // mode is the evidence a capacity operation is established from, and a write
 // it took on anybody's behalf would be the publish the mode exists to rule
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
-// every write is answered "not here".
+// every write is answered "not here". The CORE's writers included, which the
+// core builds in every mode because its logs run in every mode: a reader of
+// them is served there, and a writer handed out beside it would take a peer's
+// artifacts write as surely as a native one.
 //
 // EVERY BACKEND CARRIES THE NODE'S CONFIGURATION POSTURE ([estate.Backend.
 // Current]) through the one gate this node's trigger admission, scheduler,
@@ -581,13 +584,33 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	// THE ARTIFACTS ESTATE, which every data node runs from boot whatever its
 	// company keeps, so a node without `data` reaches it through any data
 	// node's copy. Set only where both sides are, for the identity
-	// directory's reason: a typed nil reads as a half that is there.
+	// directory's reason: a typed nil reads as a half that is there. Its
+	// WRITER only while this node publishes, so a write asked of a node in a
+	// maintenance mode is answered "not here" and moves on to one that does.
+	publishes := e.mode.Publishes()
 	if c.artifactsReader != nil && c.artifactsWriter != nil {
-		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader, Writer: c.artifactsWriter}
+		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader}
+		if publishes {
+			b.Artifacts.Writer = c.artifactsWriter
+		}
 	}
 	// AND ITS DATASTORE, run beside it on every data node.
 	if c.artifactDataReader != nil && c.artifactDataWriter != nil {
-		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader, Writer: c.artifactDataWriter}
+		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader}
+		if publishes {
+			b.ArtifactData.Writer = c.artifactDataWriter
+		}
+	}
+	// AND THE SEATS' EXECUTOR SESSIONS, run on every data node from boot
+	// whatever the company keeps, for the same reason: a seat's box runs
+	// wherever its seat is held, a node without `data` included, and the
+	// engine records what it did, and reads it back at the next launch,
+	// through whichever data node answers (ADR-0073).
+	if c.executorReader != nil && c.executorWriter != nil {
+		b.Executor = estate.ExecutorHalf{Reader: c.executorReader}
+		if publishes {
+			b.Executor.Writer = c.executorWriter
+		}
 	}
 	if n == nil {
 		return b

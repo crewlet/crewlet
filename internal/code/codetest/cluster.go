@@ -61,7 +61,7 @@ type Cluster interface {
 	// GitReadThrough is a read of a repository by object id asked through
 	// member node's own router, as a seat's tool on that member asks it —
 	// the repository's home git node first, the member's own git half at its
-	// place in the order (ADR-0082).
+	// place in the order (ADR-0089).
 	GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error)
 	// GitWriteThrough is an engine write asked through member node's own
 	// router, as a seat's or a person's tool on that member asks it — of the
@@ -87,7 +87,7 @@ type Cluster interface {
 	// SplitMaintainers has every member of nodes take itself for repoID's
 	// maintainer — its compactor's Maintainers answering yes — until the case
 	// ends: a presence view split between them, which no lease or epoch
-	// arbitrates (ADR-0082), so each compacts and publishes the repository as
+	// arbitrates (ADR-0089), so each compacts and publishes the repository as
 	// its maintainer.
 	SplitMaintainers(t testing.TB, repoID string, nodes ...string)
 	// ConfineMaintenance has every member's compactor maintain, until the
@@ -101,7 +101,7 @@ type Cluster interface {
 	// Advertise has member node say its git cache gives its background work
 	// budget bytes (GitNode.Advertise) until the case ends — git nodes of
 	// different sizes, which a repository's maintainer is placed by
-	// (ADR-0084), on one machine.
+	// (ADR-0091), on one machine.
 	Advertise(t testing.TB, node string, budget int64)
 	// ProposeCompactionAgain asks member node's router to decide, again, the
 	// last compaction a member's compactor proposed of repoID, under its own

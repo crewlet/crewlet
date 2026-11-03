@@ -168,7 +168,7 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 		t.Error("an overview snapshot carries the event feed, which the " +
 			"events question keeps to an admin")
 	}
-	for _, key := range []string{"agents", "org", "tools", "schedules", "sandboxes",
+	for _, key := range []string{"agents", "org", "tools", "schedules", "executors",
 		"tokens", "budget", "health"} {
 		if _, ok := overview[key]; !ok {
 			t.Errorf("an overview snapshot is missing %q, which is everybody's", key)
@@ -312,7 +312,7 @@ func TestAnAudienceReadsTheTrailOfTheSeatsTheTableAdmits(t *testing.T) {
 			Seats:     func() tokens.Seats { return seats },
 			Roster:    func() []map[string]any { return nil },
 			Org:       func() any { return map[string]any{} },
-			Tools:     func() []map[string]any { return nil },
+			Tools:     func() any { return nil },
 			Schedules: func() any { return []any{} },
 			Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 			Chart:     chart,
@@ -431,7 +431,7 @@ func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
 	}
 }
 
-// A CODING RUN'S QUESTION NAMES ITS READER IN THE VARIANT, AND NOTHING ELSE
+// AN EXECUTOR'S QUESTION NAMES ITS READER IN THE VARIANT, AND NOTHING ELSE
 // DOES.
 //
 // A run parked on a question shows it to the seats it is put to whatever their
@@ -443,7 +443,7 @@ func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
 //
 // Mutation: drop the record from the variant's name, or name it on every
 // sandbox push, and this fails.
-func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
+func TestAnExecutorsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 	t.Parallel()
 	person := func(login, seat string) Audience {
 		return NewAudience(iam.Principal{Login: login, Kind: iam.KindPerson,
@@ -452,7 +452,7 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 	}
 	asked, bystander := person("sam.lee", "analyst"), person("kim.ray", "auditor")
 
-	parked := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+	parked := ExecutorRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
 		Question: "which branch?", AudienceHandles: []string{"analyst"}}}
 	askedName, askedRows := parked.For(asked)
 	byName, byRows := parked.For(bystander)
@@ -460,14 +460,14 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 		t.Errorf("the reader a question is put to and one it is not share the "+
 			"variant %q, so one encode hands both the same payload", askedName)
 	}
-	if got := askedRows.([]livestate.SandboxEntry)[0].Question; got != "which branch?" {
+	if got := askedRows.([]livestate.ExecutorEntry)[0].Question; got != "which branch?" {
 		t.Errorf("the reader the question is put to was shown %q", got)
 	}
-	if got := byRows.([]livestate.SandboxEntry)[0].Question; got != "" {
+	if got := byRows.([]livestate.ExecutorEntry)[0].Question; got != "" {
 		t.Errorf("a reader the question is not put to was shown %q", got)
 	}
 
-	running := SandboxRows{{TurnID: "turn-2", AgentID: "agent-eng", Task: "fix it",
+	running := ExecutorRows{{TurnID: "turn-2", AgentID: "agent-eng", Task: "fix it",
 		AudienceHandles: []string{"analyst"}}}
 	if a, b := runningName(running, asked), runningName(running, bystander); a != b {
 		t.Errorf("with no run parked on a question two readers of the same reach "+
@@ -476,23 +476,23 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 }
 
 // runningName is the variant rows are pushed to audience under.
-func runningName(rows SandboxRows, audience Audience) string {
+func runningName(rows ExecutorRows, audience Audience) string {
 	name, _ := rows.For(audience)
 	return name
 }
 
-// THE SANDBOXES PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
-// Which `providers.llm` entry a coding run spends, the chain's head or the
+// THE EXECUTORS PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
+// Which `providers.llm` entry an executor spends, the chain's head or the
 // fallback a launch took, is the company's configuration: everybody else, the
 // seat's lead included, is sent the run and the model it runs under without
 // it. The push and the snapshot both shape the rows through here.
 //
-// Mutation: drop the configuration rule from the coding run's mask, or reach
+// Mutation: drop the configuration rule from the executor's mask, or reach
 // it with no Config for an admin, and a reader is handed the entry or an
 // admin is not.
 func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
 	t.Parallel()
-	rows := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+	rows := ExecutorRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
 		ProviderKey: "plan-zulu", Model: "opus"}}
 	lead := iam.Principal{Login: "ana.ruiz", Stage: iam.StageActive, Seat: "eng-lead",
 		Grants: []iam.Grant{iam.GrantWorklet}}
@@ -506,7 +506,7 @@ func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
 		"the overview":    {NewAudience(overviewPrincipal, nil), false},
 	} {
 		_, data := rows.For(tc.audience)
-		got := data.([]livestate.SandboxEntry)
+		got := data.([]livestate.ExecutorEntry)
 		if len(got) != 1 || (got[0].ProviderKey == "plan-zulu") != tc.entry || got[0].Model != "opus" {
 			t.Errorf("%s is sent %+v, want the entry shown %v and the model always", name, got, tc.entry)
 		}

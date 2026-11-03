@@ -5,12 +5,12 @@
 // # Why a token in the path at all
 //
 // Three edges of this engine are reachable by something running INSIDE a
-// sandbox: the OTLP receiver a coding agent exports telemetry to, the MCP
-// bridge it calls the seat's tools through, and the code host a coding box
-// fetches and pushes its run's repositories at (internal/code/host's
-// BoxTokens, under /box/git/). None can be given the API's own token — that
-// credential reads the whole company, and handing it to a box running
-// generated code is the failure the sandbox exists to prevent. So what
+// sandbox: the OTLP receiver a harness exports telemetry to, the MCP bridge it
+// calls the seat's tools through, and the code host a coding box fetches and
+// pushes its run's repositories at (internal/code/host's BoxTokens, under
+// /box/git/). None can be given the API's own token — that credential reads
+// the whole company, and handing it to a box running generated code is the
+// failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
 // one run and expires with it, and it rides in the path because the first two
 // clients are a vendor's OTLP exporter and a vendor's MCP client: neither
@@ -42,7 +42,7 @@
 // different key SET derived a different key, so the moment an operator added
 // k2 the nodes that had restarted refused every token minted by the nodes that
 // had not, in both directions, for the length of the rollout. Worse, it
-// invalidated tokens MID-RUN: a detached coding run's box would keep exporting
+// invalidated tokens MID-RUN: a detached executor's box would keep exporting
 // telemetry and calling tools against a credential the fleet no longer
 // recognised, with nothing in the config looking wrong. Tagged, the runbook is
 // add a key, restart, flip active, restart, drop the old key once the longest
@@ -60,7 +60,7 @@
 // back — its report, its transcript, its question, its live output — is
 // redacted of every text of that shape. By its SHAPE, because no node that
 // collects a run holds the tokens its launch minted: the run's row carries
-// none, so there is no value to redact by, and a coding agent that prints its
+// none, so there is no value to redact by, and a harness that prints its
 // environment or its MCP configuration prints its run's telemetry and bridge
 // tokens. A bare `v2`, which this was, is a word prose holds, so no rule could
 // key on it without redacting prose.
@@ -87,7 +87,7 @@
 // The per-key derivation is that rule's too beyond tokens: [DeriveKey] and
 // [KeyTag] also yield an embedded fleet's broker credentials — each route's
 // password, each leaf link's and operator's nkey — under domains of their own
-// (internal/queue/jetstream, ADR-0087), so one rotation runbook moves the
+// (internal/queue/jetstream, ADR-0094), so one rotation runbook moves the
 // tokens, the sessions and the broker together, with no step for any one of
 // them.
 package runtoken

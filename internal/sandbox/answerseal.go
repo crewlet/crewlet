@@ -20,7 +20,7 @@ import (
 // and that is all ADR-0031 asks of it: almost everything on a run's row is the
 // coordinator's own bookkeeping — statuses, leases, counts, the box — which it
 // reads to decide what to do next. The answer is not bookkeeping. The resumed
-// turn hands its text to the run's coding CLI as the person's words, and tells
+// turn hands its text to the run's harness as the person's words, and tells
 // it who gave them ([AskedRun]); its announcement names that person too. That
 // makes it what ADR-0031 calls an instruction, the same as a note to a running
 // turn, so it is sealed under the fleet keyring like every other instruction
@@ -133,7 +133,7 @@ type AnswerWords struct {
 	// By, ByKind and OperatorID are who gave it, in the three halves
 	// iam.ActorFor makes of a principal — the author, what sort of author
 	// that is, and the credential the answer came through — exactly as the
-	// answer's own record states them ([types.SandboxRunAnswered]). For a
+	// answer's own record states them ([types.ExecutorAnswered]). For a
 	// chat reply, the sender as the delivery's envelope names them, a
 	// person, and no credential: the chat surface vouched for the sender and
 	// nothing of this engine's was presented ([chatAnswerer]). For an answer

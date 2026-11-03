@@ -51,7 +51,7 @@ type LocalBackends interface {
 	// that copy is OUT OF SERVICE: wrong rather than behind, so the node
 	// answers none of that domain's operations from it while its seats'
 	// calls on it go to the other data nodes. Another domain's fault is not
-	// this one's — every other domain's copy keeps serving (ADR-0072).
+	// this one's — every other domain's copy keeps serving (ADR-0079).
 	// [SeatCopy] asks for the copy a SEAT is served by.
 	//
 	// The backend's [Backend.Answers] is that domain's own.
@@ -74,7 +74,7 @@ type RouterOptions struct {
 	// Git is who serves GIT: every live node with the `git` role, the
 	// engine's from the same watched presence view as Placement, and its
 	// error UNKNOWN, never "no git node". Asked by every operation on a
-	// repository's git objects ([op.keyedOnGit], ADR-0082), and — as ONE
+	// repository's git objects ([op.keyedOnGit], ADR-0089), and — as ONE
 	// listing of the git nodes beside what each advertises it can give its
 	// background work ([GitPlacement.Listing]) — by [Router.Maintainer],
 	// which places a repository's maintenance by it. Required: a router
@@ -308,7 +308,7 @@ func (t Timing) refusal() error {
 //
 // A node without the `data` role holds nothing and asks for everything; a data
 // node answers its own seats from its own copy, and asks a peer only while its
-// copy of the operation's domain is out of service (ADR-0072) or cannot take
+// copy of the operation's domain is out of service (ADR-0079) or cannot take
 // the request. Both are the same
 // router, so a tool behaves identically on either, and the path a data node
 // takes to its own copy is the path it takes to a peer's, floors included.
@@ -1526,7 +1526,7 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 //
 // A node is sticky for the reason its applier is the one most likely to have
 // this node's writes, and each domain has its own applier — and since a fault
-// takes only its own domain's copy out of service (ADR-0072), a node can serve
+// takes only its own domain's copy out of service (ADR-0079), a node can serve
 // one domain and not another. One sticky node for every domain made a router
 // on a node without data, between a peer whose tracker copy was out and one
 // whose knowledge base was, CHASE ITS TAIL: a tracker call asked the first,
@@ -1713,7 +1713,7 @@ func (r *Router) markSuspect(node string) {
 }
 
 // markOutOfService asks node last for [suspectFor] for the operations that read
-// copies: one of its copies of them is out of service (ADR-0072), and every
+// copies: one of its copies of them is out of service (ADR-0079), and every
 // other place it holds stays — so does the node, which answered.
 func (r *Router) markOutOfService(node, copies string) {
 	r.mu.Lock()
@@ -1858,7 +1858,7 @@ func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 // data, or one whose copy of a domain that gates seats is out of service
 // ([SeatCopy]) — it is the first data node that answers, and that answer is
 // trusted for [admissionTrust]. A wrong copy of any other domain is not the
-// seat's copy, and admission stays local over it (ADR-0072).
+// seat's copy, and admission stays local over it (ADR-0079).
 //
 // A COPY THAT ADMITS NO SEAT ANSWERS NO HALF, which is the zero [Served]: the
 // caller compares the halves its company runs against the halves served, and

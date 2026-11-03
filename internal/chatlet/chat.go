@@ -231,13 +231,14 @@ const (
 	//
 	// [MaxMentions], THIRTY-TWO: a collective address wakes no more agents
 	// than one message may name, because a name and `@channel` are the
-	// same wake. More would let the gesture nobody is obliged to answer
+	// same wake, and a person's `@channel` obliges every seat it reaches
+	// to answer exactly as a mention does. More would let one gesture
 	// start more runs than naming each seat could; fewer would only make
 	// the writer name the seats it left out, to wake them all the same.
 	// ONE CONSTANT, not a second figure, so the two cannot drift apart.
 	//
-	// A WAKE IS ITS SEAT'S CODING RUN IN A BOX (ADR-0066): its first request
-	// carries the CLI's own harness (about 15k input tokens for Claude
+	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): its first request
+	// carries the harness's own prompt (about 15k input tokens for Claude
 	// Code) even where the seat decides the message was not for it, and
 	// its box is a 200 to 400 MB process on the engine host for a `direct`
 	// cell, or one of the sandboxes an E2B account may run at once. So this
@@ -253,10 +254,11 @@ const (
 
 	// MaxRecipients bounds the whole resolved recipient set on one post.
 	//
-	// IT IS A CAP THAT CUTS, NOT A CEILING DERIVED FROM THE ARMS. Three arms
-	// carry limits of their own — [MaxMentions], [MaxThreadParticipants]
-	// and [MaxCollectiveRecipients] — and together with the one lead
-	// fallback they take at most 81. The others carry none: a direct
+	// IT IS A CAP THAT CUTS, NOT A CEILING DERIVED FROM THE ARMS. Three
+	// collections carry limits of their own ([MaxMentions],
+	// [MaxThreadParticipants] and [MaxCollectiveRecipients], the last
+	// under whichever ONE of its two reasons the author raised), and
+	// together with the one answerer they take at most 81. The others carry none: a direct
 	// conversation's participants (at most [MaxDMParticipants], by the
 	// room's own cap), a thread's followers and a room's followers of
 	// everything. Those are cut HERE, and the cut sets
@@ -266,7 +268,7 @@ const (
 	// NINETY-SIX, the smallest multiple of [MaxCollectiveRecipients] above
 	// the 81 the capped arms can fill: a post that fills every capped arm
 	// at once is never cut by the total, so the total bites only on the
-	// arms nothing else bounds. Every recipient is a wake, a coding run in
+	// arms nothing else bounds. Every recipient is a wake, an executor in
 	// a box, so this is also the most boxes one post starts, and never
 	// more than the seats it reaches would run at once for any other
 	// cause, since each runs one at a time. It is also a line of the
@@ -420,10 +422,10 @@ const (
 	// the unit's agent seats are members with the follow-all flag set, so
 	// the room is where work addressed to nobody in particular lands.
 	//
-	// It is also the only kind a [ReasonLeadFallback] can arise in — a
-	// person who posts to a unit and names nobody is addressing whoever
-	// leads it, and a room where that resolved to silence would be a
-	// person talking to an empty screen.
+	// Its [ReasonAnswerer] is the unit's LEAD, through the chart: a person
+	// who posts to a unit and names nobody is addressing whoever leads
+	// it. Every other named room is answered by its most senior agent
+	// member instead, because nothing but the chart says who leads it.
 	KindUnit Kind = "unit"
 
 	// KindDM is a conversation between exactly two parties.
@@ -637,8 +639,9 @@ func invalid(field, why string, args ...any) error {
 // emoji it may ([ErrReactionsFull]), each a state the sentence says how to
 // change, a room this node cannot serve until it is upgraded
 // ([ErrUnknownKind]), a room, a message or a thread that is not there
-// ([ErrNotFound]), a name another room holds ([ErrNameTaken]) and a room that
-// changed under a decision ([ErrConflict]). Each names a room as a person
+// ([ErrNotFound]), a name another room holds ([ErrNameTaken]), a room that
+// changed under a decision ([ErrConflict]) and a membership stated against
+// members that changed since they were read ([ErrMembersChanged]). Each names a room as a person
 // knows it ([Channel.called]) and never by its id. THE FRAMEWORK'S OWN THREE —
 // a lost race (the conflict beneath [ErrConflict]), a create of what is there
 // and a write a deletion keeps deleted — are told in the state log's words for
@@ -654,7 +657,7 @@ func Sentence(err error) string {
 		return "`" + refusal.Field + "`: " + refusal.Why
 	}
 	for _, mark := range []error{ErrForbidden, ErrArchived, ErrReactionsFull, ErrUnknownKind,
-		ErrNotFound, ErrNameTaken, ErrConflict} {
+		ErrNotFound, ErrNameTaken, ErrConflict, ErrMembersChanged} {
 		if !errors.Is(err, mark) {
 			continue
 		}

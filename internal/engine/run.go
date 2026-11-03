@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -58,7 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -99,8 +100,8 @@ type Engine struct {
 	// githubIssuer holds the installation tokens this process has issued
 	// its agents' own GitHub Apps, one per installation and scope, in
 	// memory only. ONE for every reader of a seat's token (its tool
-	// servers, its coding runs, the poll that keeps a long run's token
-	// current and the inbound participant lookup), so an installation
+	// servers, its executor's launches, the poll that keeps a long run's
+	// token current and the inbound participant lookup), so an installation
 	// costs one mint an hour however many ask, and a refusal one request
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
@@ -333,6 +334,11 @@ type Engine struct {
 	// parked on it. See providerpark.go.
 	limitProbes limitProbes
 
+	// parkNotices is every seat's provider park notice not yet published:
+	// one per change, held and retried while the broker refuses. See
+	// parknotice.go.
+	parkNotices parkNotices
+
 	// clock is the instant every token-budget window this engine cuts is
 	// read at, and nil is the wall clock — which is what every engine [New]
 	// builds runs on. See [Engine.now] for why there is one and why it is
@@ -347,13 +353,29 @@ type Engine struct {
 	// keeps it ([runnerProbe]), published on the heartbeat.
 	runners runnerProbe
 
-	// hostLogins is what each model entry's CLI says of its login on this
+	// hostLogins is what each model entry's harness says of its login on this
 	// node's disk, and the loop that keeps it ([hostLogins]).
 	hostLogins hostLogins
 
 	// retries is this node's watched copy of the fleet's model retries
 	// ([modelRetries]).
 	retries modelRetries
+
+	// restarts is this node's watched copy of the fleet's MCP restarts
+	// ([mcpRestarts]).
+	restarts mcpRestarts
+
+	// oauth is this node's part in its MCP servers' OAuth sign-ins: the
+	// state signer and each server's access token source ([oauthState]).
+	oauth oauthState
+
+	// listings is this node's published MCP listings and its watched copy
+	// of every node's ([mcpListings]).
+	listings mcpListings
+
+	// reviews is this node's watched copy of the definitions the fleet's
+	// MCP tools' levels were decided on ([mcpReviews]).
+	reviews mcpReviews
 
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
@@ -367,9 +389,10 @@ type Engine struct {
 	// home ([Engine.CheckModel]); empty is the process's temporary directory.
 	checkHomes string
 
-	// modelInputs is the last good read of the model alarms' fleet-wide
-	// inputs ([Engine.modelsReading]).
-	modelInputs modelInputs
+	// entryInputs is the last good read of the per-entry alarms'
+	// fleet-wide inputs, the model entries' and the MCP servers'
+	// ([Engine.entriesReading]).
+	entryInputs entryInputs
 
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
@@ -500,11 +523,11 @@ type Engine struct {
 	// hands the committer the code log's write authority as it is
 	// ([Engine.startNative]).
 	committerPublisher func(code.Publisher) code.Publisher
-	// plans is the node's registry of coding-CLI sign-ins
-	// ([cliagent.Plans]), made once at boot under a key derived from the
+	// plans is the node's registry of harness sign-ins
+	// ([harness.Plans]), made once at boot under a key derived from the
 	// keyring and handed to every revision's build, so a sit-out outlives
 	// every apply and a sign-in's id is the same on every node.
-	plans *cliagent.Plans
+	plans *harness.Plans
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake`
 	// company's runs do, nil for the double's own demonstration. Kept
@@ -557,7 +580,7 @@ type Engine struct {
 	// to end it. Nil on a node with no store or no seat host.
 	fill *memoryFill
 
-	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
+	// sandboxOtel mints each launch's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
 	//
 	// Held here and handed OUT to the API this process serves rather than
@@ -567,8 +590,8 @@ type Engine struct {
 	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
-	// bridge serves a running seat's tool surface to its executor's coding
-	// agent over MCP. Nil where neither a bridge URL is configured nor this
+	// bridge serves a running seat's tool surface to its executor's harness
+	// over MCP. Nil where neither a bridge URL is configured nor this
 	// node serves the bridge's route itself — which leaves every executor
 	// launch on this node refused, naming the variable, so a node that runs
 	// seats needs one. leaveBridgeFleet withdraws it from the fleet it
@@ -577,9 +600,9 @@ type Engine struct {
 	leaveBridgeFleet queue.Unsubscribe
 
 	// sessions is where every phase the engine drives serves its tools to
-	// the CLI that runs it, on this host: this PROCESS's one
+	// the harness that runs it, on this host: this PROCESS's one
 	// [toolsession.Host], a directory only the engine's user can open,
-	// holding one socket per CLI run, which the CLI's `crewlet mcp-relay`
+	// holding one socket per harness run, which the harness's `crewlet mcp-relay`
 	// dials. Every turn's runner is handed it ([RunnerInput.Sessions]). The
 	// executor's run is the one phase that does not use it: it is in a box,
 	// and reaches the seat's tools over the bridge above.
@@ -813,8 +836,13 @@ type Engine struct {
 	// mcpRetryBase is the restart schedule's first wait for every bridge
 	// this engine builds and for its seats' runners, zero for
 	// [mcp.RestartBase]; [Options.mcpRetryBase].
-	mcpFileMu    sync.Mutex
-	mcpRetryBase time.Duration
+	//
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// for every bridge this engine builds, zero for [mcp.RelistFloor];
+	// [Options.mcpRelistBase].
+	mcpFileMu     sync.Mutex
+	mcpRetryBase  time.Duration
+	mcpRelistBase time.Duration
 
 	// seatMCP is one bridge per seat this node holds, for that seat's
 	// per-role children, with what keeps them converged while the seat is
@@ -933,9 +961,17 @@ type Engine struct {
 	// draining node took into "no evaluation has ever run".
 	alarms atomic.Pointer[statelog.Tracker]
 
+	// waitingWatch stops this node listening on the seats' waiting channel
+	// (queued.go); nil when it is not listening.
+	waitingWatch queue.Unsubscribe
+
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
+
+	// inboxReports is this node's waiting-mail loop over the seats it holds
+	// (inboxreport.go); nil until Start arms it.
+	inboxReports *inboxReporter
 
 	// refusals is how this node's gates tell that loop a window has started
 	// refusing ([refusalLatch]). Built with the engine rather than with the
@@ -993,14 +1029,17 @@ type Engine struct {
 	// history.go.
 	history          *eventfan.Fleet
 	stopHistoryServe queue.Unsubscribe
+	// stopMCPInstanceServe withdraws this node as an answerer of reads of
+	// its MCP instances ([Engine.startMCPInstances]).
+	stopMCPInstanceServe queue.Unsubscribe
 
 	// steers is this node's running turns' note boxes, and stopSteerServe
 	// withdraws the node as their answerer. See steer.go.
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
-	// runSteers is this node's half of the notes a turn's coding run holds
-	// on its record, from the run's launch to the turn's end. See
+	// runSteers is this node's half of the notes a turn's executor holds
+	// on its record, from its launch to the turn's end. See
 	// runsteer.go and ADR-0067.
 	runSteers *runSteers
 	// codeSearchWire is this node's code search scatter envelopes, both
@@ -1041,11 +1080,11 @@ type Engine struct {
 	turnHolds          runningTurns
 	stopCodeHoldsServe queue.Unsubscribe
 
-	// sandboxTails answers a running coding run's live output from the node
+	// executorTails answers a running executor's live output from the node
 	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
 	// and stopTailServe withdraws this node as one of its answerers. See
-	// sandboxtail.go.
-	sandboxTails  *sandbox.TailReader
+	// executortail.go.
+	executorTails *sandbox.TailReader
 	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
 
@@ -1056,6 +1095,14 @@ type Engine struct {
 	boxReads         *boxReads
 	stopBoxReadServe queue.Unsubscribe
 	stopNudgeListen  queue.Unsubscribe
+
+	// mcpChecks asks the fleet to test an MCP server and answers the tests
+	// of the servers this node runs. Nil on a node with no broker, which is
+	// the whole fleet and tests everything itself. See mcpcheck.go.
+	mcpChecks *mcpChecks
+	// mcpTesting is the tests running on this node, by [mcpTestKey]: one
+	// at a time per entry and seat.
+	mcpTesting sync.Map
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -1158,7 +1205,7 @@ type Options struct {
 	// from its document, the sandboxes it configures, the native halves it
 	// runs, equipping its seats' tools — the shared MCP servers among them,
 	// each bounded by its own `startup_timeout_seconds` — and restoring its
-	// coding CLIs' credential bundles. None of that may hold a startup probe,
+	// harnesses' credential bundles. None of that may hold a startup probe,
 	// since a probe sized for a store's recovery knows nothing about a
 	// company's secrets, tool servers or logins, so a caller answering probes
 	// (internal/api's Boot) treats this call as the moment the node is alive
@@ -1188,7 +1235,7 @@ type Options struct {
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
-	// Bridge serves a seat's tools to a coding agent. Nil builds one from
+	// Bridge serves a seat's tools to a harness. Nil builds one from
 	// the environment and BoxHostURL: [mcpbridge.BaseURLVar] as [ReadBoxURLs]
 	// reads it, then [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
@@ -1242,7 +1289,7 @@ type Options struct {
 	SandboxRuns func(handle string) (held, awaitsAnswer bool)
 
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
-	// takes the production value, which is sized against coding jobs that
+	// takes the production value, which is sized against launched jobs that
 	// run for minutes; a test shrinks it so a run settles in a second
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
@@ -1291,6 +1338,13 @@ type Options struct {
 	// knob exists only so a case can watch a retry bring a server up
 	// without waiting fifteen seconds for it.
 	mcpRetryBase time.Duration
+
+	// mcpRelistBase is the soonest a running MCP session is listed again
+	// ([mcp.RelistFloor]), zero for it, and the rest of that schedule
+	// scales with it. UNEXPORTED for mcpRetryBase's reason: a case watching
+	// a server change its tools under a running engine would otherwise wait
+	// a minute for each listing.
+	mcpRelistBase time.Duration
 
 	// fakePlay scripts what a `providers.sandbox.fake` company's runs do
 	// ([sandbox.FakeRunner.Player]); nil plays each as the double's own
@@ -1426,12 +1480,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE SIGN-IN KEY BESIDE IT, derived from the same keyring and
 	// [config.Secrets.Keyring]'s one decoding of it, which openCipher has
 	// just proved: what makes a model's sign-in id the same on every node
-	// and across restarts ([cliagent.SignInID]).
+	// and across restarts ([harness.SignInID]).
 	ring, err := opts.Bootstrap.Secrets.Keyring()
 	if err != nil {
 		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
 	}
-	plans := cliagent.NewPlans(ring.Derive(cliagent.SignInKeyInfo))
+	plans := harness.NewPlans(ring.Derive(harness.SignInKeyInfo))
 	// AND THE ESTATE'S ENVELOPES OVER IT, for the same reason and in the same
 	// place: every request this node's router sends is signed with them and
 	// every reply it is sent verified, and a data node answers its peers
@@ -1450,7 +1504,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// AND A NOTE THAT WAITS ON A CODING RUN'S RECORD, which any node files
+	// AND A NOTE THAT WAITS ON AN EXECUTOR'S RECORD, which any node files
 	// and any node reads: sealed there, in domains of its own, for the reason
 	// the scatter's are (runsteer.go).
 	steerSeals, err := newSteerSeals(recordKeyring(opts.Bootstrap))
@@ -1592,7 +1646,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 
 	// THIS PROCESS'S TOOL SESSIONS, the last of what can fail with nothing
-	// open: every phase that offers tools serves them to its CLI through a
+	// open: every phase that offers tools serves them to its harness through a
 	// socket in this directory, and a TMPDIR long enough to put that socket
 	// past the platform's bound on a unix socket's path is refused HERE,
 	// naming TMPDIR, rather than at every seat's first phase as a bind error
@@ -1605,7 +1659,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	var sessions *toolsession.Host
 	if sessions, err = toolsession.NewHost(); err != nil {
 		return nil, fmt.Errorf("engine: the directory every seat's tools are served "+
-			"to its CLI from: %w", err)
+			"to its harness from: %w", err)
 	}
 	sessionsHanded := false
 	defer func() {
@@ -1681,6 +1735,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
+		mcpRelistBase:       opts.mcpRelistBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		gitHookArgv:         slices.Clone(opts.GitHook),
@@ -1721,7 +1776,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.claims = newGateWatch(e.seatsAdmitted)
 	// THE DESK FILES ON THE SAME RECORDS: a turn's box, handed over in the
 	// write its launch makes to create the run's record — before any box or
-	// CLI exists — and every late offer to the turn after it (steer.go).
+	// harness exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
@@ -1802,6 +1857,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if backends.Queue != nil {
 		if e.boxReads, err = newBoxReads(recordKeyring(opts.Bootstrap), nodeID, backends.Queue,
 			e.sandboxCoordinator); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
+		// AND A TEST OF AN MCP SERVER WHERE IT RUNS, which the node asked
+		// carries out (it starts a process or dials as the company), so it
+		// is signed too (mcpcheck.go).
+		if e.mcpChecks, err = newMCPChecks(recordKeyring(opts.Bootstrap)); err != nil {
 			if ownsBackends {
 				backends.Close(ctx)
 			}
@@ -1998,7 +2062,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
 			"configures (its secret snapshot, sandboxes, Worklet, Doclet and Chatlet, tool "+
-			"servers, coding CLI logins) starts next")
+			"servers, harness logins) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
 	}
@@ -2285,10 +2349,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armCodeHolds(ctx); err != nil {
 		return nil, err
 	}
-	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
-	// and at the same point — see sandboxtail.go.
-	if err = e.armSandboxTails(ctx); err != nil {
-		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
+	// AND THE LIVE OUTPUT OF THE EXECUTORS' BOXES IT OWNS, for the same
+	// reason and at the same point — see executortail.go.
+	if err = e.armExecutorTails(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve executors' live output: %w", err)
 	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
 	// sandboxhost.go.
@@ -2337,6 +2401,25 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return e, nil
 	}
 
+	// EVERY MAILBOX A WAKE TRAVELS THROUGH, BEFORE ANYTHING BELOW CAN SEND
+	// ONE: each seat's inbox and priority lane, and the inbound edge's own
+	// durable. Both streams drop what is published to a subject no
+	// consumer covers, and the scheduler, the change feeds and the
+	// notification router below all publish the moment they start, so
+	// made after them the first wakes of a boot (a feed replaying a
+	// person's message) were gone. The node's wake queue ([Engine.wakes])
+	// is the backstop for a seat whose create the broker refused here, not
+	// the path a boot takes. The pass is best effort per seat, as it is on
+	// every other caller; the inbound edge's is fatal, for the reason the
+	// router's own subscribe is ([Engine.ensureInboundMailbox]).
+	if e.node != nil {
+		e.node.EnsureMailboxes(ctx)
+	}
+	if e.Company() != nil {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return nil, fmt.Errorf("engine: %w", err)
+		}
+	}
 	// WHICH SEATS A PERSON PAUSED, read before the seat host claims
 	// anything — [Engine.Start] runs it — so the first mail this node is
 	// handed meets a node that already knows. Bounded: past its budget the
@@ -2349,6 +2432,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
 	e.startModelRetries(ctx)
 	e.startDeviceSignIns(ctx)
+	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
+	// watched: the catalogue a per-agent server's tools reach.
+	e.startMCPListings(ctx)
+	// AND HOW EACH OF THEM IS, answered to a server's page on any node; and
+	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
+	e.startMCPInstances(ctx)
+	e.startMCPRestarts(ctx)
+	// AND THE TESTS PEOPLE ASK FOR, of the servers this node runs.
+	e.startMCPChecks(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2513,7 +2605,7 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
-		// nothing in the engine called it — so a coding run that asked a
+		// nothing in the engine called it — so an executor that asked a
 		// person a question waited out its pause TTL however promptly they
 		// replied.
 		//
@@ -2527,6 +2619,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Observe == nil {
 		d.Observe = e.observe
+	}
+	if d.Settled == nil {
+		d.Settled = e.settleWaiting
 	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
@@ -2586,6 +2681,14 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// AND WHAT WAITS IN THE INBOXES OF THE SEATS THIS NODE HOLDS, after the
+	// host for the same reason: what it reads is the seats the host claimed.
+	// See inboxreport.go.
+	e.startInboxReports(ctx)
+	// A PERSON'S MESSAGE QUEUED BEHIND A BUSY SEAT, shown as queued. See
+	// queued.go. After the host, like the meters, because what it answers
+	// is whether this node runs the seat.
+	e.startWaitingWatch(ctx)
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (coalesce.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
@@ -2950,6 +3053,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
+	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	// THE NATIVE HALF'S DUTIES BEFORE THE CORE'S, in the order the halves
@@ -3007,6 +3111,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
+	e.stopInboxReports()
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
@@ -3062,6 +3167,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
+	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
+	// and its instances no longer answered.
+	e.stopMCPListings(ctx)
+	e.stopMCPInstances(ctx)
+	e.stopMCPChecks(ctx)
+	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()
@@ -3128,7 +3239,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryReads(ctx)
 	// And a run's live output, read from boxes this node is about to stop
 	// driving — and a read of a box on its host, asked by a peer.
-	e.stopSandboxTails(ctx)
+	e.stopExecutorTails(ctx)
 	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
@@ -3165,7 +3276,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// LAST, once nothing can run a phase: the drain waited out every turn,
 	// the sandbox's resumes stopped with it above, and the seats are gone
 	// with the node. A phase still serving from the directory would find its
-	// socket removed under its CLI.
+	// socket removed under its harness.
 	e.closeSessions(ctx)
 }
 
@@ -3242,7 +3353,7 @@ func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
 
 // Recorder is the process's one metrics recorder, or nil.
 //
-// EXPOSED for the same reason [Engine.Backends] is: a subsystem the CLI
+// EXPOSED for the same reason [Engine.Backends] is: a subsystem the harness
 // composes beside the engine — the backup service is the one — measures
 // something the catalogue declares, and a second recorder would be a second
 // set of series for one process. Nil is legal and records nothing.
@@ -3271,7 +3382,7 @@ func newObjectives(rec *metrics.Recorder) *objectives.Meter {
 // UNEXPORTED BECAUSE IT IS NOT AN ENTRY POINT. The node calls it only after it
 // has admitted the delivery's turn ([node.Node.AdmitTurn]), so a caller that
 // reached it any other way would start a turn the node never admitted
-// (ADR-0063). A turn that does not arrive by the mailbox, a coding run's
+// (ADR-0063). A turn that does not arrive by the mailbox, a launch's
 // completion or a person's recorded answer, re-enters through the sandbox
 // coordinator's resume, which asks the same admission itself.
 func (e *Engine) mailboxTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
@@ -3279,7 +3390,7 @@ func (e *Engine) mailboxTurn(ctx context.Context, handle string, evs []*events.E
 }
 
 // conditionsFor answers the ownership and posture questions for one seat.
-func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(string) inbox.Conditions {
+func (e *Engine) conditionsFor(executorRows func(string) (bool, bool)) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
 		company := e.Company()
@@ -3288,8 +3399,8 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 		// see the seat between the halves — free, with nothing waiting —
 		// which is the delivery this whole seam exists to catch.
 		var heldBySandbox, sandboxAwaitsAnswer bool
-		if sandboxRuns != nil {
-			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
+		if executorRows != nil {
+			heldBySandbox, sandboxAwaitsAnswer = executorRows(handle)
 		}
 		paused, known := e.pauseOfHandle(handle)
 		return inbox.Conditions{
@@ -3367,6 +3478,32 @@ func (e *Engine) seatFence(handle string) func() error {
 	}
 }
 
+// wakes is the queue every producer of a seat's wake publishes through: the
+// node's ([node.Node.Wakes]), which confirms the seat's mailbox, its inbox and
+// its priority lane, before a wake is sent to it, so a wake published while
+// boot or an apply has not made the mailbox yet is retried rather than
+// discarded by the stream. An engine built with no node (`crewlet validate`)
+// has no mailboxes to confirm and publishes on its queue as it is.
+func (e *Engine) wakes() queue.EventQueue {
+	if e.node == nil {
+		return e.backends.Queue
+	}
+	return e.node.Wakes()
+}
+
+// mailboxConfirmer is what a producer that spends something before it
+// publishes (the scheduler's claim, an agent-to-agent channel) asks first:
+// the node's [node.Node.ConfirmMailbox], so a refusal leaves nothing half
+// done. Nil on an engine with no node, which confirms nothing.
+func (e *Engine) mailboxConfirmer() interface {
+	ConfirmMailbox(context.Context, uuid.UUID) error
+} {
+	if e.node == nil {
+		return nil
+	}
+	return e.node
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -3380,8 +3517,11 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 		return err
 	}
 	subject := topics.AgentInbox(id)
-	for _, ev := range evs {
-		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+	// AS ONE UNIT: a partition holding a person's message goes back to the
+	// lane whole, its siblings with it, rather than the marked event alone
+	// to the lane and the rest to the inbox's tail ([queue.Together]).
+	for _, ev := range queue.Together(evs) {
+		if err := e.wakes().Publish(ctx, subject, ev); err != nil {
 			// THE SEAT BY NAME, not only the subject it is addressed by.
 			// A mailbox is named by the seat's id, so a failure reported
 			// as the subject alone hands whoever reads it a uuid and no
@@ -3415,8 +3555,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// It is NOT the work key, and that is the whole of ADR-0017: a trigger
 	// that fails without acting is NAK'd and redelivered, so one work key
 	// legitimately runs several times — and a run that borrowed that
-	// identity wrote its phases, its live row and its sandbox run on top of
-	// the attempt it was repeating.
+	// identity wrote its phases, its live row and its executor's row on top
+	// of the attempt it was repeating.
 	//
 	// THE DISPATCH'S WHERE THERE IS ONE, written back onto the local copy of
 	// the request rather than kept beside it: [Dispatcher.Dispatch] mints it
@@ -3471,6 +3611,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// saying "is thinking…" every refresh until the seat moved or the node
 	// stopped.
 	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
+	// THE MESSAGES THIS TURN PICKED UP NO LONGER WAIT: their queued line has
+	// just become this turn's working one ([notify.StatusDriver.Begin]), and
+	// a wait left behind would bring "queued" back when the turn ends.
+	e.settleWaiting(ctx, req.Handle, wakeIDsOf(req.Events))
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a
@@ -3537,8 +3681,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	ask := colleagueAskOf(askOf(req.Events))
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
-	// through until it launches its coding run, which hands what the box
-	// still holds to the run's record (steer.go).
+	// through until it launches its executor, which hands what the box
+	// still holds to the executor's record (steer.go).
 	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{

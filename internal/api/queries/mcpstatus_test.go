@@ -15,6 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -38,8 +41,10 @@ mcp_servers:
     shared: false
     command: npx
     args: ["-y", "@modelcontextprotocol/server-github"]
+    tool_prefix: gh_
   - name: linear
     transport: http
+    description: Reads and files Linear issues
     url: https://mcp.example.com
     headers:
       Authorization: Bearer literal-linear-secret
@@ -67,7 +72,10 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queries.Sources{Coord: backend, Company: companySource(t, cfg)}
+	return queries.Sources{
+		Coord: backend, Company: companySource(t, cfg),
+		Builtins: func() []queries.ToolRow { return catalogueBuiltins() },
+	}
 }
 
 // mcpFleet is two reporting nodes and one whose last heartbeat carried no
@@ -93,17 +101,76 @@ func mcpFleet(t *testing.T) coord.Backend {
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
-			{Server: "docs", Shared: true, Started: 1, Tools: 4},
-			{Server: "github", Started: 2, Tools: 26},
+			{Server: "docs", Shared: true, Started: 1, Tools: 4,
+				Shadowed: []coord.MCPToolShadow{{Tool: "search", By: "linear"}}, ShadowedCount: 1},
+			{Server: "github", Started: 2, Tools: 26,
+				Refused: []coord.MCPToolRefusal{
+					{Tool: longGitHubTool, Reason: "too_long"},
+					{Tool: "gh_read.file", Reason: "characters"},
+				}, RefusedCount: 12},
 		},
 	})
 	presentNode(t, backend, "node-b", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
-			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev},
+			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev,
+				Refused: []coord.MCPToolRefusal{
+					{Tool: "gh_lookup_colleague", Reason: "builtin"},
+					{Tool: "gh_read.file", Reason: "characters"},
+				}, RefusedCount: 3},
 		},
 	})
 	presentNode(t, backend, "node-c", nil)
 	return backend
+}
+
+// longGitHubTool is a name github's tool_prefix pushes one character over
+// the longest a harness can hand its model.
+var longGitHubTool = "gh_" + strings.Repeat("x", harnessprofile.ToolNameMax()-2)
+
+// A SERVER'S TOOLS LOST TO THEIR NAMES ARE ONE LIST ACROSS THE FLEET, each
+// tool once however many nodes name it, sorted, each with the engine's
+// sentence worded for the server's own prefix, and counted as the node
+// counting the most counts them: a node names at most eight. A server whose
+// tools are all offered sends two empty lists and two zeros.
+//
+// Mutation: keep one node's list, sum the counts, or word a sentence without
+// the configured prefix, and this is red.
+func TestAServersToolsLostToTheirNamesAreOneListAcrossTheFleet(t *testing.T) {
+	t.Parallel()
+	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
+
+	github := serverRow(t, got, "github")
+	refused := []queries.MCPRefusedTool{
+		{Tool: longGitHubTool, Reason: mcp.NameTooLong},
+		{Tool: "gh_lookup_colleague", Reason: mcp.NameBuiltin},
+		{Tool: "gh_read.file", Reason: mcp.NameCharacters},
+	}
+	slices.SortFunc(refused, func(a, b queries.MCPRefusedTool) int { return strings.Compare(a.Tool, b.Tool) })
+	for i := range refused {
+		refused[i].Message = refused[i].Reason.Sentence(refused[i].Tool, "gh_")
+	}
+	if !slices.Equal(github.RefusedTools, refused) || github.RefusedCount != 12 {
+		t.Errorf("github refused %+v of %d, want %+v of 12", github.RefusedTools, github.RefusedCount, refused)
+	}
+	if i := slices.IndexFunc(github.RefusedTools, func(r queries.MCPRefusedTool) bool { return r.Tool == longGitHubTool }); i < 0 ||
+		!strings.Contains(github.RefusedTools[i].Message, `Shorten the tool_prefix "gh_" by 1`) {
+		t.Errorf("the long name's sentence does not say how much to shorten the prefix: %+v", github.RefusedTools)
+	}
+	if len(github.ShadowedTools) != 0 || github.ShadowedCount != 0 {
+		t.Errorf("github shadowed %+v of %d, want none", github.ShadowedTools, github.ShadowedCount)
+	}
+
+	docs := serverRow(t, got, "docs")
+	shadowed := []queries.MCPShadowedTool{{Tool: "search", By: "linear", Message: mcp.ShadowSentence("search", "linear")}}
+	if !slices.Equal(docs.ShadowedTools, shadowed) || docs.ShadowedCount != 1 {
+		t.Errorf("docs shadowed %+v of %d, want %+v of 1", docs.ShadowedTools, docs.ShadowedCount, shadowed)
+	}
+
+	linear := serverRow(t, got, "linear")
+	if linear.RefusedTools == nil || linear.ShadowedTools == nil || len(linear.RefusedTools)+len(linear.ShadowedTools) != 0 ||
+		linear.RefusedCount+linear.ShadowedCount != 0 {
+		t.Errorf("linear = %+v, want two empty lists and two zeros", linear)
+	}
 }
 
 func askMCPStatus(t *testing.T, s queries.Sources) queries.MCPStatusAnswer {
@@ -337,6 +404,57 @@ func TestAServerOnlyANodeReportsIsListedAsUnconfigured(t *testing.T) {
 	}
 }
 
+// A SERVER TURNED OFF IS DISABLED, decided before anything a node reports: a
+// node still on the revision before it, running the server, shows that in its
+// own cell, and the row reads as the configuration's decision rather than as a
+// server that runs. One that runs says so, and each row carries the
+// description its prompt line does.
+func TestAServerTurnedOffIsDisabledWhateverANodeStillRuns(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: docs
+    enabled: false
+    description: Searches the engineering handbook
+    command: docs-mcp
+  - name: search
+    command: search-mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Started: 1, Tools: 4},
+			{Server: "search", Shared: true, Started: 1, Tools: 2},
+		},
+	})
+	got := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+
+	docs := serverRow(t, got, "docs")
+	if docs.State != queries.MCPDisabled || docs.Enabled {
+		t.Errorf("docs = %s, enabled %v; want disabled, whatever node-a still runs", docs.State, docs.Enabled)
+	}
+	if docs.Description != "Searches the engineering handbook" {
+		t.Errorf("docs carries the description %q", docs.Description)
+	}
+	if cell := docs.Nodes[0]; cell.Started != 1 {
+		t.Errorf("node-a's cell = %+v: the node still running it is not shown", cell)
+	}
+	if search := serverRow(t, got, "search"); search.State != queries.MCPRunning || !search.Enabled {
+		t.Errorf("search = %s, enabled %v; want running and enabled", search.State, search.Enabled)
+	}
+
+	// ON A FLEET THAT HAS NOT SAID, the configuration still has: a server
+	// turned off is disabled rather than unreported.
+	silent := askMCPStatus(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg)})
+	if docs := serverRow(t, silent, "docs"); docs.State != queries.MCPDisabled {
+		t.Errorf("with no node reporting, docs = %s, want disabled", docs.State)
+	}
+}
+
 // NO CREDENTIAL REACHES THE ANSWER: `env`, `headers` and a seat's `mcp_env`
 // are what a server authenticates with, and the launch is shown without them.
 func TestTheServerStatusCarriesNoCredential(t *testing.T) {
@@ -355,14 +473,32 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// ADMIN'S: launch commands and each failure's first line are the
-// configuration and what became of it, which `/config` shows the same reader.
-// And an unreadable lease table is an error, not a fleet with no nodes.
-func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
+// EVERYBODY'S, AND THE ADMIN'S READING IS THE CONFIGURATION READER'S: launch
+// commands and each failure's first line are the configuration and what
+// became of it, which `/config` shows the same reader, so a caller holding
+// every app but admin is answered, in a member's reading. And an unreadable
+// lease table is an error, not a fleet with no nodes.
+//
+// Mutation: register the question at admin, or answer every caller the
+// admin's reading, and this is red.
+func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	requiresExactly(t, r, "mcp_servers_status", iam.GrantAdmin)
+	if posture := r.PostureOf("mcp_servers_status"); !posture.IsEverybody() {
+		t.Errorf("mcp_servers_status is asked as %s, want everybody", posture)
+	}
+	if got, err := r.Answer(everyGrant(t), "mcp_servers_status", nil); err != nil {
+		t.Fatal(err)
+	} else if _, admin := got.(queries.MCPStatusAnswer); !admin {
+		t.Errorf("an administrator was answered %T, want the admin's reading", got)
+	}
+	everyApp := slices.DeleteFunc(slices.Clone(iam.AllGrants), func(g iam.Grant) bool { return g == iam.GrantAdmin })
+	if got, err := r.Answer(asking(t, everyApp...), "mcp_servers_status", nil); err != nil {
+		t.Errorf("a caller holding every app but admin was refused: %v", err)
+	} else if member, ok := got.(queries.MemberMCPStatusAnswer); !ok || member.Reading != queries.ReadingMember {
+		t.Errorf("a caller holding every app but admin was answered %T, want a member's reading", got)
+	}
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})
@@ -371,18 +507,23 @@ func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
 	}
 }
 
-// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, every shape held both ways,
-// and knows exactly the states the engine sends.
+// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, in both readings, every
+// shape held both ways, and knows exactly the states the engine sends.
 func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	queries.Register(r, mcpSources(t, mcpFleet(t)))
+	src := mcpSources(t, mcpFleet(t))
+	src.Alarms = mcpEvaluation
+	src.Sandbox, src.HeldCalls = heldRuns(t)
+	src.MCPListings = fakeListings{}
+	queries.Register(r, src)
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := asMap(t, raw)
 	holdShape(t, "McpServersStatusAnswer", []map[string]any{body}, false)
+	holdShape(t, "McpApproval", rowsOf(t, body["approvals"]), false)
 	holdShape(t, "McpStatusNode", rowsOf(t, body["nodes"]), false)
 	servers := rowsOf(t, body["servers"])
 	holdShape(t, "McpServerStatus", servers, false)
@@ -391,6 +532,86 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 		cells = append(cells, rowsOf(t, s["nodes"])...)
 	}
 	holdShape(t, "McpServerNode", cells, false)
+	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
+	agents := rowsOf(t, body["agents"])
+	holdShape(t, "McpAgentTools", agents, false)
+	var agentServers []map[string]any
+	for _, a := range agents {
+		agentServers = append(agentServers, rowsOf(t, a["servers"])...)
+	}
+	holdShape(t, "McpAgentServer", agentServers, false)
+
+	var refused, shadowed []map[string]any
+	for _, s := range servers {
+		refused = append(refused, rowsOf(t, s["refused_tools"])...)
+		shadowed = append(shadowed, rowsOf(t, s["shadowed_tools"])...)
+	}
+	holdShape(t, "McpRefusedTool", refused, false)
+	holdShape(t, "McpShadowedTool", shadowed, false)
+
+	// A MEMBER'S READING, through the same question: its own row and cell
+	// shapes, no launch line and no alarm.
+	memberRaw, err := r.Answer(iam.WithPrincipal(t.Context(), person(iam.StageActive, everyAppButAdmin()...)),
+		"mcp_servers_status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := asMap(t, memberRaw)
+	holdShape(t, "McpMemberServersStatusAnswer", []map[string]any{member}, false)
+	memberServers := rowsOf(t, member["servers"])
+	holdShape(t, "McpMemberServerStatus", memberServers, false)
+	var memberCells []map[string]any
+	for _, s := range memberServers {
+		memberCells = append(memberCells, rowsOf(t, s["nodes"])...)
+	}
+	holdShape(t, "McpMemberServerNode", memberCells, false)
+
+	alarms := rowsOf(t, body["alarms"])
+	holdShape(t, "McpAlarm", alarms, false)
+	var entries, fixes []map[string]any
+	for _, a := range alarms {
+		entries = append(entries, rowsOf(t, a["entries"])...)
+	}
+	for _, e := range entries {
+		fix, ok := e["fix"].(map[string]any)
+		if !ok {
+			t.Fatalf("an alarm's entry carries no fix: %v", e)
+		}
+		fixes = append(fixes, fix)
+	}
+	holdShape(t, "McpAlarmEntry", entries, false)
+	holdShape(t, "McpFix", fixes, false)
+	for name, want := range map[string][]string{
+		"McpAlarmKind":      stringsOf(statelog.PerServerKinds()),
+		"McpFixKind":        stringsOf(queries.MCPFixKinds),
+		"McpApprovalStatus": stringsOf(queries.MCPApprovalStatuses),
+	} {
+		got, err := clientsource.Union(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+		}
+		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+			t.Errorf("the dashboard's %s is %v; the engine sends %v", name, got, want)
+		}
+	}
+
+	reasons, err := clientsource.Union(clientsource.Tree(t), "McpToolRefusal")
+	if err != nil {
+		t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+	}
+	slices.Sort(reasons)
+	if want := slices.Sorted(slices.Values(stringsOf(mcp.NameRefusals))); !slices.Equal(reasons, want) {
+		t.Errorf("the dashboard's McpToolRefusal is %v; the engine sends %v", reasons, want)
+	}
+
+	classes, err := clientsource.Union(clientsource.Tree(t), "McpFailureClass")
+	if err != nil {
+		t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+	}
+	slices.Sort(classes)
+	if want := slices.Sorted(slices.Values(stringsOf(mcp.FailureClasses))); !slices.Equal(classes, want) {
+		t.Errorf("the dashboard's McpFailureClass is %v; the engine sends %v", classes, want)
+	}
 
 	got, err := clientsource.Union(clientsource.Tree(t), "McpServerState")
 	if err != nil {
@@ -422,4 +643,41 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A SERVER IS DRAWN AS THE CATALOGUE ENTRY IT IS, by its address or its
+// command, and by its own name with no mark where the catalogue knows it not.
+func TestAServerRowNamesTheCatalogueEntryItIs(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: https://api.githubcopilot.com/mcp/
+  - name: db
+    command: uvx
+    args: ["postgres-mcp==0.3.0", "--access-mode=restricted"]
+  - name: wiki
+    transport: http
+    url: https://wiki.example.com/mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	answer := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	for _, want := range []queries.MCPServerRow{
+		{Name: "code", Title: "GitHub", Catalogue: "github", Vendor: "github"},
+		{Name: "db", Title: "PostgreSQL", Catalogue: "postgres", Vendor: "postgresql"},
+		{Name: "wiki", Title: "wiki"},
+	} {
+		row := serverRow(t, answer, want.Name)
+		if row.Title != want.Title || row.Catalogue != want.Catalogue || row.Vendor != want.Vendor {
+			t.Errorf("%s is drawn as %q, %q, %q; want %q, %q, %q", want.Name, row.Title, row.Catalogue,
+				row.Vendor, want.Title, want.Catalogue, want.Vendor)
+		}
+	}
 }

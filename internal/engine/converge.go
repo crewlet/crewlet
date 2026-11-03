@@ -139,9 +139,9 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// another registry is released, since whether the seat's chain is
 		// still the one that refused is this company's to say. An entry
 		// that still calls as the same account finds its sign-in's
-		// sit-out ([cliagent.Plans]), so a limit that still holds parks the
+		// sit-out ([harness.Plans]), so a limit that still holds parks the
 		// seat again at the cost of one delivery and no process: the
-		// entry refuses before any CLI is started. A seat whose mail its
+		// entry refuses before any harness is started. A seat whose mail its
 		// run holds is parked again by its run's completion, which the
 		// readmit below re-fires: collected again, and refused on the
 		// carried limit before its turn runs ([Engine.collectedRefusal]).
@@ -160,9 +160,13 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
-		// AND A RETRY WHOSE MODEL IT REMOVED goes with the model. See
-		// modelretry.go.
+		// AND A RETRY WHOSE MODEL IT REMOVED goes with the model, and a
+		// restart whose MCP server or seat it removed with them. See
+		// modelretry.go and mcprestart.go.
 		e.clearRemovedModelRetries(ctx, c)
+		e.clearRemovedMCPRestarts(ctx, c)
+		// AND A SERVER'S LATEST TEST GOES WITH THE SERVER. See mcpcheck.go.
+		e.clearRemovedMCPChecks(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

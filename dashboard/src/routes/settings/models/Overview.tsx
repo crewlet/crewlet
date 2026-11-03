@@ -40,7 +40,7 @@ import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Alarms } from "./Alarms.tsx";
-import { CliMark, MARK_SIZE } from "./CliMark.tsx";
+import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
@@ -180,19 +180,19 @@ function RowReveal({
 }
 
 /**
- * The model's name and the model it runs, each one line, with its CLI's mark
+ * The model's name and the model it runs, each one line, with its harness's mark
  * centred beside them. The mark is not raised and does nothing of its own:
- * the row's link takes the press, and the tip names the CLI.
+ * the row's link takes the press, and the tip names the harness.
  */
 function ModelCell({ model }: { model: ModelView }) {
   return (
     <span className="models-entry-cell">
-      <CliMark agent={model.agent} size={MARK_SIZE} named />
+      <HarnessMark harness={model.harness} size={MARK_SIZE} named />
       <RowReveal
         model={model}
         tip={
           <span className="mono">
-            {product(model.agent)} · {model.key} · {model.model}
+            {product(model.harness)} · {model.key} · {model.model}
           </span>
         }
       >

@@ -2,8 +2,8 @@
  * What needs a person.
  *
  * Every one of these conditions was already known to the dashboard and each
- * lived in a different screen: a sandbox run parked on a question was a badge
- * on the board (and a run whose box had been reclaimed appeared NOWHERE at
+ * lived in a different screen: an executor parked on a question was a badge
+ * on the board (and one whose box had been reclaimed appeared NOWHERE at
  * all), a seat the engine stopped was a card among the healthy ones, a budget
  * refusing charges was a bar on one seat's page, and an engine with no active
  * configuration — refusing every inbound webhook — was a line in a popover.
@@ -22,10 +22,11 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
+import type { AgentRow, BudgetWindow, OrgBudget, ExecutorRow } from "~/protocol/index.ts";
 import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./providerLimit.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
+import type { McpAlarm, McpAlarmEntry, McpAlarmKind } from "~/contract/mcp.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import {
   failureWords,
@@ -58,15 +59,16 @@ export type Severity = "critical" | "caution" | "info";
  * union, so a new subject is a type error until it has the phrase a reader
  * sees. Neither half is a convention anybody has to remember.
  */
-export type Subject = "engine" | "budget" | "run" | "seat" | "round";
+export type Subject = "engine" | "budget" | "run" | "seat" | "round" | "tools";
 
 /** Each subject as the reader's own words, in the order the clause lists them. */
 export const SUBJECTS: Record<Subject, string> = {
   engine: "the engine and this node's link to it",
   budget: "the company's and every seat's token budget",
-  run: "every coding run waiting on an answer",
+  run: "every executor waiting on an answer",
   seat: "every seat's own state",
   round: "every round still in flight",
+  tools: "every MCP server the agents call",
 };
 
 /**
@@ -79,12 +81,12 @@ export const SUBJECTS: Record<Subject, string> = {
  *  - `engine`: the sidebar's engine row and Home's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
  *    about the product they are looking at, not an item in anybody's queue.
- *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
- *    quiet round is marked on its own running-turn row (`LiveTurnRow`), and a
- *    parked run is a row of Waiting on a person with its Answer. A round that
- *    has not moved is watched, not decided, and a coding run parked on a
- *    question already reaches the person it asks through their own decisions
- *    (`decisions`), so the company-wide list of them is live.
+ *  - `live`: Live › Now running, BESIDE the rounds and executors it is about
+ *    — a quiet round is marked on its own running-turn row (`LiveTurnRow`),
+ *    and a parked executor is a row of Waiting on a person with its Answer. A
+ *    round that has not moved is watched, not decided, and an executor parked
+ *    on a question already reaches the person it asks through their own
+ *    decisions (`decisions`), so the company-wide list of them is live.
  *
  * TOTAL OVER [Subject], so a new subject is a type error until it has a home.
  */
@@ -96,13 +98,19 @@ export const WHERE_OF: Record<Subject, Where> = {
   run: "live",
   seat: "seat",
   round: "live",
+  tools: "seat",
 };
 
-/** The subjects shown in one place, as the clause its quiet state says. */
-export function watchedIn(where: Where): string {
+/**
+ * The subjects shown in one place, as the clause its quiet state says, less
+ * the ones this reader is not shown (`unwatched`): a reader the MCP section
+ * does not open for is never asked its alarms, and a quiet band claiming to
+ * have watched them would claim a check nobody made.
+ */
+export function watchedIn(where: Where, unwatched: readonly Subject[] = []): string {
   return andList(
     (Object.keys(SUBJECTS) as Subject[])
-      .filter((subject) => WHERE_OF[subject] === where)
+      .filter((subject) => WHERE_OF[subject] === where && !unwatched.includes(subject))
       .map((subject) => SUBJECTS[subject]),
     // THE SERIAL COMMA IS LOAD-BEARING HERE: the clauses carry their own
     // "and" ("the company's and every seat's token budget").
@@ -182,7 +190,7 @@ export interface AttentionInput {
    */
   agents: AgentRow[];
   /**
-   * The DURABLE coding-run rows, which is what is still waiting.
+   * The executors' DURABLE rows, which is what is still waiting.
    *
    * THE WAITING ROW NEEDS THE RECORD, not the live entry: how long a person
    * has left to answer is the run's pause window (`pause_ttl_seconds`)
@@ -190,7 +198,7 @@ export interface AttentionInput {
    * carries the window. The live entry says a run is waiting; the record says
    * for how much longer its box is held.
    */
-  runs: SandboxRun[];
+  runs: ExecutorRow[];
   /** `null` before the first report: nothing to judge, so nothing is raised. */
   budget: OrgBudget | null;
   engine: EngineHealth | null;
@@ -199,13 +207,20 @@ export interface AttentionInput {
   now: number;
   /** A person's name by their handle, off the chart: who paused a seat is said by name. */
   nameOf: NameOf;
+  /**
+   * The MCP alarms standing on the node answering `mcp_servers_status`, each
+   * server with the gesture that fixes it: empty for a reader the MCP section
+   * does not open for, who is never asked them. The engine judged each one;
+   * this only puts it into words.
+   */
+  mcpAlarms: readonly McpAlarm[];
 }
 
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
-  const { agents, runs, budget, engine, connected, authRejected, now, nameOf } = input;
+  const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -314,7 +329,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     });
   }
 
-  // --- coding runs ---------------------------------------------------------
+  // --- executors -----------------------------------------------------------
   // FROM THE DURABLE ROWS, not from the projection: see `runs` above.
   for (const run of runs) {
     // THE ENGINE'S OWN WORDS. `awaiting_input` is not one of them, so this
@@ -323,15 +338,16 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // box was reaped past its pause TTL and only the question survives.
     if (run.status !== "awaiting_clarification" && run.status !== "reseed") continue;
     out.push({
-      id: `sandbox-${run.turn_id}`,
+      id: `executor-${run.turn_id}`,
       severity: "caution",
       subject: "run",
       icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
-      // screen stopped reading when a run became an object with an address.
-      path: ["live", "runs", run.turn_id],
+      // THE RUN'S OWN PATH. It was a `?run=` query on the board's list,
+      // which the board stopped reading when a run became an object with an
+      // address.
+      path: ["live", "executors", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.
@@ -359,6 +375,31 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       at: limit.since,
       ...whoOfLimit(limit),
     });
+  }
+
+  // --- MCP servers -----------------------------------------------------------
+  // ONE ROW PER SERVER AN ALARM STANDS ON, for as long as the engine's
+  // evaluation holds it: the engine decided the span, the server and the
+  // agent, and these are only its words. The row opens the server's page,
+  // where its instances say the rest.
+  for (const alarm of mcpAlarms) {
+    const words = MCP_ALARM_WORDS[alarm.kind];
+    for (const entry of alarm.entries) {
+      out.push({
+        id: `mcp-${alarm.kind}-${entry.key}`,
+        severity: words.severity,
+        subject: "tools",
+        icon: words.icon,
+        title: words.title(entry),
+        detail: words.detail(entry),
+        // THE ENGINE'S MEASUREMENT, what each instance said included, behind
+        // the disclosure for whoever is fixing it.
+        technical: entry.detail,
+        path: ["settings", "mcp-tools", "servers", entry.key],
+        ...(entry.since ? { at: entry.since } : {}),
+        ...(entry.seat ? { who: entry.seat } : {}),
+      });
+    }
   }
 
   // --- seats ---------------------------------------------------------------
@@ -488,6 +529,85 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 }
 
 /**
+ * Each MCP alarm in words: its row's severity, glyph, title and what leaving it
+ * costs. TOTAL OVER THE CONTRACT'S UNION, so a kind the engine adds is a type
+ * error here until it has words, rather than a row with none.
+ *
+ * A SERVER THAT IS NOT RUNNING IS CRITICAL, for the agent or node it stops,
+ * however many others it serves; a wait and a refused name cost the tools they
+ * hold back and nothing more.
+ */
+const MCP_ALARM_WORDS: Record<
+  McpAlarmKind,
+  {
+    severity: Severity;
+    icon: GlyphName;
+    title: (entry: McpAlarmEntry) => string;
+    detail: (entry: McpAlarmEntry) => string;
+  }
+> = {
+  mcp_server_failing: {
+    severity: "critical",
+    icon: "triangle-alert",
+    title: (e) => `${e.key} is not running`,
+    detail: () => "No agent can call its tools until an instance serves again.",
+  },
+  mcp_server_partial: {
+    severity: "critical",
+    icon: "triangle-alert",
+    title: (e) =>
+      e.seat ? `${e.key} is not running for ${e.seat}` : `${e.key} is not running on every node`,
+    detail: (e) =>
+      e.seat
+        ? `${e.seat} cannot call its tools. The other agents are not affected.`
+        : "The nodes it is down on cannot call its tools. The other nodes still serve it.",
+  },
+  mcp_server_waiting_long: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) =>
+      e.seat
+        ? `${e.key} is still waiting for ${e.seat}'s credential`
+        : `${e.key} is still waiting for a credential`,
+    detail: () =>
+      "The integration that mints it has not delivered it, so the agent cannot call the server's tools yet.",
+  },
+  mcp_tools_refused: {
+    severity: "caution",
+    icon: "wrench",
+    title: (e) => `Some of ${e.key}'s tools are not offered`,
+    detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
+  },
+  mcp_oauth_needs_sign_in: {
+    severity: "critical",
+    icon: "triangle-alert",
+    title: (e) => `${e.key} needs somebody to sign in`,
+    detail: () => "No agent can call its tools until an administrator signs the company in to it.",
+  },
+  mcp_oauth_expiring: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) => `${e.key}'s sign-in runs out soon`,
+    detail: () => "Sign in again before it runs out, or the agents lose its tools.",
+  },
+  mcp_approval_waiting: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) =>
+      e.seat
+        ? `${e.seat} is waiting for approval to use ${e.key}`
+        : `A call to ${e.key} is waiting for approval`,
+    detail: () => "Its run is parked until somebody allows or denies the call.",
+  },
+  mcp_tools_changed: {
+    severity: "caution",
+    icon: "settings",
+    title: (e) => `${e.key} changed a tool since it was allowed`,
+    detail: () => "Each changed tool asks before every call until somebody reviews the change.",
+  },
+};
+
+/**
  * What a parked run's row says, with its deadline where there is one.
  *
  * THE DEADLINE IS THE COST OF IGNORING IT, which is what this whole list is
@@ -500,12 +620,12 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * reclaimed on a timer (see the `pause_ttl_seconds` zero-value rule), so the
  * sentence simply ends.
  */
-function waitingDetail(run: SandboxRun, now: number): string {
+function waitingDetail(run: ExecutorRow, now: number): string {
   const asked =
     (run.question ?? "").trim() ||
     (questionWithheld(run)
       ? `${QUESTION_WITHHELD}.`
-      : "A coding run needs your answer to continue.");
+      : "Its executor needs your answer to continue.");
   if (run.status === "reseed") return `${asked} Answering restarts the work.`;
   const ttl = run.pause_ttl_seconds;
   const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;

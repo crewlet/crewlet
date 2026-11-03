@@ -128,7 +128,7 @@ import {
 import { unitPath } from "~/lib/orgchart.ts";
 import { answersAddress, itemAddress, turnItem } from "~/lib/work.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
-import { useSandboxes } from "~/lib/store-hooks.ts";
+import { useExecutors } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
@@ -159,7 +159,7 @@ export function budgetLine(w: BudgetWindow): { label: string; figure: string } {
 /**
  * Which turn this is on the task it is charged to, from the task's own turn
  * list (newest first): the running turn's own ordinal once a segment of it is
- * recorded (a coding run parks the turn and resumes it), else the one after
+ * recorded (its executor parks the turn and resumes it), else the one after
  * the newest recorded — the running turn is written when it ends. Null when
  * the list is not in hand.
  */
@@ -174,7 +174,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 2 of 4", "Turn 2 · coding run in progress". */
+/** "Turn 2 · round 2 of 4", "Turn 2 · executing". */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
@@ -190,7 +190,7 @@ function turnFacts(
   if (round > 0) {
     parts.push(call?.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`);
   }
-  if (turn?.stage === "parked") parts.push("coding run in progress");
+  if (turn?.stage === "parked") parts.push("executing");
   return parts.join(" · ");
 }
 
@@ -228,7 +228,7 @@ function SeatPeekBody({
   const viewer = useViewer();
   const org = useOrg();
   const health = useEngineHealth();
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const status = human ? undefined : statusOf(state);
@@ -272,7 +272,7 @@ function SeatPeekBody({
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
-  const sandbox = seatRun(sandboxes, seat);
+  const sandbox = seatRun(executors, seat);
   const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
   // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.
@@ -329,10 +329,10 @@ function SeatPeekBody({
         <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
-        // THE ONE THING A READER CAN ACT ON from here: a run parked on a
-        // question holds the seat until somebody answers it.
+        // THE ONE THING A READER CAN ACT ON from here: an executor parked on
+        // a question holds the seat until somebody answers it.
         <Callout variant="warning">
-          A coding run is waiting on a question:{" "}
+          This seat's executor is waiting on a question:{" "}
           <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}

@@ -2,10 +2,10 @@
  * What a person is told about a note they sent a turn.
  *
  * `steer_turn` answers `pending` with WHEN the turn will read the note
- * (`reads`, one of `STEER_READS`): at its next step, or — for a coding run
- * parked on a question — once the question is answered. The toast the press
- * raises says which, so a person who steered a run waiting on somebody's
- * answer is not told it will be read at the next step.
+ * (`reads`, one of `STEER_READS`): at its next step, or — for a turn whose
+ * executor is parked on a question — once the question is answered. The toast
+ * the press raises says which, so a person who steered an executor waiting on
+ * somebody's answer is not told it will be read at the next step.
  */
 
 import { STEER_READS } from "~/contract/steer.ts";
@@ -19,7 +19,7 @@ type SteerReads = (typeof STEER_READS)[number];
  */
 const READS_SENTENCE: Record<SteerReads, string> = {
   next_step: "It reads it at its next step.",
-  after_answer: "Its coding run is waiting on a question; it reads the note once that is answered.",
+  after_answer: "Its executor is waiting on a question; it reads the note once that is answered.",
 };
 
 /**

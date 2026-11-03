@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -270,6 +271,16 @@ func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 					LastQuery: query})
 			}
 			r.ReadsElided = math.MaxInt32
+			// AND ITS TOOL CALLS AT THEIR CAP, each with the longest
+			// server name and tool name an entry can carry.
+			for i := range usage.ToolsPerSeatDay {
+				r.Tools = append(r.Tools, usage.ToolCalls{
+					Server: strings.Repeat("s", 32),
+					Tool:   fmt.Sprintf("%060d%04d", 0, i),
+					Calls:  math.MaxInt64, Failed: math.MaxInt64, Unavailable: math.MaxInt64,
+					Refused: math.MaxInt64, TotalMS: math.MaxInt64, LastAt: at})
+			}
+			r.ToolsElided = math.MaxInt32
 			r.Code = &usage.CodeDay{ChangesOpened: math.MaxInt64, ReviewsGiven: math.MaxInt64,
 				FindingsReceived: math.MaxInt64, ChecksFailed: math.MaxInt64, Ejections: math.MaxInt64}
 			encoded, err := r.Encode()
@@ -284,9 +295,9 @@ func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 					usage.LogMaxRecordBytes)
 			}
 			if len(encoded) >= documented {
-				t.Errorf("a seat-day at the cap is %d bytes, past the %d ADR-0020 and "+
-					"usage.ReadsPerSeatDay state — measure it again and correct both",
-					len(encoded), documented)
+				t.Errorf("a seat-day at the cap is %d bytes, past the %d ADR-0020, "+
+					"usage.ReadsPerSeatDay and usage.ToolsPerSeatDay state; measure it "+
+					"again and correct them", len(encoded), documented)
 			}
 		})
 	}

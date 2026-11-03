@@ -1,7 +1,7 @@
 // Package execstate is the wire format for a turn parked on its executor's
 // run.
 //
-// Every seat's executor is its coding CLI's own agentic run, detached in a box
+// Every seat's executor is its harness's own agentic run, detached in a box
 // and minutes to hours long. The turn that launched it does not wait for it:
 // it parks, and is re-entered when the run is collected — after a restart,
 // possibly on another node, possibly days later once a person answers a
@@ -69,7 +69,7 @@ import (
 // is.
 //
 // It is 4 because 2 and 3 described a parked engine conversation — a tool
-// loop stopped on an unanswered call, 3 the one a CLI drove over MCP — with a
+// loop stopped on an unanswered call, 3 the one a harness drove over MCP — with a
 // flag marking the states that were not one. Every state is a parked run now
 // and the conversation is gone, so a build that read a new row as 3 would
 // take it for a conversation with no messages; a number is never reused, so a
@@ -94,6 +94,13 @@ type State struct {
 
 	// LoadedSkills is the skill-guard state, replayed for the same reason.
 	LoadedSkills []string `json:"loaded_skill_keys"`
+
+	// NativeSkills is the key of each Tool Skill the run's harness was
+	// handed as its own, by the name the harness lists it under
+	// (internal/agent/runner, handedskills.go): what every later opening of
+	// the run's bridge reads a load the harness reports by, and what a
+	// rebuilt guard names a refusal by. Empty for a run handed none.
+	NativeSkills map[string]string `json:"native_skills,omitempty"`
 
 	// Round is the turn iteration the run was launched in, so the resumed
 	// turn continues numbering rather than restarting at 1.
@@ -306,6 +313,10 @@ type TurnSoFar struct {
 	Reviews    int `json:"reviews,omitempty"`
 	SentBack   int `json:"sent_back,omitempty"`
 	Unaccepted int `json:"unaccepted,omitempty"`
+	// Tools is the earlier segments' calls to MCP servers' tools, per
+	// (server, tool): what the ending record's [types.TurnTally.Tools]
+	// adds this segment's to.
+	Tools []types.ToolTally `json:"tools,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

@@ -1,5 +1,5 @@
 /**
- * How many CLI processes the model runs at once, how long one may go without
+ * How many harness processes the model runs at once, how long one may go without
  * progress, and its web tools.
  *
  * NUMBERS ARE NUMBERS (design QA Minor 6): narrow fields for a few digits,
@@ -13,7 +13,10 @@
  */
 
 import { FormField, Input, Switch } from "@crewlethq/ui";
-import { DEFAULT_CLI_MAX_CONCURRENT, DEFAULT_CLI_TIMEOUT_SECONDS } from "~/contract/models.ts";
+import {
+  DEFAULT_HARNESS_MAX_CONCURRENT,
+  DEFAULT_HARNESS_TIMEOUT_SECONDS,
+} from "~/contract/models.ts";
 import type { Draft } from "../draft.ts";
 
 /** The web tools switch's helper, which Review repeats in the same words. */
@@ -38,7 +41,7 @@ export function LimitsStep({
       <FormField
         label="Processes at once"
         optional
-        helper={`CLI processes on the engine host for this model. Coding runs are not counted. Empty means ${DEFAULT_CLI_MAX_CONCURRENT}.`}
+        helper={`Harness processes on the engine host for this model. Executors are not counted. Empty means ${DEFAULT_HARNESS_MAX_CONCURRENT}.`}
         error={errors.concurrent}
       >
         {(field) => (
@@ -53,7 +56,7 @@ export function LimitsStep({
             step={1}
             width="xs"
             value={draft.concurrent}
-            placeholder={String(DEFAULT_CLI_MAX_CONCURRENT)}
+            placeholder={String(DEFAULT_HARNESS_MAX_CONCURRENT)}
             onChange={(e) => onChange({ concurrent: e.target.value })}
           />
         )}
@@ -61,7 +64,7 @@ export function LimitsStep({
       <FormField
         label="Timeout, in seconds"
         optional
-        helper={`How long one stretch of work may go without progress on the host. Empty means ${DEFAULT_CLI_TIMEOUT_SECONDS}.`}
+        helper={`How long one stretch of work may go without progress on the host. Empty means ${DEFAULT_HARNESS_TIMEOUT_SECONDS}.`}
         error={errors.timeout}
       >
         {(field) => (
@@ -76,13 +79,13 @@ export function LimitsStep({
             step={1}
             width="xs"
             value={draft.timeout}
-            placeholder={String(DEFAULT_CLI_TIMEOUT_SECONDS)}
+            placeholder={String(DEFAULT_HARNESS_TIMEOUT_SECONDS)}
             onChange={(e) => onChange({ timeout: e.target.value })}
           />
         )}
       </FormField>
       <Switch
-        label="Deny the CLI's web tools"
+        label="Deny the harness's web tools"
         description={
           held
             ? `${WEB_TOOLS_HELP} Ask Crewlet runs on this model, so they stay denied.`

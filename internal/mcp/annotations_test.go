@@ -282,3 +282,22 @@ func TestSDKAnnotationsNeverInventsAnAssertion(t *testing.T) {
 			*partial.OpenWorldHint)
 	}
 }
+
+// A TOOL STARTS AT ALWAYS ALLOW ONLY WHEN IT IS ASSERTED READ-ONLY: every
+// other tool, one whose hints say nothing included, asks a person first.
+func TestOnlyAReadOnlyToolStartsAllowed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		hints Annotations
+		want  Level
+	}{
+		{Annotations{ReadOnly: Yes}, LevelAllow},
+		{Annotations{ReadOnly: No, Destructive: No}, LevelApprove},
+		{Annotations{Destructive: Yes}, LevelApprove},
+		{Annotations{}, LevelApprove},
+	} {
+		if got := StartingLevel(RiskOf(tc.hints)); got != tc.want {
+			t.Errorf("StartingLevel(RiskOf(%+v)) = %q, want %q", tc.hints, got, tc.want)
+		}
+	}
+}

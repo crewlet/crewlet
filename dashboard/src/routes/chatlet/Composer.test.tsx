@@ -13,15 +13,17 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { keyRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES, MAX_MESSAGE_LINKS } from "~/contract/chat.ts";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { QueryName } from "~/protocol/index.ts";
 import { ADA, actEngine, applied, mountChat, type Pressed } from "~/test/chat.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 import { SHORTEN_FIRST, WRITE_FIRST } from "./Composer.tsx";
 import { ReadCursors } from "./cursor.ts";
@@ -273,5 +275,65 @@ describe("writing it", () => {
     expect(((await screen.findByLabelText("Edit your message")) as HTMLTextAreaElement).value).toBe(
       "mine",
     );
+  });
+});
+
+describe("whom it will reach", () => {
+  // The line under the box, which announces itself politely as it changes.
+  const reachLine = () =>
+    waitFor(() => {
+      const line = document.querySelector<HTMLElement>(".chat-composer-reach");
+      expect(line).not.toBeNull();
+      return line!;
+    });
+
+  // THE ENGINE'S ANSWER, NOT THE BOX'S: whom a draft reaches is the post's
+  // own routing run dry (`chat_reach`), asked once the typing settles, so the
+  // line names exactly whom Send will wake.
+  test("names the agents the post will wake once the typing settles", async () => {
+    answers.chat_reach = {
+      channel_id: "room-1",
+      reach: { recipients: [{ handle: "cto", reason: "answerer" }] },
+    };
+    mount();
+    const field = await box();
+    expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    fireEvent.change(field, { target: { value: "where are we on the release?" } });
+    const line = await reachLine();
+    expect(line.getAttribute("role")).toBe("status");
+    await waitFor(() => expect(line.textContent).toContain("Will reach cto"));
+  });
+
+  test("warns, and says why, when the post will reach no agent", async () => {
+    answers.chat_reach = { channel_id: "room-1", reach: {}, quiet: "no_agent" };
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "anyone around?" } });
+    const line = await reachLine();
+    await waitFor(() => expect(line.textContent).toContain("Will reach no agent"));
+    expect(line.textContent).toContain("Mention one with @ to ask it.");
+  });
+
+  test("says nothing over an empty box", async () => {
+    answers.chat_reach = {
+      channel_id: "room-1",
+      reach: { recipients: [{ handle: "cto", reason: "answerer" }] },
+    };
+    mount();
+    const field = await box();
+    // ON A FAKED CLOCK, past the quiet the box waits out before it asks, so
+    // the absence is asserted where a reach line would have been drawn, and
+    // never after a guess at the machine's load.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.change(field, { target: { value: "   " } });
+      act(() => {
+        vi.advanceTimersByTime(QUIET_MS);
+      });
+      await afterMicrotasks();
+      expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

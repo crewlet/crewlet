@@ -15,7 +15,8 @@ import (
 // The artifact datastore's log carried a reading of a reanchor's facts of its own: one more
 // copy of the rule [statelog.GenerationFacts.Author] states once, beside the
 // tracker's, the knowledge base's, the identity estate's, the artifacts log's,
-// the Dashboard Assistant's, chat's and the code log's readings of it. The
+// the Dashboard Assistant's, chat's, the executor log's and the code log's
+// readings of it. The
 // record names exactly the party that rule names, in the actor kinds this
 // log's columns hold, and this node when the facts name nobody.
 // Mutation: put a private reading back that maps a principal's word to an

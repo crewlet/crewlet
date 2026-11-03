@@ -79,6 +79,9 @@ const (
 	chatThreadRoute = "GET /chatlet/channels/{channel_id}/threads/{root_id}"
 	// chatMessagesRoute is a room's transcript, which only a read reads.
 	chatMessagesRoute = "GET /chatlet/channels/{channel_id}/messages"
+	// chatReachRoute is whom a draft would reach, which a post's and a
+	// reply's preview read: the post's own decision run dry.
+	chatReachRoute = "GET /chatlet/channels/{channel_id}/reach"
 )
 
 // The bounds a chat write's arguments are held to. They are internal/chatlet's
@@ -97,7 +100,29 @@ const (
 	// chatDirectOthers is everybody a direct message reaches beside the
 	// person, whom chatlet.MaxDMParticipants counts as well.
 	chatDirectOthers = 7
+	// chatChannelWakes is how many agents one `@channel` asks.
+	chatChannelWakes = 32 // chatlet.MaxCollectiveRecipients
 )
+
+// chatWakes is who a person's chat message wakes, said in the two tools a
+// model reaches for when the question is whether an agent will see a message:
+// the one that posts it and the one that reads the room it lands in.
+//
+// STATED, because a model left to guess says what it would expect of a person
+// in a room: that the agents there "read the room on their next turn". They do
+// not. An agent hears a message only when the routing wakes it, and one that
+// is not woken never reads it later, so a person told otherwise waits on an
+// answer nobody owes them. The rules are internal/chatlet's routing
+// (`Resolve`), which a person's message reaches through the same write the
+// chat screen makes.
+var chatWakes = fmt.Sprintf("Who a message wakes: an agent it names with @handle, "+
+	"everybody in a direct message, every agent in the room for a person's @channel (up "+
+	"to %d), whoever started a thread and, as news, the others in it, and members who "+
+	"follow every message. A person's message that names nobody and wakes no other agent "+
+	"wakes one agent to answer it (a unit's lead in its room, otherwise the room's most "+
+	"senior agent member), and one that names a person wakes no agent. An agent that is "+
+	"not woken never reads the message later, and each person's message says which "+
+	"agents it reached and which have answered.", chatChannelWakes)
 
 // chatApp is the app every chat read needs: chat's questions answer a holder
 // of Chatlet, and a card drawn from one is withheld from a person who no longer
@@ -185,7 +210,8 @@ func chatReads() []Tool {
 		{
 			Name: "get_chat_room", Phrase: "read this chat room",
 			Description: "Read one chat room: its topic and purpose, what kind of room it is " +
-				"and who is in it. Its messages are read_chat_messages.",
+				"and who is in it, each member who follows every message marked so. Its " +
+				"messages are read_chat_messages. " + chatWakes,
 			schema: object([]string{"channel"}, map[string]*schema{"channel": room}),
 			Routes: []string{chatRoomRoute}, Apps: chatApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -204,7 +230,12 @@ func chatReads() []Tool {
 					fact("Purpose", "purpose", tText), fact("Unit", "unit", tText),
 					fact("Created", "created_at", tDatetime),
 					fact("Archived", "archived_at", tDatetime)},
+				// WHO FOLLOWS EVERY MESSAGE is the half of the routing a
+				// room's own rows decide, so the card says it per member:
+				// without it a model asked whether an agent will see a
+				// message has only the membership, which wakes nobody.
 				Items: &cards.Items{Path: "members", ID: "handle", Label: "handle",
+					Fact: "follow_all", Flag: "follows every message",
 					Noun: wire.Noun{One: "member", Many: "members"}},
 				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "id"}}}}),
 			Label: func(a map[string]any) string {
@@ -214,8 +245,10 @@ func chatReads() []Tool {
 		{
 			Name: "read_chat_messages", Phrase: "read a chat room's messages",
 			Description: "Read what was said in a chat room, newest first: who said each " +
-				"message, its words and when. A thread under a message is get_chat_thread. " +
-				"Older messages are found by what they say with search_chat.",
+				"message, its words and when, and for a person's message which agents it " +
+				"reached and which have answered. A thread under a message is " +
+				"get_chat_thread. Older messages are found by what they say with " +
+				"search_chat. " + chatWakes,
 			schema: object([]string{"channel"}, map[string]*schema{
 				"channel": room,
 				"limit":   positive("How many messages, at most.", 50),
@@ -237,7 +270,13 @@ func chatReads() []Tool {
 					// brief cites the room by its own.
 					col("id", "Message ID", "message.id", tText),
 					col("thread", "In thread", "message.thread_root", tText),
-					col("room_id", "Room ID", "message.channel_id", tText)},
+					col("room_id", "Room ID", "message.channel_id", tText),
+					// WHOM A PERSON'S MESSAGE REACHED AND WHO ANSWERED:
+					// no_agent is a message nobody was asked to answer,
+					// which a person otherwise waits on for ever.
+					col("delivery", "Delivery", "delivery", tLabel),
+					col("reached", "Reached", "message.reach.recipients", tText),
+					col("answered", "Answered by", "answered", tText)},
 				More: "next_cursor",
 				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "channel_id"}}}}),
 			Label: func(map[string]any) string { return "Reading the messages" },
@@ -464,7 +503,7 @@ func chatWrites() []Tool {
 		chatWrite("post_chat_message", authz.ActionChatPost, false, "post in chat rooms",
 			"Propose a message in a chat room. The person sees the room and who can read it "+
 				"before anything is posted. To answer a message, reply in its thread with "+
-				"reply_in_chat_thread.",
+				"reply_in_chat_thread. "+chatWakes,
 			object([]string{"channel", "body"}, map[string]*schema{
 				"channel": room,
 				"body": text("The message, in Markdown. Name somebody with @handle to "+
@@ -844,8 +883,13 @@ func chatPostPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		reaches, err := readReach(ctx, read, r.id, "", a.String("body"), seats.seatName)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		var c changes
 		c.fact("room", "Room", r.called())
+		c.fact("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Post in room", Target: r.called(),
 			Note: "Everyone it names with @ is told, and so is everyone who follows the " +
@@ -877,15 +921,72 @@ func chatReplyPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		reaches, err := readReach(ctx, read, r.id, answered.id, a.String("body"), seats.seatName)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		var c changes
 		c.fact("room", "Room", r.called())
 		c.fact("reply_to", "Replying to", answered.quote(seats.seatName))
+		c.fact("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Reply in thread", Target: r.called(),
 			Note:         "Everyone in the thread is told, and so is everyone it names with @.",
 			ApproveLabel: "Approve and reply", Changes: c.rows(), Request: req,
 			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
 	}
+}
+
+// reachReasons are the words a card says why a message reaches a seat in,
+// for the reasons a person would not guess from the message alone. A mention,
+// a direct message and a reply to the thread the seat started say themselves.
+var reachReasons = map[string]string{
+	"collective_request": "by @channel",
+	"collective":         "by @channel",
+	"answerer":           "to answer for the room",
+	"reply":              "in the thread",
+	"follow":             "following the thread",
+	"follow_all":         "following every message",
+}
+
+// quietWords are why a draft reaches no agent, as a card says it.
+var quietWords = map[string]string{
+	"no_agent": "No agent. The room has no agent to answer it; name one with @ to ask " +
+		"it.",
+	"addressed_to_people": "No agent. It names only people, so it is for them.",
+}
+
+// readReach is whom a draft would reach, as a card says it: each seat by its
+// name, with why where the message alone would not say, or why it reaches no
+// agent. It reads the post's own decision run dry ([chatReachRoute]), so the
+// card says what the approved post will do.
+func readReach(ctx context.Context, read proposal.Read, roomID, replyTo, body string,
+	name func(handle string) string) (string, error) {
+
+	q := url.Values{"body": {body}}
+	if replyTo != "" {
+		q.Set("reply_to", replyTo)
+	}
+	doc, err := readGet(ctx, read, chatReachRoute, map[string]string{"channel_id": roomID}, q)
+	if err != nil {
+		return "", err
+	}
+	if words, ok := quietWords[value(doc, "quiet")]; ok {
+		return words, nil
+	}
+	list, _ := cards.Lookup(doc, "reach.recipients").([]any)
+	if len(list) == 0 {
+		return "Nobody", nil
+	}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		who := name(value(item, "handle"))
+		if why, ok := reachReasons[value(item, "reason")]; ok {
+			who += " " + why
+		}
+		out = append(out, who)
+	}
+	return strings.Join(out, ", "), nil
 }
 
 // chatDirectPreview names who a direct message reaches. It reads no room: a
@@ -1149,6 +1250,14 @@ func chatMembersPreview(t Tool) proposal.Previewer {
 		completed["members"] = membersArgument(next)
 		req, err := roomRequest(t, completed, r)
 		if err != nil {
+			return proposal.Preview{}, err
+		}
+		// THE MEMBERSHIP THE CARD WAS DRAWN FROM rides the write as its
+		// expectation, so the tool refuses it in the store's own snapshot if
+		// the room's members moved after this read: the approval's re-read of
+		// the room ([room.bound]) narrows that window and cannot close it.
+		if req.Body, err = withActArg(req.Body, "expected_members",
+			membersArgument(r.members)); err != nil {
 			return proposal.Preview{}, err
 		}
 		var c changes

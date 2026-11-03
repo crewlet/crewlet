@@ -433,7 +433,7 @@ const (
 	levelWidth = 5
 
 	// componentWidth is the longest component name in the tree
-	// ("sandbox.coding_agent" and "providers.credential", both 20), so
+	// ("providers.credential", 20), so
 	// every one of the 59 names in use today lands in a straight column.
 	componentWidth = 20
 

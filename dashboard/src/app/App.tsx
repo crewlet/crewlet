@@ -104,8 +104,8 @@ const Chat = lazyScreen("chatlet", (m) => m.Chat);
 const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
 const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
-const Runs = lazyScreen("live", (m) => m.Runs);
-const RunScreen = lazyScreen("live", (m) => m.RunScreen);
+const Executors = lazyScreen("live", (m) => m.Executors);
+const ExecutorScreen = lazyScreen("live", (m) => m.ExecutorScreen);
 const Conversations = lazyScreen("live", (m) => m.Conversations);
 const ChannelScreen = lazyScreen("live", (m) => m.ChannelScreen);
 const TraceScreen = lazyScreen("live", (m) => m.TraceScreen);
@@ -139,7 +139,7 @@ const Brand = lazyScreen("brand", (m) => m.BrandPage);
 const BrandSetup = lazyScreen("brand", (m) => m.BrandSetup);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Models = lazyScreen("settings", (m) => m.Models);
-const Tools = lazyScreen("settings", (m) => m.Tools);
+const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Limits = lazyScreen("settings", (m) => m.Limits);
 const People = lazyScreen("settings", (m) => m.People);
@@ -247,8 +247,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Turns />;
     case "turn":
       return <TurnScreen key={route.id} turnId={route.id} />;
-    case "runs":
-      return route.id ? <RunScreen key={route.id} turnId={route.id} /> : <Runs />;
+    case "executors":
+      return route.id ? <ExecutorScreen key={route.id} turnId={route.id} /> : <Executors />;
     case "a2a":
       return route.id ? <ChannelScreen key={route.id} id={route.id} /> : <Conversations />;
     case "trace":
@@ -300,7 +300,7 @@ export function screenFor(route: Resolved): ReactNode {
       return <Models key={route.id ?? ""} id={route.id} />;
     case "mcp-tools":
       return (
-        <Tools
+        <McpTools
           key={`${route.server ?? ""}/${route.tool ?? ""}`}
           server={route.server}
           tool={route.tool}

@@ -1214,7 +1214,9 @@ func landedTwoOwingCloses(t *testing.T, n *node, c *code.Committer, w *code.Chan
 // routing's) — the second change's authors read the first's sentence, red;
 // refuse the whole record where one of its closes owes nothing — the second
 // close stays owed, red; clear the closes of every entry named, owed or not,
-// on the stale record — it is applied, not refused, red.
+// on the stale record — it is applied, not refused, red; leave a code wake's
+// TriggerOrigin unset in inboundOf — dev's wakes name nothing that started
+// them, red.
 func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1264,6 +1266,35 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 					i+1)
 			}
 		}
+	}
+	// EACH WAKE NAMES WHAT STARTED ITS TURN: the seat dev is woken about each
+	// change under merged, its own sentence beside, and each wake names that
+	// change by its ref, so the executors board and the turn's history say
+	// which merge's close the seat answers (ada is a person and hears by
+	// notice alone).
+	_, _, routed := wakesOf(t, feedRecord(t, n, res.Position))
+	if got := woken(routed); !slices.Equal(got, []string{"dev:merged", "dev:merged"}) {
+		t.Fatalf("the settle of two not_closed closes wakes %v, want dev about each change", got)
+	}
+	refs := map[string]bool{}
+	for _, r := range routed {
+		i := slices.Index(changes[:], r.Metadata[code.MetaChangeID])
+		ref := r.Metadata[code.MetaChangeRef]
+		switch {
+		case i < 0:
+			t.Errorf("dev is woken about %q, which is neither of the landing's changes %v",
+				r.Metadata[code.MetaChangeID], changes)
+		case r.Metadata[code.MetaNotClosed] != why[i]:
+			t.Errorf("dev's wake about change %d says %q, want its own sentence %q", i+1,
+				r.Metadata[code.MetaNotClosed], why[i])
+		case !strings.HasPrefix(ref, "web!") || refs[ref]:
+			t.Errorf("dev's wake about change %d names it %q, want its own ref in web", i+1, ref)
+		case r.Origin != (types.TriggerOrigin{Kind: types.OriginCodeChange, ID: ref,
+			Reason: string(code.ReasonMerged)}):
+			t.Errorf("dev's wake about change %d names %+v as what starts its turn, want the change %s, "+
+				"merged", i+1, r.Origin, ref)
+		}
+		refs[ref] = true
 	}
 	if got := owed(repo); len(got) != 0 {
 		t.Fatalf("both closes settled in one record, %v still owe one", got)

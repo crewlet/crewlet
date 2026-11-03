@@ -109,7 +109,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0073).
+	// below a floor (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
 )
 
@@ -239,7 +239,7 @@ type ChannelCreate struct {
 	Name string `json:"name,omitempty"`
 
 	// Unit is the unit a [KindUnit] room belongs to, and empty for every
-	// other kind. It is what the lead fallback resolves through, so a unit
+	// other kind. It is what the room's answerer resolves through, so a unit
 	// room that did not name its unit would route a person's question to
 	// nobody.
 	Unit string `json:"unit,omitempty"`
@@ -342,9 +342,9 @@ func (c ChannelCreate) checkAddress() error {
 			c.Name, MaxChannelName)
 	}
 	if c.Kind == KindUnit && c.Unit == "" {
-		return invalid("unit", "a %s room names no unit — the lead fallback "+
-			"resolves through it, so a room without one routes a person's "+
-			"question to nobody", c.Kind)
+		return invalid("unit", "a %s room names no unit, and its answerer (the "+
+			"unit's lead) resolves through it, so a room without one routes a "+
+			"person's question to nobody", c.Kind)
 	}
 	if c.Kind != KindUnit && c.Unit != "" {
 		return invalid("unit", "a %s room names unit %q — only a %s room "+
@@ -515,7 +515,7 @@ type MemberSet struct {
 	// that key — so the record says exactly what changed.
 	//
 	// THE CHART'S ALONE, and only beside its activation: a room's unit is
-	// what its lead fallback resolves through, and it moves for the reason
+	// what its answerer resolves through, and it moves for the reason
 	// its membership does — the org chart gave the channel to another unit
 	// (moved in a reorg, or the unit renamed without an `id`) — so it rides
 	// the record the chart already arbitrates on the room, stamped with the
@@ -1094,7 +1094,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0073) as a record this domain's applier decodes: the framework owns when
+// ADR-0080) as a record this domain's applier decodes: the framework owns when
 // one is appended, what it removes and the floor its subject names, and the
 // domain owns what a record on its log looks like.
 //

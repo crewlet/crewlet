@@ -197,8 +197,9 @@ interface AccessSync {
   error?: AccessFailure;
 }
 
-/** Whether the seat can use its credential through a tool right now. */
-type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "off";
+/** Whether the seat can use its credential through a tool right now.
+ *  `server_off`: every tool server reading the credential is turned off. */
+type AccessToolState = "live" | "builtin" | "waiting" | "no_server" | "server_off" | "off";
 
 export interface AccessSeatLane {
   desired: AccessDesired;

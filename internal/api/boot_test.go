@@ -263,7 +263,7 @@ func TestAStartingSeatsNodeServesOnlyItsProbes(t *testing.T) {
 // routes its own direct boxes dial on api.port, to this host's loopback alone
 // ([api.Probes]), and a direct run outlives its node's process: while the node
 // restarts, the run's calls reach the boot surface, and an absent route would
-// read to its CLI as a bridge that is gone rather than one about to answer. So
+// read to its harness as a bridge that is gone rather than one about to answer. So
 // a loopback caller of either route is answered `503 starting`, and every
 // other path — and every caller off the host — exactly as before. A node that
 // runs no seats launches no box, and tells nobody to come back for them.
@@ -373,7 +373,7 @@ func (b *lockedBuffer) String() string {
 
 // A REFUSAL'S LOG LINE NEVER CARRIES THE RUN TOKEN A PATH DOES. The tool bridge
 // and the OTLP receiver are authenticated by a signed token in their own path,
-// and a coding run calling back while its node restarts meets the boot
+// and an executor calling back while its node restarts meets the boot
 // surface's refusal; a line naming the raw path would put a live credential in
 // the log. NOT PARALLEL: it installs this process's log sink for its duration,
 // which only a case running alone may do.

@@ -25,7 +25,7 @@ import (
 // THE BRIDGE'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS — the
 // contract the tool loop's runs as well (internal/agent/toolloop). Each case
 // is one detached run's session, opened on a bridge mounted on a live
-// listener, which the suite reaches over the run's minted URL as the CLI in a
+// listener, which the suite reaches over the run's minted URL as the harness in a
 // box does. The session names its caller, the seat its surface is bound to,
 // because the suite's surface is one that parks ([parking]) rather than the
 // seat's own; a seat's own session is held to the same gates by gates_test.

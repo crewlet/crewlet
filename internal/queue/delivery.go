@@ -103,7 +103,7 @@ func WithHeadroom(ctx context.Context, perMessage []Headroom) context.Context {
 // route gated its offer on this number, so a person's clarification reply on
 // its FIRST delivery — a whole budget in hand — was refused the answer route
 // outright whenever any co-partitioned message happened to be near its own
-// budget, and was spent on an ordinary turn while a parked coding run was
+// budget, and was spent on an ordinary turn while a parked executor was
 // still owed it. That question is [DeliveriesLeftFor]'s.
 //
 // # What the number counts

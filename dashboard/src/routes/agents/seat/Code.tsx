@@ -4,7 +4,7 @@
  * what its days counted.
  *
  * THREE READS, EACH THE ENGINE'S OWN QUESTION, held to the reader's grant on
- * every repository it names (ADR-0081: no app gates code, so the tab is every
+ * every repository it names (ADR-0088: no app gates code, so the tab is every
  * reader's, and a repository the reader may not read is simply not in its
  * rows):
  *
@@ -56,7 +56,7 @@ export function SeatCode({ seat, human }: { seat: Seat; human: boolean }) {
             title: "No open change",
             hint: human
               ? "A change they open, from a push or from their assistant, is listed here until it merges or closes."
-              : "A change this seat opens with code_open_change, or from a coding run, is listed here until it merges or closes.",
+              : "A change this seat opens with code_open_change, or from its executor, is listed here until it merges or closes.",
           }}
         />
       </Card>

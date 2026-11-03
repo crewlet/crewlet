@@ -163,7 +163,7 @@ func TestACheckoutAsksForExactlyTheRepositoryItNames(t *testing.T) {
 	}
 }
 
-// A CHECKOUT IS A CODING RUN'S: a call no job made has no row to grant on,
+// A CHECKOUT IS AN EXECUTOR'S: a call no job made has no row to grant on,
 // and the desk is never asked. What the row did with a checkout is said in
 // the run's words: held, conflict, full and not running each refused or
 // answered as what they are, and a refusal the desk composed reaches the run

@@ -741,10 +741,10 @@ func (b *Bootstrap) validateTopology() error {
 	// every one of those logs is signed and verified under this keyring,
 	// because the broker's admission vouches for a connection and never a
 	// record (ADR-0031). An embedded fleet's broker admits only keys derived
-	// from this keyring too (ADR-0087). A node WITHOUT data needs it
+	// from this keyring too (ADR-0094). A node WITHOUT data needs it
 	// just as much: the company document it fetches from the coordination
 	// store is authenticated by its seal, a seats node mints and verifies
-	// the per-run tokens its sandbox runs carry, and every request it sends
+	// the per-run tokens its executors carry, and every request it sends
 	// a data node's estate service, and every answer, is signed under it
 	// for the reason the records are — as is every request ANY node asks a
 	// peer to carry out, a broker member's removal of a voter and a note to
@@ -982,7 +982,7 @@ func routeAddress(raw string) (string, bool) {
 // a scheme or without one.
 //
 // REFUSED IN A FLEET URL, because a fleet's credentials are DERIVED from
-// secrets.keys, never written (ADR-0087): the engine sets each route's
+// secrets.keys, never written (ADR-0094): the engine sets each route's
 // userinfo itself, so one written there is overwritten and is a password
 // sitting in a config file for nothing, and a leaf link presents an nkey,
 // beside which nats-server would also send a URL's userinfo, in clear.
@@ -1871,8 +1871,8 @@ type Stream struct {
 	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
 	// (node, day, seat, schedule or person) for 181 days, so its size is the
 	// number of those objects rather than how busy they were. A three-node
-	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
-	// default is four times that. Unset takes the default rather than a
+	// fleet of forty seats and twenty schedules is about 320 MB; the 1 GiB
+	// default is three times that. Unset takes the default rather than a
 	// share of the disk, because a census is a property of the fleet's
 	// seats and schedules and a larger volume buys no more of them.
 	//
@@ -1880,7 +1880,7 @@ type Stream struct {
 	// take, because the broker grants a stream its whole
 	// ceiling when it creates it: this number is free space a node must
 	// have before it can boot at all, and a ten-seat node's 181-day census
-	// is about 12 MB. See [UsageLogMaxBytesFloor].
+	// is about 18 MB. See [UsageLogMaxBytesFloor].
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here: the value is the one the stream is
@@ -1948,7 +1948,7 @@ type Stream struct {
 	// append rather than shedding history. The log runs on every node that
 	// runs a state log, whether or not the company hosts code, as every
 	// domain's log does — so its derived ask is paid by every company:
-	// below about 651 GiB free it comes out of the other logs' share (at
+	// below about 652 GiB free it comes out of the other logs' share (at
 	// 100 GiB the mutation log is created at 9.1 GiB rather than 11.1;
 	// docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes, and internal/engine's
@@ -1983,8 +1983,8 @@ type Stream struct {
 	// and the whole 8 GiB from 128 GiB free, never below
 	// [ChatLogMaxBytesFloor]. What is asked is then scaled with every other
 	// derived ask to fit the one budget, so a 64 GiB first boot creates the
-	// log at about 1.4 GiB and the whole 8 GiB is created only where the
-	// broker can back every derived ask unscaled (about 662 GiB free under
+	// log at about 1.3 GiB and the whole 8 GiB is created only where the
+	// broker can back every derived ask unscaled (about 664 GiB free under
 	// an embedded broker that sizes itself). The cap is what keeps this
 	// log's ask from taking more of the vector changelog's room for a model
 	// change than it must; the constant states the figures and what it
@@ -2001,11 +2001,11 @@ type Stream struct {
 	// following it at that ratio makes this the largest ask of the ten —
 	// nearly half as much again as the mutation log's, 93 GiB beside its
 	// 64 GiB clamp — and the budget scales every derived ask in proportion.
-	// On a 64 GiB volume that creates the vector changelog at 3.9 GiB, half
+	// On a 64 GiB volume that creates the vector changelog at 3.8 GiB, half
 	// the 7.9 GiB the reference company's fifth-year model change puts in
 	// it, which is the one failure that log is sized to rule out, and a
 	// first boot gives it room for that change clear of the headroom alarm
-	// only from about 136 GiB free; with this log's ask capped as above it
+	// only from about 138 GiB free; with this log's ask capped as above it
 	// is created at 5.4 GiB on that volume, and has the room from about
 	// 100 GiB free.
 	//
@@ -2042,6 +2042,22 @@ type Stream struct {
 	// old messages is a RECORD every data node applies and never a stream
 	// bound.
 	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."`
+
+	// ExecutorLogMaxBytes is the byte ceiling on the executor log, where
+	// every capture of a seat's executor session, every turn's ending and
+	// every retention delete of them is recorded before it is applied.
+	//
+	// UNSET TAKES 512 MiB ([DefaultExecutorLogMaxBytes]), sized by the turns
+	// the company's seats run rather than by the disk: about eighteen days of
+	// a completely blocked trim at the reference company's rate. Where the
+	// broker is short it is scaled down as far as its 64 MiB floor, so a
+	// fresh node reserves only the floor for it. It shares the state logs'
+	// one budget, and crossing it refuses the append (a session is not
+	// recorded and the turn's next launch starts fresh) rather than shedding
+	// history. How long a session is kept is the company's own
+	// `turn_engine.conversation_session.retention_days`, and does not depend
+	// on this.
+	ExecutorLogMaxBytes int64 `yaml:"executor_log_max_bytes,omitempty" json:"executor_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the executor log, where seats' executor sessions are named; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2189,7 +2205,7 @@ type StreamCluster struct {
 	// one of them.
 	//
 	// The listener admits only a member presenting a route credential
-	// derived from a key of secrets.keys (ADR-0087), and that credential
+	// derived from a key of secrets.keys (ADR-0094), and that credential
 	// crosses the network IN CLEAR once per connection — NATS routes carry
 	// a password or a certificate, never a signature — as does every byte
 	// after it: the company's whole event history and every lease. So on a
@@ -2228,7 +2244,7 @@ type StreamLeaf struct {
 	// opens none.
 	//
 	// It admits only a leaf whose link presents the nkey derived from a key
-	// of secrets.keys and signs this member's nonce with it (ADR-0087): a
+	// of secrets.keys and signs this member's nonce with it (ADR-0094): a
 	// challenge, so no secret crosses the network. What crosses it after,
 	// everything the leaf's clients ask of the fleet, crosses in clear, as
 	// the route port's does — so both belong on the network the fleet's
@@ -2573,6 +2589,8 @@ func (s *Stream) validate(path Path) error {
 		AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling)
 	bytesInRange(&p, path, "chat_log_max_bytes", s.ChatLogMaxBytes,
 		ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling)
+	bytesInRange(&p, path, "executor_log_max_bytes", s.ExecutorLogMaxBytes,
+		ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2582,8 +2600,8 @@ func (s *Stream) validate(path Path) error {
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
 	//
-	// EVERY STATE LOG IS IN THE SUM, the identity, usage and chat logs
-	// included. The sum is what the broker will be asked to back, so a log
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor and
+	// code logs included. The sum is what the broker will be asked to back, so a log
 	// left out of it is a limit this check passes and the boot refuses —
 	// which is the one outcome the check exists to prevent, arriving with a
 	// message that says the configuration was fine.
@@ -2608,18 +2626,19 @@ func (s *Stream) validate(path Path) error {
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
-				"usage_log_max_bytes %d + code_log_max_bytes %d + "+
-				"artifacts_log_max_bytes %d + artifact_data_log_max_bytes %d + "+
-				"assistant_log_max_bytes %d + chat_log_max_bytes %d = %d): the broker "+
-				"refuses a stream whose ceiling it cannot back, so this node would "+
-				"fail to provision one of them. Raise store_max_bytes, or lower the "+
+				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
+				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
+				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
+				"code_log_max_bytes %d = %d): the broker refuses a stream "+
+				"whose ceiling it cannot back, so this node would fail to "+
+				"provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings, and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes, s.CodeLogMaxBytes,
+			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			s.ChatLogMaxBytes, declared)
+			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
@@ -2866,7 +2885,7 @@ var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // authenticated by its seal, a node serving the API signs every session
 // cookie and per-run token with it, and an embedded fleet's broker admits
 // only a route, a leaf link or an operator presenting a credential derived
-// from it (ADR-0087). There is no default: a key the engine invented would be
+// from it (ADR-0094). There is no default: a key the engine invented would be
 // one no other node holds.
 type Secrets struct {
 	// ActiveKeyID names the key that seals new writes. Required, and it
@@ -2883,7 +2902,12 @@ type SecretKey struct {
 	// ID is stamped into every envelope this key seals (enc:v1:<id>:...),
 	// and is kept across a rotation so old ciphertext still names a live
 	// key.
-	ID string `yaml:"id" json:"id" js:"required;pattern=^[A-Za-z0-9._-]+$" desc:"Stable key id, colon-free so the envelope parses."`
+	//
+	// AT MOST [secrets.MaxStreamKeyIDBytes], the longest id a sealed stream's
+	// header names: the keyring seals the seats' executor sessions as streams,
+	// and an id no header can name refuses the whole keyring there, at a
+	// node's first capture or restore, long after validation passed it.
+	ID string `yaml:"id" json:"id" js:"required;pattern=^[A-Za-z0-9._-]+$;maxlen=255" desc:"Stable key id, colon-free so the envelope parses, at most 255 characters so a sealed stream's header can name it."`
 
 	// Material is a base64-encoded 32-byte key, or a ${VAR} reference to
 	// one.
@@ -2895,12 +2919,18 @@ func (s *Secrets) validate(path Path) error {
 	ids := make(map[string]struct{}, len(s.Keys))
 	for i, k := range s.Keys {
 		kp := idx(at(path, "keys"), i)
-		if k.ID == "" {
+		switch {
+		case k.ID == "":
 			p.add(at(kp, "id"), ErrMissing, "every key needs an id")
-		} else if !secretKeyIDPattern.MatchString(k.ID) {
+		case !secretKeyIDPattern.MatchString(k.ID):
 			p.add(at(kp, "id"), ErrUnknownValue,
 				"%q must contain only letters, digits, '.', '_' or '-': it is "+
 					"stamped into every envelope this key seals", k.ID)
+		case len(k.ID) > secrets.MaxStreamKeyIDBytes:
+			p.add(at(kp, "id"), ErrOutOfRange,
+				"the id is %d characters and at most %d are allowed: a sealed "+
+					"stream's header names its key in one length byte", len(k.ID),
+				secrets.MaxStreamKeyIDBytes)
 		}
 		if k.Material == "" {
 			p.add(at(kp, "material"), ErrMissing,

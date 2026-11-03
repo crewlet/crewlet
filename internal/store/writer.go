@@ -2,9 +2,12 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -68,7 +71,7 @@ var tagKeys = map[string]string{
 	// through disagreed about a dimension Append reads back out of the
 	// tags. One map is what makes that disagreement unrepresentable.
 	"turn_id": "turn_id",
-	// WHO ANSWERED a coding run's question: the one dimension a person's
+	// WHO ANSWERED an executor's question: the one dimension a person's
 	// answered decisions select the answers' records by (ADR-0068), before
 	// reading the few that are theirs whole. A listing never selects the
 	// payload, so without it every answer in the window was read whole to
@@ -170,10 +173,15 @@ var tagKeys = map[string]string{
 	"dir":         "dir",
 	// And a model gesture's (types.ModelActed): which gesture, and on which
 	// providers.llm entry. `provider_key` means that entry wherever a
-	// payload carries it (a phase's record, a fallback, a sandbox run), so
-	// "what ran on, and what was done to, this model" is one filter.
+	// payload carries it (a phase's record, a fallback, an executor's
+	// launch), so "what ran on, and what was done to, this model" is one
+	// filter.
 	"action":       "action",
 	"provider_key": "provider_key",
+	// And an MCP server gesture's (types.MCPServerActed): the configured
+	// server it was made on, under a key of its own because `server` means
+	// other things on other types.
+	"mcp_server": "mcp_server",
 	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
 	// (types.AssistantTurnCompleted, and an approved write the act route
 	// records under the assistant transport), so the Audit log lists every
@@ -181,26 +189,34 @@ var tagKeys = map[string]string{
 	"conversation_id": "conversation_id",
 }
 
-// The two events that carry an LLM call's cost: a phase's record, and an
-// auxiliary record's coalesced calls.
+// The three events that carry an LLM call's cost: a phase's record, one launch
+// of an executor's run, and an auxiliary record's coalesced calls.
 //
 // Gated on the type rather than on "does the payload happen to have these
 // fields", because several other events carry a `model` or a `turn_id` and a
 // rollup that counted them would be counting calls that never happened.
-// TWO, and taken from their payload types for the reason [phaseCompleted] is.
+// THREE, and taken from their payload types for the reason [phaseCompleted] is.
 var (
 	phaseSpendType     = types.AgentPhaseCompleted{}.EventType()
+	launchSpendType    = types.ExecutorCollected{}.EventType()
 	auxiliarySpendType = types.AuxiliarySpend{}.EventType()
 )
 
 // repoReadType is the one event the repository-read columns are filled from
-// (node/0059), taken from its payload type for the reason [phaseCompleted] is.
+// (node/0060), taken from its payload type for the reason [phaseCompleted] is.
 var repoReadType = types.CodeFetched{}.EventType()
 
-// spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
-// spend lists the same two.
-func spendTypes() (string, []any) {
-	return "?, ?", []any{phaseSpendType, auxiliarySpendType}
+// spendTypes are all three, as a statement's arguments take them — every read
+// that folds spend reads the same three, one `event_type = ?` statement or
+// branch per type (see [phaseTokenSQL] for why never an `IN (…)`).
+func spendTypes() []any {
+	return []any{phaseSpendType, launchSpendType, auxiliarySpendType}
+}
+
+// isSpendType reports whether an event type is one of [spendTypes].
+func isSpendType(eventType string) bool {
+	return eventType == phaseSpendType || eventType == launchSpendType ||
+		eventType == auxiliarySpendType
 }
 
 // phaseAuxiliary is the phase an auxiliary record is filed under. Its event
@@ -209,8 +225,14 @@ func spendTypes() (string, []any) {
 // auxiliary model's spend on this value.
 const phaseAuxiliary = string(types.PhaseAuxiliary)
 
-// SpendFor pulls a spend record's cost out of a phase completion or an
-// auxiliary record.
+// phaseExecute is the phase a launch's record is filed under: its event
+// carries no phase either, and what it spent is the executor's, which every
+// reader — the rollup's Execute band, the usage cells, the turn's own sums —
+// already keys on this value.
+const phaseExecute = string(types.PhaseExecute)
+
+// SpendFor pulls a spend record's cost out of a phase completion, a collected
+// launch or an auxiliary record.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -231,7 +253,7 @@ const phaseAuxiliary = string(types.PhaseAuxiliary)
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != phaseSpendType && eventType != auxiliarySpendType {
+	if !isSpendType(eventType) {
 		return nil
 	}
 	var body map[string]json.RawMessage
@@ -257,7 +279,15 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		ProviderKey:      jsonString(body["provider_key"]),
 		Calls:            phaseCalls(body),
 	}
-	if eventType == auxiliarySpendType {
+	switch eventType {
+	case launchSpendType:
+		// THE EXECUTOR'S SPEND, filed where every reader already looks for
+		// it: phase `execute`, under the round that launched it — the
+		// record's own `iteration` — and nested under nothing. Its calls are
+		// its harness's own turns, by the rule the live projection counts it by.
+		spend.Phase, spend.HostPhase, spend.Worker = phaseExecute, "", ""
+		spend.Calls = tokens.LaunchCalls(jsonInt(body["harness_turns"]))
+	case auxiliarySpendType:
 		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
 		// looks for it: phase `auxiliary`, its purpose as the worker. The
 		// record names no phase, host phase or iteration of its own, and its
@@ -290,7 +320,6 @@ func phaseCalls(body map[string]json.RawMessage) int {
 		Phase:      jsonString(body["phase"]),
 		Rounds:     len(rounds),
 		RoundsUsed: jsonInt(body["rounds_used"]),
-		CLITurns:   jsonInt(body["cli_turns"]),
 	})
 }
 
@@ -332,8 +361,8 @@ func ExtractTags(payload []byte) map[string]string {
 	if failed {
 		tags["failed"] = "true"
 	}
-	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read and the
-	// only other one. Every turn-level record carries it as an object,
+	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read. Every
+	// turn-level record carries it as an object,
 	// `work_item{backend, id, key, project}`, and the tag is its identity
 	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
 	// that is the one of the four that a move or a rename leaves alone and
@@ -358,8 +387,134 @@ func ExtractTags(payload []byte) map[string]string {
 			}.Ref()
 		}
 	}
+	// WHAT STARTED THE TURN, the third nested read: every turn record
+	// carries its trigger, and the trigger names its PRIMARY origin
+	// (types.TriggerOrigin) as `trigger.origin{kind, id, reason}`. The tag is
+	// `<kind>:<id>`, BOTH HALVES OR NOTHING for work_item's reason, and the
+	// reason rides beside it: what the turns list's row reads its origin
+	// from. Finding a turn BY an origin, a coalesced trigger's every message
+	// included, is the turn start's own index ([TurnOrigins], node/0059).
+	if raw, ok := flat["trigger"]; ok {
+		var trigger struct {
+			Origin types.TriggerOrigin `json:"origin"`
+		}
+		if json.Unmarshal(raw, &trigger) == nil {
+			if origin := OriginRef(trigger.Origin.Kind, trigger.Origin.ID); origin != "" {
+				tags["trigger_origin"] = origin
+				if trigger.Origin.Reason != "" {
+					tags["trigger_reason"] = trigger.Origin.Reason
+				}
+			}
+		}
+	}
+	// THE MCP SERVERS A RECORD'S CALLS WERE FOR, the fourth nested read: every
+	// `tool_executions[].source` that names a server (types.ToolExecution),
+	// answered or refused. A server's recent calls are read out of the phase
+	// records that made them ([EventLog.ToolCalls]), and a listing never
+	// selects the payload (a phase record carries its whole prompt and tool
+	// log), so without the tag every phase record in the window was read
+	// whole to find the few that called one server.
+	if raw, ok := flat["tool_executions"]; ok {
+		if servers := mcpServersTag(raw); servers != "" {
+			tags[mcpServersTagKey] = servers
+		}
+	}
 	return tags
 }
+
+// OriginOfTags is the origin a record's tags name ([ExtractTags]), or nil: what
+// the turn detail reads off the earliest of its rows that names one, as the
+// turns list's aggregate does.
+func OriginOfTags(tags map[string]string) *types.TriggerOrigin {
+	kind, id, ok := strings.Cut(tags["trigger_origin"], ":")
+	if !ok || kind == "" || id == "" {
+		return nil
+	}
+	return &types.TriggerOrigin{Kind: kind, ID: id, Reason: tags["trigger_reason"]}
+}
+
+// turnStarted is the record a turn's origins are indexed from: its own start,
+// one per segment, rather than every phase record, which repeat the trigger.
+var turnStarted = types.AgentTurnStarted{}.EventType()
+
+// TurnOrigins is every object a turn's start record says started it, as
+// `<kind>:<id>`, each once, the primary origin first and then every object a
+// COALESCED trigger took in ([types.Trigger.Origins]); nil for any other
+// record. What [EventLog.Append] writes into crewlet_turn_origins (node/0059).
+//
+// READ OFF THE SERIALIZED TRIGGER, as the tags are, so a newer peer's record
+// is indexed as a known one is.
+func TurnOrigins(eventType string, payload []byte) []string {
+	if eventType != turnStarted {
+		return nil
+	}
+	var body struct {
+		Trigger struct {
+			Origin  types.TriggerOrigin   `json:"origin"`
+			Origins []types.TriggerOrigin `json:"origins"`
+		} `json:"trigger"`
+	}
+	if json.Unmarshal(payload, &body) != nil {
+		return nil
+	}
+	var out []string
+	for _, o := range append([]types.TriggerOrigin{body.Trigger.Origin}, body.Trigger.Origins...) {
+		if ref := OriginRef(o.Kind, o.ID); ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// OriginRef is a turn origin's identity as the log files it, `<kind>:<id>`,
+// or empty when either half is missing: a kind with no id names no object, and
+// an id with no kind could be two objects.
+//
+// ONE SPELLING, read by the tag above and by every reader that asks the log
+// for the turns an object started, so the two can never compose it apart.
+func OriginRef(kind, id string) string {
+	if kind == "" || id == "" {
+		return ""
+	}
+	return kind + ":" + id
+}
+
+// mcpServersTagKey is the tag [ExtractTags] names a record's MCP servers under.
+const mcpServersTagKey = "mcp_servers"
+
+// mcpServersTag is the servers a record's tool calls named, as the tag holds
+// them: each between commas, sorted, once (`,github,linear,`), and "" for a
+// record whose calls named none.
+//
+// ONE STRING because a tag is one (the tags are a flat map the listing reads
+// whole), and DELIMITED AT BOTH ENDS so [mcpServerTagNeedle] matches one whole
+// name: a server name is letters, digits and hyphens (config's server name
+// rule), so no name holds a comma and `,git,` never matches inside
+// `,github,`. Only the `source` of each call is decoded; the rest of the tool
+// log stays bytes.
+func mcpServersTag(raw json.RawMessage) string {
+	var calls []struct {
+		Source string `json:"source"`
+	}
+	if json.Unmarshal(raw, &calls) != nil {
+		return ""
+	}
+	var servers []string
+	for _, c := range calls {
+		if server, ok := mcp.OriginServer(c.Source); ok && !slices.Contains(servers, server) {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		return ""
+	}
+	slices.Sort(servers)
+	return "," + strings.Join(servers, ",") + ","
+}
+
+// mcpServerTagNeedle is what a record whose calls named server holds inside
+// its [mcpServersTag].
+func mcpServerTagNeedle(server string) string { return "," + server + "," }
 
 // jsonInt reads a number out of a raw JSON field.
 //

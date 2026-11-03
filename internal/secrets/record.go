@@ -51,6 +51,9 @@ type Record struct {
 	// one: what a write or a delete conditioned on "nothing has changed
 	// since I read it" names. Zero where the store keeps none.
 	Version uint64
+
+	// WriteOnly is a value only the engine's resolver opens ([ErrWriteOnly]).
+	WriteOnly bool
 }
 
 // Source is the write path a stored secret arrived by, stamped by that path.
@@ -98,7 +101,7 @@ const (
 	// same command's row is [SourceAPI].
 	SourceCLI Source = "cli"
 
-	// SourceLLMLogin is a coding CLI's login — `crewlet llm login`'s headless
+	// SourceLLMLogin is a harness's login — `crewlet llm login`'s headless
 	// token, or `crewlet llm export -secret-store`'s bundle — written to the
 	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"
@@ -111,11 +114,21 @@ const (
 	// SourceIAM is the engine's own key material, minted by the engine
 	// ([Reserved] names, which no listing shows).
 	SourceIAM Source = "iam"
+
+	// SourceMCP is an MCP server's header or variable stored from its page
+	// in Settings › MCP & tools (`PUT /mcp-servers/{name}/values/{key}`),
+	// sealed write-only ([Record.WriteOnly]).
+	SourceMCP Source = "mcp"
+
+	// SourceMCPSignIn is an MCP server's OAuth grant, written by the engine
+	// when a person signs the company in at the server's vendor and each
+	// time the engine renews it ([Reserved] names, which no listing shows).
+	SourceMCPSignIn Source = "mcp-sign-in"
 )
 
 // Sources are every write path's word.
 var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
-	SourceLLMLogin, SourceIAM, SourceModels}
+	SourceLLMLogin, SourceIAM, SourceModels, SourceMCP, SourceMCPSignIn}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
@@ -186,6 +199,11 @@ var ErrNoKeyring = errors.New(
 // longer opens what it wrote. Collapsing them would have a rotation that
 // dropped a key look exactly like a name nobody set.
 var ErrNotFound = errors.New("secrets: no such secret")
+
+// ErrWriteOnly reports a read of a value stored write-only (an MCP server's
+// header stored from its page): the engine resolves it, and nothing reveals it.
+var ErrWriteOnly = errors.New("secrets: the value is write-only: the engine reads it for the " +
+	"${VAR} references that name it, and no reveal answers it")
 
 // ErrInvalidName reports a name no ${VAR} reference could ever reach.
 //

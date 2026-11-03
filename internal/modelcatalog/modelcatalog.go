@@ -1,9 +1,9 @@
 // Package modelcatalog is what a model step suggests: the models each coding
-// CLI's vendor offers, read from models.dev's public catalogue.
+// harness's vendor offers, read from models.dev's public catalogue.
 //
 // # Not a model vendor, and never handed a credential
 //
-// Coding CLIs are the only LLM backend and there is no HTTP client to a model
+// Harnesses are the only LLM backend and there is no HTTP client to a model
 // vendor (`docs/concepts/llm-backends.md`). This package does not become one:
 // https://models.dev/api.json is a public, keyless catalogue (the one OpenCode
 // itself reads), so the list a person picks a model from is read without a
@@ -84,7 +84,7 @@ var ErrUnknownProvider = errors.New("modelcatalog: no such provider in the catal
 // Model is one model as the catalogue lists it, in the fields a model step
 // shows.
 type Model struct {
-	// ID is what the CLI takes as its model argument.
+	// ID is what the harness takes as its model argument.
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	// Family groups a model with its siblings (`claude-opus`), empty where

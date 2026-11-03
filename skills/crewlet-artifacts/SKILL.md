@@ -31,7 +31,7 @@ What differs from a seat's use of the same tools:
   same arguments: it is the same operation and lands once. Without it, a
   repeat is a second write.
 - **There is no sandbox here.** `from_sandbox` and `source.sandbox` read a
-  seat's coding run and are refused to you: publish files inline, or copy a
+  seat's executor's box and are refused to you: publish files inline, or copy a
   project file with `from_project_file`.
 - **Nothing is watched for you.** This endpoint is stateless and pushes
   nothing. To learn of a colleague's change, read the artifact again with

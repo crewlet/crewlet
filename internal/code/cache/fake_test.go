@@ -106,7 +106,7 @@ var fakePusher = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token
 // pusherOf is who made a fake log's n-th push, and how: one in three a seat's
 // push the engine built, its run naming its turn, its work item and its model;
 // one in three a coding box's push git received, its run naming as well the
-// run that pushed and its coding agent; and the rest fakePusher's — so every
+// run that pushed and its harness; and the rest fakePusher's — so every
 // index a case builds holds every kind of push, and a case that holds an index
 // to the rows (indexAgainstLog) compares each push's whole PushedBy, its run
 // included.
@@ -120,7 +120,7 @@ func pusherOf(n int) (code.Principal, code.PushVia) {
 		return code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: run}, code.ViaEngine
 	case 2:
 		run.RunID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("run-%d", n))).String()
-		run.CodingAgent = "claude-code"
+		run.Harness = "claude-code"
 		return code.Principal{Kind: code.PrincipalAgent, Seat: "swe", Run: run}, code.ViaGit
 	}
 	return fakePusher, code.ViaGit
@@ -489,7 +489,7 @@ func (f *fakeLog) state() fakeState {
 }
 
 // recreate is the log made again — provisioned anew, its stamp not the one
-// it had (ADR-0076) — holding an earlier state's rows: a new stream identity,
+// it had (ADR-0083) — holding an earlier state's rows: a new stream identity,
 // and the rows and the checkpoint the state held.
 func (f *fakeLog) recreate(st fakeState) {
 	f.mu.Lock()
@@ -500,7 +500,7 @@ func (f *fakeLog) recreate(st fakeState) {
 
 // restore is the log brought back from an earlier copy — a broker restored
 // from a backup's snapshot, or yesterday's volume: the SAME stream identity
-// (the stamp rides the snapshot's configuration, ADR-0076), and the rows and
+// (the stamp rides the snapshot's configuration, ADR-0083), and the rows and
 // the checkpoint the copy held, so the positions past it name other records
 // once the log is written again.
 func (f *fakeLog) restore(st fakeState) {

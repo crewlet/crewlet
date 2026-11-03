@@ -159,12 +159,28 @@ func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, erro
 // ReadFile can see it — replaced whole under the box's lock, so a read never
 // finds a write half done, as no real backend's does ([Sandbox.WriteFile]).
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
+	return s.WriteStream(ctx, p, bytes.NewReader(content))
+}
+
+// WriteStream stores what content yields, read whole BEFORE the box's lock is
+// taken — a source is the caller's and may be slow — and only then put in the
+// file's place, so a source that fails part way leaves the file as it was, as
+// every real backend's staged write does ([Sandbox.WriteStream]). An empty
+// source stores what an empty slice always did: nothing, read as an empty file.
+func (s *FakeSandbox) WriteStream(ctx context.Context, p string, content io.Reader) error {
+	got, err := io.ReadAll(readUnder(ctx, content))
+	if err != nil {
+		return fmt.Errorf("sandbox: write %s: %w", p, err)
+	}
+	if len(got) == 0 {
+		got = nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("sandbox: box is closed")
 	}
-	s.files[path.Clean(p)] = slices.Clone(content)
+	s.files[path.Clean(p)] = got
 	return nil
 }
 
@@ -493,7 +509,7 @@ func (p *FakeProvider) KilledIDs() []string {
 	return slices.Clone(p.Killed)
 }
 
-// FakeRunner is a coding agent whose job finishes when a test says so — or,
+// FakeRunner is a harness whose job finishes when a test says so — or,
 // with a [FakeRunner.Player], whose every job is played by that function.
 type FakeRunner struct {
 	mu sync.Mutex
@@ -526,9 +542,9 @@ type FakeRunner struct {
 	Player func(ctx context.Context, req RunRequest) Result
 	plays  map[string]*fakePlay
 
-	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the CLI
+	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the harness
 	// this fake stands in for takes a person's notes between its own steps,
-	// as a real runner's CLI taught to does. Set it before the first
+	// as a real runner's harness taught to does. Set it before the first
 	// collection.
 	TakesNotes bool
 
@@ -618,11 +634,11 @@ func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) 
 	return p.result, true
 }
 
-// Name is the coding agent's key in the runner registry.
+// Name is the harness's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
 
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
-// whose CLI takes a person's notes between its steps gives the coordinator.
+// whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
 // Install records that the agent was provisioned into the box.
@@ -863,7 +879,7 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 
 // Started is every run request handed to Start, in order — whole, the steer
 // wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
-// CLI's own side of the run against what the launch gave it.
+// harness's own side of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

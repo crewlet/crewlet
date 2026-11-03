@@ -208,7 +208,7 @@ func ReadOnlyProven(a Annotations) bool { return a.ReadOnly == Yes }
 // decides each builtin's hints carefully, the registry carries them, the
 // sub-agent guard reads them — and the two places that hand the catalogue to
 // somebody else's client dropped them on the floor. An operator's assistant
-// and a sandboxed coding agent therefore saw a company's whole tool surface
+// and a sandboxed harness therefore saw a company's whole tool surface
 // unannotated, which is the shape a client cannot distinguish a read from an
 // irreversible write in: `search_work_items` and `remove_work_item` arrived
 // identical.

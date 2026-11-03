@@ -83,7 +83,7 @@ type output struct {
 // line, so every object an input holds is in the outputs — an object it shares
 // with a pack that is no input is written again rather than left to that pack,
 // because two compactions decided from different snapshots may each retire the
-// pack the other relied on (ADR-0083).
+// pack the other relied on (ADR-0090).
 //
 // AND NOTHING BUT THE INPUTS IN REACH, for a compaction and a publication's
 // repack alike: to fill in the name hash its delta search sorts by,

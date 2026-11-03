@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A CODING RUN AND THE CHANGES OF THE ENGINE'S OWN CODE HOST (M4-decisions
+// AN EXECUTOR AND THE CHANGES OF THE ENGINE'S OWN CODE HOST (M4-decisions
 // D33): a run may be launched ON a change — given the change's source branch
 // to work on, from its head ([RunRepo.Change]) — and may ask to OPEN one from
 // the branch it delivers ([RunRepo.Open]), which the engine does at the run's
@@ -22,12 +22,12 @@ import (
 // record read the change rather than a branch, and nobody opens one twice.
 //
 // AT THE COLLECTION, NOT BY THE BOX: a box could open a change itself — `git
-// push -o change` — but a coding agent pushes as it goes, and a change opened
+// push -o change` — but a harness pushes as it goes, and a change opened
 // at its first push asks its reviewers to read work in progress. The engine
 // opens it once the work is done, from where the branch ended up, as the
 // seat the run is for, carrying the work item its launch was charged to.
 
-// RunChange is the change a coding run works on: its id, which the change is
+// RunChange is the change an executor works on: its id, which the change is
 // named by on the code host, and its number on its repository, which a person
 // and a seat name it by (web!42).
 type RunChange struct {
@@ -46,7 +46,7 @@ func (c RunChange) problem() string {
 	return ""
 }
 
-// OpenChange is a coding run's ask to open a change from the branch it works
+// OpenChange is an executor's ask to open a change from the branch it works
 // on once it finishes: the branch it proposes the run's work into — whole,
 // under refs/heads/, RESOLVED AT LAUNCH (the one asked, or the repository's
 // default branch then), so the collection proposes what the run was told —

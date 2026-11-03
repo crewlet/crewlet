@@ -37,6 +37,21 @@ describe("an alarm kind is read as words", () => {
     ["pool_starved", "Pool starved"],
     ["census_drift", "Census drift"],
     ["objects_missing", "Objects missing"],
+    ["objects_bucket_near_ceiling", "Objects bucket near ceiling"],
+    ["objective_burn", "Objective burn"],
+    ["feed_stopped", "Feed stopped"],
+    ["log_ceiling_short", "Log ceiling short"],
+    ["llm_credential_expiring", "LLM credential expiring"],
+    ["llm_credential_expires_soon", "LLM credential expires soon"],
+    ["llm_sign_in_refused", "LLM sign in refused"],
+    ["llm_limit", "LLM limit"],
+    ["llm_limit_waiting", "LLM limit waiting"],
+    ["mcp_server_failing", "MCP server failing"],
+    ["mcp_server_partial", "MCP server partial"],
+    ["mcp_server_waiting_long", "MCP server waiting long"],
+    ["mcp_tools_refused", "MCP tools refused"],
+    ["mcp_approval_waiting", "MCP approval waiting"],
+    ["mcp_tools_changed", "MCP tools changed"],
   ])("%s is %s", (kind, title) => {
     expect(alarmKindTitle(kind)).toBe(title);
   });

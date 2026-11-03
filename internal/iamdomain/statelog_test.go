@@ -48,7 +48,7 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			Write:  suiteWrite,
 			// THE PRODUCTION ENCODER the engine hands the trim, so this
 			// log's anchors below the floor are removed by the same record
-			// every log that writes anchors takes (ADR-0073).
+			// every log that writes anchors takes (ADR-0080).
 			EncodeTrimmed: iamdomain.EncodeTrimmed,
 			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
 			// for this log: certified to write no row.

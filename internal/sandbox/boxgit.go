@@ -6,21 +6,21 @@ import (
 	"strings"
 )
 
-// A CODING BOX'S GIT ON THE ENGINE'S OWN CODE HOST (ADR-0086): where it dials,
+// A CODING BOX'S GIT ON THE ENGINE'S OWN CODE HOST (ADR-0093): where it dials,
 // the credential it presents and the configuration it runs with — all of it
 // environment the engine hands the launch, never a file in the box and never
 // a setup step of the operator's.
 
 // BoxGitURLVar is the base a box dials for the engine's code host: a git
 // node's public listener and the /box/git prefix — https://git.example.com/box/git,
-// or a balancer over every git node's. Read by every node that launches coding
-// runs, through [ParseBoxURL] like the other two addresses a box dials back to
+// or a balancer over every git node's. Read by every node that launches
+// executors, through [ParseBoxURL] like the other two addresses a box dials back to
 // the engine. Unlike the tool bridge's URL, which must address the launching
 // node itself, ANY git node serves any box: the run is admitted by its row,
 // which every node reads.
 const BoxGitURLVar = "CREWLET_BOX_GIT_URL"
 
-// The variables of a coding run's environment its git reaches the code host
+// The variables of an executor's environment its git reaches the code host
 // by: the launching node's [BoxGitURLVar], which every clone step's remote
 // expands ([CloneRecipe]), and the run's own credential, which the engine's
 // credential helper answers git with ([BoxGit]). Each is the ENGINE'S —

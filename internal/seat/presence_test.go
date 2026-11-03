@@ -66,3 +66,46 @@ func TestADrainingHostHoldsNoPresence(t *testing.T) {
 		t.Error("a draining host still reports holding its presence")
 	}
 }
+
+// A NODE'S PRESENCE EPOCH IS ITS INCARNATION: answered exactly while it holds
+// its presence, and a new one once a drain gave the lease up and claiming
+// resumed, so a record filed under the old epoch (an MCP listing) is one its
+// peers stopped counting.
+//
+// Mutation: answer the lease's epoch while draining (in the window before the
+// drain releases it), or keep the epoch across a release and a re-claim, and
+// this is red.
+func TestAPresenceEpochIsAnsweredWhileHeldAndMovesWithANewClaim(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo")})
+	if _, held := h.PresenceEpoch(); held {
+		t.Fatal("a host that never claimed its presence answers an epoch")
+	}
+	h.renewNodePresence(f.ctx)
+	first, held := h.PresenceEpoch()
+	if !held || first <= 0 {
+		t.Fatalf("a host holding its presence answers epoch %d, %v", first, held)
+	}
+	// THE WINDOW INSIDE BeginDrain: the flag is set and the lease not yet
+	// given up, and a reader there must already see no presence.
+	h.mu.Lock()
+	h.draining = true
+	h.mu.Unlock()
+	if _, held := h.PresenceEpoch(); held {
+		t.Error("a host that began draining answers its presence epoch before the lease is released")
+	}
+	h.mu.Lock()
+	h.draining = false
+	h.mu.Unlock()
+	h.BeginDrain(f.ctx)
+	if _, held := h.PresenceEpoch(); held {
+		t.Error("a draining host still answers its presence epoch")
+	}
+	h.ResumeClaiming(f.ctx)
+	second, held := h.PresenceEpoch()
+	if !held || second == first {
+		t.Errorf("after a drain and a resume the epoch is %d (%v), want a new one past %d",
+			second, held, first)
+	}
+}

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// PushedRef is one ref a coding run moved on the engine's own code host, as the
+// PushedRef is one ref an executor moved on the engine's own code host, as the
 // push rows the code host wrote under its launch record it: per (repository,
 // ref), the old value of the run's FIRST push of it and the new value of its
 // LAST — what the ref became, never every step it took, since a rebase loop is
@@ -32,7 +32,7 @@ type PushedRef struct {
 	Change string
 }
 
-// RunPushes reads what a coding run pushed to the engine's own code host, from
+// RunPushes reads what an executor pushed to the engine's own code host, from
 // the push rows the code host wrote under its launch — the ENGINE's account of
 // the run's delivery there, beside the run's own `Delivered:` lines, which a
 // box can write as it likes. Declared here, by its consumer; the engine
@@ -122,8 +122,8 @@ const minPushedLineBytes = 16
 
 // shortOIDBytes is how much of an object id a pushed ref's line prints: twelve
 // hex digits, a name to read beside the branch rather than an id to act on — a
-// branch's commit is read whole through code_resolve, and the phase record
-// carries every id whole. Twelve rather than git's seven, so
+// branch's commit is read whole through code_resolve, and the records
+// carry every id whole. Twelve rather than git's seven, so
 // two commits of one busy repository's line are not told apart by luck.
 const shortOIDBytes = 12
 
@@ -261,8 +261,9 @@ func branchesOf(repos []RunRepo) string {
 	return strings.Join(named, "; ")
 }
 
-// PushedRecords is pushed as the phase records carry it ([types.PushedRefRecord]):
-// the run's own record and the resumed turn's executor record.
+// PushedRecords is pushed as the records carry it ([types.PushedRefRecord]):
+// the launch's own (`executor_collected`) and the resumed turn's executor
+// phase record.
 func PushedRecords(pushed []PushedRef) []types.PushedRefRecord {
 	if len(pushed) == 0 {
 		return nil

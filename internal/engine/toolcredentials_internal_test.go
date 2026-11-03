@@ -57,6 +57,7 @@ integrations:
     token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-an-atlassian-server"
     env:
@@ -64,14 +65,17 @@ mcp_servers:
       JIRA_URL: "${JIRA_SITE}"
     optional_keys: [NPM_CONFIG_REGISTRY]
   - name: notes
+    tools: {default: allow}
     shared: true
     command: "/nonexistent/definitely-not-a-notes-server"
     env:
       NPM_CONFIG_REGISTRY: "${HOST_SETTING_NOBODY_SETS}"
     optional_keys: [NPM_CONFIG_REGISTRY]
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
+    access: {seats: [cto]}
 roles:
   - name: CEO
     handle: ceo
@@ -256,20 +260,24 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: "/nonexistent/definitely-not-a-search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY}"
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
     env:
       TRACKER_SITE: "${TRACKER_SITE}"
   - name: docs
+    tools: {default: allow}
     transport: http
     url: "https://${DOCS_HOST}/mcp"
     headers:
       X-Docs-Host: "${DOCS_HOST}"
   - name: wiki
+    tools: {default: allow}
     transport: http
     url: "https://wiki.example.com/mcp"
     headers:
@@ -428,6 +436,7 @@ func TestAKeyAPassMintsIsWaitedForWhateverItsDeclaration(t *testing.T) {
 	c := specCompany(t, provisioningDoc(true)+`
 mcp_servers:
   - name: gitlab
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-glab"
     optional_keys: [GITLAB_TOKEN]
@@ -1049,7 +1058,7 @@ func TestABoxServerWithheldForAMintedCredentialIsSaidAtInfo(t *testing.T) {
 	// The seat's code-host server, which the box is scoped to below: a name
 	// the company declares no server under is not withheld but unknown.
 	c := specCompany(t, strings.Replace(provisioningDoc(true), "\nroles:\n",
-		"\nmcp_servers:\n  - name: gitlab\n    shared: false\n"+
+		"\nmcp_servers:\n  - name: gitlab\n    shared: false\n    tools: {default: allow}\n"+
 			"    command: \"/nonexistent/definitely-not-glab\"\nroles:\n", 1))
 	seat := c.Org.AgentSeatByHandle("swe")
 	e := &Engine{}
@@ -1058,8 +1067,8 @@ func TestABoxServerWithheldForAMintedCredentialIsSaidAtInfo(t *testing.T) {
 		MCP: org.RoleSandboxMCP{Servers: []string{"gitlab"}}})
 	withheld := logs.records("sandbox_mcp_server_withheld", "swe")
 	if len(withheld) != 1 || withheld[0]["level"] != "INFO" ||
-		!strings.Contains(withheld[0]["detail"].(string), "a coding run launched once the seal") {
-		t.Errorf("sandbox_mcp_server_withheld = %v: want one line at INFO saying which run "+
+		!strings.Contains(withheld[0]["detail"].(string), "a launch made once the seal") {
+		t.Errorf("sandbox_mcp_server_withheld = %v: want one line at INFO saying which launch "+
 			"is given the server", withheld)
 	}
 }
@@ -1104,6 +1113,7 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: "/nonexistent/definitely-not-a-search-server"
     env:
       SEARCH_KEY: "${SHARED_SEARCH_KEY}"
@@ -1188,6 +1198,7 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: search-server
     env:
       SEARCH_KEY: "${SEARCH_KEY_NOBODY_SETS}"
@@ -1222,10 +1233,12 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: "search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY}"
   - name: docs
+    tools: {default: allow}
     command: "docs-server"
     env:
       DOCS_TOKEN: "${DOCS_TOKEN}"

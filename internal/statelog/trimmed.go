@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE TRIMMED RECORD — ADR-0073.
+// THE TRIMMED RECORD — ADR-0080.
 //
 // Every arbitrated record a node consumes raises its subject's anchor
 // ([tables.advanceAnchor]), and the anchor is what a write's expectation is

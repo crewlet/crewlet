@@ -58,7 +58,7 @@ const SESSION: ModelDevice = {
 function open(running: ModelDevice | null = null) {
   const data = modelsData({
     entries: [
-      apiKeyEntry({ key: "codex", agent: "codex", health: "rejected", device_sign_in: running }),
+      apiKeyEntry({ key: "codex", harness: "codex", health: "rejected", device_sign_in: running }),
     ],
   });
   const onDone = vi.fn();

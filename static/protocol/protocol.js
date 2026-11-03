@@ -35,7 +35,7 @@ function sameValue(a, b) {
 *
 * An `agents` push carries these only when their version moved since the last
 * push for the same call — they move once a round, once a tool call or once a
-* CLI run, while the row is pushed five times a second as a round streams —
+* harness run, while the row is pushed five times a second as a round streams —
 * and names every version always. The store keeps the copy it holds of a field the push left
 * out, and asks for the call whole (`live_call`) when a push names a version
 * newer than the one it holds: the push that moved it was dropped. A field
@@ -337,6 +337,15 @@ function domainsOf(kind) {
 }
 /** This tab's floors. */
 var session = new SessionFloors();
+/**
+* The durable records a tab keeps WITH THEIR PAYLOAD, in `phases`: a phase's
+* own record, and one launch of an executor's run as its collection read it
+* (`executor_collected`) — no phase, but the work of the `execute` round that
+* launched it, which the screens draw inside that round's card
+* (`lib/phases.ts`). A launch lands while its turn is still parked, so a tab
+* watching the turn has the run's report the moment it is collected.
+*/
+var PHASE_RECORD_TYPES = /* @__PURE__ */ new Set(["agent_phase_completed", "executor_collected"]);
 /** What a heavy field reads as while nothing of it is held. */
 var NOTHING_HELD = {
 	prompt: "",
@@ -349,7 +358,7 @@ var NOTHING_HELD = {
 };
 /**
 * The heavy fields that are STATUS — each round's timing and tokens, and each
-* CLI run's — which a call whose body is withheld from this reader still
+* harness run's — which a call whose body is withheld from this reader still
 * carries and versions. Every other detail is the seat's BODY
 * (`LiveCall.body_withheld`).
 */
@@ -441,7 +450,7 @@ function newerDetail(held, older) {
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
-	"sandboxes",
+	"executors",
 	"org",
 	"tools",
 	"tokens",
@@ -454,7 +463,7 @@ function emptyState() {
 		agents: [],
 		events: [],
 		phases: [],
-		sandboxes: [],
+		executors: [],
 		org: null,
 		tools: [],
 		health: null,
@@ -535,7 +544,7 @@ var Store = class {
 		if (!snap) return;
 		this.state.agents = snap.agents ?? [];
 		this.state.events = (snap.events ?? []).slice(0, 400);
-		this.state.sandboxes = snap.sandboxes ?? [];
+		this.state.executors = snap.executors ?? [];
 		this.state.org = snap.org ?? {};
 		this.state.tools = snap.tools ?? [];
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
@@ -675,9 +684,9 @@ var Store = class {
 		});
 		this.emit("agents");
 	}
-	applySandboxes(list) {
-		this.state.sandboxes = list ?? [];
-		this.emit("sandboxes", "agents");
+	applyExecutors(list) {
+		this.state.executors = list ?? [];
+		this.emit("executors", "agents");
 	}
 	applyTokens(rollup) {
 		if (!rollup) return;
@@ -969,7 +978,7 @@ var Store = class {
 			this.state.events = [ev, ...this.state.events].slice(0, 400);
 			this.emit("events");
 		}
-		if (ev.type === "agent_phase_completed" && ev.payload) {
+		if (PHASE_RECORD_TYPES.has(ev.type) && ev.payload) {
 			if (!this.state.phases.some((p) => p.id === ev.id)) {
 				this.state.phases = [ev, ...this.state.phases].slice(0, 200);
 				this.emit("phases");
@@ -2391,7 +2400,7 @@ function retryAfterMs(seconds) {
 /**
 * The dashboard's single connection to the engine.
 *
-* State arrives as pushes (`snapshot`, then `agents` / `seats` / `sandboxes` /
+* State arrives as pushes (`snapshot`, then `agents` / `seats` / `executors` /
 * `tokens` / `budget` / `event` / `org` / `tools` / `schedules` / `health`), and
 * anything the dashboard needs on demand — a seat's phase history, one event's
 * payload, a trace, a different spend window, the configuration document — is
@@ -3309,8 +3318,8 @@ var LiveSocket = class {
 			case "seats":
 				this.store.applySeats(msg.data);
 				break;
-			case "sandboxes":
-				this.store.applySandboxes(msg.data);
+			case "executors":
+				this.store.applyExecutors(msg.data);
 				break;
 			case "tokens":
 				this.store.applyTokens(msg.data);
@@ -3899,8 +3908,8 @@ var SessionKeepAlive = class {
 *    authority row names them: its app for an app's change, the row's own set
 *    for one that draws on whichever of several the caller holds
 *    (`answer_knowledge`, the tracker and the knowledge base it answers
-*    from), and none for a change no app holds (pausing a seat, answering a
-*    coding run). What a control the engine does not offer is held with —
+*    from), and none for a change no app holds (pausing a seat, answering an
+*    executor). What a control the engine does not offer is held with —
 *    "needs Worklet access" — so a reader is told what to ask an admin for
 *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
 *    rather than guessed from the domain: a change can need an app and land
@@ -4023,7 +4032,7 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
-	answer_run: {
+	answer_executor: {
 		args: [
 			"turn_id",
 			"launch_id",
@@ -4032,7 +4041,7 @@ var ACTIONS = {
 		],
 		domain: null,
 		apps: [],
-		refreshes: ["sandbox_runs", "decisions"],
+		refreshes: ["executors", "decisions"],
 		scope: "person"
 	},
 	pause_seat: {
@@ -4239,6 +4248,17 @@ var ACTIONS = {
 	},
 	add_channel_members: {
 		args: ["channel", "members"],
+		domain: "chat",
+		apps: ["chatlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	set_channel_members: {
+		args: [
+			"channel",
+			"members",
+			"expected_members"
+		],
 		domain: "chat",
 		apps: ["chatlet"],
 		refreshes: [],
@@ -4456,6 +4476,15 @@ var ACTIONS = {
 * sentence, which is written for a model and names the next call, its
 * arguments and record ids. One fixed sentence for every `conflict` ended
 * "retry", which re-trying an archived room's post never changes.
+*
+* TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+* (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
+* with a `detail`, which it writes only in a person's words (ADR-0060), is
+* shown in that `detail`, as an executor's question somebody already
+* answered names who did and a spent token budget names whose it was; and a
+* sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
+* gives way to the engine's own sentence for the code where the answer
+* carries no `Retry-After`, since the engine said waiting won't change it.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -4860,4 +4889,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainsOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, PHASE_RECORD_TYPES, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainsOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

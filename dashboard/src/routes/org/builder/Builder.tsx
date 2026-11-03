@@ -66,7 +66,7 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
@@ -726,7 +726,7 @@ function BuilderScreen({
   const viewer = useViewer();
   const signedIn = !viewer.anonymous;
   const agents = useAgents();
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   const [narrowDefault] = useState(prefersTable);
   const [viewParam, setView] = useParam(
     "view",
@@ -1534,7 +1534,7 @@ function BuilderScreen({
       readOnly,
       identities,
       agents,
-      sandboxes,
+      executors,
       keys,
       registerView,
     };
@@ -1553,7 +1553,7 @@ function BuilderScreen({
     readOnly,
     identities,
     agents,
-    sandboxes,
+    executors,
     keys,
     registerView,
   ]);

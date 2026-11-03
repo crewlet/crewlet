@@ -11,7 +11,7 @@ import (
 // the same armours on short lines does. Every armour used to scan the rest of
 // its line — a BEGIN forward, for its line's end and the armour after it; an
 // END back, for its line's start — so a line of flattened key material (a
-// coding agent's one-line env dump, a `cat`ted key store) cost the armour count
+// harness's one-line env dump, a `cat`ted key store) cost the armour count
 // times the line: two megabytes, nearly two minutes. Bounding each scan at
 // [MaxKeyBlockBytes] only made it the armour count times the bound, and two
 // megabytes still took thirty seconds under the race detector. Each scan now

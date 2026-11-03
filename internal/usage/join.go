@@ -42,22 +42,23 @@ import (
 // # The order each figure grows in
 //
 // Every counter — a spend cell's six figures, a seat's turns, failures,
-// reviewed turns, send-backs, a read entry's count, a repository reader's reads
-// and the bytes they were sent, a seat's changes opened, reviews given and
-// findings received — grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
-// turn back takes it out of them), and what does is its turns with an
-// unaccepted review, so it is that count that joins by max and the first-pass
-// figure is read back from it ([joinTurns]). A turn duration can move UP a bin
-// — an untallied turn that gains a segment — so per-bin counts do not grow but
-// the count AT OR ABOVE every bin does, and the histograms join on those
-// ([Hist.Join]). A newest instant joins by the later one, and a fire or a read
-// entry the fleet holds that the derivation lacks is kept, under its own
-// identity. A label — a seat's handle and role, a fire's outcome and turn, a
-// read's newest context — is the derivation's wherever the derivation STATES
-// one for the thing it labels, because labels are not counts and a newer one
-// is the truer. A handle or a role the derivation leaves EMPTY keeps the
-// fleet's: an empty one is not a newer label but a seat the chart no longer
-// holds whose day's rows on this node name nobody — spend rows carry no
+// reviewed turns, send-backs, a read entry's count, a tool's calls in each
+// outcome and their time, a repository reader's reads and the bytes they were
+// sent, a seat's changes opened, reviews given and findings received — grows by
+// addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review
+// that sends a turn back takes it out of them), and what does is its turns with
+// an unaccepted review, so it is that count that joins by max and the
+// first-pass figure is read back from it ([joinTurns]). A turn duration can
+// move UP a bin — an untallied turn that gains a segment — so per-bin counts do
+// not grow but the count AT OR ABOVE every bin does, and the histograms join on
+// those ([Hist.Join]). A newest instant joins by the later one, and a fire, a
+// superseded fire or a read entry the fleet holds that the derivation lacks is
+// kept, under its own identity. A label (a seat's handle and role, a fire's
+// outcome and turn, a read's newest context) is the derivation's wherever the
+// derivation STATES one for the thing it labels, because labels are not counts
+// and a newer one is the truer. A handle or a role the derivation leaves EMPTY
+// keeps the fleet's: an empty one is not a newer label but a seat the chart no
+// longer holds whose day's rows on this node name nobody — spend rows carry no
 // handle, so a day with spend and no ended turn or read derives none — and a
 // handle never changes (ADR-0013), a different one being a different seat, so
 // the fleet's can never name the wrong one. Taken as the derivation's, every
@@ -86,11 +87,14 @@ import (
 // figures, and walks the whole company's day — every node's, every seat's — to
 // read one seat's cells. Naming the key also makes the statement a guard: a key
 // reshaped under it fails with `no such index` rather than quietly walking the
-// day again.
+// day again. AND ON A SCHEDULE'S FIRES, for the same planner's other habit: it
+// prefers the schedule's own history index (replicated 0076), three of the
+// key's five columns, and reads every day of that schedule on every node to
+// find one node's day.
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
-		       duration_hist, last_ended_at, reads_elided,
+		       duration_hist, last_ended_at, reads_elided, tools_elided,
 		       changes_opened, reviews_given, findings_received, checks_failed, ejections
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
@@ -104,14 +108,22 @@ const (
 		       last_work_key, last_query
 		  FROM usage_reads
 		 WHERE day = ? AND node = ? AND agent_id = ?`
+	appliedSeatToolsSQL = `
+		SELECT server, tool, calls, failed, unavailable, refused, total_ms, last_at
+		  FROM usage_tool_calls
+		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedPersonSQL = `
 		SELECT role, phase, worker, model, provider_key, input, output,
 		       cache_read, cache_write, total, calls
 		  FROM usage_person_tokens INDEXED BY sqlite_autoindex_usage_person_tokens_1
 		 WHERE day = ? AND node = ? AND person = ?`
 	appliedScheduleSQL = `
-		SELECT fired_at, target, outcome, trace_id, turn_id
-		  FROM usage_schedule_runs
+		SELECT fired_at, scheduled_at, fire_label, target, outcome, trace_id, turn_id
+		  FROM usage_schedule_runs INDEXED BY sqlite_autoindex_usage_schedule_runs_1
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	appliedSupersededSQL = `
+		SELECT trace_id, at
+		  FROM usage_schedule_superseded
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
 	// A REPOSITORY'S READERS name the key for the reason the spend reads do:
 	// the reader index (usage_repo_reads_repo_idx) COVERS every column read
@@ -153,8 +165,8 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
 				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
-				&code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived, &code.ChecksFailed,
-				&code.Ejections); {
+				&rec.ToolsElided, &code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived,
+				&code.ChecksFailed, &code.Ejections); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
@@ -174,7 +186,10 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				s.Day, s.Node, s.Seat); err != nil {
 				return err
 			}
-			rec.Reads, err = appliedReads(ctx, tx, s)
+			if rec.Reads, err = appliedReads(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Tools, err = appliedTools(ctx, tx, s)
 			return err
 		case KindPerson:
 			var err error
@@ -184,8 +199,11 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			return err
 		case KindSchedule:
 			var err error
-			rec.Fires, err = appliedFires(ctx, tx, s)
-			held = len(rec.Fires) > 0
+			if rec.Fires, err = appliedFires(ctx, tx, s); err != nil {
+				return err
+			}
+			rec.Superseded, err = appliedSuperseded(ctx, tx, s)
+			held = len(rec.Fires) > 0 || len(rec.Superseded) > 0
 			return err
 		case KindRepoRead:
 			switch err := tx.QueryRowContext(ctx, appliedRepoReadHeadSQL, s.Day, s.Node, s.Repo).Scan(
@@ -291,6 +309,32 @@ func appliedRepoReads(ctx context.Context, tx *sql.Tx, s Subject) ([]RepoRead, e
 	return out, rows.Err()
 }
 
+// appliedTools reads a seat-day's tool calls, in key order.
+func appliedTools(ctx context.Context, tx *sql.Tx, s Subject) ([]ToolCalls, error) {
+	rows, err := tx.QueryContext(ctx, appliedSeatToolsSQL, s.Day, s.Node, s.Seat)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ToolCalls
+	for rows.Next() {
+		var (
+			t    ToolCalls
+			last int64
+		)
+		if err := rows.Scan(&t.Server, &t.Tool, &t.Calls, &t.Failed, &t.Unavailable,
+			&t.Refused, &t.TotalMS, &last); err != nil {
+			return nil, err
+		}
+		if last != 0 {
+			t.LastAt = store.DecodeTime(last)
+		}
+		out = append(out, t)
+	}
+	slices.SortFunc(out, compareToolKey)
+	return out, rows.Err()
+}
+
 // appliedFires reads a schedule-day's fires, in fire order.
 func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	rows, err := tx.QueryContext(ctx, appliedScheduleSQL, s.Day, s.Node, s.ScopeType,
@@ -302,16 +346,41 @@ func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	var out []Fire
 	for rows.Next() {
 		var (
-			f     Fire
-			fired int64
+			f          Fire
+			fired, due int64
 		)
-		if err := rows.Scan(&fired, &f.Target, &f.Outcome, &f.TraceID, &f.TurnID); err != nil {
+		if err := rows.Scan(&fired, &due, &f.FireLabel, &f.Target, &f.Outcome,
+			&f.TraceID, &f.TurnID); err != nil {
 			return nil, err
 		}
-		f.At = store.DecodeTime(fired)
+		f.At, f.ScheduledAt = store.DecodeTime(fired), store.DecodeTime(due)
 		out = append(out, f)
 	}
 	slices.SortFunc(out, compareFire)
+	return out, rows.Err()
+}
+
+// appliedSuperseded reads a schedule-day's superseded fires, in their order.
+func appliedSuperseded(ctx context.Context, tx *sql.Tx, s Subject) ([]Superseded, error) {
+	rows, err := tx.QueryContext(ctx, appliedSupersededSQL, s.Day, s.Node, s.ScopeType,
+		s.ScopeID, s.Schedule)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Superseded
+	for rows.Next() {
+		var (
+			sup Superseded
+			at  int64
+		)
+		if err := rows.Scan(&sup.TraceID, &at); err != nil {
+			return nil, err
+		}
+		sup.At = store.DecodeTime(at)
+		out = append(out, sup)
+	}
+	slices.SortFunc(out, compareSuperseded)
 	return out, rows.Err()
 }
 
@@ -339,10 +408,13 @@ func Join(derived, applied Record) Record {
 		out.Reads, out.ReadsElided = joinReads(derived.Reads, derived.ReadsElided,
 			applied.Reads, applied.ReadsElided)
 		out.Code = joinCode(derived.Code, applied.Code)
+		out.Tools, out.ToolsElided = joinTools(derived.Tools, derived.ToolsElided,
+			applied.Tools, applied.ToolsElided)
 	case KindPerson:
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
 		out.Fires = joinFires(derived.Fires, applied.Fires)
+		out.Superseded = joinSuperseded(derived.Superseded, applied.Superseded)
 	case KindRepoRead:
 		// THE NAME IS A LABEL, the derivation's where it states one — the
 		// newest read's — and the fleet's where it states none.
@@ -513,6 +585,50 @@ func joinReads(d []Read, dElided int, a []Read, aElided int) ([]Read, int) {
 	return kept, held - len(kept)
 }
 
+// toolKey is a tool-calls entry's identity within its record.
+type toolKey struct{ server, tool string }
+
+func keyOfTool(t ToolCalls) toolKey { return toolKey{t.Server, t.Tool} }
+
+// compareToolKey is a record's tool order: the server, then the tool, as the
+// store derives them and the estate's key holds them.
+func compareToolKey(a, b ToolCalls) int {
+	return cmp.Or(cmp.Compare(a.Server, b.Server), cmp.Compare(a.Tool, b.Tool))
+}
+
+// joinTools joins two seat-days' tool calls and what each cap dropped, on
+// [joinReads]' terms: every figure of an entry both hold at the larger of the
+// two (each a count that only grows), the newest instant the later one, an
+// entry only the fleet holds kept, and the union capped again by the rule the
+// derivation is ([capTools]).
+func joinTools(d []ToolCalls, dElided int, a []ToolCalls, aElided int) ([]ToolCalls, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[toolKey]int, len(all))
+	for i, t := range all {
+		at[keyOfTool(t)] = i
+	}
+	for _, t := range a {
+		i, ok := at[keyOfTool(t)]
+		if !ok {
+			all = append(all, t)
+			continue
+		}
+		c := &all[i]
+		c.Calls, c.Failed = max(c.Calls, t.Calls), max(c.Failed, t.Failed)
+		c.Unavailable, c.Refused = max(c.Unavailable, t.Unavailable), max(c.Refused, t.Refused)
+		c.TotalMS = max(c.TotalMS, t.TotalMS)
+		if t.LastAt.After(c.LastAt) {
+			c.LastAt = t.LastAt
+		}
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capTools(all)
+	return kept, held - len(kept)
+}
+
 // fireKey is a fire's identity within its record — the estate's own key below
 // the schedule: when it fired, at the store's precision, and its target.
 type fireKey struct {
@@ -530,6 +646,34 @@ func compareFire(a, b Fire) int {
 
 func compareInstant(a, b time.Time) int {
 	return cmp.Compare(store.EncodeTime(a), store.EncodeTime(b))
+}
+
+// compareSuperseded is a record's order of superseded fires: when each was
+// recorded, then its trace, as the store derives them.
+func compareSuperseded(a, b Superseded) int {
+	return cmp.Or(compareInstant(a.At, b.At), cmp.Compare(a.TraceID, b.TraceID))
+}
+
+// joinSuperseded joins two schedule-days' superseded fires: every fire either
+// holds, once per trace, at the derivation's instant where both hold it. A
+// fire a seat set aside stays set aside, so the set only grows: a log that
+// lost the record (swept, restored) does not make the fire run after all.
+func joinSuperseded(d, a []Superseded) []Superseded {
+	if len(a) == 0 {
+		return d
+	}
+	out := slices.Clone(d)
+	seen := make(map[string]bool, len(out))
+	for _, sup := range out {
+		seen[sup.TraceID] = true
+	}
+	for _, sup := range a {
+		if !seen[sup.TraceID] {
+			out = append(out, sup)
+		}
+	}
+	slices.SortStableFunc(out, compareSuperseded)
+	return out
 }
 
 // joinFires joins two schedule-days' fires: every fire either holds, under the

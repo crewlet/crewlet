@@ -125,7 +125,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
 			// lists nothing — and no app is a code permission: what a
 			// credential may do to a repository is the standing of the
-			// person it is bound to (ADR-0081), so the grant decides
+			// person it is bound to (ADR-0088), so the grant decides
 			// nothing a code case reads.
 			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
 				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantWorklet}})
@@ -649,7 +649,7 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 		At: stamp, Actor: strings.Repeat("a", 128), ActorKind: "operator", ActorSeat: strings.Repeat("s", 64),
 		Via: via,
 		Run: code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
-			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: runField},
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: runField},
 		Node: strings.Repeat("n", 128), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: 1 << 40,
 		IntroducedCount: 1 << 30, ReceivedAt: stamp}
 	var longest code.Refusal
@@ -1056,12 +1056,12 @@ func TestCodeStatusSaysWhereAnImportStands(t *testing.T) {
 // with the seat they hold beside it; a seat by its handle — the actor and the
 // seat at once, so never twice — with the turn that made the push and the work
 // item it was charged to, where the row names them, and first, for its coding
-// box's push, the box's coding agent and run; the engine for the ref
+// box's push, the box's harness and run; the engine for the ref
 // lifecycle's own push, which names no actor; and nothing for what a row does
 // not say.
 //
 // Mutations: print a seat's push as a person's (`<actor> (<seat>)`) — the
-// handle twice, and no turn; leave the coding run out — the box's push reads
+// handle twice, and no turn; leave the executor out — the box's push reads
 // as one the seat's own turn made.
 func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 	t.Parallel()
@@ -1079,7 +1079,7 @@ func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 			`"via":"engine","run":{"turn_id":"t-1"}}`, "docs-writer (turn t-1)"},
 		{"a coding box's", `{"actor":"swe","actor_kind":"agent","actor_seat":"swe","via":"git",` +
 			`"run":{"turn_id":"t-2","work_backend":"native","work_key":"ENG-42","model":"claude-sonnet-4-5",` +
-			`"run_id":"3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b","coding_agent":"claude-code"}}`,
+			`"run_id":"3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b","harness":"claude-code"}}`,
 			"swe (claude-code run 3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b, turn t-2, native ENG-42)"},
 		{"the ref expiry's", `{"actor":"","actor_kind":"system","actor_seat":"","via":"expiry"}`,
 			"engine (ref expiry)"},

@@ -44,7 +44,7 @@ const (
 //
 // # What a ritual's turn is
 //
-// Every agent seat's executor is its coding CLI's own run in a box, so the
+// Every agent seat's executor is its harness's own run in a box, so the
 // turn is that run and what surrounds it: the turn-start prefetch, whose
 // blocks run side by side, each auxiliary call held to thirty seconds
 // (internal/agent/prefetch's AuxTimeout), and on a seat's first turn its
@@ -54,9 +54,9 @@ const (
 // client bound, a direct box at once, and the seat's setup applied, each
 // command allowed [DefaultSetupTimeoutSeconds] though the git-auth recipe
 // takes seconds; the run — for a ritual, read what it needs, post once and
-// submit, some five to ten of its CLI's rounds at the twenty to sixty seconds
+// submit, some five to ten of its harness's rounds at the twenty to sixty seconds
 // a round the shipped Claude Code example sizes its own round cap by, so ten
-// minutes at the slow end; and the reviewer, one CLI run on the engine host.
+// minutes at the slow end; and the reviewer, one harness run on the engine host.
 // About a quarter of an hour for a slow ritual that is not stuck, and a
 // reviewer's send-back runs the executor again in the same box, its setup
 // spared.

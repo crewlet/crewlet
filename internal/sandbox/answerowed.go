@@ -176,11 +176,12 @@ const SeatCoding Condition = "seat_coding"
 // for a seat this node does hold would leave it deaf to it.
 const SeatLost Condition = "seat_lost"
 
-// seatCoding refuses an owed resume on a seat one of whose runs holds it.
+// seatCoding refuses an owed resume on a seat its executor holds for
+// another turn.
 func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {
 	if held, _ := c.SeatRuns(handle); held {
 		return Refusal{Condition: SeatCoding,
-			Reason: "another of the seat's coding runs holds it"}, true
+			Reason: "the seat's executor holds it for another turn"}, true
 	}
 	return Refusal{}, false
 }
@@ -367,8 +368,8 @@ func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 	words := AnswerWords{
 		// Redacted HERE, at the one place the reply becomes a record a
 		// second store keeps: it is sealed onto the run's row, and handed
-		// as it is to the run's coding CLI — the asking session's next
-		// message, or a fresh run's brief — which the box and the CLI's
+		// as it is to the run's harness — the asking session's next
+		// message, or a fresh run's brief — which the box and the harness's
 		// own session keep.
 		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
@@ -694,7 +695,7 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 		CacheReadTokens:  claimed.ParkedCacheReadTokens,
 		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
 		Engine:           parkedEngineSpend(claimed),
-		Asked:            askedRun(claimed, words),
+		Asked:            c.askedWith(claimed, words),
 	})
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
@@ -1205,7 +1206,7 @@ func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, launch s
 //
 // ONLY THE SERIES' OWN CLAIM — its job, its answer, its lease — and never
 // through [Coordinator.reapTail]: that is the seat's next holder reaping a claim
-// whose node stopped, and its two bounds and its ending ([types.SandboxFailureAbandoned],
+// whose node stopped, and its two bounds and its ending ([types.ExecutorFailureAbandoned],
 // "the node that owned this seat stopped mid-run") are about a node that stopped.
 // Here none did, so nothing is counted on the row and nothing ends the run: the
 // series goes on — resuming, or declining once its own attempts are spent.
@@ -1596,9 +1597,9 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 	log.ErrorContext(ctx, "sandbox_answer_requeue_exhausted",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "attempts", MaxAnswerAttempts,
 		"window_s", answerWindow(run).Seconds(), "error", errDetail(cause),
-		"detail", "this node could not resume the coding run that asked with the answer "+
+		"detail", "this node could not resume the executor that asked with the answer "+
 			"recorded for it, in every one of its spaced attempts, so the reply is handed "+
-			"to the seat as the ordinary message it looks like; the run waits on its "+
+			"to the seat as the ordinary message it looks like; the executor waits on its "+
 			"question again and its box is bounded by pause_ttl_seconds")
 	if err := c.deliverHandBack(ctx, declined); err != nil {
 		// RECORDED AS OWED, so not lost: the retry publishes it. The seat

@@ -1,7 +1,7 @@
 // Package textcut shortens a string without breaking it.
 //
 // It replaced four helpers — three named truncate, in internal/agent/extension,
-// internal/learning and internal/providers/llm/cliagent, plus internal/learning's
+// internal/learning and internal/providers/llm/harness, plus internal/learning's
 // preview — which were four copies of one rule. They already agreed on the hard
 // part, walk back to a rune boundary, and disagreed on the easy one: two
 // appended "…" and two appended "...", so the same cut read differently
@@ -42,6 +42,10 @@ package textcut
 
 import "unicode/utf8"
 
+// marker is what every cut here that says so is marked with, spelled once
+// ([Ellipsis] says why it is this spelling).
+const marker = "…"
+
 // Ellipsis is the common case: at most max bytes of CONTENT, cut on a rune
 // boundary, with a marker where it was cut.
 //
@@ -60,7 +64,7 @@ func Ellipsis(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return Bytes(s, max) + "…"
+	return Bytes(s, max) + marker
 }
 
 // Within is at most max bytes INCLUDING the marker, cut on a rune boundary.
@@ -89,7 +93,20 @@ func Within(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	const marker = "…"
+	return Bytes(s, max-len(marker)) + marker
+}
+
+// Opening is s — the opening of a text it was already kept short of — at most
+// max bytes INCLUDING the marker, cut on a rune boundary, and marked whether or
+// not it had to be cut further to fit.
+//
+// [Within] marks only what it cuts itself, which is right for a value it is
+// handed whole. It is wrong for an opening a caller kept short for a reason
+// of its own — the part of a text a redaction could settle, say — which can be
+// well inside max and is still not the whole: unmarked, a reader takes it for
+// all there was. The same two rules hold as for Within: the marker is inside
+// the budget, and a max too small to hold it yields the marker alone.
+func Opening(s string, max int) string {
 	return Bytes(s, max-len(marker)) + marker
 }
 
@@ -118,7 +135,7 @@ func Bytes(s string, max int) string {
 //
 // The mirror of [Ellipsis], for the one kind of text whose useful end is the
 // end: a process's own account of itself watched live — the last few KiB of a
-// running coding job's activity log or its stderr, where what a watcher asks
+// running executor's activity log or its stderr, where what a watcher asks
 // is what it is doing now — and the end of one line too long to keep whole,
 // which is where a process says what went wrong. It is never how a whole log
 // is bounded for a record: that keeps whole lines from both ends and counts
@@ -128,7 +145,7 @@ func Bytes(s string, max int) string {
 // byte slice taken from the end begins mid-rune whenever the text is not ASCII
 // and a JSON encoder turns that partial rune into U+FFFD.
 //
-// It replaced a private rune-counting `tail` in the sandbox's coding-agent
+// It replaced a private rune-counting `tail` in the sandbox's harness
 // runner — a fifth copy of this package's rule, and the only one whose budget
 // was RUNES: the bound it enforced is an event's size, which is bytes, so a
 // "100 000 character" cap was anything from 100 KB to 400 KB on the wire
@@ -138,7 +155,7 @@ func Tail(s string, max int) string {
 		return s
 	}
 	if max <= 0 {
-		return "…"
+		return marker
 	}
 	// Walk FORWARD to the start of the rune that straddles the cut. At most
 	// three steps, for the reason [Bytes] gives.
@@ -146,5 +163,5 @@ func Tail(s string, max int) string {
 	for start < len(s) && !utf8.RuneStart(s[start]) {
 		start++
 	}
-	return "…" + s[start:]
+	return marker + s[start:]
 }

@@ -157,7 +157,7 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 }
 
 // A RUN'S SUBMISSION, ONCE ON ITS ROW, TELLS THE WAITER THAT DRIVES IT TO LOOK
-// NOW: its CLI is about to exit, and its completion is found within seconds of
+// NOW: its harness is about to exit, and its completion is found within seconds of
 // that rather than up to a poll interval later. Only the submission, only one
 // the gate let through, and only one recorded on the run's own job — a
 // refused submission is no end, and one its job no longer takes names a job

@@ -151,7 +151,7 @@ export interface ViewerState {
   assistant: AssistantAccessReason | null;
   /**
    * What the reader is told of the assistant's model before they ask (it is
-   * signed out, its plan is spent, its CLI cannot start), or null when nothing
+   * signed out, its plan is spent, its harness cannot start), or null when nothing
    * is known to be wrong with it: the drawer's notice, never a reason above.
    */
   assistantModel: AssistantModelNotice | null;

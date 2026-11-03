@@ -34,7 +34,7 @@ type Rig struct {
 	// Files is the store the rig's service keeps files in, nil for none.
 	Files assistant.Files
 	// sessions is where the rig's turns serve their tools to the scripted
-	// model's CLI, removed by Close.
+	// model's harness, removed by Close.
 	sessions *toolsession.Host
 }
 

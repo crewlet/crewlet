@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -208,8 +209,9 @@ type BacklinkReader interface {
 // budget — [usagePageBytes] for an answer that crosses the wire, none for one
 // this node gives itself ([Backend.pageBytes]): a ninety-day window of a
 // company's spend is tens of megabytes of rows, and a reply crosses one
-// message. The schedule runs are already a page the caller sizes, and the
-// elided count is a number.
+// message. The schedule runs are already a page the caller sizes, the elided
+// counts are numbers, and a server's tool calls are one row per tool and seat
+// that called it, which the window does not multiply ([opUsageServerToolCalls]).
 type UsageReader interface {
 	SpendPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.SpendRow], error)
 	SeatTurnsPage(ctx context.Context, q usage.SpendQuery, after usage.Group, budget int) (usage.Page[usage.TurnsRow], error)
@@ -218,6 +220,8 @@ type UsageReader interface {
 	PageReadsPage(ctx context.Context, q usage.PageReadsQuery, after usage.Group, budget int) (usage.Page[usage.PageRead], error)
 	ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error)
 	ReadsElided(ctx context.Context, from, to string) (int64, error)
+	ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error)
+	ToolsElided(ctx context.Context, from, to string) (int64, error)
 	RepoReadsPage(ctx context.Context, q usage.RepoReadsQuery, after usage.Group, budget int) (usage.Page[usage.RepoReader], error)
 	RepoReadsElided(ctx context.Context, q usage.RepoReadsQuery) (int64, error)
 }
@@ -313,7 +317,7 @@ type ChatWriter interface {
 	PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string, patch chatlet.ChannelPatch,
 		authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-		members []chatlet.Member) (chatlet.Written, error)
+		members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error)
 	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		handles []string) (chatlet.Written, []string, error)
 	Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
@@ -322,6 +326,11 @@ type ChatWriter interface {
 		in chatlet.NewMessage) (chatlet.Written, error)
 	Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
 		in chatlet.NewMessage) (chatlet.Written, error)
+	// Reach is a post's DRY RUN: whom it would reach if it were sent now,
+	// decided by the post's own decision against the serving node's
+	// snapshot and roster, and published nowhere ([chatlet.Store.Reach]).
+	Reach(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+		in chatlet.NewMessage) (chatlet.Draft, error)
 	Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
 		in chatlet.EditMessage) (chatlet.Written, error)
 	Delete(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
@@ -394,12 +403,19 @@ type Backend struct {
 
 	// Artifacts is the artifacts estate, which every data node runs from
 	// boot whatever its company keeps: its reader and its writer, each nil
-	// only where the node's core runtime is not up yet ([ArtifactsHalf]).
+	// where the node's core runtime is not up yet, and the writer nil too
+	// where the node publishes nothing ([ArtifactsHalf]).
 	Artifacts ArtifactsHalf
 
 	// ArtifactData is the artifact datastore, which every data node runs
 	// from boot beside the artifacts estate ([ArtifactDataHalf]).
 	ArtifactData ArtifactDataHalf
+
+	// Executor is the executor log, which every data node runs from boot
+	// whatever its company keeps: its reader, and its writer only while the
+	// node publishes, each nil where the core runtime is not up yet
+	// ([ExecutorHalf]).
+	Executor ExecutorHalf
 
 	// Reached waits until this node's applier of the floor's log has reached
 	// a position — the floor every request carries, the node's own included:
@@ -416,7 +432,7 @@ type Backend struct {
 	// every data node whose copy does not has run nothing, by a remote asker
 	// and by this node's own router alike — a worse node to ask, never no
 	// node ([Router.route]). A lagging knowledge base never holds back a
-	// tracker read (ADR-0072), for the reason a floor on another domain's log
+	// tracker read (ADR-0079), for the reason a floor on another domain's log
 	// is not waited for ([ready]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
@@ -536,7 +552,7 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // SeatCopy is the domain an operation names when what it asks about is the
 // copy a SEAT is served by, rather than one domain's: every domain whose health
 // gates seat admission ([statelog.Domain.GatesSeatAdmission]) in service at
-// once (ADR-0072). Admission's ping names it ([opPing]), and so does
+// once (ADR-0079). Admission's ping names it ([opPing]), and so does
 // [Router.Serves].
 //
 // EMPTY, and no operation that reads a domain's rows may name it: the gate over
@@ -549,13 +565,16 @@ const SeatCopy = ""
 // declaration. An operation's floor is on its OWN domain's log and no other:
 // see [ready].
 //
-// THE EIGHT DOMAINS AN OPERATION READS OR WRITES, and not the other two the
+// THE NINE DOMAINS AN OPERATION READS OR WRITES, and not the other two the
 // estate carries: the vectors are written by a fleet duty, never through an
 // operation, and no operation reads their rows at a position — the searches
 // that rank by them read them as an index, which carries no floor at all — and
 // the Dashboard Assistant's conversations are read and written only where the
 // API runs, on a data node, from that node's own copy, so no request carries
-// them across the router.
+// them across the router. The executor log is among the nine though no
+// surface writes it: the engine records a seat's executor session wherever
+// the seat's box ran, a node without `data` included, and only a data node
+// publishes ([originEngine], executor.go).
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
@@ -565,6 +584,7 @@ var (
 	artifactsDomain    = artifactsdomain.Domain{}.Name()
 	artifactDataDomain = artifactdata.Domain{}.Name()
 	chatDomain         = chatlet.Domain{}.Name()
+	executorDomain     = executordomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -575,6 +595,7 @@ var (
 		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 		chatDomain:         chatlet.Domain{}.Stream().Name,
+		executorDomain:     executordomain.Domain{}.Stream().Name,
 	}
 )
 
@@ -1781,7 +1802,7 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 // THE USAGE DOMAIN'S READS cross like every other domain's, so a node whose
 // usage copy is out of service answers its operator's spend and activity
 // screens from a peer's copy rather than from the one it stopped serving
-// (ADR-0072). FLOORLESS: no write this node makes lands on the usage log —
+// (ADR-0079). FLOORLESS: no write this node makes lands on the usage log —
 // every node publishes its own days from its own event log — so there is no
 // position an operator's read must see, and the rows are compacted, one per
 // object, each replaced whole.
@@ -1878,6 +1899,29 @@ var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false
 		return b.Usage.ReadsElided(ctx, a.From, a.To)
 	}).floorless()
 
+// A SERVER'S TOOL CALLS ARE ONE ANSWER, NOT PAGED: one row per (tool, seat)
+// the server's calls name over the window, summed across every node and day,
+// so a longer window adds no row — the answer grows with the server's tools
+// and the seats that called them. At the couple of hundred bytes a row
+// encodes to, one message ([queue.MaxPayloadBytes]) holds some forty thousand
+// of them, a server of a hundred tools called by four hundred seats; a reply
+// past it is refused rather than dropped ([server.encodeReply]).
+var opUsageServerToolCalls = define("usage.server_tool_calls", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error) {
+		if b.Usage == nil {
+			return nil, errNoHalf
+		}
+		return b.Usage.ServerToolCalls(ctx, q)
+	}).floorless()
+
+var opUsageToolsElided = define("usage.tools_elided", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a readsElidedArgs) (int64, error) {
+		if b.Usage == nil {
+			return 0, errNoHalf
+		}
+		return b.Usage.ToolsElided(ctx, a.From, a.To)
+	}).floorless()
+
 // repoReadsArgs is one page of a repository's readers: the read's query, the
 // reader the page before it ended on — empty for the first — and the bytes its
 // ASKER cuts a page at.
@@ -1920,7 +1964,7 @@ type linkedFromArgs struct {
 // A PAGE'S BACKLINKS READ BOTH CORPORA — the pages and the tasks whose bodies
 // link to it, named from the rows of each, a task's linked-page relations
 // included — so they run only where this node's copies of the knowledge base
-// AND the tracker are in service ([op.alsoReads], ADR-0072). Read straight off
+// AND the tracker are in service ([op.alsoReads], ADR-0079). Read straight off
 // a node's own index, a node whose pages or tracker copy had stopped serving
 // merged a peer's page with links derived from rows it no longer answered for,
 // presented as complete. They carry no floor, for [opKnowledgeSearch]'s
@@ -2415,6 +2459,11 @@ type chatSetMembersArgs struct {
 	Actor     chatlet.Actor
 	ChannelID string
 	Members   []chatlet.Member
+	// Expected is the membership the caller read, nil for none
+	// ([chatlet.Store.SetMembers]). A pointer, so the empty room a caller
+	// expects crosses the wire as the empty list rather than as no
+	// expectation at all.
+	Expected *[]chatlet.Member `json:",omitempty"`
 }
 
 var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false,
@@ -2422,7 +2471,7 @@ var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false
 		if b.ChatWriter == nil {
 			return chatlet.Written{}, errNoHalf
 		}
-		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members)
+		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members, a.Expected)
 	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) })
 
 type chatAddMembersArgs struct {
@@ -2498,6 +2547,26 @@ var opChatReply = define("chat.reply", opOnceWrite, chatDomain, false,
 		}
 		return b.ChatWriter.Reply(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
 	}).repeatableWhen(func(a chatReplyArgs) bool { return chatKeyed(a.Actor) })
+
+// chatReachArgs is a post's dry run as it crosses: the post's own arguments,
+// with the thread it would answer (empty for a room post).
+type chatReachArgs struct {
+	Actor     chatlet.Actor
+	ChannelID string
+	ReplyTo   string
+	Message   chatlet.NewMessage
+}
+
+// A POST'S DRY RUN IS A READ: it decides on the serving node's snapshot, with
+// the roster that node's write path routes by, and publishes nothing, so
+// asking it again is asking again ([chatlet.Store.Reach]).
+var opChatReach = define("chat.reach", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatReachArgs) (chatlet.Draft, error) {
+		if b.ChatWriter == nil {
+			return chatlet.Draft{}, errNoHalf
+		}
+		return b.ChatWriter.Reach(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
+	})
 
 type chatEditArgs struct {
 	Actor     chatlet.Actor

@@ -9,8 +9,7 @@ import (
 
 // The engine's git variables in a box: its code host credential and base, and
 // the three values the coding clone's commit hook reads.
-var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
-	"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}
+var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}
 
 // THE ENGINE'S GIT VARIABLES ARE RESERVED, in each of the four envs a box's
 // environment is assembled from — a seat's sandbox block, a seat's own setup
@@ -239,7 +238,7 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 			case tc.at != "" && (len(got) != 1 || got[0].Path != tc.at):
 				t.Fatalf("warnings %+v, want one at %s", got, tc.at)
 			case tc.at != "":
-				for _, says := range []string{"Tier A keyring", "ANY live coding run", "`visibility: unit`",
+				for _, says := range []string{"Tier A keyring", "ANY live executor run", "`visibility: unit`",
 					"run it in `container` or `e2b`"} {
 					if !strings.Contains(got[0].Message, says) {
 						t.Errorf("the warning does not say %q: %q", says, got[0].Message)

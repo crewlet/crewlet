@@ -4,7 +4,7 @@ One `crewlet run` is a whole company. Everything below is about running
 more than one, and the honest summary is: you probably do not need to.
 A single engine handles many concurrent turns — agent handlers are
 goroutines, so the practical ceiling is your model plans' and keys' rate
-limits and host memory — every model call is a coding CLI process — not the
+limits and host memory — every model call is a harness process — not the
 engine's own process count. **Scale up before you scale out.**
 
 Run a fleet when one of these is true:
@@ -34,8 +34,8 @@ than silently short. See [Search](search.md).
 `coordination.type: local` holds them in this process, so every node
 would believe it owns the whole company. It is *only* the leases: the
 fleet's shared records — the token counter, the completion ledger, the
-delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
-sandbox runs — are on the KV whatever this setting says, because each of
+delivery dedupe, agent-to-agent channels, scheduled-fire claims, the
+executors' records — are on the KV whatever this setting says, because each of
 them has to outlive the process rather than merely be visible to a peer. A fleet needs
 `coordination.type: embedded-kv` — and Tier A refuses `local` beside a
 clustered or external stream by name, because this is the one
@@ -120,10 +120,10 @@ took it, where a direct one records only the shell's user and no node logs it.
 the fallback every node resolves from, so a platform secret projected as env
 still works unchanged.
 
-**Every `seats` node runs its seats' models, so every one needs their CLIs.**
-A [`providers.llm` entry](../concepts/llm-backends.md) is a coding CLI that the
+**Every `seats` node runs its seats' models, so every one needs their harnesses.**
+A [`providers.llm` entry](../concepts/llm-backends.md) is a harness that the
 node holding the seat starts, and its login lives in a state directory on that
-node's own disk. So a fleet installs each CLI on every `seats` node and signs it
+node's own disk. So a fleet installs each harness on every `seats` node and signs it
 in there, and the sign-ins that reach every node at once are the ones that
 travel through the secret store: a headless token (`crewlet llm login <key>
 -capture-token` writes it into the store every node reads), an
@@ -139,7 +139,7 @@ A's tokens in `CREWLET_API_TOKEN`.
 See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
 **One `CREWLET_MCP_BRIDGE_URL` on every node.** Every agent seat's executor
-is its CLI's run in a box, and the box reaches the seat's tools over the
+is its harness's run in a box, and the box reaches the seat's tools over the
 [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box):
 it dials the fleet's bridge address, whichever node a call lands on relays it
 over the broker to the node holding the seat, and that node answers it. So
@@ -352,17 +352,18 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores, Ask Crewlet's conversations and the code host's repositories) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores, Ask Crewlet's conversations, the seats' executor sessions and the code host's repositories) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `git` | Serves the company's git repositories, where the company sets [`code.native`](../concepts/code-host.md): a disposable [cache](../concepts/code-host.md#the-cache-on-a-git-node) of them on this node's disk, sized by its Tier A [`git` block](../concepts/configuration.md#git), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
 | `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the code-retention duty, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
-`data` decides **which state logs it applies**: a data node applies all nine —
-the tracker, the vectors, the knowledge base, the identity directory, the
+`data` decides **which state logs it applies**: a data node applies all eleven
+— the tracker, the vectors, the knowledge base, the identity directory, the
 usage history, the artifacts, their datastores, Ask Crewlet's
-conversations and chat — whatever its other roles and whether or not a
+conversations, chat, the seats' executor sessions and the code host — whatever its other
+roles and whether or not a
 company has been published yet, and a node without `data` applies none. So
 every data node holds a copy of your people, the verifiers of their
 credentials and their sessions, which is what lets the node a browser reaches
@@ -435,6 +436,13 @@ node's seats do, and each of those tools asks a data node over the broker:
   is an estate read like any other, floored on the identity log and read
   again every thirty seconds. Until the node has read it once, its human
   seats are withheld from routing rather than routed by the org chart alone.
+- **Its seats' executor sessions are recorded through a data node too.** The
+  engine's record of what each seat's box did (the session it leaves, how its
+  turn ended), and the next launch's read of the conversation it continues, go
+  to the [executor log](../concepts/conversation-sessions.md) through the same
+  router. Those writes are the engine's alone: no tool and no person can make
+  one, so none of them is a write a seat's tools or your API calls could
+  reach.
 - **Its own writes are visible to its next read** on whichever data node
   answers it: every request carries the furthest position the node has been
   told landed, and a data node that has not applied that far says so rather
@@ -655,8 +663,8 @@ to get right, which the engine cannot check for you:
 - The node holding the seat **launches** the run. For an `e2b` cell it must
   reach the sandbox provider (E2B cloud, or your self-hosted `domain`). A
   `direct` or `container` cell runs on that node's own host: `direct` needs
-  the coding CLI installed there, and `container` needs the container
-  runtime there and an image with the coding CLI in it.
+  the harness installed there, and `container` needs the container
+  runtime there and an image with the harness in it.
 - The run's box **dials the tool bridge**, and which address it dials
   depends on its cell. A `direct` box dials the launching node's own
   listener on loopback wherever that node binds `api.port` — on a node
@@ -981,7 +989,8 @@ most a notification, never the state `fleet_health` reads.
 
 Worklet, Doclet's pages and embeddings, the identity
 directory, the artifacts and their datastores, Ask Crewlet's
-conversations, chat and the usage history are each derived on every data node
+conversations, chat, the usage history, the seats' executor sessions and the
+code host's repositories are each derived on every data node
 from an ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
 records. It does not hold them for ever: once every data node has applied past

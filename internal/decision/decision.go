@@ -5,8 +5,8 @@
 // # One shape, wherever an agent asks a person
 //
 // An agent asks a person from two places. A seat's turn puts a decision on a
-// work item, as the `ask` comment that carries it (internal/worklet). A coding
-// run that cannot go on without a person's answer parks on it, and its ask
+// work item, as the `ask` comment that carries it (internal/worklet). An executor
+// that cannot go on without a person's answer parks on it, and its ask
 // rides the run's coordination row until somebody answers (internal/sandbox,
 // ADR-0068). The person deciding reads both as one thing, the dashboard draws
 // both with one set of components, and an agent learns one shape for both. So
@@ -172,7 +172,7 @@ const (
 	EvidencePage EvidenceKind = "page"
 	// EvidenceTurn is an agent turn, by id.
 	EvidenceTurn EvidenceKind = "turn"
-	// EvidenceRun is a coding run, by id.
+	// EvidenceRun is an executor's run, by id.
 	EvidenceRun EvidenceKind = "run"
 	// EvidenceURL is anything else, as an https URL.
 	EvidenceURL EvidenceKind = "url"
@@ -289,7 +289,7 @@ const FieldPrefix = "decision."
 
 // ValidateAt is [Decision.Validate] naming each field under prefix, the path
 // its caller's arguments carry the decision at: `decision.` on a work item's
-// ask, and nothing on a coding run's, whose arguments carry the decision's
+// ask, and nothing on an executor's, whose arguments carry the decision's
 // fields at their top (`options[0].label`, `recommended`). A refusal names a
 // field the way the caller wrote it, or the caller is told to fix an argument
 // it never sent.

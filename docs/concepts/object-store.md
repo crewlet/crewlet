@@ -36,12 +36,17 @@ Today the store holds [a project's files](../guides/worklet.md#a-projects-files)
 the pack bytes of the company's [git repositories](code-host.md) — one object
 per push, named by its `code_packs` row, a required reference like a file's —
 every file of every [artifact](artifacts.md) version and asset, every file of
-the company's adopted brand, and the files an
+the company's adopted brand, the files an
 [Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
 keeps (the images a person attaches and the files a deep-work run delivers,
 each sealed under the fleet keyring before it is stored, so the bucket holds
-none of them in the clear). Every consumer follows the same rule: the estate
-names the object, and the store keeps its bytes.
+none of them in the clear), and each seat's executor sessions: the harness's
+own transcript of a turn, kept so a later turn on the same conversation, in any
+box on any node, continues it, sealed the same way as it streams in and named
+by the turn's row of the `executor` log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+Every consumer follows the same rule: the estate names the object, and the
+store keeps its bytes.
 
 ---
 
@@ -677,8 +682,11 @@ passes:
    ```
 
    It refuses unless the node is in maintenance mode, no node is still
-   admitted to publish, and the node has applied the company's records to the
-   end. It copies what is left, **seals** the NATS bucket (read, and never
+   admitted to publish, the node has applied the company's records to the
+   end, and it can see every row that may name a file (see [What a build
+   cannot see](#what-a-build-cannot-see)): it copies the objects this build's
+   tables name, and the store it leaves behind is yours to delete. It copies
+   what is left, **seals** the NATS bucket (read, and never
    written again, so a node not yet restarted cannot store a file where no node
    will look for it), and moves the fleet's record of its store to the bucket.
 5. **Give every node the bucket's `store.objects` block and restart it** with
@@ -770,7 +778,7 @@ bytes at all:
    reservation expires.
 2. **The transfer.** On `nats` every file streams through the engine. On `s3`,
    when the boot probe proved the bucket honours them, the intent instead hands
-   a browser or the CLI a presigned `PUT` for each file, bound to its exact
+   a browser or the harness a presigned `PUT` for each file, bound to its exact
    length, its served type, its SHA-256 as a signed checksum and
    `if-none-match: *`, so the bytes go straight to the bucket and a second put
    to the same key is refused. An agent's sandbox is never handed one: the
@@ -816,8 +824,9 @@ object is garbage from then on. Instead one data node at a time — the
 judged against the replicated estate the data node holds:
 
 - **Collection, hourly.** It pins the estate (a barrier on the log of every
-  domain that declares a table naming objects — the tracker's, the code log,
-  the artifacts log and Ask Crewlet's — so it reads every row committed when it began),
+  domain that declares a table naming objects — the tracker's, the artifacts
+  log, Ask Crewlet's, the executor log and the code log — so it reads every row
+  committed when it began),
   lists the store, and deletes every object **stored more than a day ago,
   whose key was minted more than a day ago, that no row —
   [live, retired or derived](#live-retired-and-derived-references) — names**.
@@ -987,6 +996,15 @@ more in a repository whose checks stopped ending, [How long a check is
 kept](code-host.md#how-long-a-check-is-kept)) or with its repository's purge,
 and the collector's next pass takes its bytes.
 
+A seat's executor session is live too. Its `executor_sessions` row names it, and
+nothing builds the harness's transcript again once the run that wrote it is
+gone, so the object is kept, audited and carried by a backup until a release, a
+retention delete or the seat's removal takes the name off the row
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+A lost session raises [`objects_missing`](#alarms) like any live row's object.
+That its conversation's next turn starts fresh is the launch's tolerance of the
+loss, not a reason to stop accounting for it.
+
 The first retired rows are the [code host's](code-host.md): when a compaction
 merges a repository's small packs into a larger one, each pack it replaced
 moves to `code_packs_retired` and keeps its object for **a day** — longer
@@ -1017,12 +1035,12 @@ the bucket holds, retired ones included ([A purge and the backups before
 it](../guides/backup.md#a-purge-and-the-backups-before-it)) — and, on a
 [versioned bucket](#choosing-a-backend), the noncurrent version the deletion
 leaves, for as long as the bucket's lifecycle rule keeps one. The decision is
-[ADR-0074](https://github.com/crewlet/crewlet/blob/main/adr/0074-a-retired-reference-keeps-its-object-for-a-grace.md),
+[ADR-0081](https://github.com/crewlet/crewlet/blob/main/adr/0081-a-retired-reference-keeps-its-object-for-a-grace.md),
 and the compaction's own rules — what a merge keeps, and why a retired pack
 outlives its longest read — are
-[ADR-0083](https://github.com/crewlet/crewlet/blob/main/adr/0083-a-compaction-merges-packs-without-judging-reachability.md),
+[ADR-0090](https://github.com/crewlet/crewlet/blob/main/adr/0090-a-compaction-merges-packs-without-judging-reachability.md),
 and the expunge's — what it keeps, and why it drops in two records — are
-[ADR-0092](https://github.com/crewlet/crewlet/blob/main/adr/0092-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md).
+[ADR-0099](https://github.com/crewlet/crewlet/blob/main/adr/0099-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md).
 
 The first derived rows are the code host's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index
@@ -1081,6 +1099,32 @@ deleting an object that is already gone is not an error. An artifact's
 carry names only an object the same artifact still names, checked where the
 carry is applied. The decision is
 [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-deletion-from-the-shared-store-needs-no-lock.md).
+
+### What a build cannot see
+
+The tables a collection reads are the ones **its own build** declares, and a
+newer build can add a domain whose rows name objects. So before it judges
+anything, a collection asks whether a row it cannot read may name a file, and
+**deletes nothing while one may**, reporting why on the pass:
+
+- **A data node the fleet counts runs a state log this build does not** — a
+  newer build, part of the way through a rolling upgrade. Counted as the
+  log trim counts a log's readers: a node that is merely offline holds
+  collection back, and one an operator evicted does not. Collection resumes
+  once every data node runs a build that knows every log, so a rollout that
+  finishes within the day's grace costs nothing.
+- **This node's own copy of the estate was migrated by a newer build** — the
+  node was rolled back. The migration runner steps over a version this build
+  does not carry, so the node boots, but it cannot read the tables that
+  version made, and its own row names only the logs it runs now: on a fleet
+  with one data node, its copy is the only witness. Collection resumes when a
+  build that carries those versions runs on it again, or after you restore a
+  [backup](../guides/backup.md) this build took.
+
+An answer the node cannot get (the coordination store unreachable, its copy
+of the estate not open) is a failed pass, tried again, never one that went
+ahead. A final pass of [`crewlet objects migrate`](#moving-the-files-to-a-bucket)
+asks the same question and refuses on the same answer.
 
 ---
 

@@ -86,8 +86,8 @@ it; on Linux `make test` runs the same packages.
 
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
-dashboard, running `internal/e2e`'s client replay or the probe of OpenCode's
-notes plugin does. Nothing in the tree pins a node version; CI installs the
+dashboard, running `internal/e2e`'s client replay or the probes of OpenCode's
+plugins does. Nothing in the tree pins a node version; CI installs the
 latest — see *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
@@ -417,15 +417,17 @@ What follows are the prerequisites that legitimately vary by machine.
   directory above the script holding a `go.mod` — rather than the directory it
   is run from.
 
-  `node` also runs the **OpenCode notes plugin** the engine embeds
-  (`internal/sandbox/codingagent/opencode_steer.js`): the plugin is
-  JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
-  drives it — as the engine writes it into a real box — under plain `node`,
-  through `opencode_steer_probe.mjs` beside it, against a stand-in of the
-  bridge's notes route and against a real bridge's. That package is in the
-  parallel half, so `make test`
-  requires node too and CI's `test (race)` job installs it, and its skip has
-  no allowlist entry either. It needs no npm either: the plugin imports
+  `node` also runs the **two OpenCode plugins** the engine embeds
+  (`internal/sandbox/executor/opencode_steer.js` and `opencode_skills.js`):
+  each is JavaScript an OpenCode run's server loads. `opencode_steer_test.go`
+  drives the notes plugin — as the engine writes it into a real box — under
+  plain `node`, through `opencode_steer_probe.mjs` beside it, against a
+  stand-in of the bridge's notes route and against a real bridge's;
+  `opencode_skills_test.go` drives the skill-load plugin through
+  `opencode_skills_probe.mjs`, against a stand-in of the bridge's skill route.
+  That package is in the parallel half, so `make test`
+  requires node too and CI's `test (race)` job installs it, and its skips have
+  no allowlist entry either. They need no npm either: the plugins import
   nothing.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
@@ -680,16 +682,17 @@ What follows are the prerequisites that legitimately vary by machine.
   ```
 
 Tests never call real LLM APIs — use the fakes in `internal/providers`. A
-phase that offers tools plays its model as a scripted CLI run over the real
+phase that offers tools plays its model as a scripted harness run over the real
 tool session (`internal/providers/llm/llmtest`), never by calling the
 dispatcher around it: the socket, the tool list, the withheld answers and the
 release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
 `dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
-beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
-is `internal/sandbox/codingagent/opencode_steer_probe.mjs`, beside the
-`opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
+beside the `golden_test.go` that runs it, and the OpenCode plugins' probes
+are `internal/sandbox/executor/opencode_steer_probe.mjs` and
+`opencode_skills_probe.mjs`, beside the `opencode_steer_test.go` and
+`opencode_skills_test.go` that run them. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
@@ -1103,12 +1106,16 @@ line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config
 holds them instead. Every package a page or a skill fetches by name — an
 `mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
 somebody to run — names an exact release; every server a document launches is
-listed in `pinnedToolServers` with `readAt`, the release what the documents
-say about it (its tool names, its variables) was read against; and every
-document that names a release names that one. So moving one means reading the
-new release first, correcting whatever moved, and setting `readAt` in the same
-change — and since nothing proposes the move, check the registry whenever you
-touch those pages. Reading it includes running the documented launch through
+an entry of the curated MCP catalogue
+([`internal/mcp/catalogue`](internal/mcp/catalogue)), whose `Package` and
+`Release` are the package and the release what the documents and the
+catalogue say about it (its tool names, its variables) was read against; and
+every document that names a release names that one. The catalogue's own
+launches are held by the same test, so the release the dashboard offers and
+the release a page launches are one. So moving one means reading the new
+release first, correcting whatever moved, and setting the entry's `Release`
+in the same change. Since nothing proposes the move, check the registry
+whenever you touch those pages. Reading it includes running the documented launch through
 `initialize` and `tools/list`: a runner pins the package it is given and
 resolves every dependency the package leaves unbounded at its newest, so a
 release whose source reads right can still fail to start — `mcp-linear` 0.1.1
@@ -1429,7 +1436,7 @@ the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
 every git node runs, so it is read as release surface. A floor pin only ever
 moves to a newer patch of its own series; raising a floor itself is a change to
 `gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
-[ADR-0080](adr/0080-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
+[ADR-0087](adr/0087-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
 pin changes the recipe too: git's own Makefile makes Rust mandatory from 3.0,
 which the report says when it names one.
 
@@ -1653,9 +1660,9 @@ renders, calls, copies, runs or links:
   leases), the paths a validation error names, or who may call it.
 - **A table or a function it copies a decision from.** Its
   `internal/render/mirror_test.go` fingerprints engine functions by file and
-  name — the coding-run launch, the address checks the boot refuses to start on
-  and the Atlassian host rule among them — and its CRD suite reads the CLI
-  profiles (`cliprofile`: each CLI's token and key variables and the
+  name — the executor's launch, the address checks the boot refuses to start on
+  and the Atlassian host rule among them — and its CRD suite reads the harness
+  profiles (`harnessprofile`: each harness's token and key variables and the
   variables that keep it inside a seat's home) from the engine's own refusals. A
   change to one, or a rename or a move, fails it until it has been read against
   the files that copy it.
@@ -1848,7 +1855,7 @@ with no chance to sign it, and it carries no change of its own to certify.
 ```
 feat(sandbox): reuse a paused box when a clarification is answered
 fix(confluence): relax the CQL query when the server returns no hits
-perf(providers): bench a spent plan rather than relaunch the CLI each round
+perf(providers): bench a spent plan rather than relaunch the harness each round
 docs(secret-store): document that the keyring is required
 build: stamp the version into the binary at link time
 ci(docs-publish): rebuild the docs site when a release ships
@@ -1890,10 +1897,15 @@ Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
 
-### Land a feature as a series of pull requests
+### Land a large change as a series of pull requests
 
-A feature lands as a sequence of pull requests, not as one large one. Plan the
-pieces before writing code. A piece doesn't have to deliver working
+When a change is large enough that one pull request would be hard to review,
+and it has seams where `main` can take part of it alone (a refactor the
+feature needs, a new package before the code that wires it in, a migration
+before its readers), land it as a sequence of pull requests rather than one
+large one. A small change, or one with no such seam, stays a single pull
+request; don't split it for the sake of splitting. When you do split, plan
+the pieces before writing code. A piece doesn't have to deliver working
 functionality by itself, but `main` has to be able to take it as it is: clean,
 finished code with its own tests and docs, every gate green, no existing
 behaviour broken, and nothing half-wired for a user to trip over. Code that
@@ -1905,13 +1917,13 @@ nothing sets yet, is fine. A stub or a `TODO` is not.
   says `Closes #N`. Add each pull request's link to the checklist as it opens.
 - **Land one piece, then start the next on `main`.** Each pull request is
   green in CI and titled as a release note on its own.
-- **If a piece is waiting on review, stack the next one on it.** Branch from
-  the previous piece's branch and open the pull request against that branch,
-  saying in the description which pull request it builds on. When the lower
-  one merges, rebase onto `main` and retarget. Stacking against another
-  branch needs that branch in this repository. From a fork, open the next
-  pull request against `main` and say which one it builds on; its diff
-  includes the lower piece until that one merges.
+- **If a piece is waiting on review, build the next one on it.** Branch from
+  the previous piece's branch, but open the pull request against `main` and
+  say in its description which one it builds on (`Builds on #N`). Its diff
+  includes the lower piece until that one merges; then rebase onto `main`.
+  Don't open a pull request against another pull request's branch: GitHub
+  then treats the two as a stack, which its merge API refuses to merge and
+  whose base can no longer be changed.
 - **The series is the change.** It is done when the last piece merges and
   the issue closes.
 

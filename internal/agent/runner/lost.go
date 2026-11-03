@@ -20,7 +20,7 @@ import (
 // reason the run never had. So the resumed turn relaunches its executor for the
 // same round, as it does for a run a person's answer carries on ([Asked]): in
 // the lost job's box where the launch may continue in it, its working tree as
-// the job left it, and in a fresh one otherwise — a fresh CLI session either
+// the job left it, and in a fresh one otherwise — a fresh harness session either
 // way, since the lost one's was cut off mid-step and names no point to resume
 // from. Told what happened and where to look for what it left ([Lost.Reseed]).
 //
@@ -55,7 +55,7 @@ var ErrRoundLost = errors.New("the executor's round was lost with its host too o
 // IT PROMISES NOTHING THE LAUNCH DECIDES. Whether this run is in the lost
 // job's box is the launch's to decide once it knows which box it has, and a
 // kept box is continued in only on the node whose host it is on, by the same
-// CLI — so the text says where to look either way rather than describing a
+// harness — so the text says where to look either way rather than describing a
 // working tree that may not be in front of it. And it says that what the lost
 // job did through the seat's tools did happen: those calls are not undone by
 // the loss, and a run that repeats them repeats their effects.
@@ -95,7 +95,7 @@ func (l Lost) why() string {
 // ([Lost]), or one refused on a sign-in replaced while it ran ([Rotated]).
 // [Runner.continueAgentRun] relaunches each the same way.
 type carried interface {
-	// session is the run's own CLI session, which the relaunch continues
+	// session is the run's own harness session, which the relaunch continues
 	// where it runs in that run's box; "" continues none.
 	session() string
 	// continuation is the prompt the continued session is given, and

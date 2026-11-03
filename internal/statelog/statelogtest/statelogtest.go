@@ -22,13 +22,13 @@
 // and the reserve every other write is held to — the anchors a trimmed record
 // removes below the trim floor and the zero fence a write to one of their
 // subjects then has to pass, because a log whose anchors nothing removes grows
-// a row for every subject it ever wrote (ADR-0073) — the read index's barrier,
+// a row for every subject it ever wrote (ADR-0080) — the read index's barrier,
 // which must change no row, because a linearizable read is released on it
 // before its transaction commits — and the domain that gates
 // seat admission, which must replay strictly, because a compacted domain's gap
 // is a coverage number that would otherwise withhold every seat claim on a
 // node. Whether a domain's copy is JUDGED is not a declaration and has no case
-// here: every domain's is (ADR-0072).
+// here: every domain's is (ADR-0079).
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -155,7 +155,7 @@ type Candidate struct {
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 
 	// EncodeTrimmed is the domain's own encoder of the trim's trimmed record
-	// (ADR-0073) — the production function the engine hands the trim, never
+	// (ADR-0080) — the production function the engine hands the trim, never
 	// a fixture. Required exactly when the domain's log arbitrates a kind,
 	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
 	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].

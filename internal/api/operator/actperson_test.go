@@ -301,10 +301,10 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 //
 // AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS THEY WERE
 // STORED: `update_channel` answers a model the room's topic and purpose
-// fenced, since the one it left alone is whoever set it last, and `answer_run`
-// the question the parked run asked, in the seat's name; read off those
-// answers the act route handed a person the topic and the question between a
-// fence's two lines, under value fields no walk read.
+// fenced, since the one it left alone is whoever set it last, and
+// `answer_executor` the question the parked run asked, in the seat's name;
+// read off those answers the act route handed a person the topic and the
+// question between a fence's two lines, under value fields no walk read.
 //
 // Mutation, run when this was written: answer the missed place as the
 // receipt's `unplaced` again and the drag's row goes red on the tool's name;
@@ -360,7 +360,7 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 
 	runs := guarded(newSurface(t, operator.Options{Halves: fixed(operator.Halves{}),
 		Org: company, Runs: builtin.RunDeps{Desk: parkedRun{}}}))
-	status, answer = act(t, runs, "founder", builtin.AnswerRunTool, "application/json",
+	status, answer = act(t, runs, "founder", builtin.AnswerExecutorTool, "application/json",
 		`{"args":{"turn_id":"t1","launch_id":"launch-t1","answer":"use main"}}`, newKey())
 	if status != http.StatusOK {
 		t.Fatalf("an answer to a parked run answered %d %v", status, answer)
@@ -369,12 +369,12 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 		t.Errorf("an answer to a parked run answered the receipt %v, want the question "+
 			"as the run asked it", answer["receipt"])
 	}
-	for _, problem := range caveattest.AnswerProblems(builtin.AnswerRunTool, answer) {
+	for _, problem := range caveattest.AnswerProblems(builtin.AnswerExecutorTool, answer) {
 		t.Errorf("an answer to a parked run: %s", problem)
 	}
 }
 
-// parkedRun is a run desk holding one coding run, t1, parked on a question its
+// parkedRun is a run desk holding turn t1's executor, parked on a question its
 // requester, the founder's seat, is to answer, which takes every answer.
 type parkedRun struct{}
 
@@ -388,7 +388,7 @@ func (parkedRun) Run(_ context.Context, turnID string) (sandbox.PendingRun, bool
 		Question: "which branch?", LaunchID: "launch-t1"}, true, nil
 }
 
-func (parkedRun) Deliver(context.Context, types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (parkedRun) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("answer-t1")), nil
 }
 

@@ -242,7 +242,7 @@ func TestASeatsFeedIsItsOwnWhenItsNameIsShared(t *testing.T) {
 
 // A TURN THAT PARKED AND RESUMED ENDED ONCE.
 //
-// It writes two completion records — the segment that launched a coding run
+// It writes two completion records — the segment that launched its executor
 // (`suspended`) and the one that ended the turn — so counting completions
 // draws it twice beside a turns list that shows it once. `Suspended` tells the
 // two apart, on the listing and on its axis alike, and absent it answers both.

@@ -12,7 +12,7 @@ import (
 // A CLOSED SET OF FIVE (ADR-0033), and the set is the whole point. Eleven
 // grants carved the engine by surface (a read of the board, a read of the
 // trail, a read of the document, a write of work, a write of pages, the
-// credential store twice, the deployment, the directory, a coding run) and a
+// credential store twice, the deployment, the directory, `sandbox:run`) and a
 // company had to compose those eleven into the three or four things it meant
 // to say about a person. Nobody could: an operator inviting a teammate faced a
 // list of capabilities that each opened part of a screen, and a person handed
@@ -58,10 +58,10 @@ const (
 	// IT IS HOST ACCESS, and it is ONE permission by decision rather than by
 	// oversight. The configuration it writes runs code: an `mcp_servers`
 	// entry is a command every engine host executes, a seat's `mcp_env` and
-	// its per-phase model keys (`llm_*`, a `cli-agent` provider among them)
+	// its per-phase model keys (`llm_*`, a `harness` provider among them)
 	// choose what the seat's children run and which credentials they are
 	// handed, a model entry's `run_in: direct` runs the seat's executor, a
-	// fully permissioned coding agent, on the engine host, and a seat's
+	// fully permissioned harness, on the engine host, and a seat's
 	// worker grants decide which tools a worker runs with. So a holder can
 	// run anything on every engine host and read
 	// whatever a process there can — the keyring included — and every

@@ -26,7 +26,7 @@ import (
 // and name. The walk below fails for a constructor this table does not call,
 // so a new caveat cannot ship without its person phrasing being read.
 var samples = map[string]caveat.Caveat{
-	"UnaddressedComment":  caveat.UnaddressedComment("backend-engineer"),
+	"UnaddressedComment":  caveat.UnaddressedComment("backend-engineer", false),
 	"DefaultAssigneeGone": caveat.DefaultAssigneeGone("ENG", "bo"),
 	"BodyLinksCapped":     caveat.BodyLinksCapped(31, 25),
 	"FieldDateTruncated": caveat.FieldDateTruncated("launch", "Launch",
@@ -73,6 +73,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"ArtifactBreaksPolicy": caveat.ArtifactBreaksPolicy(),
 	"ArtifactQuotaReached": caveat.ArtifactQuotaReached(),
 	"ArtifactTrashed":      caveat.ArtifactTrashed(),
+	"MembersChanged":       caveat.MembersChanged(),
 	"ModelAtLimit":         caveat.ModelAtLimit(),
 	"TokenBudgetSpent":     caveat.TokenBudgetSpent(caveat.CompanyTokenBudget()),
 	"TokenBudgetSpent (a seat's)": caveat.TokenBudgetSpent(
@@ -376,7 +377,7 @@ func TestEveryCodeStatesWhatItAsksOfAPerson(t *testing.T) {
 		t.Error("a default assignee nobody holds is left broken until somebody " +
 			"acts, and is not marked required")
 	}
-	if caveat.UnaddressedComment("bo").Action() != caveat.ActionNone {
+	if caveat.UnaddressedComment("bo", false).Action() != caveat.ActionNone {
 		t.Error("a remark that asks nothing demands dismissal")
 	}
 }

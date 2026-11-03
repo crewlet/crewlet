@@ -69,8 +69,8 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 			if pausing {
 				stop = fs.Bool("stop", false,
 					"also end the seat's running work: the turn it is on at its next round, "+
-						"and any coding run it has out at once; neither is run again. Until it "+
-						"is resumed, every change its coding runs make is refused")
+						"and its executor in its box at once; neither is run again. Until it "+
+						"is resumed, every change its executor makes is refused")
 				reason = fs.String("reason", "", "why, in a line; shown on the seat and in the feed")
 			}
 			opID = opIDFlag(fs,
@@ -134,9 +134,10 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, answer.Receipt.PausedAt)
 		if answer.Receipt.StopRunning {
 			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again; "+
-				"a coding run it has out is ended now, its box reclaimed and what it spent charged.")
-			fmt.Fprintln(stdout, "  Its coding runs change nothing until it is resumed: their pushes "+
-				"and their calls of its tools that write are refused.")
+				"its executor, if running in its box, is ended now, the box reclaimed and what it "+
+				"spent charged.")
+			fmt.Fprintln(stdout, "  Its executor changes nothing until it is resumed: its pushes "+
+				"and its calls of the seat's tools that write are refused.")
 		} else {
 			fmt.Fprintln(stdout, "  The turn it is on, if any, finishes first; nothing new starts.")
 		}

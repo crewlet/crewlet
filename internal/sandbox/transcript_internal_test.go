@@ -115,7 +115,7 @@ func TestALineLongerThanItsHalfKeepsAMarkedPartOfItself(t *testing.T) {
 // REDACTED WHOLE, THEN BOUNDED. A private key is the one credential shape that
 // spans lines, so a whole-line cut can still fall inside one: its BEGIN kept on
 // one side and its END dropped, which no pattern then recognises — and the
-// key's body would be published on the phase record.
+// key's body would be published on the launch's record.
 func TestAKeyAcrossEitherCutIsRedactedFirst(t *testing.T) {
 	t.Parallel()
 	const body = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n"
@@ -152,7 +152,7 @@ func TestAKeyAcrossEitherCutIsRedactedFirst(t *testing.T) {
 	}
 }
 
-// THE RECORD CARRIES WHAT WAS LEFT OUT, on the run's own phase fields, from the
+// THE RECORD CARRIES WHAT WAS LEFT OUT, on the launch's own record, from the
 // one place the bound is applied.
 func TestTheRecordCarriesWhatTheBoundLeftOut(t *testing.T) {
 	t.Parallel()
@@ -162,7 +162,7 @@ func TestTheRecordCarriesWhatTheBoundLeftOut(t *testing.T) {
 		t.Errorf("fitResult left %d lines / %d bytes out and kept %d bytes",
 			got.TranscriptElidedLines, got.TranscriptElidedBytes, len(got.Transcript))
 	}
-	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
 	if rec.ActivityTranscriptElidedLines != got.TranscriptElidedLines ||
 		rec.ActivityTranscriptElidedBytes != got.TranscriptElidedBytes {
 		t.Errorf("the record carries %d/%d, the result %d/%d", rec.ActivityTranscriptElidedLines,

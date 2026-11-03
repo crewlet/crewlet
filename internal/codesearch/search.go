@@ -573,7 +573,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, he
 			}
 			// THE FILL: the first node of the order is its home, which may
 			// fill a copy; a runner-up may where the home passed the fill on
-			// (ADR-0082's walk) or said nothing at all.
+			// (ADR-0089's walk) or said nothing at all.
 			home := round == 0 || a.silent || (a.result.Outcome == OutcomeUnready && a.result.Unready.PassesFill()) ||
 				a.result.Outcome == OutcomeFailed
 			node := a.order[a.at]

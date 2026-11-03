@@ -13,13 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkRunPushes is the engine's whole read of what one coding run pushed —
+// BenchmarkRunPushes is the engine's whole read of what one executor pushed —
 // every page of a `run_pushes` read at its default limit, each in a read
 // transaction of its own, as each is an estate request of its own — over a
 // repository taking 70 pushes a minute (the large model's monorepo), for a run
 // of an hour and one of a week that pushed once every five minutes, beside an
 // hour's run in a quiet repository that takes a push every ten minutes. What
-// it costs is the scan: the read has no index of its own (replicated 0093), so
+// it costs is the scan: the read has no index of its own (replicated 0097), so
 // it reads every push the repository took during the run, a lookup of each
 // row to test the run it names, and `rows/op` is how many. Each row is a push
 // of one command and three introduced commits, about 400 bytes, as an
@@ -70,7 +70,7 @@ func BenchmarkRunPushes(b *testing.B) {
 	// half way between the week run's.
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
 		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
-			run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+			run_id, harness, commands, introduced, introduced_count, received_at, row_bytes)
 		SELECT printf('busy-%07d', i), 'busy', i, i, 'swe', 'agent', 'swe', 'git', 'turn',
 			CASE WHEN i % ?2 = 0 THEN ?3 WHEN i > ?1 - ?4 AND i % ?2 = ?2 / 2 THEN ?5 ELSE '' END,
 			CASE WHEN i % ?2 = 0 OR (i > ?1 - ?4 AND i % ?2 = ?2 / 2) THEN 'claude-code' ELSE '' END,
@@ -78,7 +78,7 @@ func BenchmarkRunPushes(b *testing.B) {
 		week, every, weekRun, hour, hourRun, commands, introduced, len(commands)+len(introduced))
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
 		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
-			run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+			run_id, harness, commands, introduced, introduced_count, received_at, row_bytes)
 		SELECT printf('quiet-%07d', i), 'quiet', i, i, 'swe', 'agent', 'swe', 'git', 'turn',
 			CASE WHEN i > ?1 - ?2 AND i % 2 = 0 THEN ?3 ELSE '' END,
 			CASE WHEN i > ?1 - ?2 AND i % 2 = 0 THEN 'claude-code' ELSE '' END,
@@ -101,7 +101,7 @@ func BenchmarkRunPushes(b *testing.B) {
 	}
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
 		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
-			run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+			run_id, harness, commands, introduced, introduced_count, received_at, row_bytes)
 		SELECT printf('wide-%07d', i), 'wide', i, i, 'swe', 'agent', 'swe', 'git', 'turn',
 			CASE WHEN i % ?2 = ?2 / 2 THEN ?3 ELSE '' END,
 			CASE WHEN i % ?2 = ?2 / 2 THEN 'claude-code' ELSE '' END,
@@ -117,7 +117,7 @@ func BenchmarkRunPushes(b *testing.B) {
 		e.apply(create(b, repos[k], repos[k]))
 		e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
 			INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
-				run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+				run_id, harness, commands, introduced, introduced_count, received_at, row_bytes)
 			SELECT printf('%s-%07d', ?2, i), ?2, i, i, 'swe', 'agent', 'swe', 'git', 'turn',
 				CASE WHEN i % ?3 = ?3 / 2 THEN ?4 ELSE '' END,
 				CASE WHEN i % ?3 = ?3 / 2 THEN 'claude-code' ELSE '' END,

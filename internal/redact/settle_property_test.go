@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// transcriptLines are the lines a coding run's transcript is made of, as far as
+// transcriptLines are the lines an executor's transcript is made of, as far as
 // the key reader is concerned: the armour lines bare and wrapped, glued to a
 // body's line or on one line with it, a body's full and short lines bare and
 // wrapped — one with no digit among them — blank lines bare and wrapped, the

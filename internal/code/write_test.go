@@ -35,7 +35,7 @@ func aWrite() code.EngineWrite {
 // AN ENGINE WRITE IS HELD TO ONE RULE by every party to it — the tool that asks
 // it, the router that carries it, the git node that builds it — and refused
 // ErrInvalid naming the field: each kind takes the fields it needs and no
-// other; a seat names its run — its turn, never a coding run, whose box pushes
+// other; a seat names its run — its turn, never an executor, whose box pushes
 // through git — and a person their human seat; the operation is one this
 // engine mints; the payload, the operations, every path and the depth of every
 // path it names are bounded; one operation names a path; a link takes its
@@ -43,7 +43,7 @@ func aWrite() code.EngineWrite {
 //
 // Mutations: admit a blob_oid for a link — its row passes, red; count a move's
 // destination as no path — the colliding row passes, red; let a seat's run
-// name a coding run — its row passes, and its build would land as a proposal
+// name an executor — its row passes, and its build would land as a proposal
 // its committer refuses, red; drop the depth bound, or hold a move's
 // destination to none — a path one component past it passes, red; refuse a
 // path at the bound — the write at it is refused, red.
@@ -84,8 +84,8 @@ func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 		"no repository":   {edit(aWrite(), func(w *code.EngineWrite) { w.RepoID = "acme" }), "repo_id:"},
 		"a seat with no run": {edit(aWrite(), func(w *code.EngineWrite) { w.Principal.Run = code.RunProvenance{} }),
 			"principal.run:"},
-		"a seat naming a coding run": {edit(aWrite(), func(w *code.EngineWrite) {
-			w.Principal.Run.RunID, w.Principal.Run.CodingAgent = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "claude-code"
+		"a seat naming an executor": {edit(aWrite(), func(w *code.EngineWrite) {
+			w.Principal.Run.RunID, w.Principal.Run.Harness = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "claude-code"
 		}), "principal.run.run_id:"},
 		"a token bound to nobody": {edit(aWrite(), func(w *code.EngineWrite) {
 			w.Principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"}

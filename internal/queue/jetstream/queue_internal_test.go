@@ -58,8 +58,8 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 
 	// AND THE SHIPPED DEFAULTS SPAN THE OUTAGE THEY EXIST FOR: a message's
 	// whole budget must outlast the minute an LLM entry sits out after its
-	// CLI reports a spent plan with no reset instant
-	// (internal/providers/llm/cliagent, bench.go) several times over — the
+	// harness reports a spent plan with no reset instant
+	// (internal/providers/llm/harness, bench.go) several times over — the
 	// failure flat spacing consumed the budget on in 25 seconds.
 	var total time.Duration
 	shipped := &Queue{}
@@ -143,8 +143,8 @@ func TestASettledMessageIsForgotten(t *testing.T) {
 // [attachment.apply] settles in its ack branch for exactly this reason, and
 // the batch path did not — so a partition that failed once and succeeded on
 // its redelivery left its sequence behind for ever. It is ordinary operation
-// rather than a rarity: a coding run's answer that this node could not hand
-// over is NAKed and acked on a later pass, which is precisely the
+// rather than a rarity: an answer to a parked executor that this node could
+// not hand over is NAKed and acked on a later pass, which is precisely the
 // NAK-then-ack shape, so every seat that ever hands an answer back leaked one
 // entry per delivery.
 //

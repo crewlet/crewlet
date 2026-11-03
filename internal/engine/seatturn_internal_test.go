@@ -69,7 +69,7 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	}
 
 	desk := sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(e.backends.Fleet), Queue: e.backends.Queue}
-	if _, err := desk.Deliver(t.Context(), types.SandboxAnswerGiven{
+	if _, err := desk.Deliver(t.Context(), types.ExecutorAnswerGiven{
 		TurnID: "t1", AgentHandle: "swe", Answer: "stack it on gp-4",
 		AnsweredBy: "founder", AnsweredByKind: "human", LaunchID: parked.LaunchID,
 	}); err != nil {

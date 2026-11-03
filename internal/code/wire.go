@@ -280,7 +280,7 @@ type PackRow struct {
 	// nothing in it reached the repository after it. A push's pack and a
 	// merge's arrived at their own record; every rewrite's output — a
 	// compaction's, an expunge's, a rescue — at the latest of the packs it
-	// replaced, since moving content brings none (replicated 0123). An
+	// replaced, since moving content brings none (replicated 0127). An
 	// expunge on its maintainer's schedule keeps a pack that arrived within
 	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
 	// a pack a cache adopted before a round served its row. A read's
@@ -397,7 +397,7 @@ type PushRow struct {
 	ActorSeat string `json:"actor_seat,omitempty"`
 	// Via is how the push's pack was built, and Run, for a seat's push, the
 	// turn, the work item and the model behind it — and for a coding box's,
-	// the run that pushed and its coding agent — each stamped by the engine
+	// the run that pushed and its harness — each stamped by the engine
 	// from the call or the run that made the push, never read from a commit.
 	Via      PushVia       `json:"via"`
 	Run      RunProvenance `json:"run,omitzero"`
@@ -497,7 +497,7 @@ func (row PushRow) brief() PushRow {
 // derived from the commits, whose committer header any client may write.
 //
 // THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0086), and a row naming no way this build knows is refused by
+// replicated 0090), and a row naming no way this build knows is refused by
 // every reader of it (scanPush): an apply that forgot the column would
 // otherwise read as one way or the other.
 type PushVia string
@@ -649,7 +649,7 @@ type IntroducedQuery struct {
 	Descending bool              `json:"descending,omitempty"`
 }
 
-// RunPushesQuery is the coding run a `run_pushes` read lists the pushes of:
+// RunPushesQuery is the executor a `run_pushes` read lists the pushes of:
 // the run by its launch id, the id its pushes' rows name it by
 // ([RunProvenance.RunID]); the repositories its launch was given, by id — the
 // run could push nowhere else, and the read lists them in this order — and
@@ -665,7 +665,7 @@ type IntroducedQuery struct {
 // push beside it costs the read more pages and never one page more than
 // that. An index on the run would hold an entry for every box push on every
 // data node for the history's 181 days to serve that one read a run
-// (replicated 0093 says what it would cost); BenchmarkRunPushes measures what
+// (replicated 0097 says what it would cost); BenchmarkRunPushes measures what
 // the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
@@ -674,7 +674,7 @@ type RunPushesQuery struct {
 }
 
 // BranchChangesQuery is a `branch_changes` read: the repositories a collected
-// coding run was given to push to, one to [MaxRunRepos] of them, each by its
+// executor was given to push to, one to [MaxRunRepos] of them, each by its
 // id and once, each with the branches of it whose live changes the read
 // answers — each a whole ref under refs/heads/, once, [MaxRefsPerQuery] in
 // all — which the engine names each delivered ref's change by. One seek of
@@ -801,8 +801,8 @@ type AskDue struct {
 // at the next pass, since each stays due until it is settled.
 const MaxAskSettlesPerRead = 64
 
-// MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
-// coding run is given — each costs a clone before its coding agent starts,
+// MaxRunRepos is the most repositories one [RunPushesQuery] names: the most an
+// executor is given — each costs a clone before its harness starts,
 // inside its setup budget, and a run that needs more is a task to split — so a
 // read of a run's pushes scans at most this many repositories' pushes above its
 // launch. The bound a run's repositories are held to where they are granted
@@ -942,7 +942,7 @@ const (
 	// ReadPushes is one repository's push history, newest first in log
 	// order.
 	ReadPushes ReadKind = "pushes"
-	// ReadRunPushes is ONE CODING RUN'S PUSHES, oldest first — what its box
+	// ReadRunPushes is ONE EXECUTOR'S PUSHES, oldest first — what its box
 	// delivered to the code host: every push row naming the run
 	// ([RunProvenance.RunID]) among those of the repositories the run was
 	// given, above the position it was launched at ([RunPushesQuery]). The
@@ -1049,7 +1049,7 @@ const (
 	// names heads ([BranchChangesQuery]), in the order the query names the
 	// repositories and their branches, a branch heading none left out. The engine's own read, as
 	// `run_pushes` is, which no principal makes and no grant holds: what it
-	// names each ref a collected coding run moved by — the change the run
+	// names each ref a collected executor moved by — the change the run
 	// delivered to — and what tells it whether the change a run asked to
 	// open at its collection is open already.
 	ReadBranchChanges ReadKind = "branch_changes"
@@ -1209,7 +1209,7 @@ type ReadQuery struct {
 	// and serves only what BOTH may read: a listing leaves out what either
 	// may not, and a read the asker's own grant covers and the ceiling's
 	// does not is [ErrAboveCeiling]. Judged where the read is answered, as
-	// the asker's grant is (ADR-0081), and never where the turn runs: a
+	// the asker's grant is (ADR-0088), and never where the turn runs: a
 	// ceiling judged against the repository a turn resolved once would keep
 	// admitting a seat a later activation shut out of it for the rest of
 	// the turn, while the asker's own grant was judged afresh at every read.
@@ -1217,7 +1217,7 @@ type ReadQuery struct {
 	// ONLY A SEAT, AND ONLY BESIDE A SEAT: a person's or a token's read is
 	// its own, which no ceiling bounds, and a seat is the one requester
 	// whose grant reads the chart — a person maintains every repository
-	// (ADR-0078) and a stranger reads none, both settled where the turn runs
+	// (ADR-0085) and a stranger reads none, both settled where the turn runs
 	// before any read is asked. Refused on `introduced`, on `run_pushes` and
 	// on the duty listings `compaction_due`, `publication_due` and
 	// `expunge_due`, which no principal makes.
@@ -1291,7 +1291,7 @@ type ReadQuery struct {
 	// its readiness, does not. Beside DetailOnly it answers the change's row
 	// ALONE, no page of its revisions with it — one seek of
 	// code_changes_number_idx — for a read that needs nothing of the change
-	// but its state, its branches, its id and its number: a coding run's
+	// but its state, its branches, its id and its number: an executor's
 	// launch on a change, which looks up the branch it works on. Refused
 	// beside a part or a cursor, which read no first page of revisions;
 	// refused on every other kind.
@@ -1639,7 +1639,7 @@ type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
 	// Pushes is a page of a repository's history, newest first, or of one
-	// coding run's pushes, oldest first — each repository the run was given
+	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
 	Pushes  []PushRow       `json:"pushes,omitempty"`
 	Refs    []RefRow        `json:"refs,omitempty"`
@@ -2436,7 +2436,7 @@ type CheckQuery struct {
 	// a page read: a page is full wherever the narrowing holds as many rows
 	// after its place, so what it costs follows what it answers rather than
 	// the history around it. A repository's listing and the window SEEK an
-	// index that leads with the narrowing (replicated 0139): the state, or the
+	// index that leads with the narrowing (replicated 0143): the state, or the
 	// check's name and then the state — a name alone is one seek a state,
 	// merged ([narrowedPlaces]). Their writes are what any index on
 	// code_checks costs: the two over a repository's attempts hold every
@@ -2600,13 +2600,13 @@ type RepoDetail struct {
 // RuleSource is who set one of a repository's rules and when, named by the
 // rule's pattern: the decider of the record that last CHANGED the rule — its
 // push controls or its gate — and that record's instant (code_protections,
-// replicated 0143). A record that carries the rule unchanged, as every
+// replicated 0147). A record that carries the rule unchanged, as every
 // settings change carries every rule, leaves its source as it was
 // ([rulesSourced]).
 //
 // A READ'S ANSWER, never a record's field: the columns are derived from what
 // every record already carries, its envelope's decider and its broker
-// instant, so none of it takes a versionedFields row (0143 states the
+// instant, so none of it takes a versionedFields row (0147 states the
 // condition the derivation holds under).
 type RuleSource struct {
 	Pattern string `json:"pattern"`
@@ -2620,7 +2620,7 @@ type RuleSource struct {
 }
 
 // RemoteState is a repository's other hosts as its row holds them
-// (code_repos, replicated 0118): zero for a repository with no mirror that was
+// (code_repos, replicated 0122): zero for a repository with no mirror that was
 // never imported. A read's answer, never a record's field, so none of it takes
 // a versionedFields row; the records that write the columns name theirs
 // (mirror.go).
@@ -2709,8 +2709,8 @@ type ChangeRow struct {
 	OwnerOperatorID string    `json:"owner_operator_id,omitempty"`
 	// WorkItem is the work item the change carries, nil for none.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
-	// CreatedTurn and CreatedRun are the turn and the sandbox run that opened
-	// it, each "" where there was none — a person's open has neither.
+	// CreatedTurn and CreatedRun are the turn and the executor's launch that
+	// opened it, each "" where there was none — a person's open has neither.
 	CreatedTurn string `json:"created_turn,omitempty"`
 	CreatedRun  string `json:"created_run,omitempty"`
 	// OpenedAt is the broker instant of the record that opened it, and
@@ -2775,7 +2775,7 @@ type ChangeSummary struct {
 	// close, a merge, a push that moved its head — and the last one somebody
 	// wrote about it on its own subject — an ask for review, a comment, a
 	// review, an answer to a finding — never the home's facts (replicated
-	// 0142). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
+	// 0146). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
 	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
 	// conversation, and carries its lifecycle's last move alone, and no
 	// count of its findings.
@@ -2825,7 +2825,7 @@ type ConversationRow struct {
 	// SpokenAt is the broker instant of the last record somebody wrote on
 	// the change's subject — an ask for review, a comment, a thread
 	// resolved, a review, an answer to a finding (code_conversations.
-	// updated_at, replicated 0142) — and zero, left out, where every record
+	// updated_at, replicated 0146) — and zero, left out, where every record
 	// on it was the home's or the engine's. Unlike Version, which every
 	// record there moves — a revision's facts and every mergeability its
 	// home records again as the target branch moves among them — it moves
@@ -3346,7 +3346,7 @@ type GitQuery struct {
 	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
 	// and held to the repository's read grant by the git node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
-	// repository, a person or a token by ADR-0078's rules, which read no
+	// repository, a person or a token by ADR-0085's rules, which read no
 	// chart. Never trusted for anything but the grant. REFUSED on a read the
 	// engine makes on its own account ([GitQuery.EnginesOwn]), which names
 	// none.
@@ -3410,7 +3410,7 @@ type GitQuery struct {
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
 	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
-	// copy it does not hold (ADR-0082): its EFFECTIVE HOME — the first git
+	// copy it does not hold (ADR-0089): its EFFECTIVE HOME — the first git
 	// node of the repository's order once the walk's demotions are applied —
 	// and, only where that node answered that no copy serving the read is
 	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a

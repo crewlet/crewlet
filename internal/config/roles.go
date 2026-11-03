@@ -120,9 +120,9 @@ type Role struct {
 	// executor's chain. The turn's work happens in one run, so a second
 	// field naming the model that run is on would be two spellings of one
 	// setting — and the phases that remain here are the SATELLITES an
-	// operator points somewhere cheaper. They are also where a CLI with no
+	// operator points somewhere cheaper. They are also where a harness with no
 	// in-box runner serves a seat: only claude-code and opencode can be its
-	// executor ([CodingAgents]), and any CLI can be its reviewer.
+	// executor ([ExecutorHarnesses]), and any harness can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
@@ -293,9 +293,9 @@ func (p *RolePlacement) validate(path Path) error {
 // reads beyond the engine-wide catalogue.
 //
 // NOT A GATE, and nothing here places the box. Every agent seat's executor is
-// its coding CLI's own run, in the cell the providers.llm entry it launches on
+// its harness's own run, in the cell the providers.llm entry it launches on
 // names (that entry's `run_in`, else providers.sandbox.default_run_in), on
-// that entry's own CLI — so neither the cell nor the runner is a seat's to
+// that entry's own harness — so neither the cell nor the runner is a seat's to
 // say. What is left is what differs from one seat's work to another's: its
 // own provisioning and environment, the tool servers its box is given, how
 // long a box blocked on a person stays paused, and how many rounds one run
@@ -329,11 +329,15 @@ type RoleSandbox struct {
 	// "say nothing" would be the same zero.
 	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
 
-	// MCP scopes which of the seat's MCP servers its box gets, beside the
-	// seat's own tool bridge, which every executor box is given.
+	// MCP names which of the seat's MCP servers run in its box rather than
+	// reach it over the seat's tool bridge, which every executor box is
+	// given and which serves every other MCP server the seat holds, each
+	// under its own name. A server named here is not served over the bridge
+	// too, so a run never holds one server twice: it is the box's, for a
+	// server that has to run where the checkout is.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
-	// rather than a simplification: the coding CLIs offer no per-tool
+	// rather than a simplification: the harnesses offer no per-tool
 	// allowlist that could be enforced uniformly, so each gets the servers
 	// it is given.
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
@@ -343,7 +347,7 @@ type RoleSandbox struct {
 	// variable of its own, and only LLM credentials derive automatically —
 	// but for the engine's own code host: a run given repositories on it is
 	// handed its run's git credential and git configuration by the engine
-	// (ADR-0086), whose variables ([ReservedSandboxEnv]) no value here may
+	// (ADR-0093), whose variables ([ReservedSandboxEnv]) no value here may
 	// set.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's executor run; declare external tokens here."`
 
@@ -371,7 +375,7 @@ type RoleSandbox struct {
 
 // RoleSandboxMCP is the server-level scope for a seat's executor box.
 type RoleSandboxMCP struct {
-	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names this seat's executor box is given, beside its tool bridge."`
+	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP servers that run in this seat's executor box; its tool bridge serves every other."`
 }
 
 // IsZero lets an unset scope drop out of a round trip.

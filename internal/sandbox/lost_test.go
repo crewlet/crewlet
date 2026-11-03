@@ -35,8 +35,9 @@ func TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced(t *testing.T) {
 		t.Fatalf("the row records %+v on job %s; want the engine's restart at %v on %s",
 			got.Lost, got.LaunchID, rig.now, run.LaunchID)
 	}
+	rig.now = rig.now.Add(DefaultPollInterval)
 	if fired := rig.tick(); fired != 1 {
-		t.Errorf("the next pass announced %d; want the unclaimed loss announced again", fired)
+		t.Errorf("the pass an interval later announced %d; want the unclaimed loss announced again", fired)
 	}
 }
 
@@ -187,11 +188,11 @@ func TestALostJobsRoundIsCarriedOnNotCollected(t *testing.T) {
 	if charged := rig.accountant.total(); charged != 1000 {
 		t.Errorf("charged %d tokens for the lost job, want its 1000", charged)
 	}
-	phases := rig.phases()
-	if len(phases) != 1 {
-		t.Fatalf("published %d records for the lost job, want its own one", len(phases))
+	launches := rig.collected()
+	if len(launches) != 1 {
+		t.Fatalf("published %d records for the lost job, want its own one", len(launches))
 	}
-	if rec := phases[0]; rec.Failed || !strings.Contains(rec.Notes, "cut off") {
+	if rec := launches[0]; rec.Failed || !strings.Contains(rec.Notes, "cut off") {
 		t.Errorf("the lost job's record is failed=%v with notes %q; want it noted cut off, not failed",
 			rec.Failed, rec.Notes)
 	}
@@ -223,7 +224,7 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := rig.pending.AttachSandbox(ctx, "t1", BoxRef{
-		SandboxID: first.SandboxID, CommandID: "cmd-2", CodingAgent: "claude-code",
+		SandboxID: first.SandboxID, CommandID: "cmd-2", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
@@ -244,7 +245,7 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 }
 
 // A LOST JOB THAT HAD ASKED A PERSON IS PARKED ON ITS QUESTION, as a job that
-// finished asking is: its question was written and its CLI on its way out, and
+// finished asking is: its question was written and its harness on its way out, and
 // the answer is what carries it on — a fresh run would ask again, or guess.
 //
 // Mutation: carry every lost job's round on, and a question already put to a

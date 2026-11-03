@@ -441,8 +441,8 @@ func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error
 // A DECISION'S SHAPE AND ITS EVIDENCE ARE CHECKED IN ONE PASS (ADR-0059). A
 // work item's ask whose decision is malformed and also cites a task that does
 // not exist is told both at once, each named under `decision.` as the ask
-// carries it, and a caller whose arguments carry the decision at their top (a
-// coding run's) is told the same faults under no prefix.
+// carries it, and a caller whose arguments carry the decision at their top (an
+// executor's) is told the same faults under no prefix.
 //
 // Mutation: return on the shape's refusal before the evidence is looked up,
 // and the missing task is not named.

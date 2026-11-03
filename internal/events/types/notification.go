@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -83,6 +84,11 @@ type CoalescedMessage struct {
 	// ([NotificationWriter]): five comments merged into one trigger can be
 	// five people, and the merged event's flat Writer is the latest's alone.
 	Writer *NotificationWriter `json:"writer,omitempty"`
+	// Origin is this constituent's OWN origin ([ExternalNotification.Origin]):
+	// the message it was, under the reason it reached the seat. The merged
+	// event's flat Origin is the latest constituent's, so without this copy
+	// the turn a burst woke could be found from its last message alone.
+	Origin TriggerOrigin `json:"origin,omitzero"`
 }
 
 // ExternalNotification is an inbound notification from an external system, and
@@ -159,6 +165,13 @@ type ExternalNotification struct {
 	// is the latest constituent's, as Sender is, and each constituent keeps
 	// its own in Messages.
 	Writer *NotificationWriter `json:"writer,omitempty"`
+	// Origin is what this notification is about and why it reached its
+	// seat ([TriggerOrigin]): a first-party source states it (a chat
+	// message and its routing reason, a work item and the tracker's
+	// reason), and a vendor's notification leaves it zero. It is what
+	// files the turn the notification wakes under the object a person
+	// holds, so "which turn did my message start" has an answer.
+	Origin TriggerOrigin `json:"origin,omitzero"`
 
 	// Messages are the constituents when this event is a COALESCED trigger.
 	//
@@ -180,6 +193,24 @@ func (e ExternalNotification) AgentID() string { return e.Agent }
 // Integration is the system the message came from, and the string the dashboard
 // builds its branded badge out of.
 func (e ExternalNotification) Integration() string { return e.NotificationSource }
+
+// TriggerOrigin is what the notification is about ([Originated]).
+func (e ExternalNotification) TriggerOrigin() TriggerOrigin { return e.Origin }
+
+// TriggerOrigins is every object a COALESCED notification took in, oldest
+// first and each once ([Gathered]), or nil for a notification of one message.
+func (e ExternalNotification) TriggerOrigins() []TriggerOrigin {
+	if len(e.Messages) == 0 {
+		return nil
+	}
+	var out []TriggerOrigin
+	for _, m := range e.Messages {
+		if !m.Origin.IsZero() && !slices.Contains(out, m.Origin) {
+			out = append(out, m.Origin)
+		}
+	}
+	return out
+}
 
 // IntegrationSender is the human the integration identified, when it did.
 func (e ExternalNotification) IntegrationSender() string { return e.Sender }

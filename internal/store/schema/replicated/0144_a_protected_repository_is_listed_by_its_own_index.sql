@@ -1,0 +1,36 @@
+-- A protected repository is listed by its own index.
+--
+-- Settings › Code's Branch protection card shows every repository a rule
+-- protects, each rule with what it lets a push do and what its merge gate
+-- asks. It read the listing of every repository (code.Reader's repos, over
+-- code_repos_name_idx) and kept the protected ones in the browser: one page
+-- of at most 100 repositories, so a protected repository past that page was
+-- never shown, and a page cost what every repository costs however few were
+-- protected — and no index could filter them, since whether a rule protects a
+-- repository was on code_protections' rows alone.
+--
+-- code_repos.protected is 1 where at least one rule protects the repository
+-- and 0 where none does, written by the applier in the statement that writes
+-- the row beside its rules — a create, a settings change and a restore,
+-- every record that writes them (code.rowProtected, beside code.rowDigests).
+-- A listing that asks for the protected repositories alone
+-- (code.ReadQuery.Protected, `GET /code/repos?protected=true`) walks
+-- code_repos_protected_idx: those repositories by name, paged by name, so a
+-- page of them costs what they cost.
+--
+-- PARTIAL, ON THE PREDICATE THE LISTING REPEATS VERBATIM (protected = 1),
+-- and NAMED by it (code.protectedReposKey): code_repos_name_idx serves the
+-- same order, and the planner may take either. A repository no rule protects
+-- has no entry; one whose rules go from none to some, or back, moves in or
+-- out with the row update its settings record already makes.
+--
+-- THE DEFAULT IS 0 because SQLite requires one for a NOT NULL column added to
+-- a table, and every record that writes the rules writes the column. No
+-- release carries the code domain (its stated condition, code.RecordVersion),
+-- so no store outside a development branch holds a repository the column was
+-- not written for (0133's reason).
+--
+-- Class: code_repos stays reproducible: the column is written only from the
+-- records the applier applies.
+ALTER TABLE code_repos ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX code_repos_protected_idx ON code_repos (name) WHERE protected = 1;    -- Reader.Read(repos) protected: the protected repositories in name order, paged by name

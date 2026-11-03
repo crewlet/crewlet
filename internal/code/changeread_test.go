@@ -265,7 +265,7 @@ func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
 		}
 
 		// IN BRIEF AND ALONE (ReadQuery.DetailOnly beside Brief): the very
-		// row, and no revision read with it — what a coding run's launch on a
+		// row, and no revision read with it — what an executor's launch on a
 		// change reads.
 		alone, err := r.Read(ctx, code.ReadQuery{Asker: ada, Kind: code.ReadChange, Repo: "web", Change: 1,
 			Brief: true, DetailOnly: true, Fresh: stale})

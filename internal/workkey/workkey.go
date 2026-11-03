@@ -24,7 +24,7 @@
 //
 // # Why a key rather than an epoch fence
 //
-// The instinct is to guard these writes the way a pending sandbox run is
+// The instinct is to guard these writes the way an executor's pending run is
 // guarded, with a fencing predicate. That works for mutating an existing row
 // and fails for an insert, which has no row to attach the condition to — and
 // even done atomically it loses data in the case where nothing went wrong. A

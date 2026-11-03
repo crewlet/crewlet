@@ -10,7 +10,7 @@
 // messages are instructions seals under the same frame in key domains of its
 // own: a request one node asks another to carry out and its reply
 // ([internal/signedask]), a person's answer to a parked run
-// ([internal/sandbox]'s answer seal), a note to a coding run on its record.
+// ([internal/sandbox]'s answer seal), a note to an executor on its record.
 //
 // # Why a leaf
 //
@@ -35,7 +35,7 @@
 //
 // The broker's admission is no authority over a record. An embedded fleet's
 // broker admits only a connection presenting a key derived from this same
-// keyring (ADR-0087), but it decides per connection, and a route's password
+// keyring (ADR-0094), but it decides per connection, and a route's password
 // crosses the fleet network in clear — so anything that captured one is a
 // member — while an external cluster admits whom its operator chooses. And a
 // record on a domain's log is whatever the next node applies: rows every peer

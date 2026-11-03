@@ -18,28 +18,27 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The executor, run by its coding CLI's own agentic loop.
+// The executor, run by its harness's own agentic loop.
 //
-// # What is the CLI's, and what stays the engine's
+// # What is the harness's, and what stays the engine's
 //
-// Every seat's executor is its coding CLI's own run, in a box: its own loop,
+// Every seat's executor is its harness's own run, in a box: its own loop,
 // its own shell, its own edits and commits. The seat's tools reach it over the
 // MCP bridge, which dispatches through the SAME tools.Surface every
-// engine-driven phase calls. So what the CLI owns is how the executor's work
+// engine-driven phase calls. So what the harness owns is how the executor's work
 // happens; everything around it stays the engine's, and each of those is a
 // deliberate refusal to fork:
 //
 //   - The PROMPT is the seat's: identity, chart, memory, skills and workers,
-//     built once here and handed to the CLI as an appended system prompt and
+//     built once here and handed to the harness as an appended system prompt and
 //     the brief it runs.
 //   - The SURFACE is built the same way as every phase's, with the same skill
 //     guard. The bridge executes against it, so a tool denied to the seat is
 //     denied to its run.
-//   - The SUBMISSION is the same tool. The CLI ends its run by calling
+//   - The SUBMISSION is the same tool. The harness ends its run by calling
 //     submit_work over the bridge, so the outcome vocabulary and the rescue
 //     path are the engine's.
 //   - The REVIEWER is the engine's own loop. The point of a reviewer is that
@@ -56,7 +55,7 @@ import (
 // start, since a turn sent back for another iteration launches its next run
 // from the segment that collected this one.
 
-// AgentLauncher starts the executor as its coding CLI's own agentic run.
+// AgentLauncher starts the executor as its harness's own agentic run.
 //
 // Declared by the consumer, and narrow on purpose: the runner knows what the
 // executor should be asked to do and which tools it may use; the engine knows
@@ -90,9 +89,9 @@ type Launched struct {
 	LaunchID string
 }
 
-// AgentRunRequest is one executor handed to its coding CLI's agent loop.
+// AgentRunRequest is one executor handed to its harness's agent loop.
 //
-// THE PROMPT ARRIVES IN TWO HALVES, because the CLIs take it in two: Claude
+// THE PROMPT ARRIVES IN TWO HALVES, because the harnesses take it in two: Claude
 // Code appends a file to its own system prompt, OpenCode adds an instruction
 // file to its default agent's. Both keep the vendor's harness prompt — the
 // part that teaches its shell, editor and loop, which the run is FOR — and put
@@ -107,18 +106,25 @@ type AgentRunRequest struct {
 
 	// Brief is the turn's own ask — with its earlier rounds, every note a
 	// person sent the turn that it has already read, and then Notes — and
-	// the whole of what the CLI is prompted with.
+	// the whole of what the harness is prompted with.
 	Brief string
 
 	// Notes are the notes this brief is the FIRST to read, in the order the
 	// brief renders them ([SteerSource.Brief]): the launch records them read
-	// by the job it opens, in the write that opens it, so the job's own CLI
+	// by the job it opens, in the write that opens it, so the job's own harness
 	// never takes them again.
 	Notes []steer.Note
 
 	// Surface is what the run may call, bridged; see the package rule
 	// above.
 	Surface *tools.Surface
+
+	// Skills are the Tool Skills the run's harness is handed as its own
+	// (handedskills.go): written into its box, listed to its model, and
+	// loaded with its own skill tool — each load its harness reports
+	// recorded on the run's bridge session as the run's load_tool_skill
+	// call of the skill's key ([HandedSkills.Listed]). Nil hands none.
+	Skills HandedSkills
 
 	// Spend is what the calls Surface serves cost the engine, counted
 	// apart from this segment because they happen after it — see
@@ -141,7 +147,7 @@ type AgentRunRequest struct {
 
 	// Continue is set when this launch CARRIES ON a run that parked on a
 	// person's question, now answered, or whose job was lost with its host —
-	// the same round, relaunched: the asking run's CLI session, and the
+	// the same round, relaunched: the asking run's harness session, and the
 	// prompt that continues it, which the launch uses where it runs in the
 	// asking run's box (a lost job's session is never continued, and names
 	// none). Brief is then what a fresh run is told instead, the question and
@@ -163,7 +169,7 @@ type AgentRunRequest struct {
 // Continuation is how a launch carries on an asking run — see
 // [AgentRunRequest.Continue].
 type Continuation struct {
-	// SessionID is the asking run's CLI session; Brief its next prompt —
+	// SessionID is the asking run's harness session; Brief its next prompt —
 	// the answer, and the notes [AgentRunRequest.Notes] carries: only those,
 	// because the session already holds every note it read before it asked.
 	SessionID string
@@ -193,7 +199,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	snapshot := r.executorUniverse(r.seatSnapshot())
 
 	// The submission tool is on the surface because it is how the executor
-	// says what it did. The CLI calls it over the bridge, and the value it
+	// says what it did. The harness calls it over the bridge, and the value it
 	// captures here is read only when the resume happens in THIS process —
 	// otherwise the resume rebuilds it from the run's durable bridged-call
 	// log.
@@ -203,12 +209,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	// ITS OWN METER: every call this surface serves is the CLI's, made
+	// ITS OWN METER: every call this surface serves is the harness's, made
 	// over the bridge after this segment has suspended and charged what it
 	// spent — see [BridgedSpend].
 	bridged := NewBridgedSpend()
 	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
-		executorActive(snapshot))
+		executorActive(snapshot, r.boxServers()))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -219,7 +225,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// that reaches no run's record ([Runner.steerReturn]), and recorded
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, notes, history, snapshot, built, fresh)
+	system, user := r.executorPrompt(ctx, notes, history, built, fresh)
+	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
+	// than listed in its prompt (handedskills.go), matched against the
+	// surface it is launched with.
+	handed := r.handSkills(ctx, built)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,
@@ -236,12 +246,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// it was asked.
 	//
 	// The surface travels too, whose definitions are NOT in the prompt
-	// below: they reach the CLI over the MCP bridge, where the CLI's own
+	// below: they reach the harness over the MCP bridge, where the harness's own
 	// model is billed for every one of them. See [emitter.promptSize].
 	//
 	// ONE ROUND OF ONE, the cap the collected record states too: the
 	// engine's whole exchange with the run is this launch and its answer,
-	// and the CLI's own turns inside it are bounded by the run's turn cap
+	// and the harness's own turns inside it are bounded by the run's turn cap
 	// (`max_turns`) rather than by anything the engine states here. See
 	// [agentRunResult].
 	emit := r.emitter()
@@ -254,6 +264,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Brief:      user.Text,
 		Notes:      fresh,
 		Surface:    surface,
+		Skills:     handed,
 		Spend:      bridged,
 		Round:      round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
@@ -277,7 +288,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
-	r.recordAgentSuspension(round, surface, history, began, time.Since(began))
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed)
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
@@ -352,10 +363,27 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// asking run's own session after the answer alone, since that session
 	// already holds every note it read.
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, "", history, snapshot, built, fresh)
+	system, user := r.executorPrompt(ctx, "", history, built, fresh)
+	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
+	// copy is the run's artefact, written afresh at every start, and a
+	// session carried on keeps what it loaded, which the rebuilt guard
+	// already holds.
+	handed := r.handSkills(ctx, built)
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
+	}
+	// THE CALL A PERSON APPROVED IS MADE HERE, once, through the surface the
+	// run carries on with, as the last step before the relaunch: after every
+	// check that could refuse the relaunch, so a round refused here never
+	// made it, and before the prompt, which tells the run what it returned
+	// (ADR-0077).
+	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
+		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
+			r.steerReturn(ctx, Launched{}, fresh)
+			return turn.Work{Calls: logged, Inherited: len(logged)}, describe(surface),
+				fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), heldErr)
+		}
 	}
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
@@ -377,6 +405,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			SignInReplaced: isRotated(carry),
 		},
 		Surface:    surface,
+		Skills:     handed,
 		Spend:      bridged,
 		Round:      state.Round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
@@ -401,7 +430,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		launchedAt = began
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
-		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed)
 	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
@@ -411,12 +440,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 
 // recordAgentSuspension captures what the run's collection needs.
 func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
-	began time.Time, launched time.Duration,
+	began time.Time, launched time.Duration, handed HandedSkills,
 ) {
 	state := execstate.State{
 		Version:      execstate.Version,
 		ActiveTools:  surface.Active(),
 		LoadedSkills: r.loadedSkills(),
+		// THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, which every
+		// later opening of its bridge reads a reported load by, and every
+		// rebuild of its guard names a refusal by (handedskills.go).
+		NativeSkills: handed.Listed(),
 		Round:        round,
 		// THE LAUNCH'S HALF OF THE PHASE, and where it began, for the
 		// record the collection publishes. See [execstate.State.LaunchMS]
@@ -500,10 +533,10 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 // ([Runner.continueAgentRun]) and one that reopens it while it works
 // ([Runner.ReopenAgentRun]).
 //
-// AS THE RUN LEFT IT: the tools its launch recorded and the skills its guard
-// held then, and what the run did to both since over the bridge, read off
-// called — every tool a successful activation named ([replayedActive]) and
-// every skill it loaded ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
+// AS THE RUN LEFT IT: the tools its launch recorded — every tool it can reach,
+// so nothing a run does over the bridge adds one — and the skills its guard
+// held then, with every skill the run loaded since over the bridge read off
+// called ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
 // the closed rounds in history and the run's calls, seeded into the call log
 // through the rebuilt surface ([seedCalls]), so a count read from here sees
 // every call made before it.
@@ -512,43 +545,30 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 // own: the collection rebuilt the launch's record alone, on the reasoning that
 // it makes no gated call. That much is true, and it is beside the point,
 // because the collected surface is also what the round's record states the
-// run held (tools_available) and could still have discovered
-// (tool_catalogue). Every tool the run had activated over the bridge was
-// published as one it never found, and the record contradicted the run's own
-// calls listed beside it. The guard is replayed too, although nothing calls
-// through the collection's surface: a rebuild that replays half of what the
-// run did is the drift this rule exists to stop.
+// run held (tools_available). The guard is replayed too, although nothing
+// calls through the collection's surface: a rebuild that replays half of what
+// the run did is the drift this rule exists to stop.
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
 	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, called []ledger.Call,
 ) (*tools.Surface, error) {
 	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
-		replayedActive(state, called), state.LoadedSkills...)
+		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return nil, err
 	}
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
 	r.observeLoads(surface, called)
+	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
+	// rebuilt guard refuses names the skill as the run's harness lists it.
+	r.handedAs(state.NativeSkills)
 	return surface, nil
-}
-
-// replayedActive is the tools a run's surface holds once its bridged calls
-// are replayed onto the one its launch recorded: those, and every tool a
-// successful activation named.
-func replayedActive(state execstate.State, called []ledger.Call) []string {
-	active := slices.Clone(state.ActiveTools)
-	for _, call := range called {
-		if call.Name == toolname.Activate && !call.Failed {
-			active = append(active, activationTarget(call.Args))
-		}
-	}
-	return active
 }
 
 // observeLoads tells the guard the surface was just armed with every skill a
 // run's bridged calls loaded, by the guard's own reading of a call — the one
 // rule for which call unlocks what. Called once the surface is built, because
-// whether a guard is armed at all depends on the loader being active, which an
-// activation over the bridge may be what made it. A call is read by its
+// whether a guard is armed at all depends on the loader being active. A call is
+// read by its
 // canonical arguments, made through the surface ([tools.Surface.ArgsOf]), as
 // the guard reads every call the surface admits.
 func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
@@ -596,13 +616,13 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 // bridge wrote rather than from the surface: the process that resumes may not
 // be the one that launched, so the surface here is rebuilt as the run left it
 // ([Runner.rebuiltSurface]) and has served no call of its own. That log is
-// also where the submission is: the CLI ended its run by calling submit_work
+// also where the submission is: the harness ended its run by calling submit_work
 // over the bridge, and replaying that call through a fresh submission tool is
 // what recovers the outcome it declared.
 //
 // An absent submission is NOT a value. A run that stopped without saying what
 // it did is rescued as incomplete and judged on its record, rather than having
-// a delivery inferred from the prose the CLI happened to end with.
+// a delivery inferred from the prose the harness happened to end with.
 //
 // `history` is the turn's closed rounds, which its submission's citations read
 // beside the run's own calls — see [turn.Record] — and `bridged` the run's
@@ -614,8 +634,8 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// started_at: a start read off neither segment would put the record at
 	// the epoch, a day before the turn existed. Its DURATION is the
 	// phase's — both segments, the launch's carried on the park — and
-	// never the run between them, which is the run's own fact, on the
-	// record of the box it ran in. See types.AgentPhaseCompleted.
+	// never the run between them, which is each launch's own fact, on its
+	// types.ExecutorCollected. See types.AgentPhaseCompleted.
 	began := time.Now()
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	logged := bridgedLedger(bridged)
@@ -641,18 +661,17 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	run := r.cfg.Resume.Run
 	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
 	// THE NOTES THE ROUND'S RUN READ, off the record every read is written
-	// on: in its briefs, and at the boundaries of its CLI's own loop — the
+	// on: in its briefs, and at the boundaries of its harness's own loop — the
 	// reads of this round's jobs, at the run's one round, each with where it
 	// was read.
 	res.RunSteers = runReads(r.cfg.Resume.Steered, state.Round)
 	res.StartedAt = began.UTC()
 	res.Elapsed = time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began)
 	work, described := r.finishWork(ctx, state.Round, work{
-		submit:   submit,
-		res:      res,
-		surface:  surface,
-		snapshot: snapshot,
-		run:      run,
+		submit:  submit,
+		res:     res,
+		surface: surface,
+		run:     run,
 	})
 	// The RUN's calls, not this process's surface's — see the doc above —
 	// and every one an EARLIER ATTEMPT's ([turn.Work.Inherited]): the run
@@ -682,11 +701,11 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // count — it is the honest one. A round is an iteration of the ENGINE's
 // exchange with a model: one request, one answer. For the executor the engine
 // made a single request — the launch — and got a single answer back, however
-// many turns the CLI took inside its own loop to produce it. The bridge's call
+// many turns the harness took inside its own loop to produce it. The bridge's call
 // log carries no round of its own and inventing one per call would claim a
 // structure nobody observed, splitting one run into thirty rounds of one call
 // each. So the record's cap is that one round too: the engine allowed the
-// run one request, and its turns are bounded by the CLI's own cap
+// run one request, and its turns are bounded by the harness's own cap
 // (`max_turns`), which is the run's fact rather than this phase's.
 //
 // THE ROUND IS TIMED, from the launch (launchedAt, the phase's first instant)
@@ -695,12 +714,13 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // bridged call inside it at the instant the bridge measured. Two clocks when
 // the launch and the collection ran on different nodes, which is why a skew
 // that would make the span negative states none. It carries NO TOKENS: what
-// the run spent is the run's own fact, on the `sandbox` record its collection
-// publishes, and repeating it here would charge every rollup twice.
+// the run spent is each launch's own fact, on the `executor_collected` record
+// its collection publishes, and repeating it here would charge every rollup
+// twice.
 //
 // EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
 // in the order the run made them: the bridge is where a run's calls are
-// measured, since they ran inside the CLI's own loop and not one of the
+// measured, since they ran inside the harness's own loop and not one of the
 // engine's.
 //
 // THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
@@ -726,12 +746,13 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 			Output: call.Result, Failed: call.Failed,
 			StartedAt: call.StartedAt, Duration: call.Duration,
 			Origin: call.Origin, Server: call.Server,
+			Source: call.Source, Refusal: call.Refusal,
 		})
 	}
 	if strings.TrimSpace(answer) != "" {
 		// The run's own last word, on the round its calls are on, so the
 		// ledger reads as one block rather than as prose beside orphaned
-		// tool rows. There is no separate reasoning to report: a CLI's
+		// tool rows. There is no separate reasoning to report: a harness's
 		// thinking stays inside its own loop.
 		res.Narration = []toolloop.Narration{{Round: runRound, Content: answer}}
 	}
@@ -797,8 +818,8 @@ func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
 }
 
 // inAdmissionOrder is a run's bridged calls in the order the bridge admitted
-// them — the order the CLI made them in — where the row holds them in the
-// order they FINISHED: each is appended once it returns, and a CLI that makes
+// them — the order the harness made them in — where the row holds them in the
+// order they FINISHED: each is appended once it returns, and a harness that makes
 // several calls at once finishes them in whatever order their tools take. The
 // record states the order the run acted in, and the replay below reads a
 // submission made after another as the correction, whichever returned first.
@@ -810,7 +831,7 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 }
 
 // replaySubmission feeds the run's own submit_work call back through a fresh
-// submission tool, so the outcome the CLI declared is the one the turn reports.
+// submission tool, so the outcome the harness declared is the one the turn reports.
 //
 // LAST WRITE WINS, which is the submission contract everywhere else: a second
 // call is a correction, and replaying in the order the run made its calls is

@@ -43,7 +43,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
+  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
 };
 
 /** A reader who holds the tracker and the knowledge base but not Admin. */
@@ -79,7 +79,7 @@ const QUIET = {
   },
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
-  sandbox_runs: { runs: [] },
+  executors: { runs: [] },
   inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 

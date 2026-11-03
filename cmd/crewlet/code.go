@@ -144,7 +144,7 @@ func runCode(environ config.Source, args []string, stdout, stderr io.Writer) err
 const maxCredentialInput = 64 << 10
 
 // codeCredentialUser is the user name the helper answers. FIXED: the API
-// reads only the password of a Basic credential (ADR-0078), so a name would
+// reads only the password of a Basic credential (ADR-0085), so a name would
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 
@@ -347,13 +347,13 @@ type codePushView struct {
 	ActorKind string    `json:"actor_kind"`
 	ActorSeat string    `json:"actor_seat"`
 	// Run is a seat's push's: the turn that made it and the work item it was
-	// charged to, and a coding box's run and its coding agent.
+	// charged to, and a coding box's run and its harness.
 	Run struct {
 		TurnID      string `json:"turn_id"`
 		WorkBackend string `json:"work_backend"`
 		WorkKey     string `json:"work_key"`
 		RunID       string `json:"run_id"`
-		CodingAgent string `json:"coding_agent"`
+		Harness     string `json:"harness"`
 	} `json:"run"`
 	Node     string `json:"node"`
 	Commands []struct {
@@ -398,7 +398,7 @@ const (
 	// mebibytes, above the largest TestTheCodePagesFitOneAnswer builds — a
 	// push of code.MaxCommandsPerPush commands at the longest ref beside
 	// code.MaxIntroduced ids and a seat's run at its bound, each byte of a ref
-	// and of a run field but the coding run's UUID one JSON writes as six, at
+	// and of a run field but the executor's UUID one JSON writes as six, at
 	// 1 692 620 bytes (the code domain refuses a push whose record entry is
 	// that wide, so no row reaches it), and a repository at its longest
 	// description and default branch with every rule
@@ -670,8 +670,8 @@ type codePushLine struct {
 
 // pushLine is p as status prints it: who made it — a person's credential
 // and, where bound, the seat they hold; a seat by its handle and the turn and
-// work item behind its push, and its coding box's run and coding agent where
-// the box pushed — the node that took it, and what became of every ref,
+// work item behind its push, and its coding box's run and harness where the
+// box pushed — the node that took it, and what became of every ref,
 // `ok|noop|ng <ref> <old>..<new> [(reason)]` joined with `; `.
 func pushLine(p codePushView) codePushLine {
 	by := p.Actor
@@ -682,7 +682,7 @@ func pushLine(p codePushView) codePushLine {
 		by = p.ActorSeat
 		var made []string
 		if p.Run.RunID != "" {
-			made = append(made, strings.TrimSpace(p.Run.CodingAgent+" run "+p.Run.RunID))
+			made = append(made, strings.TrimSpace(p.Run.Harness+" run "+p.Run.RunID))
 		}
 		if p.Run.TurnID != "" {
 			made = append(made, "turn "+p.Run.TurnID)

@@ -34,9 +34,19 @@ type childProcess struct {
 	waitErr error
 	ownExit bool
 
+	// startErr is why the process could not be started at all, nil until
+	// a start failed: the command not found, or not executable. Atomic,
+	// since the transport's Connect writes it on whatever goroutine the SDK
+	// runs it on, and the client reads it once the handshake has failed.
+	startErr atomic.Pointer[error]
+
 	// stdinClosed is set by the shutdown ladder just before it closes the
 	// child's stdin, which is what ownExit is judged against.
 	stdinClosed atomic.Bool
+
+	// launched is when the process started, in Unix nanoseconds, zero until
+	// it has: what a test times its launch by ([Test]).
+	launched atomic.Int64
 
 	// ended is told the moment the session over this child can carry no
 	// more calls: the process exited, or a write to its stdin failed; and
@@ -181,6 +191,7 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	cmd.Stdin, cmd.Stdout = inR, outW
 	if err := cmd.Start(); err != nil {
 		closeFiles(inR, inW, outR, outW)
+		t.child.startErr.Store(&err)
 		return nil, err
 	}
 	// The child holds its own copies now, so the parent's go at once. The
@@ -188,6 +199,7 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	// copy, the pipe never reaches EOF, and the reader would never see a
 	// server that exited.
 	closeFiles(inR, outW)
+	t.child.launched.Store(time.Now().UnixNano())
 	go t.child.reap()
 
 	return (&sdk.IOTransport{

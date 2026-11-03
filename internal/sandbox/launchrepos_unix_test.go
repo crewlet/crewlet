@@ -88,7 +88,7 @@ exit 0`)
 }
 
 // SETUP AND THE RUN SHARE ONE WORKING DIRECTORY. A setup step writes at a path
-// relative to where it runs, and the coding agent is told to find what it
+// relative to where it runs, and the harness is told to find what it
 // made at that path from where IT starts, so the two must start in the same
 // directory: every backend runs a command with no directory of its
 // own in one default (the box's workspace here). A file a setup step writes
@@ -105,8 +105,8 @@ func TestSetupAndTheRunShareAWorkingDirectory(t *testing.T) {
 	}}, nil); err != nil {
 		t.Fatalf("ApplySetup: %v", err)
 	}
-	// AS A CODING AGENT'S JOB IS STARTED: in no directory of its own
-	// (internal/sandbox/codingagent's Runner.Start).
+	// AS A HARNESS'S JOB IS STARTED: in no directory of its own
+	// (internal/sandbox/executor's Runner.Start).
 	if _, err := box.StartBackground(t.Context(), "test -f marker && printf found > found", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}

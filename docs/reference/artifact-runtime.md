@@ -385,7 +385,7 @@ interface AssetsApi {
 }
 ```
 
-Assets are uploaded by the artifact's editors from the dashboard, the CLI or
+Assets are uploaded by the artifact's editors from the dashboard, the harness or
 an agent's tool, never by a page.
 
 ### Opening links

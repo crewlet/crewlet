@@ -158,6 +158,11 @@ var resources = []resource{
 	// say what they do or to what ([acted]).
 	{Path: "/config/revisions/{id}/revert", Action: "revert the configuration to"},
 	{Path: "/fleet/broker/remove-peer/{peer}", Action: "remove"},
+	{Path: "/mcp-servers/{name}/retry", Action: "restart", Noun: "MCP server"},
+	{Path: "/mcp-servers/{name}/check", Action: "test", Noun: "MCP server"},
+	{Path: "/mcp-servers/{name}/changes", Action: "review the changed tools of", Noun: "MCP server"},
+	{Path: "/mcp-checks", Action: "test", Noun: "an MCP server before it is saved", Singleton: true},
+	{Path: "/mcp-probe", Action: "check", Noun: "an MCP server's address", Singleton: true},
 	{Path: "/worklet/items/{key}/depend", Action: "change the dependencies of"},
 	{Path: "/worklet/items/{key}/relate", Action: "change the relations of"},
 	{Path: "/worklet/projects/{key}/tags", Action: "change the tags of"},

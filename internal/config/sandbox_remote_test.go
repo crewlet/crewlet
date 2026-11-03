@@ -53,7 +53,7 @@ func TestAPlacementNeedsItsBackend(t *testing.T) {
 // and only then.
 //
 // `local:` alone is TWO cells, not one: it serves `direct`, which runs the
-// coding agent as the engine's user, and `container`, which does not. Picking
+// harness as the engine's user, and `container`, which does not. Picking
 // either for an operator who wrote neither is the default that gets discovered
 // afterwards. But the question is about the ENTRIES the seats' executors
 // launch on: a catalogue whose every such entry names its own cell has nothing

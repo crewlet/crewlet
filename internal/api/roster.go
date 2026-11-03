@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
@@ -153,41 +154,19 @@ func placement(ctx context.Context, company func() (*config.Company, *org.Organi
 	return out, nil
 }
 
-// toolRows renders the engine's catalogue for the wire.
-func toolRows(runtime NodeRuntime) []map[string]any {
-	infos := runtime.Tools()
-	out := make([]map[string]any, 0, len(infos))
-	for _, info := range infos {
-		row := map[string]any{
-			"name":        info.Name,
-			"description": info.Description,
-			"source":      info.Source,
-			// THE HINTS AND WHERE IT LANDS. The catalogue carried three
-			// strings, so the screen an operator audits a fresh MCP
-			// server on could say what its tools are CALLED and nothing
-			// about what they do — while the engine's own delivery fence
-			// had been reading these hints all along.
-			"annotations": map[string]any{
-				"read_only":   info.Annotations.ReadOnly,
-				"destructive": info.Annotations.Destructive,
-				"idempotent":  info.Annotations.Idempotent,
-				"open_world":  info.Annotations.OpenWorld,
-			},
-			"delivers": info.Delivers,
-		}
-		if info.Annotations.Title != "" {
-			row["title"] = info.Annotations.Title
-		}
-		// ABSENT rather than an empty object when a tool takes no
-		// arguments, which is a real shape: a form rendered from `{}` and
-		// one rendered from a schema with no properties look identical,
-		// and only the first is "this build did not send it".
-		if len(info.InputSchema) > 0 {
-			row["input_schema"] = info.InputSchema
-		}
-		out = append(out, row)
+// toolRows is the engine's catalogue for the wire: ALWAYS A LIST, so a node
+// that serves no tool sends `[]` rather than a null a client reads as "not
+// sent".
+//
+// THE ROWS THEMSELVES, never a map rebuilt from them: the catalogue's shape is
+// [queries.ToolRow]'s, which `mcp_servers_status` sends too, and a second
+// spelling of it here is how the push and the MCP page would come to describe
+// one tool two ways.
+func toolRows(runtime NodeRuntime) []queries.ToolRow {
+	if rows := runtime.Tools(); rows != nil {
+		return rows
 	}
-	return out
+	return []queries.ToolRow{}
 }
 
 // placementTick reads the placement for the live channel.

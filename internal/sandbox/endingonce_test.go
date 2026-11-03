@@ -26,7 +26,7 @@ import (
 type announcement struct {
 	id     string
 	at     time.Time
-	failed types.SandboxRunFailed
+	failed types.ExecutorFailed
 }
 
 // announcements is every publish of a lost run's announcement on the events
@@ -36,7 +36,7 @@ func (r *coordRig) announcements() []announcement {
 	defer r.queue.mu.Unlock()
 	var out []announcement
 	for _, p := range r.queue.published {
-		payload, ok := p.event.Data.(*types.SandboxRunFailed)
+		payload, ok := p.event.Data.(*types.ExecutorFailed)
 		if !ok || p.topic != topics.Event(payload.EventType()) {
 			continue
 		}
@@ -89,7 +89,7 @@ func TestAnEndingWhoseDeleteLandedAndFailedIsAnnouncedOnce(t *testing.T) {
 	next := reaper(t.Context(), t, rig, deleteLandsThenFails{rig.pending}, 2, nil)
 	rig.finished("t1")
 	next.fireRetries()
-	announcedOnce(t, rig, types.SandboxFailureAbandoned)
+	announcedOnce(t, rig, types.ExecutorFailureAbandoned)
 	if got := rig.failures(); len(got) != 1 {
 		t.Fatalf("announced %d losses, want one", len(got))
 	}
@@ -117,16 +117,16 @@ func TestAnEndingIsAnnouncedForItsOwnReasonByTheNodeThatFinishesIt(t *testing.T)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if got := rig.get("t1"); got.Ending == nil || got.Ending.Reason != types.SandboxFailureCollect {
+	if got := rig.get("t1"); got.Ending == nil || got.Ending.Reason != types.ExecutorFailureCollect {
 		t.Fatalf("the run's ending = %+v, want it decided as %q and kept for its retry",
-			got.Ending, types.SandboxFailureCollect)
+			got.Ending, types.ExecutorFailureCollect)
 	}
 	rig.coordinator.Stop()
 	rig.failPublishes(nil)
 
 	reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	rig.finished("t1")
-	announcedOnce(t, rig, types.SandboxFailureCollect)
+	announcedOnce(t, rig, types.ExecutorFailureCollect)
 }
 
 // AN ENDING FINISHED BY TWO NODES IS ONE EVENT. The reaping holder announces the
@@ -149,7 +149,7 @@ func TestAnEndingFinishedByTwoNodesIsOneEvent(t *testing.T) {
 
 	reaper(t.Context(), t, rig, rig.pending, 3, nil)
 	rig.finished("t1")
-	if got := announcedOnce(t, rig, types.SandboxFailureAbandoned); len(got) != 2 {
+	if got := announcedOnce(t, rig, types.ExecutorFailureAbandoned); len(got) != 2 {
 		t.Fatalf("published %d copies, want the second holder's repeat of the first's", len(got))
 	}
 }
@@ -172,7 +172,7 @@ func TestAnAnnouncementTheBrokerRefusedIsMadeByTheRetry(t *testing.T) {
 		t.Fatal("nothing was scheduled to finish the ending its announcement held up")
 	}
 	rig.finished("t1")
-	announcedOnce(t, rig, types.SandboxFailureAbandoned)
+	announcedOnce(t, rig, types.ExecutorFailureAbandoned)
 }
 
 // THE ANNOUNCEMENT GOES OUT WHILE THE RECORD STILL EXISTS, which is what lets a
@@ -191,7 +191,7 @@ func TestAnEndingIsAnnouncedBeforeItsRecordIsDeleted(t *testing.T) {
 	rig.queue.mu.Unlock()
 	reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	rig.finished("t1")
-	announcedOnce(t, rig, types.SandboxFailureAbandoned)
+	announcedOnce(t, rig, types.ExecutorFailureAbandoned)
 	if len(recordAtAnnouncement) == 0 || !recordAtAnnouncement[0] {
 		t.Fatalf("the record was gone when the loss was announced (%v): a node stopped between "+
 			"the two leaves the loss announced by nobody", recordAtAnnouncement)
@@ -221,7 +221,7 @@ func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
 
 	next := reaper(t.Context(), t, rig, rig.pending, 10, nil)
 	rig.finished("t1")
-	announcedOnce(t, rig, types.SandboxFailureSeatRemoved)
+	announcedOnce(t, rig, types.ExecutorFailureSeatRemoved)
 	if _, awaits := next.coordinator.SeatRuns("swe"); awaits {
 		t.Fatal("the next holder counted a run whose ending is decided as a question waiting on a person")
 	}
@@ -250,7 +250,7 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 			t.Fatalf("OnCompleted: %v", err)
 		}
 		rig.finished("t1")
-		got := announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		got := announcedOnce(t, rig, types.ExecutorFailureResumeBroken)
 		if got[0].failed.Detail != resumeBrokenDetail {
 			t.Errorf("detail %q, want nothing said of a reply: none drove this resume", got[0].failed.Detail)
 		}
@@ -266,7 +266,7 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 			t.Fatalf("OnCompleted: %v", err)
 		}
 		rig.finished("t1")
-		announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		announcedOnce(t, rig, types.ExecutorFailureResumeBroken)
 	})
 	t.Run("a recorded answer's inline attempt", func(t *testing.T) {
 		rig := newCoordRig(t)
@@ -278,7 +278,7 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 			t.Fatalf("R1 = %q, want it recorded", d)
 		}
 		rig.finished("t1")
-		got := announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		got := announcedOnce(t, rig, types.ExecutorFailureResumeBroken)
 		if got[0].failed.Detail != resumeBrokenDetail+replyReturnedDetail {
 			t.Errorf("detail %q, want it saying the reply went back to the seat", got[0].failed.Detail)
 		}
@@ -295,7 +295,7 @@ func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
 		brokenBeforeTurn(rig)
 		rig.fireRetries()
 		rig.finished("t1")
-		announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		announcedOnce(t, rig, types.ExecutorFailureResumeBroken)
 	})
 	t.Run("but not one whose turn ran", func(t *testing.T) {
 		rig := newCoordRig(t)

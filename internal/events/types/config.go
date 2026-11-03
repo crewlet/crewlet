@@ -15,7 +15,7 @@ func init() {
 }
 
 // ConfigRevisionActivated is published when a new company_config revision is
-// activated (a config write, a per-entity edit, a revert, or a CLI import).
+// activated (a config write, a per-entity edit, a revert, or a harness import).
 //
 // Every node fetches the payload from the DB and applies it. Deliberately thin:
 // the event is a nudge, and the authoritative path is the epoch pointer, so

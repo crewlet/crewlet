@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -16,7 +17,7 @@ import (
 // Where a bridged run's tool calls are kept.
 //
 // An engine phase's calls sit on a surface in memory, and the turn writes them
-// when it ends. An executor's run cannot: its calls are made by its coding CLI,
+// when it ends. An executor's run cannot: its calls are made by its harness,
 // a process outside the engine, over the bridge, minutes or hours apart, and
 // the run can outlive the node that started it. So each one is appended to the
 // run's own log in the coordination store, kept beside its row
@@ -56,6 +57,8 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Duration:  time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:    call.Origin,
 			Server:    call.Server,
+			Source:    call.Source,
+			Refusal:   mcp.Refusal(call.Refusal),
 		})
 	}
 	return out
@@ -171,6 +174,9 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			DurationMS: call.Duration.Milliseconds(),
 			Origin:     call.Origin,
 			Server:     call.Server,
+			Source:     call.Source,
+			Refusal:    string(call.Refusal()),
+			Held:       call.Held,
 		},
 		Spent: l.spent(),
 	})
@@ -184,16 +190,18 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			"launch_id", launch, "tool", call.Name)
 		return nil
 	}
-	// THE RUN'S WORK IS IN, or its question is asked, and its CLI is about
+	// THE RUN'S WORK IS IN, or its question is asked, and its harness is about
 	// to end its turn and exit: the waiter that drives it polls it now
 	// rather than at its next pass ([sandbox.Waiter.Nudge]). After the call
 	// is in the log, so the poll that finds the run done collects a log
 	// that holds its submission, and a row that holds its question (the
-	// ask was recorded before its call returned). A call the gate refused
-	// is no end (the run goes on) and tells nobody. Told even where the
-	// call's spend could not be written to the row after it: the call is
-	// in, and the next call that lands carries the spend.
-	if l.nudge != nil && sandbox.EndsRun(call.Name) && !call.Failed {
+	// ask was recorded before its call returned), as does a call held for a
+	// person's approval, recorded as the job's question before its call
+	// returned. A call the gate refused is no end (the run goes on) and
+	// tells nobody. Told even where the call's spend could not be written to
+	// the row after it: the call is in, and the next call that lands carries
+	// the spend.
+	if l.nudge != nil && ((sandbox.EndsRun(call.Name) && !call.Failed) || call.Held) {
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
 	return err

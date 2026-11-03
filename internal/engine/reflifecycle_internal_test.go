@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -107,7 +107,7 @@ func (lc *refLifecycle) deps(skew time.Duration) builtin.CodeDeps {
 // launch launches turn's run as the engine's executor launch opens its job —
 // the turn's holds sealed for the row and handed to it, the row's writer
 // attached once it exists ([launchHolds]) — granting it no repository
-// (ADR-0086), then checks each of repos out on that job through the node's
+// (ADR-0093), then checks each of repos out on that job through the node's
 // code seam, as the run's bridged `code_checkout` does ([runCheckouts]), and
 // answers its row.
 func (lc *refLifecycle) launch(t *testing.T, turn *turnctx.Turn, repos ...builtin.RepoRequest) sandbox.PendingRun {
@@ -116,7 +116,7 @@ func (lc *refLifecycle) launch(t *testing.T, turn *turnctx.Turn, repos ...builti
 	hold := launchHolds(turn.Holding(), lc.rig.pending, turn.RunID)
 	opened, err := lc.rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID,
 		AgentHandle: turn.Seat.Handle(), AgentID: "a-1", Role: turn.Seat.Name,
-		CodingAgent: codingagent.ClaudeCodeName, Placement: string(lc.rig.placement), Reply: "tool",
+		Harness: executor.ClaudeCodeName, Placement: string(lc.rig.placement), Reply: "tool",
 		CodeHolds: hold.ids, CreatedAt: time.Now().UTC()}, sandbox.Fence{})
 	if err != nil {
 		hold.settle(err)

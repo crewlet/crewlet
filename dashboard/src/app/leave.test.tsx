@@ -124,7 +124,7 @@ test("a replace stays on the entry, so no guard is asked", () => {
 test("Back and Forward are undone while held, and leave makes each", () => {
   const view = mount(null);
   act(() => nav!.to(["company", "org", "roster"]));
-  act(() => nav!.to(["live", "runs"]));
+  act(() => nav!.to(["live", "executors"]));
   const probe = holdAll();
   view.rerender(probe.guard);
 
@@ -132,17 +132,17 @@ test("Back and Forward are undone while held, and leave makes each", () => {
   traverse();
   expect(probe.asked).toEqual(["#/company/org/roster"]);
   // Undone: the page never showed the entry it was asked about.
-  settleOn("#/live/runs");
+  settleOn("#/live/executors");
 
   act(() => probe.leave());
   settleOn("#/company/org/roster");
 
   act(() => history.forward());
   traverse();
-  expect(probe.asked).toEqual(["#/company/org/roster", "#/live/runs"]);
+  expect(probe.asked).toEqual(["#/company/org/roster", "#/live/executors"]);
   settleOn("#/company/org/roster");
   act(() => probe.leave());
-  settleOn("#/live/runs");
+  settleOn("#/live/executors");
 });
 
 // A link is an entry the browser makes itself, with no place stamped on it:

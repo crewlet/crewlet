@@ -2,7 +2,6 @@ package httpx
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -65,14 +64,6 @@ var notGlobal6 = []netip.Prefix{
 	netip.MustParsePrefix("3fff::/20"),     // documentation (RFC 9637)
 }
 
-// ErrNotPublic is an address the rule refuses: one that is not on the public
-// internet. [ResolvePublic] answers it for a host that is, or resolves to,
-// such an address; a dialer that judges each address at its socket with
-// [Rule.Public] wraps it naming the address it refused. An address the rule
-// could not judge, because the network's resolver failed the lookup it
-// needed, is refused with that failure instead, never with this.
-var ErrNotPublic = errors.New("httpx: not an address on the public internet")
-
 // Resolver is what the rule asks of a resolver: the addresses a name has, of
 // the family network names ("ip" for every address, "ip6" for AAAA records
 // alone). *net.Resolver has it; a test answers it from a table and reaches no
@@ -84,8 +75,9 @@ type Resolver interface {
 // Rule is the public-address rule as it holds on one network: which addresses
 // are on the public internet there, given the NAT64 prefixes the network
 // translates IPv6 to IPv4 through, which its resolver names. [NewRule] is the
-// only way to a Rule that calls any address public, so no address whose
-// verdict the network's prefixes can change is judged without them: an
+// only way to a Rule that calls any address public, so no dial judges an
+// address whose verdict the network's prefixes can change without them
+// ([Public], which names no network, is for a caller with no dial): an
 // address in a network-specific prefix inside 2000::/3 that carries a private
 // IPv4 address would otherwise be called public. The zero Rule, and a nil
 // one, name no network, and refuse every address.
@@ -151,9 +143,9 @@ func NewRule(r Resolver) *Rule {
 // about to connect to, before the connection is made. Asked there, the dial
 // stays net.Dialer's own: it resolves the name, races its address families
 // and splits its bound across a family's addresses, all of which a dialer
-// handing it one judged address at a time forgoes. The CDN fetch's dialer
-// (internal/artifactupload/vendor.Guarded) is the worked example: it makes
-// the rule once a dial, on the resolver its net.Dialer resolves with.
+// handing it one judged address at a time forgoes. [Guarded]'s dialer is the
+// worked example: it makes the rule once a dial, on the resolver its
+// net.Dialer resolves with.
 func (r *Rule) Public(ctx context.Context, ip netip.Addr) (bool, error) {
 	if r == nil || r.resolver == nil {
 		return false, nil

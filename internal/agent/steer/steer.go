@@ -16,21 +16,21 @@
 // seat fence: a note that arrives while a run is going ends that run as soon as
 // the calls of the response it arrived during have their answers
 // ([Box.Waiting] is how the tool loop asks), and the next run opens with it.
-// The work itself is a coding CLI's own run in a box, and the engine has no
+// The work itself is a harness's own run in a box, and the engine has no
 // round there to open: a note reaches it in the BRIEF the run starts with, and
-// inside the run at a boundary of the CLI's own loop, through the run's tool
-// bridge — where the CLI places what a hook hands it (Claude Code, after a
+// inside the run at a boundary of the harness's own loop, through the run's tool
+// bridge — where the harness places what a hook hands it (Claude Code, after a
 // batch of tool calls or as it is about to finish), or as a message of its own
 // at the next step (OpenCode). The two vendors place it differently, and the
 // engine sends it either way at a point where every call has its answer, so a
 // note never sits between a call and its result — which a provider rejects
 // outright, and which would make a model read the note as the tool's output.
 // The ENGINE never folds a note into a tool's result either, which any tool's
-// output could imitate; where a CLI then places a hook's context is the CLI's
+// output could imitate; where a harness then places a hook's context is the harness's
 // own — Claude Code, on some models, appends it to the end of the batch's last
 // tool result as a reminder of its own — so the run's standing instruction
-// tells the model a note by the heading the CLI puts on it and by the note's
-// own, and never by where it sits (internal/sandbox/codingagent, steer.go).
+// tells the model a note by the heading the harness puts on it and by the note's
+// own, and never by where it sits (internal/sandbox/executor, steer.go).
 // After the fence, because a turn this node no longer holds, or one a person
 // stopped, must not be told anything more. And the ENGINE never edits a system
 // prompt mid-turn: the system prompt is the frozen prefix a provider caches on,
@@ -38,7 +38,7 @@
 //
 // # Two homes, one after the other
 //
-// Before a turn launches its coding run, its notes wait in the [Box] the turn's
+// Before a turn launches its executor, its notes wait in the [Box] the turn's
 // first segment holds, on the node running it, reached by the signed scatter
 // on the steer wire (wire.go). From the run's launch to the turn's end they wait
 // on the run's own record in the coordination store, sealed, where any node may
@@ -88,7 +88,7 @@ import (
 // conversation, and a conversation belongs in chat or on the work item, where
 // it is threaded, kept and answered. The bound is also what keeps one step's
 // reading from being a wall of notes the model weighs against its own task.
-// "Unread" on a run's record means not yet recorded read, so a note a CLI has
+// "Unread" on a run's record means not yet recorded read, so a note a harness has
 // been handed and has not yet confirmed putting in front of its model still
 // counts.
 const MaxPendingNotes = 5
@@ -151,13 +151,13 @@ func (s Status) Valid() bool { return slices.Contains(Statuses, s) }
 type Reads string
 
 const (
-	// ReadsNextStep — the turn is working: its coding run, or the engine's
+	// ReadsNextStep — the turn is working: its executor, or the engine's
 	// own loop, reads the note at its next step.
 	ReadsNextStep Reads = "next_step"
 
-	// ReadsAfterAnswer — the turn's coding run is parked on a question it
+	// ReadsAfterAnswer — the turn's executor is parked on a question it
 	// asked a person: the note waits, and whatever resumes the turn reads it
-	// — the run carried on with the answer, or the reviewer after it.
+	// — the executor carried on with the answer, or the reviewer after it.
 	ReadsAfterAnswer Reads = "after_answer"
 )
 
@@ -220,7 +220,7 @@ func (e *TooLongError) Error() string {
 
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
-// a coding run's read, the job that read it; At is when.
+// an executor's read, the launch that read it; At is when.
 type Reading struct {
 	Phase     types.Phase
 	Iteration int
@@ -269,7 +269,7 @@ func Record(turn Turn, note Note, read *Reading) types.AgentTurnSteered {
 }
 
 // Box holds the notes offered to ONE turn segment and not yet read by it: the
-// turn's first, until it launches its coding run and hands what it still holds
+// turn's first, until it launches its executor and hands what it still holds
 // to the run's record ([Box.HandOver]).
 //
 // Safe for concurrent use: an offer arrives on a broker goroutine while the
@@ -354,7 +354,7 @@ func (b *Box) Drain() []Note {
 // read is the caller's to record, and a box has nothing to write it on.
 func (b *Box) Take(_ context.Context, _ Reading) []Note { return b.Drain() }
 
-// Brief is [Box.Drain] as a coding run's brief reads it: the notes the launch
+// Brief is [Box.Drain] as an executor's brief reads it: the notes the launch
 // takes, which are the box's no longer — see [Box.Return] for a launch that
 // fails.
 func (b *Box) Brief(context.Context) []Note { return b.Drain() }
@@ -377,7 +377,7 @@ func (b *Box) Return(_ context.Context, notes []Note) {
 }
 
 // HandOver ends the box's intake and answers every note it holds unread, for the
-// caller to file where the turn's notes wait from here — its coding run's
+// caller to file where the turn's notes wait from here — its executor's
 // record, in the write the launch makes to create it. A new note is answered
 // closed from here, which tells its caller to look where the turn's notes went.
 //
@@ -420,7 +420,7 @@ func (b *Box) Reopen(notes []Note) []Note {
 
 // Waiting reports a note waiting to be read, without taking it — what ends a
 // run of the engine's loop once its calls in flight are answered, so the next
-// run reads the note as a user message rather than the CLI reading it inside a
+// run reads the note as a user message rather than the harness reading it inside a
 // tool's result.
 func (b *Box) Waiting() bool {
 	if b == nil {

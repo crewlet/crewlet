@@ -289,6 +289,26 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 	return nil
 }
 
+// AgentHandleByID names the agent seat whose derived id is id by its handle,
+// for a reader naming a seat a peer reported by its id (a heartbeat row names
+// the seat an instance was launched for that way, ADR-0013).
+//
+// THE ID ITSELF WHERE THIS ORG HOLDS NO SUCH SEAT, which is a seat retired since
+// the peer reported it, or a peer on another revision: the honest name for it,
+// as a lease's is in `fleet`, rather than none. "" for uuid.Nil, which names no
+// seat (a shared server's instance). A nil org names every seat by its id.
+func (o *Organization) AgentHandleByID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	if o != nil {
+		if role := o.AgentSeatByID(id); role != nil {
+			return role.Handle()
+		}
+	}
+	return id.String()
+}
+
 // ---- normalisation --------------------------------------------------- //
 
 // Normalize applies the derivations the org chart implies but nobody writes
@@ -309,6 +329,8 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 //  4. A unit lead AUTO-MANAGES any direct member that no direct member of
 //     the same unit already manages.
 //  5. A manages entry naming a UNIT KEY expands to the handles in it.
+//  6. Each seat records the keys of the units it sits in ([Role.UnitKeys]),
+//     after step 1 has settled where that is.
 //
 // Steps 4 and 5 both read manages through ONE resolver ([managesIndex]),
 // built once after step 1 has settled who sits where. Auto-management runs
@@ -332,8 +354,36 @@ func (o *Organization) Normalize() {
 	index := o.managesIndex()
 	o.autoManageByLead(index)
 	o.expandManages(index)
+	o.placeSeats()
 	for r := range o.AllRoles() {
 		r.Contact.Normalize()
+	}
+}
+
+// placeSeats records, on every seat, the keys of the units it sits in: its own
+// unit's first, then each enclosing unit's ([Role.UnitKeys]).
+//
+// Recomputed whole on every pass, so a second pass lands on the same answer.
+// A unit with no key adds nothing, since nothing can name it.
+func (o *Organization) placeSeats() {
+	for _, r := range o.Roles {
+		r.UnitKeys = nil
+	}
+	var place func(u *Unit, outer []string)
+	place = func(u *Unit, outer []string) {
+		chain := outer
+		if key := u.Key(); key != "" {
+			chain = append([]string{key}, outer...)
+		}
+		for _, r := range u.Roles {
+			r.UnitKeys = slices.Clone(chain)
+		}
+		for _, c := range u.Children {
+			place(c, chain)
+		}
+	}
+	for _, u := range o.Units {
+		place(u, nil)
 	}
 }
 

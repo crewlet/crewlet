@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0091): a person's own push
+// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0098): a person's own push
 // onto a protected branch whose gate requires a check lands with no check
 // having measured it, so it lies above the branch's green row — and the
 // home's `checks_due` listing names the repository and, on its first page,
@@ -121,7 +121,7 @@ func tipsDue(t *testing.T, n *node, repo string) ([]string, []code.TipDue) {
 	return repos.DueRepos, work.DueTips
 }
 
-// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0091): a
+// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0098): a
 // target's tip work reads at most its window's bound of landings above its
 // green — two here, where the shipped bound is MaxTipLandings — and then its
 // newest, the tip a dispatch reaches. Three of ada's pushes onto main are one
@@ -185,7 +185,7 @@ func TestATipWindowKeepsItsNewestAndCallsAGapOnlyAGap(t *testing.T) {
 	}
 }
 
-// A GREEN MOVES IN ONE RECORD WHATEVER LIES BENEATH IT (ADR-0091): a landing
+// A GREEN MOVES IN ONE RECORD WHATEVER LIES BENEATH IT (ADR-0098): a landing
 // is green by its place — at or below its target's green row — never by a
 // mark of its own, so a green record moves the one row however many unproven
 // landings a red tip left above it. Four of ada's pushes land on main with
@@ -234,7 +234,7 @@ func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
 	}
 }
 
-// A TIP ROUND IN FLIGHT IS READ WHEREVER IT IS (ADR-0091): the home dispatches
+// A TIP ROUND IN FLIGHT IS READ WHEREVER IT IS (ADR-0098): the home dispatches
 // a target's newest landing only once no tip round on another of its commits
 // is still queued or running, so a target's tip work names that round's
 // commit — read by its own index, past the window as much as inside it. Three
@@ -281,7 +281,7 @@ func TestATipRoundInFlightIsReadWhereverItIs(t *testing.T) {
 	}
 }
 
-// A TARGET PAST THE PAGE IS ANSWERED ON THE NEXT PAGE (ADR-0091): main and
+// A TARGET PAST THE PAGE IS ANSWERED ON THE NEXT PAGE (ADR-0098): main and
 // release each owe their tip work, and a page holds one target's. The first
 // page answers main — the target that fills it is answered, never dropped —
 // and names it as where it ended; the next, asked after it, answers release;

@@ -86,7 +86,7 @@ const (
 	// ADMITTED AT THE ROUTE AND DECIDED PER REPOSITORY, as a work item's
 	// thread is. Who may read a repository, fetch from it or push to it is
 	// a GRANT the serving node derives from the chart for the repository a
-	// request names (code.GrantOf, ADR-0081): a person maintains every
+	// request names (code.GrantOf, ADR-0088): a person maintains every
 	// repository, and a seat holds the least of its code tier and its
 	// relation to the repository's owner — a question the route cannot ask
 	// before the repository is read, and that this table has no chart arm
@@ -152,7 +152,7 @@ const (
 	// engine write by the grant's ref rule and the protections on the git
 	// node that builds it and again at the repository's committer, a
 	// repository's lifecycle by the one lifecycle rule on the data node that
-	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0081). Five
+	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0088). Five
 	// change a branch — files committed, a commit reverted or picked, a
 	// branch created or deleted — and five a repository: made, changed
 	// (settings, archive, rename), deleted, restored, or a branch protected.
@@ -315,17 +315,17 @@ const (
 	//
 	// A PERSON'S DECISION ABOUT A SEAT, and never a seat's: pausing one,
 	// resuming one, sending a note to the turn it is running, answering
-	// the question a coding run it launched parked on. Each is decided on
+	// the question an executor it launched parked on. Each is decided on
 	// the SEAT the gesture is about, by the owner-or-lead class — the
 	// seat's holder, whoever leads it, or admin — and
 	// each is decided INSIDE its tool, because the seat is never simply
 	// what the arguments state: a typed handle resolves through the org
 	// (`@sre`), a turn names the seat only the node running it can say,
 	// and a run names the seat its row recorded.
-	ActionSeatPause  Action = "pause_seat"
-	ActionSeatResume Action = "resume_seat"
-	ActionTurnSteer  Action = "steer_turn"
-	ActionRunAnswer  Action = "answer_run"
+	ActionSeatPause      Action = "pause_seat"
+	ActionSeatResume     Action = "resume_seat"
+	ActionTurnSteer      Action = "steer_turn"
+	ActionExecutorAnswer Action = "answer_executor"
 
 	// ActionKnowledgeAnswer is a person's question answered from what the
 	// company has written down, by a model, at the company's expense. A
@@ -436,7 +436,44 @@ const (
 	// credential's write and a device sign-in are `secrets.write`.
 	ActionModelsCheck Action = "models.check"
 	ActionModelsRetry Action = "models.retry"
-	ActionAuditRead   Action = "audit.read"
+	// ActionToolsRetry restarts an MCP server now, on every node or on the
+	// node holding one seat (`POST /mcp-servers/{name}/retry`). Like a
+	// model's retry it changes RUNTIME state the company already reaches,
+	// never config or a credential: the server is restarted from the spec
+	// it runs.
+	ActionToolsRetry Action = "tools.retry"
+	// ActionToolsCheck tests an MCP server where it runs, never calling a
+	// tool (`POST /mcp-servers/{name}/check`), or checks an address before a
+	// server is added at it (`POST /mcp-probe`). Like a restart it changes no
+	// config and no credential: a test brings up a connection of its own
+	// and closes it. A test of a DRAFT (`POST /mcp-checks`) runs what a write
+	// would, so it is decided as the write it stands for, `config.write` and
+	// `secrets.write` on top, and an address check as the write that would
+	// make the engine dial the address, `config.write` on top
+	// (internal/api/mcpapi).
+	ActionToolsCheck Action = "tools.check"
+	// ActionToolsApprove answers a call an agent's run made to a tool at
+	// Needs approval, which waits parked on the answer
+	// (`POST /mcp-approvals/{id}`, ADR-0077): allow it once, allow it
+	// always, or deny it. An administrator's, or a lead of the seat whose
+	// run made the call; a person's alone, never an agent's and never the
+	// assistant's, since the level exists so that a person decides that
+	// call. Always allow also writes the tool's level, so it is
+	// `config.write` on top, at that verb's step-up (internal/api/mcpapi).
+	ActionToolsApprove Action = "tools.approve"
+	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
+	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
+	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
+	// READINGS: whoever [ActionConfigRead] admits reads the launch lines,
+	// each failure's sentence, the headers and variables a credential goes
+	// in, what removing a server takes with it and the community registry
+	// the company names, and everybody else each server's condition and
+	// tools and the curated catalogue, with none of that (internal/api/
+	// queries' mcpmember.go). The servers' list is a question,
+	// `mcp_servers_status`, whose everybody posture admits whom this row
+	// does.
+	ActionToolsRead Action = "tools.read"
+	ActionAuditRead Action = "audit.read"
 	// ActionFleetHealth is the tool `fleet_health`: every live node as its
 	// own heartbeat states it, with the alarms its own table has firing.
 	// ActionCodeStatus is the tool `code_status`: the git nodes' caches and
@@ -1166,7 +1203,7 @@ var rules = map[Action]rule{
 	// a page it read named, so never an agent's; and the deciding data node
 	// refuses a seat's create carrying an import or a mirror again, whatever
 	// its grant. EVERYBODY at the gate and no step-up: every person
-	// maintains every repository (ADR-0081) and may create a project for any
+	// maintains every repository (ADR-0088) and may create a project for any
 	// owner the chart holds, and an import, like a create, takes nothing
 	// away — a mistaken one is deleted as any repository is.
 	ActionCodeImportRepo: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
@@ -1184,7 +1221,7 @@ var rules = map[Action]rule{
 	// ([ActionInboxMark]): marking somebody's mail read is a gesture nobody
 	// asked a lead to make. HUMAN-ONLY, since a seat has no inbox to mark —
 	// it is woken, never shown a list — and NO APP: every person reads every
-	// repository (ADR-0081), so the code half of an inbox is every person's,
+	// repository (ADR-0088), so the code half of an inbox is every person's,
 	// where Worklet's half takes the worklet app.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 
@@ -1407,6 +1444,12 @@ var rules = map[Action]rule{
 	// WHO HOLDS EACH HUMAN SEAT is the org chart's people, named — see
 	// [ActionSeatsRead]. The route masks each holder per caller.
 	ActionSeatsRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// WHAT EACH MCP SERVER IS DOING AND WHICH TOOLS IT SERVES is everybody's,
+	// as each model's condition is: it is what tells a member why an agent
+	// lacks a tool. What a member is answered names no launch line, header,
+	// variable, account or call ([ActionToolsRead]); the configuration's
+	// reader is answered the rest, by [ActionConfigRead]'s own row.
+	ActionToolsRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- an agent's own ---------------------------------------------- //
 	//
@@ -1443,7 +1486,7 @@ var rules = map[Action]rule{
 	// caller is that requester (the self arm), and about the run's seat
 	// otherwise — so the person who asked for the work answers what it
 	// asks them, and nobody who merely leads them does.
-	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+	ActionExecutorAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
 	// A SEAT'S TRAIL IS ITS LEAD'S TO READ, and admin's: its diary, its
@@ -1570,6 +1613,27 @@ var rules = map[Action]rule{
 	// retry moves every node.
 	ActionModelsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionModelsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// AN MCP SERVER'S RESTART is admin's with no step-up, as a model's retry
+	// is and for its reason: it writes neither the company nor a credential,
+	// and the person reaching for it is watching a server fail now. The
+	// assistant proposes it and the person approves it, since it ends every
+	// instance's session on every node it names.
+	ActionToolsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// AN MCP SERVER'S TEST is admin's with no step-up, for the restart's
+	// reason: it writes neither the company nor a credential. The assistant
+	// proposes it and the person approves it, since it starts a process or
+	// dials an address on every node it names.
+	ActionToolsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// A HELD TOOL CALL'S ANSWER is the seat's lead's or an administrator's,
+	// as answering the run's own question is, and a person's alone: the
+	// level holds the call for a person, so an agent seat answering it
+	// would be an agent approving an agent. No step-up for once or deny,
+	// which write neither the company nor a credential and are often given
+	// from a phone while the run waits; Always allow asks `config.write`'s
+	// in the handler. Its nature is a write a person approves, and the
+	// human-only list keeps the assistant from it.
+	ActionToolsApprove: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
@@ -1971,7 +2035,9 @@ const (
 	tellSeat      = "Only an agent does this, as part of its own work."
 	tellKnowledge = "Asking the knowledge base's own model would spend outside this " +
 		"conversation's budget, so Ask Crewlet searches the pages itself instead."
-	tellReady = "Only an open artifact reports that it has finished drawing."
+	tellReady    = "Only an open artifact reports that it has finished drawing."
+	tellApproval = "A call an agent waits on is approved by a person, so this stays with " +
+		"you: answer it from the Inbox or Settings › MCP & tools."
 	tellCheck = "A check result is reported by the CI that ran the check, with its own token: " +
 		"Ask Crewlet runs no CI."
 )
@@ -1983,7 +2049,7 @@ const (
 // approved, because a grant is the person's own session narrowed and never
 // widened (ADR-0050, ADR-0051).
 //
-// FOUR KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
+// FIVE KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
 // that names which:
 //
 //   - a sign-in or session ceremony: how somebody proves who they are, or
@@ -2000,6 +2066,9 @@ const (
 //     a check result only the CI that ran the check reports (its row records
 //     the person whose CI sent it, and a grant is never that CI, whoever
 //     approved it);
+//   - a person's approval of an agent's call: a tool at Needs approval holds
+//     each call so that a person decides it, and an assistant answering it
+//     would be a model approving a model;
 //
 // plus the one seat-only verb, asking a colleague (`a2a_ask`): no person takes
 // it either, so parity alone keeps it from the person's assistant.
@@ -2033,6 +2102,8 @@ var assistantNever = map[Action]neverEntry{
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
 	ActionCodeReportCheck: {"a check's result is reported by the CI that ran it, and an assistant runs " +
 		"no CI, so its report would be a result nobody ran", tellCheck},
+	ActionToolsApprove: {"a tool at Needs approval holds each call for a person's decision, " +
+		"and the assistant deciding it would be a model approving a model's call", tellApproval},
 }
 
 // SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and

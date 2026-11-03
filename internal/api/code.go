@@ -36,14 +36,14 @@ import (
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
 // ([auth.Public] names neither): a repository is the company's
 // source, and a person reaches it with their own bound token — the third person
-// transport beside the act route and the operator's MCP (ADR-0078). On a git
+// transport beside the act route and the operator's MCP (ADR-0085). On a git
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
 // /box/git/ is: a box's routes, the code host's third prefix, are published
 // beside a coding box's other two edges and admitted by the box's own token,
 // never by an operator token. The same three handlers serve them behind the
-// code host's box admission, which reads a coding run's token — or a check's —
+// code host's box admission, which reads an executor's token — or a check's —
 // from git's Basic password and the run's row, or the check's attempt's, on
 // every request ([auth.BoxGitPrefix]); mounted on the route table itself, like
 // /mcp/ and /otlp/, never through the [authz.Router] the person's routes take,
@@ -146,7 +146,7 @@ type CodeSurface interface {
 	GitReads() (GitReader, error)
 
 	// VerifyBox is whether token is the credential user presents on a box
-	// route, signed by this fleet — a coding run's token under host.BoxUser,
+	// route, signed by this fleet — an executor's token under host.BoxUser,
 	// a check's under code.CheckUser (host.VerifyBox) — by the engine's own
 	// tokens over the keyring Tier A derives on EVERY node whatever the
 	// company runs: so it answers where GitRoutes finds no code host, which
@@ -344,7 +344,7 @@ func servesGit(b *config.Bootstrap) bool {
 //     ([authz.ActionCodeGit]), as the code questions do ([authz.ActionCodeRead]):
 //     what each may fetch or push is the per-repository grant the serving node
 //     derives from the chart once the repository is read (code.GrantOf,
-//     ADR-0081), which no route can ask before it.
+//     ADR-0088), which no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
 //     that reads every byte of it and holds a maintenance slot, and with a
@@ -458,7 +458,7 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 
 // boxGitRoute is [App.gitRoute] for a box's route, which tells WHY this node
 // serves no code host now only to a request presenting a token this fleet
-// signed — a coding run's, or a check's ([CodeSurface.VerifyBox]) — and
+// signed — an executor's, or a check's ([CodeSurface.VerifyBox]) — and
 // answers any other the code host's own challenge — the box admission's
 // credential step, [host.ChallengeBox].
 //

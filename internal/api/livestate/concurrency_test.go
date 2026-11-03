@@ -36,12 +36,12 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 					streamOnly, id(fmt.Sprint("p", w, i))))
 				s.Apply(env("agent_turn_completed",
 					with(base, map[string]any{"total_tokens": 1}), id(fmt.Sprint("t", w, i))))
-				s.Apply(env("sandbox_run_started",
+				s.Apply(env("executor_launched",
 					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "agent_id": seat}))
-				s.Apply(env("sandbox_run_failed",
+				s.Apply(env("executor_failed",
 					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "agent_id": seat}))
-				s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
-					TurnID: fmt.Sprint("rec", w, i), AgentID: seat, Status: livestate.SandboxRunning,
+				s.ReconcileExecutors([]livestate.ExecutorRecord{{Entry: livestate.ExecutorEntry{
+					TurnID: fmt.Sprint("rec", w, i), AgentID: seat, Status: livestate.ExecutorRunning,
 				}}}, time.Now())
 				s.Seed(livestate.History{Turns: []store.Turn{{
 					TurnID: fmt.Sprint("seed", w, i), AgentID: seat, Complete: true,
@@ -57,7 +57,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 		wg.Go(func() {
 			for range 100 {
 				s.RecentEvents(50)
-				s.ActiveSandboxes()
+				s.ActiveExecutors()
 				s.SpendRecords()
 				s.Budget()
 				s.AgentOverlay("Seat-0")

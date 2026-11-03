@@ -50,7 +50,7 @@ type Reconciler struct {
 
 	// progress is this node's convergence state, published as ONE value.
 	//
-	// Written only by the tick — Run's loop, or the one-shot CLI path,
+	// Written only by the tick — Run's loop, or the one-shot harness path,
 	// never both at once, which [Engine.following] enforces — and read by
 	// every surface that reports on this node: the seat heartbeat through
 	// SetPosture, the readiness probe, and each runtime-state HTTP
@@ -126,7 +126,7 @@ type Reconciler struct {
 	// recorded is the last apply outcome this node wrote to the fleet view,
 	// which every tick after it writes again — see [Reconciler.refresh].
 	// Written and read by the tick alone; atomic because the tick is not
-	// pinned to one goroutine (Run's loop, or the one-shot CLI path).
+	// pinned to one goroutine (Run's loop, or the one-shot harness path).
 	recorded atomic.Pointer[coord.NodeApply]
 
 	// decided is the last posture this reconciler computed, for the one
@@ -1095,7 +1095,7 @@ func violations(warnings []config.Warning) []violation {
 //
 // It writes nothing. The body is whatever the coordination bucket holds, and
 // anything the broker admits can write it — its admission vouches for a
-// connection, never a value (ADR-0087); the seal under the fleet's keyring is
+// connection, never a value (ADR-0094); the seal under the fleet's keyring is
 // what says a node of this fleet wrote it, so the caller opens it before any of
 // it is kept ([Reconciler.keep]) — a body that does not open is refused before
 // it becomes a revision this node's operator surface would show and offer to

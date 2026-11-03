@@ -46,7 +46,7 @@ type CheckLine struct {
 	Kind   string `json:"kind,omitempty"`
 	Remedy string `json:"remedy,omitempty"`
 	// Meaning is, on an auth failure, whether the vendor refused the
-	// credential ("refused") or the CLI never used it ("unread").
+	// credential ("refused") or the harness never used it ("unread").
 	Meaning string `json:"meaning,omitempty"`
 }
 
@@ -110,7 +110,7 @@ func limitedOf(sit *coord.ModelSitOut) *Limited {
 //     overwrites a credential another model reads.
 //  4. `config.write` when a re-activation will follow, before anything is
 //     tested or sealed.
-//  5. The test: the CLI itself, with only these values.
+//  5. The test: the harness itself, with only these values.
 //  6. With `dry_run=true`, the answer and nothing else.
 //  7. The seal, then the one re-activation, held to `If-Match`. A create
 //     seals each value only where none is stored, in one step of the
@@ -153,7 +153,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		}
 		next, err := s.config.CheckEntity(ctx, configapi.EntityLLMProviders, key, req.Entity,
 			active == nil, by)
-		if !refuseDraft(w, err) {
+		if !configapi.RefuseDraft(w, err) {
 			return
 		}
 		company = next
@@ -199,7 +199,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	}
 
 	// THE TEST, of the draft when the body carries one: a value is only
-	// worth storing if the CLI the entry runs signs in with it.
+	// worth storing if the harness the entry runs signs in with it.
 	var testDraft *config.LLMProvider
 	if req.Entity != nil {
 		testDraft = draft
@@ -325,10 +325,10 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 // passed answers a test that did not pass, and reports whether it did,
 // naming the credential in words.
 //
-// A REFUSED SIGN-IN IS SAID BY WHAT IT MEANT, not in the CLI's words: Claude
+// A REFUSED SIGN-IN IS SAID BY WHAT IT MEANT, not in the harness's words: Claude
 // Code says "Not logged in · Please run /login" of a token it never used, and
 // that, quoted at a field the person just pasted into, sent them to a login
-// that would change nothing. The CLI's words stay on the check's lines.
+// that would change nothing. The harness's words stay on the check's lines.
 func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Check,
 	words credentialWords) bool {
 
@@ -352,9 +352,9 @@ func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Ch
 			httpjson.Detail{"detail": "The vendor did not answer the test; nothing was stored. Try again.",
 				"check": answerOf(c)})
 	default:
-		// THE CLI ITSELF, not the credential: no binary, a profile it
-		// cannot run. Placed at the entry's CLI, with the doctor's remedy.
-		path := config.Path{"providers", "llm", key, "agent"}
+		// THE HARNESS ITSELF, not the credential: no binary, a profile it
+		// cannot run. Placed at the entry's harness, with the doctor's remedy.
+		path := config.Path{"providers", "llm", key, "harness"}
 		message, remedy := c.Said, ""
 		for _, line := range c.Lines {
 			if !line.OK {
@@ -398,34 +398,6 @@ func checkValues(w http.ResponseWriter, values map[string]string, names []string
 	return true
 }
 
-// refuseDraft answers a draft entry the document refused, and reports whether
-// it was admitted.
-func refuseDraft(w http.ResponseWriter, err error) bool {
-	var managed *configapi.ManagedError
-	var invalid *configapi.ValidationError
-	var entity *configapi.EntityError
-	switch {
-	case err == nil:
-		return true
-	case errors.As(err, &managed):
-		configapi.RefuseManaged(w, managed)
-	case errors.As(err, &invalid):
-		fields := configapi.RefusalFields(err)
-		fields["detail"] = invalid.Err.Error()
-		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
-	case errors.As(err, &entity):
-		fields := configapi.RefusalFields(&configapi.DocumentError{Err: entity.Err})
-		fields["detail"] = entity.Err.Error()
-		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
-	case errors.Is(err, configapi.ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNoActiveRevision)
-	default:
-		log.Error("llm_draft_check_failed", "error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-	}
-	return false
-}
-
 // nameProblems is every value the draft entry does not read, and every value
 // whose kind is not its slot's, each located at the value.
 func nameProblems(company *config.Company, key string, entry *config.LLMProvider,
@@ -447,7 +419,7 @@ func nameProblems(company *config.Company, key string, entry *config.LLMProvider
 				Message: fmt.Sprintf("%s is not read by this model: it signs in with %s", name, reading)})
 			continue
 		}
-		// BEFORE ANY CLI RUNS: a value with a space or a line break inside
+		// BEFORE ANY HARNESS RUNS: a value with a space or a line break inside
 		// is never one the vendor issued, and Claude Code ignores such a
 		// token outright, so testing it only produces a misleading refusal.
 		if problem := strayProblem(wordsFor(entry, key, []string{name}).noun, values[name]); problem != "" {
@@ -465,7 +437,7 @@ func nameProblems(company *config.Company, key string, entry *config.LLMProvider
 		case name == tokenVar && isKey:
 			out = append(out, config.Problem{Path: path.String(), Segments: path, Kind: "invalid",
 				Message: "That is an API key. This model signs in with a subscription token " +
-					"from its CLI's setup-token; to use a key, add a model that signs in with " +
+					"from its harness's setup-token; to use a key, add a model that signs in with " +
 					"an API key instead."})
 		case name == keyVar && isToken:
 			out = append(out, config.Problem{Path: path.String(), Segments: path, Kind: "invalid",
@@ -591,9 +563,9 @@ func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, 
 	return out, nil
 }
 
-// agentName is an entry's CLI in a sentence.
+// agentName is an entry's harness in a sentence.
 func agentName(entry *config.LLMProvider) string {
-	switch entry.Agent {
+	switch entry.Harness {
 	case "", "claude-code":
 		return "Claude Code"
 	case "codex":
@@ -601,7 +573,7 @@ func agentName(entry *config.LLMProvider) string {
 	case "opencode":
 		return "OpenCode"
 	}
-	return string(entry.Agent)
+	return string(entry.Harness)
 }
 
 func plural(n int, one, many string) string {

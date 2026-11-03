@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -620,7 +621,7 @@ type Options struct {
 	// beside its probes, to its own host's boxes alone ([Probes]).
 	OtelReceiver *sandbox.OtelReceiver
 
-	// Bridge serves a running seat's tool surface to a coding agent over
+	// Bridge serves a running seat's tool surface to a harness over
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
@@ -680,7 +681,7 @@ type Options struct {
 	// code domain's reads under /code/ on every node, asked of the engine on
 	// every request, with the box tokens a box route on a node serving no
 	// code host verifies by before it says why: see [CodeSurface]. /git/
-	// and /code/ are never on api.public (ADR-0078); /box/git/ is, admitted
+	// and /code/ are never on api.public (ADR-0085); /box/git/ is, admitted
 	// by the run. REQUIRED, for [Options]' reason.
 	Code CodeSurface
 
@@ -722,10 +723,10 @@ type Options struct {
 	// would then never be ready.
 	Estate EstateFloor
 
-	// Audit is where a backup publishes its runtime audit record — this
-	// node's own queue, whose publish listener writes the event store. The
-	// operator surface is handed the same one by whoever builds it
-	// ([operator.Options.Audit]). REQUIRED: copying every credential the
+	// Audit is where a backup, and an MCP server's restart, publish their
+	// runtime audit record: this node's own queue, whose publish listener
+	// writes the event store. The operator surface is handed the same one by
+	// whoever builds it ([operator.Options.Audit]). REQUIRED: copying every credential the
 	// company holds to a directory somebody named is the one call an audit
 	// is most often opened to find.
 	Audit operator.AuditPublisher
@@ -805,7 +806,7 @@ func New(opts Options) (*App, error) {
 		// live projection over the placement below.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
-		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
+		Tools:  func() any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
@@ -903,6 +904,54 @@ func New(opts Options) (*App, error) {
 	// [Options.State].)
 	if sources.Now == nil {
 		sources.Now = now
+	}
+	// Which built-ins a seat is offered: the registry the engine applied,
+	// and the pair its runner adds, which only the engine holds.
+	sources.Builtins = opts.Runtime.Builtins
+	// And what every node's MCP servers list, which only the engine
+	// watches.
+	sources.MCPListings = opts.Runtime.Listings()
+	// And how each server's instances are, which only the engine can ask
+	// the nodes holding them.
+	sources.MCPInstances = opts.Runtime.MCPInstances()
+	// And the node's latest alarm evaluation, which the Models and the MCP
+	// servers answers carry their kinds from.
+	sources.Alarms = opts.Runtime.LatestAlarms
+	// And each server's latest test, which every node reads from the
+	// coordination store.
+	sources.MCPChecks = opts.Runtime.MCPChecks()
+	// And each server's OAuth grant, which every node reads from the
+	// coordination store, with the addresses a vendor is given.
+	sources.MCPGrants = opts.Runtime.MCPGrants()
+	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
+	// company this node applied, the community registry it names and, for
+	// one server's detail, the sources as they stand here, every field the
+	// detail reads set above: built here rather than handed in, because the
+	// app already holds the one company reader every answer takes it from.
+	// A DRAFT IS HELD TO THE CONFIGURATION'S OWN DRY RUN, where this app
+	// serves one: a nil service leaves the draft test answered unavailable,
+	// never a nil pointer behind an interface.
+	var drafts mcpapi.DraftChecker
+	var documents mcpapi.ValueDocuments
+	var toolDocuments mcpapi.ToolDocuments
+	if sources.Config != nil {
+		drafts, documents, toolDocuments = sources.Config, sources.Config, sources.Config
+	}
+	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
+		if sources.Company == nil {
+			return nil
+		}
+		company, _ := sources.Company()
+		return company
+	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
+		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(),
+		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
+		// OVER THE CHART, which an approval asks: whether the caller leads
+		// the seat whose run made the held call.
+		Guard: authz.ContextGuard(sources.Chart)})
+	if err != nil {
+		return nil, err
 	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
@@ -1015,7 +1064,7 @@ func New(opts Options) (*App, error) {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	if err := a.mountWebhooks(mux, opts.Inbound, now); err != nil {
+	if err := a.mountWebhooks(mux, opts.Inbound, opts.Runtime.MCPLanding(), now); err != nil {
 		return nil, err
 	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
@@ -1054,6 +1103,10 @@ func New(opts Options) (*App, error) {
 		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
 		// own verb (internal/api/llmapi).
 		{"models", opts.Models, logging.Get("api.llm")},
+		// SETTINGS › MCP & TOOLS' OWN ROUTES: its reads, and gestures
+		// that record every call of theirs, refused ones included, as an
+		// `mcp_server_acted`, so no refused write logs a line here.
+		{"mcp", mcpSurface, nil},
 	} {
 		var mounted authz.Mux = mux
 		if surface.log != nil {
@@ -1439,7 +1492,9 @@ type Inbound struct {
 }
 
 // mountWebhooks registers the inbound edge.
-func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Time) error {
+func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, signIns webhooks.MCPSignIns,
+	now func() time.Time) error {
+
 	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
@@ -1451,6 +1506,7 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Tim
 		Now:        now,
 
 		SlackInstalls: in.SlackInstalls,
+		MCPSignIns:    signIns,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)
@@ -1956,4 +2012,20 @@ func servedOverHTTPS(b *config.Bootstrap, public bool) bool {
 	default:
 		return strings.HasPrefix(b.API.ExternalBase(), "https://")
 	}
+}
+
+// mcpReviews is the review route's reads and writes: a server's changes as
+// the sources read them, and the fleet's accepted definitions.
+type mcpReviews struct {
+	queries.Sources
+	AcceptedStore
+}
+
+// reviewDesk is the review route's [mcpapi.Reviews] over sources and store,
+// untyped nil without a store, which answers a review unavailable.
+func reviewDesk(sources queries.Sources, store AcceptedStore) mcpapi.Reviews {
+	if store == nil {
+		return nil
+	}
+	return mcpReviews{Sources: sources, AcceptedStore: store}
 }

@@ -5,7 +5,7 @@
  * it; an edit's choice keeps the seats the model serves, never every seat;
  * no choice row carries a "Replaces" line, Review lists the changes; seats
  * are named, never keyed; a document that split a category reads back half-checked;
- * a CLI that cannot code refuses the coding box of a seat without it; the
+ * a harness that cannot code refuses the coding box of a seat without it; the
  * fast-model note is quiet and only where a category carries one; and the
  * web tools rule is said wherever a choice meets it, with its one-click fix.
  */
@@ -182,10 +182,10 @@ test("a category the document split by hand reads back half-checked", () => {
   expect(box.checked).toBe(false);
 });
 
-test("a CLI that cannot code refuses a seat's coding box, says why once, and lets a ticked one off", () => {
+test("a harness that cannot code refuses a seat's coding box, says why once, and lets a ticked one off", () => {
   const uses = noUses();
   for (const job of CATEGORY_JOBS.coding) uses.jobs[job] = ["qa"];
-  render(<Harness company={split} start={{ agent: "codex", intent: "custom", uses }} />);
+  render(<Harness company={split} start={{ harness: "codex", intent: "custom", uses }} />);
   const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
   const coding = CATEGORY_WORDS.coding.label;
   expect(box(`Product Manager ${coding}`).disabled).toBe(true);
@@ -193,7 +193,7 @@ test("a CLI that cannot code refuses a seat's coding box, says why once, and let
   expect(box(`Product Manager ${CATEGORY_WORDS.reviews.label}`).disabled).toBe(false);
   // The grid says why under itself, and the section says it once, whatever the number of seats.
   const section = screen.getByRole("region", { name: "Customise per seat" });
-  expect(within(section).getAllByText(/but coding|cannot run coding/)).toHaveLength(1);
+  expect(within(section).getAllByText(/but coding|cannot run a seat's executor/)).toHaveLength(1);
   fireEvent.click(box(`Quality Lead ${coding}`));
   for (const job of CATEGORY_JOBS.coding) expect(latest.uses.jobs[job]).toEqual([]);
 });

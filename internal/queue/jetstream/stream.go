@@ -127,7 +127,7 @@
 //
 // # Every connection presents a key
 //
-// ADR-0087. Every embedded broker this package starts — a solo member, a
+// ADR-0094. Every embedded broker this package starts — a solo member, a
 // clustered member, a member with a leaf listener, a leaf — installs ONE
 // authenticator (brokerAuth, nats-server's embedding hooks
 // CustomClientAuthentication and, on a clustered member,

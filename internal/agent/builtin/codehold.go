@@ -62,7 +62,7 @@ import (
 // row names the seat that set it — is held the same way, through its own seam
 // ([HoldRef]) and its own key ([code.RefHoldKey]) in the same set and on the
 // same row: every ref a turn READS through a code tool, every branch it
-// WRITES, whether or not the write moves it, and every ref a coding run's
+// WRITES, whether or not the write moves it, and every ref an executor's
 // launch resolves. A read moves no ref, and a write that moves nothing appends
 // no record, so neither orders itself against a deletion of the branch; so a
 // hold on a branch unset [code.RefHoldRecordAfter] or more is RECORDED, as an
@@ -191,7 +191,7 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 // that depends on what a seat's branch names is sent only after HoldRef has
 // answered for it. Its callers are the ONE ref read of this package
 // ([CodeDeps.refsOf], under every ref a code tool resolves and every ref a
-// coding run's launch does), a write tool's branch ([CodeDeps.branch]) and the
+// executor's launch does), a write tool's branch ([CodeDeps.branch]) and the
 // launch's branch that does not exist yet ([CodeDeps.ResolveRunRepos]) — and
 // nothing else in a turn names a ref (TestOnlyTheSeamResolvesARefForATurn,
 // TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest).

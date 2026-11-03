@@ -623,7 +623,12 @@ export function installWindow(initial: number): {
  * run's tool log and a seat's thread — and a measurement fake written twice
  * is two fakes that disagree about what a box reports the day one of them is
  * tuned. The pair is restored in a `finally`, so a case cannot leave every
- * later one measuring a box jsdom never laid out.
+ * later one measuring a box jsdom never laid out — RESTORED TO WHAT WAS THERE,
+ * which on `HTMLElement.prototype` is nothing: jsdom defines the four on
+ * `Element.prototype`, so the fake is an own property a restore has to DELETE.
+ * Put back only where the prototype had one of its own, it was never taken
+ * away, and every block rendered after the first call in a file measured as
+ * overflowing — a short block took a tab stop no browser would give it.
  *
  * `act` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
  * its children when a reader opens it, which is after this function would
@@ -651,7 +656,12 @@ export function overflowing(
     act?.(container);
     return container;
   } finally {
-    if (had.scroll) Object.defineProperty(HTMLElement.prototype, scroll, had.scroll);
-    if (had.client) Object.defineProperty(HTMLElement.prototype, client, had.client);
+    for (const [name, was] of [
+      [scroll, had.scroll],
+      [client, had.client],
+    ] as const) {
+      if (was) Object.defineProperty(HTMLElement.prototype, name, was);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
   }
 }

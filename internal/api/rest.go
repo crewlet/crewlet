@@ -48,6 +48,12 @@ var namedRoutes = []struct {
 	// because it is the same kind of fact — what this seat has said and
 	// remembered — rather than a company-wide listing.
 	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
+	// One seat's EXECUTOR SESSIONS, beside its threads for their reason:
+	// what its harness wrote on each turn, kept when the turn's run ended —
+	// and one turn's transcript under the listing that names it.
+	{method: "GET", pattern: "/agents/{id}/sessions", what: "executor_sessions", path: map[string]string{"id": "handle"}},
+	{method: "GET", pattern: "/agents/{id}/sessions/{turn_id}", what: "executor_session",
+		path: map[string]string{"id": "handle", "turn_id": "turn_id"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more
@@ -84,10 +90,10 @@ var namedRoutes = []struct {
 	// it asks a member for the metadata group, which the lease table the
 	// fleet view is read from cannot say.
 	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
-	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
+	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
-	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
+	{method: "GET", pattern: "/executors/{turn_id}/tail", what: "executor_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
 	// WHERE THE COMPANY'S APPS LIVE IN A BROWSER, everybody's where
@@ -212,6 +218,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
 		path: map[string]string{"channel_id": "channel_id"}},
+	// WHOM A DRAFT WOULD REACH, before it is sent: the post's own decision
+	// run dry, with the words in `body` and a reply's thread in `reply_to`.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/reach", what: "chat_reach",
+		path: map[string]string{"channel_id": "channel_id"}},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
 		what: "chat_message",
 		path: map[string]string{"channel_id": "channel_id", "message_id": "message_id"}},
@@ -264,7 +274,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
-	// the serving node derives (code.GrantOf, ADR-0081) — and who read a
+	// the serving node derives (code.GrantOf, ADR-0088) — and who read a
 	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
 	// ALONE: they were the code host's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second

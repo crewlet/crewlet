@@ -159,7 +159,7 @@ finished by its retry or the trash reaper's next pass.
 
 ```mermaid
 sequenceDiagram
-    participant W as Writer (dashboard, CLI or tool)
+    participant W as Writer (dashboard, harness or tool)
     participant API as API node
     participant S as Object store
     participant L as artifacts log
@@ -189,7 +189,7 @@ collector could have deleted those objects. Only then does a byte move.
 
 - On the default `nats` object store every transfer streams through the engine.
 - On an `s3` store whose boot probe proved it honours them, a browser or the
-  CLI uploads straight to the bucket on a presigned `PUT` bound to the exact
+  harness uploads straight to the bucket on a presigned `PUT` bound to the exact
   length, type, SHA-256 and `if-none-match: *`. An agent's sandbox is never
   handed one; the engine reads the box itself.
 - **Finalize reads every new object back** through the verifying reader before

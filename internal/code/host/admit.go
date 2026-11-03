@@ -47,7 +47,7 @@ type admission struct {
 	repo code.RepoRef
 	// linearizable reports that repo was read through the barrier.
 	linearizable bool
-	// box is the coding run a /box/git/ request was admitted for; nil for a
+	// box is the executor a /box/git/ request was admitted for; nil for a
 	// person's and a check's.
 	box *BoxRun
 	// check is the attempt a check's box was admitted for, as its row stood
@@ -238,7 +238,7 @@ func admitted(name string, p iam.Principal) admission {
 // fetch's record can never name two different principals.
 //
 // A BOX'S RUN IS FITTED where it is stamped (code.FitProvenance): its work
-// item, model and coding agent are other systems' labels copied onto the row
+// item, model and harness are other systems' labels copied onto the row
 // as they arrived — a GitLab key may nest a project path past the bound — and
 // one copied raw would have every push the box makes refused as an invalid
 // proposal, the run stopped by a label it never chose. Its two ids are the
@@ -258,7 +258,7 @@ func (a admission) principal() code.Principal {
 		run := a.box.Provenance
 		run.WorkBackend, run.WorkKey = code.FitProvenance(run.WorkBackend), code.FitProvenance(run.WorkKey)
 		run.WorkID, run.WorkProject = code.FitProvenance(run.WorkID), code.FitProvenance(run.WorkProject)
-		run.Model, run.CodingAgent = code.FitProvenance(run.Model), code.FitProvenance(run.CodingAgent)
+		run.Model, run.Harness = code.FitProvenance(run.Model), code.FitProvenance(run.Harness)
 		return code.Principal{Kind: code.PrincipalAgent, Seat: a.box.Seat, Run: run}
 	}
 	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
@@ -378,7 +378,7 @@ func (a admission) resyncKey() (scope, principal string, ok bool) {
 
 // floorWords is how an answer at a box's floor names it — what it has been
 // shown, what it may do instead, and whose bucket ran out, the principal's
-// and the scope's (code.NotRejudged): a coding run's, or a check's.
+// and the scope's (code.NotRejudged): an executor's, or a check's.
 func (a admission) floorWords() (shown, instead, principal, scope string) {
 	if a.check != nil {
 		return "this check was queued at", "a check's box fetches the one commit it checks", checkResyncs,
@@ -394,7 +394,7 @@ func (a admission) floorWords() (shown, instead, principal, scope string) {
 // off the serving epoch (Signer.Committer), and "" for a person, whose push
 // may carry the engine's commits as git carries any. A box runs code nobody
 // vouches for, and the committer is what a cooperating client's history
-// marks the host's own writes by (ADR-0085), so a box's push claiming it is
+// marks the host's own writes by (ADR-0092), so a box's push claiming it is
 // refused forged_committer. An error is a node holding no epoch, which judges
 // no box's push.
 func (a admission) engineCommitter(s Signer) (string, error) {
@@ -424,7 +424,7 @@ func (a admission) engineCommitter(s Signer) (string, error) {
 // much as a seat's — keyed by its REPOSITORY (`check:<id>`), never its
 // attempt: a push fans out a check per name its file defines, and keyed per
 // attempt one repository's dozen checks took a dozen turns of the class where
-// a coding run takes one.
+// an executor takes one.
 func (a admission) share() gitproc.Share {
 	switch {
 	case a.check != nil:

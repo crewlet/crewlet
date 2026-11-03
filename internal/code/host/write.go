@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0085). A seat's or a
+// AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0092). A seat's or a
 // person's change made through a tool — files committed, a commit reverted or
 // picked, a branch created or deleted — is built on the repository's git node,
 // in a scratch beside its cache, by git's own plumbing over exactly the trees
@@ -49,7 +49,7 @@ import (
 // `Crewlet <engine@<code.identity_domain>>`, a CONVENTION that marks the
 // commits the host built in a cooperating client's history and authenticates
 // nothing: any client can write it, and only the push row (`via engine`, its
-// principal) says who built a commit (ADR-0085). A coding box's push whose
+// principal) says who built a commit (ADR-0092). A coding box's push whose
 // pack holds a commit naming it that the repository does not already hold is
 // refused (forged_committer, landing.EngineCommitter); a person's may carry
 // one.

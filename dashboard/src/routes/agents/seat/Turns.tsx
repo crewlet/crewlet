@@ -376,10 +376,13 @@ export function Turns({
                     <span className="row gap-1">
                       {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE: `complete`
                           tells a turn in flight from one that ended, and a
-                          turn waiting on its coding run is `parked`,
-                          neither. */}
+                          turn waiting on its executor in its box is
+                          `parked`, neither. */}
                       {t.parked && (
-                        <Tag appearance="outline" title="waiting on a coding run it launched">
+                        <Tag
+                          appearance="outline"
+                          title="waiting on its executor, running in its box"
+                        >
                           parked
                         </Tag>
                       )}

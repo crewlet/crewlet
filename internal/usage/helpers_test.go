@@ -171,13 +171,15 @@ func recordAt(t *testing.T, r usage.Record, seq uint64) statelog.Record {
 func dump(t *testing.T, db *store.DB) map[string][]string {
 	t.Helper()
 	orders := map[string]string{
-		"usage_turns":          "day, node, agent_id",
-		"usage_tokens":         "day, node, agent_id, phase, worker, model, provider_key",
-		"usage_reads":          "day, node, agent_id, backend, page_id, via",
-		"usage_schedule_runs":  "day, node, scope_type, scope_id, name, fired_at, target",
-		"usage_person_tokens":  "day, node, person, phase, worker, model, provider_key",
-		"usage_repo_read_days": "day, node, repo_id",
-		"usage_repo_reads":     "day, node, repo_id, principal_kind, principal, via, seat",
+		"usage_turns":               "day, node, agent_id",
+		"usage_tokens":              "day, node, agent_id, phase, worker, model, provider_key",
+		"usage_reads":               "day, node, agent_id, backend, page_id, via",
+		"usage_schedule_runs":       "day, node, scope_type, scope_id, name, fired_at, target",
+		"usage_schedule_superseded": "day, node, scope_type, scope_id, name, trace_id",
+		"usage_person_tokens":       "day, node, person, phase, worker, model, provider_key",
+		"usage_tool_calls":          "day, node, agent_id, server, tool",
+		"usage_repo_read_days":      "day, node, repo_id",
+		"usage_repo_reads":          "day, node, repo_id, principal_kind, principal, via, seat",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
@@ -261,6 +263,17 @@ func (e *events) phase(at time.Time, agent, turn, ph, decision string, input, ou
 	})
 }
 
+// launch records one collected launch of the executor's run — the record an
+// executor's spend is on, which names no phase of its own.
+func (e *events) launch(at time.Time, agent, turn string, input, output int) {
+	e.add("executor_collected", at, agent, "Dev", map[string]any{
+		"agent_id": agent, "role": "Dev", "turn_id": turn, "iteration": 1,
+		"launch_id": fmt.Sprintf("job-%04d", e.seq+1), "model": "m-1", "provider_key": "primary",
+		"input_tokens": input, "output_tokens": output,
+		"total_tokens": input + output, "cache_read_tokens": input / 2,
+	})
+}
+
 // turn records a turn's two completion records, the second stating the whole
 // turn as the record that ends one does (types.TurnTally): its span, whether
 // it failed, and what each of its reviews decided.
@@ -285,6 +298,15 @@ func (e *events) turn(at time.Time, agent, handle, turn string, failed bool,
 	e.add("turn_completed", at, agent, "Dev", map[string]any{
 		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
 		"duration_ms": duration.Milliseconds(), "turn": whole,
+	})
+}
+
+// turnCalling records a turn whose ending states the MCP tool calls it made
+// (types.TurnTally.Tools), each given in its wire shape.
+func (e *events) turnCalling(at time.Time, agent, handle, turn string, tools ...map[string]any) {
+	e.add("turn_completed", at, agent, "Dev", map[string]any{
+		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
+		"duration_ms": 1000, "turn": map[string]any{"duration_ms": 1000, "tools": tools},
 	})
 }
 

@@ -29,7 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -1913,7 +1913,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
 // codeCatalogueBudget is the most bytes the thirty-nine code tools'
-// definitions may add to the tool list a run's session serves its CLI
+// definitions may add to the tool list a run's session serves its harness
 // ([listedBytes]): what a seat at full_access carries, the one tier offered
 // every write (CodeWritesWithheld), but for code_report_check,
 // code_purge_unreachable and code_import_repo, each a person's alone, and
@@ -1921,7 +1921,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // what its tier reaches of a change's conversation
 // ([codeReviewCatalogueBudget], [codeReadsCatalogueBudget]).
 //
-// THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A CLI'S PROMPT ONCE CARRIED
+// THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A HARNESS'S PROMPT ONCE CARRIED
 // (indented, HTML-escaped, in the user text), which is larger than the compact
 // JSON of a tools/list answer, so each budget held there holds here; the
 // history is kept because each step in it was a deliberate cost.
@@ -2003,7 +2003,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 const codeCatalogueBudget = 57_500
 
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
-// definitions may add to the tool list a run's session serves its CLI: what
+// definitions may add to the tool list a run's session serves its harness: what
 // every seat of a company hosting code carries on every round, whatever its
 // tier — a seat below full_access beside the few writes of a change's
 // conversation its tier reaches ([codeReviewCatalogueBudget]).
@@ -2026,7 +2026,7 @@ const codeCatalogueBudget = 57_500
 const codeReadsCatalogueBudget = 22_100
 
 // codeReviewCatalogueBudget is the most bytes a review seat's code tools may
-// add to the tool list a run's session serves its CLI: the thirteen reads and
+// add to the tool list a run's session serves its harness: the thirteen reads and
 // the four writes of a change's conversation its tier reaches — an ask for
 // review, a review, a comment and an answer to the findings it raised
 // (CodeWritesWithheld) — the most any tier below full_access carries, since a
@@ -2041,12 +2041,12 @@ const codeReviewCatalogueBudget = 22_500
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code is offered the thirteen reads on every run of every turn, a review seat
 // the four writes of a change's conversation beside them, and a seat at
-// full_access twenty-three writes beside them: the CLI lists them from the
+// full_access twenty-three writes beside them: the harness lists them from the
 // run's tool session (internal/toolsession) and carries every listed tool's
 // name, description, schema and hints into its model's context, each byte
 // paid again on every request it makes. Measured as that list reaches a
 // client — the SDK's own serialisation, through a real MCP session, since what
-// a CLI is handed is what arrives rather than what was registered — the reads
+// a harness is handed is what arrives rather than what was registered — the reads
 // alone, a review seat's and all thirty-nine, each held to a budget, so a
 // later description edit is
 // a decision rather than drift, as the executor prompt's budgets make a
@@ -2066,7 +2066,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		{"all thirty-nine code tools (a full_access seat's and the operator's)",
 			listedBytes(t, builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{}))), codeCatalogueBudget},
 	} {
-		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))
+		tokens := harness.EstimateTokens(strings.Repeat(" ", c.got))
 		if c.got > c.budget {
 			t.Errorf("%s add %d bytes (~%d tokens) to every run's tool list, past their budget of %d", c.what,
 				c.got, tokens, c.budget)
@@ -2091,7 +2091,7 @@ func offeredAt(tier code.Tier, every []tools.Callable) []tools.Callable {
 // name, description, input schema and hints, summed. Served by the session's
 // own server over the SDK's in-memory transport, with the hints the seat's
 // registry advertises (builtin.AnnotationsFor), so the bytes are the ones a
-// CLI is handed.
+// harness is handed.
 func listedBytes(t *testing.T, offered []tools.Callable) int {
 	t.Helper()
 	catalogue := make(listedOnly, 0, len(offered))
@@ -2100,7 +2100,7 @@ func listedBytes(t *testing.T, offered []tools.Callable) int {
 			Def:         llm.ToolDef{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()},
 			Annotations: builtin.AnnotationsFor(tool.Name())})
 	}
-	srv := toolsession.NewServer("crewlet", "Crewlet", catalogue)
+	srv := toolsession.NewServer("crewlet", "Crewlet", "", catalogue)
 	srv.Sync()
 	ctx := t.Context()
 	serverEnd, clientEnd := sdkmcp.NewInMemoryTransports()

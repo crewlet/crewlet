@@ -199,7 +199,7 @@ function useOwnerName(): (owner: CodeOwner) => string {
       : (unitByKey(index, owner.ref)?.name ?? owner.ref);
 }
 
-/** Which seats read a repository, in words. Every person reads every repository (ADR-0081). */
+/** Which seats read a repository, in words. Every person reads every repository (ADR-0088). */
 function readByWord(visibility: string): string {
   return visibility === "unit" ? "Its owner's seats" : "Every seat";
 }

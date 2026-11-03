@@ -1,12 +1,12 @@
 // Package sandbox is the executor runtime: every agent seat's executor is its
-// coding CLI's own run, inside a box placed in one of the catalogue's cells.
+// harness's own run, inside a box placed in one of the catalogue's cells.
 //
 // The shape that matters is that a run is DETACHED. The launch starts it, the
 // turn SUSPENDS, and the engine RESUMES the same turn with the run's report
 // when the run completes — possibly minutes later, possibly in a different
 // process after a restart, possibly on a different node. Nothing
 // here parks a goroutine on a running job: a goroutine cannot survive a
-// restart, and a coding agent legitimately runs for longer than a deployment
+// restart, and a harness legitimately runs for longer than a deployment
 // window.
 //
 // A run that stops to ask a person something is that same shape one step
@@ -87,6 +87,14 @@
 // whose seal does not open is never handed to a turn or attributed to anybody.
 // See answerseal.go.
 //
+// AND A CALL TO A TOOL AT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK
+// DOES (ADR-0077): the job's question is the call ([PendingRun.HeldCall]), its
+// arguments sealed beside it ([CallSeal]); only its approval route answers it,
+// never a chat reply ([ConversationRef.Answers]) or an answer by turn that does
+// not name it ([Coordinator.AnswerByTurn]); and the resume that makes the call
+// marks it first, so no attempt at the same answer makes it twice
+// ([PendingStore.MarkHeldCall]). See heldcall.go.
+//
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
 // keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
@@ -110,6 +118,15 @@
 // code host answers holds a finished run's seat for as long as the host is
 // down — and never left out, since silence reads as "nothing pushed".
 //
+// AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
+// its harness starts ([RunHandle.SessionID]), says whether it continued the one it
+// was asked to, and why not where it did not ([Result.Continued],
+// [Result.FellBack]), and packs it when the harness exits
+// ([Result.Captured]); a run handed a session packed in another box
+// ([RunRequest.Carried]) restores it before its harness takes it up, and a box
+// takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
+// carry.go.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
@@ -127,6 +144,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -167,36 +185,39 @@ type ExecResult struct {
 	Stderr   string
 }
 
-// Limits are the caps handed to a coding agent.
+// Limits are the caps handed to a harness.
 //
 // Zero means UNSET for each field, and the runner falls back to the agent's own
 // default. Note what is not here: a run deadline. The engine imposes no
-// wall-clock limit on a coding job — it runs as long as it needs, and
+// wall-clock limit on a launched job — it runs as long as it needs, and
 // completion is detected by tracking the job rather than by a clock. There WAS
 // a TimeoutSec here, read by nobody, contradicting the paragraph above it.
 //
 // MaxTurns comes from the resolved [Spec] — providers.sandbox.default_max_turns
-// overlaid with role.sandbox.max_turns — and is the only engine-side bound on
-// a runaway coding agent, since a job is deliberately never stopped on a clock.
+// overlaid with role.sandbox.max_turns — and is zero, uncapped, unless the
+// company or the seat sets a cap: a job is deliberately never stopped on a
+// clock, so this is the one bound on its rounds, and it is the operator's to
+// choose.
 //
-// MAXBUDGETUSD IS SET BY NOBODY, deliberately. The fleet's own token meter
-// already post-charges a collected run against the seat's budget, and a second
-// cap denominated in the operator's dollars would fight it: two ceilings on one
-// spend, disagreeing, with the CLI's the one that silently wins.
+// NO DOLLAR CAP. The fleet's own token meter already post-charges a collected
+// run against the seat's budget, and a second cap denominated in the
+// operator's dollars would fight it: two ceilings on one spend, disagreeing,
+// with the harness's the one that silently wins. A MaxBudgetUSD field stood
+// here, set by nobody while the runner turned it into a flag, and went the way
+// TimeoutSec did.
 type Limits struct {
-	MaxTurns     int
-	MaxBudgetUSD float64
+	MaxTurns int
 }
 
 // Spec is what it takes to mint and drive one box.
 //
 // AN EXTERNAL HOST'S REPOSITORY IS NOT HERE. Which repository on GitHub or
 // GitLab to work in is task context the executor puts in the brief, and the
-// coding agent clones it with the token the config injects — a spec field for
-// it would make one repository per role a structural fact when it is a
-// per-turn one. A repository on the engine's OWN code host is here
-// ([Spec.Repos]), because naming one is a GRANT: the run row carries it and
-// the box's credential is judged by it, which a brief cannot be.
+// harness clones it with the token the config injects — a spec field for it
+// would make one repository per role a structural fact when it is a per-turn
+// one. A repository on the engine's OWN code host is here ([Spec.Repos]),
+// because naming one is a GRANT: the run row carries it and the box's
+// credential is judged by it, which a brief cannot be.
 //
 // There are deliberately NO CPU, MEMORY OR DISK FIELDS, and no TEMPLATE either.
 // A remote box's resources are a property of its template, fixed when the
@@ -213,8 +234,8 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// CodingAgent names the runner: "claude-code", "opencode", …
-	CodingAgent string
+	// Harness names the runner: "claude-code", "opencode", …
+	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
 	// engine's host records it in its own directory, which is how that
@@ -235,7 +256,7 @@ type Spec struct {
 	// pushed branch instead.
 	PauseTTLSec float64
 
-	// MaxTurns caps the agentic rounds a coding run may take. 0 is
+	// MaxTurns caps the agentic rounds a launch may take. 0 is
 	// uncapped, and is the default.
 	//
 	// Resolved here rather than passed alongside, because it is settled the
@@ -250,14 +271,14 @@ type Spec struct {
 	// role.sandbox.env — which is where an operator DECLARES an external
 	// token. The engine never names a tool-specific variable itself, but for
 	// the engine's own code host, whose access it gives a run that names
-	// repositories ([BoxGit], ADR-0086) — and that through the launch's own
+	// repositories ([BoxGit], ADR-0093) — and that through the launch's own
 	// environment, never this field. A launch hands the box a COPY with what
 	// it minted for the job added ([LaunchRequest.RunEnv]): what the box is
 	// made with and every setup step runs with, the run's telemetry added at
 	// the job's start.
 	Env map[string]string
 
-	// CredentialFiles is a subscription-CLI login: a path relative to the
+	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
 	// Each provider decides what to do with it, and they decide differently
@@ -280,8 +301,8 @@ type Spec struct {
 	Repos []RunRepo
 }
 
-// MaxRunRepos is the most repositories one coding run is given: each costs a
-// clone before the coding agent starts, and a run that needs more is a task
+// MaxRunRepos is the most repositories one executor is given: each costs a
+// clone before the harness starts, and a run that needs more is a task
 // that should be split.
 //
 // THE CLONES ADD UP. They run one after another, after the operator's steps
@@ -290,13 +311,13 @@ type Spec struct {
 // — five times the box's TTL ([DefaultBoxTimeout]), which is why the launch
 // keeps the box's timer refreshed for as long as it provisions it
 // ([keepProvisioning]) rather than leaving the sum to the timer the box was
-// made with. What a run waits for before its coding agent starts is that sum.
+// made with. What a run waits for before its harness starts is that sum.
 //
 // ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
 // clone's: a clone's index-pack keeps an entry for every commit and tree it
 // receives while it writes their index — 1.37 million of them for a gigabyte
 // of history (internal/code/host's BenchmarkBoxClone) — and eight at once
-// would share a box its template sized for one coding agent. In turn, the
+// would share a box its template sized for one harness. In turn, the
 // clones cost a run with many repositories time; at once, they would cost
 // its box memory.
 //
@@ -327,9 +348,9 @@ const MaxConePaths = 64
 // these, quoted at their worst — a path of nothing but single quotes is four
 // times its length once quoted ([ShellQuote]), and each takes its two quotes
 // and a space — come to at most 64 × 1 023 = 65 472 bytes of the step, and the
-// rest of it (the names, the commands and the commit-trailer hook it writes)
-// to a few KiB more; TestTheWorstCloneStepIsOneShellArgument builds that step
-// and holds it under the limit. It bounds what a run's grants add to its row
+// rest of it (the names and the commands) to a few KiB more;
+// TestTheWorstCloneStepIsOneShellArgument builds that step and holds it under
+// the limit. It bounds what a run's grants add to its row
 // too, which every node's completion poll reads whole: at most [MaxRunRepos] ×
 // 64 × 255 bytes of paths, about 128 KiB before the JSON on the row escapes
 // them.
@@ -356,10 +377,10 @@ func (a RepoAccess) Valid() bool { return slices.Contains(RepoAccesses(), a) }
 
 // RunRepo is one repository a box is given, RESOLVED WHEN THE BOX IS: the
 // repository's id beside the name it had then, so a rename meanwhile cannot
-// move the grant; the commit the box starts from; the branch a coding run
+// move the grant; the commit the box starts from; the branch an executor
 // works on; and the cone it checks out.
 //
-// The json tags are a WIRE FORMAT: a coding run's row carries these
+// The json tags are a WIRE FORMAT: an executor's row carries these
 // ([PendingRun.Repos]), and a node of another build reads them. A check's
 // repository rides no row: its box is made, run and closed by one node.
 type RunRepo struct {
@@ -368,11 +389,11 @@ type RunRepo struct {
 	Repo string `json:"repo"`
 	// RepoID is the repository's id, canonical: what the grant names.
 	RepoID string `json:"repo_id"`
-	// Base is the whole id of the commit the box starts from: a coding
-	// run's base, "" for an empty repository, or the one commit a check
+	// Base is the whole id of the commit the box starts from: an
+	// executor's base, "" for an empty repository, or the one commit a check
 	// measures.
 	Base string `json:"base"`
-	// Branch is the branch a coding run works on, its ref
+	// Branch is the branch an executor works on, its ref
 	// refs/heads/<branch>; "" for a check, which works on no branch.
 	Branch string `json:"branch"`
 	// Access is what the box may do with the repository: a check's box
@@ -381,13 +402,13 @@ type RunRepo struct {
 	// Paths are the directories checked out (a sparse cone), at most
 	// [MaxConePaths]; empty is the whole tree.
 	Paths []string `json:"paths,omitempty"`
-	// Change is the change a coding run works on — the live change whose
+	// Change is the change an executor works on — the live change whose
 	// source is Branch, which it starts from the head of — and nil for a run
-	// on no change (runchange.go). A coding run's alone.
+	// on no change (runchange.go). An executor's alone.
 	Change *RunChange `json:"change,omitempty"`
-	// Open is the change a coding run asked to open from Branch once it
+	// Open is the change an executor asked to open from Branch once it
 	// finishes — at its collection, once a launch ([OpenChange]) — and nil
-	// for none. A coding run's alone, and only one given the repository to
+	// for none. An executor's alone, and only one given the repository to
 	// write: a run that may push nothing delivers nothing to open one from.
 	Open *OpenChange `json:"open_change,omitempty"`
 }
@@ -527,10 +548,18 @@ func canonicalID(s string) bool {
 type RunHandle struct {
 	CommandID string
 	PID       int
+
+	// SessionID is the harness session the job was started in, named by the
+	// runner BEFORE the harness starts — the one the job continues
+	// ([RunRequest.Resume]), or the id it minted for a new one — so a job
+	// killed before it reported anything still names its session. The job
+	// itself says which it ran ([Result.SessionID], [Result.Continued]): one
+	// asked to continue a session its box neither held nor could restore
+	// starts a new one instead.
 	SessionID string
 }
 
-// Result is one coding run's outcome.
+// Result is one launch's outcome.
 type Result struct {
 	Text    string
 	Success bool
@@ -538,7 +567,7 @@ type Result struct {
 	// InputTokens is the run's WHOLE prompt count, its cached share
 	// included, and CacheReadTokens / CacheWriteTokens are the share of it
 	// the provider's prompt cache served and stored — the same convention
-	// every engine provider reports on its completion, so a coding run's
+	// every engine provider reports on its completion, so a launch's
 	// tokens fold into the spend rollup beside the phases the engine ran
 	// itself. A breakdown, never an addition: the total is input + output.
 	InputTokens      int
@@ -546,12 +575,48 @@ type Result struct {
 	CacheReadTokens  int
 	CacheWriteTokens int
 	CostUSD          float64
-	SessionID        string
 
-	// Turns is how many model turns the run's CLI says its own loop took —
+	// SessionID is the harness session the run worked in, as its harness reported it
+	// or, where it reported nothing, as the run's script recorded it before
+	// the harness started.
+	SessionID string
+
+	// Continued says the run continued the session it was asked to
+	// ([RunRequest.Resume]): its box held that session, or restored it from
+	// the archive carried into it ([RunRequest.Carried]), and the harness took it
+	// up. False for a run that started a session of its own — one asked to,
+	// and one whose script found the session neither in its box nor
+	// restorable, which starts a new one under another id and says why
+	// ([Result.FellBack]) rather than let its harness create an empty session
+	// under the old id and answer the brief as if it remembered.
+	Continued bool
+
+	// FellBack says why a run asked to continue a session started a new one
+	// in its place, in the words its script said it in on its error stream —
+	// the session was not in its box and none was carried in, the box's harness
+	// is older than the release that continues a carried one, the archive
+	// carried in could not be restored — so whoever reads what the run did
+	// learns why it began again rather than finding a new session id alone.
+	// "" for a run that continued its session, and for one asked to start
+	// one.
+	FellBack string
+
+	// HarnessVersion is the release of the harness that ran, as its `--version` gave
+	// it ("2.1.310"), read by the run's script in the box; "" where it
+	// recorded none this build can read.
+	HarnessVersion string
+
+	// Captured is the run's session as its box packed it when the harness
+	// exited, to be carried into another box ([SessionArchive]); nil where
+	// the box holds none — a run killed before its harness exited, a harness that
+	// wrote no session, a box without the tools to pack one, which the run's
+	// error stream says.
+	Captured *SessionArchive
+
+	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
-	// where the CLI reported none. It is what the run's phase record counts
-	// as its calls (tokens.PhaseCalls): a run whose CLI said nothing counts
+	// where the harness reported none. It is what the launch's own record counts
+	// as its calls (tokens.LaunchCalls): a run whose harness said nothing counts
 	// as one, the one call the engine knows it asked for.
 	//
 	// AS REPORTED, never estimated: Claude Code states it on its result
@@ -563,7 +628,7 @@ type Result struct {
 	// DeliveredRefs are the branches and pull or merge requests the run
 	// reported delivering, in its report's order: the `Delivered:` lines it
 	// wrote, or the pull-request URLs its prose holds where it named none.
-	// They are DISPLAY and a reminder — the run's phase record and the run's
+	// They are DISPLAY and a reminder — the launch's own record and the run's
 	// report its reviewer reads carry them — and nothing judges a turn on
 	// them: whether a turn reached anybody is the engine's own record of the
 	// calls it made ([github.com/crewlet/crewlet/internal/agent/turn]).
@@ -606,19 +671,19 @@ type Result struct {
 
 	Error string
 
-	// Event is how the CLI said its run ended IN FIELDS, beside the words of
+	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the
 	// sentence beside it is worded. It is what an executor's ending is
-	// classified by first, as a call's is (cliagent.Provider.RunEnded), and
-	// nothing else reads it. Set on a run that did not succeed, by a CLI that
+	// classified by first, as a call's is (harness.Provider.RunEnded), and
+	// nothing else reads it. Set on a run that did not succeed, by a harness that
 	// prints such an event; empty otherwise, and wherever the line is past
 	// [MaxRunEventBytes] ([boundBox]).
 	Event string
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
-	// output, or its stderr where the CLI streams nothing better. It is the
+	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
 	// own. A runner returns it WHOLE and redacted; the coordinator holds it
 	// to the record's bound ([Coordinator.fitResult]) and redacts it again
@@ -643,11 +708,11 @@ type Result struct {
 // usageFloored is r with every count of what the run spent made non-negative,
 // and whether any had to be.
 //
-// A RUN REPORTS ITS OWN USAGE, parsed out of the coding CLI's last line of
+// A RUN REPORTS ITS OWN USAGE, parsed out of the harness's last line of
 // output — and that line is printed inside a box the run's own agent can run
 // any command in. A negative count there is a REFUND: the charge would
-// subtract it from the seat's budget counter, and the phase record from every
-// rollup that sums it, so a run could buy itself headroom by printing a
+// subtract it from the seat's budget counter, and the launch's record from
+// every rollup that sums it, so a run could buy itself headroom by printing a
 // number. Nothing a run spends is negative, so a negative count is read as
 // nothing spent, and the caller says so. Floored where every collected result
 // enters the coordinator, so every backend's parser is covered by one rule.
@@ -719,6 +784,22 @@ type Sandbox interface {
 	// what is at the path there is replaced, a link included.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
+	// WriteStream puts what content yields at path whole, exactly as
+	// [Sandbox.WriteFile] puts a byte slice there — staged beside the path
+	// and renamed over it, the same refusals on the engine host — for content
+	// the engine must not hold in memory: a harness's session archive,
+	// carried into a box from the object store, which grows with the session
+	// it packs.
+	//
+	// READ ONCE, A PIECE AT A TIME, and only while ctx lasts: a write whose
+	// caller gave up stops at the next piece rather than reading its source
+	// to the end. A source that fails part way fails the write, and the file
+	// at the path is the one that was there before — the staged one is
+	// removed, never moved over it — so an archive cut short in transit is
+	// never a file the box reads as whole. The caller keeps content: the
+	// write neither closes it nor reads it once it has returned.
+	WriteStream(ctx context.Context, path string, content io.Reader) error
+
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
 	// question, a marker, a result line — and REFUSES one past
 	// [MaxFileBytes] ([ErrFileTooLarge], as a [*FileTooLargeError] naming the
@@ -726,7 +807,7 @@ type Sandbox interface {
 	// clipped report reads as a finished one. Empty on missing: a poll for a
 	// marker that is not written yet is not an error.
 	//
-	// NEVER FOR A MACHINE STREAM. A coding agent's event log and its stderr
+	// NEVER FOR A MACHINE STREAM. A harness's event log and its stderr
 	// grow with the run and have no size a whole read could honestly refuse
 	// at — the engine keeps a bounded share of them in the end — so they
 	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
@@ -737,7 +818,7 @@ type Sandbox interface {
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
-	// once in bounded memory: a coding agent's event log, read at
+	// once in bounded memory: a harness's event log, read at
 	// collection a line at a time. Nothing is refused for its size, since
 	// the reader holds one piece at a time and decides itself what to keep.
 	// A missing file is a reader that yields nothing, as ReadFile's empty
@@ -945,7 +1026,7 @@ type Provider interface {
 	Kill(ctx context.Context, sandboxID string) error
 }
 
-// Runner runs one coding agent inside a box against a brief.
+// Runner runs one harness inside a box against a brief.
 //
 // TWO SHAPES, ONE RUNNER: the inline Run (start, block, result — for tests and
 // short jobs) and the detached Start/Poll/Collect triple the engine drives
@@ -977,23 +1058,23 @@ type Runner interface {
 	Follow(handle RunHandle) LiveReading
 }
 
-// RunRequest is one coding run's inputs.
+// RunRequest is one launch's inputs.
 //
 // NEVER PERSISTED: a run is started once, by the node that launched it, and
 // everything a later collection or resume needs is on the run's row and in the
 // box. So a field added here changes no record a peer of another build reads.
 type RunRequest struct {
 	// System is the run's standing instructions, which the runner hands its
-	// CLI on the channel that ADDS to the CLI's own system prompt rather than
+	// harness on the channel that ADDS to the harness's own system prompt rather than
 	// replacing it: the vendor's prompt is what teaches the harness this run
 	// exists to use. A runner adds its own standing instruction to it — the
 	// report the run writes before it stops, at the box's path for it.
 	System string
 
-	// Brief is the task: the prompt the CLI runs, and nothing standing.
+	// Brief is the task: the prompt the harness runs, and nothing standing.
 	Brief string
 
-	// Resume is the CLI's own session the run CONTINUES, as an earlier run in
+	// Resume is the harness's own session the run CONTINUES, as an earlier run in
 	// the same box reported it ([Result.SessionID]): the conversation, its
 	// tool results and its working files are where that run left them, and
 	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
@@ -1002,38 +1083,70 @@ type RunRequest struct {
 	// assistant's deep work, where its run parked on a proposal and the
 	// approval has come. Empty starts a new session.
 	//
-	// THE CLI'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
+	// THE HARNESS'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
 	// knew what it had read, tried and decided, and a fresh conversation
 	// told only the question and the answer starts that work again. It holds
-	// only in the box the session lives in, which is why a seat's launch
-	// sets it only where the job continues in the asking job's box
-	// ([LaunchRequest.Continue]). A runner whose CLI cannot continue a
+	// in the box the session lives in, which is why a seat's launch sets it
+	// only where the job continues in the asking job's box
+	// ([LaunchRequest.Continue]) — or in a box the session is carried into
+	// ([RunRequest.Carried]). A runner whose harness cannot continue a
 	// session refuses a run that asks it to, rather than start a new
-	// conversation its caller believes is the old one.
+	// conversation its caller believes is the old one; and a run whose box
+	// turns out to hold the session neither way starts a new one and says so
+	// ([Result.Continued]).
 	Resume string
+
+	// Carried is the session Resume names, packed in another box
+	// ([SessionArchive]), for this run's box to restore before its harness takes
+	// it up: written into the box as the run starts, after the previous
+	// run's artefacts are cleared, and restored by the run's own script — or
+	// not, in a box whose own copy of the session already holds this archive
+	// (one the box packed, or restored before), which is never written over:
+	// that copy is the archive's or newer. A box holding a copy that does
+	// not hold the archive has it replaced by the archive. Nil for a run that
+	// continues a session its box already holds, or none. Its session must
+	// be Resume's, and its harness and format the runner's, or the run is
+	// refused.
+	Carried *CarriedSession
 
 	Env    map[string]string
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
-	// CLI the runner drives: the seat's providers.llm entry's model exactly
-	// as its runs on the engine host hand it to that same CLI, which is the
-	// only CLI the engine lets reach this runner. Empty leaves the agent's
+	// harness the runner drives: the seat's providers.llm entry's model exactly
+	// as its runs on the engine host hand it to that same harness, which is the
+	// only harness the engine lets reach this runner. Empty leaves the agent's
 	// own choice.
 	//
-	// NO ENDPOINT AND NO KEY: an entry talks to its CLI's own vendor, and its
+	// NO ENDPOINT AND NO KEY: an entry talks to its harness's own vendor, and its
 	// sign-in rides the run env, so nothing secret is written into a file
 	// inside the box.
 	Model string
 
-	// MCPServers is the scoped MCP surface, keyed by server name.
-	// SERVER-LEVEL SCOPING ONLY — there is no per-tool allowlist, because
-	// the agent inside the box negotiates its own tool list with the server
-	// and an allowlist the engine could not enforce would be a claim rather
-	// than a control.
+	// MCPServers are the MCP servers the engine hands the run, keyed by
+	// server name: its tool bridge, and the seat's servers that run in its
+	// box. SERVER-LEVEL ONLY — there is no per-tool allowlist, because the
+	// agent inside the box negotiates its own tool list with the server and
+	// an allowlist the engine could not enforce would be a claim rather than
+	// a control.
 	MCPServers map[string]MCPServer
 
-	// Steer is how the run's CLI reaches a person's notes to its turn while
+	// OnlyMCPServers holds the run to MCPServers alone: no server its
+	// harness's own configuration, a repository's or a plugin's declares,
+	// and no connector of the account it signs in with, starts beside them
+	// (Claude Code's --strict-mcp-config).
+	//
+	// The assistant's deep work sets it: it acts for a person, confined on
+	// the engine host, and reaches exactly the tools it is handed. A seat's
+	// executor leaves it false, and its harness starts what it would start
+	// for a person running it — the box's own configuration's servers, the
+	// repository's, a plugin's, the signed-in account's connectors — beside
+	// the ones the engine hands it: what those reach is the run's cell's to
+	// bound, never the engine's to decide. A runner whose harness has no way
+	// to be held to the servers it is handed refuses a run that sets it.
+	OnlyMCPServers bool
+
+	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a
 	// run with no tool bridge — the assistant's deep work — has. NEVER
@@ -1048,12 +1161,160 @@ type RunRequest struct {
 	// `Delivered:` line only for what it delivered somewhere else: a line
 	// for a push the record already names is the same delivery said twice.
 	ReportedRepos []string
+
+	// Skills are skills the run's harness is handed as its OWN — see [Skill]:
+	// written where the harness reads skills of its own, listed to its model
+	// beside the ones the box and the checkout hold, and loaded with the
+	// harness's own skill tool. Nil hands none. A runner refuses a run handed
+	// skills that its harness cannot take, or with nowhere to report a load
+	// ([RunRequest.SkillLoads]).
+	Skills []Skill
+
+	// SkillLoads is where the run's harness reports loading one of Skills —
+	// see [SkillWiring]. NEVER PERSISTED, for the reason Steer is not: it
+	// names the job's own endpoint.
+	SkillLoads SkillWiring
+
+	// Attribution is the credit every commit the run authors as itself
+	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
+	// is left exactly as the box and the repository configure it.
+	Attribution *CommitAttribution
 }
 
-// SteerWiring is where a run's CLI asks for its turn's notes: one tool of the
+// SkillNamespace is what a run's harness lists every skill of
+// [RunRequest.Skills] under: `crewlet:<name>` ([Skill.Listed]).
+//
+// ONE NAME ON EVERY HARNESS. Claude Code names a plugin's skill
+// `<plugin>:<skill>`, and the plugin a runner hands it its skills in is named
+// this; OpenCode names a skill by its directory, and a runner names each
+// directory in full. So the engine can tell a run's model which skill to load
+// without knowing which harness runs it, and a load the harness reports is
+// read back by the name it listed. And NOT A NAME A REPOSITORY'S OR AN IMAGE'S
+// OWN SKILL TAKES by accident, which, sharing one, the harness would run in
+// the company's place or the company's in its.
+const SkillNamespace = "crewlet"
+
+// Skill is one skill a run's harness is handed as its own.
+type Skill struct {
+	// Name is the skill's own name ([ValidSkillName]), which the harness
+	// lists it under in [SkillNamespace] ([Skill.Listed]).
+	Name string
+
+	// Description is what the harness lists beside the name, for its model
+	// to choose by: the harness hands a model a skill's body only when the
+	// model loads it.
+	Description string
+
+	// Body is the skill's text, which the harness hands its model once the
+	// model loads the skill — AS THE HARNESS READS A SKILL OF ITS OWN, since
+	// that is what it is: Claude Code reads a skill's file as a template, in
+	// which a line's `` !`command` `` runs as the skill loads and
+	// `$ARGUMENTS` is a placeholder, where OpenCode hands its model the text
+	// as written.
+	Body string
+
+	// Required says the run's calls to the tools this skill covers are
+	// refused until the harness reports loading it. A runner refuses a run
+	// with a required skill on a harness release that cannot report a load:
+	// it could never call those tools.
+	Required bool
+}
+
+// Listed is the name the run's harness lists the skill under, and its model
+// loads it by.
+func (s Skill) Listed() string { return SkillNamespace + ":" + s.Name }
+
+// maxSkillName is the longest [Skill.Name]: the Agent Skills specification's
+// bound on a skill's name, which both harnesses read a skill's name by.
+const maxSkillName = 64
+
+// ValidSkillName reports whether name can be a [Skill.Name]: one to
+// [maxSkillName] lowercase ASCII letters and digits, in runs joined by single
+// hyphens — the Agent Skills specification's grammar. It is a directory's
+// name in the box on either harness, and part of what the harness lists; a
+// name outside it is one a harness may refuse to load, or one that names a
+// path rather than a skill.
+func ValidSkillName(name string) bool {
+	if name == "" || len(name) > maxSkillName || name[0] == '-' || name[len(name)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-' && name[i-1] != '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// SkillWiring is where a run's harness reports loading one of its skills
+// ([RunRequest.Skills]): one tool of the MCP server the run's tool bridge is
+// ([RunRequest.MCPServers]), which a hook of the harness's calls once its skill
+// tool has answered (Claude Code), and the URL of the bridge's skill route,
+// which a plugin of the harness's own posts each load to (OpenCode). The
+// engine fills it from the same names its bridge serves, so the box and the
+// bridge cannot disagree about them (internal/api/mcpbridge).
+type SkillWiring struct {
+	// Server is the name the bridge is listed under in the run's MCP
+	// configuration, and Tool the tool a hook calls on it — never listed,
+	// so no model is offered it, and no model can unlock a skill it never
+	// read.
+	Server string
+	Tool   string
+
+	// URL is the job's skill route: the bridge endpoint the box already
+	// dials, with the route's suffix.
+	URL string
+}
+
+// Set reports whether the wiring names anything a harness could reach.
+func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
+
+// CommitAttribution asks a run's runner to credit Crewlet on every commit the
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`, the
+// one trailer GitHub renders as a participant in the commit; where Seat is
+// set, the seat that made the commit and the work item its turn is charged
+// to; and, where Run is set, the run that wrote it, which leads a reader of
+// the history back to the run's page.
+//
+// GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
+// runs on every commit the run makes (internal/sandbox/executor's
+// attribution.go), so the credit is there whether or not the agent remembered
+// an instruction — and only on a commit whose author is the identity the run
+// commits as, so a person's commit the run amends, cherry-picks or rebases is
+// never credited to Crewlet.
+//
+// A CLAIM, NEVER EVIDENCE: the box can delete the hook or write any trailer
+// it likes, so nothing in the engine reads a pushed commit's trailers — a box
+// push's provenance is stamped from the run's own row at its admission. The
+// trailers carry that provenance where the row does not reach: a mirror of
+// the repository, and a commit older than the code host's push horizon.
+type CommitAttribution struct {
+	// Run is what the run's commits name it by, the identifier its page is
+	// addressed by: a seat's job is its turn's, so every job of one turn —
+	// a relaunch included — names the one run. Empty names no run — a run
+	// with no page of its own — and the commit names none. One line of
+	// printable text, since it becomes a trailer's value.
+	Run string
+
+	// Seat is the handle of the seat the run is the executor of, and
+	// WorkItem the item its turn is charged to (nil for none, which the
+	// commit says as "none" rather than leaving out, since a rewritten
+	// commit's trailer is replaced, never kept). Empty for a run that is no
+	// seat's — deep work for a person — which names neither; a WorkItem
+	// without a Seat, or one with no backend, is the engine's own bug and is
+	// refused.
+	Seat     string
+	WorkItem *types.WorkItem
+}
+
+// SteerWiring is where a run's harness asks for its turn's notes: one tool of the
 // MCP server the run's tool bridge is ([RunRequest.MCPServers]), which a hook
-// of the CLI's calls between its steps, and the URL of the bridge's notes
-// route, which a CLI that admits notes from a plugin of its own polls. The
+// of the harness's calls between its steps, and the URL of the bridge's notes
+// route, which a harness that admits notes from a plugin of its own polls. The
 // engine fills it from the same names its bridge serves, so the box and the
 // bridge cannot disagree about them (internal/api/mcpbridge).
 type SteerWiring struct {
@@ -1068,7 +1329,7 @@ type SteerWiring struct {
 	URL string
 }
 
-// Set reports whether the wiring names anything a CLI could reach.
+// Set reports whether the wiring names anything a harness could reach.
 func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // Run is the inline shape: start, wait, collect.

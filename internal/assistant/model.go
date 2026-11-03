@@ -27,7 +27,7 @@ type modelProblem struct {
 	Message string
 	Hint    string
 	// Retryable is whether asking again can help without anybody acting:
-	// not for a signed-out model or a CLI that cannot start.
+	// not for a signed-out model or a harness that cannot start.
 	Retryable bool
 	// RetryAt is when a spent plan is tried again, zero where unknown.
 	RetryAt time.Time
@@ -36,7 +36,7 @@ type modelProblem struct {
 }
 
 // modelRetrySeconds is how long a person is told to wait after the model chain
-// failed for a reason no code names: long enough for a CLI's restart.
+// failed for a reason no code names: long enough for a harness's restart.
 const modelRetrySeconds = 10
 
 // modelProblemOf is THE mapping from a model failure to what the person reads,

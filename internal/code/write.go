@@ -25,7 +25,7 @@ import (
 // deleted, a review's suggestions applied — that the engine BUILDS on the
 // repository's git node, in a scratch
 // beside its cache, and LANDS as a push through the one landing every push
-// takes (internal/code/host's Server.Write, ADR-0085). This package holds what
+// takes (internal/code/host's Server.Write, ADR-0092). This package holds what
 // both ends of it import, as it does for a read by object id: the WIRE — the
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's
 // own refusals ([WriteRefusal]) — the one rule a write is held to by the tool
@@ -75,7 +75,7 @@ const (
 	// target ([EngineWrite.Ref]) by its method ([EngineWrite.Method]), at the
 	// head its caller read ([EngineWrite.ExpectedHead]): built on the
 	// repository's git node onto the target's tip and landed as ONE MERGE
-	// RECORD its gate decides ([MergeProposal], ADR-0089) — or, on a target
+	// RECORD its gate decides ([MergeProposal], ADR-0096) — or, on a target
 	// whose merges land through its queue, enqueued there ([QueueProposal]).
 	// Never a push: a merge moves its target, merges its change and may
 	// delete its source in one record, and an engine-built push carries one
@@ -178,14 +178,14 @@ const (
 )
 
 // EngineWrite is one write the engine builds and lands as a push, asked of the
-// repository's home git node (ADR-0082). Every field is held to
+// repository's home git node (ADR-0089). Every field is held to
 // [EngineWrite.Validate] by every party to it.
 type EngineWrite struct {
 	Kind   EngineWriteKind `json:"kind"`
 	RepoID string          `json:"repo_id"`
 	// Principal is who writes: a seat with the run that made the write
-	// (RunProvenance, its turn at least, and never a coding run: a write is a
-	// tool call's, and a coding run's box pushes through git), or a person
+	// (RunProvenance, its turn at least, and never an executor: a write is a
+	// tool call's, and an executor's box pushes through git), or a person
 	// through a credential bound to their human seat. A token bound to nobody
 	// writes nothing.
 	Principal Principal `json:"principal"`
@@ -687,7 +687,7 @@ func (w EngineWrite) Validate() error {
 	// WHO WRITES IS NAMED, and is somebody who may: a seat with the run that
 	// made the write, whose push names it; a person through a credential
 	// bound to their human seat, whose seat is the commit's author. A token
-	// bound to nobody fetches and writes nothing (ADR-0078).
+	// bound to nobody fetches and writes nothing (ADR-0085).
 	if why := w.Principal.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
@@ -696,13 +696,13 @@ func (w EngineWrite) Validate() error {
 		return fmt.Errorf("%w: principal.run: a seat's write names the run that made it — its turn at least, "+
 			"stamped by the engine from the call", ErrInvalid)
 	case w.Principal.Run.RunID != "":
-		// A WRITE IS A TOOL CALL'S, whose run is the turn that called it —
-		// a coding run's box pushes through git — and the push it lands as
-		// is engine-built, which Proposal.Validate refuses naming a coding
-		// run. Refused here, by the rule every party holds a write to,
-		// rather than by the landing after a git node has built it.
+		// A WRITE IS A TOOL CALL'S, whose run is the turn that called it — an
+		// executor's box pushes through git — and the push it lands as is
+		// engine-built, which Proposal.Validate refuses naming an executor.
+		// Refused here, by the rule every party holds a write to, rather than
+		// by the landing after a git node has built it.
 		return fmt.Errorf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
-			"is its turn: it names no coding run", ErrInvalid)
+			"is its turn: it names no executor", ErrInvalid)
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a write is a person's, through a credential bound to their human "+
 			"seat — a token bound to nobody writes nothing", ErrInvalid)

@@ -25,7 +25,7 @@ import (
 //
 // THE CONTROL TOPIC, NEVER THE SEAT'S INBOX. The answer is addressed to a run,
 // like the completion that topic was made for, and the inbox is the seat's
-// mail: held for as long as any of the seat's coding runs holds it, and worked
+// mail: held for as long as any of the seat's executors holds it, and worked
 // oldest first after that. An answer put there waited behind every job the
 // seat took on and every message it had not got to, and on a busy seat it
 // waited until the run's pause TTL took its box (see
@@ -46,6 +46,27 @@ type AnswerDesk struct {
 // Run reads one run by its turn id, for the check an answer is made against.
 func (d AnswerDesk) Run(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	return d.Pending.Get(ctx, turnID)
+}
+
+// Held is the active run whose row holds held call id ([PendingRun.HeldCall]),
+// false where none does: the run a held call's approval answers
+// (`POST /mcp-approvals/{id}`, ADR-0077).
+//
+// OVER EVERY ACTIVE RUN, as the board reads them: a held call is named by its
+// own id, which a person read off the Inbox or the MCP answer, and nothing
+// indexes a run by it. The fleet holds one row per run that still owns
+// engine-side state, which is what a person's gesture reads.
+func (d AnswerDesk) Held(ctx context.Context, id string) (PendingRun, bool, error) {
+	runs, err := d.Pending.ListActive(ctx)
+	if err != nil {
+		return PendingRun{}, false, fmt.Errorf("sandbox: reading the runs for held call %s: %w", id, err)
+	}
+	for _, run := range runs {
+		if run.HeldCall != nil && run.HeldCall.ID == id {
+			return run, true, nil
+		}
+	}
+	return PendingRun{}, false, nil
 }
 
 // Answerer is who gave the answer run has recorded, as its seal names them
@@ -77,10 +98,10 @@ func OpenedAnswerer(seal *AnswerSeal, run PendingRun) string {
 
 // Deliver puts one answer on the control topic of the seat that holds the run
 // it names, refusing one that names no run or no question
-// ([types.SandboxAnswerGiven.LaunchID]) before anything is read or published.
+// ([types.ExecutorAnswerGiven.LaunchID]) before anything is read or published.
 //
 // THE RUN'S OWN ROW DECIDES THE TOPIC, read here by the turn the answer names,
-// and the answer is stamped with that row's seat ([types.SandboxAnswerGiven]
+// and the answer is stamped with that row's seat ([types.ExecutorAnswerGiven]
 // .Agent): a control topic is addressed by the seat's agent id, derived from
 // its handle (ADR-0013). The coordinator that consumes it compares the same
 // id against the row again ([Coordinator.AnswerByTurn]), so an answer that
@@ -103,12 +124,12 @@ func OpenedAnswerer(seal *AnswerSeal, run PendingRun) string {
 // than told it failed: a second answer to the same question is harmless — the
 // first to be consumed resumes the run and the other is announced
 // not_awaiting, because each names the question it answers
-// ([types.SandboxAnswerGiven.LaunchID]) and the run is no longer waiting on it
+// ([types.ExecutorAnswerGiven.LaunchID]) and the run is no longer waiting on it
 // whatever it waits on by then — while telling a person their answer was
 // refused when it is on its way would have them give it somewhere else. A row
 // that could not be read is reported the same way, for the same reason:
 // answering again is safe either way.
-func (d AnswerDesk) Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (d AnswerDesk) Deliver(ctx context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	if strings.TrimSpace(given.TurnID) == "" {
 		return uuid.Nil, errors.New("sandbox: an answer names no run")
 	}

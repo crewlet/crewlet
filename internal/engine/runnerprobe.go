@@ -155,7 +155,7 @@ func probeCells(ctx context.Context, spec *config.SandboxProvider, resolve func(
 		Container: cell(config.PlacementContainer, func() sandbox.CellProbe {
 			if local.Image == "" {
 				return sandbox.CellProbe{Detail: "providers.sandbox.local.image is not set",
-					Fix: "Set providers.sandbox.local.image to an image with the coding CLI installed"}
+					Fix: "Set providers.sandbox.local.image to an image with the harness installed"}
 			}
 			return sandbox.ProbeContainer(ctx, string(local.Runtime))
 		}),

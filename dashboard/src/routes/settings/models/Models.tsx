@@ -42,7 +42,7 @@ export function Models({ id }: { id?: string }) {
     }
     if (next === "edit") {
       const target = key ?? id;
-      if (target) flow.wizard(target, at ?? { step: "cli" });
+      if (target) flow.wizard(target, at ?? { step: "harness" });
       return;
     }
     if (id && key && key !== id) {

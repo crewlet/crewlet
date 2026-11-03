@@ -219,7 +219,7 @@ func TestAResumeAnnouncesItsSegment(t *testing.T) {
 	e, p := starting(t, refusingModels(t))
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
-	completion := events.New(types.SandboxRunCompleted{
+	completion := events.New(types.ExecutorFinished{
 		AgentHandle: "swe", RoleName: "SWE", TurnID: "run-1", SandboxID: "sbx-1",
 	}, events.TraceContext{})
 

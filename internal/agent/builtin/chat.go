@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -117,7 +118,7 @@ type ChatWriter interface {
 	PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string,
 		patch chatlet.ChannelPatch, authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-		members []chatlet.Member) (chatlet.Written, error)
+		members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error)
 	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		handles []string) (chatlet.Written, []string, error)
 	Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
@@ -389,6 +390,10 @@ func chatClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalForbidden, true
 	case errors.Is(err, chatlet.ErrNameTaken), errors.Is(err, chatlet.ErrRoomExists):
 		return tools.RefusalExists, true
+	case errors.Is(err, chatlet.ErrMembersChanged):
+		// A READ OUTGROWN, NOT A RACE LOST: the members moved after the
+		// caller read them, and reading them again is the cure.
+		return tools.RefusalStaleVersion, true
 	case errors.Is(err, chatlet.ErrConflict), errors.Is(err, chatlet.ErrArchived),
 		errors.Is(err, chatlet.ErrReactionsFull):
 		// A LOST RACE, AND THE STATE OF THE ROOM OR THE MESSAGE THE CALL IS
@@ -484,6 +489,14 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 			name, chatlet.Sentence(err)))
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chatlet.Sentence(err)))
+	case errors.Is(err, chatlet.ErrMembersChanged):
+		// NOT A RACE LOST BUT A READ OUTGROWN: the membership was stated
+		// against members the room no longer holds, so what to read again
+		// is the room's members, and a person is told it in their words.
+		return toPerson(refusedBy(class, err, fmt.Sprintf("%s was refused: %s, so "+
+			"nothing was written. Read the room's members again and state the "+
+			"change against what it holds now.", name, chatlet.Sentence(err))),
+			caveat.MembersChanged())
 	case class == tools.RefusalConflict:
 		// A LOST RACE, in words that say which read comes before a
 		// retry. A tool of another domain tells it in [statelog.LostRace]
@@ -813,9 +826,20 @@ func addressesRoom(body string) bool {
 // posts is a new message — exactly as a person pressing send twice says it
 // twice, since nothing redelivers that call.
 func (d ChatDeps) message(body string, links []string) chatlet.NewMessage {
+	return ChatMessage(d.Mentions, body, links)
+}
+
+// ChatMessage is what a post carries, read from the words a person or a model
+// wrote: the seats it names (through mentions, which may be nil) and whether
+// it addresses the whole room.
+//
+// EXPORTED FOR THE POST'S DRY RUN, which a composer asks before the send
+// (`chat_reach`): the words are read by this one function on both sides, so
+// whom a draft is told it reaches is whom the same words reach when posted.
+func ChatMessage(mentions MentionResolver, body string, links []string) chatlet.NewMessage {
 	in := chatlet.NewMessage{Body: body, Links: links, Collective: addressesRoom(body)}
-	if d.Mentions != nil {
-		in.Mentions = d.Mentions.Mentions(body)
+	if mentions != nil {
+		in.Mentions = mentions.Mentions(body)
 	}
 	return in
 }
@@ -878,6 +902,15 @@ func postReceipt(written chatlet.Written, channelID string) map[string]any {
 		// the receipt is where it learns that thirty-two colleagues are
 		// about to be woken.
 		out["addressed_whole_room"] = true
+	}
+	if reach := written.Message.Reach; reach != nil {
+		// WHOM A PERSON'S POST REACHED, said back so the person who sent
+		// it through an assistant is told at once whether any agent was
+		// asked, rather than waiting on an answer nobody owes them.
+		out["reached"] = reach.Recipients
+		if len(reach.Recipients) == 0 {
+			out["reached_no_agent"] = true
+		}
 	}
 	return out
 }

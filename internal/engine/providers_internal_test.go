@@ -23,20 +23,20 @@ func tierB(values map[string]string) *config.Resolver {
 	return config.NewResolver(storeSource(values), config.EnvSource{})
 }
 
-// TestBuildCLIAgentResolvesModel pins the scalar a Tier B document most often
-// writes a reference into. The model becomes the CLI's --model argv, so an
-// unresolved one is not an error an operator can read: it is the CLI refusing
-// a model literally named "${CLI_MODEL}".
-func TestBuildCLIAgentResolvesModel(t *testing.T) {
+// TestBuildHarnessAgentResolvesModel pins the scalar a Tier B document most often
+// writes a reference into. The model becomes the harness's --model argv, so an
+// unresolved one is not an error an operator can read: it is the harness refusing
+// a model literally named "${HARNESS_MODEL}".
+func TestBuildHarnessAgentResolvesModel(t *testing.T) {
 	t.Parallel()
-	r := tierB(map[string]string{"CLI_MODEL": "sonnet"})
+	r := tierB(map[string]string{"HARNESS_MODEL": "sonnet"})
 
-	p, err := BuildCLIAgent("subscription", config.LLMProvider{
-		Model:    "${CLI_MODEL}",
+	p, err := BuildHarness("subscription", config.LLMProvider{
+		Model:    "${HARNESS_MODEL}",
 		StateDir: t.TempDir(),
 	}, r, nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := p.Model(); got != "sonnet" {
 		t.Errorf("Model() = %q, want %q", got, "sonnet")
@@ -45,7 +45,7 @@ func TestBuildCLIAgentResolvesModel(t *testing.T) {
 
 // A CREDENTIAL THE ENTRY NAMES NO VARIABLE FOR IS READ THROUGH THE STORE.
 //
-// Both of an entry's credentials fall back to the CLI's own conventional
+// Both of an entry's credentials fall back to the harness's own conventional
 // variable — the headless token's under auth.mode subscription, the API key's
 // under api-key — and the fallback has to go through the resolver, which reads
 // the secret store before the environment. `crewlet llm login -capture-token`
@@ -59,19 +59,19 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
-		auth    config.CLIAgentAuth
+		auth    config.HarnessAuth
 		varName string
 		want    string
 		absent  string
 	}{{
 		name:    "a subscription token",
-		auth:    config.CLIAgentAuth{},
+		auth:    config.HarnessAuth{},
 		varName: "CLAUDE_CODE_OAUTH_TOKEN",
 		want:    "tok-from-the-store",
 		absent:  "ANTHROPIC_API_KEY",
 	}, {
 		name:    "an api key",
-		auth:    config.CLIAgentAuth{Mode: config.AuthAPIKey},
+		auth:    config.HarnessAuth{Mode: config.AuthAPIKey},
 		varName: "ANTHROPIC_API_KEY",
 		want:    "sk-ant-from-the-store",
 		absent:  "CLAUDE_CODE_OAUTH_TOKEN",
@@ -82,13 +82,13 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 				"CLAUDE_CODE_OAUTH_TOKEN": "tok-from-the-store",
 				"ANTHROPIC_API_KEY":       "sk-ant-from-the-store",
 			})
-			p, err := BuildCLIAgent("claude", config.LLMProvider{
+			p, err := BuildHarness("claude", config.LLMProvider{
 				Model:    "sonnet",
 				StateDir: t.TempDir(),
 				Auth:     tc.auth,
 			}, r, nil)
 			if err != nil {
-				t.Fatalf("BuildCLIAgent: %v", err)
+				t.Fatalf("BuildHarness: %v", err)
 			}
 			env := p.SandboxEnv()
 			if got := env[tc.varName]; got != tc.want {
@@ -110,16 +110,16 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 //
 // A provider entry that plainly reads `model: "${LLM_MODEL}"` and is refused
 // with "Model is required" sends an operator to look at a field they can see
-// is filled in — and one that silently ran on the CLI's own default model
+// is filled in — and one that silently ran on the harness's own default model
 // would bill and answer as a model nobody chose. Naming the variable sends
 // them to the one thing they have to change, which is the rule every error in
 // this tree is held to.
 //
-// "Resolved to nothing" is every way a reference gives the CLI no model, not
+// "Resolved to nothing" is every way a reference gives the harness no model, not
 // only a variable nobody set: one set to "" (compose passing an unset host
 // variable through, an empty stored secret, which is authoritative) built an
 // entry with no model at all, and a composite reference with one part unset
-// handed the CLI the rest of it ("/sonnet") as a model.
+// handed the harness the rest of it ("/sonnet") as a model.
 func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -148,8 +148,8 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := BuildCLIAgent("default", config.LLMProvider{
-				Agent:    config.CLIOpenCode,
+			_, err := BuildHarness("default", config.LLMProvider{
+				Harness:  config.HarnessOpenCode,
 				Model:    tc.model,
 				StateDir: t.TempDir(),
 			}, tierB(tc.values), nil)
@@ -165,18 +165,18 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	}
 }
 
-// A MODEL IS HANDED TO THE CLI TRIMMED. White space around a resolved value —
+// A MODEL IS HANDED TO THE HARNESS TRIMMED. White space around a resolved value —
 // a stored secret pasted with its newline — is no part of any model's name,
-// and a padded --model argument is one the CLI refuses as a model it has
+// and a padded --model argument is one the harness refuses as a model it has
 // never heard of.
 func TestAResolvedModelIsTrimmed(t *testing.T) {
 	t.Parallel()
-	p, err := BuildCLIAgent("default", config.LLMProvider{
+	p, err := BuildHarness("default", config.LLMProvider{
 		Model:    "${LLM_MODEL}",
 		StateDir: t.TempDir(),
 	}, tierB(map[string]string{"LLM_MODEL": " sonnet\n"}), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := p.Model(); got != "sonnet" {
 		t.Errorf("Model() = %q, want %q", got, "sonnet")
@@ -184,15 +184,15 @@ func TestAResolvedModelIsTrimmed(t *testing.T) {
 }
 
 // AND A MISSING CREDENTIAL STILL BUILDS. The asymmetry is deliberate: every
-// call then fails with the CLI's own sign-in error, which names the CLI and
+// call then fails with the harness's own sign-in error, which names the harness and
 // is exactly what `crewlet llm doctor` explains — far easier to diagnose than
 // a boot that died over one key, where a missing model has no such tell.
 func TestAMissingCredentialStillBuilds(t *testing.T) {
 	t.Parallel()
-	if _, err := BuildCLIAgent("default", config.LLMProvider{
+	if _, err := BuildHarness("default", config.LLMProvider{
 		Model:    "sonnet",
 		StateDir: t.TempDir(),
-		Auth: config.CLIAgentAuth{
+		Auth: config.HarnessAuth{
 			Mode:   config.AuthAPIKey,
 			APIKey: "${NOBODY_SET_THIS}",
 		},
@@ -201,11 +201,11 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 	}
 }
 
-// THE TIMEOUT THAT RUNS IS THE CONFIG'S. The CLI backend keeps no default of
+// THE TIMEOUT THAT RUNS IS THE CONFIG'S. The harness backend keeps no default of
 // its own — the engine hands it the entry's resolved cap — so the config's
 // default is the one every call runs under, and it is the one the docs and the
 // schema state.
-func TestTheCLITimeoutDefaultIsTheDocumentedOne(t *testing.T) {
+func TestTheHarnessTimeoutDefaultIsTheDocumentedOne(t *testing.T) {
 	t.Parallel()
 	if got := (&config.LLMProvider{}).Timeout(); got != 600 {
 		t.Fatalf("an entry naming no timeout_seconds gets %v s, want the documented 600", got)

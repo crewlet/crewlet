@@ -177,7 +177,7 @@ function FactList({ label, rows }: { label: string; rows: { label: string; value
 }
 
 /**
- * Who pushed the commit, when and how, and the turn, coding run and work item
+ * Who pushed the commit, when and how, and the turn, executor and work item
  * behind a seat's push — as the engine recorded them, never as the commit says
  * — or why the answering node cannot say.
  */
@@ -230,14 +230,17 @@ function Pushed({ answer }: { answer: CodeCommitAnswer }) {
             ),
           },
           {
-            label: "Coding run",
-            value: run?.run_id ? (
-              <a className="mono prose-link" href={href(["live", "runs", run.run_id])}>
-                {run.run_id}
-              </a>
-            ) : (
-              <EmptyValue label="None" />
-            ),
+            // THE EXECUTORS BOARD IS KEYED BY THE TURN that launched the
+            // executor: the launch's job id is shown, the turn is linked.
+            label: "Executor",
+            value:
+              run?.run_id && run.turn_id ? (
+                <a className="mono prose-link" href={href(["live", "executors", run.turn_id])}>
+                  {run.run_id}
+                </a>
+              ) : (
+                <EmptyValue label="None" />
+              ),
           },
           {
             label: "Work item",

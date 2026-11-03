@@ -69,8 +69,8 @@ func (r *RefusedCheckout) Error() string { return r.Result.Output }
 // reads the result's own.
 func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 
-// A CODING RUN'S REPOSITORIES ON THE COMPANY'S OWN CODE HOST, resolved as its
-// box checks each out into the run's grants (ADR-0086): each repository a
+// AN EXECUTOR'S REPOSITORIES ON THE COMPANY'S OWN CODE HOST, resolved as its
+// box checks each out into the run's grants (ADR-0093): each repository a
 // code_checkout call names becomes a [sandbox.RunRepo] on the run's row — its
 // id beside its current name, the commit the run starts from, the branch it
 // works on, what it may do and its cone — and the position the resolution
@@ -88,7 +88,7 @@ func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
 // is never given a repository its requester could not read.
 //
 // AND WHAT THE BOX MAY PUSH IS DECIDED FOR THAT REQUESTER TOO (M3-decisions
-// U40 (a), its write half for a coding run): in a turn a colleague seat woke,
+// U40 (a), its write half for an executor): in a turn a colleague seat woke,
 // the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
 // and the code host's box admission holds the box to the colleague's own
 // grant on every request it makes ([code.Grant.Under]) — a read the colleague
@@ -177,7 +177,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 	}
 	if c.asker.Kind != code.PrincipalAgent {
 		return RunRepos{}, &RefusedCheckout{Result: refused(tools.RefusalForbidden,
-			CodeCheckoutTool+" gives repositories to a seat's coding run, and this call is no seat's.")}
+			CodeCheckoutTool+" gives repositories to a seat's executor, and this call is no seat's.")}
 	}
 	out := RunRepos{Ceiling: c.ceiling}
 	byID := map[string]string{}

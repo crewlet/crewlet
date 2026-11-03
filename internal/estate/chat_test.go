@@ -253,7 +253,7 @@ func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, _ string
 }
 
 func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
-	_ []chatlet.Member) (chatlet.Written, error) {
+	_ []chatlet.Member, _ *[]chatlet.Member) (chatlet.Written, error) {
 	return d.wrote("set_members", actor, "")
 }
 
@@ -278,6 +278,13 @@ func (d *chatDesk) Post(_ context.Context, actor chatlet.Actor, _ string, _ chat
 func (d *chatDesk) Reply(_ context.Context, actor chatlet.Actor, _, replyTo string,
 	_ chatlet.NewMessage) (chatlet.Written, error) {
 	return d.wrote("reply:"+replyTo, actor, "")
+}
+
+func (d *chatDesk) Reach(_ context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Draft, error) {
+	return chatlet.Draft{ChannelID: channelID, ThreadRoot: replyTo, Mentions: in.Mentions,
+		Reach: &chatlet.Reach{Recipients: []chatlet.Reached{
+			{Handle: actor.Name() + "-answerer", Reason: chatlet.ReasonAnswerer}}}}, nil
 }
 
 func (d *chatDesk) Edit(_ context.Context, actor chatlet.Actor, _, _ string, _ chatlet.EditMessage) (chatlet.Written, error) {
@@ -474,7 +481,7 @@ func TestAKeyedChatWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			return err
 		}},
 		{"set members", "set_members", func(ctx context.Context, c Chat, a chatlet.Actor) error {
-			_, err := c.SetMembers(ctx, a, "room-1", []chatlet.Member{{Handle: "sam"}})
+			_, err := c.SetMembers(ctx, a, "room-1", []chatlet.Member{{Handle: "sam"}}, nil)
 			return err
 		}},
 		{"join", "join", func(ctx context.Context, c Chat, a chatlet.Actor) error {

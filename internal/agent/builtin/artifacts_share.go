@@ -275,8 +275,8 @@ func (t *uploadArtifactAsset) Parameters() map[string]any {
 			},
 			"from_sandbox": map[string]any{
 				"type": "string",
-				"description": "A file your coding run wrote in this turn, relative to " +
-					"its workspace.",
+				"description": "A file written in this turn's box, relative to its " +
+					"workspace.",
 			},
 			"from_project_file": map[string]any{
 				"type": "object",

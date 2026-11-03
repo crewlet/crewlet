@@ -172,7 +172,7 @@ func TestAStreamedResponseNamesAModelBeforeTheRunReturns(t *testing.T) {
 	}
 }
 
-// TEXT IS FILED UNDER THE REQUEST IT BELONGS TO, not the one after it. A CLI's
+// TEXT IS FILED UNDER THE REQUEST IT BELONGS TO, not the one after it. A harness's
 // record can show a request before its prose is written — Claude Code's
 // opens at message_start — so the rest of that prose arrives after the host
 // already counts the request; filed by arrival, it was drawn as the next

@@ -14,7 +14,7 @@ import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
-  SandboxEntry,
+  ExecutorEntry,
   ConfigRole,
   SeatActivityDay,
   ScheduleRow,
@@ -162,14 +162,14 @@ export function liveRow(
 }
 
 /**
- * The detached coding run a seat has in flight, by its handle alone: the run's
- * `agent_handle` names one seat, and every run carries one — a launch is made
- * under the seat's own lease. The role name is never read. Matched on the role,
- * a sibling's run parked on a question was drawn on this seat's profile and
- * peek as THIS seat's question.
+ * The executor a seat has in flight, by its handle alone: the entry's
+ * `agent_handle` names one seat, and every entry carries one — a launch is
+ * made under the seat's own lease. The role name is never read. Matched on the
+ * role, a sibling's executor parked on a question was drawn on this seat's
+ * profile and peek as THIS seat's question.
  */
-export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): SandboxEntry | null {
-  return sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
+export function seatRun(executors: readonly ExecutorEntry[], seat: Seat): ExecutorEntry | null {
+  return executors.find((s) => s.agent_handle === seat.handle) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +395,7 @@ export function turnTokens(
  * steps · 3 variables · up to 40 turns".
  *
  * NOT WHERE THE BOX IS, and never "not offered": every agent seat's executor
- * is its coding CLI's own run in a box, placed by the `run_in` of whichever
+ * is its harness's own run in a box, placed by the `run_in` of whichever
  * model entry launches it, which the seat's own block does not say — so this
  * says only what the block does. Every value on the setup card starts the line
  * it stands on, so each is written with its capital, as "No provider

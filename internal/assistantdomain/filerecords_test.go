@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0075). A conversation's
-// files are Required (ADR-0074), so a backup reads the assistant's log past its
+// A FILE RECORD NAMES THE OBJECT ITS ROW NAMES (ADR-0082). A conversation's
+// files are Required (ADR-0081), so a backup reads the assistant's log past its
 // store copy and carries every object a record names, because a restore
 // replays those records into the rows: what the declaration's reader says one
 // record writes has to be the row the applier wrote, spelled as the table's

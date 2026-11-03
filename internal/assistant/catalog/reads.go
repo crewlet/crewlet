@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -359,12 +360,12 @@ func readTools() []Tool {
 		{
 			Name: "list_decisions", Phrase: "list what waits on you",
 			Description: "What is waiting on the person: questions asked of them on tasks, and " +
-				"coding runs parked on a question for them. With list_agents' stopped seats, this " +
+				"executors parked on a question for them. With list_agents' stopped seats, this " +
 				"is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
-			// An ask is a colleague's; a coding run's is not, and is read by
-			// the one rule for a coding run's words (provenance.CodingRun).
+			// An ask is a colleague's; an executor's is not, and is read by
+			// the one rule for an executor's words (provenance.Executor).
 			TrustOf: outsideWhere(decisionRows, runAskField),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /worklet/decisions", nil, nil)
@@ -375,8 +376,8 @@ func readTools() []Tool {
 					col("at", "Since", "at", tDatetime), col("key", "Task", "ask.key", tText),
 					prose("title", "Title", "ask.title"), prose("question", "Question", "ask.body"),
 					seat("asked_by", "Asked by", "ask.asked_by"),
-					seat("agent", "Coding run", "run.agent_handle"),
-					prose("run_question", "Run question", "run.question")},
+					seat("agent", "Executor", "run.agent_handle"),
+					prose("run_question", "Executor's question", "run.question")},
 				Open: &cards.Open{Screen: "inbox"}}}),
 			Label: func(map[string]any) string { return "Reading what waits on you" },
 		},
@@ -510,18 +511,33 @@ func readTools() []Tool {
 			Name: "list_turns", Phrase: "list this seat's turns",
 			Narrow: []string{"handle", "failed", "days"},
 			Description: "One seat's recent turns: outcome, model, tokens and duration, newest " +
-				"first, and for a failed turn why it failed. Rows the person may not read are " +
-				"left out.",
+				"first, for a failed turn why it failed, and what started each (a chat " +
+				"message and why it reached the seat, a work item, a schedule). With " +
+				"message_id, the turns that chat message started in the seat it reached " +
+				"(read_chat_messages says which seats a message reached). Rows the person " +
+				"may not read are left out.",
 			schema: object([]string{"handle"}, map[string]*schema{
-				"handle": text("The seat's handle or name.", nameBytes),
-				"failed": flag("Only the turns that failed."),
-				"days":   positive("The window in days.", 30),
-				"limit":  positive("How many turns, at most.", 50),
+				"handle":     text("The seat's handle or name.", nameBytes),
+				"message_id": text("A chat message's id: only the turns it started.", nameBytes),
+				"failed":     flag("Only the turns that failed."),
+				"days":       positive("The window in days.", 30),
+				"limit":      positive("How many turns, at most.", 50),
 			}),
 			Routes: []string{"GET /turns"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /turns", nil, query(a).str("handle", "seat").
-					truth("failed", "failed").num("days", "days", 0).num("limit", "limit", 25).values())
+				args := Args(a)
+				message := args.String("message_id")
+				q := query(args).str("handle", "seat").truth("failed", "failed").
+					num("limit", "limit", 25)
+				if message != "" {
+					// THE TURNS A MESSAGE STARTED, over the whole history a
+					// node keeps unless the call narrows it: a person asks
+					// about a message they can still see.
+					q.fixed("origin", types.OriginChatMessage+":"+message).num("days", "days", 30)
+				} else {
+					q.num("days", "days", 0)
+				}
+				return get("GET /turns", nil, q.values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns", Rows: "turns", More: "next",
 				Brief: []string{"started", "task", "tokens", "error"},
@@ -534,6 +550,11 @@ func readTools() []Tool {
 					// fact a question about a failed turn is asking.
 					prose("error", "Why it failed", "error"),
 					col("error_kind", "Failure kind", "error_kind", tLabel),
+					// WHAT STARTED IT (store.Turn.Origin): the object, its id
+					// and why it reached the seat.
+					col("origin", "Started by", "origin.kind", tLabel),
+					col("origin_id", "Started by ID", "origin.id", tText),
+					col("origin_reason", "Why it reached the seat", "origin.reason", tLabel),
 					col("models", "Models", "models", tText),
 					col("task", "Task", "work_item.key", tText),
 					prose("summary", "Summary", "summary"),
@@ -547,24 +568,25 @@ func readTools() []Tool {
 				if a.Bool("failed") {
 					failedOnly = "failed only"
 				}
-				return scopeOf(labelled(a, "handle", "for"), failedOnly, lastDays(a, 0))
+				return scopeOf(labelled(a, "handle", "for"),
+					labelled(a, "message_id", "started by message"), failedOnly, lastDays(a, 0))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
-			Name: "list_coding_runs", Phrase: "list coding runs",
-			Description: "Coding runs in flight and recent, including any parked on a question.",
+			Name: "list_executors", Phrase: "list executors",
+			Description: "Seats' executors in flight and recent, including any parked on a question.",
 			schema:      object(nil, map[string]*schema{}),
-			Routes:      []string{"GET /sandbox-runs"}, Fence: true,
-			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
+			Routes:      []string{"GET /executors"}, Fence: true,
+			// AN EXECUTOR'S QUESTION IS THE HARNESS'S, a third party's model
 			// working from a brief that may be an outside chat message or a
-			// webhook's payload, read by the one rule for a coding run's
-			// words (provenance.CodingRun) wherever it is read.
+			// webhook's payload, read by the one rule for an executor's
+			// words (provenance.Executor) wherever it is read.
 			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
-				return get("GET /sandbox-runs", nil, nil)
+				return get("GET /executors", nil, nil)
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Executors", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
 				Columns: []cards.Column{seat("agent", "Seat", "agent_handle"),
 					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
@@ -572,12 +594,12 @@ func readTools() []Tool {
 					// (internal/workkey), which no person reads as a task.
 					col("status", "Status", "status", tLabel),
 					col("task", "Task", "work_item.key", tText),
-					col("coding_agent", "Agent", "coding_agent", tText),
+					col("harness", "Harness", "harness", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
 					prose("question", "Question", "question"), col("turn", "Turn", "turn_id", tText)},
 				Open: &cards.Open{Screen: "live"}}}),
-			Label: func(map[string]any) string { return "Listing coding runs" },
+			Label: func(map[string]any) string { return "Listing executors" },
 		},
 		{
 			Name: "get_spend", Phrase: "read token spend",
@@ -955,22 +977,22 @@ func artifactKinds() []string {
 	return out
 }
 
-// outsideWhere is the trust of an answer whose rows (at rows) may carry a
-// coding run's question at field: the one trust decided for a coding run's
-// words (provenance.CodingRun) where any row carries one, and where none does
+// outsideWhere is the trust of an answer whose rows (at rows) may carry an
+// executor's question at field: the one trust decided for an executor's
+// words (provenance.Executor) where any row carries one, and where none does
 // the engine's own records, a colleague's by the one rule for a surface the
 // engine hosts.
 func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	return func(_ Args, answer any) provenance.Trust {
 		if carriesRunAsk(answer, rows, field) {
-			return provenance.CodingRun("").Trust
+			return provenance.Executor("").Trust
 		}
 		return provenance.TrustForHosted("", nil, false)
 	}
 }
 
-// carriesRunAsk reports whether any row of answer at rows carries a coding
-// run's question at field.
+// carriesRunAsk reports whether any row of answer at rows carries an executor's
+// question at field.
 func carriesRunAsk(answer any, rows, field string) bool {
 	list, _ := cards.Lookup(answer, rows).([]any)
 	for _, row := range list {

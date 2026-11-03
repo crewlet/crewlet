@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -132,7 +133,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	// the sum leaves out.
 	order := []string{trackerLog, vectors, doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(), codeLog, usage.Domain{}.Name(), iamdomain.Domain{}.Name(),
-		assistantdomain.Domain{}.Name(), chatlet.Domain{}.Name()}
+		assistantdomain.Domain{}.Name(), chatlet.Domain{}.Name(), executordomain.Domain{}.Name()}
 	var registered []string
 	for _, domain := range registeredDomains() {
 		registered = append(registered, domain.Name())
@@ -179,19 +180,19 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		return 1 - float64(fit(unset, free, "")[trackerLog].Bytes)/
 			float64(fit(unset, free, codeLog)[trackerLog].Bytes)
 	}
+	//
+	// THE RUN AROUND 100 GiB, walked outward from it, because the fraction
+	// rises past the band and comes back down through it on its way to
+	// nothing: a volume far above the band printing the same figure is the
+	// descent, not the range the guide names.
 	band := fmt.Sprintf("%.1f", 100*shorter(100*gib))
-	var from, to int64
-	for free := 16 * gib; free <= 700*gib; free += gib {
-		if fmt.Sprintf("%.1f", 100*shorter(free)) != band {
-			continue
-		}
-		if from == 0 {
-			from = free
-		} else if free != to+gib {
-			t.Errorf("the mutation log is %s %% shorter on %d GiB and on %d GiB free and not "+
-				"between them, so no one range of volumes has it", band, to/gib, free/gib)
-		}
-		to = free
+	inBand := func(free int64) bool { return fmt.Sprintf("%.1f", 100*shorter(free)) == band }
+	from, to := 100*gib, 100*gib
+	for from-gib >= 16*gib && inBand(from-gib) {
+		from -= gib
+	}
+	for to+gib <= 700*gib && inBand(to+gib) {
+		to += gib
 	}
 
 	// WHERE IT STOPS GROWING: above the band the mutation log is made a
@@ -725,21 +726,19 @@ func leastFree(t *testing.T, at func(free int64) bool, to bool) float64 {
 }
 
 // gibText spells a ceiling as the pages do: a whole number of gibibytes, or a
-// half or a third of one past it, as a whole and a vulgar fraction (64, ½,
-// 42⅔) — the figures an ask is derived as — and otherwise to a tenth (9.9).
+// sixth of one past it, as a whole and a vulgar fraction (64, ½, 42⅔, 229⅙) —
+// the figures an ask is derived as and their sum, which adds thirds to halves
+// — and otherwise to a tenth (9.9).
 func gibText(b int64) string {
-	for _, part := range []struct {
-		of        int64
-		fractions []string
-	}{{3, []string{"", "⅓", "⅔"}}, {2, []string{"", "½"}}} {
-		n := (part.of*b + gib/2) / gib
-		if d := part.of*b - n*gib; d > -part.of && d < part.of {
-			whole, frac := n/part.of, part.fractions[n%part.of]
-			if whole == 0 && frac != "" {
-				return frac
-			}
-			return strconv.FormatInt(whole, 10) + frac
+	const of = 6
+	fractions := []string{"", "⅙", "⅓", "½", "⅔", "⅚"}
+	n := (of*b + gib/2) / gib
+	if d := of*b - n*gib; d > -of && d < of {
+		whole, frac := n/of, fractions[n%of]
+		if whole == 0 && frac != "" {
+			return frac
 		}
+		return strconv.FormatInt(whole, 10) + frac
 	}
 	return strconv.FormatFloat(float64(b)/float64(gib), 'f', 1, 64)
 }
@@ -753,7 +752,7 @@ func gibValue(t *testing.T, text string) int64 {
 	for _, fraction := range []struct {
 		glyph string
 		value float64
-	}{{"½", 1.0 / 2}, {"⅓", 1.0 / 3}, {"⅔", 2.0 / 3}} {
+	}{{"⅙", 1.0 / 6}, {"⅓", 1.0 / 3}, {"½", 1.0 / 2}, {"⅔", 2.0 / 3}, {"⅚", 5.0 / 6}} {
 		if rest, found := strings.CutSuffix(text, fraction.glyph); found {
 			whole, part = rest, fraction.value
 			break

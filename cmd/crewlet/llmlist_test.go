@@ -19,7 +19,7 @@ import (
 func TestLLMListNamesAnEnvSignInAsEnv(t *testing.T) {
 	t.Parallel()
 	entry := func(key, lines string) string {
-		return fmt.Sprintf("    %s:\n      agent: claude-code\n      model: sonnet\n      state_dir: %q\n%s", key, t.TempDir(), lines)
+		return fmt.Sprintf("    %s:\n      harness: claude-code\n      model: sonnet\n      state_dir: %q\n%s", key, t.TempDir(), lines)
 	}
 	flags := doctorCompany(t,
 		entry("gateway", "      auth: {mode: env}\n"+
@@ -32,7 +32,7 @@ func TestLLMListNamesAnEnvSignInAsEnv(t *testing.T) {
 	}
 	rows := map[string][]string{}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if got := strings.Fields(lines[0]); strings.Join(got, " ") != "PROVIDER AGENT MODEL SIGN-IN STATE DIR" {
+	if got := strings.Fields(lines[0]); strings.Join(got, " ") != "PROVIDER HARNESS MODEL SIGN-IN STATE DIR" {
 		t.Fatalf("header = %q", lines[0])
 	}
 	for _, line := range lines[1:] {

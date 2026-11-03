@@ -143,12 +143,12 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 		{"a valid put creating the company", http.MethodPut, companyJSONDoc, false, http.StatusOK},
 		{"a put the validator refuses", http.MethodPut,
 			strings.Replace(companyDoc, "      model: claude-sonnet-5\n",
-				"      agent: nowhere\n      model: claude-sonnet-5\n", 1),
+				"      harness: nowhere\n      model: claude-sonnet-5\n", 1),
 			true, http.StatusBadRequest},
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
 		{"a patch the validator refuses", http.MethodPatch,
-			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
+			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"harness": "nowhere", "model": "m"}}}}`,
 			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
 		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.
@@ -550,15 +550,15 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 
 	// A refusal is the write's own, located at the key to correct.
-	provider["agent"] = "nonsense"
+	provider["harness"] = "nonsense"
 	broken, err := json.Marshal(provider)
 	if err != nil {
 		t.Fatal(err)
 	}
 	refused := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(broken), nil)
 	if refused.Code != http.StatusBadRequest ||
-		!strings.Contains(refused.Body.String(), "providers.llm.zulu.agent") {
-		t.Errorf("a check of an unknown agent = %d %s, want 400 located at the key", refused.Code, refused.Body)
+		!strings.Contains(refused.Body.String(), "providers.llm.zulu.harness") {
+		t.Errorf("a check of an unknown harness = %d %s, want 400 located at the key", refused.Code, refused.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a refused entity check wrote %+v, want nothing", got)

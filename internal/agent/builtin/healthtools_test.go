@@ -554,7 +554,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 // A CODE STATUS ANSWER IS HELD TO THE SEAT'S REPOSITORY GRANT.
 //
 // The health grant opens the deployment's view and never a repository the
-// seat's own grant does not read (ADR-0081): of the hottest repositories the
+// seat's own grant does not read (ADR-0088): of the hottest repositories the
 // git nodes name, a seat's answer keeps those its grant reads, leaves out one
 // it may not read, one whose name now names nothing and one whose name now
 // names another repository, and says how many it left out; one repository
@@ -904,7 +904,7 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 // A CODE STATUS ANSWER IN A TURN SOMEBODY WOKE IS HELD TO THEIR GRANT TOO.
 //
 // Its repository reads are code reads, and the requester ceiling holds every
-// code read (ADR-0081): in a turn a colleague seat woke, each grant read names
+// code read (ADR-0088): in a turn a colleague seat woke, each grant read names
 // that seat, so the hot list also leaves out a repository the seat may read
 // and the colleague may not — counted withheld beside the one the seat itself
 // may not read — and that repository asked by name is refused as the code

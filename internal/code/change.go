@@ -15,7 +15,7 @@ import (
 )
 
 // A CHANGE'S CLOSED SETS — the values code_changes holds (replicated migration
-// 0081, the table created again by 0089), each a named string with typed
+// 0085, the table created again by 0093), each a named string with typed
 // constants, Valid, and a function answering the set in order: the one list a
 // validator, a schema and the dashboard's contract read.
 
@@ -64,7 +64,7 @@ const (
 	// MergedViaDirect is a change a MERGE RECORD merged ([Merge]): its
 	// target moved onto the commit its merge built, by a record whose
 	// decide held the change to its target's merge gate — or recorded a
-	// person's override of it — from one snapshot (ADR-0089).
+	// person's override of it — from one snapshot (ADR-0096).
 	//
 	// BASE FORMAT, under the condition merge.go's head states: no build
 	// that carries the code domain has run without it, and a change row is
@@ -255,8 +255,8 @@ type ChangeOpen struct {
 	Owner Principal `json:"owner,omitzero"`
 	// WorkItem is the work item the change carries out, nil for none.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
-	// TurnID and RunID are the turn and the sandbox run that opened it, each
-	// "" where there was none — a person's open has neither.
+	// TurnID and RunID are the turn and the executor's launch that opened
+	// it, each "" where there was none — a person's open has neither.
 	TurnID string `json:"turn_id,omitempty"`
 	RunID  string `json:"run_id,omitempty"`
 	// Mentions is the handles the change's title and body name, as its
@@ -445,7 +445,7 @@ func ChangeAddress(repo string, number int64) string {
 // way; and where even that is none, "commit" and head's abbreviated id.
 // ALWAYS A TITLE — [TitleProblem] finds nothing in it — because neither of
 // its openers is refused for its title: a push's options (internal/code/host),
-// whose change never fails its push, and a coding run's ask at its
+// whose change never fails its push, and an executor's ask at its
 // collection (internal/engine), never left unopened for its title. ONE RULE
 // for both, so a change opened either way from one commit takes one title.
 //
@@ -489,8 +489,8 @@ func AsTitle(s string) string {
 
 // TitleProblem is why s is no change's title, or "": a title is one line of
 // text — not empty, at most [MaxChangeTitleBytes] of valid UTF-8 holding no
-// control character, so no line break. Exported for the launch that holds a
-// coding run's ask to open a change to it before a box costs anything
+// control character, so no line break. Exported for the launch that holds an
+// executor's ask to open a change to it before a box costs anything
 // (internal/agent/builtin).
 func TitleProblem(s string) string {
 	switch {

@@ -531,11 +531,11 @@ func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
 			ceilings = append(ceilings, "`stream."+name+"`")
 		}
 	}
-	// A FLOOR: ten logs' ceilings today, the code log's, the Dashboard
-	// Assistant's and chat's among them, and a reflection that matched
-	// nothing would let any message pass.
-	if len(ceilings) < 10 {
-		t.Fatalf("config.Stream declares %v, fewer than the ten state logs' "+
+	// A FLOOR: eleven logs' ceilings today, the Dashboard Assistant's,
+	// chat's, the executor log's and the code log's among them, and a
+	// reflection that matched nothing would let any message pass.
+	if len(ceilings) < 11 {
+		t.Fatalf("config.Stream declares %v, fewer than the eleven state logs' "+
 			"ceilings, so this compares nothing", ceilings)
 	}
 	for _, want := range append(ceilings, "`backup_age`") {

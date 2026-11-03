@@ -267,7 +267,7 @@ func TestAnEndingDecidedWhileARevivalWaitsIsFinishedByIt(t *testing.T) {
 	launch := rig.get("t1").LaunchID
 	if _, ok, err := rig.pending.DecideEnding(t.Context(), "t1", Decision{
 		License: License{WhileIn: []string{StatusResumed}, Launch: launch},
-		Reason:  types.SandboxFailureClaimStranded, Detail: "its claim could not be handed back",
+		Reason:  types.ExecutorFailureClaimStranded, Detail: "its claim could not be handed back",
 	}); err != nil || !ok {
 		t.Fatalf("the unleased node's ending = %v, %v", ok, err)
 	}
@@ -278,7 +278,7 @@ func TestAnEndingDecidedWhileARevivalWaitsIsFinishedByIt(t *testing.T) {
 		t.Fatalf("handed back %v, want R1's copy exactly once", got)
 	}
 	rig.finished("t1")
-	if got := rig.failures(); len(got) != 1 || got[0].Reason != types.SandboxFailureClaimStranded {
+	if got := rig.failures(); len(got) != 1 || got[0].Reason != types.ExecutorFailureClaimStranded {
 		t.Fatalf("announced %+v, want the decided ending announced once", got)
 	}
 	if calls := holder.resumer.calls(); len(calls) != 0 {

@@ -4,7 +4,7 @@
  *
  * The invariants worth breaking a build over: a commit's diff is against its
  * first parent, and a root commit's against git's empty tree; who pushed it,
- * its turn, its coding run and its work item are the engine's record, not the
+ * its turn, its executor and its work item are the engine's record, not the
  * commit's author line; the changes it belongs to link their pages; a
  * comparison's files are what head changed since the merge base, read by both
  * whole ids; Open change is ONE `code_open_change` of the branch compared into
@@ -110,7 +110,7 @@ function commit(extra: Record<string, unknown> = {}, commitExtra: Record<string,
           work_backend: "native",
           work_key: "ENG-42",
           run_id: RUN,
-          coding_agent: "claude-code",
+          harness: "claude-code",
         },
       },
       via: "git",
@@ -249,10 +249,12 @@ function mount(ui: ReactElement, hash: string, viewer: unknown = VIEWER) {
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
 
-// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its turn, its coding run
+// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its turn, its executor
 // and its work item from the push that introduced the commit, never the
-// author line; and the change it heads a revision of links its page.
-// Mutation: name the pusher from the author, or drop the run, and this fails.
+// author line; and the change it heads a revision of links its page. The
+// executor is linked by its turn, which is what the executors board is keyed
+// by. Mutation: name the pusher from the author, drop the executor, or link
+// it by its job id, and this fails.
 test("a commit's page says who pushed it, from which turn and run, and its changes", async () => {
   stubEngine();
   mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}`);
@@ -263,7 +265,7 @@ test("a commit's page says who pushed it, from which turn and run, and its chang
     `#/live/turns/${TURN}`,
   );
   expect(within(pushed).getByRole("link", { name: RUN }).getAttribute("href")).toBe(
-    `#/live/runs/${RUN}`,
+    `#/live/executors/${TURN}`,
   );
   expect(within(pushed).getByText("ENG-42")).toBeTruthy();
   const changes = screen.getByRole("region", { name: "Changes" });

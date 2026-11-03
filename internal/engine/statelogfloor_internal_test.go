@@ -21,6 +21,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -260,7 +261,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// an estate nobody serves — and moving them would hand them to a peer
 	// asking the same data nodes. ONLY THE TRACKER'S: the knowledge base's
 	// copy has no hole and keeps serving, while the seat copy — which the
-	// tracker is part of — goes with it (ADR-0072).
+	// tracker is part of — goes with it (ADR-0079).
 	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
 			_, serves := e.local.For(t.Context(), worklet.Domain{}.Name())
@@ -624,10 +625,11 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	// and writes each, and a case naming two of them left the identity
 	// estate's unasked.
 	identity := identityLogs(t, s)
-	if identity[0] != running || len(identity) < 7 {
+	if identity[0] != running || len(identity) < 9 {
 		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
 			"at least the knowledge base's, the identity estate's, the artifacts "+
-			"log's, the artifact datastore's, the assistant's and chat's after it", logNames(identity))
+			"log's, the artifact datastore's, the assistant's, chat's, the "+
+			"executor log's and the code log's after it", logNames(identity))
 	}
 	others := identity[1:]
 
@@ -871,9 +873,10 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	n, c := e.native.Load(), e.core.Load()
 	s := c.log
 	if n.writer == nil || n.pages == nil || n.chat == nil || c.iamWriter == nil ||
-		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil {
+		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil ||
+		c.executorWriter == nil {
 		t.Fatal("the node runs no tracker writer, page store, chat store, identity " +
-			"writer, artifacts writer, datastore writer or assistant writer")
+			"writer, artifacts writer, datastore writer, assistant writer or executor writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -940,6 +943,19 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 		// assistant records with is a write at zero.
 		assistantdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
 			_, err := createConversation(ctx, c.assistantWriter, key)
+			return err
+		},
+		// A CONVERSATION NO TURN HAS ENDED IN is a subject nobody has
+		// written, so a turn's end recorded on it is a write at zero.
+		executordomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.executorWriter.End(ctx, executordomain.Call{
+				By:   iam.Actor{Name: "executor", Kind: iam.ActorSystem},
+				OpID: statelog.NewOpID(time.Now(), "op-"+strings.ToLower(key)),
+			}, executordomain.NewEnd{
+				Handle: "ceo", Turn: statelog.NewOpID(time.Now(), ""),
+				ConversationKey: "chat:floor-" + key,
+				Ending:          executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+			})
 			return err
 		},
 	}

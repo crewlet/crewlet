@@ -34,12 +34,12 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -100,24 +100,25 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultTimeout:   seconds(spec.Timeout()),
 		DefaultPauseTTL:  secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:  spec.MaxTurns(),
+		AttributeCommits: spec.AttributesCommits(),
 		DefaultSetup:     setupSteps(spec.Setup),
 		Telemetry:        otel,
 	})
 }
 
-// sandboxRunners is every coding agent this build can drive in a box: the CLIs
+// sandboxRunners is every harness this build can drive in a box: the harnesses
 // an executor can run on.
 //
 // A FUNCTION rather than a literal at the one call site, because two other
 // readers need the same list: `crewlet llm doctor` reports an executor-chain
-// member whose CLI has no runner as skipped, and config refuses a chain with
-// none, both against codingagent.Names(). Tests hold all three together — a
+// member whose harness has no runner as skipped, and config refuses a chain with
+// none, both against executor.Names(). Tests hold all three together — a
 // drift would have config pass a chain the engine then refuses at the seat's
 // first launch.
 func sandboxRunners() map[string]sandbox.Runner {
 	return map[string]sandbox.Runner{
-		codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
-		codingagent.OpenCodeName:   codingagent.NewOpenCode(),
+		executor.ClaudeCodeName: executor.NewClaudeCode(),
+		executor.OpenCodeName:   executor.NewOpenCode(),
 	}
 }
 
@@ -130,7 +131,7 @@ type fakePlayer = func(ctx context.Context, req sandbox.RunRequest) sandbox.Resu
 // double, each playing its runs with play.
 //
 // THE SAME NAMES, because the double stands in for the box and not for the
-// choice of CLI: a fake company's executor chains pick their member exactly as
+// choice of harness: a fake company's executor chains pick their member exactly as
 // a real one's do, and only what the run does differs. And A RUN THAT
 // FINISHES, because a double whose job never ended would park every turn of a
 // demonstration company for good — the double's own runner is what completes
@@ -139,8 +140,8 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 	if play == nil {
 		play = demoRun
 	}
-	runners := make(map[string]sandbox.Runner, len(codingagent.Names()))
-	for _, name := range codingagent.Names() {
+	runners := make(map[string]sandbox.Runner, len(executor.Names()))
+	for _, name := range executor.Names() {
 		runner := sandbox.NewFakeRunner(name)
 		runner.Player = play
 		runners[name] = runner
@@ -155,7 +156,7 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 	return sandbox.Result{
 		Success: true,
 		Text: "This run was played by providers.sandbox.fake, the in-process " +
-			"double: no coding agent ran and no tool was called.",
+			"double: no harness ran and no tool was called.",
 	}
 }
 
@@ -166,7 +167,7 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 // because nothing else connects them: the last time they disagreed the
 // config's default named a backend with no case here, so a company validated
 // cleanly, reported a configured sandbox on the dashboard, and failed at its
-// first coding run.
+// first launch.
 //
 // ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared between them: the two
 // differ in exactly one option, and a single instance would have to be told
@@ -329,12 +330,12 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 	return out
 }
 
-// runEnv is one coding run's environment and provisioning, read through this
+// runEnv is one launch's environment and provisioning, read through this
 // node's resolver by the rule every tool server's values are
 // ([resolveServer]): every reference resolved, or why the run lacks it.
 type runEnv struct {
-	// env is the run environment the box's setup commands and its coding
-	// agent are handed — the engine's own facts and the configuration's —
+	// env is the run environment the box's setup commands and its harness
+	// are handed — the engine's own facts and the configuration's —
 	// before the LLM credentials and the telemetry are laid over it.
 	env map[string]string
 
@@ -356,7 +357,7 @@ type runEnv struct {
 	facted []string
 }
 
-// runEnvironment is one coding run's environment and provisioning: the
+// runEnvironment is one launch's environment and provisioning: the
 // provider-wide setup steps, then the seat's own, and the run environment
 // they, the seat's sandbox block and the engine assemble. Nil-safe on the
 // seat's box settings, since a seat's executor runs in a box whether or not
@@ -375,7 +376,7 @@ type runEnv struct {
 // steps' contributions, then the seat's own env — so an operator's explicit
 // value always beats a step's default.
 //
-// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0086): a run given repositories on
+// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
 // it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
 // git configuration ([Engine.boxGitEnv]), as an executor's run is given the
 // tool bridge's endpoint — a credential the box acts AS, scoped to the run and
@@ -601,7 +602,7 @@ func secondsPtr(v *float64) *time.Duration {
 	return &d
 }
 
-// sandboxAccountant post-charges a collected coding run against the shared
+// sandboxAccountant post-charges a collected launch against the shared
 // counters.
 //
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
@@ -769,7 +770,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // refs its report named and what its push record says it pushed — the
 // resumed executor's phase record lists both ([runRecordOf]). Zero when a
 // person's answer resumed a parked clarification: nothing was collected. The
-// run's cost is on its own `sandbox` phase record instead — see
+// run's cost is on its launch's own `executor_collected` record instead — see
 // [sandbox.ResumeRequest.DeliveredRefs].
 type runAccount struct {
 	// DeliveredRefs are what the run reported, and RefsElided how many more
@@ -805,8 +806,8 @@ func accountOf(req sandbox.ResumeRequest) runAccount {
 // dashboard.
 func runRecordOf(run sandbox.PendingRun, account runAccount) runner.RunRecord {
 	return runner.RunRecord{
-		CodingAgent: run.CodingAgent,
-		SandboxID:   run.SandboxID,
+		Harness:   run.Harness,
+		SandboxID: run.SandboxID,
 		// AND WHICH ENTRY RAN IT, as the launch recorded the member it
 		// picked: the executor's record and its spend are charged to
 		// that entry and model, which a fallback makes other than the
@@ -858,7 +859,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 // ITS TRACE, continued from the ids on the run's row — the suspended span
 // reconstructed as a remote parent, since no span survives a suspend — and
 // ITS SEAT, bound for every model call the turn makes ([llm.WithSeat]) exactly
-// as the dispatch path binds it for a fresh turn. A coding CLI keeps a home of
+// as the dispatch path binds it for a fresh turn. A harness keeps a home of
 // its own per seat — its transcripts, its sign-in — and a call that names no
 // seat runs in the one home every unbound call shares: a resumed turn's
 // executor, its reviewer and a worker a box delegated to all did, beside each
@@ -944,7 +945,7 @@ type resumeInput struct {
 	// segment's charge includes too: see [sandbox.ResumeRequest.Engine].
 	Engine sandbox.EngineSpend
 
-	// Ended is how the collected run's CLI said it ended, verbatim — see
+	// Ended is how the collected run's harness said it ended, verbatim — see
 	// [sandbox.ResumeRequest.Ended] and [Engine.noteRunEnded].
 	Ended sandbox.RunEnding
 
@@ -1050,7 +1051,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     retries the resume on its own schedule and each attempt raises its
 	//     own indicator off the recorded trigger. It never falls through to
 	//     an ordinary turn, which answered the person with a turn rather
-	//     than with the coding run they were replying to. See
+	//     than with the executor they were replying to. See
 	//     [sandbox.Coordinator.TryResumeFromAnswer] and
 	//     [sandbox.Coordinator.AnswerByTurn].
 	working := rejoined
@@ -1111,7 +1112,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
-	input.Resume = runnerResume(in, e.runSteers.carried(in.Run))
+	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher))
 	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1389,8 +1390,8 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// phase with a cap — never runs on a resume.
 		Remaining: e.remainingFor(company, in.Turn.Handle()),
 		// THE SAME FENCE THE DISPATCH PATH GETS, and a parked run needs it
-		// more than a fresh turn does: its turn was parked across a coding
-		// run that may have taken an hour, and the node that picks it up is
+		// more than a fresh turn does: its turn was parked across a launch
+		// that may have taken an hour, and the node that picks it up is
 		// not always the node that parked it. The grant it closes on is the
 		// one THIS node holds now — which is the correct anchor, since that
 		// is what this node is admitted for.
@@ -1425,7 +1426,10 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 // run's row and the resume's own input: what the run did, where, under which
 // entry, and what carries it on. steered is every note the turn has read
 // ([runSteers.carried]).
-func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
+//
+// seal opens a held call's arguments and seals its result (ADR-0077): nil on a
+// node without the fleet keyring's cipher, where a held call is not made.
+func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) *runner.Resume {
 	return &runner.Resume{
 		State: in.State, Answer: in.Answer,
 		// WHICH BOX DID THE WORK, and what it delivered — see
@@ -1442,7 +1446,7 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).
-		Asked: runnerAsked(in.Asked),
+		Asked: runnerAsked(in.Asked, seal),
 		Lost:  runnerLost(in.Lost),
 		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
 		// [Engine.signInReplaced].
@@ -1454,16 +1458,79 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 }
 
 // runnerAsked is the coordinator's account of an answered question in the
-// runner's terms, nil for a resume no answer drove.
-func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
+// runner's terms, nil for a resume no answer drove: a held call's arguments
+// opened from their seal, and its mark and result written through the claim
+// ([heldCommit]).
+func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked {
 	if asked == nil {
 		return nil
 	}
-	return &runner.Asked{
+	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
 		Label: asked.Label,
 	}
+	if held := asked.Held; held != nil {
+		call := held.Call
+		out.Held = &runner.HeldCall{Tool: call.Tool, Server: call.Server, Digest: call.Digest,
+			Choice: held.Choice, Commit: heldCommit{held: held, seal: seal}}
+		if sandbox.HeldMakes(held.Choice) {
+			args, err := seal.OpenArguments(held.TurnID, call)
+			if err != nil {
+				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
+				// node cannot open leaves the call unmade, and the run is
+				// told so.
+				log.Error("held_call_arguments_unopened", "turn_id", held.TurnID,
+					"held_call", call.ID, "tool", call.Tool, "error", err.Error())
+				out.Held.Unopened = "its arguments could not be opened on the node carrying the " +
+					"run on, so the engine could not make the call as it was approved; call it " +
+					"again to ask afresh"
+			}
+			out.Held.Args = args
+		}
+	}
+	return out
+}
+
+// heldCommit is [runner.HeldCommit] over the claim's writes
+// ([sandbox.HeldResume]) and the fleet keyring's seal, which the result is
+// sealed under on the row and opened from for a later attempt.
+type heldCommit struct {
+	held *sandbox.HeldResume
+	seal *sandbox.CallSeal
+}
+
+// Begin marks the held call; see [runner.HeldCommit].
+func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
+	call, first, err := h.held.Mark(ctx)
+	switch {
+	case err != nil:
+		return runner.HeldPrior{}, err
+	case first:
+		return runner.HeldPrior{First: true}, nil
+	case !call.Made():
+		return runner.HeldPrior{}, nil
+	}
+	result, err := h.seal.OpenResult(h.held.TurnID, call)
+	if err != nil {
+		// RECORDED, AND UNREADABLE HERE: the call was made, and what it
+		// returned cannot be handed over, which the run is told as a call
+		// whose result is unknown. Never made again.
+		log.ErrorContext(ctx, "held_call_result_unopened", "turn_id", h.held.TurnID,
+			"held_call", call.ID, "tool", call.Tool, "error", err.Error())
+		return runner.HeldPrior{}, nil
+	}
+	return runner.HeldPrior{Made: true, Result: result}, nil
+}
+
+// Record seals and records what the held call returned; see
+// [runner.HeldCommit].
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult) error {
+	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
+	if err != nil {
+		return err
+	}
+	return h.held.Record(ctx, sealed)
 }
 
 // runnerLost is the coordinator's account of a lost job in the runner's terms,
@@ -1477,17 +1544,17 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 
 // noteRunEnded sits out the entry a collected run launched on, where the run
 // ended on its vendor's report of a spent plan or a rate limit
-// ([cliagent.Provider.RunEnded]) — on this node, in the epoch this resume runs
+// ([harness.Provider.RunEnded]) — on this node, in the epoch this resume runs
 // in, which is the epoch every launch the resumed turn makes picks its member
 // from.
 //
-// HERE, BECAUSE NOTHING ELSE SEES IT. The run is its CLI's own, in a box, and
+// HERE, BECAUSE NOTHING ELSE SEES IT. The run is its harness's own, in a box, and
 // never goes through the entry's runs on this host — the one path that benched
 // an entry. Unread, a reviewer's send-back relaunched the turn into the very
 // plan the run had just spent, and so did every other seat's next launch on
 // the entry, while a reviewer's run on it would have moved the chain on at
 // once. A run that ended otherwise, an entry this epoch does not have —
-// renamed or removed since the launch — and one that is not a coding CLI's
+// renamed or removed since the launch — and one that is not a harness's
 // bench nothing; a run that succeeded starts the entry's backoff over, as a
 // call that was answered does.
 //
@@ -1510,8 +1577,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	if !ok {
 		return
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI {
+	agent, isHarness := provider.(*harness.Provider)
+	if !isHarness {
 		return
 	}
 	if launched := run.Launch.SignInID; launched != "" && launched != string(agent.SignInID()) {
@@ -1522,7 +1589,7 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 				"recorded on none the entry signs in with now")
 		return
 	}
-	if agent.RunEnded(ctx, cliagent.RunEnd{Answer: ended.Text, Error: ended.Error,
+	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
 		Failed: !ended.Success, Event: ended.Event, At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
@@ -1701,8 +1768,8 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the parked turn state could not be serialized", err)
 		return false, nil
 	}
-	// The iteration rides BESIDE the blob: the coordinator files the run's
-	// own phase record under it and never decodes the state.
+	// The iteration rides BESIDE the blob: the coordinator files each
+	// launch's own record under it and never decodes the state.
 	suspended, err := rt.pending.MarkSuspended(ctx, turnID, sandbox.Suspension{
 		State: blob, Iteration: suspension.State.Round,
 	})
@@ -1787,7 +1854,7 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 	}
 	log.ErrorContext(ctx, event, args...)
 	if err := rt.coordinator.FailRun(ctx, turnID,
-		types.SandboxFailureSuspensionUnrecorded, detail); err != nil {
+		types.ExecutorFailureSuspensionUnrecorded, detail); err != nil {
 		log.WarnContext(ctx, "sandbox_suspension_settle_failed", "turn_id", turnID, "error", err,
 			"detail", "the run's record could not be read, so its box was not reclaimed; the "+
 				"seat's next recovery pass reaps a run left launching")
@@ -1951,12 +2018,22 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 	}
 }
 
-// sandboxMCP renders the seat's SCOPED coding-agent MCP surface.
+// sandboxMCP renders the seat's SCOPED harness MCP surface.
 //
 // Only the servers role.sandbox.mcp.servers names — never the seat's whole MCP
-// surface by default. A coding agent inside a box reaches whatever it is given
+// surface by default. A harness inside a box reaches whatever it is given
 // with no per-tool control left, so what it is given is the decision, and it
-// is made here rather than inherited.
+// is made here rather than inherited. And never one the company has turned off
+// ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
+// day it is turned back on, and gives the box nothing until then. Nor one the
+// seat is not granted ([config.MCPServer.Grants]): a box reaches a server's
+// tools as surely as the seat's surface does, so it is held to the one grant
+// the surface is. Nor one whose address, resolved, is one the engine would not
+// dial its own child of the server at ([config.MCPAddressProblem]). Nor one
+// any tool of which is held back from the agents
+// ([config.MCPToolPolicy.AllowsEveryTool]): the harness in the box dials the
+// server itself, past the engine, so it would reach every tool the server
+// lists, and the seat reaches the allowed ones over the bridge anyway.
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1968,7 +2045,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // ([resolveServer]), from the same values the engine's own child of the
 // server is started with: the server's own env, headers and url as well as the
 // seat's block. They were once handed over verbatim, `${VAR}` and all, and
-// written into the CLI's config that way — OpenCode reads `{env:VAR}` and not
+// written into the harness's config that way — OpenCode reads `{env:VAR}` and not
 // `${VAR}`, and Claude Code expands one from the run env, which holds none of
 // the company's secrets.
 //
@@ -2009,10 +2086,62 @@ func sandboxMCP(
 			scoped = append(scoped, name)
 			continue
 		}
+		if !server.IsEnabled() {
+			// OUT OF THE SCOPE TOO, unlike an unknown name: the renderer
+			// would report one the company declares no server under, and
+			// this one is declared and turned off. Not resolved either,
+			// since a value it would need is nobody's concern while off.
+			log.Info("sandbox_mcp_server_off", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: the company has "+
+					"turned it off, and an executor launched once it is turned back on "+
+					"is given it")
+			continue
+		}
+		if !server.Grants(seat) {
+			// OUT OF THE SCOPE, as one turned off is: declared, and not
+			// this seat's. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_not_granted", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is not granted to "+
+					"this seat (mcp_servers[].access, or the integration lane for a server "+
+					"reading each agent's own credential)")
+			continue
+		}
+		if !server.Tools.AllowsEveryTool() {
+			// OUT OF THE SCOPE, as one not granted is: a box reaches a
+			// server whole, so a level that holds a tool back could not
+			// hold there. Admission refuses the listing, so only a stored
+			// revision reaches here.
+			log.Warn("sandbox_mcp_server_levelled", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server in its box: some of its "+
+					"tools are held back from the agents (mcp_servers[].tools), and a box "+
+					"reaches a server whole; the seat reaches its allowed tools over the bridge")
+			continue
+		}
+		if server.OAuth != nil {
+			// A BOX CANNOT RENEW A SIGN-IN: it is handed a server's values
+			// once, at its launch, and admission refuses the listing; one a
+			// stored revision still carries reaches the server through the
+			// bridge instead.
+			log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: it is signed in to with "+
+					"OAuth, and the box reaches its tools through the bridge")
+			continue
+		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
+		}
+		if server.Kind() == config.TransportHTTP {
+			// THE ADDRESS AS THE BOX WOULD DIAL IT, refused by the rule
+			// that keeps the engine's own child of the server from dialling
+			// it ([serverSpec]); out of the scope, like a server turned off.
+			if problem := config.MCPAddressProblem(values.url); problem != "" {
+				log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+					"detail", "the executor is not given this server: its url "+problem)
+				continue
+			}
 		}
 		box := sandbox.MCPServer{
 			Name: server.Name, Transport: sandbox.Transport(server.Kind()),
@@ -2029,7 +2158,7 @@ func sandboxMCP(
 	return sandbox.RenderMCP(servers, scoped), withheld
 }
 
-// boxServers is the scoped MCP surface one coding run's box is given
+// boxServers is the scoped MCP surface one executor's box is given
 // ([sandboxMCP]), with every server withheld for its seat credentials judged
 // against the integrations minting them and said, at the level its story
 // earns — the seat's own child's ([Engine.withheldForCredentials]): waiting
@@ -2038,7 +2167,7 @@ func sandboxMCP(
 //
 // WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
 // nothing restarts a box's servers, so a server withheld from this run is
-// offered to the first coding run launched once what it waits for arrives
+// offered to the first launch after what it waits for arrives
 // ([credentialMissing.arrival]): the seal reaching this node, or the agent's
 // GitHub App being installed.
 func (e *Engine) boxServers(
@@ -2049,19 +2178,23 @@ func (e *Engine) boxServers(
 	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
 	servers, withheld := sandboxMCP(env, c, seat, settings,
 		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
+	// A SERVER A TOOL OF WHICH CHANGED is not the box's either (ADR-0078):
+	// the run's facts at launch, not the configuration's, so outside
+	// sandboxMCP, which decides from the revision alone.
+	servers = e.withoutChangedServers(ctx, seat.Handle(), servers)
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)
 		attrs := append([]any{"seat", seat.Handle(), "server", missing.server}, missing.logAttrs()...)
 		if missing.waiting() {
 			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
-				"detail", "the coding agent is not given this server for this run: "+
-					missing.reason()+"; a coding run launched once "+missing.arrival()+
+				"detail", "the harness is not given this server for this launch: "+
+					missing.reason()+"; a launch made once "+missing.arrival()+
 					" is given it")...)
 			continue
 		}
 		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
-			"detail", "the coding agent is not given this server: "+missing.reason())...)
+			"detail", "the harness is not given this server: "+missing.reason())...)
 	}
 	return servers
 }
@@ -2093,7 +2226,7 @@ func pauseTTL(settings *org.RoleSandbox) *time.Duration {
 // may carry one display NAME — it is an admission rule, so a revision stored
 // before that rule runs with duplicates and a write merely cannot add one —
 // and a walk matching on it returned whichever came first. A seat with no
-// sandbox block would then be handed its namesake's, which is a coding run on
+// sandbox block would then be handed its namesake's, which is an executor on
 // another seat's setup steps, its credentials and its box.
 //
 // A handle is unique by a RUNNABLE rule instead: a company carrying two is
@@ -2379,7 +2512,7 @@ func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part
 	}
 	note := compact.Result{Compacted: true, From: len(text)}.Note()
 	// THE TURN'S OWN COST, filed under the run the report belongs to: the
-	// resumed segment reads it as the coding run's answer.
+	// resumed segment reads it as the executor's answer.
 	//
 	// ITS OWN TALLY, handed back with the text: no segment's tally is open
 	// while a run is collected — the condensation happens between two of
@@ -2523,7 +2656,7 @@ func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
 	return rt.coordinator.SeatRuns(handle)
 }
 
-// answerParkedRun offers a delivery to a parked coding run, through the
+// answerParkedRun offers a delivery to a parked executor, through the
 // runtime current when it arrives; with none, nothing is parked here to take
 // it.
 func (e *Engine) answerParkedRun(ctx context.Context, handle string,
@@ -2835,7 +2968,7 @@ func resumeRefusal(err error) (sandbox.Refusal, bool) {
 // has no model, or whose node refuses new work. The seat's budget and its
 // models' limit are the turn gate's, which every attempt passes, the inline
 // one included, and which asks them of the relaunch an answer's turn makes
-// ([Engine.seatCannotRun]). Whether another of the seat's coding runs holds it
+// ([Engine.seatCannotRun]). Whether another of the seat's executors holds it
 // is the coordinator's own count, so the coordinator asks that itself first
 // ([sandbox.SeatCoding]), and whether another of its turns is running is the
 // node's, asked at the same gate ([Engine.admitResume]): an answer by turn
@@ -3185,7 +3318,7 @@ func (e *Engine) markSandboxSeat(handle string, attached bool) {
 // so, the first run it launched under the revision that brought the runtime
 // would publish its completion to a topic nothing on this node consumes, and a
 // run a peer left on it would be polled by nobody here: the seat held the
-// coding job's turn for ever and never resumed it.
+// parked turn for ever and never resumed it.
 //
 // UNDER EACH SEAT'S OWN LOCK, the one its acquisition and release run under, so
 // a seat claimed or handed on while this walks is prepared exactly once or not
@@ -3321,8 +3454,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state
 	// standing, and on a chat surface that state is a live re-assertion
-	// rather than a stale row. A turn that suspended into a detached coding
-	// run deliberately leaves its indicator up, and the resume lands on
+	// rather than a stale row. A turn that suspended into a detached
+	// executor deliberately leaves its indicator up, and the resume lands on
 	// whichever node holds the seat when the box reports — so a node that has
 	// handed the seat on would otherwise go on saying "is thinking…" every
 	// refresh interval, for a turn it is not running, until the process died.
@@ -3389,7 +3522,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	}
 }
 
-// SeatHeldBySandbox reports whether a detached coding run HOLDS a seat, so it
+// SeatHeldBySandbox reports whether a detached executor HOLDS a seat, so it
 // starts no new turn until the run settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
@@ -3404,14 +3537,14 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// codingRun is what one coding box is handed to reach a model: the model, the
+// executorRun is what one coding box is handed to reach a model: the model, the
 // credential files a local backend seeds, and the whole run environment.
 //
 // THREE things travel, and they travel differently on purpose:
 //
 //   - The MODEL, so the agent addresses the model the seat runs on rather
 //     than its catalogue's default — the entry's model exactly as its runs
-//     on this host name it, for its own CLI only.
+//     on this host name it, for its own harness only.
 //   - The ENTRY'S ENVIRONMENT, in the run environment beneath the seat's,
 //     which reaches any box including a remote one: its env — a gateway's
 //     base URL, a cloud switch and its region, a provider's key — and its
@@ -3422,13 +3555,13 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
-type codingRun struct {
+type executorRun struct {
 	model string
 	files map[string]string
 	env   map[string]string
 }
 
-// newCodingRun is the [codingRun] of a box run on agent — the executor-chain
+// newExecutorRun is the [executorRun] of a box run on agent — the executor-chain
 // member the launch picked ([agentLauncher.member]) — over seatEnv, the
 // environment the seat's own config assembled ([Engine.runEnvironment]).
 //
@@ -3437,36 +3570,36 @@ type codingRun struct {
 // environment: a box is handed its entry the same way whoever launched it.
 //
 // THE PICKED MEMBER, never a second resolution of the chain: the runner the box
-// runs IS that member's CLI, so its model, written in that CLI's own grammar,
-// and its env and sign-in, which that CLI reads, are always ones the runner can
+// runs IS that member's harness, so its model, written in that harness's own grammar,
+// and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun {
-	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE CLI IT IS
-	// WRITTEN FOR. An entry's model is in that CLI's own grammar — OpenCode
+func newExecutorRun(agent *harness.Provider, seatEnv map[string]string) executorRun {
+	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
+	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
-	// the exact string every other phase's run on the entry gives the CLI,
+	// the exact string every other phase's run on the entry gives the harness,
 	// resolved and rendered as they render it.
 	//
-	// No provider of the engine's declaring: the CLI reaches the model the
+	// No provider of the engine's declaring: the harness reaches the model the
 	// way the entry's own calls do, its vendor's endpoint or the one a base
 	// URL in the entry's env names, which the run environment carries — a
 	// provider the engine declared beside it would shadow the one the model
 	// names.
-	run := codingRun{
+	run := executorRun{
 		model: agent.ModelArgument(),
 		env:   underlay(seatEnv, entryEnv(agent, seatEnv)),
 		files: agent.SandboxCredentials(),
 	}
-	// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document its
+	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
 	// path, not the profile's, because the runner is what reads it
-	// ([codingagent.Paths.CredentialDocument]).
+	// ([executor.Paths.CredentialDocument]).
 	if doc := agent.SandboxCredentialDocument(); doc != "" {
 		if run.files == nil {
 			run.files = map[string]string{}
 		}
-		run.files[codingagent.CredentialDocument] = doc
+		run.files[executor.CredentialDocument] = doc
 	}
 	return run
 }
@@ -3474,19 +3607,19 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // entryEnv is what an entry contributes to a run's environment, beneath what
 // the seat brought: its whole env with its sign-in — its headless token, its
 // API key, a provider key or a gateway's address in its env
-// ([cliagent.Provider.SandboxEnv]).
+// ([harness.Provider.SandboxEnv]).
 //
 // UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env or a
 // setup step wins. For OpenCode that is the whole rule: it reads one key per
 // model provider, and the provider the run's model names reads the one
 // variable it reads.
 //
-// ONE UNIT FOR THE SIGN-IN OF A CLI THAT HAS SEVERAL: when the entry's profile
-// lists names that sign its CLI in beyond its token and its key
-// ([cliprofile.Profile.SignInEnv]) and the seat's own environment already signs
-// the CLI in ([cliagent.Provider.CredentialEnvNames], which reads that list),
+// ONE UNIT FOR THE SIGN-IN OF A HARNESS THAT HAS SEVERAL: when the entry's profile
+// lists names that sign its harness in beyond its token and its key
+// ([harnessprofile.Profile.SignInEnv]) and the seat's own environment already signs
+// the harness in ([harness.Provider.CredentialEnvNames], which reads that list),
 // the entry adds none of its own sign-in
-// ([entrySignInName]). Such a CLI ranks its sign-ins by name (Claude Code's
+// ([entrySignInName]). Such a harness ranks its sign-ins by name (Claude Code's
 // cloud toggle routes away from the Anthropic API altogether, and
 // ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN), so underlaying
 // by name cannot see that a seat is already signed in. An api-key entry's key
@@ -3494,9 +3627,9 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // company's metered key, and beside a Bedrock toggle it rode into a box that
 // never reads it.
 //
-// THE PROFILE'S LIST, NOT A LIST OF THE RUNNER'S: the names that sign a CLI in
-// are a fact about that CLI, which its profile records once and an override
-// can extend, so a cloud switch a build of the CLI adds is one profile edit,
+// THE PROFILE'S LIST, NOT A LIST OF THE RUNNER'S: the names that sign a harness in
+// are a fact about that harness, which its profile records once and an override
+// can extend, so a cloud switch a build of the harness adds is one profile edit,
 // and an entry's `auth.mode: env` and this rule read the same names.
 //
 // THE REST OF THE ENTRY'S ENV STILL LIES BENEATH IT. A base URL, a region or
@@ -3506,7 +3639,7 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // to bypass it names the variable itself. Dropped whole for such a seat, as
 // the entry's sign-in alone once was, its run would lose the gateway every
 // other phase of its entry goes through.
-func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
+func entryEnv(agent *harness.Provider, seatEnv map[string]string) map[string]string {
 	env := agent.SandboxEnv()
 	if len(agent.Profile().SignInEnv) == 0 || !signsIn(seatEnv, agent.CredentialEnvNames()) {
 		return env
@@ -3520,18 +3653,18 @@ func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]st
 }
 
 // entrySignInName reports whether name is part of an entry's sign-in, which a
-// seat signing the CLI in itself replaces as one unit ([entryEnv]): a name the
-// CLI signs in by, its profile's token and key variables (which an override may
+// seat signing the harness in itself replaces as one unit ([entryEnv]): a name the
+// harness signs in by, its profile's token and key variables (which an override may
 // have renamed) and its sign_in_env, such as Claude Code's gateway bearer token
-// and its cloud toggles ([cliagent.Provider.CredentialEnvNames]); and any
+// and its cloud toggles ([harness.Provider.CredentialEnvNames]); and any
 // credential-named variable
-// ([cliprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
+// ([harnessprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
 // AWS_BEARER_TOKEN_BEDROCK or the AWS key pair), which with the entry's toggle
 // gone no request of the run reads, and which would sit in a box whose agent
 // runs with every permission as a company credential the seat's run never
 // uses.
-func entrySignInName(agent *cliagent.Provider, name string) bool {
-	return slices.Contains(agent.CredentialEnvNames(), name) || cliprofile.IsCredentialName(name)
+func entrySignInName(agent *harness.Provider, name string) bool {
+	return slices.Contains(agent.CredentialEnvNames(), name) || harnessprofile.IsCredentialName(name)
 }
 
 // signsIn reports whether env carries a non-blank value under any of names.
@@ -3547,7 +3680,7 @@ func signsIn(env map[string]string, names []string) bool {
 	return false
 }
 
-// SandboxCredentialError reports a coding run whose box could never
+// SandboxCredentialError reports a launch whose box could never
 // authenticate, refused before the box is minted.
 //
 // A distinct type because the remedies (a token that travels, an api-key
@@ -3560,7 +3693,7 @@ type SandboxCredentialError struct{ msg string }
 
 func (e *SandboxCredentialError) Error() string { return e.msg }
 
-// sandboxCredentials refuses a run whose coding agent has nothing to
+// sandboxCredentials refuses a run whose harness has nothing to
 // authenticate with inside its box.
 //
 // THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription login with
@@ -3581,10 +3714,10 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
 //
-// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newCodingRun]):
+// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newExecutorRun]):
 // a guard that asked the chain's head would wave through a fallback launch on a
 // member with no travelling token, and refuse one whose own entry mints one.
-func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sandbox.Placement,
+func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
 	env map[string]string) error {
 	if placement.OnEngineHost() {
 		// A local box seeds the credential files and writes a refreshed
@@ -3597,12 +3730,12 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 	return credentialRefusal(agent, key, seat, placement)
 }
 
-// entrySignsIn reports whether env signs agent's CLI in, in a box that is not on
+// entrySignsIn reports whether env signs agent's harness in, in a box that is not on
 // the engine host: the rule a seat's remote run and the assistant's deep work
 // are both held to before a box is started.
-func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
-	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([cliprofile.Profile.SignInEnv],
-	// which [cliagent.Provider.CredentialEnvNames] reads): for Claude Code a
+func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
+	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([harnessprofile.Profile.SignInEnv],
+	// which [harness.Provider.CredentialEnvNames] reads): for Claude Code a
 	// bearer token, or a Bedrock, Vertex AI or Foundry toggle, whether the seat
 	// brought one, which is then handed none of the entry's sign-in
 	// ([entryEnv]), or the entry's own env carries it into the box: a gateway's
@@ -3612,7 +3745,7 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 	if signsIn(env, agent.CredentialEnvNames()) {
 		return true
 	}
-	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
+	// A HARNESS THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
 	// variable to ask about: which one it reads depends on the provider the
 	// entry's model names, and an operator may give it in role.sandbox.env
 	// rather than env. So any credential-named variable the run carries
@@ -3622,17 +3755,17 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 	// seat that works, which is worse than the vendor's own "not
 	// authenticated" it exists to pre-empt.
 	//
-	// IT JUDGES THE RIGHT CLI, and the key it lets through is one the run can
+	// IT JUDGES THE RIGHT HARNESS, and the key it lets through is one the run can
 	// read: the box is handed the entry's model exactly as its runs on this
 	// host name it, so its provider is the one the operator keyed for those,
-	// and the runner is that entry's own CLI ([newCodingRun]).
+	// and the runner is that entry's own harness ([newExecutorRun]).
 	// Narrowing it to the variable the model's provider segment "should" use
-	// would need a table of that CLI's providers the engine does not ship and
+	// would need a table of that harness's providers the engine does not ship and
 	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,
 	// `moonshotai` MOONSHOT_API_KEY, `amazon-bedrock` the AWS pair.
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
-			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
+			if harnessprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
 				return true
 			}
 		}
@@ -3652,10 +3785,10 @@ func saidNames(names []string) []words.Said {
 }
 
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing
-// in whose environment signs its CLI in, carrying the remedy for THIS entry.
+// in whose environment signs its harness in, carrying the remedy for THIS entry.
 //
 // THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
-// what the entry reads at all ([cliagent.Provider.ModeSignIn]). Chosen by the
+// what the entry reads at all ([harness.Provider.ModeSignIn]). Chosen by the
 // profile alone, an api-key Claude Code entry whose key resolved to nothing was
 // told to mint a subscription token: `-capture-token` stored one the entry
 // never reads (api-key gives the token no fallback, and the child has the token
@@ -3664,24 +3797,24 @@ func saidNames(names []string) []words.Said {
 // store the token lands in; its credential files are seeded as under every
 // mode, but those never leave the engine host. So:
 //
-//   - api-key: the key, worded once in cliagent for every message that names
+//   - api-key: the key, worded once in harness for every message that names
 //     it, or the seat's own in role.sandbox.env;
 //   - inherit-env: one of the variables it forwards, in the engine's
 //     environment or the seat's role.sandbox.env, or a local cell, which is
 //     seeded with the entry's login;
-//   - subscription: a token that travels where the CLI mints one, the
-//     provider's key where the CLI reads it from its environment, and
+//   - subscription: a token that travels where the harness mints one, the
+//     provider's key where the harness reads it from its environment, and
 //     otherwise a local cell, which is seeded with the login itself.
 //
 // A variable the profile names outside the reference grammar is never offered
-// ([cliagent.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
+// ([harness.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
 // mint can carry a credential under it, so where it is the route the mode or
-// the CLI would take, the remedy names the overrides field that names it —
+// the harness would take, the remedy names the overrides field that names it —
 // beside every route the entry still has, and alone only where it has none.
 //
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
-func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) error {
+func credentialRefusal(agent *harness.Provider, key, seat string, placement sandbox.Placement) error {
 	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
 	// or the catalogue's default for an entry that names none. A seat has
 	// no cell of its own to move.
@@ -3692,21 +3825,21 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
 			"environment authenticates it: %s", seat, key, placement, sign.Missing())
 		switch {
-		case sign.Mode == cliagent.AuthEnv && len(sign.Variables) == 0:
+		case sign.Mode == harness.AuthEnv && len(sign.Variables) == 0:
 			// The entry's env is its whole sign-in and seeds no login, so
 			// no cell helps: the remedy is the env, which the lead names.
 			return &SandboxCredentialError{msg: lead}
-		case sign.Mode == cliagent.AuthEnv:
+		case sign.Mode == harness.AuthEnv:
 			// No login either way, so a local cell is no remedy here: the
 			// env is, the entry's or the seat's.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; or set %s in this seat's role.sandbox.env", lead, words.Or(sign.Variables))}
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
-			// The mode hands the CLI nothing, so the remedy is the mode
+			// The mode hands the harness nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
 			return refusedCredential(fmt.Sprintf(
 				"%s; that login reaches the box only in a local cell (%s)", lead, localCell))
-		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
+		case len(sign.Variables) == 0 && sign.Mode == harness.AuthAPIKey:
 			// Its one variable is outside the grammar, and the lead names
 			// that field as the remedy. Not role.sandbox.env: every write
 			// refuses the entry until the field changes, and a name
@@ -3718,7 +3851,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			return refusedCredential(fmt.Sprintf(
 				"%s; or run the entry in a local cell (%s), which is seeded with its login",
 				lead, localCell))
-		case sign.Mode == cliagent.AuthAPIKey:
+		case sign.Mode == harness.AuthAPIKey:
 			return refusedCredential(fmt.Sprintf(
 				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0]))
 		default:
@@ -3743,11 +3876,11 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
 			"-capture-token`, or run the entry in a local cell (%s)", key, localCell)
 	case agent.SignsInThroughEnv():
-		// This CLI's key travels the way a token does, so the one-line
+		// This harness's key travels the way a token does, so the one-line
 		// fix is the key rather than a placement change — named by the
 		// provider segment of the very value the box is handed, the one
 		// fact here that says which provider it is. The VARIABLE stays
-		// the CLI's to name (see [sandboxCredentials]), so it is not
+		// the harness's to name (see [sandboxCredentials]), so it is not
 		// guessed at.
 		provider := "the provider its model names"
 		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
@@ -3757,16 +3890,16 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			"that provider, in providers.llm.%s.env or in this seat's "+
 			"role.sandbox.env — both are exported into the box — or run the entry in "+
 			"a local cell (%s)",
-			provider, agent.Agent(), key, localCell)
+			provider, agent.Harness(), key, localCell)
 		// The key travels whatever token_env says, so it stays the remedy,
 		// and the field the doctor reports is named beside it.
 		if misnamedToken != "" {
 			remedy += ". No headless token can travel instead: " + misnamedToken +
-				"; name the variable your build of the CLI reads there"
+				"; name the variable your build of the harness reads there"
 		}
 	case misnamedToken != "":
 		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
-			"of the CLI reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
+			"of the harness reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
 	}
 	return refusedCredential(fmt.Sprintf(
 		"seat %q's executor runs on %q in %q, where its subscription login cannot follow it: "+
@@ -3792,7 +3925,7 @@ func refusedCredential(msg string) error {
 // The direction is the decision: an operator who named a variable in
 // role.sandbox.env meant that value, and the engine silently replacing it
 // with a resolved subscription token would override a deliberate choice —
-// including the deliberate choice to point one seat's coding runs at a
+// including the deliberate choice to point one seat's executor at a
 // different account.
 func underlay(env, defaults map[string]string) map[string]string {
 	if env == nil {
@@ -3810,7 +3943,7 @@ func underlay(env, defaults map[string]string) map[string]string {
 // credential was replaced while it ran (M8 of the Models design), answering the
 // carried round or nil.
 //
-// A process's environment cannot change, and the coding CLIs re-read no file
+// A process's environment cannot change, and the harnesses re-read no file
 // for a token, so a job running when its entry's credential was rotated keeps
 // the old one until it ends; where the vendor revoked the old one, the job
 // ends refused while the entry already signs in with the new one. Every LAUNCH
@@ -3821,7 +3954,7 @@ func underlay(env, defaults map[string]string) map[string]string {
 // ALL OF IT MUST HOLD: a completion (a person's answer and a lost job carry
 // their rounds on already); a job that is not itself such a relaunch (once per
 // round, so a credential that keeps failing fails the turn); a sign-in
-// recorded at its launch; an ending its entry's CLI classifies as an auth
+// recorded at its launch; an ending its entry's harness classifies as an auth
 // failure; and an entry whose sign-in now differs from the one recorded. A
 // refusal on the very sign-in the entry still uses is an ordinary refusal.
 func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput) *runner.Rotated {
@@ -3834,11 +3967,11 @@ func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput)
 	if !ok {
 		return nil
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI {
+	agent, isHarness := provider.(*harness.Provider)
+	if !isHarness {
 		return nil
 	}
-	kind, classified := agent.EndedKind(cliagent.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
+	kind, classified := agent.EndedKind(harness.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
 		Failed: !in.Ended.Success, Event: in.Ended.Event, At: in.Ended.At})
 	if !classified || kind != llm.KindAuth {
 		return nil

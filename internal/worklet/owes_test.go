@@ -15,8 +15,8 @@ import (
 // The asker said it would report the outcome in a channel, and the person who
 // answered is told it will: the asker's `answered` wake names that surface in
 // [notify.Inbound.Owes], which is what the turn engine holds the turn open on.
-// A watcher on the same item receives the same record under its own reason and
-// owes nothing — the promise was the asker's — and an answer to a decision
+// A thread participant on the same item receives the same record under its own
+// reason and owes nothing (the promise was the asker's), and an answer to a decision
 // that asked for no inform owes nothing at all.
 func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 	t.Parallel()
@@ -28,14 +28,13 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 		Body: "the audit first", Answers: &answers, Choice: "hold",
 	}
 	wake := worklet.Wake{
-		Kind: worklet.ChangeComment,
-		After: worklet.Task{Key: "ENG-1", Project: "ENG", Title: "release",
-			Watchers: []string{"bo"}},
+		Kind:    worklet.ChangeComment,
+		After:   worklet.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
 		Comment: &answer, AnswersDecision: asked,
-		Thread: worklet.ThreadParties{AnsweredAuthor: "cy"},
+		Thread: worklet.ThreadParties{AnsweredAuthor: "cy", Participants: []string{"bo"}},
 	}
 	byHandle := routedByHandle(t, askRecord(t, worklet.TaskPatch{Comment: &answer}, wake))
-	asker, watcher := byHandle["cy"], byHandle["bo"]
+	asker, participant := byHandle["cy"], byHandle["bo"]
 	if asker.Metadata[worklet.MetaVia] != string(worklet.ReasonAnswered) {
 		t.Fatalf("the asker was routed under %q, so the case asserts nothing",
 			asker.Metadata[worklet.MetaVia])
@@ -45,11 +44,12 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 			"a tracker comment and the promised post would never be made",
 			asker.Owes, decision.InformSlack)
 	}
-	if watcher.Metadata[worklet.MetaVia] == "" {
-		t.Fatal("the watcher was not routed, so the case asserts nothing")
+	if participant.Metadata[worklet.MetaVia] == "" {
+		t.Fatal("the thread participant was not routed, so the case asserts nothing")
 	}
-	if watcher.Owes != "" {
-		t.Errorf("a watcher's copy owes %q — it promised nobody anything", watcher.Owes)
+	if participant.Owes != "" {
+		t.Errorf("a thread participant's copy owes %q, and it promised nobody anything",
+			participant.Owes)
 	}
 
 	uninformed := wake

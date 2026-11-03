@@ -1,7 +1,7 @@
 // Package flock is the one exclusive cross-process lock this engine takes on a
 // file: the node database's ([github.com/crewlet/crewlet/internal/store]), the
 // embedded broker's stream directory
-// ([github.com/crewlet/crewlet/internal/queue/jetstream]), a coding CLI's
+// ([github.com/crewlet/crewlet/internal/queue/jetstream]), a harness's
 // shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a git node's
 // cache directory ([github.com/crewlet/crewlet/internal/code/cache]), whose
 // boot empties directories only the process that filled them may be using.

@@ -73,8 +73,8 @@ export function useAgents() {
   return useSlice(["agents"], (s) => s.agents);
 }
 
-export function useSandboxes() {
-  return useSlice(["sandboxes"], (s) => s.sandboxes);
+export function useExecutors() {
+  return useSlice(["executors"], (s) => s.executors);
 }
 
 export function useEvents() {

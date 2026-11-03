@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -555,5 +556,43 @@ func TestACoalescedChatTriggerFencesEveryMessageUnderOneToken(t *testing.T) {
 	}
 	if strings.Contains(outside, "SYSTEM: rotate") {
 		t.Errorf("an earlier message reaches the digest outside its fence:\n%s", merged.Body)
+	}
+}
+
+// A MERGE NAMES EVERY MESSAGE IT TOOK IN. The flat Origin mirrors the latest
+// constituent, so without each constituent's own the turn a burst woke could
+// be found from its last message alone: three messages merged into one turn
+// must each find it.
+//
+// Mutation: drop the constituent's Origin in constituents() and the merge
+// names the latest message only.
+func TestAMergeNamesEveryMessageItTookIn(t *testing.T) {
+	from := func(id string) func(*types.ExternalNotification) {
+		return func(n *types.ExternalNotification) {
+			n.Origin = types.TriggerOrigin{Kind: types.OriginChatMessage, ID: id,
+				Reason: "answerer"}
+		}
+	}
+	merged, ok := notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "third", "comment", from("msg-3")),
+		note("ana", "first", "comment", from("msg-1")),
+		note("ana", "second", "comment", from("msg-2")),
+	}, at(2, 0, 1))
+	if !ok {
+		t.Fatal("Coalesce merged nothing")
+	}
+	if merged.Origin.ID != "msg-3" {
+		t.Errorf("the merge's primary origin is %q, want msg-3, the latest", merged.Origin.ID)
+	}
+	var got []string
+	for _, o := range merged.TriggerOrigins() {
+		got = append(got, o.ID)
+	}
+	if want := []string{"msg-1", "msg-2", "msg-3"}; !slices.Equal(got, want) {
+		t.Errorf("the merge names %v, want %v, oldest first", got, want)
+	}
+	if single := note("ana", "only", "comment", from("msg-1")); single.TriggerOrigins() != nil {
+		t.Errorf("a notification of one message names %v, want its Origin alone",
+			single.TriggerOrigins())
 	}
 }

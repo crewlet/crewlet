@@ -185,6 +185,9 @@ var categories = map[string]placement{
 	// A person's gesture on a model (Settings › Models): a check, a retry,
 	// a credential test or write, a device sign-in, a host login read.
 	"model_acted": {"lifecycle", RateAuthenticated},
+	// A person's gesture on an MCP server (Settings › MCP & tools): a
+	// restart, on every node or one seat's instance.
+	"mcp_server_acted": {"lifecycle", RateAuthenticated},
 	// An administrator's compliance read of a person's assistant
 	// conversation (D06), with the reason they gave.
 	"assistant_conversation_read": {"lifecycle", RateAuthenticated},
@@ -204,7 +207,7 @@ var categories = map[string]placement{
 	// and cannot make more of them than there are syncs.
 	"seat_access_drift_restored": {"lifecycle", RateEngine},
 
-	// Task: work reaching a seat — including a detached sandbox run, which
+	// Task: work reaching a seat — including a detached executor, which
 	// is the execution of one, and a schedule firing, which creates one.
 	//
 	// THERE IS NO TASK LIFECYCLE HERE. The five that were — created,
@@ -212,26 +215,29 @@ var categories = map[string]placement{
 	// task object Worklet replaced, and none of them ever had a
 	// publisher. Work's own record is the tracker's log, its history rows
 	// and its change feed.
-	"task_assigned":                   {"task", RateAuthenticated},
-	"sandbox_run_started":             {"task", RateEngine},
-	"sandbox_clarification_requested": {"task", RateEngine},
-	"sandbox_run_completed":           {"task", RateEngine},
+	"task_assigned":     {"task", RateAuthenticated},
+	"executor_launched": {"task", RateEngine},
+	"executor_asked":    {"task", RateEngine},
+	"executor_finished": {"task", RateEngine},
 	// A run settled WITHOUT its turn resuming. Categorised beside the
 	// completion rather than kept live-only: this is the durable record
 	// that a turn was lost, and it is the one an operator goes looking for
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
-	"sandbox_run_failed": {"task", RateEngine},
+	"executor_failed": {"task", RateEngine},
 	// A run a PERSON ended by pausing its seat with a stop. Kept for the
 	// same reason as the loss beside it — it is the record of why the work
 	// never came back — and apart from it, because a stop is not a failure.
-	"sandbox_run_stopped": {"task", RateEngine},
+	"executor_stopped": {"task", RateEngine},
 	// What an answer to a run's question became, on either route. The chat
 	// route left no record at all, so this is the only account of whether a
 	// person's reply resumed the run, found it already answered, or found it
 	// gone — and of who gave it.
-	"sandbox_run_answered": {"task", RateAuthenticated},
+	"executor_answered":    {"task", RateAuthenticated},
 	"scheduled_task_fired": {"task", RateEngine},
+	// A fire that waited in its seat's inbox and was not run, because a
+	// later fire of the same schedule ran in its place.
+	"scheduled_fire_superseded": {"task", RateEngine},
 
 	"a2a_channel_opened": {"a2a", RateEngine},
 	"a2a_message_sent":   {"a2a", RateEngine},
@@ -290,6 +296,10 @@ var categories = map[string]placement{
 	"seat_provider_released":       {"system", RateEngine},
 	"skill_telemetry_write_failed": {"system", RateEngine},
 	"subagent_batched":             {"system", RateEngine},
+	// One launch of an executor's run, as its collection read it: the
+	// executor's spend and its run's own account, stored beside the phase
+	// records of the round that launched it.
+	"executor_collected": {"system", RateEngine},
 
 	// Auth: who signed in and how, what ended a session, what changed
 	// about what a person may do, and whether a record on a fleet log was
@@ -469,13 +479,20 @@ var excluded = map[string]Exclusion{
 		"kept out below"},
 	"a2a_message": {Cause: CauseAlreadyRecorded, Reason: "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request"},
+	"seat_inbox_waiting": {Cause: CauseSampled, Reason: "a SNAPSHOT of what waits in the inboxes of the seats " +
+		"one node holds, published on a five-second tick when a count moved and " +
+		"every thirty seconds when none did, so a durable row per report would be " +
+		"readings the next report supersedes; the live projection holds the " +
+		"current one"},
 	"budget_meters": {Cause: CauseSampled, Reason: "a SNAPSHOT of the shared token counters, published by " +
 		"every node on a 15-second tick and at once when a budget window first " +
 		"refuses a charge, so a durable row per report is about " +
 		"two million a year per node to answer a question the live projection " +
 		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
-		"agent_phase_completed rows internal/tokens aggregates, so \"what did " +
+		"agent_phase_completed rows, per executor launch in the " +
+		"executor_collected rows and per auxiliary purpose in the " +
+		"auxiliary_spend rows internal/tokens aggregates, so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
 		"reading at 14:03:15\" is not a question anybody asks"},
 	"tool_skill_page_changed": {Cause: CauseAlreadyRecorded, Reason: "a NUDGE between nodes that one tool-skill " +
@@ -490,9 +507,9 @@ var excluded = map[string]Exclusion{
 		"catalogue is already a row (config_revision_applied), and a durable " +
 		"row per node per rebuild would record one revision once more per " +
 		"member of the fleet"},
-	"sandbox_answer_given": {Cause: CauseAlreadyRecorded, Reason: "the WAKE an answer by turn puts on the seat's " +
+	"executor_answer_given": {Cause: CauseAlreadyRecorded, Reason: "the WAKE an answer by turn puts on the seat's " +
 		"inbox, and never a turn. What the answer became is " +
-		"sandbox_run_answered, and that a person gave it is their " +
+		"executor_answered, and that a person gave it is their " +
 		"operator_acted row, so categorising this would write a third row " +
 		"for one answer — the reason a2a_request is kept out above"},
 	"reflection_due": {Cause: CauseAlreadyRecorded, Reason: "the WAKE that puts a finished turn in front of " +
@@ -602,6 +619,7 @@ var liveOnly = map[string]bool{
 	"agent_spawned":       true,
 	"agent_terminated":    true,
 	"budget_meters":       true,
+	"seat_inbox_waiting":  true,
 }
 
 // Category names an event type's dashboard category and reports whether the

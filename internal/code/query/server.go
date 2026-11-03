@@ -246,7 +246,7 @@ func New(o Options) (*Server, error) {
 //  3. A node holding no copy of the repository, nor filling one
 //     (Cache.Holds), answers a read that is not its walk's effective home's
 //     (code.GitQuery.Home) unready (not_held) at once, having started
-//     nothing: ONE node a walk fills a copy (ADR-0082), and every other
+//     nothing: ONE node a walk fills a copy (ADR-0089), and every other
 //     either holds one already or sends the read on.
 //  4. The node's copy is synced to the asker's floor, or read as it stands
 //     where the asker holds none, the wait bounded by statelog.ReadBudget: a

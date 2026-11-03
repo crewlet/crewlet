@@ -34,7 +34,7 @@ import (
 //
 // Unready is the failure a turn's first round would meet as far as the node
 // knows WITHOUT CALLING A MODEL, or nil when any member may answer: every
-// member's plan spent, its CLI signed out or unable to start
+// member's plan spent, its harness signed out or unable to start
 // (chain.Unready over the members). It is what `/viewer` tells a person
 // before they ask and what refuses a question before any round.
 type Models interface {

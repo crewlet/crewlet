@@ -20,11 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A JOB WHOSE CLI ASKED FOR ITS NOTES IS RECORDED AS HAVING ASKED — by a Claude
+// A JOB WHOSE HARNESS ASKED FOR ITS NOTES IS RECORDED AS HAVING ASKED — by a Claude
 // Code hook's take and by an OpenCode plugin's poll alike, on the run's real
-// bridge session — and its collection says nothing; a job whose CLI never asked
+// bridge session — and its collection says nothing; a job whose harness never asked
 // is said, at its collection, to have run no reader (steer_reader_never_ran).
-// That line tells an operator something in the box switched the CLI's reading
+// That line tells an operator something in the box switched the harness's reading
 // off, so it must be said of exactly the job that never asked: said of every
 // job that did, it would send them hunting for a policy that is not there.
 //
@@ -32,7 +32,7 @@ import (
 //
 // Mutation: drop the record of the ask from either the hook's take or the
 // plugin's poll, and that job is said never to have run its reader.
-func TestAJobsCLIAskingForItsNotesIsOnItsRecord(t *testing.T) {
+func TestAJobsHarnessAskingForItsNotesIsOnItsRecord(t *testing.T) {
 	logs := captureSteerLogs(t)
 	client := httpxtest.Pool(t)
 	for _, tc := range []struct {
@@ -99,7 +99,7 @@ func TestAJobsCLIAskingForItsNotesIsOnItsRecord(t *testing.T) {
 				}
 				return script(ctx, req)
 			})
-			// THE CLI SAYS IT READS NOTES, as Claude Code's and OpenCode's
+			// THE HARNESS SAYS IT READS NOTES, as Claude Code's and OpenCode's
 			// runners do: a run of it that never asks is a sign.
 			for _, runner := range rig.runners {
 				runner.TakesNotes = true
@@ -112,7 +112,7 @@ func TestAJobsCLIAskingForItsNotesIsOnItsRecord(t *testing.T) {
 				t.Fatalf("collect: %v", err)
 			}
 			if askErr != nil {
-				t.Fatalf("the CLI's ask: %v", askErr)
+				t.Fatalf("the harness's ask: %v", askErr)
 			}
 			said := false
 			for _, line := range strings.Split(logs.String(), "\n") {

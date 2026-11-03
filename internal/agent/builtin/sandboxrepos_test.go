@@ -115,7 +115,7 @@ func charted(asker code.Principal, repo code.RepoRef) code.Grant {
 }
 
 // A RUN'S PUSHES ARE DECIDED FOR WHOEVER WOKE ITS TURN TOO (M3-decisions U40
-// a, its write half for a coding run): in a turn a colleague seat woke, the
+// a, its write half for an executor): in a turn a colleague seat woke, the
 // run's grants name that seat for the code host's box admission to hold the
 // box to, and the launch prechecks the same rule — `access: write` on a branch
 // the colleague could not push is refused naming why, an access left out

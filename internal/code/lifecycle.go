@@ -39,7 +39,7 @@ import (
 // ONE FUNCTION, [lifecycleRefusal], over the chart of the DECIDING node's
 // epoch: a bound person maintains every tool-made repository and creates
 // projects for any owner the chart holds; a seat maintains what its grant on
-// the repository lets it ([GrantOf], ADR-0081) — a unit's projects if it is
+// the repository lets it ([GrantOf], ADR-0088) — a unit's projects if it is
 // the unit's effective lead at full_access, its own scratch repositories at
 // full_access — and never leaves a project owned by a seat: its own
 // repositories are its scratch repositories, which a cap and an idle expiry

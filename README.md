@@ -59,7 +59,7 @@ work isn't done.</sub>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>Every agent seat works as its coding CLI's own run in a box — on your host, in a
+<sub>Every agent seat works as its harness's own run in a box — on your host, in a
 container or in a remote VM — and an engineer seat opens the merge request under
 its own identity, not yours.</sub>
 </td>
@@ -105,7 +105,7 @@ prompt on its own model — a frontier model to work, a cheap one to check. See
 
 There is no infrastructure to bring up. Crewlet is one binary: it embeds its
 event stream (a NATS JetStream server) and its database is two local files it
-creates. Its models run through the **coding CLI** each vendor ships — Claude
+creates. Its models run through the **harness** each vendor ships — Claude
 Code, Codex or OpenCode, installed beside it — so the vendor's own harness
 drives every model, on your plan or your key. Describe a company and run it:
 
@@ -120,7 +120,7 @@ export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."     # Claude Code's key — or sign it in on your Claude plan
 export OPENAI_API_KEY="sk-..."            # embeddings
 
-crewlet llm doctor     # the model end to end: the CLI, its sign-in, a real tool call
+crewlet llm doctor     # the model end to end: the harness, its sign-in, a real tool call
 crewlet run            # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
 ```
 
@@ -151,7 +151,7 @@ mission: "Ship AI-powered products fast"
 
 providers:
   llm:
-    default:             # Claude Code, the default CLI
+    default:             # Claude Code, the default harness
       model: sonnet
       auth: { mode: api-key }   # reads ANTHROPIC_API_KEY; drop it to run on your plan
   sandbox:               # where every agent seat's executor runs: Claude Code's
@@ -205,9 +205,9 @@ first turn with no integrations at all, then wiring in the real ones.
 > `nimbus.company.yaml` is the full one — GitLab, Mattermost, open models
 > through OpenCode on an OpenRouter key, and Worklet and Doclet, the engine's
 > own work tracker and knowledge base.
-> `nimbus-claude-cli.company.yaml` is the short path: chat on Mattermost, its
+> `nimbus-claude-code.company.yaml` is the short path: chat on Mattermost, its
 > model Claude Code on the Claude plan you already pay for, and every seat running
-> that same CLI as its own agentic run in a box on the engine host, on
+> that same harness as its own agentic run in a box on the engine host, on
 > that same login — no API key, and no service beyond the chat server in this
 > repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
 > and Doclet, and [Jira](docs/integrations/jira.md) /
@@ -233,12 +233,12 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
+| **LLM** | Every model through the vendor's own [harness](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
 | **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) — rooms in the dashboard, and the default where no vendor is declared — or [Mattermost](docs/integrations/mattermost.md), self-hosted, one bot identity per agent, or [Slack](docs/integrations/slack.md), one app per agent |
-| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the harness |
 
 The knowledge base is **single-homed** — one searcher per company, because two would
 make an agent's answer to "what do we already know about this" depend on which one was

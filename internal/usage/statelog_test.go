@@ -3,6 +3,7 @@ package usage_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,12 +28,15 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// already has them — a schema created from test code would
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE: the repo_read kind and its four
-			// fields, at version 2, and a seat's code day, at 3 — each
-			// brought by a record that carries it (carryingSuiteField),
-			// which fails on the first row somebody adds without a case. A
-			// kind this build's successor adds is a row keyed on the kind's
-			// value, and brings its record the same way.
+			// THE VERSIONED-FIELD TABLE: a seat-day's tool calls and what
+			// their cap dropped, at 2; a fire's tick and a schedule-day's
+			// fires its seats did not run, at 3; the repo_read kind and its
+			// four fields, at 4; a seat's code day, at 5, and its failed
+			// checks and ejections, at 6 — each brought by a record that
+			// carries it ([carryingSuiteField]), which fails on the first
+			// row somebody adds without a case. A kind this build's
+			// successor adds is a row keyed on the kind's value, and brings
+			// its record the same way.
 			Fields:   usage.VersionedFields(),
 			Carrying: carryingSuiteField,
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
@@ -47,24 +51,33 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 }
 
 // carryingSuiteField builds a valid record carrying the named versioned field,
-// with its version left for the encoder to stamp.
+// with its version left for the encoder to stamp: a seat-day of the suite's
+// own shape, with one tool's calls or with a count its cap dropped, or a
+// schedule-day of it, with a fire's tick or a fire its seat did not run; a
+// repository's day; or a seat's day carrying its changes and reviews.
 //
-// THE repo_read KIND'S ROWS are each a repository's day — the kind's row, the
+// MAIN'S ROWS (2 and 3) each bring a record carrying that field alone. THE
+// repo_read KIND'S ROWS are each a repository's day — the kind's row, the
 // repository it names and its readers ride every one of them, all at version
-// 2 — with the field the row names set where the base repo_read record would
+// 4 — with the field the row names set where the base repo_read record would
 // leave it out; THE CODE DAY'S is a seat's day carrying its changes and
-// reviews, at version 3. A row added to the table without a case here fails
+// reviews, at version 5, or its failed checks or ejections, at 6, which ride
+// the code day's own row. A row added to the table without a case here fails
 // the suite rather than passing unexamined: a record that did not carry the
 // field would be stamped below it and reported as the path being wrong, which
 // is a fixture fault dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	rec := suiteRepoRead("suite-carrying", "", 0)
 	switch field.Name {
-	case "Subject.Kind repo_read", "Subject.Repo", "Record.RepoReads":
-	case "Record.RepoName":
-		rec.RepoName = "platform"
-	case "Record.RepoReadersElided":
-		rec.RepoReadersElided = 3
+	case "Subject.Kind repo_read", "Subject.Repo", "Record.RepoReads", "Record.RepoName",
+		"Record.RepoReadersElided":
+		rec := suiteRepoRead("suite-carrying", "", 0)
+		switch field.Name {
+		case "Record.RepoName":
+			rec.RepoName = "platform"
+		case "Record.RepoReadersElided":
+			rec.RepoReadersElided = 3
+		}
+		return rec.Encode()
 	case "Record.Code", "Record.Code.ChecksFailed", "Record.Code.Ejections":
 		seat := usage.Record{
 			RecordEnvelope: usage.RecordEnvelope{Writer: "suite-node",
@@ -80,8 +93,36 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			seat.Code = &usage.CodeDay{Ejections: 1}
 		}
 		return seat.Encode()
+	}
+	kind := usage.KindSeat
+	if strings.HasPrefix(field.Name, "Fire.") || field.Name == "Record.Superseded" {
+		kind = usage.KindSchedule
+	}
+	body, err := encodeSuiteRecord(string(kind), "carrying", "", 0)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := usage.Decode(body)
+	if err != nil {
+		return nil, err
+	}
+	rec.V = 0
+	switch field.Name {
+	case "Record.Tools":
+		rec.Tools = []usage.ToolCalls{{Server: "github", Tool: "github_get_issue", Calls: 2,
+			Failed: 1, TotalMS: 300, LastAt: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)}}
+	case "Record.ToolsElided":
+		rec.ToolsElided = 3
+	case "Fire.ScheduledAt":
+		rec.Fires[0].ScheduledAt = rec.Fires[0].At
+	case "Fire.FireLabel":
+		rec.Fires[0].FireLabel = "20260923T0900"
+	case "Record.Superseded":
+		rec.Superseded = []usage.Superseded{{TraceID: "trace-superseded",
+			At: time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)}}
 	default:
-		return nil, fmt.Errorf("no suite record carries %s — add a case that sets it", field.Name)
+		return nil, fmt.Errorf("no suite record carries %s: add a case that sets it "+
+			"and nothing else versioned", field.Name)
 	}
 	return rec.Encode()
 }

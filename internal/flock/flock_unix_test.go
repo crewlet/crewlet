@@ -15,7 +15,7 @@ import (
 // flock belongs to the open file description, not to a descriptor, and every
 // duplicate of the lock's descriptor refers to that same description — a child
 // this process forked and has not yet exec'd holds one (a node that runs git
-// and coding CLIs forks constantly), and so does anything that dup'd it.
+// and harnesses forks constantly), and so does anything that dup'd it.
 // Closing the lock's own descriptor leaves the lock held for as long as any
 // such copy lives; only LOCK_UN drops it whoever else has the description
 // open. The copy here is a dup kept open across the release, which is that

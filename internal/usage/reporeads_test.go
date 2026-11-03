@@ -74,16 +74,16 @@ func readersOf(t *testing.T, db *store.DB, repo, from, to string) []usage.RepoRe
 	return page.Rows
 }
 
-// A REPOSITORY'S READERS ARE VERSION 2, AND ONLY THEY ARE.
+// A REPOSITORY'S READERS ARE VERSION 4, AND ONLY THEY ARE.
 //
-// The kind is new, so a build at version 1 must retain its records rather
+// The kind is new, so a build below version 4 must retain its records rather
 // than fault at a kind it has no applier for — and nothing else the domain
 // writes may move with it, or the older half of a rolling upgrade would
 // retain every seat's day too. And what the kind cannot carry is refused at
 // the writer, before a node's applier could stop on it: a subject naming no
 // repository, a seat's subject naming one, a day of no reader, more than a day
 // holds, a reader this build cannot name, one named twice.
-func TestARepoReadRecordIsVersionTwoAndCarriesOnlyItsReaders(t *testing.T) {
+func TestARepoReadRecordIsVersionFourAndCarriesOnlyItsReaders(t *testing.T) {
 	t.Parallel()
 	stamp := func(r usage.Record) (int, error) {
 		t.Helper()
@@ -98,8 +98,8 @@ func TestARepoReadRecordIsVersionTwoAndCarriesOnlyItsReaders(t *testing.T) {
 		return env.V, nil
 	}
 	if v, err := stamp(repoReadRecord("node-a", "2026-09-23", "repo-1", reader("pat:7", "maya", 2))); err != nil ||
-		v != 2 {
-		t.Errorf("a repository's readers are stamped %d (%v), want 2", v, err)
+		v != 4 {
+		t.Errorf("a repository's readers are stamped %d (%v), want 4", v, err)
 	}
 	if v, err := stamp(seatRecord("node-a", "2026-09-23", "seat-1", "m")); err != nil || v != 1 {
 		t.Errorf("a seat's day is stamped %d (%v), want the base format's 1", v, err)

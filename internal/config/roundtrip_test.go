@@ -28,7 +28,7 @@ providers:
     big:
       model: claude-opus-5
     bigger:
-      agent: codex
+      harness: codex
       model: gpt-5
       auth:
         mode: api-key

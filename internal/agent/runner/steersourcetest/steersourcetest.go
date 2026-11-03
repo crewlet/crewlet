@@ -1,6 +1,6 @@
 // Package steersourcetest is the ONE contract suite every [runner.SteerSource]
 // runs: the first segment's box ([steer.Box], certified from
-// internal/agent/steer) and the record of the coding run a resumed segment
+// internal/agent/steer) and the record of the executor a resumed segment
 // reads (internal/engine's rowSource, certified from there).
 //
 // The runner reads a turn's notes through the source and nothing else, so what

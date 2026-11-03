@@ -37,22 +37,22 @@ import (
 // the ledger read wired as the engine wires it
 // ([sandbox.CoordinatorOptions.WasSpent]).
 
-// answerBoard records every sandbox_run_answered a coordinator announces, and
+// answerBoard records every executor_answered a coordinator announces, and
 // every copy of an answer by turn it hands back to the seat's control topic.
 type answerBoard struct {
 	mu       sync.Mutex
-	answered []types.SandboxRunAnswered
+	answered []types.ExecutorAnswered
 	inbox    []*events.Event
 }
 
 func (b *answerBoard) Publish(_ context.Context, topic string, ev *events.Event) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := ev.Data.(*types.SandboxAnswerGiven); ok && topic == topics.AgentControl(fixtureSeat("swe")) {
+	if _, ok := ev.Data.(*types.ExecutorAnswerGiven); ok && topic == topics.AgentControl(fixtureSeat("swe")) {
 		b.inbox = append(b.inbox, ev)
 		return nil
 	}
-	if payload, ok := ev.Data.(*types.SandboxRunAnswered); ok && topic == topics.Event(payload.EventType()) {
+	if payload, ok := ev.Data.(*types.ExecutorAnswered); ok && topic == topics.Event(payload.EventType()) {
 		b.answered = append(b.answered, *payload)
 	}
 	return nil
@@ -74,7 +74,7 @@ func (b *answerBoard) outcomes() []types.AnswerOutcome {
 	return out
 }
 
-// spentWorld is one seat's coding run over one store and the fleet's one
+// spentWorld is one seat's executor over one store and the fleet's one
 // completion ledger, held by whichever node a case gives it to.
 type spentWorld struct {
 	store   *sandbox.CoordStore
@@ -162,7 +162,7 @@ func (w *spentWorld) parked(t *testing.T, h *spentHolder) sandbox.PendingRun {
 	if _, err := h.coordinator.Launch(ctx, w.manager, sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -187,7 +187,7 @@ func (w *spentWorld) claimedBy(t *testing.T, run sandbox.PendingRun, given *even
 ) {
 	t.Helper()
 	ctx := t.Context()
-	payload, _ := events.DataAs[*types.SandboxAnswerGiven](given)
+	payload, _ := events.DataAs[*types.ExecutorAnswerGiven](given)
 	raw, err := json.Marshal(given)
 	if err != nil {
 		t.Fatalf("encode the answer: %v", err)
@@ -464,7 +464,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if _, err := first.coordinator.Launch(t.Context(), w.manager, sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -474,8 +474,8 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	first.coordinator.Stop()
 	w.runner.Finish(sandbox.Result{Success: true, Text: "done"})
 	run := mustRun(t, w.store, "t1")
-	done := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+	done := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, Harness: run.Harness}
 	completion := events.New(done, events.TraceContext{})
 
 	stale := w.leasedBy(t, func(string) (sandbox.Fence, bool) { return sandbox.Fence{}, false }, &takingResumer{})

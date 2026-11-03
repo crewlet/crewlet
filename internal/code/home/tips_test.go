@@ -38,7 +38,7 @@ func tipTurn(t *testing.T, e *checkEstate) ([]code.ChecksRequest, []code.QueuePr
 	return slices.Clone(e.writes), slices.Clone(e.records), slices.Clone(e.read)
 }
 
-// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0091, M5-D15): main's
+// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0098, M5-D15): main's
 // green is at G; two landings lie above it — X, which rewrites the checks file
 // so unit runs `true`, then T on top of it. The tip work reads the checks file
 // at G, the base of the first landing above the green, and never at a
@@ -184,7 +184,7 @@ func TestARedTipIsBisectedOverLandingRows(t *testing.T) {
 	}
 }
 
-// A TIP WAITS FOR THE ROUND IN FLIGHT (ADR-0091): main's tip round runs on X,
+// A TIP WAITS FOR THE ROUND IN FLIGHT (ADR-0098): main's tip round runs on X,
 // and T has landed on top of it since, holding no attempt yet. The turn
 // dispatches nothing — T waits for X's round to end rather than start a second
 // round beside it, so a target landed on faster than its checks run keeps one

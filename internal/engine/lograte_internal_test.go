@@ -150,7 +150,7 @@ func importedLog(created time.Time) (jetstream.LogStats, *probe) {
 // A GAUGE FOLLOWS A MEASUREMENT THAT BECAME UNKNOWN.
 //
 // A log re-anchored under a running fleet starts its first two days again, so
-// its intake is not measured and the report, the CLI and the screen all show
+// its intake is not measured and the report, the harness and the screen all show
 // it absent. The gauge used to keep the old stream's figure, which is one
 // evaluation giving two answers; it is withdrawn now. A log that merely could
 // not be read keeps its last measurement everywhere, the gauge included.

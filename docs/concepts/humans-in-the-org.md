@@ -317,7 +317,7 @@ What the binding buys:
   keep one team's seats out of another's
   ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
   is how to set it up, and
-  [ADR-0078](https://github.com/crewlet/crewlet/blob/main/adr/0078-a-person-reaches-git-with-their-own-bound-token.md)
+  [ADR-0085](https://github.com/crewlet/crewlet/blob/main/adr/0085-a-person-reaches-git-with-their-own-bound-token.md)
   why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
@@ -639,7 +639,7 @@ screen (Home), is the queue of the principal the request resolved to — a perso
 signed in with a session, or a token the identity directory binds — read under
 that principal's own record name (`iam.RecordOwner`): the seat they hold, or a
 credential's own login when the directory binds it to none. First comes
-**Needs you** — the questions agents put to them, the coding runs parked on a
+**Needs you** — the questions agents put to them, the executors parked on a
 question to them, a seat stopped on its budget, the conditions a person
 decides — then **Updates**, what reached them and is not read yet, and the
 item they open is read in full beside the list with the answer to it right

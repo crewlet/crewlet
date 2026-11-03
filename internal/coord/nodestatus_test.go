@@ -431,7 +431,7 @@ func TestAModelBeatRoundTrips(t *testing.T) {
 }
 
 // THE BEAT IS RE-SENT EVERY FIFTEEN SECONDS, so every piece of text a model row
-// or a runner cell carries is bounded: a vendor's sentence, a CLI's detail and
+// or a runner cell carries is bounded: a vendor's sentence, a harness's detail and
 // an account are any length, and the plan is a prefix and never the whole
 // sign-in identity.
 func TestModelTextIsBoundedOnTheWire(t *testing.T) {
@@ -529,5 +529,46 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 	if want := at.Add(-99 * time.Minute); !row.ParkedSince.Equal(want) || !row.Parked[0].Since.Equal(want) {
 		t.Errorf("the wait reads from %v (first named %v), want the longest-waiting seat's %v",
 			row.ParkedSince, row.Parked[0].Since, want)
+	}
+}
+
+// AN MCP ROW'S OUTAGE, WAIT, CLASS AND RESTARTS CROSS THE LEASE whole, through
+// the JSON round trip the lease store makes, and a healthy row carries none of
+// them: absent reads as no outage, no wait, no class and no restart, which is
+// every row of a company whose servers are up.
+func TestAnMCPRowCarriesItsOutageClassAndRestartsAcrossTheLease(t *testing.T) {
+	t.Parallel()
+	down := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	held := down.Add(-time.Hour)
+	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{
+		{Server: "tracker", Failed: 1, Error: "would not start", ErrorClass: "dns", DownSince: down, Restarts: 3,
+			Waiting: 1, Wait: "waits for ${GITHUB_TOKEN}", WaitingSince: held},
+		{Server: "search", Shared: true, Started: 1, Tools: 2},
+	}}
+	raw, err := json.Marshal(map[string]any{coord.StatusKey: status.Meta()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := coord.StatusFromMeta(meta)
+	if !ok || len(got.MCP) != 2 {
+		t.Fatalf("read back %+v (%v)", got, ok)
+	}
+	if row := got.MCP[0]; row.ErrorClass != "dns" || !row.DownSince.Equal(down) || row.Restarts != 3 ||
+		!row.WaitingSince.Equal(held) {
+		t.Errorf("the failing row read back as %+v", row)
+	}
+	if row := got.MCP[1]; row.ErrorClass != "" || !row.DownSince.IsZero() || row.Restarts != 0 ||
+		!row.WaitingSince.IsZero() {
+		t.Errorf("the healthy row read back as %+v", row)
+	}
+	rows, _ := status.Meta()["mcp"].([]map[string]any)
+	for _, key := range []string{"error_class", "down_since", "restarts", "waiting_since"} {
+		if _, sent := rows[1][key]; sent {
+			t.Errorf("a healthy row sends %q", key)
+		}
 	}
 }

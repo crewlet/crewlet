@@ -3,7 +3,7 @@
 // mirror's first fill), a PULL MIRROR's syncs ([code.RepoSettings.MirrorFrom])
 // and a PUSH MIRROR's pushes ([code.RepoSettings.MirrorTo]) — M6-D16 and
 // M6-D19. The home is the first git node of the repository's rendezvous order
-// over the live git nodes (ADR-0082), and [Mirrors] is a worker of its loop
+// over the live git nodes (ADR-0089), and [Mirrors] is a worker of its loop
 // (internal/code/home's Loop, through that package's Worker interface, which
 // this package satisfies without importing it): its listing is the
 // `imports_due` and `mirrors_due` reads (internal/code's ReadImportsDue and
@@ -120,10 +120,11 @@
 // a sync writes; at most pushBatch refspecs a push. It carries the seat's
 // OWN identity at the other host — the token the mirror's credential names,
 // sent by the one outbound dial (M6-D18) — never a bot's, and the trailers
-// a commit's box wrote (its seat, run and work item, by the sandbox
-// package's TrailerHook) travel with it as they are: the mirror inherits
-// what the box's hook wrote and decides nothing about them (U25 a). Their
-// keys are not spelled here, since only the hook may spell one.
+// a commit's box wrote (its seat, run and work item, by the executor's
+// attribution hook, internal/sandbox/executor) travel with it as they are:
+// the mirror inherits what the box's hook wrote and decides nothing about
+// them (U25 a). Their keys are not spelled here, since only the attribution
+// may spell one.
 //
 // A FAILED PUSH IS THE HOME'S STATE, in memory alone: a push to another host
 // is no record, and the node that pushes is the one that knows whether it

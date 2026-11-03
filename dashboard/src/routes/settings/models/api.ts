@@ -96,7 +96,7 @@ async function settle<T>(request: Promise<RestResponse>): Promise<ModelAnswer<T>
 }
 
 /**
- * How long the dashboard waits on a route that runs the CLI: the engine's own
+ * How long the dashboard waits on a route that runs the harness: the engine's own
  * budget for it (held to the engine by a Go gate) and a margin for the answer
  * to be written and travel back, so the page never abandons a test the engine
  * is still finishing.
@@ -184,7 +184,7 @@ export async function retryModel(
   );
 }
 
-/** `POST /llm/providers/{key}/host-login/check`: the CLI's own login on the answering node. */
+/** `POST /llm/providers/{key}/host-login/check`: the harness's own login on the answering node. */
 export async function checkHostLogin(
   key: string,
   signal?: AbortSignal,

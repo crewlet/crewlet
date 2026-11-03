@@ -64,7 +64,7 @@ import (
 //     was given to read is refused here too.
 //  5. STOP — a push only: a seat whose pause asked its running work to stop
 //     ([Runs.Stopped]) pushes nothing from a box. A person's pause with
-//     stop_running is the engine's emergency stop, and a detached coding run
+//     stop_running is the engine's emergency stop, and a detached executor
 //     is deliberately not fenced by it — it outlives its turn — so without
 //     this a box kept pushing to the company's repositories as the seat after
 //     a person stopped it. A pause without stop_running stops new work only,
@@ -153,8 +153,8 @@ const (
 )
 
 // admitBox is admit for a box: the name, then the credential, whose user name
-// says whose box it is — a check's, admitted by admitCheck, or a coding
-// run's, by admitRun.
+// says whose box it is — a check's, admitted by admitCheck, or an executor's,
+// by admitRun.
 func (s *Server) admitBox(ctx context.Context, w http.ResponseWriter, r *http.Request, op auth.GitOp) (admission, bool) {
 	raw := r.PathValue(PathRepo)
 	name := strings.TrimSuffix(raw, ".git")
@@ -202,7 +202,7 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		b.unavailable("run_unread", "the run store could not be read here: "+sentence(err.Error()))
 		return admission{}, false
 	case !found:
-		b.refuse("run_unknown", fmt.Sprintf("coding run %s is unknown here: it ended and its record was "+
+		b.refuse("run_unknown", fmt.Sprintf("executor %s is unknown here: it ended and its record was "+
 			"removed, or it never launched", ref.TurnID))
 		return admission{}, false
 	case run.Ref.LaunchID != ref.LaunchID:
@@ -210,7 +210,7 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 			"since, and only its current job's token admits a box", ref.TurnID))
 		return admission{}, false
 	case !run.Live:
-		b.refuse("run_ended", fmt.Sprintf("coding run %s has ended (%s): its box keeps no git access",
+		b.refuse("run_ended", fmt.Sprintf("executor %s has ended (%s): its box keeps no git access",
 			ref.TurnID, run.Status))
 		return admission{}, false
 	}

@@ -29,7 +29,7 @@ verb each is asked beside the app.
 
 Three facts about a verb are fields on its row rather than permissions anybody
 holds: `humanOnly` keeps an agent off a person's gesture, `seatOnly` keeps a
-person off an agent's — asking a colleague and starting a coding run, which
+person off an agent's — asking a colleague and calling `run_sandbox`, which
 the seat's role offers or does not — and `seated` keeps a credential acting as
 itself off a verb made as a seat: a question answered on the asker's seat's
 model, and every chat verb, because a room renders a speaker by seat and its
@@ -74,7 +74,7 @@ a CLI, a duty or a test is held to it exactly as a route is.
 
 Since [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md) every
 agent seat's executor is its coding CLI's own run, launched by the turn
-itself, and no tool starts a coding run, so there is no verb for one.
+itself, and no tool starts it, so `run_sandbox` and its verb are gone.
 `seatOnly` marks one verb, asking a colleague (`a2a_ask`), where the decision
 above names two.
 

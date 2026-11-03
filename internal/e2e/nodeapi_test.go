@@ -20,8 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // listenForBridge binds the listener a node's API — and with it the seat's
@@ -207,6 +209,8 @@ func wireAPI(
 	}
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
+		Secrets:        fleetsecrets.New(backends.Fleet, cipher),
+		Grants:         e,
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
 		Node:           nodeID,
@@ -321,6 +325,12 @@ func wireAPI(
 			// through the constructor cmd/crewlet wires it with: nil on a
 			// member in a maintenance mode, which arms no trim.
 			Retention: api.RetentionSource(ctx, e),
+			// THE FLEET'S RUNS, whose held calls the MCP answer lists, and
+			// what those calls would send, opened under this node's
+			// keyring, as cmd/crewlet hands both.
+			Sandbox:    sandbox.NewCoordStore(backends.Fleet),
+			RunAnswers: e.AnswerSeal(),
+			HeldCalls:  sandbox.NewCallSeal(e.Cipher()),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,

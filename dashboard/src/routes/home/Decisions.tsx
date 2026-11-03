@@ -2,7 +2,7 @@
  * "Needs your decision" — the first few things only this reader can settle,
  * each answerable where it stands.
  *
- * WHAT IT HOLDS: the open asks put to this person and the coding runs parked
+ * WHAT IT HOLDS: the open asks put to this person and the executors parked
  * on a question to them (the engine's `decisions`), and the seats the engine
  * stopped for a spent token budget that THIS reader can resolve, by raising
  * the ceiling or handing the item on (`seatDecisionsFor` decides which).

@@ -194,15 +194,15 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 		// the kick-off arrived in. Different here on purpose — equal ones
 		// would let a path that read the wrong field pass every case
 		// below.
-		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
+		Harness: "claude-code", PartitionKey: "chat:D1:root-1",
 		ConversationKey: "chat:D1",
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 		// The item the launching turn was on, so every case runs over a
 		// row that carries one — and a write that dropped it would show.
 		// The unit of work likewise.
 		WorkItem: &rigItem, WorkKey: rigWorkKey,
-		// The model the launch pointed its agent at, which the run's own
-		// phase record is filed under.
+		// The model the launch pointed its agent at, which the launch's
+		// own record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
 	shape(&run)
@@ -211,7 +211,7 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
-		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
+		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -355,16 +355,16 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 	}
 }
 
-// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN ON THE NEXT TICK.
+// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN, ONE POLL INTERVAL LATER.
 //
 // The announcement is a signal, not the work: the run's row is. So a completion
 // whose delivery was acked without a claim (a node that may not start the turn
 // yet, on a condition that clears by waiting) loses nothing, because the run is
-// still running and the next tick fires it again. That is what lets the control
+// still running and a later poll fires it again. That is what lets the control
 // topic hand such a completion back without spending a delivery.
 //
-// Mutation: fire a run's completion once and remember it, and the second tick
-// fires nothing for a run that is still waiting for its claim.
+// Mutation: fire a run's completion once and remember it for good, and the poll
+// an interval later fires nothing for a run that is still waiting for its claim.
 func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -375,6 +375,65 @@ func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
 			t.Fatalf("tick %d fired %d completions for a finished run nobody claimed, want 1",
 				tick, fired)
 		}
+		rig.now = rig.now.Add(DefaultPollInterval)
+	}
+}
+
+// A JOB NOBODY RESUMES IS RECORDED AS FINISHED ONCE, AND ANNOUNCED TO ITS SEAT
+// ON A DOUBLING SCHEDULE. Announced on every poll, a finished health check whose
+// review met a model's weekly limit put 6280 completions on the event stream in
+// 27 hours. The event stream's copy is the record that the job finished, and
+// it goes out once per job; the seat's copy is the backstop for a condition
+// that clears with nothing to say so, and it waits twice as long each time, up
+// to the ceiling. A new job of the same turn starts again.
+//
+// Mutation: announce on every poll, or publish the event stream's copy with
+// every announcement, and the counts below are the poll's.
+func TestAJobNobodyResumesIsAnnouncedOnASchedule(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	public := func() int {
+		n := 0
+		for _, topic := range rig.queue.topics() {
+			if topic == topics.Event(types.ExecutorFinished{}.EventType()) {
+				n++
+			}
+		}
+		return n
+	}
+
+	var fired []time.Duration
+	start := rig.now
+	for elapsed := time.Duration(0); elapsed <= 27*time.Hour; elapsed += DefaultPollInterval {
+		rig.now = start.Add(elapsed)
+		if rig.tick() == 1 {
+			fired = append(fired, elapsed)
+		}
+	}
+	if public() != 1 {
+		t.Fatalf("the event stream recorded the job's completion %d times, want once", public())
+	}
+	want := []time.Duration{0, DefaultPollInterval, 3 * DefaultPollInterval, 7 * DefaultPollInterval}
+	if len(fired) < len(want) || !slices.Equal(fired[:len(want)], want) {
+		t.Fatalf("announced at %v, want the schedule to begin %v", fired, want)
+	}
+	if limit := int(27*time.Hour/(reannounceCeilingPolls*DefaultPollInterval)) + 10; len(fired) > limit {
+		t.Fatalf("announced %d times in 27 hours, want at most %d", len(fired), limit)
+	}
+	for i := 1; i < len(fired); i++ {
+		if gap := fired[i] - fired[i-1]; gap > reannounceCeilingPolls*DefaultPollInterval+DefaultPollInterval {
+			t.Fatalf("announcement %d came %v after the one before, past the ceiling", i, gap)
+		}
+	}
+
+	// A NEW JOB OF THE SAME TURN IS NEWS AGAIN.
+	relaunch := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	if fired := rig.tick(); fired != 1 || public() != 2 {
+		t.Fatalf("the turn's next job %s fired %d and recorded %d completions in all, want "+
+			"it announced and recorded at once", relaunch.LaunchID, fired, public())
 	}
 }
 
@@ -390,7 +449,7 @@ func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
 
 	got := rig.queue.topics()
 	want := []string{
-		topics.Event(types.SandboxRunCompleted{}.EventType()),
+		topics.Event(types.ExecutorFinished{}.EventType()),
 		sweControl(),
 	}
 	if len(got) != len(want) {
@@ -434,7 +493,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	payload, ok := rig.queue.published[0].event.Data.(*types.ExecutorFinished)
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}
@@ -445,7 +504,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 	if run.LaunchID == "" || payload.LaunchID != run.LaunchID {
 		t.Fatalf("launch = %q, want the job the tick saw finish, %q", payload.LaunchID, run.LaunchID)
 	}
-	if payload.AgentHandle != "swe" || payload.CodingAgent != "claude-code" {
+	if payload.AgentHandle != "swe" || payload.Harness != "claude-code" {
 		t.Fatalf("payload = %+v", payload)
 	}
 }
@@ -572,7 +631,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: rig.get("t1").SandboxID, CodingAgent: "retired-agent",
+		SandboxID: rig.get("t1").SandboxID, Harness: "retired-agent",
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -581,7 +640,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 	}
 }
 
-// The engine imposes NO run-time limit on a coding job — the box is bounded
+// The engine imposes NO run-time limit on a launched job — the box is bounded
 // only by how long the engine can go without a heartbeat.
 func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	t.Parallel()
@@ -850,7 +909,7 @@ func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: rig.get("t1").SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
+		SandboxID: rig.get("t1").SandboxID, Harness: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -1210,12 +1269,12 @@ func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 	ctx := r.t.Context()
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: r.now,
+		Harness: "claude-code", CreatedAt: r.now,
 	}, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: sandboxID, CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: sandboxID, CommandID: "cmd-1", Harness: "claude-code",
 	}, Fence{}); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -1242,7 +1301,7 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	payload, ok := rig.queue.published[0].event.Data.(*types.ExecutorFinished)
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}

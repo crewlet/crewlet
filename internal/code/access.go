@@ -13,7 +13,7 @@ import (
 )
 
 // WHO MAY DO WHAT TO A REPOSITORY — a grant DERIVED from the chart, never
-// stored (ADR-0081). A list of who may push to a repository would be a second
+// stored (ADR-0088). A list of who may push to a repository would be a second
 // chart, and it would drift from the first the day a seat moved units; so a
 // principal's standing on a repository is computed, every time it is asked,
 // from the repository's row and the epoch's chart, through ONE function
@@ -23,7 +23,7 @@ import (
 // seat's grant to its run's ([Grant.Within]).
 //
 // A PERSON — an operator credential bound to a human seat — maintains every
-// repository, and a token bound to nobody reads every one: ADR-0078's rules,
+// repository, and a token bound to nobody reads every one: ADR-0085's rules,
 // which need no chart, so [GrantOf] never consults the roster for an operator.
 // A SEAT holds the minimum of two levels: what its tier lets it do anywhere
 // (role.code.access, [Tier.Cap]) and what the chart relates it to this
@@ -166,7 +166,7 @@ type Roster interface {
 type RosterSeat struct {
 	Handle string
 	// Human is a person's seat: a person acts through their own bound token
-	// (ADR-0078), never as a seat, so a grant asked for a human seat as an
+	// (ADR-0085), never as a seat, so a grant asked for a human seat as an
 	// agent is none.
 	Human bool
 	// Tier is the seat's role.code.access as written, "" where the document
@@ -207,7 +207,7 @@ type Grant struct {
 	// refusal ([Grant.refused] says why that bounds it).
 	none string
 
-	// limit is the grant of the CODING RUN whose box asks ([Grant.Within]),
+	// limit is the grant of the EXECUTOR whose box asks ([Grant.Within]),
 	// which the principal's own is held to, and limited whether one does: a
 	// grant no run holds is unlimited, the zero value.
 	limit   Access
@@ -220,7 +220,7 @@ type Grant struct {
 	ceiling *Grant
 }
 
-// Within is g held to a coding run's grant — what the run's checkout of it
+// Within is g held to an executor's grant — what the run's checkout of it
 // was given of the repository, read or write: its box does no more than BOTH
 // the run's grant and the seat's own allow. Access no higher than run outside
 // the seat's own namespace; and, where run is below write, no command at all,
@@ -259,7 +259,7 @@ func (g Grant) Within(run Access) Grant {
 //     colleague could not push.
 //
 // A grant UNDER A CEILING IS NEVER WIDER than g: the ceiling only refuses.
-// A PERSON bounds nothing — a person maintains every repository (ADR-0078) —
+// A PERSON bounds nothing — a person maintains every repository (ADR-0085) —
 // so a caller holds a grant under a seat's ceiling alone, never a person's,
 // and a ceiling that stands nowhere (no seat of the chart, a human seat
 // asked as an agent, or whoever may change nothing at all —
@@ -298,7 +298,7 @@ const RunReadDetail = "this coding box's run was given this repository to read: 
 // GrantOf is p's standing on repo, read from r.
 //
 // It NEVER CONSULTS r FOR AN OPERATOR — a person or a token, whose rules need
-// no chart (ADR-0078) — so a nil roster answers every operator, and gives
+// no chart (ADR-0085) — so a nil roster answers every operator, and gives
 // every agent none. An agent naming no seat the roster holds, or a HUMAN seat,
 // stands nowhere: a person acts through their own token, never as a seat.
 func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
@@ -495,7 +495,7 @@ func (g Grant) ReadRefusal() string {
 	switch {
 	case why != "":
 	case g.limited && g.limit < AccessRead && g.Access >= AccessRead:
-		why = "the coding run its box acts for was given no access to it"
+		why = "the executor its box acts for was given no access to it"
 	case g.Principal.Kind == PrincipalAgent && g.Relation == AccessNone:
 		// THE ROW'S OWN VISIBILITY, never the word unit spelled here: one
 		// this build does not know is read as unit, and the sentence says
@@ -692,7 +692,7 @@ func (k WriteCeilingKind) Valid() bool { return slices.Contains(WriteCeilingKind
 //
 // NO CEILING is a write made for its seat alone — a turn nobody woke, the
 // outcome of its own act — or for a PERSON, who bounds nothing: a person
-// maintains every repository (ADR-0078). A person's own write carries none.
+// maintains every repository (ADR-0085). A person's own write carries none.
 //
 // THE SEAT'S OWN WORK IS STEERED by whoever woke the turn, nobody included,
 // as DecideWithin spares a steerable verb on what an agent owns: a command

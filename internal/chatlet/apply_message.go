@@ -116,10 +116,11 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	var (
 		seq      int64
 		archived sql.NullInt64
+		kind     Kind
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT message_seq, archived_at FROM chat_channels WHERE id = ?`, at.subject().ID).
-		Scan(&seq, &archived)
+		`SELECT message_seq, archived_at, kind FROM chat_channels WHERE id = ?`,
+		at.subject().ID).Scan(&seq, &archived, &kind)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// A POST INTO A ROOM THIS NODE DOES NOT HAVE, under a STRICT
@@ -162,6 +163,11 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		ThreadRoot: p.ThreadRoot, Author: p.Author, AuthorKind: p.AuthorKind,
 		Body: p.Body, Links: p.Links, Mentions: p.Mentions,
 		Collective: p.Collective, CreatedAt: at.brokerAt,
+		// FROM THE RECORD'S OWN ROUTING SNAPSHOT, which every node
+		// holds byte for byte: whom the writer routed the post to is
+		// what it reached, and a node that routed it again here
+		// would answer from a roster the writer did not have.
+		Reach: reachOf(p.AuthorKind, at.record.Notify),
 	}
 	document, err := EncodeMessage(message)
 	if err != nil {
@@ -242,6 +248,17 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows += thread
 
+	receipts, err := writeReceipts(ctx, tx, at, message, seq, reachedHandles(message.Reach))
+	if err != nil {
+		return 0, "", err
+	}
+	rows += receipts
+	answered, err := answerReceipts(ctx, tx, at, kind, message, seq)
+	if err != nil {
+		return 0, "", err
+	}
+	rows += answered
+
 	// NO HISTORY ROW FOR A POST. The message row IS the post's own
 	// record, and a second row per message would double the highest-volume
 	// table in the engine to say a thing the first one already says.
@@ -303,6 +320,17 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 	message.Body = p.Body
 	message.Links = p.Links
 	message.Mentions = p.Mentions
+	// WHOM THE EDIT NEWLY REACHED joins the post's reach, the one change an
+	// edit makes to it: the record's recipients are the mentions it added
+	// ([Store.Edit]). On a copy, so the stored reach is not changed under a
+	// version guard that then skips the write.
+	var widened []string
+	if message.Reach != nil {
+		reach := *message.Reach
+		reach.Recipients = slices.Clone(reach.Recipients)
+		widened = reach.widen(at.record.Notify)
+		message.Reach = &reach
+	}
 	edited := at.brokerAt
 	message.EditedAt = &edited
 	message.EditedBy, message.EditedByKind = p.EditedBy, p.EditedByKind
@@ -379,8 +407,12 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, "", err
 	}
+	receipts, err := writeReceipts(ctx, tx, at, message.Message, message.Seq, widened)
+	if err != nil {
+		return 0, "", err
+	}
 	a.noteMessage(at, message)
-	return rows + followed + unfollowed, VerdictApplied, nil
+	return rows + followed + unfollowed + receipts, VerdictApplied, nil
 }
 
 // applyDelete tombstones a message: the body goes, the row stays.
@@ -612,6 +644,7 @@ func (a *Applier) eraseMessage(ctx context.Context, tx *sql.Tx, at applyContext,
 			{"chat_messages", "id"},
 			{"chat_mentions", "message_id"},
 			{"chat_reactions", "message_id"},
+			{"chat_receipts", "message_id"},
 		} {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			res, err := tx.ExecContext(ctx,
@@ -739,7 +772,7 @@ func namedBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // ([writeFollows]), and a name taken back — by an edit that dropped it, a
 // delete, an erase — takes the subscription with it. Left behind, a colleague
 // named by mistake and corrected away a minute later would be woken by every
-// reply the thread ever had, each its own coding run in a box, with no gesture
+// reply the thread ever had, each its own launch in a box, with no gesture
 // in this build's vocabulary to stop it.
 //
 // IT IS THE THREAD'S QUESTION, NOT THE MESSAGE'S. A follow is keyed on the
@@ -870,6 +903,7 @@ func (a *Applier) applyPrune(ctx context.Context, tx *sql.Tx, at applyContext,
 		{"chat_reactions", "message_at", "chat_reactions_prune_idx"},
 		{"chat_thread_participants", "root_at", "chat_thread_participants_prune_idx"},
 		{"chat_follows", "root_at", "chat_follows_prune_idx"},
+		{"chat_receipts", "message_at", "chat_receipts_prune_idx"},
 	} {
 		// THE INDEX IS NAMED IN THE TABLE ABOVE rather than in a
 		// comment beside each statement, so a column that loses its
@@ -997,6 +1031,91 @@ func writeMentions(ctx context.Context, tx *sql.Tx, at applyContext,
 			message.ID, at.position, err)
 	}
 	return rows, nil
+}
+
+// writeReceipts writes a waiting receipt for each seat a person's post
+// reached (handles), for a later post by that seat to mark answered
+// ([answerReceipts]).
+//
+// THE THREAD KEY IS WHERE THE ANSWER IS LOOKED FOR: the thread hung off a room
+// post is the post's own, and a reply's is its root's ([threadOf]). Every
+// column is copied from the post, so every node writes the same rows, and ON
+// CONFLICT DO NOTHING keeps a seat's first receipt when an edit reaches it
+// again.
+func writeReceipts(ctx context.Context, tx *sql.Tx, at applyContext,
+	message Message, seq int64, handles []string) (int, error) {
+
+	if len(handles) == 0 {
+		return 0, nil
+	}
+	thread := threadOf(message.ID, message.ThreadRoot)
+	messageAt := store.EncodeTime(message.CreatedAt)
+	rows, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO chat_receipts
+			(message_id, handle, channel_id, thread_key, message_seq, message_at)
+		VALUES`,
+		`(?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (message_id, handle) DO NOTHING`,
+		len(handles), func(i int) []any {
+			return []any{message.ID, handles[i], message.ChannelID, thread, seq,
+				messageAt}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: write message %s's receipts at %s: %w",
+			message.ID, at.position, err)
+	}
+	return rows, nil
+}
+
+// answerReceipts marks answered every receipt this post answers: the waiting
+// receipts of its AUTHOR on earlier messages in its thread, or, in a direct
+// conversation, on any earlier message in it.
+//
+// WHAT COUNTS AS AN ANSWER is the reply a person can see: the seat speaking in
+// the thread the message started or sits in. In a named room a seat's post at
+// the top level is a remark of its own, not an answer to somebody's thread; a
+// direct conversation exists only between its parties, so anything the seat
+// says in it after the message answers it.
+//
+// ON `chat_receipts_open_idx`, which holds only the receipts still waiting, so
+// a post reads the few its author still owes in this room. Every value is the
+// record's or the room's minted sequence, so every node marks the same rows.
+func answerReceipts(ctx context.Context, tx *sql.Tx, at applyContext, kind Kind,
+	message Message, seq int64) (int, error) {
+
+	where := `channel_id = ? AND handle = ? AND answer_id = '' AND message_seq < ?`
+	args := []any{message.ID, store.EncodeTime(at.brokerAt), message.ChannelID,
+		message.Author, seq}
+	switch {
+	case kind.Direct():
+	case message.ThreadRoot != "":
+		where += ` AND thread_key = ?`
+		args = append(args, message.ThreadRoot)
+	default:
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE chat_receipts INDEXED BY chat_receipts_open_idx
+		   SET answer_id = ?, answered_at = ?
+		 WHERE `+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: mark what message %s answers at %s: %w",
+			message.ID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// reachedHandles is the seats a reach names, in its order.
+func reachedHandles(r *Reach) []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.Recipients))
+	for _, seat := range r.Recipients {
+		out = append(out, seat.Handle)
+	}
+	return out
 }
 
 // writeThreadRows derives who has spoken in a thread and who follows it.

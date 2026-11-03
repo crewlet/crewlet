@@ -9,9 +9,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -54,6 +57,15 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 // the evidence a capacity operation is established from — no publisher on
 // this node — and a write it took on another node's behalf, or its own seats',
 // would be the publish the mode rules out. Its reads are still served.
+//
+// THE CORE'S HALVES AS MUCH AS THE NATIVE ONES: the core runs its logs in every
+// mode, so its readers are served there, and its writers were handed out beside
+// them — a peer's artifacts write asked of a node in a maintenance mode was
+// published by it. Each writer is held to the mode on its own, so a node that
+// withheld one and offered another is named.
+//
+// Mutation: hand the artifacts writer out whatever the mode and the maintenance
+// rows go red naming it.
 func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 	t.Parallel()
 	for mode, wantWriters := range map[statelog.MaintenanceMode]bool{
@@ -67,12 +79,34 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 			trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{},
 		}
 		e.native.Store(n)
-		b := e.estateBackend(&core{}, n)
-		if got := b.Writer != nil && b.PageWriter != nil; got != wantWriters {
-			t.Errorf("%s: writers offered = %v, want %v", mode, got, wantWriters)
+		c := &core{
+			artifactsReader: &artifactsdomain.Reader{}, artifactsWriter: &artifactsdomain.Writer{},
+			artifactDataReader: &artifactdata.Reader{}, artifactDataWriter: &artifactdata.Writer{},
+			executorReader: &executordomain.Reader{}, executorWriter: &executordomain.Writer{},
 		}
-		if b.Tracker == nil || b.Pages == nil {
-			t.Errorf("%s: a read half is missing", mode)
+		b := e.estateBackend(c, n)
+		for name, offered := range map[string]bool{
+			"tracker":       b.Writer != nil,
+			"pages":         b.PageWriter != nil,
+			"artifacts":     b.Artifacts.Writer != nil,
+			"artifact data": b.ArtifactData.Writer != nil,
+			"executor":      b.Executor.Writer != nil,
+		} {
+			if offered != wantWriters {
+				t.Errorf("%s: the %s writer offered = %v, want %v", mode, name, offered, wantWriters)
+			}
+		}
+		for name, served := range map[string]bool{
+			"tracker":       b.Tracker != nil,
+			"pages":         b.Pages != nil,
+			"artifacts":     b.Artifacts.Reader != nil,
+			"artifact data": b.ArtifactData.Reader != nil,
+			"executor":      b.Executor.Reader != nil,
+		} {
+			if !served {
+				t.Errorf("%s: the %s reader is missing, and a mode that publishes "+
+					"nothing still answers reads", mode, name)
+			}
 		}
 	}
 }

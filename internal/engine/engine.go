@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -84,12 +84,18 @@ type Company struct {
 	AskTool runner.RunAsk
 
 	// CheckoutTool is `code_checkout`, the tool an executor's run checks a
-	// repository of the company's own code host out through (ADR-0086):
+	// repository of the company's own code host out through (ADR-0093):
 	// offered on that run's surface alone ([runner.Config.Checkout]), for
 	// AskTool's reason — it grants to the running job's row, which no other
 	// phase has. Built with the builtins where the epoch's code tools serve
 	// ([Engine.equip]); nil on an epoch whose company hosts no code.
 	CheckoutTool tools.Callable
+	// HoldTool records a call an executor's run makes to a tool at Needs
+	// approval as the question it parks on (ADR-0077), installed on that
+	// run's surface alone ([runner.Config.Hold]). Built with AskTool; nil
+	// on an epoch built without an engine or without the fleet keyring's
+	// cipher, whose runs are refused every such call.
+	HoldTool tools.Holder
 
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
@@ -174,9 +180,9 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	return newCompany(c, env, nil)
 }
 
-// newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
-// plans, the node's registry ([cliagent.Plans]); nil for an epoch nothing runs.
-func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) (*Company, error) {
+// newCompany builds an epoch whose harness entries keep their sit-outs on
+// plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -205,11 +211,16 @@ func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) 
 	if err != nil {
 		return nil, err
 	}
+	// DESCRIBED BEFORE ANYTHING IS FILED, so every MCP tool this epoch's
+	// registry is given, and every seat's registry cloned from it, carries
+	// what its server is for into the prompt's server list.
+	registry := tools.NewRegistry()
+	registry.DescribeServers(serverDescriptions(c))
 	return &Company{
 		Config:   c,
 		Org:      organization,
 		Models:   models,
-		Tools:    tools.NewRegistry(),
+		Tools:    registry,
 		contacts: env.LookupOK,
 	}, nil
 }
@@ -271,8 +282,9 @@ func (c *Company) Seats() []placement.Seat {
 // because the seat's own surface is a fact about this node's leases and not
 // about the configuration: only the node that claimed the seat has its
 // per-role children. Pass [Engine.seatRegistry]; nil falls back to the
-// epoch's shared surface, which is the correct answer for a seat that
-// declares no per-role server and for any caller that holds no lease.
+// epoch's shared surface as the seat holds it ([grantedSurface]), which is the
+// correct answer for a seat granted no per-role server and for any caller that
+// holds no lease.
 func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
@@ -282,12 +294,12 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		// Refused HERE, naming the seat and the fix, rather than by the
 		// runner's own nil check, which reads as a wiring fault. The
 		// dispatcher never gets this far for a company with no models, so
-		// what reaches it is a path that bypasses the inbox: a coding run
-		// resuming after a revision removed every provider.
+		// what reaches it is a path that bypasses the inbox: a turn resuming
+		// from its executor after a revision removed every provider.
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
-		reg = c.Tools
+		reg = grantedSurface(c, role)
 	}
 	// REFUSED HERE TOO, for the reason [turn.Run] refuses it: this field
 	// arms submit_work's own citation check, and a caller that omits it
@@ -326,7 +338,7 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		Sessions: in.Sessions,
 		Metrics:  in.Metrics,
 		// The onboarding pass's extension policy: the executor's rounds
-		// are its CLI's own, capped by the run's max_turns, and the
+		// are its harness's own, capped by the run's max_turns, and the
 		// reviewer's budget is a structural one — so the pass is the only
 		// engine loop a cap is extended in.
 		Caps: runner.Caps{
@@ -395,6 +407,9 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		// AND ITS CHECKOUT of the company's own repositories, on the same
 		// surface for the same reason.
 		Checkout: c.CheckoutTool,
+		// AND ITS WAY TO PARK ON A CALL THAT NEEDS APPROVAL, recorded on
+		// the same row through the same desk.
+		Hold: c.HoldTool,
 		// The turn's note box, opened by the caller because the caller is
 		// what files it where a person's note can find it.
 		Steer: in.Steer,
@@ -466,10 +481,10 @@ type RunnerInput struct {
 	Publisher queue.Publisher
 	Turn      runner.Turn
 
-	// Sessions is where the turn's phases serve their tools to the CLI that
+	// Sessions is where the turn's phases serve their tools to the harness that
 	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
 	// Both RunnerFor call sites pass it, because a phase that offers tools
-	// reaches its CLI through nothing else — a runner built without it is
+	// reaches its harness through nothing else — a runner built without it is
 	// refused where it is built ([runner.New]).
 	Sessions *toolsession.Host
 
@@ -479,7 +494,7 @@ type RunnerInput struct {
 	// this is wired unconditionally rather than branched on.
 	OnPhase func(phase.Phase)
 
-	// Launcher runs this turn's executor as its coding CLI's own agentic
+	// Launcher runs this turn's executor as its harness's own agentic
 	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
 	// use; nil is a seat with nothing to launch on, which the runner
 	// refuses to be built for.

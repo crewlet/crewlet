@@ -99,7 +99,7 @@ func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
 	}
 }
 
-// The question a parked sandbox run asks before telling somebody to reply in
+// The question a parked executor asks before telling somebody to reply in
 // a thread that may not exist.
 func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {
 	cases := map[string]bool{

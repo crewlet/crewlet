@@ -304,7 +304,7 @@ export const UnbrokenCode = 32;
  * document's. A page, a description or a comment is a DOCUMENT: a newline
  * inside a paragraph is a soft wrap somebody typed to keep a source line
  * short, and a heading opens a section of it. A MODEL'S WORDS — a round's
- * speech, a coding run's report, a prompt the engine built for a
+ * speech, an executor's report, a prompt the engine built for a
  * model — are neither. A model writes one fact per line and means each line,
  * and a "## Summary" in the middle of a transcript is emphasis inside one item
  * of the page, not a section of it.
@@ -377,7 +377,7 @@ export interface RenderOptions {
    * it checked, to a place that is the company's (`LinkMode` in
    * `lib/inlineTokens.ts`). For words written by an agent or a model that may
    * have read anything: the Dashboard Assistant's answers, the Inbox and a
-   * coding run's question. Any other address is drawn inert, its label and
+   * an executor's question. Any other address is drawn inert, its label and
    * then the host it names, in the quiet link ink, readable and copyable and
    * never a control.
    */
@@ -841,8 +841,8 @@ export function renderMarkdown(source: string, given: RenderOptions = {}): React
 }
 
 /**
- * How a MODEL'S WORDS are rendered: a round's speech, a coding
- * run's report. Every newline is the line break the model meant, and a heading
+ * How a MODEL'S WORDS are rendered: a round's speech, an
+ * executor's report. Every newline is the line break the model meant, and a heading
  * is emphasis inside one transcript item rather than a section of the page —
  * see [RenderOptions]. One constant, so the transcript's every block of a
  * model's prose reads by one rule.
@@ -862,7 +862,7 @@ export const ASSISTANT_WORDS: RenderOptions = {
 
 /**
  * How words an agent wrote for a person to act on are read, in the Inbox (an
- * ask, its context, its conversation) and in a coding run's Answer dialog
+ * ask, its context, its conversation) and in an executor's Answer dialog
  * (its question's context, `components/writes.tsx`): a link is live only
  * where the dashboard built it (`links: "checked"`), as in the assistant's
  * answers and in the links a chat message carries

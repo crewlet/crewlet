@@ -22,7 +22,7 @@ import (
 // pushedBy proposes one push of cmds to repo by who through c, and fails t
 // unless every command landed ok; it answers the push's result. A seat's push
 // git receives is its coding box's, so it names the run that made it — the
-// turn that launched the run, the run's launch and its coding agent — as the
+// turn that launched the run, the run's launch and its harness — as the
 // engine stamps every one.
 func pushedBy(t *testing.T, c *code.Committer, repo string, who code.Principal,
 	cmds ...code.Command) code.ProposeResult {
@@ -32,7 +32,7 @@ func pushedBy(t *testing.T, c *code.Committer, repo string, who code.Principal,
 	p.Principal = who
 	if who.Kind == code.PrincipalAgent {
 		p.Principal.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(),
-			RunID: uuid.NewString(), CodingAgent: "claude-code"}
+			RunID: uuid.NewString(), Harness: "claude-code"}
 	}
 	res, err := c.Propose(t.Context(), p)
 	requireOK(t, answer{res, err})

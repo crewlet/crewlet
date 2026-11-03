@@ -111,7 +111,7 @@ func TestAWriteRefusedAfterItsLookIsNamedAndLeavesNothingStaged(t *testing.T) {
 		}
 		return hostbox.ReplaceFileIn(root, name, content)
 	}
-	err = replaceWith(root, "token", []byte("new"), obstacle)
+	err = replaceWith(root, "token", strings.NewReader("new"), obstacle)
 	var refused *NotRegularFileError
 	if !errors.As(err, &refused) || refused.Kind != "a directory" || !refused.Write {
 		t.Fatalf("a write that met a directory put at its path = %v; want it refused as a write over "+

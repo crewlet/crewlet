@@ -87,7 +87,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		// every linearizable read behind every other one and write an
 		// anchor row per read into the transaction holding this store's
 		// only writer; and the trim's trimmed record removes anchors, so
-		// arbitrated it would write one of its own (ADR-0073).
+		// arbitrated it would write one of its own (ADR-0080).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -224,7 +224,7 @@ func (Domain) OpsTable() string { return "pages_ops" }
 // older paragraph presented as the current one — where a node behind on a
 // compacted domain serves an answer that is merely less complete and says so.
 // Its copy is judged like every domain's, and a wrong one goes out of service
-// for the knowledge base's operations alone — ADR-0072.
+// for the knowledge base's operations alone — ADR-0079.
 func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every data node's Replicated tables must be

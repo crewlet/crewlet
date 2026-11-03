@@ -19,7 +19,7 @@ import (
 // forty-seat company is some ten thousand (day, node, seat) groups of several
 // spend cells each, tens of megabytes of rows. Read in-process that is one
 // transaction and no wire; answered by ANOTHER data node — the case a node
-// whose usage copy is out of service routes to (ADR-0072) — it crosses one
+// whose usage copy is out of service routes to (ADR-0079) — it crosses one
 // message, which carries at most [queue.MaxPayloadBytes]. So every read that
 // can grow with a window has a PAGED form ([SpendPage], [SeatTurnsPage],
 // [PersonSpendPage], [SeatDaysPage], [PageReadsPage]), and the whole read is
@@ -441,7 +441,7 @@ const (
 		 GROUP BY node, agent_id`
 
 	// pageReadsStatement is one page id's reads from a day on, in the
-	// read's order — usage_reads_page_idx's own (replicated 0073) — each
+	// read's order — usage_reads_page_idx's own (replicated 0077) — each
 	// named by its seat's head row of that day, and narrowed to the ways
 	// of reaching it by the %s it is formatted with.
 	pageReadsStatement = `

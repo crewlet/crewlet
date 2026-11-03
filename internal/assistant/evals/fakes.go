@@ -185,6 +185,10 @@ type Audit struct {
 	mu     sync.Mutex
 	events []*events.Event
 	hold   chan struct{}
+	// grew is closed on the next publish, so a suite waiting in [Audit.Await]
+	// wakes when a record lands rather than polling for it. Nil until a
+	// suite waits.
+	grew chan struct{}
 }
 
 // Hold makes every publish wait until release closes (or its context ends),
@@ -209,7 +213,41 @@ func (a *Audit) Publish(ctx context.Context, _ string, ev *events.Event) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.events = append(a.events, ev)
+	if a.grew != nil {
+		close(a.grew)
+		a.grew = nil
+	}
 	return nil
+}
+
+// Await returns every event published once there are at least n, waiting
+// up to `within` for them, and false with what there is if they never come.
+//
+// A TURN'S AUDIT RECORD LANDS AFTER ITS STREAM ENDS: the runner tells the
+// person first and publishes the record after the done frame (assistant's
+// turn.go), so a suite that read [Audit.Events] the moment it saw done raced
+// the runner, and on a loaded runner read nothing at all.
+func (a *Audit) Await(n int, within time.Duration) ([]*events.Event, bool) {
+	deadline := time.NewTimer(within)
+	defer deadline.Stop()
+	for {
+		a.mu.Lock()
+		if len(a.events) >= n {
+			out := slices.Clone(a.events)
+			a.mu.Unlock()
+			return out, true
+		}
+		if a.grew == nil {
+			a.grew = make(chan struct{})
+		}
+		grew := a.grew
+		a.mu.Unlock()
+		select {
+		case <-grew:
+		case <-deadline.C:
+			return a.Events(), false
+		}
+	}
 }
 
 // Events is every event published.

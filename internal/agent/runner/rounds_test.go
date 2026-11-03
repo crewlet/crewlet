@@ -565,7 +565,7 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 		t.Fatalf("Review = %v, want the refusal the judgement left standing", err)
 	}
 	if got := len(prov.allRuns()) - runs; got != 0 {
-		t.Errorf("the reviewer started %d CLI runs after the turn was refused, want none", got)
+		t.Errorf("the reviewer started %d harness runs after the turn was refused, want none", got)
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
 		t.Errorf("charges = %v, want both rounds and the refused judgement, and nothing after", got)
@@ -573,12 +573,12 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 }
 
 // NOTHING MORE IS BOUGHT ON A REFUSAL ALREADY CERTAIN — not a judgement, and
-// not another of the CLI's requests. The judge is a model call like any other
+// not another of the harness's requests. The judge is a model call like any other
 // — billed, then charged — and once nothing more fits a window every charge
 // after is refused. Here the phase's two rounds fill the ceiling exactly: both
 // are admitted, nothing refused them, and the phase runs out of rounds with the
 // window full. So the extension is decided by the budget, not the judge: no
-// judgement is bought, and the CLI asks its model nothing past the two
+// judgement is bought, and the harness asks its model nothing past the two
 // requests the window held. (The judge's own guard is held in
 // judge_internal_test.go.)
 func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
@@ -599,7 +599,7 @@ func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 		t.Errorf("charges = %v, want the two rounds and no judgement", got)
 	}
 	if got := prov.roundsOf("onboarding"); got != 2 {
-		t.Errorf("the CLI made %d model requests, want the two the window held", got)
+		t.Errorf("the harness made %d model requests, want the two the window held", got)
 	}
 }
 

@@ -177,6 +177,9 @@ var classified = map[string]struct {
 	"estate.Backend.ArtifactData": {seamNone, "the datastore's reader and writer, built over " +
 		"artifactdata.ReaderOptions and artifactdata.WriterDeps; a write's authority is stamped " +
 		"on the asking side"},
+	"estate.Backend.Executor": {seamNone, "the executor sessions' reader and writer, built over " +
+		"executordomain.WriterDeps, over the copy's rows and its log; a capture's budget and a retired " +
+		"seat are stated by the asking node, which has already judged the fleet's revision"},
 	"estate.Backend.Reached": {seamNone, "the applier's position"},
 	"estate.Backend.Answers": {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":  {seamNone, "the copy's establishment, for a seat's admission"},

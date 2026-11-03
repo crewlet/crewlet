@@ -10,7 +10,7 @@ import (
 // ([Land]) and a push's — so a branch's tip checks judge, and its green row
 // follows, every way it moved. A push moves a protected branch only as a
 // person's own push under direct_push persons, their recorded override
-// (ADR-0089): no protection takes a seat's direct push.
+// (ADR-0096): no protection takes a seat's direct push.
 //
 // The push's DECIDE stamps its landings ([PushEntry.Landings]) from the rules
 // its snapshot holds — the push half it already asks every command about, and

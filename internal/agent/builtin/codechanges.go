@@ -779,7 +779,7 @@ func (g *changeRead) head(ctx context.Context, after statelog.Position) (*code.C
 // ([code.ReadQuery.Brief] beside DetailOnly), one seek of its number on the
 // code host — and the position it was read at, at the seat's level: what a
 // read that needs nothing of the change but its state, its branches, its id
-// and its number asks, which a coding run's launch on a change is
+// and its number asks, which an executor's launch on a change is
 // ([CodeDeps.runChange]). Its detail would read its description, authors,
 // conversation and mergeability and judge its readiness, all of it dropped.
 func (g *changeRead) row(ctx context.Context) (*code.ChangeSummary, statelog.Position, *tools.Result) {

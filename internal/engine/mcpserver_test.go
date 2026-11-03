@@ -37,12 +37,12 @@ import (
 // file inside a package can never read one outside it.
 const (
 	toolServerModeEnv = engine.ToolServerModeEnv
-	// toolServerToolEnv names the single tool this server publishes, with
-	// launchToken in it replaced by the launch's number, so a server can
-	// list a different tool after a restart.
+	// toolServerToolEnv names the tools this server publishes,
+	// comma-separated, with launchToken in each replaced by the launch's
+	// number, so a server can list a different tool after a restart.
 	toolServerToolEnv = engine.ToolServerToolEnv
-	// toolServerEchoEnv names an environment variable whose value is
-	// reported back in the tool's description.
+	// toolServerEchoEnv names the environment variables, comma separated,
+	// whose values are reported back in the tool's description.
 	toolServerEchoEnv = engine.ToolServerEchoEnv
 
 	// toolServerRequireEnv names an environment variable the server
@@ -98,7 +98,7 @@ func TestMain(m *testing.M) {
 	if status, ok := codetest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
-	// FIRST: a phase serves its tools to its CLI through `<this binary>
+	// FIRST: a phase serves its tools to its harness through `<this binary>
 	// mcp-relay <socket>`, and under `go test` this binary is the engine.
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(toolServerModeEnv) != "" {
@@ -231,12 +231,31 @@ func answerRPC(line string) bool {
 		// actually holds, which is the only way a test can tell one seat's
 		// child from another's from the outside.
 		desc := "a test tool"
-		if key := os.Getenv(toolServerEchoEnv); key != "" {
-			desc = key + "=" + os.Getenv(key)
+		if keys := os.Getenv(toolServerEchoEnv); keys != "" {
+			echoed := []string{}
+			for key := range strings.SplitSeq(keys, ",") {
+				echoed = append(echoed, key+"="+os.Getenv(key))
+			}
+			desc = strings.Join(echoed, ",")
 		}
-		reply(req.ID, fmt.Sprintf(
-			`{"tools":[{"name":%q,"description":%q,"inputSchema":{"type":"object"}}]}`,
-			name, desc), "")
+		// A DEFINITION THAT CHANGES UNDER A RUNNING SERVER: the
+		// description is read at each listing from the file named, so a
+		// case changes the tool by writing it.
+		if path := os.Getenv(engine.ToolServerDescribeEnv); path != "" {
+			if raw, err := os.ReadFile(path); err == nil {
+				desc = strings.TrimSpace(string(raw))
+			}
+		}
+		listed := make([]string, 0, 1)
+		for _, one := range strings.Split(name, ",") {
+			listed = append(listed, fmt.Sprintf(
+				`{"name":%q,"description":%q,"inputSchema":{"type":"object"}}`, one, desc))
+		}
+		ttl := ""
+		if ms := os.Getenv(engine.ToolServerTTLEnv); ms != "" {
+			ttl = `,"ttlMs":` + ms
+		}
+		reply(req.ID, `{"tools":[`+strings.Join(listed, ",")+`]`+ttl+`}`, "")
 	case "tools/call":
 		reply(req.ID, `{"content":[{"type":"text","text":"ok"}]}`, "")
 		return true

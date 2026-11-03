@@ -35,7 +35,7 @@ the next charge would be refused.
 every read (`coord.Windows`), as the ceilings do; the store holds labels and
 spend and never reads a clock to decide which window a charge belongs to. A
 turn is charged in the windows current when each round is charged, on the clock
-of the epoch it is pinned to; a detached coding run in the windows it is
+of the epoch it is pinned to; a detached executor in the windows it is
 collected in.
 
 The counters live in `<prefix>_token_windows`, a bucket aged at

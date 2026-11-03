@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// WHAT ONE CODING RUN MAY TAKE OF THIS NODE: a box runs generated code, so
+// WHAT ONE EXECUTOR MAY TAKE OF THIS NODE: a box runs generated code, so
 // what its requests cost the node and the code log is bounded by its run —
 // never left to the box to keep small.
 //
@@ -70,7 +70,7 @@ import (
 // the repository, the dozen checks one push fans out share one term, as
 // their transfers share one turn.
 
-// MaxRunRequests is how many of one coding run's requests may be in flight on
+// MaxRunRequests is how many of one executor's requests may be in flight on
 // one node at once.
 //
 // SIXTEEN — TWICE sandbox.MaxRunRepos (8), the most repositories a run is
@@ -82,7 +82,7 @@ import (
 const MaxRunRequests = 16
 
 // boxResync draws one linearizable re-sync of adm's request from the node's
-// re-sync buckets (Options.Resyncs) — a coding run's on its seat, a check's
+// re-sync buckets (Options.Resyncs) — an executor's on its seat, a check's
 // attempt on its repository's checks (admission.resyncKey) — counted by
 // outcome there: nil, taken; or the refusal, its read to be answered at the
 // box's floor. A person's request is never charged: its reads of refs are
@@ -162,7 +162,7 @@ const (
 )
 
 // checkHold is the key a check's box's requests in flight are counted under:
-// its attempt on its repository's checks, which no coding run's launch id
+// its attempt on its repository's checks, which no executor's launch id
 // spells.
 func checkHold(k code.CheckKey) string {
 	scope, principal := k.Resyncs()

@@ -67,8 +67,8 @@ import (
 //
 // A CREDENTIAL IS NEVER A LEAD'S, AND NEITHER IS A `${VAR}`. Every credential
 // field a change sets, clears or alters — compared whole, so a key with nothing
-// under it counts, since an `mcp_env` key alone starts its server for the seat
-// — and every `${VAR}` reference it sets, clears or alters in ANY field, is
+// under it counts, since an `mcp_env` key alone changes what the seat's child of
+// its server is started with — and every `${VAR}` reference it sets, clears or alters in ANY field, is
 // listed apart ([OrgChange.Credentials]) and is admin's. A
 // reference names any variable the engine's process can resolve — the
 // company's secrets and Tier A's own keyring and tokens alike — and a
@@ -542,11 +542,10 @@ func settingsChanged(before, after *Company) []string {
 // much as its strings — and every other string that carries a `${VAR}`.
 //
 // THE WHOLE VALUE, because a credential field's key is a capability of its own. An
-// `mcp_env` block naming a per-seat server is what starts that server for the
-// seat, with the template's own resolved environment and headers, whatever the
-// block holds — `{github: {}}` and `{github: {TOKEN: ""}}` included — so a walk
-// of the strings alone, which finds nothing in either, admitted a lead
-// attaching any per-seat tool server to their agents.
+// `mcp_env` block's keys are laid over its server's own values for the seat's
+// child, so `{github: {TOKEN: ""}}` changes the identity that child acts with
+// though it holds no string a walk would find, and a walk of the strings alone
+// admitted a lead pointing an agent's tool at another identity, or at none.
 //
 // A credential field holding nothing — an empty string, map or list — is
 // none, so a block whose credential fields are unset holds none. EMPTYING ONE

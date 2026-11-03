@@ -11,7 +11,7 @@ import (
 //
 // Each caller appends its own path to the value and hands the result to a
 // client inside a box that the engine never hears from again: an exporter that
-// cannot use its endpoint drops the run's telemetry silently, and a coding CLI
+// cannot use its endpoint drops the run's telemetry silently, and a harness
 // handed an unusable bridge fails every tool call. So a value that is set and
 // is not something a box can dial is refused, naming the variable and the part
 // that is wrong — and never repeating the value, whose user information is a
@@ -30,7 +30,7 @@ import (
 // decode to no UTF-8, a host that ends in a number and is no IPv4 address the
 // standard reads (a typo'd 10.0.0.300), and a port past 65535. Every host row
 // and every port row but zero has the verdict Node 22's and Bun's `new URL`
-// give it — the parsers of the two coding agents this build launches, which
+// give it — the parsers of the two harnesses this build launches, which
 // agreed on every row, measured — and port zero, which both parse, is refused
 // because nothing listens on it. The IPv4 shorthand the standard does read
 // (127.1, 0x7f.1) boots, since the box dials the address its parser makes of

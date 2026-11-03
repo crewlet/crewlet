@@ -131,7 +131,7 @@ func validCheckRef(ref CheckRunRef) bool {
 }
 
 // boxCredential is the credential a box's request presented under user, as
-// this fleet signed it: a coding run's token under BoxUser, a check's under
+// this fleet signed it: an executor's token under BoxUser, a check's under
 // code.CheckUser — the ONE RULE of which credential a user name presents, which
 // the box routes' admission (admitBox) and the API's box routes on a node
 // serving no code host (VerifyBox) both judge by. ok is false for any other
@@ -150,7 +150,7 @@ func boxCredential(runs *BoxTokens, checks *CheckTokens, user, token string) (ru
 }
 
 // VerifyBox reports whether token is the credential user presents on a box
-// route, signed by this fleet — a coding run's under BoxUser, a check's under
+// route, signed by this fleet — an executor's under BoxUser, a check's under
 // code.CheckUser ([boxCredential]). EXPORTED FOR the API's box routes on a node
 // serving no code host, which tell a box why only once its request presents
 // one ([ChallengeBox]).

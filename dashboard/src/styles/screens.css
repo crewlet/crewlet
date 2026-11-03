@@ -236,7 +236,7 @@
   color: var(--color-feedback-warning-ink);
 }
 
-/* A PHASE'S CLI RUNS, each heading the rounds it made (`RunHead` in
+/* A PHASE'S HARNESS RUNS, each heading the rounds it made (`RunHead` in
    PhaseCard.tsx). A run is the coarser boundary of the two, so it is a HEAD
    rather than another rail: its rounds keep their own bracket and tint, and
    the run's line above them — its name, its entry, its span of rounds and how
@@ -6196,7 +6196,7 @@ a.work-cal-chip {
 }
 
 /* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, for text
-   whose every space and break is the record — a coding run's activity log. A
+   whose every space and break is the record — a launch's activity log. A
    page body, a work item's description and a model's own words ARE markdown,
    so they carry `.md` beside it: the whitespace rule goes back to normal (the
    renderer decides what a break is — every newline, for a model's words) and
@@ -7548,7 +7548,7 @@ a.work-cal-chip {
   color: var(--color-text-tertiary);
 }
 
-/* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
+/* A PARKED RUN'S BANNER (routes/live/Executors.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one
    caption line of 180 characters is a line nobody finds the end of. */
@@ -7556,7 +7556,7 @@ a.work-cal-chip {
   max-width: 72ch;
 }
 
-/* A collected run's own report — prose the coding agent wrote, so it keeps its
+/* A collected run's own report — prose the harness wrote, so it keeps its
    line breaks and is held to a reading measure. */
 .run-report {
   margin: 0;
@@ -8312,8 +8312,8 @@ a.live-row:focus-visible {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
 }
-/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a CLI run, a
-   coding run and the reflection pass read as the headings the rows under them
+/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a harness run, a
+   launch and the reflection pass read as the headings the rows under them
    belong to. */
 .wf-row:is(
     [data-kind="turn"],
@@ -9246,96 +9246,6 @@ a.live-row:focus-visible {
   height: var(--size-control-sm);
   line-height: var(--size-control-sm);
   overflow: hidden;
-}
-
-/* SETTINGS › TOOLS & MCP › ADD AN MCP SERVER. The two choices sit side by
-   side where the dialog has the width and stack on a phone; a pair row is a
-   name, a value twice its width and the remove control, aligned on the
-   fields rather than on their labels so the × sits beside the boxes. */
-.mcp-add-pair {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
-  gap: var(--spacing-3);
-}
-.mcp-add-pairs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  min-width: 0;
-}
-.mcp-add-pairs > legend {
-  padding: 0;
-  margin-bottom: var(--spacing-1);
-}
-.mcp-add-pair-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
-  gap: var(--spacing-2);
-  align-items: end;
-}
-.mcp-add-pair-remove {
-  margin-bottom: var(--spacing-1);
-}
-/* Whether the row may be unset: under the row, across it, since it is about
-   the pair rather than either box. */
-.mcp-add-pair-optional {
-  grid-column: 1 / -1;
-}
-.mcp-add-pairs-error {
-  color: var(--color-feedback-danger-ink);
-}
-@media (width < 640px) {
-  .mcp-add-pair-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .mcp-add-pair-row > :nth-child(2) {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-}
-
-/* A NODE'S FAILURE under its chip: secondary prose, clamped by `.clamp` to two
-   lines. The chip above it carries the danger tone; the reason in danger ink
-   too was the same alarm twice, in running text. Whole on the server's page.
-   What a waiting instance waits for sits there the same way, and is no alarm
-   at all. */
-.mcp-failure,
-.mcp-wait {
-  color: var(--color-text-secondary);
-  max-width: 32rem;
-}
-/* THE SERVER'S PAGE says a launch and each failure WHOLE — the one place a
-   reason the grid clamps can be read without a pointer — so a command line or
-   a URL wraps anywhere rather than running off the column. */
-.mcp-failures {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-/* THE KEYS WHOLE, one per line: each is a name somebody matches against the
-   configuration, so a long one wraps rather than being cut. */
-.mcp-unlisted {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-wrap: anywhere;
-}
-.mcp-launch-whole,
-.mcp-failure-whole {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.mcp-failure-whole {
-  color: var(--color-text-secondary);
 }
 
 /* ---- Signing in ----------------------------------------------------------

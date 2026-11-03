@@ -31,7 +31,7 @@ import (
 //     broker's inbox partition and the coalescer's merge unit.
 //   - ConversationIdentity says which ongoing conversation it is part of: the
 //     conversation ledger's key, the turn telemetry's conversation_key tag,
-//     the episodes column, and the value a parked coding run matches a
+//     the episodes column, and the value a parked executor matches a
 //     person's answer against — they answer on the conversation, not into
 //     the batch.
 //   - WakesActor says whether a notification reaches the party who caused it.
@@ -134,7 +134,7 @@ type Prompt interface {
 	//
 	// Two readers, and both are positional rather than historical: the
 	// broker partitions a seat's inbox by it and the coalescer merges a
-	// partition into one trigger. A parked coding run was a third until
+	// partition into one trigger. A parked executor was a third until
 	// its match moved onto the identity — a person answers on the
 	// conversation, and the engine's own prompt routinely puts their reply
 	// in a finer partition than the question was asked from.
@@ -241,6 +241,13 @@ type Inbound struct {
 	Body string
 
 	Metadata map[string]string
+
+	// Origin is what this notification is about and why it reaches its
+	// recipient ([types.TriggerOrigin]), SET BY A FIRST-PARTY PARSER PER
+	// RECIPIENT: the reason is the recipient's own. The delivery carries it
+	// onto the notification it publishes, so the turn it wakes is filed
+	// under the object a person holds. Zero on every vendor edge.
+	Origin types.TriggerOrigin
 
 	// Fence is the token a prompt fences the foreign text it weaves into the
 	// trigger under ([provenance.Fence]): minted by the delivery for this

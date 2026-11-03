@@ -401,8 +401,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         named(labels, where.id),
       ];
     }
-    case "runs":
-      return where.id ? inside("runs", named(labels, where.id)) : sectionPage("runs");
+    case "executors":
+      return where.id ? inside("executors", named(labels, where.id)) : sectionPage("executors");
     case "a2a":
       return where.id ? inside("a2a", named(labels, where.id)) : sectionPage("a2a");
     case "trace":
@@ -498,7 +498,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       if (where.server) {
         return [
           root(row, true),
-          { label: tools?.label ?? "MCP Tools", path: tools?.path ?? row.path },
+          { label: tools?.label ?? "MCP & tools", path: tools?.path ?? row.path },
           { label: "Servers" },
           ownName(labels, where.server),
         ];

@@ -52,7 +52,7 @@ type Confinement struct {
 	Deny []string
 
 	// Read are paths beneath a denied one that the job may READ: the coding
-	// CLI's own installation, which on a workstation sits in the operator's
+	// harness's own installation, which on a workstation sits in the operator's
 	// home. Never writable.
 	Read []string
 }
@@ -107,7 +107,7 @@ type confineRules struct {
 }
 
 // ConfineCommand is the hidden command the engine binary answers as the
-// Landlock helper. The CLI dispatches it to [ConfineMain].
+// Landlock helper. The harness dispatches it to [ConfineMain].
 const ConfineCommand = "sandbox-confine"
 
 // resolvePath is p absolute, cleaned and with its symlinks resolved as far as
@@ -204,7 +204,7 @@ func sbplString(s string) string { return strconv.Quote(s) }
 
 // keychainServices are the macOS services that hand out the login keychain's
 // items. Denied, a job cannot ask for the operator's stored passwords; the
-// coding CLI signs in from the credentials seeded into the box's own home.
+// harness signs in from the credentials seeded into the box's own home.
 var keychainServices = []string{
 	"com.apple.SecurityServer",
 	"com.apple.securityd",
@@ -215,7 +215,7 @@ var keychainServices = []string{
 //
 // THE LAST MATCHING RULE WINS in a sandbox profile, which is what the order
 // relies on: everything is allowed, the denied trees and every write are then
-// taken away, and the box's home and the CLI's install are given back last.
+// taken away, and the box's home and the harness's install are given back last.
 // Network stays open: web access is the run's (ADR-0054).
 //
 // THE HOME'S ANCESTORS MAY BE STAT'ED, each by its literal path and for its
@@ -265,7 +265,7 @@ func sandboxProfile(r confineRules) string {
 // bwrapArgv is the bubblewrap command line for one box, before the job's argv.
 //
 // The host's root is bound READ-ONLY, then every denied path is masked: a
-// directory under an empty tmpfs, a file under /dev/null. The CLI's install is
+// directory under an empty tmpfs, a file under /dev/null. The harness's install is
 // bound back read-only and the box's home read-write, last, so they win over
 // a mask of a tree that holds them. A new pid namespace with its own /proc
 // keeps every other process's environment out of reach.

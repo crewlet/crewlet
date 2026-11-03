@@ -1377,7 +1377,7 @@ type SeatHolder struct {
 //
 // Two seeks at most, whatever the size of the directory: the binding by
 // `iam_people_seat_lookup_idx`, and — only where no row binds the seat — the
-// removal by `iam_removed_seat_idx` (replicated migration 0117), whose order
+// removal by `iam_removed_seat_idx` (replicated migration 0121), whose order
 // is the person's id. It is what a seat's turn composes the person it acts for
 // from, on every call of a tool that reads or writes for somebody — a cost
 // that must not grow with the people the company has hired or has ever
@@ -1453,7 +1453,7 @@ func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool,
 // index's own order.
 //
 // THE REMOVAL'S SEAT IS ITS OWN COLUMN (`iam_removed.seat_id`, replicated
-// migration 0117), written by the removal's apply and re-derived from the
+// migration 0121), written by the removal's apply and re-derived from the
 // tombstone's claims ([Applier.Rederive]), never pulled out of the claims here:
 // a json_extract is a value no index reaches, and the tombstones are
 // permanent.

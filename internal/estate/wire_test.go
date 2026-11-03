@@ -213,6 +213,8 @@ var floorless = map[string]string{
 	"usage.schedule_runs":     "reads the usage domain, as usage.spend does",
 	"usage.page_reads":        "reads the usage domain, as usage.spend does",
 	"usage.reads_elided":      "reads the usage domain, as usage.spend does",
+	"usage.server_tool_calls": "reads the usage domain, as usage.spend does",
+	"usage.tools_elided":      "reads the usage domain, as usage.spend does",
 	"usage.repo_reads":        "reads the usage domain, as usage.spend does",
 	"usage.repo_reads_elided": "reads the usage domain, as usage.spend does",
 }
@@ -222,10 +224,10 @@ var floorless = map[string]string{
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the code host's
 // CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
-// CREWLET_CHAT_LOG or the artifacts estate's and its datastore's, each named
-// as its domain declares it. One that waited on none would carry no floor at
-// all, and one that named another domain's would wait on an applier it does
-// not depend on ([ready]).
+// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG or the artifacts
+// estate's and its datastore's, each named as its domain declares it. One that
+// waited on none would carry no floor at all, and one that named another
+// domain's would wait on an applier it does not depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
@@ -236,6 +238,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 		chatDomain:         "CREWLET_CHAT_LOG",
+		executorDomain:     "CREWLET_EXECUTOR_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -276,7 +279,7 @@ var seatCopyOps = map[string]string{
 // EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
 // router and the server ask before running it here: a domain's copy that is
 // wrong runs none of that domain's operations and every other domain's
-// (ADR-0072). An operation naming no domain — the search ops once did, since
+// (ADR-0079). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read. The one copy that
 // is no domain's is a git node's git half ([GitCopy]), which a git operation
@@ -285,7 +288,7 @@ var seatCopyOps = map[string]string{
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
-		identityDomain, artifactsDomain, artifactDataDomain, chatDomain}
+		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
@@ -327,7 +330,7 @@ var readsSeveral = map[string][]string{
 
 // AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
 // all of them: a node whose copy of any is out of service runs none of it
-// (ADR-0072), and the router's memory of where it stays is kept for that set
+// (ADR-0079), and the router's memory of where it stays is kept for that set
 // of copies rather than for one domain's.
 func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	t.Parallel()

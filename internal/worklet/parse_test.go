@@ -32,7 +32,8 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", Title: "wire it",
 			Status: worklet.StatusInProgress, Assignee: "cy",
-			Watchers: []string{"di"},
+			CommentAuthorKind:  worklet.AuthorHuman,
+			ThreadParticipants: []string{"di"},
 		},
 	})
 
@@ -44,11 +45,18 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	reasons := map[string]string{}
 	for _, r := range routed {
 		reasons[r.To.Handle] = r.Metadata[worklet.MetaVia]
+		// THE TURN EACH WAKES IS FILED UNDER THE ITEM, under that seat's
+		// own reason.
+		if r.Origin != (types.TriggerOrigin{Kind: types.OriginWorkItem, ID: "ENG-1",
+			Reason: r.Metadata[worklet.MetaVia]}) {
+			t.Errorf("%s's wake names origin %+v, want ENG-1 under its reason",
+				r.To.Handle, r.Origin)
+		}
 	}
 	want := map[string]string{
 		"bo": string(worklet.ReasonMention),
 		"cy": string(worklet.ReasonAssignee),
-		"di": string(worklet.ReasonWatcher),
+		"di": string(worklet.ReasonThread),
 	}
 	for handle, reason := range want {
 		if reasons[handle] != reason {
@@ -83,9 +91,14 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 		// A NODE NAMED LIKE A SEAT is still the engine.
 		{"bo", worklet.AuthorSystem, types.NotificationWriter{Kind: iam.ActorSystem}},
 	} {
+		// THE COMMENT NAMES cy, so it wakes cy whoever wrote it: unnamed,
+		// only a person's comment asks the assignee anything (ownerAsked),
+		// and the writer of a notice that wakes nobody is never read.
 		record := parseRecord(&worklet.Notify{
 			Kind: worklet.ChangeComment, Excerpt: "can you look at this",
-			Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy"},
+			Mentions: []string{"cy"},
+			Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy",
+				CommentAuthorKind: c.kind},
 		})
 		record.Actor, record.ActorKind = c.actor, c.kind
 		routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
@@ -108,10 +121,11 @@ func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
 func TestAHandleThatIsNoLongerASeatIsDropped(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind: worklet.ChangeStatus,
+		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
 			Key: "ENG-1", Project: "ENG", Assignee: "somebody-who-left",
-			Watchers: []string{"di"},
+			CommentAuthorKind:  worklet.AuthorHuman,
+			ThreadParticipants: []string{"di"},
 		},
 	})
 	routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
@@ -126,8 +140,8 @@ func TestAHandleThatIsNoLongerASeatIsDropped(t *testing.T) {
 		}
 	}
 	if len(routed) != 1 || routed[0].To.Handle != "di" {
-		t.Fatalf("the change reached %v, and the watcher who is still here "+
-			"should have been told", routed)
+		t.Fatalf("the change reached %v, and the thread participant who is "+
+			"still here should have been told", routed)
 	}
 }
 
@@ -141,9 +155,9 @@ func TestAHandleThatIsNoLongerASeatIsDropped(t *testing.T) {
 func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind: worklet.ChangeStatus,
+		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
-			Key: "ENG-1", Project: "ENG", Watchers: []string{"di", "bo"},
+			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
 		},
 	})
 	parser := worklet.NewParser(worklet.ParserOptions{})
@@ -182,9 +196,9 @@ func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind: worklet.ChangeStatus,
+		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
-			Key: "ENG-1", Project: "ENG", Watchers: []string{"di", "bo"},
+			Key: "ENG-1", Project: "ENG", ThreadParticipants: []string{"di", "bo"},
 		},
 	})
 	routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(t.Context(),
@@ -249,7 +263,7 @@ func TestAWokenSeatReadsTheWholeComment(t *testing.T) {
 	long := strings.Repeat("Looks good overall. ", 60) + "BUT the migration is missing."
 	wake := worklet.Wake{
 		Kind:    worklet.ChangeComment,
-		Comment: &worklet.Comment{ID: "c-1", Body: long, Author: "ana"},
+		Comment: &worklet.Comment{ID: "c-1", Body: long, Author: "ana", AuthorKind: worklet.AuthorHuman},
 		After:   worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "bo"},
 	}.Notify(nil)
 	if wake == nil || !strings.HasSuffix(wake.Excerpt, "…") {
@@ -273,7 +287,10 @@ func TestAWokenSeatReadsTheWholeComment(t *testing.T) {
 	// A STATED EXCERPT IS SHOWN AS ITSELF: it was not cut from the payload.
 	stated := parseRecord(&worklet.Notify{
 		Kind: worklet.ChangeComment, Excerpt: "handing this to bo: he owns the schema",
-		Snapshot: worklet.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "bo"},
+		Snapshot: worklet.Snapshot{
+			Key: "ENG-1", Project: "ENG", Assignee: "bo",
+			CommentAuthorKind: worklet.AuthorHuman,
+		},
 	})
 	stated.Mutation = payload
 	routed, err = worklet.NewParser(worklet.ParserOptions{}).Parse(

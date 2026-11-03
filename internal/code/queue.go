@@ -1150,7 +1150,7 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 		c.announceEjected(*p.Eject, out.Position)
 	}
 	// A BROKEN LANDING IS ANNOUNCED the same way, once its own record applied
-	// here: the one event a red tip's bisect leaves (ADR-0091).
+	// here: the one event a red tip's bisect leaves (ADR-0098).
 	if p.Broken != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
 		c.announceBroken(*p.Broken, out.Position)
 	}

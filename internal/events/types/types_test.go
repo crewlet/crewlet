@@ -30,6 +30,7 @@ func catalogue() []events.Payload {
 		TaskAssigned{},
 		// schedule.go
 		ScheduledTaskFired{},
+		ScheduledFireSuperseded{},
 		// notification.go
 		ExternalNotification{}, TurnTriggerSkipped{},
 		NotificationsCoalesced{}, NotificationSkipped{},
@@ -38,6 +39,8 @@ func catalogue() []events.Payload {
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
 		// budget.go
 		BudgetExhausted{}, BudgetMeters{},
+		// waiting.go
+		SeatInboxWaiting{},
 		// auxiliary.go
 		AuxiliarySpend{},
 		// provider.go
@@ -52,9 +55,9 @@ func catalogue() []events.Payload {
 		SkillPromoted{}, SkillStaled{}, SkillArchived{}, SkillRevived{},
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
-		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{}, SandboxRunStopped{},
-		SandboxClarificationRequested{}, SandboxAnswerGiven{}, SandboxRunAnswered{},
+		// executor.go
+		ExecutorLaunched{}, ExecutorFinished{}, ExecutorCollected{}, ExecutorFailed{},
+		ExecutorStopped{}, ExecutorAsked{}, ExecutorAnswerGiven{}, ExecutorAnswered{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// toolskill.go
@@ -81,6 +84,8 @@ func catalogue() []events.Payload {
 		OperatorActed{}, BackupRequested{}, ModelActed{},
 		// operatortools.go
 		OperatorToolsChanged{},
+		// mcpservers.go
+		MCPServerActed{},
 		// assistant_read.go
 		AssistantConversationRead{},
 		// assistant.go
@@ -115,6 +120,7 @@ var wireTypes = []string{
 	"auxiliary_spend",
 	"backup_requested",
 	"model_acted",
+	"mcp_server_acted",
 	"budget_exhausted",
 	"budget_meters",
 	"change_merged",
@@ -167,15 +173,18 @@ var wireTypes = []string{
 	"reflection_completed",
 	"reflection_due",
 	"review_submitted",
-	"sandbox_answer_given",
-	"sandbox_clarification_requested",
-	"sandbox_run_answered",
-	"sandbox_run_completed",
-	"sandbox_run_failed",
-	"sandbox_run_started",
-	"sandbox_run_stopped",
+	"executor_answer_given",
+	"executor_asked",
+	"executor_answered",
+	"executor_collected",
+	"executor_finished",
+	"executor_failed",
+	"executor_launched",
+	"executor_stopped",
+	"scheduled_fire_superseded",
 	"scheduled_task_fired",
 	"seat_access_drift_restored",
+	"seat_inbox_waiting",
 	"seat_paused",
 	"seat_provider_parked",
 	"seat_provider_released",
@@ -354,98 +363,103 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
-	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
-	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
-	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":           {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
-	"turn_trigger_skipped":            {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
-	"notifications_coalesced":         {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
-	"notification_skipped":            {"detail", "handle", "notification_source", "reason"},
-	"a2a_request":                     {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis"},
-	"a2a_message":                     {"channel_id", "content", "question", "sender", "sender_role"},
-	"a2a_channel_opened":              {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},
-	"a2a_message_sent":                {"channel_id", "content", "message_id", "recipient", "sender", "sender_role", "turn_id", "work_key"},
-	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
-	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
-	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
-	"assistant_conversation_read":     {"actor", "actor_kind", "conversation_id", "file_id", "operator_id", "owner_id", "reason"},
-	"assistant_turn_completed":        {"actor", "actor_kind", "assistant_turn_id", "conversation_id", "duration_ms", "error_code", "failed", "model", "operator_id", "prompt_version", "provider_key", "state", "steps"},
-	"auxiliary_spend":                 {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},
-	"custody_batch":                   {"events"},
-	"reflection_due":                  {"turn"},
-	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
-	"provider_fallback":               {"agent_id", "error_kind", "from_cli", "from_provider_key", "from_subscription", "iteration", "phase", "resets_at", "role", "to_provider_key", "turn_id", "work_key"},
-	"seat_provider_parked":            {"agent_handle", "agent_id", "cli", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
-	"seat_provider_released":          {"agent_handle", "agent_id", "reason", "role"},
-	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"agent_turn_completed":            {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
-	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
-	"agent_turn_progress":             {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
-	"subagent_batched":                {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
-	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
-	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},
-	"skill_used":                      {"agent_handle", "agent_id", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
-	"knowledge_read":                  {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
-	"code_fetched":                    {"bytes", "kind", "principal", "principal_kind", "reads", "repo_id", "repo_name", "seat", "via"},
-	"code_check_finished":             {"agent_id", "attempt", "change_id", "duration_ms", "name", "oid", "owner", "owner_kind", "placement", "purpose", "reason", "repo_id", "repo_name", "replaces", "required", "state", "target"},
-	"change_merged":                   {"change_id", "commit", "merged_by", "merged_by_kind", "method", "number", "override", "repo_id", "repo_name", "target"},
-	"change_opened":                   {"agent_id", "by_push", "change_id", "number", "owner", "owner_kind", "repo_id", "repo_name", "target_ref", "title"},
-	"review_submitted":                {"agent_id", "change_id", "findings", "number", "owner", "owner_agent_id", "owner_kind", "repo_id", "repo_name", "review_id", "reviewer", "reviewer_kind", "revision", "verdict"},
-	"code_queue_ejected":              {"change_id", "checks", "enqueued_by", "enqueued_by_kind", "entry_id", "number", "owner", "owner_agent_id", "owner_kind", "paths", "reason", "repo_id", "repo_name", "target"},
-	"code_target_broken":              {"change_id", "checks", "commit", "kind", "landed_by", "number", "repo_id", "repo_name", "target"},
-	"code_mirror_pushed":              {"as", "deleted", "deleted_count", "repo_id", "repo_name", "updated", "updated_count", "url", "waiting", "waiting_count"},
-	"code_imported":                   {"bytes", "chunks", "default_branch", "error", "mirrored", "position", "refs", "repo_id", "repo_name", "url"},
-	"code_expunged":                   {"dropped_bytes", "dropped_objects", "expunge", "position", "repo_id", "repo_name", "request", "store_until"},
-	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
-	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
-	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},
-	"skill_refined":                   {"agent_handle", "agent_id", "refinement_kind", "role", "skill_id", "skill_name", "skill_version", "turn_id", "work_key"},
-	"skill_promoted":                  {"container_key", "distinct_agents", "page_id", "page_title", "role", "sibling_count", "skill_name", "unit_id"},
-	"skill_staled":                    {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
-	"skill_archived":                  {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
-	"skill_revived":                   {"agent_handle", "prior_state", "skill_id", "skill_name", "transitioned_at", "turn_id", "work_key"},
-	"skill_telemetry_write_failed":    {"agent_handle", "error", "kind", "skill_id", "skill_name", "turn_id", "work_key"},
-	"compaction_requested":            {"agent_handle", "raw_count", "threshold"},
-	"compaction_completed":            {"agent_handle", "clusters_compacted", "compacted_evicted", "consolidated_dropped", "non_terminal_dropped", "raw_replaced_by_compaction", "skipped_reason"},
-	"reflection_completed":            {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
-	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
-	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
-	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
-	"sandbox_run_stopped":             {"agent_handle", "agent_id", "coding_agent", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
-	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "decision", "question", "question_context", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
-	"seat_paused":                     {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
-	"seat_resumed":                    {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
-	"seat_access_drift_restored":      {"after", "agent_handle", "before", "integration", "lane", "restored_at"},
-	"agent_turn_stopped":              {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
-	"agent_turn_steered":              {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
-	"sandbox_answer_given":            {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "choice", "launch_id", "operator_id", "turn_id"},
-	"sandbox_run_answered":            {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
-	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
-	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
-	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
-	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
-	"operator_tools_changed":          {},
-	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
-	"inbound_delivery":                {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
-	"iam_session_started":             {"expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
-	"iam_session_ended":               {"by", "lineage", "operator_id", "person", "reason"},
-	"iam_login_failures":              {"minute", "overflow", "sources"},
-	"iam_stepup_completed":            {"lineage", "login", "person", "remote", "replaces", "second_factor"},
-	"iam_credential_minted":           {"by", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
-	"iam_credential_revoked":          {"by", "credential", "kind", "operator_id", "owner", "reason"},
-	"iam_grants_changed":              {"added", "by", "operator_id", "person", "removed", "version"},
-	"iam_recovery_code_used":          {"login", "person", "remaining", "remote"},
-	"iam_second_factor_throttled":     {"login", "person", "remote"},
-	"iam_mfa_reset":                   {"by", "operator_id", "person", "reason"},
-	"iam_invitation_cancelled":        {"by", "invitation", "operator_id", "reason"},
-	"iam_password_changed":            {"login", "person", "remote"},
-	"iam_password_reset_issued":       {"by", "credential", "expires_at", "first", "operator_id", "person", "reason"},
-	"iam_password_reset":              {"credential", "first", "login", "person", "remote"},
-	"iam_session_generation_bumped":   {"by", "generation", "operator_id", "reason"},
-	"statelog_record_unverifiable":    {"domain", "held", "key_id", "position"},
-	"statelog_record_tampered":        {"domain", "held", "key_id", "position"},
+	"mcp_server_acted": {"accepted", "action", "actor", "actor_kind", "address", "answer", "approval", "blocked", "draft",
+		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
+	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
+	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
+	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
+	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
+	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
+	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
+	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
+	"a2a_request":                   {"channel_id", "content", "requester", "sender_role", "work_item", "work_item_basis"},
+	"a2a_message":                   {"channel_id", "content", "question", "sender", "sender_role"},
+	"a2a_channel_opened":            {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},
+	"a2a_message_sent":              {"channel_id", "content", "message_id", "recipient", "sender", "sender_role", "turn_id", "work_key"},
+	"a2a_channel_closed":            {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
+	"budget_exhausted":              {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
+	"budget_meters":                 {"meter_id", "org", "seats", "seq", "timezone"},
+	"seat_inbox_waiting":            {"reporter_id", "seats", "seq"},
+	"assistant_conversation_read":   {"actor", "actor_kind", "conversation_id", "file_id", "operator_id", "owner_id", "reason"},
+	"assistant_turn_completed":      {"actor", "actor_kind", "assistant_turn_id", "conversation_id", "duration_ms", "error_code", "failed", "model", "operator_id", "prompt_version", "provider_key", "state", "steps"},
+	"auxiliary_spend":               {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},
+	"custody_batch":                 {"events"},
+	"reflection_due":                {"turn"},
+	"llm_unavailable":               {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
+	"provider_fallback":             {"agent_id", "error_kind", "from_harness", "from_provider_key", "from_subscription", "iteration", "phase", "resets_at", "role", "to_provider_key", "turn_id", "work_key"},
+	"seat_provider_parked":          {"agent_handle", "agent_id", "harness", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
+	"seat_provider_released":        {"agent_handle", "agent_id", "reason", "role"},
+	"agent_turn_started":            {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"turn_completed":                {"agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
+	"agent_phase_started":           {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
+	"agent_phase_completed":         {"agent_id", "cache_read_tokens", "cache_write_tokens", "harness", "conversation_key", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_turn_progress":           {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
+	"subagent_batched":              {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
+	"episode_written":               {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
+	"persist_decider_completed":     {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},
+	"skill_used":                    {"agent_handle", "agent_id", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
+	"knowledge_read":                {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
+	"code_fetched":                  {"bytes", "kind", "principal", "principal_kind", "reads", "repo_id", "repo_name", "seat", "via"},
+	"code_check_finished":           {"agent_id", "attempt", "change_id", "duration_ms", "name", "oid", "owner", "owner_kind", "placement", "purpose", "reason", "repo_id", "repo_name", "replaces", "required", "state", "target"},
+	"change_merged":                 {"change_id", "commit", "merged_by", "merged_by_kind", "method", "number", "override", "repo_id", "repo_name", "target"},
+	"change_opened":                 {"agent_id", "by_push", "change_id", "number", "owner", "owner_kind", "repo_id", "repo_name", "target_ref", "title"},
+	"review_submitted":              {"agent_id", "change_id", "findings", "number", "owner", "owner_agent_id", "owner_kind", "repo_id", "repo_name", "review_id", "reviewer", "reviewer_kind", "revision", "verdict"},
+	"code_queue_ejected":            {"change_id", "checks", "enqueued_by", "enqueued_by_kind", "entry_id", "number", "owner", "owner_agent_id", "owner_kind", "paths", "reason", "repo_id", "repo_name", "target"},
+	"code_target_broken":            {"change_id", "checks", "commit", "kind", "landed_by", "number", "repo_id", "repo_name", "target"},
+	"code_mirror_pushed":            {"as", "deleted", "deleted_count", "repo_id", "repo_name", "updated", "updated_count", "url", "waiting", "waiting_count"},
+	"code_imported":                 {"bytes", "chunks", "default_branch", "error", "mirrored", "position", "refs", "repo_id", "repo_name", "url"},
+	"code_expunged":                 {"dropped_bytes", "dropped_objects", "expunge", "position", "repo_id", "repo_name", "request", "store_until"},
+	"prefetch_summary":              {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
+	"counterparty_profile_updated":  {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
+	"skill_synthesized":             {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},
+	"skill_refined":                 {"agent_handle", "agent_id", "refinement_kind", "role", "skill_id", "skill_name", "skill_version", "turn_id", "work_key"},
+	"skill_promoted":                {"container_key", "distinct_agents", "page_id", "page_title", "role", "sibling_count", "skill_name", "unit_id"},
+	"skill_staled":                  {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
+	"skill_archived":                {"agent_handle", "last_used_at", "skill_id", "skill_name", "transitioned_at"},
+	"skill_revived":                 {"agent_handle", "prior_state", "skill_id", "skill_name", "transitioned_at", "turn_id", "work_key"},
+	"skill_telemetry_write_failed":  {"agent_handle", "error", "kind", "skill_id", "skill_name", "turn_id", "work_key"},
+	"compaction_requested":          {"agent_handle", "raw_count", "threshold"},
+	"compaction_completed":          {"agent_handle", "clusters_compacted", "compacted_evicted", "consolidated_dropped", "non_terminal_dropped", "raw_replaced_by_compaction", "skipped_reason"},
+	"reflection_completed":          {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
+	"executor_launched":             {"agent_handle", "agent_id", "harness", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
+	"executor_finished":             {"agent_handle", "agent_id", "harness", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
+	"executor_collected":            {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "cache_read_tokens", "cache_write_tokens", "harness_turns", "harness", "conversation_key", "cost_usd", "delivered_refs", "delivered_refs_elided", "duration_ms", "error", "error_kind", "failed", "input_tokens", "iteration", "launch_id", "model", "notes", "output_tokens", "provider_key", "pushed_refs", "pushed_refs_elided", "pushed_refs_unread", "response", "role", "sandbox_id", "started_at", "total_tokens", "turn_id", "work_item", "work_key"},
+	"executor_failed":               {"agent_handle", "agent_id", "harness", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
+	"executor_stopped":              {"agent_handle", "agent_id", "harness", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
+	"executor_asked":                {"agent_handle", "agent_id", "audience", "conversation_key", "decision", "question", "question_context", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
+	"seat_paused":                   {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
+	"seat_resumed":                  {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
+	"seat_access_drift_restored":    {"after", "agent_handle", "before", "integration", "lane", "restored_at"},
+	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
+	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
+	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "launch_id", "operator_id", "turn_id"},
+	"executor_answered":             {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
+	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
+	"prompt.size":                   {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
+	"turn.guard_breach":             {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
+	"tool_skill_page_changed":       {"backend", "container", "page_id", "walk"},
+	"operator_tools_changed":        {},
+	"raw_webhook":                   {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
+	"inbound_delivery":              {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
+	"iam_session_started":           {"expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
+	"iam_session_ended":             {"by", "lineage", "operator_id", "person", "reason"},
+	"iam_login_failures":            {"minute", "overflow", "sources"},
+	"iam_stepup_completed":          {"lineage", "login", "person", "remote", "replaces", "second_factor"},
+	"iam_credential_minted":         {"by", "credential", "expires_at", "grants", "kind", "operator_id", "owner", "reason"},
+	"iam_credential_revoked":        {"by", "credential", "kind", "operator_id", "owner", "reason"},
+	"iam_grants_changed":            {"added", "by", "operator_id", "person", "removed", "version"},
+	"iam_recovery_code_used":        {"login", "person", "remaining", "remote"},
+	"iam_second_factor_throttled":   {"login", "person", "remote"},
+	"iam_mfa_reset":                 {"by", "operator_id", "person", "reason"},
+	"iam_invitation_cancelled":      {"by", "invitation", "operator_id", "reason"},
+	"iam_password_changed":          {"login", "person", "remote"},
+	"iam_password_reset_issued":     {"by", "credential", "expires_at", "first", "operator_id", "person", "reason"},
+	"iam_password_reset":            {"credential", "first", "login", "person", "remote"},
+	"iam_session_generation_bumped": {"by", "generation", "operator_id", "reason"},
+	"statelog_record_unverifiable":  {"domain", "held", "key_id", "position"},
+	"statelog_record_tampered":      {"domain", "held", "key_id", "position"},
 }
 
 // TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a
@@ -571,11 +585,11 @@ func TestFailed(t *testing.T) {
 		tagFailed     bool
 		want          bool
 	}{
-		{"failure by type alone", "sandbox_run_failed", false, false, true},
+		{"failure by type alone", "executor_failed", false, false, true},
 		// A RUN A PERSON STOPPED IS NOT A LOST ONE: its turn is closed as
 		// stopped, and a type that failed by name would count it with the
 		// runs that broke.
-		{"a run a person stopped", "sandbox_run_stopped", false, false, false},
+		{"a run a person stopped", "executor_stopped", false, false, false},
 		{"llm chain exhausted", "llm_unavailable", false, false, true},
 		{"budget refused a charge", "budget_exhausted", false, false, true},
 		{"guard breach", "turn.guard_breach", false, false, true},
@@ -611,6 +625,42 @@ func TestDescribeTriggerWithNoTrigger(t *testing.T) {
 	}
 	if string(raw) != "{}" {
 		t.Errorf("the zero trigger marshals to {}, got %s", raw)
+	}
+}
+
+// A TRIGGER THAT NAMES ANYTHING IS NOT ZERO, whichever field names it.
+//
+// Trigger.IsZero lists its fields by hand, since its Origins slice makes the
+// struct incomparable, and a field added later and left off that list would
+// make a trigger that names something read as no trigger at all. This sets
+// each field alone, so the list is held to the struct rather than to memory.
+func TestTriggerIsZeroSeesEveryField(t *testing.T) {
+	t.Parallel()
+	if !(Trigger{}).IsZero() {
+		t.Fatal("the zero Trigger must be zero")
+	}
+	typ := reflect.TypeFor[Trigger]()
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		var trigger Trigger
+		value := reflect.ValueOf(&trigger).Elem().Field(i)
+		switch {
+		case field.Type == reflect.TypeFor[time.Time]():
+			value.Set(reflect.ValueOf(time.Unix(1, 0).UTC()))
+		case field.Type == reflect.TypeFor[TriggerOrigin]():
+			value.Set(reflect.ValueOf(TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1"}))
+		case field.Type.Kind() == reflect.String:
+			value.SetString("set")
+		case field.Type.Kind() == reflect.Slice:
+			value.Set(reflect.MakeSlice(field.Type, 1, 1))
+		default:
+			t.Fatalf("Trigger.%s is a %s this test cannot set: teach it, and "+
+				"Trigger.IsZero, the new field", field.Name, field.Type)
+		}
+		if trigger.IsZero() {
+			t.Errorf("a trigger naming only its %s reads as zero: Trigger.IsZero "+
+				"does not look at the field", field.Name)
+		}
 	}
 }
 
@@ -947,6 +997,72 @@ func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 					"the partition has its own tag so the conversation's keeps "+
 					"one meaning", typ.Name(), wire)
 			}
+		}
+	}
+}
+
+// A TRIGGER NAMES WHAT STARTED THE TURN, and survives the wire: the waking
+// event's origin (a chat message and why it reached the seat, a schedule) is
+// copied into the descriptor and read back from it.
+//
+// Mutation: drop the Originated read in DescribeTrigger, or the origin's
+// decode, and this fails.
+func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
+	t.Parallel()
+	chat := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1", Reason: "answerer"}
+	early := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-0", Reason: "answerer"}
+	trace := events.TraceContext{}
+	for name, tc := range map[string]struct {
+		event *events.Event
+		want  TriggerOrigin
+	}{
+		"a chat message": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat}, trace), chat},
+		"a schedule": {events.New(TaskAssigned{Schedule: "daily standup"}, trace),
+			TriggerOrigin{Kind: OriginSchedule, ID: "daily standup"}},
+		"a colleague's ask": {events.New(A2ARequest{ChannelID: "ch-1"}, trace),
+			TriggerOrigin{Kind: OriginColleagueAsk, ID: "ch-1"}},
+		"a code notice": {events.New(ExternalNotification{NotificationSource: "code",
+			Origin: TriggerOrigin{Kind: OriginCodeChange, ID: "web!42", Reason: "review_requested"}}, trace),
+			TriggerOrigin{Kind: OriginCodeChange, ID: "web!42", Reason: "review_requested"}},
+		"an alarm": {events.New(ExternalNotification{NotificationSource: "alarms",
+			Origin: TriggerOrigin{Kind: OriginAlarm, ID: "feed_stopped:code", Reason: "fired"}}, trace),
+			TriggerOrigin{Kind: OriginAlarm, ID: "feed_stopped:code", Reason: "fired"}},
+		"a vendor's message": {events.New(ExternalNotification{NotificationSource: "mattermost"},
+			trace), TriggerOrigin{}},
+		"a burst of messages": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat, Messages: []CoalescedMessage{{Origin: early}, {Origin: chat}}}, trace),
+			chat},
+	} {
+		got := DescribeTrigger(tc.event)
+		if got.Origin != tc.want {
+			t.Errorf("%s: origin %+v, want %+v", name, got.Origin, tc.want)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Trigger
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.Origin != tc.want {
+			t.Errorf("%s: read back as %+v from %s", name, back.Origin, raw)
+		}
+		// A BURST NAMES EVERY MESSAGE IT TOOK IN, oldest first, on the
+		// wire as in hand.
+		if name == "a burst of messages" {
+			want := []TriggerOrigin{early, chat}
+			if !slices.Equal(got.Origins, want) || !slices.Equal(back.Origins, want) {
+				t.Errorf("a burst names %+v and reads back %+v, want %+v", got.Origins,
+					back.Origins, want)
+			}
+		} else if len(got.Origins) != 0 {
+			t.Errorf("%s: names %+v beside its origin, want none", name, got.Origins)
+		}
+		if _, present := got.Map()["origin"]; present == tc.want.IsZero() {
+			t.Errorf("%s: the wire form's origin key is present=%v for %+v", name,
+				present, tc.want)
 		}
 	}
 }

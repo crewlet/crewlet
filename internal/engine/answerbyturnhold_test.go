@@ -104,7 +104,7 @@ func (s *busySeat) launch(t *testing.T, turnID string) {
 		Turn: sandbox.TurnRef{TurnID: turnID, AgentID: fixtureSeat("swe").String(),
 			AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch %s: %v", turnID, err)
 	}
@@ -127,10 +127,10 @@ func (s *busySeat) parks(t *testing.T, turnID, question string) sandbox.PendingR
 	return run
 }
 
-// answer is a person answering run through answer_run's own desk.
+// answer is a person answering run through answer_executor's own desk.
 func (s *busySeat) answer(t *testing.T, run sandbox.PendingRun, text string) {
 	t.Helper()
-	given := types.SandboxAnswerGiven{
+	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: text,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 		LaunchID: run.LaunchID,
@@ -329,7 +329,7 @@ func (r *relaunchingResumer) launch(turnID string) sandbox.LaunchRequest {
 	return sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: turnID, AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}
 }
 
@@ -356,9 +356,9 @@ func (r *relaunchingResumer) count() int {
 }
 
 // answerAgainst is an operator's answer to the question run is waiting on, as
-// answer_run puts it on the seat's control topic.
+// answer_executor puts it on the seat's control topic.
 func answerAgainst(run sandbox.PendingRun, answer string) *events.Event {
-	ev := events.New(types.SandboxAnswerGiven{
+	ev := events.New(types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		Answer:     answer,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
@@ -372,8 +372,8 @@ func answerAgainst(run sandbox.PendingRun, answer string) *events.Event {
 func complete(t *testing.T, c *sandbox.Coordinator, store *sandbox.CoordStore, turnID string) {
 	t.Helper()
 	run := mustRun(t, store, turnID)
-	done := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: turnID, LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+	done := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+		TurnID: turnID, LaunchID: run.LaunchID, SandboxID: run.SandboxID, Harness: run.Harness}
 	if err := c.OnCompleted(t.Context(), done, events.New(done, events.TraceContext{})); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 func TestSchemaGenerates(t *testing.T) {
@@ -143,8 +144,8 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		def, field string
 		want       []string
 	}{
-		{"LLMProvider", "agent", strs(CLIAgentNames)},
-		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
+		{"LLMProvider", "harness", strs(Harnesses)},
+		{"HarnessAuth", "mode", strs(HarnessAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		{"SandboxProvider", "default_run_in", strs(Placements)},
 		{"LLMProvider", "run_in", strs(Placements)},
@@ -186,6 +187,18 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// node would run.
 		{"Tracker", "backend", strs(TrackerBackends)},
 		{"Knowledge", "backend", strs(KnowledgeBackends)},
+		// AN MCP TOOL'S LEVEL, the default's here and one tool's below,
+		// whose values a map holds: a level the schema offered and the
+		// validator refused would be a block an editor passed that no node
+		// enforces.
+		{"MCPToolPolicy", "default", strs(MCPToolLevels)},
+	}
+	policy, _ := defs["MCPToolPolicy"].(map[string]any)
+	props, _ := policy["properties"].(map[string]any)
+	levels, _ := props["levels"].(map[string]any)
+	value, _ := levels["additionalProperties"].(map[string]any)
+	if got := closedSet(t, value); strings.Join(got, ",") != strings.Join(strs(MCPToolLevels), ",") {
+		t.Fatalf("MCPToolPolicy.levels' values enum = %v, validators accept %v", got, strs(MCPToolLevels))
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -616,10 +629,10 @@ providers:
       auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY}"}
     sub:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
       max_concurrent: 2
     oc:
-      agent: opencode
+      harness: opencode
       model: anthropic/claude-sonnet-5
       run_in: direct
       env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}
@@ -659,6 +672,7 @@ mcp_servers:
     shared: false
     command: glab
     args: [mcp, serve]
+    tools: {default: allow}
   - name: gh
     transport: http
     shared: false
@@ -686,7 +700,7 @@ units:
       - name: CTO
         handle: cto
         llm: [oc, default]
-        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}}
+        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}, gitlab: {enabled: true, access_level: 30}}
         sandbox:
           max_turns: 0
           pause_ttl_seconds: 600
@@ -1378,6 +1392,44 @@ func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	}
 }
 
+// A KEYRING KEY'S ID IS BOUNDED WHERE A SEALED STREAM CAN NAME IT, in the
+// validator and in the artifact alike: a sealed stream's header names its key
+// in one length byte (secrets.MaxStreamKeyIDBytes), and an id past it refused
+// the whole keyring at a node's first capture of an executor session, after
+// `crewlet validate` and the boot had both passed it.
+//
+// Mutation: drop the length check from Secrets.validate and a 256-character
+// id validates; drop the tag's maxlen and the artifact admits it.
+func TestAKeyringKeyIDIsBoundedWhereASealedStreamCanNameIt(t *testing.T) {
+	t.Parallel()
+	keyring := func(id string) *Secrets {
+		return &Secrets{ActiveKeyID: id, Keys: []SecretKey{{ID: id, Material: TestKeyMaterial}}}
+	}
+	if err := keyring(strings.Repeat("k", secrets.MaxStreamKeyIDBytes)).validate(Path{"secrets"}); err != nil {
+		t.Fatalf("an id of %d characters was refused: %v", secrets.MaxStreamKeyIDBytes, err)
+	}
+	err := keyring(strings.Repeat("k", secrets.MaxStreamKeyIDBytes+1)).validate(Path{"secrets"})
+	if err == nil || !strings.Contains(err.Error(), "secrets.keys[0].id") {
+		t.Fatalf("an id of %d characters: %v, want a refusal naming secrets.keys[0].id",
+			secrets.MaxStreamKeyIDBytes+1, err)
+	}
+	defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+	key, _ := defs["SecretKey"].(map[string]any)
+	props, _ := key["properties"].(map[string]any)
+	id, _ := props["id"].(map[string]any)
+	var bound any
+	for _, branch := range anyOf(id) {
+		own, _ := branch.(map[string]any)
+		if _, hasPattern := own["pattern"]; hasPattern && own["maxLength"] != nil {
+			bound = own["maxLength"]
+		}
+	}
+	if got, _ := bound.(float64); int(got) != secrets.MaxStreamKeyIDBytes {
+		t.Errorf("the schema bounds a key id at %v and a sealed stream names at most %d",
+			bound, secrets.MaxStreamKeyIDBytes)
+	}
+}
+
 // The artifact has to work on the config it ships beside. The example
 // carries the `# yaml-language-server: $schema=` modeline, so a schema that
 // rejected it would put red underlines through the file a new operator
@@ -1387,7 +1439,7 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
 	// full-stack one every integration block, the subscription one a
-	// signed-in CLI, the cell its entry's `run_in` places executor runs in
+	// signed-in harness, the cell its entry's `run_in` places executor runs in
 	// and the company-wide round cap.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
@@ -1518,6 +1570,7 @@ func byteBounds() map[string][2]int64 {
 		"artifact_data_log_max_bytes": {ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling},
 		"assistant_log_max_bytes":     {AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling},
 		"chat_log_max_bytes":          {ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling},
+		"executor_log_max_bytes":      {ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling},
 		"store_max_bytes":             {StoreMaxBytesFloor, StoreMaxBytesCeiling},
 	}
 }

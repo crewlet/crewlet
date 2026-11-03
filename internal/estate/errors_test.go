@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -112,6 +113,29 @@ func TestAnArtifactsCreateOfWhatIsThereKeepsBothSentinels(t *testing.T) {
 	}
 	if said, _ := statelog.Sentence(got); said != statelog.AlreadyThere {
 		t.Errorf("the far side tells a person %q, want %q", said, statelog.AlreadyThere)
+	}
+}
+
+// AN EXECUTOR RECORD A NEWER BUILD WROTE KEEPS WHAT IT IS ABOUT ACROSS THE
+// WIRE: [executordomain.ErrFutureVersion] carries the subject a deferral files
+// it under and the two versions as fields, and a typed error rebuilt from its
+// message alone would answer errors.As with none of them.
+//
+// Mutation: drop executordomain.ErrFutureVersion from typedKinds and errors.As
+// finds nothing.
+func TestAnExecutorRecordFromANewerBuildKeepsItsSubjectAcrossTheWire(t *testing.T) {
+	t.Parallel()
+	subject := executordomain.ConversationSubject("swe", "C0FOUNDER/1700000000.000100", "")
+	original := fmt.Errorf("apply: %w",
+		&executordomain.ErrFutureVersion{Got: 3, Want: 1, Subject: subject})
+	got := throughWire(t, original)
+	var future *executordomain.ErrFutureVersion
+	if !errors.As(got, &future) || future.Got != 3 || future.Want != 1 || future.Subject != subject {
+		t.Fatalf("errors.As(*executordomain.ErrFutureVersion) after the wire = %+v, from %v",
+			future, got)
+	}
+	if got.Error() != original.Error() {
+		t.Errorf("the message became %q, want %q", got, original)
 	}
 }
 
@@ -534,7 +558,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 var flooredDomains = []statelog.Domain{
 	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, code.Domain{},
 	iamdomain.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
-	chatlet.Domain{},
+	chatlet.Domain{}, executordomain.Domain{},
 }
 
 // crossingDomains is the package of every domain an operation floors on,

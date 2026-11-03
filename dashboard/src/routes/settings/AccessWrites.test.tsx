@@ -81,7 +81,7 @@ const PEOPLE = {
       login: "di.moss",
       name: "Di Moss",
       seat: "kai",
-      // STORED AS ADMIN ALONE, as a Tier A file or the CLI writes it.
+      // STORED AS ADMIN ALONE, as a Tier A file or the harness writes it.
       grants: ["admin"],
     },
     {

@@ -316,7 +316,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 
 	// 7. THE GIT READS, the server-side reads of a repository by object id a
-	// seat asks of this node as a repository's home (ADR-0082): over the
+	// seat asks of this node as a repository's home (ADR-0089): over the
 	// cache and the pool, under the node's ONE seat git-work share of the
 	// pool's read lane — the engine writes' builds draw on the same (step 8),
 	// never a second share, which would let seats' reads and builds between
@@ -362,7 +362,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// the committer, the operator audit for every push, and the current
 	// epoch's limits and retention. Who is pushing is the API guard's answer
 	// on each request, the seat the identity directory binds its credential
-	// to included. An ENGINE WRITE (ADR-0085) is judged by the current
+	// to included. An ENGINE WRITE (ADR-0092) is judged by the current
 	// epoch's chart and refused a seat while this node is behind the
 	// company's configuration, as a read is; signed from the current epoch
 	// (codeSigner); and built under the git reads' own share. A CODING BOX
@@ -398,7 +398,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 
 	// 9. THE COMPACTOR, a repository's MAINTAINER's three loops — the merge of
-	// its packs (ADR-0083), the publication of its layers (ADR-0084) and the
+	// its packs (ADR-0090), the publication of its layers (ADR-0091) and the
 	// expunge a person's purge asks for — over the cache and the store the host
 	// uses, listing and proposing through the router's code seam — whose
 	// Compact raises this node's floors past what it landed — and asking the
@@ -585,7 +585,7 @@ func (g gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	return g.reads.Read(ctx, q)
 }
 
-// Write is the code host's engine write (ADR-0085).
+// Write is the code host's engine write (ADR-0092).
 func (g gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
 	return g.writes.Write(ctx, w)
 }

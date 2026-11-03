@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -77,7 +78,7 @@ import (
 // declaration ([statelog.Domain.GatesSeatAdmission]): a compacted domain's gap
 // is a coverage number rather than a fault, so withholding seats for one would
 // be the outage the number exists to avoid. And the copy verdict is per domain
-// too, for every domain (ADR-0072): a domain's copy that is WRONG goes out of
+// too, for every domain (ADR-0079): a domain's copy that is WRONG goes out of
 // service for its own operations, whatever it declares about seats.
 
 // native holds this node's native-backend runtime: the tracker's, the
@@ -122,19 +123,15 @@ type native struct {
 	pageReader    *doclet.Reader
 	chatReader    *chatlet.Reader
 
-	// trackerObjects is the tracker's rows as the object store's passes
-	// read them, set on every runtime [Engine.startNative] publishes — the
-	// same reader as trackerReader where the company runs Worklet.
-	//
-	// ITS OWN FIELD because the question it answers is the LOG's, not the
-	// tools': the core runs the tracker's log whatever `tracker.backend`
-	// says, so a company on Jira, or on none, whose pages are on Doclet
-	// still applies every `tracker_files` row its log carries — and one
-	// that moved its tracker off Worklet holds every project file it ever
-	// stored. Those rows name objects the collector must keep and the audit
-	// must check. Read from trackerReader, the answer was "no tracker" for
-	// exactly those companies, and their collector never started.
-	trackerObjects *worklet.Reader
+	// trackerFiles reads the tracker's rows that name objects, on every
+	// company, whatever its tracker: the tracker's log is the core's and is
+	// applied on every data node whatever `tracker.backend` says, so a
+	// company that moved off Worklet still holds the file rows it wrote
+	// there, and the object store's passes must still read them
+	// ([native.objectEstates]). It is trackerReader where the company runs
+	// Worklet, never a second reader beside it. Every runtime
+	// [Engine.startNative] publishes sets it; nil only on a zero runtime.
+	trackerFiles *worklet.Reader
 
 	// codeReader is the code log's rows as every reader reads them, set on
 	// every runtime [Engine.startNative] publishes — the code log is the
@@ -264,6 +261,11 @@ type native struct {
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
 
+	// feeds is the change feeds this node started, stored once when they
+	// start and read by every alarm evaluation ([native.feedsReading]). Nil
+	// before they start, and on a node in a mode that publishes nothing.
+	feeds atomic.Pointer[[]*changefeed.Feed]
+
 	// run is the context every goroutine this half started runs under, and
 	// stop is what ends it.
 	//
@@ -344,13 +346,27 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}()
 
 	var err error
+	// THE TRACKER'S FILE ROWS ARE READ ON EVERY COMPANY, through the domain's
+	// own read authority, because its log runs whatever this company's tracker
+	// is (above): a company on Jira that once ran Worklet still holds the rows
+	// naming its project files, and the object store's collector, its audit and
+	// `crewlet objects migrate` must read them, or they would read those
+	// objects as nobody's.
+	//
+	// A NODE WHOSE TRACKER LOG DID NOT COME UP IS REFUSED, whatever its
+	// tracker: the domain is in every register, and without its rows the
+	// collector would read every object they name as nobody's.
+	running := sl.Domain(worklet.Domain{}.Name())
+	if running == nil {
+		return fmt.Errorf("engine: this node runs no tracker domain, so " +
+			"neither Worklet nor the object store's passes have its rows to " +
+			"read; the domain is in the register and its stream failed to come up")
+	}
+	if n.trackerFiles, err = worklet.NewReader(
+		sl.estate().Reader(), running.reader); err != nil {
+		return fmt.Errorf("engine: the tracker's file rows: %w", err)
+	}
 	if runTracker {
-		running := sl.Domain(worklet.Domain{}.Name())
-		if running == nil {
-			return fmt.Errorf("engine: this node runs no tracker domain, so " +
-				"Worklet has nowhere to write; the domain is in the register " +
-				"and its stream failed to come up")
-		}
 		n.writer, err = worklet.NewWriter(worklet.WriterDeps{
 			Publisher: running.publisher,
 			DB:        sl.estate().Reader(),
@@ -392,27 +408,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// a level served: the refusal ladder, the coverage probe and the
 		// barrier a linearizable read waits through. Built beside the
 		// runner rather than here, because the health it refuses on is
-		// the same one seat admission reads.
-		if n.trackerReader, err = worklet.NewReader(
-			sl.estate().Reader(), running.reader); err != nil {
-			return fmt.Errorf("engine: Worklet reader: %w", err)
-		}
-	}
-	// THE TRACKER'S ROWS FOR THE OBJECT STORE, whatever the tools are: the
-	// tool surface's own reader where there is one, and otherwise one built
-	// for the estate alone, over the log the core runs regardless — see
-	// [native.trackerObjects].
-	n.trackerObjects = n.trackerReader
-	if n.trackerObjects == nil {
-		running := sl.Domain(worklet.Domain{}.Name())
-		if running == nil {
-			return fmt.Errorf("engine: this node runs no tracker domain, so the " +
-				"object store has no estate to read project files from — the " +
-				"domain is in the register and its stream failed to come up")
-		}
-		if n.trackerObjects, err = worklet.NewReader(sl.estate().Reader(), running.reader); err != nil {
-			return fmt.Errorf("engine: tracker reader for the object store: %w", err)
-		}
+		// the same one seat admission reads. The one reader the file rows
+		// are read through too.
+		n.trackerReader = n.trackerFiles
 	}
 	// THE CODE LOG'S ROWS, UNCONDITIONALLY: there is no backend to choose for
 	// the code host, so every data node runs the code log in its core, and
@@ -550,7 +548,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// `knowledge.vectors` off.
 	vectors := search.NewQueryVectors(e.queryModel)
 	// EVERY SCAN THIS NODE RUNS ASKS ITS COPIES' VERDICT FIRST — its own
-	// searches' range and every peer's slice alike (ADR-0072): a range
+	// searches' range and every peer's slice alike (ADR-0079): a range
 	// over a copy out of service is counted missing, never answered from
 	// rows this node has stopped serving.
 	copies := e.copies()
@@ -750,15 +748,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 // push's pack. Chat's do not: a message LINKS a file rather than holding one,
 // so no row of chat's ever pins an object, and the knowledge base's pages
 // carry their bodies whole.
+//
+// WHATEVER THE COMPANY'S TRACKER ([native.trackerFiles]). It used to be offered
+// only where the company ran Worklet, and the collector starts only with every
+// declared table's estate, so on a company whose tracker was Jira or none no
+// collection or audit ever ran — not over the artifacts' objects nor Ask
+// Crewlet's files either, whose logs every data node runs — and `crewlet
+// objects migrate` refused, saying the node held no copy of the records.
 func (n *native) objectEstates() []collect.Estate {
-	if n.trackerObjects == nil {
+	if n.trackerFiles == nil {
 		// A ZERO RUNTIME — a test's — holds no domain's rows. Every
 		// runtime [Engine.startNative] publishes sets the field, and a
 		// collector over one that did not is refused by name
 		// ([Engine.startCollectorOver]).
 		return nil
 	}
-	estates := []collect.Estate{worklet.ObjectEstate{Reader: n.trackerObjects}}
+	estates := []collect.Estate{worklet.ObjectEstate{Reader: n.trackerFiles}}
 	if n.codeReader != nil {
 		estates = append(estates, code.ObjectEstate{Reader: n.codeReader})
 	}
@@ -815,6 +820,14 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil {
 		return false, nil
 	}
+	// THE INBOUND EDGE'S MAILBOX BEFORE THE FEEDS below publish onto it
+	// ([Engine.ensureInboundMailbox]), and before the halves start, so a
+	// refusal leaves nothing up for the retry to skip past.
+	if e.mode.Publishes() {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return false, err
+		}
+	}
 	if err := e.startNative(ctx, e.boot, c); err != nil {
 		return false, err
 	}
@@ -829,12 +842,14 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 // startNativeCollector starts the object store's collector duty on this data
 // node: it deletes objects no row names and audits what the store has lost,
 // both against the rows of every domain a declared table names — the native
-// half's and the core's artifacts and assistant logs alike. It runs wherever the node runs
-// its native half, whatever backends the company chose
-// ([native.objectEstates]): a company that moved its tracker off Worklet still
-// holds the rows that name its project files' objects. A runtime it cannot
-// start over is logged as `object_collector_not_started`, never passed over in
-// silence ([Engine.startCollectorOver]). ONE CALL FOR BOTH CALLERS, [New] and
+// half's (the tracker's files, the code log's packs) and the core's (the
+// artifacts' versions and assets, Ask Crewlet's files and the seats' executor
+// sessions) alike. It runs wherever the node runs its native half, whatever
+// backends the company chose ([native.objectEstates]): a company that moved
+// its tracker off Worklet still holds the rows that name its project files'
+// objects. A runtime it cannot start over is logged as
+// `object_collector_not_started`, never passed over in silence
+// ([Engine.startCollectorOver]). ONE CALL FOR BOTH CALLERS, [New] and
 // [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
 //
 // # Only where the mode publishes
@@ -863,8 +878,8 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 }
 
 // startCollectorOver starts the collector over n's estates and the core's
-// artifacts and assistant estates ([objectEstatesFor]), and answers why it did not — which
-// [Engine.startNativeCollector] logs.
+// artifacts, assistant and executor estates ([objectEstatesFor]), and answers
+// why it did not — which [Engine.startNativeCollector] logs.
 //
 // A RUNTIME THAT OFFERS NO ESTATE IS REFUSED, NEVER SKIPPED. Every runtime
 // [Engine.startNative] publishes offers one per declaring domain
@@ -880,7 +895,8 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 	if n == nil {
 		return nil
 	}
-	refs, err := collect.Sources(references.All, objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())...)
+	refs, err := collect.Sources(references.All, objectEstatesFor(n, e.ArtifactsReader(),
+		e.AssistantReader(), e.ExecutorReader())...)
 	if err != nil {
 		return err
 	}
@@ -1183,6 +1199,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	// on. A domain whose feed disagrees with its declaration gets no feed
 	// and an error naming it, rather than a trim that silently waits for
 	// ever or silently waits for nothing.
+	var started []*changefeed.Feed
 	for _, domain := range registeredDomains() {
 		running := c.log.Domain(domain.Name())
 		if running == nil {
@@ -1215,21 +1232,58 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 				"source", translator.Source().Name, "error", err.Error())
 			continue
 		}
+		started = append(started, feed)
+	}
+	// PUBLISHED BEFORE ANY OF THEM RUNS, so the alarm evaluation reads every
+	// feed this node started from its first beat ([native.feedsReading]),
+	// one whose first open fails included.
+	n.feeds.Store(&started)
+	for _, feed := range started {
 		n.done.Add(1)
 		go func() {
 			defer n.done.Done()
 			// THE NATIVE HALF'S OWN CONTEXT, never the caller's: this
-			// goroutine is joined by stopNative, which ends that one.
+			// goroutine is joined by stopNative, which ends that one. Run
+			// returns only then: a feed whose consumer fails opens it again
+			// on its own, and says so while it is down ([changefeed.Feed.Outage]).
 			//nolint:contextcheck // n.run is [context.WithoutCancel] of
 			// the boot context: a feed started under the CALLER's would be one
 			// [native.shutdown] can never end, and its wait would block for ever.
-			if err := feed.Run(n.run); err != nil {
-				log.ErrorContext(ctx, "changefeed_stopped",
-					"source", translator.Source().Name, "error", err.Error(),
-					"detail", "writes still land; nothing is woken by them "+
-						"until this node or a peer reopens the feed")
-			}
+			feed.Run(n.run)
 		}()
+	}
+}
+
+// feedsReading is [native.feedsReading] over this node's native half. A node
+// that has met no company has started none, and reads no feed.
+func (e *Engine) feedsReading(now time.Time, out *statelog.Reading) {
+	e.native.Load().feedsReading(now, out)
+}
+
+// feedsReading fills the change feeds' half of an alarm reading: every feed
+// this node started that is down, how long for and why.
+//
+// THIS NODE'S OWN FEEDS. A feed's group is the fleet's, so a peer whose feed
+// is up still handles the records this node's cannot; the alarm names the
+// node whose consumer is down, and on a single data node that is every wake
+// in the company.
+func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
+	if n == nil {
+		return
+	}
+	feeds := n.feeds.Load()
+	if feeds == nil {
+		return
+	}
+	for _, feed := range *feeds {
+		outage, down := feed.Outage()
+		if !down {
+			continue
+		}
+		out.FeedsDown = append(out.FeedsDown, statelog.FeedOutage{
+			Source: outage.Source, For: now.Sub(outage.Since),
+			Failures: outage.Failures, Cause: outage.Cause,
+		})
 	}
 }
 
@@ -1278,8 +1332,8 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	}
 	if run.chat {
 		// NOTHING TO CONFIGURE, and that is the record rather than a
-		// shortcut. The lead a `lead_fallback` wake names is resolved at
-		// WRITE time, inside the decide, and rides the record — so a
+		// shortcut. The seat an `answerer` wake names is resolved at
+		// WRITE time, inside the decide, and rides the record, so a
 		// parser handed a lead map here would answer with whoever holds
 		// the role now, which for a message somebody sent last week is a
 		// different person. It is the tracker's arm's reasoning rather
@@ -2103,7 +2157,7 @@ func (c liveChannels) UnitChannels() []string {
 	return out
 }
 
-// liveRoster is chat's three-method view of the company, resolved against the
+// liveRoster is chat's four-method view of the company, resolved against the
 // epoch current when the WRITE runs.
 //
 // PER CALL, for every other live seam's reason here: a chat store is built
@@ -2152,6 +2206,42 @@ func (l liveRoster) Lead(unit, room string) string {
 		return ""
 	}
 	return unitRoomLead(company.Org, unit, room)
+}
+
+// Senior names the most senior AGENT seat among handles, or empty:
+// [seniorAgent] against the CURRENT epoch.
+func (l liveRoster) Senior(handles []string) string {
+	company := l.engine.Company()
+	if company == nil {
+		return ""
+	}
+	return seniorAgent(company.Org, handles)
+}
+
+// seniorAgent is who answers for a room made by hand: the most senior AGENT
+// seat among its members' handles, by [org.Organization.Senior], or empty.
+//
+// IT IS WHAT [chatlet.Roster.Senior] ANSWERS, and the chat write path puts it
+// on the record a person's post publishes as the room's answerer
+// ([chatlet.ReasonAnswerer]). A PERSON IS NEVER IT: a person is addressable and
+// runs no turn, so a room whose most senior member is a person is answered by
+// its most senior agent. And a handle the chart no longer holds is not a seat
+// at all, so a member who has left the company is never ranked.
+func seniorAgent(chart *org.Organization, handles []string) string {
+	if chart == nil || len(handles) == 0 {
+		return ""
+	}
+	named := make(map[string]bool, len(handles))
+	for _, h := range handles {
+		named[h] = true
+	}
+	senior := chart.Senior(func(r *org.Role) bool {
+		return !r.IsHuman() && named[r.Handle()]
+	})
+	if senior == nil {
+		return ""
+	}
+	return senior.Handle()
 }
 
 // Seats is every seat handle of the CURRENT epoch's chart, people and agents

@@ -94,7 +94,7 @@ export function uiletTone(tone: Tone): UiletTone {
  * other identity: beside a state badge the state is the one coloured thing on
  * the row, and the phase is the word that says where the work is. Inside a
  * FIGURE a phase is a series (`lib/spend.ts`' `phaseColor`); on a row it is a
- * word, and every phase — the engine's seven, and one a newer peer sends — is
+ * word, and every phase — the engine's six, and one a newer peer sends — is
  * drawn the same way, which is the behaviour a rolling upgrade needs.
  */
 export function PhaseTag({ phase }: { phase: string }) {

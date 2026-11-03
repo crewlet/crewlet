@@ -45,7 +45,7 @@ import (
 //     its next round boundary, refuses any executor launch it would make
 //     (the launch asks the same fence before it opens anything and again
 //     once its row exists), and the dispatcher spends the trigger rather
-//     than retrying it. The CODING RUN a turn already launched has no rounds
+//     than retrying it. The EXECUTOR a turn already launched has no rounds
 //     the engine sees, so this node — where it holds the seat — ENDS it at
 //     once ([Engine.stopSeatRuns]): its box reclaimed, its bridge session
 //     closed, its spend charged, and the turn parked on it closed as stopped.

@@ -60,7 +60,7 @@ function engine(): Call[] {
         return json(modelsDoc({}), 200, { ETag: DOCUMENT_TAG });
       }
       if (call.method === "GET" && call.path === "/config/llm-providers/sonnet") {
-        return json({ agent: "claude-code", model: "sonnet" }, 200, { ETag: ENTRY_TAG });
+        return json({ harness: "claude-code", model: "sonnet" }, 200, { ETag: ENTRY_TAG });
       }
       if (call.method === "DELETE" && call.path === "/config/llm-providers/sonnet") {
         if (call.ifMatch !== ENTRY_TAG) {
@@ -99,7 +99,7 @@ afterEach(() => {
 test("every removal request states the entry's tag, and the removal goes through", async () => {
   const calls = engine();
   const data = modelsData({
-    entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", agent: "codex" })],
+    entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
     doc: modelsDoc({}),
     seats: [seat("backend-engineer", "Backend Engineer")],
     assistant: { enabled: false, key: null },
@@ -142,7 +142,7 @@ test.each([403, 413])(
       return real(url, init);
     });
     const data = modelsData({
-      entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", agent: "codex" })],
+      entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", harness: "codex" })],
       doc: modelsDoc({}),
       seats: [seat("backend-engineer", "Backend Engineer")],
       assistant: { enabled: false, key: null },

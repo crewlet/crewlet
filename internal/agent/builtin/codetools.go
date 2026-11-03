@@ -39,7 +39,7 @@ import (
 //
 // The gate admits every principal (`authz.ClassEverybody`): who may read a
 // repository is a GRANT the serving node derives from its own chart for the
-// repository a call names (ADR-0081), which the gate cannot ask before the
+// repository a call names (ADR-0088), which the gate cannot ask before the
 // repository is read. So each tool names its caller — [CodeAskerOf], the one
 // conversion the REST reads use too — and the data node or the git node that
 // answers holds the read to that caller's grant: a listing leaves out what the
@@ -64,7 +64,7 @@ import (
 // never here against the repository the turn resolved once: the asker's
 // grant is judged afresh at every read, and a ceiling judged on the turn's
 // memo would keep reading for a colleague a later activation shut out. A
-// person passes — every person maintains every repository (ADR-0078) — and a
+// person passes — every person maintains every repository (ADR-0085) — and a
 // call outside any turn, a person's own assistant, reads for nobody but its
 // caller. The requester's authority is a ceiling and never a source: what is
 // read is the seat's own read, judged by its own grant.
@@ -461,7 +461,7 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 // (healthtools.go), whose hot list and one-repository form read repositories
 // through the code tools' resolution — the requester is decided on the verb
 // those reads are, the code host's ([authz.ActionCodeRead]), and NO FURTHER.
-// The requester ceiling holds a repository read (ADR-0081), so every
+// The requester ceiling holds a repository read (ADR-0088), so every
 // repository such a call reads is read for its requester as a code tool's is;
 // what the tool reads beyond the repositories is its own row's, which the
 // call's gate has already decided for the seat, and deciding that row again
@@ -717,7 +717,7 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // in the code host's own sentence, every such name named. Its read is THE ONE
 // code.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
 // calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
-// is not an id, a write's branch ([CodeDeps.branch]) and a coding run's launch
+// is not an id, a write's branch ([CodeDeps.branch]) and an executor's launch
 // every ref it resolves ([CodeDeps.ResolveRunRepos]) — and so the one place a
 // call's caller and ceiling are stamped on a resolve, and the turn's hold on
 // every seat's branch it answers is taken ([HoldRef]).
@@ -737,7 +737,7 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 
 // refsOf is [CodeDeps.resolveRef]'s read, ANSWERING a name no live ref holds
 // beside the rest ([code.ResolvedRef.Missing]) rather than refusing the call:
-// for the callers to which a missing ref is an answer — a coding run's launch,
+// for the callers to which a missing ref is an answer — an executor's launch,
 // whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]), and a
 // write's branch, which its own head compare answers ([CodeDeps.branch]). The
 // repository the answer names is the one the turn resolved, or the call is
