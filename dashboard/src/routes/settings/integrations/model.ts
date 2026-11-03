@@ -137,6 +137,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Create an access token for Crewlet with the Admin role on your Expo account, so it can manage the agents' robot users.",
   },
+  digitalocean: {
+    does: [
+      "Read Droplets, Kubernetes clusters, databases and DNS",
+      "Create, resize and remove infrastructure, where you allow it",
+      "Use doctl or the DigitalOcean MCP server as themselves",
+    ],
+    identity:
+      "Each agent gets its own DigitalOcean token, so you can cut off one agent without touching the others.",
+    byHand:
+      "Create a personal access token for each agent in DigitalOcean's control panel, with the scopes Crewlet lists, and paste it here. DigitalOcean has no API to create one.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

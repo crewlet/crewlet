@@ -286,6 +286,25 @@ describe("credentials", () => {
     expect(vendorIdentities(state, sre.node)).toEqual([]);
   });
 
+  // A DIGITALOCEAN TOKEN LEAVES WITH ITS SEAT: Crewlet revokes it itself once
+  // the seat is off or gone, so a seat on at DigitalOcean leaves nothing there.
+  test("a DigitalOcean seat names no account to decommission", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      digitalocean: { enabled: true, provisioning: { team: "acme" } },
+    };
+    doc.units![0]!.children![0]!.roles![0]!.integrations = {
+      digitalocean: { enabled: true, level: "operate" },
+    };
+    const state = keyedState(doc);
+    const sre = locate(state.draft, "seat:sre");
+    if (sre?.kind !== "seat") throw new Error("seat:sre");
+    expect(isConnected(doc, "digitalocean")).toBe(true);
+    expect(TOOL_NAMES.digitalocean).toBe("DigitalOcean");
+    expect(vendorIdentities(state, sre.node)).toEqual([]);
+  });
+
   // The labels are a map, which the fact once printed as "[object Object]".
   test("a placement reads as the node it pins and the labels a node must carry", () => {
     expect(placementSummary({ node: "node-a" })).toBe("Pinned to node node-a");
