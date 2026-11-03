@@ -3,8 +3,9 @@
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
  * old tier registered), its GitLab (Dev a Developer in a group that lists no
- * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
- * (QA's robot a Developer, the rest off), built from the fields a case names.
+ * projects), its Cloudflare (SRE able to purge, the rest off), its Expo (QA's
+ * robot a Developer, the rest off) and its Scaleway (SRE operating the
+ * production project, PM off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
@@ -107,6 +108,41 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
 /** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
 const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
 
+/** Scaleway's two projects, by the IDs a policy names, and the names a person reads. */
+export const SCW_PROD = "11111111-1111-4111-8111-111111111111";
+export const SCW_STAGING = "22222222-2222-4222-8222-222222222222";
+
+/** Scaleway's three fixed levels, each a set of Scaleway permission sets the engine grants. */
+const SCALEWAY_OPTIONS: AccessOptions = {
+  lane: "scaleway",
+  tool_server: "scaleway",
+  live: false,
+  rotatable: true,
+  levels: [
+    {
+      id: "read",
+      name: "Read",
+      note: "Reads servers, storage, networks, DNS and databases in its projects, plus the audit trail across the organization.",
+    },
+    {
+      id: "operate",
+      name: "Operate",
+      note: "Also restarts servers and changes firewalls, IPs, load balancers and private networks in its projects.",
+    },
+    {
+      id: "administer",
+      name: "Administer",
+      administers: true,
+      note: "Also creates, rebuilds and deletes servers, disks, databases, Kubernetes clusters and registry images, and can leave access behind in them: SSH keys and startup scripts on servers, database users, kubeconfigs with the cluster's admin token, and public images. When you take this level away, rotate what it could reach.",
+    },
+  ],
+  scoped: true,
+  scope_live: true,
+  scope_required: true,
+  scope: [SCW_PROD, SCW_STAGING],
+  scope_names: { [SCW_PROD]: "gophrase-prod", [SCW_STAGING]: "gophrase-staging" },
+};
+
 const EXPO_OPTIONS: AccessOptions = {
   lane: "expo",
   live: false,
@@ -178,6 +214,7 @@ export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
+export const SCALEWAY_LANE = laneOf(SCALEWAY_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -512,4 +549,58 @@ export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswe
     },
   };
   return answer;
+}
+
+/** What a Scaleway seat's box holds: the person's two lines, then the engine's settings. */
+const scalewayBox = (handle: string): AccessBox => ({
+  env: [
+    { name: "SCW_SECRET_KEY", value: `\${SCALEWAY_SECRET_KEY_${handle}}`, by: "you" },
+    { name: "SCW_ACCESS_KEY", value: `\${SCALEWAY_ACCESS_KEY_${handle}}`, by: "you" },
+    {
+      name: "SCW_DEFAULT_ORGANIZATION_ID",
+      value: "33333333-3333-4333-8333-333333333333",
+      by: "crewlet",
+    },
+    { name: "SCW_DEFAULT_PROJECT_ID", value: SCW_PROD, by: "crewlet" },
+    { name: "SCW_DISABLE_CHECK_VERSION", value: "true", by: "crewlet" },
+  ],
+});
+
+/** Scaleway with SRE operating the production project and its tool live, PM off at the default level. */
+export function scalewayAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
+  return {
+    kind: "scaleway",
+    revision: "rev-7",
+    syncing: false,
+    last_sync_at: ago(4 * MIN),
+    options: [SCALEWAY_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        scaleway: {
+          ...offLane("read"),
+          box: { env: scalewayBox("PM").env.filter((l) => l.by === "you") },
+        },
+      }),
+      seat("sre", "SRE", {
+        scaleway: onLane({
+          variable: "SCALEWAY_SECRET_KEY_SRE",
+          box: scalewayBox("SRE"),
+          desired: { enabled: true, level: "operate", scope: [SCW_PROD] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-sre",
+            level: "operate",
+            scope: [SCW_PROD],
+            credential: {
+              variable: "SCALEWAY_SECRET_KEY_SRE",
+              others: ["SCALEWAY_ACCESS_KEY_SRE"],
+              minted_at: ago(DAY),
+            },
+          },
+          ...sre,
+        }),
+      }),
+    ],
+  };
 }
