@@ -264,16 +264,14 @@ describe("credentials", () => {
     expect(qa?.kind === "seat" && vendorIdentities(added, qa.node)).toEqual([]);
   });
 
-  // AN EXPO ROBOT LEAVES WITH ITS SEAT: the engine deletes it once the seat is
-  // off or gone, so a seat that is on at Expo has nothing there to decommission.
-  test("an Expo seat names no account to decommission", () => {
+  // AN EXPO ROBOT STAYS AT EXPO until a person deletes it there, so deleting a
+  // seat that is on at Expo names it; a seat that is off there has none.
+  // Mutation: drop Expo from the vendor lanes and the robot goes unnamed.
+  test("an Expo seat names the robot a person deletes at Expo", () => {
     const doc = fixtureCompany();
     doc.integrations = {
       ...doc.integrations,
-      expo: {
-        enabled: true,
-        provisioning: { account_name: "acme", access_token: "${EXPO_ACCESS_TOKEN}" },
-      },
+      expo: { enabled: true, provisioning: { account_name: "acme" } },
     };
     doc.units![0]!.children![0]!.roles![0]!.integrations = {
       expo: { enabled: true, level: "developer" },
@@ -283,7 +281,12 @@ describe("credentials", () => {
     if (sre?.kind !== "seat") throw new Error("seat:sre");
     expect(isConnected(doc, "expo")).toBe(true);
     expect(TOOL_NAMES.expo).toBe("Expo");
-    expect(vendorIdentities(state, sre.node)).toEqual([]);
+    expect(vendorIdentities(state, sre.node)).toEqual(["its Expo robot"]);
+    doc.units![0]!.children![0]!.roles![0]!.integrations = { expo: { enabled: false } };
+    const off = keyedState(doc);
+    const offSeat = locate(off.draft, "seat:sre");
+    if (offSeat?.kind !== "seat") throw new Error("seat:sre");
+    expect(vendorIdentities(off, offSeat.node)).toEqual([]);
   });
 
   // A DIGITALOCEAN TOKEN LEAVES WITH ITS SEAT: Crewlet revokes it itself once
