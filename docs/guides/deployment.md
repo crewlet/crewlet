@@ -144,11 +144,11 @@ alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps ten ordered logs on the stream: the tracker's mutation
-log, the vector changelog, the knowledge base's log, the code host's log, the
-identity estate's log, the usage log, the artifacts log, the artifact
-datastore's log, Ask Crewlet's log, the chat log and the executor log. Each log's byte ceiling is
-**reserved** on the volume holding `stream.store_dir` when its stream is
+The engine keeps eleven ordered logs on the stream: the tracker's mutation
+log, the vector changelog, the knowledge base's log, the executor log, the code
+host's log, the identity estate's log, the usage log, the artifacts log, the
+artifact datastore's log, Ask Crewlet's log and the chat log. Each log's byte
+ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
 one, and otherwise three quarters of

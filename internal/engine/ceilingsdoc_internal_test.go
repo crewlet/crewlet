@@ -165,6 +165,10 @@ func TestThePagesStateTheVolumeArithmeticTheEngineSizesBy(t *testing.T) {
 
 	for page, want := range map[string][]string{
 		"docs/guides/deployment.md": {
+			// THE COUNT WHERE THE PAGE FIRST SAYS IT: both sides of a merge
+			// said "ten" here, each meaning a different tenth log, so the
+			// sentence auto-merged naming eleven under the word ten.
+			fmt.Sprintf("The engine keeps %s ordered logs on the stream", count),
 			shareWords + " of the free space",
 			fmt.Sprintf("less than about %d GiB free", withBucket),
 			// THE SUM AND ITS ADDENDS, which the page gives in place of the
