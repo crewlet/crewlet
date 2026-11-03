@@ -186,7 +186,7 @@ func TestToolStateOf(t *testing.T) {
 		{"its only server turned off, still off", turnedOff, dd, seataccess.Desired{}, live, seataccess.ToolOff},
 	}
 	for _, tc := range cases {
-		if got := seataccess.ToolStateOf(tc.c, tc.lane, tc.want, tc.have); got != tc.tool {
+		if got := seataccess.ToolStateOf(tc.c, "sre", tc.lane, tc.want, tc.have); got != tc.tool {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.tool)
 		}
 	}

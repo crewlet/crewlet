@@ -371,6 +371,28 @@ func (s *RoleSandbox) validate(path Path) error {
 	return p.err()
 }
 
+// References reports whether this seat's box environment names ${name}: its
+// env, or one of its own setup steps' env or files. Nil-safe.
+func (s *RoleSandbox) References(name string) bool {
+	if s == nil {
+		return false
+	}
+	names := func(values map[string]string) bool {
+		for _, v := range values {
+			if slices.Contains(envref.Names(v), name) {
+				return true
+			}
+		}
+		return false
+	}
+	if names(s.Env) {
+		return true
+	}
+	return slices.ContainsFunc(s.Setup, func(step SandboxSetupStep) bool {
+		return names(step.Env) || names(step.Files)
+	})
+}
+
 // RoleIntegrations is a seat's own identity on external surfaces: the chat
 // apps it speaks as (Slack, Mattermost) and the GitHub App it acts as.
 //

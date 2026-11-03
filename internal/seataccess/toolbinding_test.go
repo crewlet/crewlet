@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	_ "github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -80,7 +81,7 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 			seataccess.LaneSlack, seataccess.ToolLive},
 	}
 	for _, tc := range cases {
-		if got := seataccess.ToolStateOf(tc.c, tc.lane, on("a"), live); got != tc.want {
+		if got := seataccess.ToolStateOf(tc.c, "sre", tc.lane, on("a"), live); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -109,6 +110,42 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 						b.Vendor, key, b.Vendor, keys)
 				}
 			}
+		}
+	}
+}
+
+// A SEAT'S OWN BOX IS ITS TOOL WHERE ITS ENVIRONMENT NAMES ITS CREDENTIAL: the
+// EAS CLI reads EXPO_TOKEN, so a seat whose role.sandbox.env or setup names
+// its own sealed token is live once it is sealed and waiting before. Another
+// seat's token, or none, is no tool.
+func TestASeatsBoxThatNamesItsCredentialIsItsTool(t *testing.T) {
+	t.Parallel()
+	seat := func(sandbox *config.RoleSandbox) *config.Company {
+		return &config.Company{Roles: []config.Role{{Name: "QA", Handle: "qa", Sandbox: sandbox}}}
+	}
+	live := seataccess.Observed{Exists: true, Enabled: true, Level: "viewer",
+		Credential: &seataccess.Credential{Variable: "EXPO_TOKEN_QA"}}
+	waiting := live
+	waiting.Credential = nil
+	byEnv := seat(&config.RoleSandbox{Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"}})
+	byFile := seat(&config.RoleSandbox{Setup: []config.SandboxSetupStep{{Name: "eas",
+		Files: map[string]string{".expo-token": "${EXPO_TOKEN_QA}"}}}})
+	for _, tc := range []struct {
+		name string
+		c    *config.Company
+		have seataccess.Observed
+		want seataccess.ToolState
+	}{
+		{"named in its env", byEnv, live, seataccess.ToolLive},
+		{"named in its env, not sealed yet", byEnv, waiting, seataccess.ToolWaiting},
+		{"named in a setup file", byFile, live, seataccess.ToolLive},
+		{"another seat's token", seat(&config.RoleSandbox{Env: map[string]string{
+			"EXPO_TOKEN": "${EXPO_TOKEN_SRE}"}}), live, seataccess.ToolNoServer},
+		{"no box settings", seat(nil), live, seataccess.ToolNoServer},
+	} {
+		got := seataccess.ToolStateOf(tc.c, "qa", seataccess.LaneExpo, on("viewer"), tc.have)
+		if got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

@@ -130,3 +130,29 @@ func TestExpoSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.T) {
 		t.Errorf("sealed fields = %v, want [TOKEN]", got)
 	}
 }
+
+// A SEAT'S BOX NAMES A VARIABLE WHERE ITS ENV, A SETUP STEP'S ENV OR A SETUP
+// FILE REFERENCES IT, and nowhere else.
+func TestARoleSandboxReferencesWhatItNames(t *testing.T) {
+	t.Parallel()
+	box := &config.RoleSandbox{
+		Env: map[string]string{"EXPO_TOKEN": "${EXPO_TOKEN_QA}"},
+		Setup: []config.SandboxSetupStep{{Name: "npm",
+			Env:   map[string]string{"NPM_TOKEN": "${NPM_TOKEN}"},
+			Files: map[string]string{".netrc": "machine example.com password ${NETRC_TOKEN}"}}},
+	}
+	for _, name := range []string{"EXPO_TOKEN_QA", "NPM_TOKEN", "NETRC_TOKEN"} {
+		if !box.References(name) {
+			t.Errorf("%s is not read as named", name)
+		}
+	}
+	for _, name := range []string{"EXPO_TOKEN", "EXPO_TOKEN_Q", "OTHER"} {
+		if box.References(name) {
+			t.Errorf("%s is read as named", name)
+		}
+	}
+	var none *config.RoleSandbox
+	if none.References("EXPO_TOKEN_QA") {
+		t.Error("no box names anything")
+	}
+}
