@@ -87,7 +87,7 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 			t.Errorf("two transitions share the id %s", tr.ID)
 		}
 		ids[tr.ID] = true
-		if want := statelog.TransitionID(tr.Node, tr.Kind, tr.Domain, tr.Change, tr.Since); tr.ID != want {
+		if want := statelog.TransitionID(tr.Node, tr.Kind, tr.Domain, tr.Entry, tr.Change, tr.Since); tr.ID != want {
 			t.Errorf("%s %s carries the id %s, want the derived %s", tr.Change, tr.Kind, tr.ID, want)
 		}
 		byName[fmt.Sprintf("%s %s/%s", tr.Change, tr.Kind, tr.Domain)] = tr
@@ -127,5 +127,50 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 	}
 	if statelog.TransitionChange("escalated").Valid() {
 		t.Error("a change this build does not make reads as valid")
+	}
+}
+
+// TWO ENTRIES OF ONE PER-ENTRY KIND THAT RISE TOGETHER ARE TWO TRANSITIONS,
+// each naming its entry under an id of its own, because a wake is keyed on the
+// id and two servers raised in one evaluation share the node, the kind, the
+// change and the instant. Their clears are told apart the same way, so one
+// server recovering while the other stays down is not the alarm clearing.
+//
+// Mutation: leave the entry out of the transition or out of [TransitionID], and
+// the two carry no entry, or one id.
+func TestTwoEntriesRisingTogetherAreTwoTransitions(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var got []statelog.AlarmTransition
+	tracker.OnTransition("node-a", func(tr statelog.AlarmTransition) { got = append(got, tr) })
+	down := func(servers ...string) []statelog.Alarm {
+		a := statelog.Alarm{Kind: statelog.KindMCPServerFailing, Detail: "servers are down"}
+		for _, s := range servers {
+			a.Entries = append(a.Entries, statelog.AlarmEntry{Key: s, Detail: s + " is down"})
+		}
+		return []statelog.Alarm{a}
+	}
+	tracker.Observe(t.Context(), nil)
+	tracker.Observe(t.Context(), down("github", "linear"))
+	clock = clock.Add(statelog.AlarmInterval)
+	tracker.Observe(t.Context(), down("linear"))
+
+	var said []string
+	ids := map[string]bool{}
+	for _, tr := range got {
+		said = append(said, string(tr.Change)+" "+tr.Entry+": "+tr.Detail)
+		if ids[tr.ID] {
+			t.Errorf("%s %s shares the id %s with another transition", tr.Change, tr.Entry, tr.ID)
+		}
+		ids[tr.ID] = true
+		if want := statelog.TransitionID(tr.Node, tr.Kind, tr.Domain, tr.Entry, tr.Change, tr.Since); tr.ID != want {
+			t.Errorf("%s %s carries the id %s, want the derived %s", tr.Change, tr.Entry, tr.ID, want)
+		}
+	}
+	want := []string{"fired github: github is down", "fired linear: linear is down",
+		"cleared github: github is down"}
+	if !slices.Equal(said, want) {
+		t.Errorf("the tracker handed on %q, want %q", said, want)
 	}
 }

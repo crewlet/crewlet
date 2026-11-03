@@ -27,8 +27,8 @@
 // # Once each
 //
 // A transition carries its own id, derived by the tracker that made it from
-// the node, the alarm, the log it stands on, the change and the instant the
-// instance was raised (statelog.TransitionID), and each wake's id is derived
+// the node, the alarm, the log or configured entry it stands on, the change and
+// the instant the instance was raised (statelog.TransitionID), and each wake's id is derived
 // from that id and the seat ([WakeID]). So a republish — the outbox retrying a
 // publish the broker took but whose answer was lost, or a delivery handed to
 // a second node — routes to the same ids, and the inbox's same-id dedupe and
@@ -86,6 +86,9 @@ const (
 	// DomainField is the log a per-log alarm stands on; absent for a
 	// node-wide one.
 	DomainField = "domain"
+	// EntryField is the configured entry a per-entry alarm stands on, a model
+	// entry or an MCP server; absent for every other kind.
+	EntryField = "entry"
 	// ChangeField is what the alarm did (statelog.TransitionChange).
 	ChangeField = "change"
 	// SinceField is when the instance was raised, RFC 3339.
@@ -256,6 +259,9 @@ func inbound(t statelog.AlarmTransition) notify.Inbound {
 	if t.Domain != "" {
 		meta[DomainField] = t.Domain
 	}
+	if t.Entry != "" {
+		meta[EntryField] = t.Entry
+	}
 	if !t.Since.IsZero() {
 		meta[SinceField] = t.Since.UTC().Format(time.RFC3339)
 	}
@@ -278,8 +284,9 @@ func inbound(t statelog.AlarmTransition) notify.Inbound {
 
 // InstanceID is the alarm instance t is a transition of, as a turn's origin
 // names it and as the alarms page names it: the alarm's kind, which is its
-// identity there, and the log a per-log alarm stands on — `<kind>`, or
-// `<kind>:<log>`.
+// identity there, and the log a per-log alarm stands on or the entry a
+// per-entry one does — `<kind>`, `<kind>:<log>` or `<kind>:<entry>` — so a turn
+// an MCP server's alarm started is found from that server.
 //
 // THE INSTANCE, NEVER THE TRANSITION: a fire and the clear that ends it are
 // one alarm standing, which is what a person asking "which turns did this
@@ -292,10 +299,14 @@ func inbound(t statelog.AlarmTransition) notify.Inbound {
 // seat's one look at fleet_health all treat it as one alarm — the node is in
 // the wake's metadata and its prompt's first line.
 func InstanceID(t statelog.AlarmTransition) string {
-	if t.Domain == "" {
+	switch {
+	case t.Domain != "":
+		return string(t.Kind) + ":" + t.Domain
+	case t.Entry != "":
+		return string(t.Kind) + ":" + t.Entry
+	default:
 		return string(t.Kind)
 	}
-	return string(t.Kind) + ":" + t.Domain
 }
 
 // subject is the one line an operator sees in the feed: the alarm, where it
@@ -304,6 +315,9 @@ func subject(t statelog.AlarmTransition) string {
 	where := t.Node
 	if t.Domain != "" {
 		where = t.Node + ", " + t.Domain + " log"
+	}
+	if t.Entry != "" {
+		where = t.Node + ", " + t.Entry
 	}
 	switch t.Change {
 	case statelog.TransitionFired:

@@ -1,6 +1,7 @@
 package alarmwake
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 func (Prompt) Addressed(notify.Inbound) bool { return false }
 
 // PartitionKey implements [notify.Prompt]: ONE ALARM is the conversation, on
-// every node and every log it stands on, so the copies of it the inbox holds
+// every node and every log or entry it stands on, so the copies of it the inbox holds
 // pending together merge into one turn: the copies one condition raises across
 // the fleet (every data node evaluates its own table, so a fleet-wide fact such
 // as a stale backup fires on each of them within one alarm interval), and a
@@ -119,6 +120,9 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 	if domain != "" {
 		b.WriteString(", on the `" + domain + "` log")
 	}
+	if entry := meta[EntryField]; entry != "" {
+		b.WriteString(", for the " + entryNoun(statelog.Kind(kind)) + " `" + entry + "`")
+	}
 	b.WriteString("\n**What happened:** ")
 	at, since := meta[AtField], meta[SinceField]
 	switch change {
@@ -170,6 +174,15 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 		"already have followed this one. Your role carries the health grant, which is why you " +
 		"were told; whether anything needs doing, and by whom, is yours to judge.\n")
 	return b.String()
+}
+
+// entryNoun is what a per-entry kind's entry is called, the table's own split
+// of [statelog.PerEntryKinds] into model entries and MCP servers.
+func entryNoun(kind statelog.Kind) string {
+	if slices.Contains(statelog.PerServerKinds(), kind) {
+		return "MCP server"
+	}
+	return "model entry"
 }
 
 // stoodFor is how long an instance stood, from its two RFC 3339 instants, or

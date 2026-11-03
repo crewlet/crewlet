@@ -181,8 +181,8 @@ func (t *Tracker) transition(key instance, change TransitionChange, detail strin
 	since, at time.Time) AlarmTransition {
 
 	return AlarmTransition{
-		ID:   TransitionID(t.node, key.kind, key.domain, change, since),
-		Node: t.node, Kind: key.kind, Domain: key.domain, Change: change, Detail: detail,
+		ID:   TransitionID(t.node, key.kind, key.domain, key.entry, change, since),
+		Node: t.node, Kind: key.kind, Domain: key.domain, Entry: key.entry, Change: change, Detail: detail,
 		Since: since, At: at,
 	}
 }

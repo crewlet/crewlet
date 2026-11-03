@@ -48,7 +48,8 @@ func (c TransitionChange) Valid() bool { return slices.Contains(TransitionChange
 // record a wake about it is derived from (ADR-0095).
 //
 // ONE PER INSTANCE, as the log lines are: a per-log alarm standing on two logs
-// is two instances, and the second log joining it is a transition of its own
+// is two instances, a per-entry alarm standing on two MCP servers is two more,
+// and the second log or server joining it is a transition of its own
 // ([instance]).
 type AlarmTransition struct {
 	// ID is the transition's own id ([TransitionID]), which every copy of
@@ -65,6 +66,10 @@ type AlarmTransition struct {
 	// for a node-wide one.
 	Domain string `json:"domain,omitempty"`
 
+	// Entry is the configured entry a per-entry alarm stands on, a model
+	// entry or an MCP server ([PerEntryKinds]); empty for every other kind.
+	Entry string `json:"entry,omitempty"`
+
 	// Change is what the instance did.
 	Change TransitionChange `json:"change"`
 
@@ -80,17 +85,20 @@ type AlarmTransition struct {
 }
 
 // TransitionID is the id of the transition change made by the instance of
-// kind on node — on the log domain, for a per-log alarm — that was raised at
-// since.
+// kind on node — on the log domain, for a per-log alarm, or on the configured
+// entry, for a per-entry one — that was raised at since.
 //
 // DERIVED from what makes a transition the one it is, never minted at random:
-// an instance is raised once at an instant and clears once, so these five
-// name exactly one transition, and every copy of it — a republish, a second
+// an instance is raised once at an instant and clears once, so these six name
+// exactly one transition, and every copy of it — a republish, a second
 // delivery — carries the same id, which is what lets a wake derived from it be
-// recognised as a duplicate of itself. A UUIDv5 rather than the joined string,
-// so the id has one length and no separator a node or a log name could carry.
-func TransitionID(node string, kind Kind, domain string, change TransitionChange, since time.Time) string {
-	key := node + "\x00" + string(kind) + "\x00" + domain + "\x00" + string(change) + "\x00" +
+// recognised as a duplicate of itself. THE ENTRY IS ONE OF THE SIX because two
+// servers that go down in one evaluation are raised at one instant, and a wake
+// is keyed on this id: without it the second server's wake is a duplicate of
+// the first's and nobody is told. A UUIDv5 rather than the joined string, so
+// the id has one length and no separator a node, log or entry name could carry.
+func TransitionID(node string, kind Kind, domain, entry string, change TransitionChange, since time.Time) string {
+	key := node + "\x00" + string(kind) + "\x00" + domain + "\x00" + entry + "\x00" + string(change) + "\x00" +
 		strconv.FormatInt(since.UnixNano(), 10)
 	return uuid.NewSHA1(transitionNamespace, []byte(key)).String()
 }
