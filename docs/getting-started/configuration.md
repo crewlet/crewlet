@@ -1233,9 +1233,9 @@ stream:
                                     #   TAKES 512 MiB, sized by the turns the
                                     #   seats run rather than by the disk, and
                                     #   scaled down as far as 64 MiB where the
-                                    #   broker is short: about eighteen days of
+                                    #   broker is short: about seventeen days of
                                     #   a completely blocked trim at the
-                                    #   reference company's ~29 MB a day, and
+                                    #   reference company's ~32 MB a day, and
                                     #   at 64 MiB about two, short of min_age —
                                     #   past ~30 seats on a small host, set it.
                                     #   Crossing it refuses the append, and the
