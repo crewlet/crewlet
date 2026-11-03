@@ -97,14 +97,18 @@ type Engine struct {
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
+	// issuers replaces the integrations that issue seat credentials at use,
+	// for a test of the contract they share; nil is the build's
+	// ([Engine.seatIssuers]). See issued.go.
+	issuers []seatIssuer
 	// githubPulls reads a pull request for a chat link's preview through
 	// the same agents' apps the participant lookup reads with, rebuilt
 	// with it on every wiring and emptied when GitHub is retired. See
 	// githubpulls.go.
 	githubPulls githubPullReader
 	// tokenWaits is what this node's polls have said of the running jobs
-	// whose seat's app issues no token, so each wait is said once per job
-	// rather than on every pass. See githubtoken.go.
+	// whose seat's issued tokens could not be issued, so each wait is said
+	// once per job rather than on every pass. See issued.go.
 	tokenWaits tokenWaits
 
 	// authEvents is this node's authentication audit trail, and

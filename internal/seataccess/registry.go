@@ -34,36 +34,8 @@ func Register(v Vendor) {
 	if !slices.Contains(Kinds(), kind) {
 		panic(fmt.Sprintf("seataccess: %q is not a kind that manages per-seat access", kind))
 	}
-	cat := v.Catalog()
-	if cat.Kind != kind {
-		panic(fmt.Sprintf("seataccess: the %s vendor's catalog names %q", kind, cat.Kind))
-	}
-	want := LanesOf(kind)
-	got := make([]Lane, 0, len(cat.Lanes))
-	for _, spec := range cat.Lanes {
-		got = append(got, spec.Lane)
-	}
-	if !slices.Equal(want, got) {
-		panic(fmt.Sprintf("seataccess: the %s vendor's catalog lists lanes %s, want %s",
-			kind, words.And(got), words.And(want)))
-	}
-	if len(cat.Credentials) == 0 {
-		panic(fmt.Sprintf("seataccess: the %s vendor's catalog names no credential field", kind))
-	}
-	for _, spec := range cat.Lanes {
-		if spec.ScopeRequired && !spec.Scoped {
-			panic(fmt.Sprintf("seataccess: the %s vendor's %s lane requires a scope it does not have",
-				kind, spec.Lane))
-		}
-		envs := map[string]bool{}
-		for _, b := range spec.BoxEnv {
-			if !slices.Contains(cat.Credentials, b.Field) || strings.TrimSpace(b.Env) == "" || envs[b.Env] {
-				panic(fmt.Sprintf("seataccess: the %s vendor's %s lane reads %q from %q: "+
-					"each box variable is named once, from one of its credential fields %s",
-					kind, spec.Lane, b.Field, b.Env, words.And(cat.Credentials)))
-			}
-			envs[b.Env] = true
-		}
+	if problem := catalogProblem(kind, v.Catalog()); problem != "" {
+		panic(problem)
 	}
 	registry.Lock()
 	defer registry.Unlock()
@@ -71,6 +43,51 @@ func Register(v Vendor) {
 		panic(fmt.Sprintf("seataccess: the %s vendor is registered twice", kind))
 	}
 	registry.vendors[kind] = v
+}
+
+// catalogProblem is why cat may not be registered for kind, or "": a catalog
+// naming another kind or other lanes, a lane holding no credential, and a
+// box variable or an issued field no seat could be handed.
+func catalogProblem(kind integration.Kind, cat Catalog) string {
+	if cat.Kind != kind {
+		return fmt.Sprintf("seataccess: the %s vendor's catalog names %q", kind, cat.Kind)
+	}
+	want := LanesOf(kind)
+	got := make([]Lane, 0, len(cat.Lanes))
+	for _, spec := range cat.Lanes {
+		got = append(got, spec.Lane)
+	}
+	if !slices.Equal(want, got) {
+		return fmt.Sprintf("seataccess: the %s vendor's catalog lists lanes %s, want %s",
+			kind, words.And(got), words.And(want))
+	}
+	for _, spec := range cat.Lanes {
+		// EVERY LANE HOLDS A CREDENTIAL, sealed or issued at use, and an
+		// issued one is never also sealed, which would show it twice.
+		if len(cat.Credentials) == 0 && spec.Issued == "" {
+			return fmt.Sprintf("seataccess: the %s vendor's %s lane names no credential field, "+
+				"sealed or issued", kind, spec.Lane)
+		}
+		if spec.Issued != "" && (strings.TrimSpace(spec.Issued) != spec.Issued ||
+			slices.Contains(cat.Credentials, spec.Issued)) {
+			return fmt.Sprintf("seataccess: the %s vendor's %s lane issues %q, which is blank-padded "+
+				"or one of its sealed fields %s", kind, spec.Lane, spec.Issued, words.And(cat.Credentials))
+		}
+		if spec.ScopeRequired && !spec.Scoped {
+			return fmt.Sprintf("seataccess: the %s vendor's %s lane requires a scope it does not have",
+				kind, spec.Lane)
+		}
+		envs := map[string]bool{}
+		for _, b := range spec.BoxEnv {
+			if !slices.Contains(cat.Credentials, b.Field) || strings.TrimSpace(b.Env) == "" || envs[b.Env] {
+				return fmt.Sprintf("seataccess: the %s vendor's %s lane reads %q from %q: "+
+					"each box variable is named once, from one of its credential fields %s",
+					kind, spec.Lane, b.Field, b.Env, words.And(cat.Credentials))
+			}
+			envs[b.Env] = true
+		}
+	}
+	return ""
 }
 
 // Lookup returns the vendor registered for kind.

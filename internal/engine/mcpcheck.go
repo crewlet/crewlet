@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -578,7 +577,7 @@ func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport 
 		// save binds the seat's own credential to it, and a draft is decided
 		// as that save, so it is tested with what the save will hand the seat.
 		block := c.Config.SeatToolEnv(server, role.Handle())
-		env, token := e.seatResolver(ctx, c, role, github.ToolTokenLife)
+		env, token := e.seatResolver(ctx, c, role, toolTokenLife)
 		report = e.testServer(ctx, server, role, block, env,
 			&seatMint{kinds: e.mintedFor(c, role.Handle()), token: token}, tried, nil)
 	}

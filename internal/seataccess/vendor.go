@@ -298,11 +298,19 @@ type Catalog struct {
 	// credential itself first: `APP_KEY` for Datadog; `TOKEN` and `EMAIL`
 	// for Atlassian; `BOT_TOKEN` for Mattermost; `BOT_TOKEN` and
 	// `SIGNING_SECRET` for Slack; `APP_KEY` and `APP_WEBHOOK_SECRET` for
-	// GitHub. Each is sealed under [SinkName](Kind, field, handle).
+	// GitHub. Each is sealed under [SinkName](Kind, field, handle). Empty
+	// only where every lane's credential is issued at use ([LaneSpec.Issued]).
 	Credentials []string
 
 	// Lanes are the lanes this kind grants, each with what it offers.
 	Lanes []LaneSpec
+}
+
+// isCredential reports whether field is the sealed credential itself, the
+// first of [Catalog.Credentials]: false for every field of a catalog whose
+// lanes are all issued at use ([LaneSpec.Issued]), which seals none.
+func (c Catalog) isCredential(field string) bool {
+	return len(c.Credentials) > 0 && c.Credentials[0] == field
 }
 
 // Lane is the spec for one lane, or false where the catalog has none.
@@ -362,6 +370,12 @@ type LaneSpec struct {
 	// TOKEN); empty where its tool is a server. The seat's own box settings
 	// set each to its sealed name ([BoxLines]).
 	BoxEnv []BoxVar
+
+	// Issued is the field of a lane whose credential the engine issues at use
+	// and never seals, its variable [SinkName] of it; empty where the
+	// credential is sealed. The access answer reports it as the seat's
+	// credential ([IssuedCredential]). Never one of [Catalog.Credentials].
+	Issued string
 }
 
 // BoxVar is one variable a box CLI reads a seat credential from: Env, set to

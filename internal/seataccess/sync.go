@@ -437,7 +437,7 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 				CreatedByPass: s.in.Pass, State: AccountActive, Adopted: true,
 			}
 		}
-		if rec.Credential == nil && o.Credential != nil {
+		if rec.Credential == nil && o.Credential != nil && (o.Credential.Variable != "" || len(s.cat.Credentials) > 0) {
 			cred := *o.Credential
 			if cred.Variable == "" {
 				cred.Variable = SinkName(s.kind, s.cat.Credentials[0], rec.Handle)
@@ -634,7 +634,7 @@ func (s *syncer) absorb(ctx context.Context, rec *Record, step Step, res StepRes
 		if err := s.forget(ctx, rec, res.Revoked); err != nil {
 			return err
 		}
-		eff.revoked = eff.revoked || slices.Contains(res.Revoked, s.cat.Credentials[0])
+		eff.revoked = eff.revoked || slices.ContainsFunc(res.Revoked, s.cat.isCredential)
 	}
 	if rec.Account != nil {
 		switch {
@@ -728,7 +728,7 @@ func (s *syncer) forget(ctx context.Context, rec *Record, fields []string) error
 			return fmt.Errorf("clear %s: %w", strings.Join(names, ", "), err)
 		}
 	}
-	if slices.Contains(fields, s.cat.Credentials[0]) {
+	if slices.ContainsFunc(fields, s.cat.isCredential) {
 		rec.Credential = nil
 	}
 	return nil

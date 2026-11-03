@@ -147,7 +147,8 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		{"AccessDisabledBy", strs(
 			string(seataccess.DisabledByCrewlet), string(seataccess.DisabledByHand),
 		), nil},
-		{"AccessCredentialSource", strs(seataccess.CredentialMinted, seataccess.CredentialExternal), nil},
+		{"AccessCredentialSource", strs(seataccess.CredentialMinted, seataccess.CredentialExternal,
+			seataccess.CredentialIssued), nil},
 		{"AccessManaged", strs(seataccess.ManagedExternal), nil},
 		{"AccessManagedBy", strs(seataccess.ManagedByOperator), nil},
 	} {

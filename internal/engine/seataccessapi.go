@@ -389,6 +389,11 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			observed.Credential = rec.Credential
 		}
 		d := want[lane]
+		// A CREDENTIAL ISSUED AT USE is the seat's while it is on, though
+		// nothing seals it, so its tool reads live on it like any other.
+		if issued := seataccess.IssuedCredential(q.Kind, lane, ref.Handle, d, observed); issued != nil {
+			observed.Credential = issued
+		}
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
 			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),

@@ -15,12 +15,13 @@
 // item in turnspend.go, because only this package holds the trigger, the
 // runner's tally and the tracker's writer together. ADR-0022 is the decision.
 //
-// And it is where an agent's own GitHub App token is issued: when a value
-// naming it is read, for that seat's resolution alone, renewed before it runs
-// short in the seat's tool servers and in a running box's token files, and
-// never sealed (githubtoken.go), because only this package holds a seat's
-// configuration, its app's key and its boxes together. ADR-0058 is the
-// decision.
+// And it is where a seat's credential issued at use is issued, an agent's own
+// GitHub App token among them: when a value naming it is read, for that
+// seat's resolution alone, renewed before it runs short in the seat's tool
+// servers and in a running box's token files, and never sealed (issued.go,
+// one contract every issuing integration implements), because only this
+// package holds a seat's configuration, its integrations' keys and its boxes
+// together. ADR-0058 is the decision.
 //
 // And it is where a person's note to a running turn is carried: in the first
 // segment's box on the node running the turn until the turn launches its

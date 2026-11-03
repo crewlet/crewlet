@@ -31,7 +31,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
-	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -439,10 +438,10 @@ type runEnv struct {
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	settings *org.RoleSandbox, defaults []sandbox.SetupStep, boxDefaults []seataccess.BoxDefault) runEnv {
 
-	// THE SEAT'S OWN RESOLUTION, so its GitHub App token is answered here
-	// and nowhere else, issued good for [github.RunTokenLife]: a run's
-	// environment is fixed when its box starts. See githubtoken.go.
-	resolver, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	// THE SEAT'S OWN RESOLUTION, so what it is issued at use is answered
+	// here and nowhere else, good for [runTokenLife]: a run's environment is
+	// fixed when its box starts. See issued.go.
+	resolver, token := e.seatResolver(ctx, c, seat, runTokenLife)
 	setup := boxSetup(defaults, settings)
 
 	// THE LAYERS, each value with what declared it.
@@ -2244,14 +2243,14 @@ func sandboxMCP(
 // WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
 // nothing restarts a box's servers, so a server withheld from this run is
 // offered to the first launch after what it waits for arrives
-// ([credentialMissing.arrival]): the seal reaching this node, or the agent's
-// GitHub App being installed.
+// ([credentialMissing.arrival]): the seal reaching this node, or the step an
+// issuer waits on, such as the agent's GitHub App being installed.
 func (e *Engine) boxServers(
 	ctx context.Context, c *Company, seat *org.Role, settings *org.RoleSandbox,
 ) map[string]sandbox.MCPServer {
 	// THE SAME TOKEN LIFE AS THE RUN'S OWN ENVIRONMENT: a server rendered
 	// into the box is started there once, with whatever it is handed now.
-	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	env, token := e.seatResolver(ctx, c, seat, runTokenLife)
 	servers, withheld := sandboxMCP(env, c, seat, settings,
 		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
 	// A SERVER A TOOL OF WHICH CHANGED is not the box's either (ADR-0078):
@@ -2541,11 +2540,11 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		Node:  e.id,
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
-		// A job continued in its turn's kept box starts on a current GitHub
-		// App token file: the hook both waiters run on every poll, run
-		// once more before the job, since no poll reached the box while it
-		// was paused and no setup rewrites it — see
-		// [sandbox.CoordinatorOptions.Refresh] and githubtoken.go.
+		// A job continued in its turn's kept box starts on current token
+		// files: the hook both waiters run on every poll, run once more
+		// before the job, since no poll reached the box while it was
+		// paused and no setup rewrites them (see
+		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
 	})
 	if err != nil {
@@ -2696,8 +2695,8 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 // box by the fleet's, a direct or container box by its launching node's own
 // ([sandbox.Drives]) — so whatever the poll does to a running box has to ride
 // both, or the boxes of the other kind silently go without it. The refresh is
-// the case in point: a long run's GitHub App token, kept current in the files
-// the run was provisioned with (githubtoken.go), is renewed by the poll that
+// the case in point: a long run's issued tokens, kept current in the files
+// the run was provisioned with (issued.go), are renewed by the poll that
 // reaches the box and by nothing else.
 func (e *Engine) sandboxWaiterOptions(
 	rt *sandboxRuntime, drives sandbox.Drives, interval time.Duration,

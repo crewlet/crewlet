@@ -290,24 +290,52 @@ type Credential struct {
 	Variable string   `json:"variable"`
 	Others   []string `json:"others,omitempty"`
 
-	// MintedAt is when the value was minted and sealed.
-	MintedAt time.Time `json:"minted_at"`
+	// MintedAt is when the value was minted and sealed; zero for one never
+	// sealed, which an issued credential is ([CredentialIssued]).
+	MintedAt time.Time `json:"minted_at,omitzero"`
 
 	// By is who the pass that sealed it ran for, as [iam.Actor] names them.
 	By string `json:"by,omitempty"`
 
 	// Source is [CredentialMinted] for a credential Crewlet minted at the
-	// vendor, and [CredentialExternal] for one handed in from outside
-	// Crewlet (an operator's Secret, an app created elsewhere), which the
-	// engine binds and never writes or rotates.
+	// vendor, [CredentialExternal] for one handed in from outside Crewlet
+	// (an operator's Secret, an app created elsewhere), which the engine
+	// binds and never writes or rotates, and [CredentialIssued] for one the
+	// engine issues at use.
 	Source string `json:"source,omitempty"`
 }
 
-// The two sources of a seat's credential ([Credential.Source]).
+// The sources of a seat's credential ([Credential.Source]).
 const (
 	CredentialMinted   = "minted"
 	CredentialExternal = "external"
+
+	// CredentialIssued is a credential the engine issues when a seat's value
+	// names it and never seals ([LaneSpec.Issued]): it carries no MintedAt,
+	// since each node issues its own and a time would be the answering node's.
+	CredentialIssued = "issued"
 )
+
+// IssuedCredential is the credential the seat with handle holds on lane where
+// the lane's credential is issued at use ([LaneSpec.Issued]) and the seat is
+// on with an account to issue for: its variable, from [CredentialIssued]. Nil
+// for every other lane, an unregistered kind, and a seat off or not yet made.
+func IssuedCredential(kind integration.Kind, lane Lane, handle string, want Desired, have Observed) *Credential {
+	vendor, ok := Lookup(kind)
+	if !ok {
+		return nil
+	}
+	return issuedCredentialOf(vendor.Catalog(), lane, handle, want, have)
+}
+
+// issuedCredentialOf is [IssuedCredential] from cat.
+func issuedCredentialOf(cat Catalog, lane Lane, handle string, want Desired, have Observed) *Credential {
+	spec, ok := cat.Lane(lane)
+	if !ok || spec.Issued == "" || strings.TrimSpace(handle) == "" || !want.Enabled || !have.Exists {
+		return nil
+	}
+	return &Credential{Variable: SinkName(cat.Kind, spec.Issued, handle), Source: CredentialIssued}
+}
 
 // Observed is what the vendor showed on the last sync for one seat on one
 // lane, read back every pass. The wire shape is the dashboard's (`observed`).
