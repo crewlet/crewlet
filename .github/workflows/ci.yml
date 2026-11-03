@@ -7,7 +7,8 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # A side branch for merge 6's CI rounds; this line lives only on that branch, which is never merged.
+    branches: [main, 'claude/crewlet-code-ci*']
   pull_request:
 
 permissions:
