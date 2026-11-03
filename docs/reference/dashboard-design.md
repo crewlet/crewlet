@@ -2058,6 +2058,18 @@ reads the first page of its window through the same control, so a first page
 refused before any answered is said as the refusal it was, with the control
 beside it.
 
+**A picker over what the engine pages asks the engine for what was typed.** Code's
+repository picker, the one Changes, Queue, Search and Pushes share
+(`routes/code/RepoPicker.tsx`), is a field over `code_repos`: typed text, in
+lowercase, is asked as the listing's `prefix` once it rests, which the engine
+reads as one range of its index by name, and Load more pages on under it. With
+nothing typed, the list is the listing from its first name, the screen's row for
+every repository above it. Each of the four used to be built from the
+listing's first page, so a company hosting more than a hundred repositories
+could not choose any past it. An opening no repository name could have is said
+in the list and never asked, and the chosen name stays a row where the pages
+loaded do not hold it, so an address naming any repository reads as itself.
+
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
 that one used to render the full instant in the same 62 px track, so it wrapped

@@ -98,6 +98,7 @@ import type {
   CodeReadiness,
 } from "~/protocol/index.ts";
 import { REPO_PARAM, changeObject } from "./paths.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -198,9 +199,6 @@ export function Changes() {
   );
   const asked = useMemo(() => changesParams(filters), [filters]);
   const params = "params" in asked ? asked.params : {};
-  // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
-  // first page, by name, as Pushes offers them.
-  const choices = useCodeQuery("code_repos");
   const first = useCodeQuery("code_changes", params, {
     enabled: "params" in asked,
     pollMs: CHANGES_POLL_MS,
@@ -215,15 +213,6 @@ export function Changes() {
   );
   const rows = paged.items;
   const narrowed = narrowsTheWalk(filters);
-  const repoChoices = [
-    { value: "", label: "Every repository" },
-    ...(choices.data?.repos ?? []).map((r) => ({ value: r.name, label: r.name })),
-    // THE NAMED ONE, where the first page does not hold it: a choice the
-    // address made is never one the picker cannot show.
-    ...(repo !== "" && !(choices.data?.repos ?? []).some((r) => r.name === repo)
-      ? [{ value: repo, label: repo }]
-      : []),
-  ];
 
   return (
     <>
@@ -246,14 +235,7 @@ export function Changes() {
           ariaLabel="Which changes"
           active={state !== DEFAULT_STATE}
         />
-        <Select
-          width="auto"
-          value={repo}
-          onChange={(value) => setRepo(String(value))}
-          options={repoChoices}
-          ariaLabel="Repository"
-          active={repo !== ""}
-        />
+        <RepoPicker repo={repo} onChoose={setRepo} every="Every repository" />
         <Select
           width="auto"
           value={movedIn}
