@@ -877,8 +877,10 @@ func TestATurnThatNeverLaunchedTellsTheNextTurnHowItEnded(t *testing.T) {
 // error can quote what a box said — which lifts the hold the turn's begin took
 // and tells the conversation's next turn how this one ended.
 //
-// Mutation: record an abandoned launch's end only where a stop abandoned it, or
-// quote its error unredacted, and a check goes red.
+// Mutation: record an abandoned launch's end only where a stop abandoned it,
+// and the turn ends nowhere. (That the launch's own account of its error is
+// redacted is [TestTheEndCarriesTheTurnsOwnDecisionAndBreach]'s: every path to
+// the log redacts the failure again, so none of it reaches the log here.)
 func TestAnAbandonedFirstLaunchEndsItsTurnOnTheLog(t *testing.T) {
 	t.Parallel()
 	e, spy := loggingEngine(t)
