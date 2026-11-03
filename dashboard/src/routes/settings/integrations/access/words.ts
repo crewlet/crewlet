@@ -29,10 +29,10 @@ export interface LaneWords {
   rotate: string;
   /**
    * What a seat's scope is: its column heading, a single item, an empty list,
-   * and where an empty list is literal, the hint under a seat that is on with
-   * none.
+   * where an empty list is literal the hint under a seat that is on with none,
+   * and where the vendor has none to offer, what the picker says instead.
    */
-  scope?: { noun: string; singular: string; empty: string; emptyOn?: string };
+  scope?: { noun: string; singular: string; empty: string; emptyOn?: string; none?: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
   /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */

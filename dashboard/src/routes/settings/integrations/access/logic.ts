@@ -19,6 +19,7 @@ import type {
   GitHubAccess,
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
+import { andList } from "~/lib/words.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -181,6 +182,29 @@ export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
 }
 
 /**
+ * The scope a seat takes as it is turned on, or undefined: on a lane where an
+ * empty scope reaches nothing, the one entry a list read just now holds, so a
+ * person need not pick the only one there is.
+ */
+export function onlyScope(lane: Lane, want: AccessDesired): string[] | undefined {
+  if (!lane.scope_required || !lane.scope_live || want.enabled) return undefined;
+  if ((want.scope ?? []).length > 0 || lane.scope?.length !== 1) return undefined;
+  return [...lane.scope];
+}
+
+/**
+ * Why a seat's scope cannot be saved, or null, as the engine would refuse it:
+ * on a lane where an empty scope reaches nothing (`scope_required`), a seat
+ * turned on with none.
+ */
+export function refusedScope(lane: Lane, want: AccessDesired): string | null {
+  if (!lane.scope_required || !want.enabled || managedOutside(lane)) return null;
+  if ((want.scope ?? []).length > 0) return null;
+  const singular = laneWords(lane.key).scope?.singular ?? "entry";
+  return `Choose at least one ${lane.name} ${singular} for every agent that is on.`;
+}
+
+/**
  * The empty level's note under a seat on a lane of sets that holds it, where
  * the multi-select has no menu row to carry it, or null.
  */
@@ -209,12 +233,49 @@ export function accessWords(lane: Lane, o: AccessObserved): string {
   return laneWords(lane.key).fixed ?? levelName(lane, o.level);
 }
 
+/** How a person reads one scope entry: the vendor's name for it, else the identifier stored. */
+export function scopeLabel(lane: Lane, id: string): string {
+  return lane.scope_names?.[id] ?? id;
+}
+
 /** A seat's scope as a sentence fragment: "gophrase/backend and gophrase/web", or the lane's empty words. */
 export function scopeWords(lane: Lane, scope: string[] | undefined): string {
+  if (!scope || scope.length === 0) return laneWords(lane.key).scope?.empty ?? "None";
+  return andList(scope.map((id) => scopeLabel(lane, id)));
+}
+
+/** One entry a scope picker offers: the vendor's name, with the identifier beneath where they differ. */
+export interface ScopeChoice {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * What a seat's scope picker offers: every entry the connection reaches, then
+ * any the seat holds that it no longer reaches (a project deleted at the
+ * vendor), so a person can clear it.
+ */
+export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoice[] {
+  const ids = [...(lane.scope ?? [])];
+  for (const id of held ?? []) if (!ids.includes(id)) ids.push(id);
+  return ids.map((id) => {
+    const label = scopeLabel(lane, id);
+    return label === id ? { value: id, label } : { value: id, label, description: id };
+  });
+}
+
+/**
+ * What a scope picker says where it has nothing to offer, or null where it
+ * offers something or takes typed entries (`scope_open`): the vendor's list
+ * could not be read, or it was read and holds nothing.
+ */
+export function scopeUnavailable(lane: Lane, held: string[] | undefined): string | null {
+  if (lane.scope_open || scopeChoices(lane, held).length > 0) return null;
   const words = laneWords(lane.key).scope;
-  if (!scope || scope.length === 0) return words?.empty ?? "None";
-  if (scope.length === 1) return scope[0]!;
-  return `${scope.slice(0, -1).join(", ")} and ${scope[scope.length - 1]}`;
+  const noun = (words?.noun ?? "Scope").toLowerCase();
+  if (!lane.scope_live) return `Crewlet could not read your ${noun}`;
+  return words?.none ?? `No ${noun} to choose from`;
 }
 
 export interface Status {
@@ -337,13 +398,16 @@ export function widensPermissions(
 
 /**
  * The quiet hint under a seat that is on with an empty scope, where an empty
- * scope is literal (Mattermost: no channels), or null.
+ * scope is literal (Mattermost: no channels) or refused (`scope_required`),
+ * or null.
  */
 export function emptyScopeHint(lane: Lane, want: AccessDesired): string | null {
-  const hint = laneWords(lane.key).scope?.emptyOn;
-  return hint && !managedOutside(lane) && want.enabled && (want.scope ?? []).length === 0
-    ? hint
-    : null;
+  if (managedOutside(lane) || !want.enabled || (want.scope ?? []).length > 0) return null;
+  const words = laneWords(lane.key).scope;
+  if (words?.emptyOn) return words.emptyOn;
+  if (!lane.scope_required) return null;
+  const noun = (words?.noun ?? "scope").toLowerCase();
+  return `Not in any ${words?.singular ?? "entry"} yet, so it can reach nothing. Choose its ${noun}.`;
 }
 
 /**
