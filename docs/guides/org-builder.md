@@ -841,7 +841,8 @@ seat goes:
   unit does), and the secret store entries its config references, stay until
   you decommission them. They are listed by name, never by value, with links to
   **Company › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
-  so nothing exists for it outside the chart.
+  so nothing exists for it outside the chart. An Expo robot is never listed:
+  the engine deletes it once its seat is off or gone.
 - **The mailbox, executor and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
   the change and then retired, together with its executor on any turn it still has out. Its
