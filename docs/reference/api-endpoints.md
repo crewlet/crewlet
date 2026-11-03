@@ -4154,7 +4154,12 @@ repositories, Mattermost's channels, and the Jira projects and Confluence
 spaces the org model names), or read from the vendor just now. An entry
 without it could not be read, so its empty `scope` says nothing about the
 reach. `scope_required` marks a lane whose agent,
-once on, must name at least one scope entry. Each entry of `options` also says whether a person can
+once on, must name at least one scope entry. `tool_server` names the
+`mcp_servers` entry a per-seat tool server for the lane is started from: the
+company's own where it declares one reading the lane's credential (an enabled
+one first), else the name the catalogue's server is conventionally declared
+under. It is absent where no server reads the lane's credential (Expo, whose
+tool is the CLI in the agent's box). Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates

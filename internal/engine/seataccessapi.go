@@ -415,6 +415,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 			}
 		}
 		o.Lane = lane
+		o.ToolServer = seataccess.ToolServerOf(company, lane)
 		if registered {
 			o = seataccess.WithReach(o, vendor, company, roster)
 		}
