@@ -5,7 +5,6 @@ import (
 	"errors"
 	"maps"
 	"os"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,148 +91,156 @@ func askEnd(t *testing.T, runner *executor.Runner, box sandbox.Sandbox, handle s
 	}
 }
 
-// AN ENDED CLAUDE CODE RUN PACKS AS ITS OWN END DOES. A stand-in harness files
-// its session and works on; the end request, sent to the pid its script
-// published, ends it: the script stops the harness, packs its session through
-// the very pack its own exit makes — the transcript, its sidecars and its task
-// list, its digest kept — records that the job was ended, and exits with the
-// harness's own status, which the wrapper writes beside the done marker as on
-// every exit. The collection reads the run as not succeeded, saying first that
-// it was ended.
+// AN ENDED CLAUDE CODE RUN PACKS AS ITS OWN END DOES, under every sh a box may
+// have. A stand-in harness files its session and works on; the end request,
+// sent to the pid its script published, ends it: the script stops the
+// harness, packs its session through the very pack its own exit makes — the
+// transcript, its sidecars and its task list, its digest kept — records that
+// the job was ended, and exits with the harness's own status, which the
+// wrapper writes beside the done marker as on every exit. The collection reads
+// the run as not succeeded, saying first that it was ended.
 //
 // Mutations: drop the script's trap, and SIGUSR1's default kills it with no pack
 // and no record; pack only on a clean exit, and there is no capture; drop the
 // second wait, and the exit is the interrupted wait's 138.
 func TestAnEndedClaudeCodeRunPacksAsItsOwnEndDoes(t *testing.T) {
 	t.Parallel()
-	runner, box := realBox(t)
-	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", endingHarness("2.1.310", false))
-	p := executor.PathsFor(box)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
-	askEnd(t, runner, box, handle)
-	awaitOver(t, runner, box, handle, 15*time.Second, "the end gives its harness five seconds")
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, box := realBoxUnder(t, sh)
+		writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", endingHarness("2.1.310", false))
+		p := executor.PathsFor(box)
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		askEnd(t, runner, box, handle)
+		awaitOver(t, runner, box, handle, 15*time.Second, "the end gives its harness five seconds")
 
-	if ended := boxFile(t, box, p.JobEnded()); ended != "asked\n" {
-		t.Errorf("the job's end is recorded as %q, want asked", ended)
-	}
-	if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
-		t.Errorf("the run exited %q, want its harness's own 143", code)
-	}
-	if done := boxFile(t, box, p.Done()); done != "143\n" {
-		t.Errorf("the done marker holds %q, want the harness's status", done)
-	}
-	res, err := runner.Collect(t.Context(), box, handle)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	const opening = "the run was ended on request before it finished: its harness was told to stop and exited 143"
-	if res.Success || res.JobEnd != sandbox.JobEndAsked || !strings.HasPrefix(res.Error, opening) {
-		t.Errorf("the collection reads success %v, end %q, failure %q; want a run that says it was ended",
-			res.Success, res.JobEnd, res.Error)
-	}
-	if res.Captured == nil {
-		t.Fatalf("the ended run packed no session:\n%s", boxFile(t, box, p.Err()))
-	}
-	described, body, err := runner.OpenCapture(t.Context(), box)
-	if err != nil || body == nil {
-		t.Fatalf("OpenCapture = %v, %v", body, err)
-	}
-	defer func() { _ = body.Close() }()
-	members := archiveMembers(t, body)
-	project := "projects/" + executor.ClaudeProjectDir + "/"
-	session := handle.SessionID
-	for _, want := range []string{project + session + ".jsonl", project + session + "/subagents/agent-1.jsonl",
-		project + session + "/tool-results/out.txt", "tasks/" + session + "/1.json"} {
-		if _, ok := members[want]; !ok {
-			t.Errorf("the ended run's capture lacks %s: %v", want, slices.Sorted(maps.Keys(members)))
+		if ended := boxFile(t, box, p.JobEnded()); ended != "asked\n" {
+			t.Errorf("the job's end is recorded as %q, want asked", ended)
 		}
-	}
-	for name := range members {
-		if !strings.HasPrefix(name, project+session) && !strings.HasPrefix(name, "tasks/"+session+"/") {
-			t.Errorf("the ended run's capture holds %s, which is no part of the session", name)
+		if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
+			t.Errorf("the run exited %q, want its harness's own 143", code)
 		}
-	}
-	capture := []byte(boxFile(t, box, p.SessionCapture()))
-	if digests := boxFile(t, box, p.SessionDigests()); !strings.Contains(digests,
-		session+" "+digestOf(t, capture)+"\n") || described.SessionID != session {
-		t.Errorf("the box keeps no digest of the ended run's capture: %q", digests)
-	}
+		if done := boxFile(t, box, p.Done()); done != "143\n" {
+			t.Errorf("the done marker holds %q, want the harness's status", done)
+		}
+		res, err := runner.Collect(t.Context(), box, handle)
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		const opening = "the run was ended on request before it finished: its harness was told to stop and exited 143"
+		if res.Success || res.JobEnd != sandbox.JobEndAsked || !strings.HasPrefix(res.Error, opening) {
+			t.Errorf("the collection reads success %v, end %q, failure %q; want a run that says it was ended",
+				res.Success, res.JobEnd, res.Error)
+		}
+		if res.Captured == nil {
+			t.Fatalf("the ended run packed no session:\n%s", boxFile(t, box, p.Err()))
+		}
+		described, body, err := runner.OpenCapture(t.Context(), box)
+		if err != nil || body == nil {
+			t.Fatalf("OpenCapture = %v, %v", body, err)
+		}
+		defer func() { _ = body.Close() }()
+		members := archiveMembers(t, body)
+		project := "projects/" + executor.ClaudeProjectDir + "/"
+		session := handle.SessionID
+		for _, want := range []string{project + session + ".jsonl", project + session + "/subagents/agent-1.jsonl",
+			project + session + "/tool-results/out.txt", "tasks/" + session + "/1.json"} {
+			if _, ok := members[want]; !ok {
+				t.Errorf("the ended run's capture lacks %s: %v", want, slices.Sorted(maps.Keys(members)))
+			}
+		}
+		for name := range members {
+			if !strings.HasPrefix(name, project+session) && !strings.HasPrefix(name, "tasks/"+session+"/") {
+				t.Errorf("the ended run's capture holds %s, which is no part of the session", name)
+			}
+		}
+		capture := []byte(boxFile(t, box, p.SessionCapture()))
+		if digests := boxFile(t, box, p.SessionDigests()); !strings.Contains(digests,
+			session+" "+digestOf(t, capture)+"\n") || described.SessionID != session {
+			t.Errorf("the box keeps no digest of the ended run's capture: %q", digests)
+		}
+	})
 }
 
-// A CLAUDE CODE HARNESS THAT OUTLIVES ITS GRACE IS KILLED, THEN PACKED: a harness
-// that ignores SIGTERM is killed once its grace is out, the job recorded as
-// ended by a kill, and its session packed all the same.
+// A CLAUDE CODE HARNESS THAT OUTLIVES ITS GRACE IS KILLED, THEN PACKED, under
+// every sh a box may have: a harness that ignores SIGTERM is killed once its
+// grace is out, the job recorded as ended by a kill, and its session packed all
+// the same.
 //
 // Mutation: drop the kill after the grace, and the script waits for its
 // harness for ever, past the case's bound.
 func TestAClaudeCodeHarnessThatOutlivesItsGraceIsKilledThenPacked(t *testing.T) {
 	t.Parallel()
-	_, box := realBox(t)
-	runner := executor.New(timedClaude{stop: 300 * time.Millisecond})
-	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", endingHarness("2.1.310", true))
-	p := executor.PathsFor(box)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
-	askEnd(t, runner, box, handle)
-	awaitOver(t, runner, box, handle, 10*time.Second, "the harness is given a third of a second here")
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		_, box := realBoxUnder(t, sh)
+		runner := executor.New(timedClaude{stop: 300 * time.Millisecond})
+		writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", endingHarness("2.1.310", true))
+		p := executor.PathsFor(box)
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		askEnd(t, runner, box, handle)
+		awaitOver(t, runner, box, handle, 10*time.Second, "the harness is given a third of a second here")
 
-	if ended := boxFile(t, box, p.JobEnded()); ended != "killed\n" {
-		t.Errorf("the job's end is recorded as %q, want killed", ended)
-	}
-	if code := boxFile(t, box, p.ExitCode()); code != "137\n" {
-		t.Errorf("the run exited %q, want the killed harness's 137", code)
-	}
-	res, err := runner.Collect(t.Context(), box, handle)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if res.Captured == nil || !strings.HasPrefix(res.Error,
-		"the run was ended on request before it finished: its harness did not stop within") {
-		t.Errorf("the killed run collected capture %+v, failure %q", res.Captured, res.Error)
-	}
+		if ended := boxFile(t, box, p.JobEnded()); ended != "killed\n" {
+			t.Errorf("the job's end is recorded as %q, want killed", ended)
+		}
+		if code := boxFile(t, box, p.ExitCode()); code != "137\n" {
+			t.Errorf("the run exited %q, want the killed harness's 137", code)
+		}
+		res, err := runner.Collect(t.Context(), box, handle)
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if res.Captured == nil || !strings.HasPrefix(res.Error,
+			"the run was ended on request before it finished: its harness did not stop within") {
+			t.Errorf("the killed run collected capture %+v, failure %q", res.Captured, res.Error)
+		}
+	})
 }
 
-// AN END ASKED BEFORE THE HARNESS STARTS STARTS NOTHING. The request comes while
-// the run's script asks the harness its release — the first thing it does after
-// it publishes its pid — and the script, which cannot handle it until that
-// returns, starts no harness: the job is recorded as ended before its harness
-// started, with the status a SIGTERM leaves.
+// AN END ASKED BEFORE THE HARNESS STARTS STARTS NOTHING, under every sh a box
+// may have. The request comes while the run's script asks the harness its
+// release — the first thing it does after it publishes its pid — and the
+// script, which cannot handle it until that returns, starts no harness: the job
+// is recorded as ended before its harness started, with the status a SIGTERM
+// leaves.
 //
 // Mutation: drop the check before the launch, and the harness runs its brief.
 func TestAnEndAskedBeforeTheHarnessStartsStartsNothing(t *testing.T) {
 	t.Parallel()
-	runner, box := realBox(t)
-	p := executor.PathsFor(box)
-	asked := box.Home() + "/release-asked"
-	harness := strings.Replace(sessionHarness("2.1.310"),
-		`if [ "$1" = --version ]; then echo`,
-		`if [ "$1" = --version ]; then : > `+shQuote(asked)+`; sleep 2; echo`, 1)
-	writeBoxStandIn(t, box, p.BinDir()+"/claude", harness)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	boxFileAppears(t, box, p.JobScript(), "the script to publish its pid")
-	waitForFile(t, asked, "the script to ask its harness's release")
-	askEnd(t, runner, box, handle)
-	awaitOver(t, runner, box, handle, 15*time.Second, "the release takes two seconds here")
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, box := realBoxUnder(t, sh)
+		p := executor.PathsFor(box)
+		asked := box.Home() + "/release-asked"
+		harness := strings.Replace(sessionHarness("2.1.310"),
+			`if [ "$1" = --version ]; then echo`,
+			`if [ "$1" = --version ]; then : > `+shQuote(asked)+`; sleep 2; echo`, 1)
+		writeBoxStandIn(t, box, p.BinDir()+"/claude", harness)
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		boxFileAppears(t, box, p.JobScript(), "the script to publish its pid")
+		waitForFile(t, asked, "the script to ask its harness's release")
+		askEnd(t, runner, box, handle)
+		awaitOver(t, runner, box, handle, 15*time.Second, "the release takes two seconds here")
 
-	if ended := boxFile(t, box, p.JobEnded()); ended != "before\n" {
-		t.Errorf("the job's end is recorded as %q, want before", ended)
-	}
-	if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
-		t.Errorf("the run exited %q, want 143", code)
-	}
-	if argv := boxFile(t, box, box.Home()+"/argv"); argv != "" {
-		t.Errorf("the harness ran its brief after its run was asked to end:\n%s", argv)
-	}
+		if ended := boxFile(t, box, p.JobEnded()); ended != "before\n" {
+			t.Errorf("the job's end is recorded as %q, want before", ended)
+		}
+		if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
+			t.Errorf("the run exited %q, want 143", code)
+		}
+		if argv := boxFile(t, box, box.Home()+"/argv"); argv != "" {
+			t.Errorf("the harness ran its brief after its run was asked to end:\n%s", argv)
+		}
+	})
 }
 
 // waitForFile waits for a host path to exist, failing the case after ten
@@ -258,7 +265,7 @@ func waitForFile(t *testing.T, path, what string) {
 // default — and what it publishes is protocol 1 and its own pid, there by the
 // time it asks its harness anything: a stand-in whose `--version` reads the
 // record and sends the request at once leaves a script that ends its job, and
-// records that it did.
+// records that it did, under every sh a box may have.
 //
 // Mutation: write the pid before the trap, and the script's text says so; send
 // the request through a record that names another process, and the job is
@@ -280,128 +287,133 @@ func TestTheScriptPublishesItsPIDOnlyOnceItsTrapIsSet(t *testing.T) {
 		}
 	}
 
-	runner, box := realBox(t)
-	bp := executor.PathsFor(box)
-	seen := box.Home() + "/job-script-at-release"
-	harness := strings.Replace(sessionHarness("2.1.310"),
-		`if [ "$1" = --version ]; then echo`,
-		`if [ "$1" = --version ]; then cp `+shQuote(bp.JobScript())+` `+shQuote(seen)+
-			`; read -r proto pid < `+shQuote(bp.JobScript())+`; kill -USR1 "$pid"; echo`, 1)
-	writeBoxStandIn(t, box, bp.BinDir()+"/claude", harness)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	awaitOver(t, runner, box, handle, 15*time.Second, "the run starts nothing here")
-	recorded := boxFile(t, box, seen)
-	fields := strings.Fields(recorded)
-	if len(fields) != 2 || fields[0] != "1" {
-		t.Fatalf("the script's record at its release gate is %q, want `1 <pid>`", recorded)
-	}
-	if pid, err := strconv.Atoi(fields[1]); err != nil || pid < 2 {
-		t.Fatalf("the script's record names %q, no pid", fields[1])
-	}
-	if ended := boxFile(t, box, bp.JobEnded()); ended != "before\n" {
-		t.Errorf("a request sent the moment the pid could be read left the job recorded %q, want before; "+
-			"its exit %q", ended, boxFile(t, box, bp.ExitCode()))
-	}
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, box := realBoxUnder(t, sh)
+		bp := executor.PathsFor(box)
+		seen := box.Home() + "/job-script-at-release"
+		harness := strings.Replace(sessionHarness("2.1.310"),
+			`if [ "$1" = --version ]; then echo`,
+			`if [ "$1" = --version ]; then cp `+shQuote(bp.JobScript())+` `+shQuote(seen)+
+				`; read -r proto pid < `+shQuote(bp.JobScript())+`; kill -USR1 "$pid"; echo`, 1)
+		writeBoxStandIn(t, box, bp.BinDir()+"/claude", harness)
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		awaitOver(t, runner, box, handle, 15*time.Second, "the run starts nothing here")
+		recorded := boxFile(t, box, seen)
+		fields := strings.Fields(recorded)
+		if len(fields) != 2 || fields[0] != "1" {
+			t.Fatalf("the script's record at its release gate is %q, want `1 <pid>`", recorded)
+		}
+		if pid, err := strconv.Atoi(fields[1]); err != nil || pid < 2 {
+			t.Fatalf("the script's record names %q, no pid", fields[1])
+		}
+		if ended := boxFile(t, box, bp.JobEnded()); ended != "before\n" {
+			t.Errorf("a request sent the moment the pid could be read left the job recorded %q, want before; "+
+				"its exit %q", ended, boxFile(t, box, bp.ExitCode()))
+		}
+	})
 }
 
-// slowTar installs, in box's bin directory, a stand-in `tar` that says it has
-// begun in begun and then — where partial is set — writes a partial archive at
-// the path its -f names and works on for good; and otherwise takes a second
-// before it runs the real tar.
-func slowTar(t *testing.T, box sandbox.Sandbox, begun string, partial bool) {
-	t.Helper()
-	real, err := exec.LookPath("tar")
-	if err != nil {
-		t.Fatalf("no tar on this machine's PATH to stand in front of: %v", err)
-	}
-	script := "#!/bin/sh\n: > " + shQuote(begun) + "\n"
+// slowTar is a prelude for a run's script that stands in front of its `tar`: a
+// FUNCTION, which a shell runs ahead of its builtins' applets and of its PATH
+// alike — a stand-in on the PATH is passed over by a busybox that prefers its
+// own applets, Debian's and Ubuntu's busybox-static among them — that says it
+// has begun in begun and then, where partial is set, writes part of an archive
+// at the path its -f names and works on for good; and otherwise takes a second
+// before it runs the box's own tar. Its variables are its own, so the
+// script's are left as they were.
+func slowTar(begun string, partial bool) string {
 	if partial {
-		script += `out= prev=; for a; do [ "$prev" = -czf ] && out=$a; prev=$a; done` + "\n" +
-			`[ -z "$out" ] || printf 'part of an archive' > "$out"` + "\nexec sleep 300\n"
-	} else {
-		script += "sleep 1\nexec " + shQuote(real) + " \"$@\"\n"
+		return `tar() { slowtarout= slowtarprev=; for slowtararg; do [ "$slowtarprev" = -czf ] && ` +
+			`slowtarout=$slowtararg; slowtarprev=$slowtararg; done; [ -z "$slowtarout" ] || ` +
+			`printf 'part of an archive' > "$slowtarout"; : > ` + shQuote(begun) + `; sleep 300; }` + "\n"
 	}
-	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/tar", script)
+	return `tar() { : > ` + shQuote(begun) + `; sleep 1; command tar "$@"; }` + "\n"
 }
 
 // A SECOND END REQUEST LEAVES THE PACK WHOLE, on Claude Code as on OpenCode (see
-// the OpenCode case beside the script's): a request that comes while the ended
-// run packs is ignored, and the archive is whole and the exit the harness's.
+// the OpenCode case beside the script's), under every sh a box may have: a
+// request that comes while the ended run packs is ignored, and the archive is
+// whole and the exit the harness's.
 //
 // Mutation: put the request back to its default once the end is under way
 // rather than ignoring it, and the second request kills the script mid-pack,
 // with no archive left.
 func TestASecondEndRequestLeavesAClaudeCodePackWhole(t *testing.T) {
 	t.Parallel()
-	runner, box := realBox(t)
-	p := executor.PathsFor(box)
-	writeBoxStandIn(t, box, p.BinDir()+"/claude", endingHarness("2.1.310", false))
-	begun := box.Home() + "/tar-begun"
-	slowTar(t, box, begun, false)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
-	askEnd(t, runner, box, handle)
-	waitForFile(t, begun, "the ended run to pack")
-	askEnd(t, runner, box, handle)
-	awaitOver(t, runner, box, handle, 15*time.Second, "the pack takes a second here")
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, box := realBox(t)
+		begun := box.Home() + "/tar-begun"
+		runsUnder(t, box, sh, slowTar(begun, false))
+		p := executor.PathsFor(box)
+		writeBoxStandIn(t, box, p.BinDir()+"/claude", endingHarness("2.1.310", false))
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		askEnd(t, runner, box, handle)
+		waitForFile(t, begun, "the ended run to pack")
+		askEnd(t, runner, box, handle)
+		awaitOver(t, runner, box, handle, 15*time.Second, "the pack takes a second here")
 
-	if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
-		t.Errorf("the run exited %q, want its harness's 143", code)
-	}
-	_, body, err := runner.OpenCapture(t.Context(), box)
-	if err != nil || body == nil {
-		t.Fatalf("the run left no whole capture: %v, %v\n%s", body, err, boxFile(t, box, p.Err()))
-	}
-	defer func() { _ = body.Close() }()
-	if members := archiveMembers(t, body); len(members) == 0 {
-		t.Error("the capture holds nothing")
-	}
+		if code := boxFile(t, box, p.ExitCode()); code != "143\n" {
+			t.Errorf("the run exited %q, want its harness's 143", code)
+		}
+		_, body, err := runner.OpenCapture(t.Context(), box)
+		if err != nil || body == nil {
+			t.Fatalf("the run left no whole capture: %v, %v\n%s", body, err, boxFile(t, box, p.Err()))
+		}
+		defer func() { _ = body.Close() }()
+		if members := archiveMembers(t, body); len(members) == 0 {
+			t.Error("the capture holds nothing")
+		}
+	})
 }
 
-// A PACK KILLED MIDWAY LEAVES NO ARCHIVE WHERE THE TAKE READS: the run's script
-// packs in its staging directory and moves a whole archive into place, so a
-// job killed while it packs — an end past its wait — leaves only the staging
-// directory, which the clear before the box's next run removes.
+// A PACK KILLED MIDWAY LEAVES NO ARCHIVE WHERE THE TAKE READS, under every sh a
+// box may have: the run's script packs in its staging directory and moves a
+// whole archive into place, so a job killed while it packs — an end past its
+// wait — leaves only the staging directory, which the clear before the box's
+// next run removes.
 //
 // Mutation: tar straight into the capture's path, and the kill leaves part of an
 // archive where the take reads it as whole.
 func TestAPackKilledMidwayLeavesNoArchiveWhereTheTakeReads(t *testing.T) {
 	t.Parallel()
-	runner, box := realBox(t)
-	p := executor.PathsFor(box)
-	writeBoxStandIn(t, box, p.BinDir()+"/claude", endingHarness("2.1.310", false))
-	begun := box.Home() + "/tar-begun"
-	slowTar(t, box, begun, true)
-	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
-	askEnd(t, runner, box, handle)
-	waitForFile(t, begun, "the ended run to pack")
-	if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
-		t.Fatalf("KillJob: %v", err)
-	}
-	awaitOver(t, runner, box, handle, 15*time.Second, "the job was killed")
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		runner, box := realBox(t)
+		begun := box.Home() + "/tar-begun"
+		runsUnder(t, box, sh, slowTar(begun, true))
+		p := executor.PathsFor(box)
+		writeBoxStandIn(t, box, p.BinDir()+"/claude", endingHarness("2.1.310", false))
+		handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "begin"})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		boxFileAppears(t, box, transcriptOf(box, handle.SessionID), "the harness to file its session")
+		askEnd(t, runner, box, handle)
+		waitForFile(t, begun, "the ended run to pack")
+		if err := box.KillJob(t.Context(), handle.CommandID); err != nil {
+			t.Fatalf("KillJob: %v", err)
+		}
+		awaitOver(t, runner, box, handle, 15*time.Second, "the job was killed")
 
-	if left := boxFile(t, box, p.SessionCapture()); left != "" {
-		t.Fatalf("the killed pack left %q where the take reads a whole archive", left)
-	}
-	if _, err := os.Stat(p.SessionStaging()); err != nil {
-		t.Fatalf("the premise: the killed pack left no staging directory (%v)", err)
-	}
-	if err := runner.ClearArtifacts(t.Context(), box); err != nil {
-		t.Fatalf("ClearArtifacts: %v", err)
-	}
-	if _, err := os.Stat(p.SessionStaging()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the killed pack's staging directory outlived the clear before the next run: %v", err)
-	}
+		if left := boxFile(t, box, p.SessionCapture()); left != "" {
+			t.Fatalf("the killed pack left %q where the take reads a whole archive", left)
+		}
+		if _, err := os.Stat(p.SessionStaging()); err != nil {
+			t.Fatalf("the premise: the killed pack left no staging directory (%v)", err)
+		}
+		if err := runner.ClearArtifacts(t.Context(), box); err != nil {
+			t.Fatalf("ClearArtifacts: %v", err)
+		}
+		if _, err := os.Stat(p.SessionStaging()); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the killed pack's staging directory outlived the clear before the next run: %v", err)
+		}
+	})
 }
 
 // AN END IS ASKED OF THE PID THE SCRIPT RECORDED, and only of one recorded in
