@@ -3,6 +3,7 @@ package catalogue
 import (
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -28,6 +29,10 @@ type SeatKey struct {
 	Env    string
 	Header string
 	Prefix string
+	// Sign is a credential sent nowhere: the engine signs each request to
+	// the remote server with it ([mcp.RequestSigner]), so a server it binds
+	// is never handed to a box. Env, Header and Prefix are empty.
+	Sign bool
 }
 
 // Binding is a recognised server's declaration of the seat credential it
@@ -162,6 +167,14 @@ func hostUnder(domains ...string) func(Launch) bool {
 		})
 	}
 }
+
+// awsMCPHost recognises AWS's MCP Server in any Region it runs in:
+// aws-mcp.<Region>.api.aws, and no other host under api.aws.
+func awsMCPHost(l Launch) bool {
+	return l.Transport == TransportHTTP && awsMCP.MatchString(HostOf(l.URL))
+}
+
+var awsMCP = regexp.MustCompile(`^aws-mcp\.[a-z0-9-]+\.api\.aws$`)
 
 // either recognises what a or b does.
 func either(a, b func(Launch) bool) func(Launch) bool {

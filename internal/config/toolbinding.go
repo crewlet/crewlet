@@ -107,6 +107,9 @@ func (m *MCPServer) Launch() catalogue.Launch {
 // under on its own transport.
 type BoundSeatKey struct {
 	Kind, Field, Key, Prefix string
+	// Sign is a credential the engine signs each request with and sends
+	// nowhere: Key and Prefix are empty, and no seat's block holds it.
+	Sign bool
 }
 
 // SeatBindings is every seat credential this per-seat server reads: what it
@@ -134,6 +137,12 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		return nil
 	}
 	for _, k := range keys {
+		if k.Sign {
+			if m.Kind() == TransportHTTP {
+				out = append(out, BoundSeatKey{Kind: kind, Field: k.Field, Sign: true})
+			}
+			continue
+		}
 		key, prefix := k.Env, ""
 		if m.Kind() == TransportHTTP {
 			key, prefix = k.Header, k.Prefix
@@ -143,6 +152,17 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		}
 	}
 	return out
+}
+
+// SignedBinding is the seat credential this per-seat server's requests are
+// signed with, and false for a server that is handed its credential instead.
+func (m *MCPServer) SignedBinding() (BoundSeatKey, bool) {
+	for _, k := range m.SeatBindings() {
+		if k.Sign {
+			return k, true
+		}
+	}
+	return BoundSeatKey{}, false
 }
 
 // validateSeatCredentials checks a server's declared seat credentials.
@@ -284,7 +304,7 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			// key to value: what the server reads, and what it is handed.
 			bound := map[string]string{}
 			for _, k := range server.SeatBindings() {
-				if !role.seatOnAt(k.Kind) {
+				if k.Sign || !role.seatOnAt(k.Kind) {
 					continue
 				}
 				if ref, ok := c.boundRef(&role.Integrations, seat.Handle(), k); ok {

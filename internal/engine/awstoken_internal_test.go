@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	awsint "github.com/crewlet/crewlet/internal/aws"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -73,6 +74,11 @@ integrations:
       home_region: us-east-2
       certificate_authority: "${AWS_CERTIFICATE_AUTHORITY}"
       connection: "`+awsConnection+`"
+mcp_servers:
+  - name: aws
+    transport: http
+    shared: false
+    url: "https://aws-mcp.us-east-1.api.aws/mcp"
 roles:
   - name: Owner
     handle: owner
@@ -95,4 +101,32 @@ roles:
 	e.epoch.current.Store(c)
 	return issuerRig{e: e, c: c, kind: integration.KindAWS, ready: "builder", waiting: "planner",
 		says: "AccessDenied"}
+}
+
+// A SEAT'S AWS SERVER IS SIGNED WITH ITS OWN SESSION: the seat on at AWS gets a
+// child of the recognised server that signs as it, holding no header, and a
+// seat that is not on gets none.
+func TestASeatsAWSServerIsSignedWithItsOwnSession(t *testing.T) {
+	t.Parallel()
+	r := awsRig(t, false)
+	for _, tc := range []struct {
+		handle string
+		signed bool
+	}{{"builder", true}, {"planner", false}} {
+		seat := r.c.Org.AgentSeatByHandle(tc.handle)
+		env, tokens := r.e.seatResolver(t.Context(), r.c, seat, toolTokenLife)
+		specs, outcomes := seatSpecs(r.c, seat, env, &seatMint{kinds: r.e.mintedFor(r.c, tc.handle), token: tokens})
+		var signer awsint.MCPSigner
+		for _, spec := range specs {
+			if s, ok := spec.Signer.(awsint.MCPSigner); ok {
+				signer = s
+				if len(spec.Headers) != 0 {
+					t.Errorf("%s: the signed server carries headers %v", tc.handle, spec.Headers)
+				}
+			}
+		}
+		if got := signer != (awsint.MCPSigner{}); got != tc.signed || len(outcomes) != 0 {
+			t.Errorf("%s: signed %v, want %v (outcomes %v)", tc.handle, got, tc.signed, outcomes)
+		}
+	}
 }
