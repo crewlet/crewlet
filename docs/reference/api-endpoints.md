@@ -11193,7 +11193,11 @@ withheld from the reader. A call a person approved once the run asked for it
 ([Asking a person before a tool runs](../guides/tools-and-mcp.md#asking-a-person-before-a-tool-runs))
 is among them, marked `approved: true`, with no `args` and no `output`: the
 run's resume made it with the arguments the run held sealed, and handed its
-result to the job that carries the work on sealed too.
+result to the job that carries the work on sealed too. The call the run held
+for that approval comes before it, marked `held: true`, with no `args`, which
+ride the run's row sealed beside its question, and with `failed: true`, since
+nothing it asked for happened: it is the run's question, not a failure, and
+the executors board draws it so.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

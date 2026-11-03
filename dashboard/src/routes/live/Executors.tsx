@@ -444,7 +444,7 @@ function BridgeSummary({ run }: { run: ExecutorRow }) {
       </section>
     );
   }
-  const failures = calls.filter((c) => c.failed).length;
+  const failures = calls.filter(callFailed).length;
   const last = calls[calls.length - 1];
   return (
     <section className="col gap-2">
@@ -1169,7 +1169,7 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
       </Card>
     );
   }
-  const failures = calls.filter((c) => c.failed).length;
+  const failures = calls.filter(callFailed).length;
   return (
     <Card>
       <Card.Header
@@ -1223,6 +1223,25 @@ const SEALED_ARGUMENTS = "(sealed with the approval, not kept on the record)";
 const SEALED_RESULT = "(handed to the run sealed, not kept on the record)";
 
 /**
+ * What a call the run held for a person's approval ([BridgeCall.held]) is said
+ * to have sent: its arguments ride the run's row sealed beside its question,
+ * for whoever may approve it, and are never on the record, so "(none)" would
+ * say a call that named them named nothing.
+ */
+const HELD_ARGUMENTS = "(sealed beside the run's question, for whoever may approve it)";
+
+/**
+ * Whether a bridged call failed. A HELD call is recorded failed, since nothing
+ * it asked for happened, and is no failure: it is the run's question for a
+ * person, as an ask is, and the call they let be made follows it in the log
+ * marked approved. Counted as a failure, a run that asked and was approved
+ * read as a run whose tool broke.
+ */
+function callFailed(call: BridgeCall): boolean {
+  return Boolean(call.failed) && !call.held;
+}
+
+/**
  * One bridged call's two records, formatted.
  *
  * INSIDE the lazy disclosure, and that placement is the point. `useMemo` in
@@ -1269,15 +1288,15 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
           plain
           focusWhenScrollable
           label={`${call.name} arguments`}
-          code={args || (call.approved ? SEALED_ARGUMENTS : "(none)")}
+          code={args || (call.approved ? SEALED_ARGUMENTS : call.held ? HELD_ARGUMENTS : "(none)")}
         />
       </div>
       <div className="col gap-1">
-        <div className="t-label">{call.failed ? "Error" : "Result"}</div>
+        <div className="t-label">{callFailed(call) ? "Error" : "Result"}</div>
         <CodeBlock
           plain
           focusWhenScrollable
-          label={`${call.name} ${call.failed ? "error" : "result"}`}
+          label={`${call.name} ${callFailed(call) ? "error" : "result"}`}
           code={output || (call.approved ? SEALED_RESULT : "(nothing returned)")}
         />
       </div>
@@ -1297,8 +1316,9 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
       title={
         <span className="row gap-2 baseline">
           <InlineCode>{call.name}</InlineCode>
+          {call.held && <Tag variant="warning">held for approval</Tag>}
           {call.approved && <Tag variant="info">approved</Tag>}
-          {call.failed && <Tag variant="danger">failed</Tag>}
+          {callFailed(call) && <Tag variant="danger">failed</Tag>}
           <span className="spacer" />
           <span className="t-caption">{fmtTime(call.at)}</span>
         </span>

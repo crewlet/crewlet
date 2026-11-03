@@ -269,6 +269,47 @@ test("a call a person approved is marked so, its sealed records never drawn as e
   expect(result?.textContent).toContain("(handed to the run sealed, not kept on the record)");
 });
 
+// THE CALL THE RUN HELD FOR A PERSON'S APPROVAL is recorded failed, since nothing
+// it asked for happened, and without its arguments, which ride the run's row
+// sealed beside its question: counted as a failure and drawn with "(none)", a
+// run that asked and was approved read as a run whose tool broke, and a call
+// that named its arguments as one that named none.
+//
+// Mutation: count a held call among the failures, drop its tag, or draw its
+// empty arguments as any other call's, and this goes red.
+test("a call held for a person's approval is marked so, never as a failure", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "add_issue_comment",
+              held: true,
+              failed: true,
+              output: "add_issue_comment was NOT called: it needs a person's approval",
+              origin: "mcp:github",
+              server: "github",
+              at: "2026-06-15T12:02:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  expect(screen.getByText("held for approval")).toBeTruthy();
+  expect(screen.queryByText("failed")).toBeNull();
+  expect(screen.queryByText(/failure/)).toBeNull();
+  const args = container.querySelector('[aria-label="add_issue_comment arguments"]');
+  const result = container.querySelector('[aria-label="add_issue_comment result"]');
+  expect(args?.textContent).toContain(
+    "(sealed beside the run's question, for whoever may approve it)",
+  );
+  expect(result?.textContent).toContain("was NOT called");
+});
+
 // ---------------------------------------------------------------------------
 // A run's own page
 // ---------------------------------------------------------------------------

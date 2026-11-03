@@ -965,6 +965,14 @@ export interface BridgeCall {
   origin?: string;
   server?: string;
   /**
+   * A call to a tool at Needs approval that was NOT made: the run recorded it
+   * as its question for a person and parked on their answer. The engine marks
+   * it `failed` too, since nothing it asked for happened, but it is no failure
+   * and is never counted as one. Its arguments are never here: they ride the
+   * run's row sealed beside its question, for whoever may approve it.
+   */
+  held?: boolean;
+  /**
    * The call a person let be made once its run asked for their approval:
    * made by the run's resume on the engine host rather than by the job over
    * its bridge, and recorded among its round's calls. Its arguments and its
