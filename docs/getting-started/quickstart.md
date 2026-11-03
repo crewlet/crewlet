@@ -928,7 +928,8 @@ schedules: the engine runs its own tracker, wiki and chat, so a task you file
 or assign in Worklet, a page in Doclet and a post in a Chatlet room each wake
 the seats they reach. External surfaces put the company to work where your
 people already are, and add what those three do not: a code host for its
-code, and a chat that reaches you when you are not looking. Pick yours in
+code — which the engine can also be ([Hosting Code](../guides/code.md)) — and
+a chat that reaches you when you are not looking. Pick yours in
 **[Choosing your stack](choosing-your-stack.md)** (LLM, tracker + knowledge
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
