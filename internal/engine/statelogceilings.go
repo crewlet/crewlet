@@ -142,7 +142,8 @@ const StreamBudgetShare = 0.625
 //
 // A gibibyte, which is the floor Tier A's own validation enforces on the
 // CORPUS-SIZED logs' fields — the tracker's, the vector changelog's, the
-// knowledge base's, the artifacts log's, the artifact datastore's and chat's —
+// knowledge base's, the code log's, the artifacts log's, the artifact
+// datastore's and chat's —
 // because below it a log that grows with a corpus is not a log, it is a window
 // that refuses appends within a week of a company starting work. It is where
 // SCALING stops and it is nobody's floor but theirs: the identity estate's,
