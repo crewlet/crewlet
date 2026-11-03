@@ -387,6 +387,8 @@ var contract = []Entry{
 	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionContinuesIn", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionContinuedBy", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SCHEDULE_CONVERSATION_PREFIX", ReadScalar,
+		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},

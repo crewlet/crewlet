@@ -603,6 +603,11 @@ const CONTINUED_BY: Record<SessionContinuedBy, ContinuedWords> = {
     not: "The conversation's next turn would not continue this session",
     unknown: "Whether the conversation's next turn continues this session cannot be said now",
   },
+  next_fire: {
+    would: "The schedule's next fire would continue this session",
+    not: "The schedule's next fire would not continue this session",
+    unknown: "Whether the schedule's next fire continues this session cannot be said now",
+  },
 };
 
 /**
@@ -631,10 +636,11 @@ const CONTINUES_IN: Record<SessionContinuesIn, string> = {
 
 /**
  * Whether a launch would continue the session, as a sentence: which launch
- * (`continued_by` — a relaunch of its turn, or its conversation's next turn),
- * the engine's decision (`continuable`) and where (`continues_in`), with its own
- * reason (`not_continuable`) where it would not, where a relaunch would only in
- * the box the turn's run parked in, and where it cannot be said now.
+ * (`continued_by` — a relaunch of its turn, its conversation's next turn, or
+ * its schedule's next fire), the engine's decision (`continuable`) and where
+ * (`continues_in`), with its own reason (`not_continuable`) where it would not,
+ * where a relaunch would only in the box the turn's run parked in, and where it
+ * cannot be said now.
  *
  * NO MORE THAN THE ENGINE DECIDED: a launch WOULD continue the session where
  * the box it gets can take it up and the seat's budget can carry it, which only

@@ -13,7 +13,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -939,6 +941,44 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 	row.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
 	row.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
 	return row
+}
+
+// A SCHEDULE'S ROW SAYS WHETHER ITS NEXT FIRE CONTINUES IT. A schedule is a
+// conversation of each seat that runs it, every fire a turn of it, so a fire's
+// row is decided as any conversation's is — by the decision its next fire's
+// first launch takes — and said as the schedule's next fire (`next_fire`), in
+// the schedule's words: the newest fire's session is continuable in any box,
+// and an older fire's names the fire the next one is handed instead. A chat
+// conversation's head on the same page stays its next turn's.
+//
+// Mutation: decide a schedule's row as `next_turn`, word it as a
+// conversation's, or tell a chat conversation's row as a schedule's, and a
+// check goes red.
+func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
+	t.Parallel()
+	schedule := notify.ScheduleConversation(types.ScheduleScopeRole, "a-1", "health-check")
+	older, head, chat := endedOn(schedule, 1), endedOn(schedule, 2), endedOn("chat:room", 3)
+	s := continuableSources(t, []executordomain.Session{chat, head, older}, nil)
+	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	rows := rowsByTurn(t, page)
+	if got := rows[head.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
+		!*got.Continuable || got.ContinuesIn != sandbox.ContinuesInAnyBox {
+		t.Errorf("the schedule's newest session is %s by %q, want its next fire's, in any box", decided(got),
+			got.ContinuedBy)
+	}
+	if got := rows[older.Turn]; got.ContinuedBy != sandbox.ContinuedByNextFire || got.Continuable == nil ||
+		*got.Continuable || !strings.Contains(got.NotContinuable,
+		"the schedule's next fire is handed fire "+head.Turn+"'s session, the newest the schedule left") {
+		t.Errorf("an older fire's session is %s by %q, want its next fire's, naming the fire it is handed",
+			decided(got), got.ContinuedBy)
+	}
+	if got := rows[chat.Turn]; got.ContinuedBy != sandbox.ContinuedByNextTurn || got.Continuable == nil ||
+		!*got.Continuable {
+		t.Errorf("a chat conversation's head is %s by %q, want its next turn's", decided(got), got.ContinuedBy)
+	}
 }
 
 // A ROW SAYS WHETHER THE NEXT TURN CONTINUES IT, as that turn's first launch

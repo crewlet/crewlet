@@ -994,7 +994,7 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			if tc.run != nil {
 				tc.run(&run)
 			}
-			got := ReadContinuityOf(row, "", &run, tc.target, now)
+			got := ReadContinuityOf(row, "", &run, tc.target, ContinuedByNextTurn, now)
 			by := ContinuedByRelaunch
 			if tc.ending {
 				by = ""

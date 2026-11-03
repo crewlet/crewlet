@@ -292,6 +292,48 @@ test("an ended turn's account says whether its conversation's next turn would co
   );
 });
 
+// A SCHEDULE'S SESSION IS ITS NEXT FIRE'S TO CONTINUE: a schedule is a
+// conversation of each seat that runs it, every fire a turn of it, so an ended
+// fire's account names the schedule's next fire wherever another
+// conversation's names its next turn — continued, not continued with the
+// engine's reason, and not to be said yet.
+test("an ended fire's account says whether the schedule's next fire would continue it", () => {
+  const fire: Partial<ExecutorSessionRow> = {
+    conversation_key: `schedule/role/${BASE}/health-check`,
+    continued_by: "next_fire",
+  };
+  const olderFireWhy =
+    `the schedule's next fire is handed fire ${NEWEST}'s session, the newest the schedule ` +
+    "left, and is told how this one ended where its brief has room";
+  expect(continuableWords(session(fire))).toBe(
+    "The schedule's next fire would continue this session in whichever box it gets, " +
+      "where that box can take it up and the seat's budget can carry it.",
+  );
+  expect(
+    continuableWords(
+      session({
+        ...fire,
+        continuable: false,
+        continues_in: undefined,
+        not_continuable: olderFireWhy,
+      }),
+    ),
+  ).toBe(`The schedule's next fire would not continue this session: ${olderFireWhy}.`);
+  expect(
+    continuableWords(
+      session({
+        ...fire,
+        continuable: null,
+        continues_in: undefined,
+        not_continuable: "every member of the seat's executor chain is sitting out its plan",
+      }),
+    ),
+  ).toBe(
+    "Whether the schedule's next fire continues this session cannot be said now: every " +
+      "member of the seat's executor chain is sitting out its plan.",
+  );
+});
+
 // THE ENGINE'S REASON IS ONE SENTENCE OF THE SCREEN'S, closed once: a reason
 // that brings its own full stop is not closed again, and a row the engine sent
 // no reason for still reads as a sentence.
