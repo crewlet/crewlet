@@ -23,8 +23,9 @@
  *     by shownField, because asking a person to invent a shared token is
  *     asking them to invent a password, and the engine generates it on
  *     submit. The one exception is a minted value with a PUBLIC half a person
- *     has to carry to the app (Google Cloud's federation key): once minted,
- *     its row shows the engine's rendering of that half, never an input.
+ *     has to carry to the app (a key whose public half the app must be
+ *     given): once minted, its row shows the engine's rendering of that half,
+ *     never an input.
  *
  * There is no Replace control. Typing over a field is what replaces what it
  * holds, and an untouched one is not submitted.
