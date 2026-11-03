@@ -1061,9 +1061,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
 	// started ([Paths.SessionRecord]): the session a harness that reported none
 	// ran in, whether it was the one the run was asked to continue, why it
-	// started anew where it did — a sentence, held to its bound as it is read
-	// ([parseSessionRecord]) — and the harness's release. A record the box
-	// refused is a piece the run did not report, as any other is.
+	// started anew where it did — a sentence, held to its bound here, where it
+	// enters the result ([sandbox.BoundFellBack]): the line is the box's, as
+	// long as the record — and the harness's release. A record the box refused
+	// is a piece the run did not report, as any other is.
 	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1081,7 +1082,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if !validSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
-	result.Continued, result.FellBack, result.HarnessVersion = rec.continued, rec.why, releaseOf(rec.release)
+	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
+	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)
 	}

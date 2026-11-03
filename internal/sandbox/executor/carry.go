@@ -63,8 +63,9 @@ type sessionRecord struct {
 	// continued says it is the session the run was asked to continue.
 	continued bool
 	// why is why a run asked to continue a session started a new one in its
-	// place, as its script said it ([sandbox.Result.FellBack]), redacted and
-	// held to [sandbox.MaxFellBackBytes]; "" for every other run.
+	// place, as its script said it ([sandbox.Result.FellBack]), the line as
+	// the box holds it: held to its bound where the run's result is built
+	// ([Runner.Collect]), the one reader of it. "" for every other run.
 	why string
 	// release is the harness's `--version`, as it printed it.
 	release string
@@ -80,31 +81,43 @@ type sessionRecord struct {
 // script's. The script writes `why` on one line, whatever the words it
 // quotes held. An id that is not one a harness mints ([validSessionID]) is no id.
 //
-// AND A REASON IS A SENTENCE: `why` is redacted whole and cut to
-// [sandbox.MaxFellBackBytes] as it is read ([sandbox.BoundFellBack]). The
-// line quotes whatever OpenCode answered, and the record is a file the run's
-// own agent can write, so the line was as long as the file, and the run's
-// result carried it whole to its record and to a node that asked for the read.
+// READ WHERE IT LIES, AND NO FURTHER THAN ITS FOUR KEYS. The record is a file
+// the run's own agent can write, as long as the 32 MiB the engine reads whole
+// ([sandbox.MaxFileBytes]), and it is read on every collection and every take
+// of the box's session. Split into a slice of its lines, with a set of every
+// key it named, a record of empty lines cost sixteen times its size, half a
+// GiB, on each of those reads; walked a line at a time it costs nothing past
+// its own bytes, and the walk ends once the four keys are read, since no later
+// line of one is the record's.
+//
+// AND NOTHING IN IT IS HELD HERE: the take reads the id alone, so `why` is
+// held to its bound by the one reader of it, where the run's result is built
+// ([Runner.Collect], [sandbox.BoundFellBack]), rather than redacted on every
+// read of the record and thrown away by all but one.
 func parseSessionRecord(text string) sessionRecord {
-	var rec sessionRecord
-	seen := map[string]bool{}
-	for _, line := range strings.Split(text, "\n") {
+	var (
+		rec                                         sessionRecord
+		readID, readContinued, readWhy, readRelease bool
+	)
+	for text != "" && !(readID && readContinued && readWhy && readRelease) {
+		var line string
+		line, text, _ = strings.Cut(text, "\n")
 		key, value, _ := strings.Cut(line, " ")
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		value = strings.TrimSpace(value)
-		switch key {
-		case "id":
+		switch {
+		case key == "id" && !readID:
+			readID = true
 			if validSessionID(value) {
 				rec.id = value
 			}
-		case "continued":
+		case key == "continued" && !readContinued:
+			readContinued = true
 			rec.continued = value == "yes"
-		case "why":
-			rec.why = sandbox.BoundFellBack(value)
-		case "release":
+		case key == "why" && !readWhy:
+			readWhy = true
+			rec.why = value
+		case key == "release" && !readRelease:
+			readRelease = true
 			rec.release = value
 		}
 	}
