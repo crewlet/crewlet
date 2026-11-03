@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
@@ -70,6 +71,9 @@ import (
 // Slack's app-manifest API in the access sync (D11), with the configuration
 // token the company seals, and the install stays a person's click; there is
 // nothing company-wide at Slack for a pass to converge.
+//
+// Cloudflare reads its provisioner token and account, and its access sync
+// mints, narrows, rolls and deletes one account API token per agent.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&slackPass{engine: e},
@@ -79,6 +83,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&gitlabPass{engine: e},
 		&mattermostPass{engine: e},
 		&datadogPass{engine: e},
+		&cloudflarePass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }
@@ -553,6 +558,72 @@ func (e *Engine) datadogManaged(
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// cloudflarePass adapts cloudflare.Reconcile to the pass contract: the
+// provisioner token and the account it mints in, then each agent's own token.
+//
+// NO TEARDOWN: the engine puts nothing company-wide at Cloudflare. Every
+// agent's token is deleted by the disconnect's access sync
+// ([Engine.tearDownSeatAccess]), from the ledger.
+type cloudflarePass struct{ engine *Engine }
+
+func (*cloudflarePass) Kind() integration.Kind { return integration.KindCloudflare }
+
+// Needs is nil: the provisioner token is held in the company document.
+func (*cloudflarePass) Needs() *setup.Requirement { return nil }
+
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
+func (p *cloudflarePass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *cloudflarePass) run(ctx context.Context, _ setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Cloudflare
+	if cfg == nil || !cfg.Enabled {
+		return nil, integration.ErrNotConfigured
+	}
+	if cfg.Provisioning == nil {
+		// Config validation refuses this shape; a document that reached
+		// here anyway is reported as the finding it is.
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning",
+			Detail: "integrations.cloudflare.provisioning is unset, so no agent's token can be minted",
+		}}, nil
+	}
+	env := p.engine.resolver()
+	token := strings.TrimSpace(env.Value(cfg.Provisioning.APIToken))
+	if token == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning.api_token",
+			Detail: "the Cloudflare provisioner token did not resolve, so no agent's token can be minted",
+		}}, nil
+	}
+	client, err := cloudflare.NewClient(cloudflare.ClientOptions{
+		AccountID: env.Value(cfg.Provisioning.AccountID), Token: token,
+	})
+	if err != nil {
+		// THE ACCOUNT ID, the one input left that NewClient refuses: a
+		// fact about the document, not a pass that failed to look.
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing, Subject: "integrations.cloudflare.provisioning.account_id",
+			Detail: "integrations.cloudflare.provisioning.account_id does not resolve to a Cloudflare account ID",
+		}}, nil
+	}
+	// THE AGENTS' TOKENS, which the orphan advisory spares: the ledger's.
+	held, err := p.engine.seatAccessAccounts(ctx, integration.KindCloudflare)
+	if err != nil {
+		return nil, fmt.Errorf("engine: cloudflare pass: %w", err)
+	}
+	res, err := cloudflare.Reconcile(ctx, cloudflare.Options{
+		Client: client, Config: cfg, Company: company.Config.Name,
+		Managed: slices.Collect(maps.Values(held)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: cloudflare pass: %w", err)
+	}
+	return res.Findings(), nil
 }
 
 // SetupSink is the recorder a pass writes minted credentials through.
