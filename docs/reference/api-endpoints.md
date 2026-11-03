@@ -4132,7 +4132,14 @@ a tool right now: `live`, `waiting` (a server reads it and it is not sealed
 yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
 read), `no_server` (no server the company declares reads it), `server_off`
 (every server that reads it is turned off, `enabled: false`) or `off` (the
-seat or its account is off).
+seat or its account is off). A lane whose tool is a CLI in the agent's own box
+(Expo's EAS CLI) also carries `box`, what that box holds for it: in `env`, the
+exact `sandbox.env` lines the seat needs, each variable set to the seat's own
+sealed name (`"by": "you"`), then, while the seat's lane is on, the non-secret
+settings the engine supplies itself, as configured (`"by": "crewlet"`):
+`{"env": [{"name": "EXPO_TOKEN", "value": "${EXPO_TOKEN_QA}", "by": "you"}]}`.
+With no server, `tool` is `live` or `waiting` only while the seat's box sets
+every one of its own lines exactly so.
 
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just

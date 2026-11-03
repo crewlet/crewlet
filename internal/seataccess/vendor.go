@@ -296,10 +296,36 @@ type LaneSpec struct {
 	// reinstall.
 	Rotatable bool
 
-	// BoxEnv is the variable a CLI in the seat's executor box reads the
-	// lane's credential from (Expo's EXPO_TOKEN); empty where its tool is a
-	// server. The seat's own box settings set it to the sealed name.
-	BoxEnv string
+	// BoxEnv is each variable a CLI in the seat's executor box reads one of
+	// the lane's credentials from, by its sealed field (Expo's EXPO_TOKEN from
+	// TOKEN); empty where its tool is a server. The seat's own box settings
+	// set each to its sealed name ([BoxLines]).
+	BoxEnv []BoxVar
+}
+
+// BoxVar is one variable a box CLI reads a seat credential from: Env, set to
+// the seat's sealed Field, one of [Catalog.Credentials].
+type BoxVar struct {
+	Field string
+	Env   string
+}
+
+// BoxDefaulter is a [Vendor] whose box CLI reads non-secret settings beside
+// the seat's credentials (an organization, a default project). The engine puts
+// them in the box of every seat whose box-CLI lane is on, below every layer a
+// person writes ([BoxDefaults]).
+type BoxDefaulter interface {
+	// BoxDefaults is what the engine puts in the box of the seat whose role
+	// is role.
+	BoxDefaults(c *config.Company, role *config.Role) BoxSet
+}
+
+// BoxSet is what a [BoxDefaulter] supplies to one seat's box.
+type BoxSet struct {
+	// Env is each variable and its value: a literal, or a `${VAR}` reference
+	// the launch resolves. Never a secret, since a default is not scrubbed
+	// from the run's output.
+	Env map[string]string
 }
 
 // PermissionSpec is one permission a GitHub App can hold.

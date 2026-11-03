@@ -304,6 +304,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
 			Tool:        seataccess.ToolStateOf(q.Company, ref.Handle, lane, d, observed),
 			Administers: seataccess.Administers(offers[lane], d),
+			Box:         seataccess.BoxOf(q.Company, q.Kind, lane, ref.Handle),
 		}
 	}
 	return sa, nil
