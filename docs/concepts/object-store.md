@@ -996,6 +996,15 @@ more in a repository whose checks stopped ending, [How long a check is
 kept](code-host.md#how-long-a-check-is-kept)) or with its repository's purge,
 and the collector's next pass takes its bytes.
 
+A seat's executor session is live too. Its `executor_sessions` row names it, and
+nothing builds the harness's transcript again once the run that wrote it is
+gone, so the object is kept, audited and carried by a backup until a release, a
+retention delete or the seat's removal takes the name off the row
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+A lost session raises [`objects_missing`](#alarms) like any live row's object.
+That its conversation's next turn starts fresh is the launch's tolerance of the
+loss, not a reason to stop accounting for it.
+
 The first retired rows are the [code host's](code-host.md): when a compaction
 merges a repository's small packs into a larger one, each pack it replaced
 moves to `code_packs_retired` and keeps its object for **a day** — longer
