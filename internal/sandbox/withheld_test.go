@@ -121,9 +121,14 @@ func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 		// stopped between the two writes, and the log holds no approved call.
 		if _, _, err := rig.pending.runs.MutateSandboxRunPart(ctx, "t1", coord.RunLog,
 			func(current coord.Record, found bool) ([]byte, error) {
+				// Two failures, kept apart: a missing record has no error to
+				// wrap, and folding it into one Errorf would print %!w(<nil>).
+				if !found {
+					return nil, errors.New("the job opened no log")
+				}
 				var log BridgeLog
-				if err := json.Unmarshal(current.Value, &log); err != nil || !found {
-					return nil, fmt.Errorf("the job opened no log (found %v): %v", found, err)
+				if err := json.Unmarshal(current.Value, &log); err != nil {
+					return nil, fmt.Errorf("decoding the job's log: %w", err)
 				}
 				log.Calls = slices.DeleteFunc(log.Calls, func(c BridgeCall) bool { return c.HeldID == id })
 				return json.Marshal(log)
