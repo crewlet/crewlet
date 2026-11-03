@@ -723,6 +723,8 @@ var contract = []Entry{
 	{"AccessPermission", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeat", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessSeatLane", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBox", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessBoxLine", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessDesired", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessObserved", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
 	{"AccessCredential", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
