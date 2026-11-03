@@ -928,7 +928,7 @@
           ]
         },
         "endpoint": {
-          "description": "The S3 API's base URL; empty is Amazon S3's own for the region.",
+          "description": "The S3 API's base URL: http or https, a host, and a port of 1..65535 if it has one; empty is Amazon S3's own for the region.",
           "type": [
             "string",
             "number",
