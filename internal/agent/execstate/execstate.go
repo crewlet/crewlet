@@ -290,8 +290,9 @@ type State struct {
 // launch's prompt reads.
 //
 // BOUNDED where it is rendered, not here: each block by its own source and the
-// endings by theirs (internal/agent/prompts' EndingsMaxBytes), so the row
-// carries the strings the first launch's prompt did and nothing more.
+// endings by theirs (internal/agent/prompts' EndingsMaxBytes, which measures
+// the block as [Encode] writes it, escapes included), so the row carries the
+// strings the first launch's prompt did and nothing more.
 type Frozen struct {
 	ThreadContext       string `json:"thread_context,omitempty"`
 	PersonalMemory      string `json:"personal_memory,omitempty"`

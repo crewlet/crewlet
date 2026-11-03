@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -151,5 +152,39 @@ func TestTheEndingsKeepTheNewestWholeAndCountTheRest(t *testing.T) {
 
 	if block, told := BuildConversationEndings(b, ConversationEndings{}); block != "" || told != nil {
 		t.Fatalf("a conversation with no ended turn told %v: %q", told, block)
+	}
+}
+
+// THE BLOCK FITS ITS SHARE OF THE RUN RECORD AS THE RECORD ENCODES IT. Every
+// park of the turn carries the block frozen, written by encoding/json, which
+// spells `<`, `>` and `&` in six bytes each and a line break in two — and an
+// account that quotes code is made of them. So the block is held to its bound
+// as encoded: of accounts that double in the encoding, it tells half the
+// turns it would as rendered text, the head among them and the rest counted.
+//
+// Mutation: measure the block as it renders rather than as it encodes, and it
+// tells every turn and takes about twice its bound of the record.
+func TestTheEndingsFitTheirShareOfTheRunRecordAsEncoded(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	markup := strings.Repeat("if a < b && c > d {}\n", 2000/21)
+	var turns []TurnEnding
+	for i := range 10 {
+		turns = append(turns, TurnEnding{Turn: fmt.Sprintf("t-%d", i), Outcome: "completed",
+			EndedAt: time.Date(2026, 10, 1, 9, i, 0, 0, time.UTC), CompletedWork: markup})
+	}
+	block, told := BuildConversationEndings(b, ConversationEndings{Seat: "cto", Head: "t-9", Turns: turns})
+	encoded, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("encoding the block: %v", err)
+	}
+	if len(encoded) > EndingsMaxBytes {
+		t.Fatalf("the block encodes in %d bytes, past its bound of %d (it renders in %d)", len(encoded),
+			EndingsMaxBytes, len(block))
+	}
+	if len(told) < 2 || len(told) == len(turns) || told[len(told)-1] != "t-9" ||
+		strings.Count(block, markup) != len(told) || !strings.Contains(block, "are not shown here") {
+		t.Fatalf("the block told %v of %d turns, want the head and the newest whole, the rest counted", told,
+			len(turns))
 	}
 }

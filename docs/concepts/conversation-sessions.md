@@ -94,7 +94,10 @@ fails open: the turn runs with no endings and continues nothing, logged as
 **Bounded by whole endings.** The block always tells the head, then the others
 newest first while they fit **24 000 bytes** — about six thousand tokens — and
 counts the rest, never cutting inside a turn's ending; a head whose accounts
-alone would not fit is told without them, saying so.
+alone would not fit is told without them, saying so. The bytes are counted as
+the turn's run record carries the block, escapes included, so an account that
+quotes code or markup is told in fewer turns rather than taking more of the
+record.
 
 **Frozen at the first launch.** The turn's first launch writes the read onto the
 run's record it creates — where it was read, the turns its brief told, and the

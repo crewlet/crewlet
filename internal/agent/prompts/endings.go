@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -30,7 +31,9 @@ import (
 // token ([provenance.Neutralise]), so they open and close nothing under it.
 
 // EndingsMaxBytes bounds the block, its heading and the count of what it left
-// out included.
+// out included, AS THE RUN RECORD CARRIES IT: the block's JSON encoding, quotes
+// and escapes included (internal/agent/execstate's Frozen.Endings, which
+// encoding/json writes into every park of the turn).
 //
 // TWENTY-FOUR THOUSAND BYTES, about six thousand tokens: the order of one
 // round of the prior-work ledger, and a small fraction of any model this
@@ -41,7 +44,15 @@ import (
 // ordinary endings in a few hundred bytes: the block always holds the head
 // whole and, beside it, the conversation's last several turns. It is also what
 // every run record of the turn carries frozen on its park, in a coordination
-// store sized for kilobytes.
+// store sized for kilobytes — the share of the run row's one byte budget the
+// block is held to.
+//
+// MEASURED ENCODED, never as the text renders: JSON writes `<`, `>`, `&`,
+// U+2028 and U+2029 as six bytes each and a control character as up to six, and
+// the accounts are model- and person-written text that quotes code and markup
+// freely, so a block bounded as rendered text could take six times its bound of
+// the record. Measured encoded, its rendered text is never longer either: every
+// rune JSON writes takes at least the bytes it renders in.
 //
 // NEVER A TURN CUT INSIDE: the head is told whatever the bound — the turn
 // whose session the next one continues is the one it most needs — and the
@@ -153,25 +164,30 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 	}
 	// THE COUNT'S ROOM IS HELD BACK FROM THE START, at its longest: a line
 	// counting every turn, which any count the block ends on is no longer
-	// than. Each turn told costs its own text and the blank line before it.
-	room := EndingsMaxBytes - len(endingsHeader) - len("\n\n") - len(endingsLeftOut(len(in.Turns)+in.Omitted))
+	// than. Each turn told costs its own text and the blank line before it,
+	// every part measured as the record encodes it ([encodedLen]): JSON
+	// escapes rune by rune, so the parts' encoded lengths add up to the
+	// block's.
+	gap := encodedLen("\n\n")
+	room := EndingsMaxBytes - len(`""`) - encodedLen(endingsHeader) - gap -
+		encodedLen(endingsLeftOut(len(in.Turns)+in.Omitted))
 	told := make([]bool, len(in.Turns))
 	used := 0
 	for i, t := range in.Turns {
 		if in.Head == "" || t.Turn != in.Head {
 			continue
 		}
-		if len("\n\n")+len(rendered[i]) > room {
+		if gap+encodedLen(rendered[i]) > room {
 			rendered[i] = renderEnding(b, in.Seat, t, false)
 		}
-		told[i], used = true, len("\n\n")+len(rendered[i])
+		told[i], used = true, gap+encodedLen(rendered[i])
 		break
 	}
 	for i := len(in.Turns) - 1; i >= 0; i-- {
 		if told[i] {
 			continue
 		}
-		cost := len("\n\n") + len(rendered[i])
+		cost := gap + encodedLen(rendered[i])
 		if used+cost > room {
 			break
 		}
@@ -188,6 +204,15 @@ func BuildConversationEndings(b provenance.Boundary, in ConversationEndings) (st
 		parts = append(parts, endingsLeftOut(left))
 	}
 	return strings.Join(parts, "\n\n"), turns
+}
+
+// encodedLen is how many bytes s takes inside a JSON string as encoding/json
+// writes it, its quotes left off: what the block costs of the run record that
+// carries it ([EndingsMaxBytes]). A Go string always encodes — a byte that is
+// not UTF-8 is written as U+FFFD's escape — so there is no error to answer.
+func encodedLen(s string) int {
+	encoded, _ := json.Marshal(s)
+	return len(encoded) - len(`""`)
 }
 
 // endingsLeftOut is the line counting the ended turns the block does not show.
