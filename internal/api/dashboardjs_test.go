@@ -1606,7 +1606,14 @@ const (
 	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
 	// +1409 bytes for the two marks, less 442 bytes net across the kit's
 	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
-	treeBudget = 5<<20 + 325<<10
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. 5448 KiB.
+	treeBudget = 5<<20 + 328<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
