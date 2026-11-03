@@ -356,16 +356,37 @@ func TestAGitWritePastTheOnesANodeHoldsIsAnsweredAtOnce(t *testing.T) {
 }
 
 // heldBeside bounds what a held write's slot holds beside its three copies of
-// the payload: each copy's other fields (requestBeside at their longest), the
-// allocator's rounding of each copy — a large object — up to its next 8 KiB
-// page, the slot's context, timer and channels (here its asker's too, which
-// in a fleet are on another node) and its replay-guard entry. At most some
-// 88 KiB as measured under -race (TestWhatAHeldGitWriteHolds: 2.96 and 3.09
-// payloads a slot over two runs, the heap between its two readings moving by
-// some 130 KiB a slot from one run to the next), held to a QUARTER OF A
-// PAYLOAD: room for what is beside the copies and that noise, and none for a
-// fourth.
-const heldBeside = code.MaxCommitPayloadBytes / 4
+// the payload, each at its longest: each copy's other fields (requestBeside),
+// the allocator's rounding of each copy — a large object — up to its next
+// 8 KiB page, and the slot's own state — its context, timer and channels
+// (here its asker's too, which in a fleet are on another node) and its
+// replay-guard entry — held to one requestBeside more: 88 KiB. Measured under
+// -race with the heap read after two collections (liveHeap), a slot of the
+// test's writes, whose other fields are short, holds a steady 3.02 payloads,
+// some 21 KB beside the copies (TestWhatAHeldGitWriteHolds: 3 163 613 to
+// 3 167 442 bytes over 18 runs at GOMAXPROCS 2, 4 and 8, and 3 167 003 in a
+// run of the whole package), so the bound has room for every other field at
+// its longest and none for a fourth copy. It was a quarter of a payload while
+// the heap was read after one collection, which counted a pool's buffers
+// once a processor and moved by some 130 KiB a slot from one run to the next.
+const heldBeside = 3*requestBeside + 3*(8<<10) + requestBeside
+
+// liveHeap is the heap's allocated bytes once TWO collections have run. A
+// sync.Pool keeps what was put back in it, one cache a processor, and a
+// collection only moves that to the pool's victim cache, which still counts
+// as allocated: the second frees it. Read after one, a buffer pooled from
+// encoding a write at the payload's bound was counted as a held write's, once
+// a processor: the same writes measured 3.02 payloads a slot at GOMAXPROCS 2
+// and up to 3.27 at 8, past three payloads and heldBeside, and 3.28 on CI's
+// runner. What a slot holds does not depend on how many processors share the
+// pools.
+func liveHeap() int64 {
+	runtime.GC()
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return int64(m.HeapAlloc)
+}
 
 // WHAT A HELD GIT WRITE HOLDS IS MEASURED, not assumed: a git node holds, in
 // each slot of its writes' lane a peer's write takes, the write's request as
@@ -415,19 +436,15 @@ func TestWhatAHeldGitWriteHolds(t *testing.T) {
 		t.Fatalf("a write at the payload's bound in plain bytes: %v, want it admitted", err)
 	}
 
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
+	before := liveHeap()
 	heard := holdWrites(t, q, half, slots, plain)
-	runtime.GC()
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
+	after := liveHeap()
 	release()
 	for err := range heard {
 		t.Error(err)
 	}
 
-	slot := (int64(after.HeapAlloc) - int64(before.HeapAlloc)) / slots
+	slot := (after - before) / slots
 	t.Logf("a held write at the payload's bound holds %d bytes of the heap, %.2f payloads", slot,
 		float64(slot)/code.MaxCommitPayloadBytes)
 	if limit := int64(3*code.MaxCommitPayloadBytes + heldBeside); slot > limit {

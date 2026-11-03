@@ -405,22 +405,28 @@ func eachID(rows *sql.Rows, each func(id string)) error {
 }
 
 // conversationRowIn is change id's conversation's counters, nil where nobody
-// has discussed it.
-func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*ConversationRow, error) {
+// has discussed it, and the broker instant (store.EncodeTime) of the last
+// record somebody wrote on it, 0 where none has ([ConversationRow.SpokenAt]):
+// what a change read dates the change by beside its lifecycle, from the one
+// row it reads, rather than reading the row again by [withConversations].
+func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*ConversationRow, int64, error) {
 	var (
-		c        ConversationRow
-		position int64
+		c                ConversationRow
+		position, spoken int64
 	)
 	err := tx.QueryRowContext(ctx, conversationCountsSQL, id).Scan(&c.Comments, &c.Reviews, &c.OpenFindings,
-		&c.OpenBlockers, &c.ChangesRequested, &c.Version, &position)
+		&c.OpenBlockers, &c.ChangesRequested, &c.Version, &position, &spoken)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return nil, nil
+		return nil, 0, nil
 	case err != nil:
-		return nil, fmt.Errorf("code: read change %s's conversation: %w", id, err)
+		return nil, 0, fmt.Errorf("code: read change %s's conversation: %w", id, err)
 	}
 	c.Position = unpacked(position)
-	return &c, nil
+	if spoken > 0 {
+		c.SpokenAt = store.DecodeTime(spoken)
+	}
+	return &c, spoken, nil
 }
 
 // changeReviewers serves a page of change id's reviewers — named, its web!n —
@@ -834,7 +840,7 @@ const (
 		CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
 		WHERE r.change_id = CAST(j.value AS TEXT) AND r.reviewer = ?2 AND r.state = 'requested'`
 	conversationCountsSQL = `SELECT comments, reviews, open_findings, open_blockers, changes_requested, version,
-			position
+			position, updated_at
 		FROM code_conversations WHERE change_id = ?`
 	reviewersOfSQL = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
 			note, position

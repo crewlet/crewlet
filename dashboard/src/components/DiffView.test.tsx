@@ -732,6 +732,69 @@ describe("a long diff", () => {
     }
   });
 
+  // A LINE THE HOST REVEALS IS BROUGHT INTO VIEW WHEREVER IT IS, a block the
+  // window holds no rows of included: its block's box first, which brings the
+  // block within a view, and then the line itself once the block holds it —
+  // once for the host's reveal, never again as the window moves. Mutation:
+  // reveal only a line the mounted blocks hold, or reveal it on every commit,
+  // and this fails.
+  test("reveals a line past the blocks it holds, its block first and then the line, once", () => {
+    const restore = installObserver();
+    const scrolled: Element[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const at = 9 * WINDOW_BLOCK_ROWS;
+      // ONE PREDICATE, as a host keeps it across its renders.
+      const reveal = (line: { after: number | null }) => line.after === at;
+      const hunks = longDiff(30 * WINDOW_BLOCK_ROWS);
+      const { container, rerender } = render(<DiffView hunks={hunks} reveal={reveal} />);
+      // Line 900 is row 899, in block 8, of which nothing is drawn yet.
+      const box = container.querySelector<HTMLElement>('[data-block="8"]')!;
+      expect(box.childElementCount).toBe(0);
+      expect(scrolled).toEqual([box]);
+
+      Observer.made[0]!.say([
+        { block: 0, near: false, height: 2100 },
+        { block: 8, near: true },
+      ]);
+      const line = scrolled.at(-1) as HTMLElement;
+      expect(scrolled).toHaveLength(2);
+      expect(line.classList.contains("diff-view__line")).toBe(true);
+      expect(line.querySelector(".diff-view__text")?.textContent).toBe(`line ${at}`);
+
+      // THE READER MOVES ON: the window letting the block go and taking it
+      // in again, or the host drawing again, moves nobody back.
+      Observer.made[0]!.say([{ block: 8, near: false, height: 2100 }]);
+      Observer.made[0]!.say([{ block: 8, near: true }]);
+      rerender(<DiffView hunks={hunks} reveal={reveal} />);
+      expect(scrolled).toHaveLength(2);
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      restore();
+    }
+  });
+
+  test("reveals a line of a diff it holds whole at once, on the line", () => {
+    const restore = replaceObserver(undefined);
+    const scrolled: Element[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const at = 9 * WINDOW_BLOCK_ROWS;
+      render(<DiffView hunks={longDiff(30 * WINDOW_BLOCK_ROWS)} reveal={(l) => l.after === at} />);
+      expect(scrolled).toHaveLength(1);
+      expect(scrolled[0]!.querySelector(".diff-view__text")?.textContent).toBe(`line ${at}`);
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      restore();
+    }
+  });
+
   // NO OBSERVER, NO WINDOW: slower, and never wrong.
   test("is mounted whole where the browser has no observer", () => {
     const restore = replaceObserver(undefined);

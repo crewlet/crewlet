@@ -1418,10 +1418,12 @@ type ReadQuery struct {
 	// Window narrows a `changes` listing to the changes that moved within
 	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
 	// kind. A listing that names nothing else an index leads by — no
-	// repository, work item, reviewer or need — walks the two indexes of
-	// when its changes last moved (changewindow.go), newest move first, and
-	// tests a state and an owner on the rows it read; one that names any of
-	// those walks that one's index and tests the window on each row.
+	// repository, work item, reviewer or need, and no live state — walks the
+	// two indexes of when its changes last moved (changewindow.go), newest
+	// move first, and tests a terminal state and an owner on the rows it
+	// read; one that names any of those walks that one's index, in its order
+	// (a live state's newest opening first), and tests the window on each
+	// row.
 	Window ChangeWindow `json:"window,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
@@ -2809,8 +2811,9 @@ type ChangeDetail struct {
 // none of its authors has answered; its STANDING BLOCKERS — the blockers that
 // hold it back whatever its authors answered, until their raiser's later
 // review or a dismissal clears them (S40); how many reviewers' latest verdict
-// asks for changes; and the version and position of the last record on the
-// change's subject — the floor a read of its parts is asked at.
+// asks for changes; the version and position of the last record on the
+// change's subject — the floor a read of its parts is asked at; and when
+// somebody last wrote on it.
 type ConversationRow struct {
 	Comments         int64             `json:"comments"`
 	Reviews          int64             `json:"reviews"`
@@ -2819,6 +2822,16 @@ type ConversationRow struct {
 	ChangesRequested int64             `json:"changes_requested"`
 	Version          int64             `json:"version"`
 	Position         statelog.Position `json:"position"`
+	// SpokenAt is the broker instant of the last record somebody wrote on
+	// the change's subject — an ask for review, a comment, a thread
+	// resolved, a review, an answer to a finding (code_conversations.
+	// updated_at, replicated 0146) — and zero, left out, where every record
+	// on it was the home's or the engine's. Unlike Version, which every
+	// record there moves — a revision's facts and every mergeability its
+	// home records again as the target branch moves among them — it moves
+	// only with what the change's reviews and comments are rows of, so a
+	// reader holding pages of those asks them again only when it moves.
+	SpokenAt time.Time `json:"spoken_at,omitzero"`
 }
 
 // ReviewRow is one review of a change (code_reviews): the revision it judged,

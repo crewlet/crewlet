@@ -1463,7 +1463,8 @@ func (t *codeGetRepo) Name() string { return CodeGetRepoTool }
 
 func (t *codeGetRepo) Description() string {
 	return fmt.Sprintf("One repository in detail — its protection rules, each with the merge gate it "+
-		"holds a merge to, its size, how many branches and tags it has, your access, its last push and, "+
+		"holds a merge to and who last set it and when, its size, how many branches and tags it has, "+
+		"your access, its last push and, "+
 		"asked by a person or a token, the URL to clone it from (a seat reads a repository through these "+
 		"tools) — and a page of its branches with the commit each points at, %d a page: "+
 		"`branches_prefix` narrows them to a namespace (`seats/<handle>/`, `release/`), and "+
@@ -1540,11 +1541,12 @@ type codeRepoAnswer struct {
 	Detail   *codeRepoDetail `json:"detail,omitempty"`
 	CloneURL string          `json:"clone_url,omitempty"`
 	// Protections are its rules WHOLE, each with the merge gate it holds a
-	// merge to: what its detail's row answers of each rule beside the gates
-	// the read asked for (code.ReadQuery.Gates), on the detail's page alone,
-	// in pattern order — those that fit, and ProtectionsNext the pattern of
-	// the last answered where more follow it ([codeRepoRules]).
-	Protections     []code.Protection `json:"protections,omitempty"`
+	// merge to and who last set it: what its detail's row answers of each
+	// rule beside the gates and the sources the read asked for
+	// (code.ReadQuery.Gates), on the detail's page alone, in pattern order —
+	// those that fit, and ProtectionsNext the pattern of the last answered
+	// where more follow it ([codeRepoRules]).
+	Protections     []codeRule        `json:"protections,omitempty"`
 	ProtectionsNext string            `json:"protections_next,omitempty"`
 	Branches        []codeBranch      `json:"branches"`
 	BranchesNext    string            `json:"branches_next,omitempty"`
@@ -1556,26 +1558,48 @@ type codeRepoAnswer struct {
 // answer, and ProtectionsNext where more follow.
 type codeRepoRules struct {
 	Repo            string            `json:"repo"`
-	Protections     []code.Protection `json:"protections"`
+	Protections     []codeRule        `json:"protections"`
 	ProtectionsNext string            `json:"protections_next,omitempty"`
 	Position        statelog.Position `json:"position"`
 }
 
-// wholeRules is a repository's rules with their merge gates: the rules its
-// row answers, each given the gate its detail answered for its pattern —
-// gates read beside the rules, in one transaction, so every gate names a rule
-// of the row ([code.RepoDetail.Gates]). Only for a detail read that asked for
-// the gates: on one that did not, every rule would read as ungated.
-func wholeRules(rules []code.PushRule, gates []code.RuleGate) []code.Protection {
+// codeRule is one of a repository's rules WHOLE: what a push is held to, the
+// merge gate it holds a merge to, and who last set it and when
+// ([code.RuleSource]). The source tells a seat where a rule is changed: one
+// the company document declares (SetByKind config, naming nobody) is the
+// document's to change, and one a tool set names the seat, the person's seat
+// or the credential that set it, which the change's conversation can reach.
+type codeRule struct {
+	code.Protection
+	SetBy     string         `json:"set_by,omitempty"`
+	SetByKind code.ActorKind `json:"set_by_kind,omitempty"`
+	SetAt     time.Time      `json:"set_at,omitzero"`
+}
+
+// wholeRules is a repository's rules with their merge gates and sources: the
+// rules its row answers, each given the gate and the source its detail
+// answered for its pattern — both read beside the rules, in one transaction,
+// so every gate and every source names a rule of the row
+// ([code.RepoDetail.Gates], [code.RepoDetail.RuleSources]). Only for a
+// detail read that asked for the gates: on one that did not, every rule
+// would read as ungated and set by nobody.
+func wholeRules(rules []code.PushRule, gates []code.RuleGate, sources []code.RuleSource) []codeRule {
 	gateOf := make(map[string]code.MergeGate, len(gates))
 	for _, g := range gates {
 		gateOf[g.Pattern] = g.Gate
 	}
-	out := make([]code.Protection, len(rules))
+	sourceOf := make(map[string]code.RuleSource, len(sources))
+	for _, s := range sources {
+		sourceOf[s.Pattern] = s
+	}
+	out := make([]codeRule, len(rules))
 	for i, r := range rules {
 		out[i].PushRule = r
 		if g, ok := gateOf[r.Pattern]; ok {
 			out[i].Gate = &g
+		}
+		if s, ok := sourceOf[r.Pattern]; ok {
+			out[i].SetBy, out[i].SetByKind, out[i].SetAt = s.SetBy, s.SetByKind, s.SetAt
 		}
 	}
 	return out
@@ -1636,7 +1660,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		answer = &read
 	}
 	out := codeRepoAnswer{Repo: repo.Name, Position: answer.Position}
-	var rules []code.Protection
+	var rules []codeRule
 	if d := answer.Repo; d != nil {
 		if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, d.RepoRef); r != nil {
 			return *r, nil
@@ -1648,7 +1672,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE RULES ONCE, WHOLE: beside the detail rather than in its row,
 		// which would answer each rule's push half a second time.
 		out.Detail.Protections = nil
-		rules = wholeRules(d.Protections, d.Gates)
+		rules = wholeRules(d.Protections, d.Gates, d.RuleSources)
 		if c.asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
 			out.CloneURL = t.deps.CloneURL(repo.Name)
 		}
@@ -1742,8 +1766,8 @@ func (t *codeGetRepo) rulesAfter(ctx context.Context, turn *turnctx.Turn, c code
 	if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, d.RepoRef); r != nil {
 		return *r, nil
 	}
-	rules := wholeRules(d.Protections, d.Gates)
-	if i := slices.IndexFunc(rules, func(p code.Protection) bool { return p.Pattern > after }); i >= 0 {
+	rules := wholeRules(d.Protections, d.Gates, d.RuleSources)
+	if i := slices.IndexFunc(rules, func(p codeRule) bool { return p.Pattern > after }); i >= 0 {
 		rules = rules[i:]
 	} else {
 		rules = rules[len(rules):]

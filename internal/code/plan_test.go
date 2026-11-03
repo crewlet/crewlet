@@ -396,7 +396,7 @@ func registeredStatements() map[string]statement {
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
-		"rule sources":        {ruleSourcesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"rule details":        {ruleDetailsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"sourced rules":       {sourcedRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"rule":                {ruleSQL, []any{"repo-1", "refs/heads/main"}, []string{protectionKey + " (repo_id=? AND pattern=?)"}},
 		"read back":           {readBackSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},

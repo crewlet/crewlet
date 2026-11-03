@@ -1648,8 +1648,13 @@ const (
 	// chunk +1.7 KiB, the Code workspace +0.5 KiB, Settings +0.4 KiB, the
 	// quiet-input hook +0.3 KiB and the Inbox +0.2 KiB, less 0.3 KiB of the
 	// page-link module and +0.3 KiB net elsewhere, all of it fetched on
-	// opening Code or Settings. 5416 KiB.
-	treeBudget = 5<<20 + 296<<10
+	// opening Code or Settings. 5416 KiB. The diff reader's next round (a
+	// failed check's line revealed wherever its window is, the patch read on
+	// to the page holding it, the line dropped when the reader opens another
+	// file, and a change's reviews and comments asked again only once spoken)
+	// took it to 5416.6 KiB (+1.0 KiB): the DiffView chunk +0.7 KiB and the
+	// Code workspace +0.2 KiB, all of it fetched on opening Code. 5417 KiB.
+	treeBudget = 5<<20 + 297<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

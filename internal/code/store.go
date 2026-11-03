@@ -1367,9 +1367,10 @@ func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error)
 }
 
 // gatesIn reads the merge gates of a repository's rules that carry one, each
-// named by its rule's pattern, in pattern order — what one repository's detail
-// answers a read that asks for them ([ReadQuery.Gates]) — and nil where no
-// rule carries one.
+// named by its rule's pattern, in pattern order — what the changes falling due
+// read beside their facts — and nil where no rule carries one. A
+// repository's detail reads the same gates with who set each rule, in one
+// statement ([ruleDetailsIn]).
 func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	rows, err := tx.QueryContext(ctx, gatesSQL, id)
 	if err != nil {
@@ -1399,33 +1400,59 @@ func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
 	return out, nil
 }
 
-// ruleSourcesIn reads who set each of a repository's rules and when
-// ([RuleSource]), in pattern order — what one repository's detail answers a
-// read that asks for its gates — and nil where no rule protects it.
-func ruleSourcesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleSource, error) {
-	rows, err := tx.QueryContext(ctx, ruleSourcesSQL, id)
+// ruleDetailsIn reads a repository's rules as its detail answers a read that
+// asks for its gates ([ReadQuery.Gates]): the merge gate of each rule that
+// carries one ([RuleGate], as [gatesIn] reads them) and who set every rule
+// and when ([RuleSource]), each in pattern order and nil where there is none.
+//
+// ONE SEEK OF THE RULES FOR BOTH, never one an answer: they are the same
+// rows, read in the same transaction, so a statement each was a second seek
+// of the rules the first had just walked, for the reason [detailRowIn] reads
+// its row once. [gatesIn] stays its own for the changes falling due, which
+// read the gates and nothing of who set them.
+func ruleDetailsIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, []RuleSource, error) {
+	rows, err := tx.QueryContext(ctx, ruleDetailsSQL, id)
 	if err != nil {
-		return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+		return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []RuleSource
+	var (
+		gates   []RuleGate
+		sources []RuleSource
+	)
 	for rows.Next() {
 		var (
-			r    RuleSource
-			kind string
-			at   int64
+			r      RuleSource
+			column string
+			kind   string
+			at     int64
 		)
-		if err = rows.Scan(&r.Pattern, &r.SetBy, &kind, &at); err != nil {
-			return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+		if err = rows.Scan(&r.Pattern, &column, &r.SetBy, &kind, &at); err != nil {
+			return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
 		}
 		r.SetByKind, r.SetAt = ActorKind(kind), store.DecodeTime(at)
-		out = append(out, r)
+		sources = append(sources, r)
+		// AN EMPTY COLUMN IS A RULE WITH NO GATE, the rows [gatesIn]'s
+		// statement leaves out; any other is decoded, and one that does not
+		// decode is refused rather than read as none.
+		if column == "" {
+			continue
+		}
+		g := RuleGate{Pattern: r.Pattern}
+		if g.Gate, err = decodeGate(column); err != nil {
+			return nil, nil, fmt.Errorf("code: read %s's rule %s: %w", id, r.Pattern, err)
+		}
+		gates = append(gates, g)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read who set %s's rules: %w", id, err)
+		return nil, nil, fmt.Errorf("code: read %s's rules: %w", id, err)
 	}
-	slices.SortFunc(out, func(a, b RuleSource) int { return strings.Compare(a.Pattern, b.Pattern) })
-	return out, nil
+	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its readers
+	// rely on: a gate and a source are found beside their rule by walking
+	// them in order.
+	slices.SortFunc(gates, func(a, b RuleGate) int { return strings.Compare(a.Pattern, b.Pattern) })
+	slices.SortFunc(sources, func(a, b RuleSource) int { return strings.Compare(a.Pattern, b.Pattern) })
+	return gates, sources, nil
 }
 
 // The lifecycle decides' statements. claimsSQL and reposRowsSQL are
@@ -1457,12 +1484,13 @@ const (
 	ruleSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
 		WHERE repo_id = ? AND pattern = ?`
 	// gatesSQL is the gates of a repository's rules that carry one, by
-	// pattern ([gatesIn]): one repository's detail asked for them.
+	// pattern ([gatesIn]): the changes falling due read them.
 	gatesSQL = `SELECT pattern, gate FROM code_protections WHERE repo_id = ? AND gate != '' ORDER BY pattern`
-	// ruleSourcesSQL is who set each of a repository's rules and when, by
-	// pattern ([ruleSourcesIn]): one repository's detail asked for its gates.
-	ruleSourcesSQL = `SELECT pattern, set_by, set_by_kind, set_at FROM code_protections WHERE repo_id = ?
-		ORDER BY pattern`
+	// ruleDetailsSQL is every rule of a repository with its gate and who set
+	// it and when, by pattern ([ruleDetailsIn]): one repository's detail
+	// asked for its gates.
+	ruleDetailsSQL = `SELECT pattern, gate, set_by, set_by_kind, set_at FROM code_protections
+		WHERE repo_id = ? ORDER BY pattern`
 	// protectionsOfSQL is protectionsSQL for every repository a JSON list
 	// names, in one statement ([reposIn]).
 	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push, gate

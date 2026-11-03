@@ -2752,12 +2752,10 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// path owners' reason: read in the same transaction as the rules the row
 	// carries, so every gate names a rule of the row.
 	// WITH WHO SET EACH RULE AND WHEN, every rule's: the rules in detail, as
-	// a person reading a repository's protection asks for them.
+	// a person reading a repository's protection asks for them — both in one
+	// seek of the rules ([ruleDetailsIn]).
 	if q.Gates {
-		if out.Repo.Gates, err = gatesIn(ctx, tx, id); err != nil {
-			return err
-		}
-		if out.Repo.RuleSources, err = ruleSourcesIn(ctx, tx, id); err != nil {
+		if out.Repo.Gates, out.Repo.RuleSources, err = ruleDetailsIn(ctx, tx, id); err != nil {
 			return err
 		}
 	}

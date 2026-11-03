@@ -185,3 +185,39 @@ func TestTheListingsSeekTheirIndexes(t *testing.T) {
 		}
 	}
 }
+
+// A WINDOW LEADS NO LIVE STATE: a listing narrowed to a window walks the two
+// indexes of when changes last moved beside every state, a merged or a closed
+// one, and tests that state on the rows it read — but beside a draft or an
+// open state it walks that state's own index and tests the window on each
+// row, since the state's index holds the live set alone where the window's
+// hold every change that moved within it, every merged one among them.
+//
+// Mutation: put the window ahead of a live state again → the open changes in
+// a window walk code_changes_updated_idx; drop the window test from the live
+// state's walk → its rows are kept whenever they moved.
+func TestAWindowLeadsNoLiveState(t *testing.T) {
+	t.Parallel()
+	const since = 1_000
+	for _, state := range append([]ChangeState{""}, ChangeStates()...) {
+		w := walkOf(ReadQuery{Kind: ReadChanges, State: state, Window: WindowWeek}, "", since)
+		switch {
+		case state.Live():
+			if w.index != changesStateKey || w.order != byOpening || len(w.keys) != 1 ||
+				w.keys[0] != string(state) || w.state {
+				t.Errorf("a window beside state %q walks %s %v in order %d, testing the state %t; want %s's "+
+					"walk of it", state, w.index, w.keys, w.order, w.state, changesStateKey)
+			}
+			if !w.window || w.since != since {
+				t.Errorf("a window beside state %q is tested %t from %d, want tested from %d", state, w.window,
+					w.since, since)
+			}
+		default:
+			if w.index != changesMovedKey || w.order != byMove || w.window || w.state != (state != "") {
+				t.Errorf("a window beside state %q walks %s in order %d, testing the window %t and the state "+
+					"%t; want the window's walk testing the state alone", state, w.index, w.order, w.window,
+					w.state)
+			}
+		}
+	}
+}

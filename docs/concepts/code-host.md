@@ -1744,8 +1744,8 @@ answer that holds every record the code log had committed when it was asked.
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
   opened; a window's, where nothing else leads it, by when each change last
-  moved; every other listing in the order the records that opened its
-  changes landed on the code log. Every change it lists says how many of its
+  moved; every other listing — a live state's in a window among them — in
+  the order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
   last moved**.
 - **When a change last moved** is the later of two instants, one a subject it
@@ -1759,10 +1759,16 @@ answer that holds every record the code log had committed when it was asked.
   moved because its target did would put every change of a busy branch in
   every day's window. A **window** (`24h`, `7d` or `30d`) lists the changes
   that moved within the last day, week or month. Named with nothing else an
-  index leads by — no repository, work item, reviewer or need — it walks the
-  two instants' indexes together, newest move first, each change once, and
-  tests a state and an owner on the rows it read; named beside one of those,
-  it is tested on the rows that one's walk read.
+  index leads by — no repository, work item, reviewer or need, and no live
+  state — it walks the two instants' indexes together, newest move first,
+  each change once, and tests a merged or closed state and an owner on the
+  rows it read; named beside one of those, it is tested on the rows that
+  one's walk read, in that walk's order. A **live state** (`draft`, `open`)
+  leads its own walk, newest opening first, because its index holds only the
+  live changes, where the window's hold every change that moved, the merged
+  among them: in a company that merges far more changes than it keeps open,
+  the open changes of a month's window walked by the window would cost a page
+  for every few that are kept.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
