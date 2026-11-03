@@ -39,9 +39,11 @@
 //
 // # The empty key is the honest default
 //
-// A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a
-// sandbox resume running in a later task than the dispatch that bound the
-// key — has no cross-node duplicate to collapse. Those rows are
+// A turn with no ledgerable trigger — a sub-agent, a sandbox resume running
+// in a later task than the dispatch that bound the key — has no cross-node
+// duplicate to collapse. (A scheduled fire is not one: it is a task
+// assignment, which the completion ledger records, so its key is derived from
+// its fire.) Those rows are
 // unconstrained by design: the store maps an empty key to NULL, and SQL
 // treats NULLs as distinct, so only the case the key can actually speak for
 // is constrained by it.
