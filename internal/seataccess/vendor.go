@@ -539,6 +539,11 @@ type Level struct {
 	// cannot ("Product access only": the account has the product, and the
 	// site's permission schemes decide what it sees).
 	Note string `json:"note,omitempty"`
+
+	// Unavailable is why no seat can be given the level yet ([LevelGap]),
+	// empty where one can. A picker offers it disabled with this reason,
+	// rather than as a choice a save would only fail at.
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 // ToolState is whether a seat can use its credential through a tool right now.

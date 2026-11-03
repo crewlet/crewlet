@@ -66,6 +66,8 @@ interface AccessLevel {
   administers?: boolean;
   /** What a seat on it then sees, where the name alone does not say (product access only). */
   note?: string;
+  /** Why no seat can be given it yet: offered disabled, with this as the reason. */
+  unavailable?: string;
 }
 
 /** One GitHub App permission a seat can hold, in GitHub's own name. */

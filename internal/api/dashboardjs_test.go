@@ -1613,7 +1613,12 @@ const (
 	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
 	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
 	// elsewhere. 5448 KiB.
-	treeBudget = 5<<20 + 328<<10
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
+	// bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
+	treeBudget = 5<<20 + 330<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
