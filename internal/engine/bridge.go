@@ -127,7 +127,9 @@ func decodeBridgeArgs(raw string) map[string]any {
 // ([sandbox.BridgeAppend.Owed]): the session's next append carries it, and the
 // log lists it as the call it is, once, however many appends carry it — the
 // session cannot tell an append that did not land from one whose every answer
-// was lost after it did, and the log can.
+// was lost after it did, and the log can. An append one attempt landed is
+// never owed, whatever the attempts after it answer: they are for its spend
+// alone ([bridgeLedger.appendRetrying]).
 //
 // AND WHAT IS STILL OWED WHEN THE JOB IS OVER is carried by an append that
 // names no call of its own: the one the run's collection asks for before its
@@ -465,22 +467,47 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 }
 
 // appendRetrying appends a, tried again on an error — see [bridgeLedger] — and
-// answers the last attempt. Asked again, an append whose earlier answer was
-// lost after it landed is answered recorded and lands nothing twice
+// answers whether ANY attempt recorded it. Asked again, an append whose earlier
+// answer was lost after it landed is answered recorded and lands nothing twice
 // ([sandbox.PendingStore.AppendBridgeCall]).
+//
+// RECORDED STICKS: nothing a later attempt answers takes a call back out of the
+// log. An append writes the run's log and then, where its calls moved the
+// job's spend, the job's record, and an attempt whose first write landed and
+// whose second did not is answered recorded beside the second's error. All an
+// attempt after it can still do is write that spend — the store finds the
+// calls listed, writes the log nothing and the record again — so its answer
+// says nothing of the calls: one that finds the store out of reach wrote
+// nothing, and one that finds the log moved on to the run's next job, or gone
+// with the run, says only that the spend can no longer reach this job's
+// record, which ends the retry. Where an attempt landed, the error answered is
+// the spend's, as the last attempt that landed answered it: nil once one wrote
+// it. Answered by its last attempt alone, a call the log held was owed again,
+// said to be on no record of the run, and its submission's waiter was never
+// told the work was in.
 func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
+	landed := false
+	// spend is what the last attempt that landed answered beside it: why the
+	// spend of its calls is not on the job's record, or nil once it is.
+	var spend error
 	for attempt := 1; ; attempt++ {
 		recorded, err := l.store.AppendBridgeCall(ctx, runID, a)
-		if err == nil || attempt >= appendAttempts || ctx.Err() != nil {
-			return recorded, err
+		switch {
+		case recorded:
+			landed, spend = true, err
+		case landed && err == nil:
+			// THE LOG HAS MOVED ON, or gone with the run, since an attempt put
+			// the calls in it: the spend can no longer reach this job's record,
+			// and nothing is left to try again.
+			return true, spend
 		}
-		timer := time.NewTimer(appendRetryWaits[attempt-1])
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return recorded, err
+		if err != nil && attempt < appendAttempts && sleepCtx(ctx, appendRetryWaits[attempt-1]) {
+			continue
 		}
+		if landed {
+			return true, spend
+		}
+		return false, err
 	}
 }
 

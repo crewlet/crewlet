@@ -278,12 +278,19 @@ func (s *flakyStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.Bri
 	return true, nil
 }
 
-// spendlessStore is a pending store whose log takes every append and whose
-// record takes none of the spend beside it: the call is in the log, and the
-// write of what it cost failed after it ([sandbox.PendingStore.AppendBridgeCall]
+// errSpendRefused is what a store answers beside an append its log took and
+// whose spend its record refused ([sandbox.PendingStore.AppendBridgeCall]
 // answers both).
+var errSpendRefused = errors.New("the record took the call's log but not its spend")
+
+// spendlessStore is a pending store whose log takes the first attempt of the
+// first append asked of it and whose record refuses the spend beside it — the
+// calls are in the log, and the write of what they cost failed after it — and
+// which answers every attempt after that one as then does: the spend refused
+// again, the store out of reach, or the log moved on to the run's next job.
 type spendlessStore struct {
 	sandbox.PendingStore
+	then  func() (bool, error)
 	mu    sync.Mutex
 	asked []sandbox.BridgeAppend
 }
@@ -292,41 +299,101 @@ func (s *spendlessStore) AppendBridgeCall(_ context.Context, _ string, a sandbox
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.asked = append(s.asked, a)
-	return true, errors.New("the record took the call's log but not its spend")
+	if len(s.asked) == 1 {
+		return true, errSpendRefused
+	}
+	return s.then()
 }
 
 // A CALL THE LOG TOOK IS NEVER OWED, WHATEVER BECAME OF ITS SPEND. An append is
-// one write of the run's log and then, where the call moved the job's spend,
+// one write of the run's log and then, where its calls moved the job's spend,
 // one of its record; a store that took the first and refused the second
-// answers the call recorded beside the error. The call is in the log, so it is
-// not owed — owed, the session's next append would carry a call the log
-// already lists, and its end would name it on no record — and the run's waiter
-// is still nudged for a submission that landed; the spend is cumulative, so
-// the next append that lands carries it.
+// answers the calls recorded beside the error. They are in the log, and
+// nothing an attempt after that one answers takes them out of it: the attempts
+// after it are for the spend alone, whether they meet the spend refused again,
+// the store out of reach, or the log moved on to the run's next job. So
+// neither the call nor what the append carried is owed — owed, the session's
+// next append would carry calls the log already lists, and its end would name
+// them on no record — nor said to be on no record of the run, a carry of them
+// is answered carried, and the run's waiter is still nudged for a submission
+// that landed; the spend is cumulative, so the next append that lands carries
+// it. On a bubble's clock, so the retries cost the suite nothing.
 //
-// Mutation: owe a call on any error the append answers, and the next append
-// carries the submission the log already holds; nudge only on an append that
-// answered no error, and the waiter is not told the run's work is in.
+// Mutation: answer an append as its last attempt alone, and a call the first
+// attempt put in the log is owed again where the store was then out of reach,
+// and said to be on no record where the log then moved on, its submission's
+// waiter never told; owe a call on any error the append answers, and the next
+// append carries the submission the log already holds; nudge only on an append
+// that answered no error, and the waiter is not told the run's work is in.
 func TestACallTheLogTookIsNeverOwedWhateverBecameOfItsSpend(t *testing.T) {
 	t.Parallel()
-	store := &spendlessStore{}
-	l := newBridgeLedger(store, nil)
-	l.bind("launch-1")
-	var nudged []sandbox.Nudge
-	l.nudge = func(_ context.Context, n sandbox.Nudge) { nudged = append(nudged, n) }
-	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: sandbox.SubmitWorkTool},
-		Seq: 1, Digest: "d1"}); err == nil {
-		t.Fatal("an append whose spend did not land answered no error")
-	}
-	if n := l.owing(); n != 0 {
-		t.Errorf("the ledger owes %d appends of a call the log took, want none", n)
-	}
-	if len(nudged) != 1 || nudged[0].Why != sandbox.NudgeSubmitted {
-		t.Errorf("the waiter was nudged %+v, want once for the submission that landed", nudged)
-	}
-	_ = l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}, Seq: 2, Digest: "d2"})
-	if last := store.asked[len(store.asked)-1]; len(last.Owed) != 0 {
-		t.Errorf("the next append carried %+v, a call the log already held", last.Owed)
+	carried := sandbox.OwedAppend{Call: sandbox.BridgeCall{Name: "post_message", Seq: 1,
+		Digest: strings.Repeat("a1", 32)}}
+	unrecorded := []string{"bridge_call_owed", "bridge_owed_calls_unrecorded", "bridge_owed_calls_after_their_job"}
+	for _, tc := range []struct {
+		name string
+		then func() (bool, error)
+	}{
+		{"its spend refused at every attempt", func() (bool, error) { return true, errSpendRefused }},
+		{"the store out of reach after the attempt the log took", func() (bool, error) {
+			return false, errors.New("the coordination store is electing a leader")
+		}},
+		{"the log moved on after the attempt it took", func() (bool, error) { return false, nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				// A CALL'S OWN APPEND, carrying one the session owed.
+				store := &spendlessStore{then: tc.then}
+				l, logs := readingLedger(store)
+				l.owed = []sandbox.OwedAppend{carried}
+				var nudged []sandbox.Nudge
+				l.nudge = func(_ context.Context, n sandbox.Nudge) { nudged = append(nudged, n) }
+				if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
+					Call: tools.Call{Name: sandbox.SubmitWorkTool}, Seq: 2, Digest: strings.Repeat("d2", 32)}); err == nil {
+					t.Error("an append whose spend never reached the record answered no error")
+				}
+				if first := store.asked[0]; len(first.Owed) != 1 || first.Owed[0].Call.Seq != 1 {
+					t.Fatalf("the first attempt carried %+v, want the call the session owed", first.Owed)
+				}
+				if n := l.owing(); n != 0 {
+					t.Errorf("the ledger owes %d appends of calls the log took, want none", n)
+				}
+				if len(nudged) != 1 || nudged[0].Why != sandbox.NudgeSubmitted {
+					t.Errorf("the waiter was nudged %+v, want once for the submission that landed", nudged)
+				}
+				for _, msg := range unrecorded {
+					if line := logLine(t, logs, msg); line != nil {
+						t.Errorf("calls the log took were said as %s: %v", msg, line)
+					}
+				}
+				_ = l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"},
+					Seq: 3, Digest: strings.Repeat("d3", 32)})
+				if last := store.asked[len(store.asked)-1]; len(last.Owed) != 0 {
+					t.Errorf("the next append carried %+v, calls the log already held", last.Owed)
+				}
+
+				// AND A CARRY OF WHAT THE SESSION OWED, as the run's
+				// collection asks for one.
+				store = &spendlessStore{then: tc.then}
+				l, logs = readingLedger(store)
+				l.owed = []sandbox.OwedAppend{carried}
+				if !l.Settle(t.Context(), "run-1") {
+					t.Error("a carry the log took answered not carried")
+				}
+				if n := l.owing(); n != 0 {
+					t.Errorf("the ledger owes %d appends after a carry the log took, want none", n)
+				}
+				if line := logLine(t, logs, "bridge_owed_calls_carried"); line == nil || line["spend_error"] == nil {
+					t.Errorf("the carry was said as %v, want carried with its spend's error\n%s", line, logs)
+				}
+				for _, msg := range unrecorded {
+					if line := logLine(t, logs, msg); line != nil {
+						t.Errorf("calls a carry put in the log were said as %s: %v", msg, line)
+					}
+				}
+			})
+		})
 	}
 }
 
