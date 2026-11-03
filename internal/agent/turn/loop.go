@@ -389,7 +389,7 @@ type Result struct {
 	//
 	// It exists for the record of how the turn ENDED, kept on the turn's row
 	// of the executor log beside the session the turn kept: the log's end
-	// (internal/executordomain's Ending.Delivered), which the conversation's
+	// (internal/executorkeep's Ending.Delivered), which the conversation's
 	// next turn is told. It cannot ask the session: a transcript in which the
 	// seat was about to reply does not say whether the reply went. On a turn
 	// that delivered nothing, a record of the turn's own artifact as the
