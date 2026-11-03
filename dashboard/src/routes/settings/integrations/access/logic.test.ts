@@ -14,6 +14,7 @@ import {
   MATTERMOST_LANE,
   datadogAnswer,
   expoAnswer,
+  expoWaitingAnswer,
   offLane,
   onLane,
 } from "./fixtures.ts";
@@ -22,18 +23,27 @@ import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  handoffOf,
+  rotateHandoffOf,
   joinLevels,
   levelName,
+  boxSettings,
   noToolRemedy,
+  onlyScope,
   productOnly,
   refusedLevel,
+  refusedScope,
   scopeApplies,
   offSentence,
   sameDesired,
+  scopeChoices,
+  scopeUnavailable,
   scopeWords,
   statusOf,
   toolWords,
+  type Lane,
 } from "./logic.ts";
+import type { AccessSeatLane } from "~/contract/access.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
@@ -125,20 +135,24 @@ test("the tool reads as one value", () => {
 
 // EXPO'S TOOL IS THE EAS CLI IN THE AGENT'S OWN BOX, with no tool server to
 // start: an on seat reads as the CLI it drives, its level as Expo's role name,
-// and a seat whose sandbox env hands the CLI nothing is told the line to add.
+// and a seat whose sandbox env hands the CLI nothing is told its own line, as
+// the engine sends it.
 test("an Expo seat's tool is the EAS CLI in its box, and its level is Expo's role", () => {
   const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
   expect(toolWords(EXPO_LANE, qa)).toBe("Live, EAS CLI in its box, as EXPO_TOKEN");
   expect(toolWords(EXPO_LANE, { ...qa, tool: "no_server" })).toBe(
     "Not set up: its sandbox env does not set EXPO_TOKEN",
   );
-  expect(noToolRemedy("expo")).toContain('Add EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"');
-  expect(noToolRemedy("expo")).not.toMatch(/tool server/);
-  expect(noToolRemedy("datadog")).toMatch(/^the company declares no datadog tool server\./);
+  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).toBe(
+    'its sandbox env does not set EXPO_TOKEN. Add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Then its tool signs in as the agent.',
+  );
+  expect(noToolRemedy(DATADOG_LANE, [{ name: "SRE", saved: sre() }])).toMatch(
+    /^the company declares no datadog tool server\./,
+  );
   expect(accessWords(EXPO_LANE, qa.observed)).toBe("Developer");
   expect(availableActions(EXPO_LANE, qa, false, false)).toEqual(["rotate"]);
   expect(offSentence(EXPO_LANE, offLane("viewer"))).toBe(
-    "Off. Turning it on creates an Expo robot user for the agent with the chosen role, and its own access token.",
+    "Off. Turning it on asks you to add a robot for the agent at Expo with the chosen role and paste its token here. Crewlet checks the token and keeps it.",
   );
 });
 
@@ -286,4 +300,213 @@ test("an agent that left the company reads as such when its details open, not as
   expect(offSentence(DATADOG_LANE, offLane(), true)).toBe(
     "This agent left the company and has no account here.",
   );
+});
+
+// A HANDOFF IS READ OFF THE ENGINE'S WAIT AND THE LANE'S OWN LEVELS, never
+// guessed: the role in the vendor's word with its own line, the role it shows
+// now, the robot by the name the engine sent, and whether this is a new token.
+describe("a handoff", () => {
+  const pm = (answer: ReturnType<typeof expoWaitingAnswer>) => answer.seats[0]!.lanes.expo!;
+
+  test("a new agent's wait is a handoff from its robot, at the role chosen here", () => {
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("create")))).toEqual({
+      step: "create",
+      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+      said: "Add a robot named crewlet-gophrase-pm with the Runner role at Expo",
+      account: "crewlet-gophrase-pm",
+      role: { name: "Runner", note: "View all projects and perform low-risk actions on them" },
+      current: undefined,
+      renew: false,
+      rotating: false,
+    });
+  });
+
+  test("a refused token is a new one, and a changed role says what Expo shows", () => {
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("mint")))).toMatchObject({
+      step: "mint",
+      renew: true,
+    });
+    expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer("rerole")))).toMatchObject({
+      step: "rerole",
+      current: "Developer",
+      role: { name: "Runner" },
+    });
+  });
+
+  test("the robot is named only as the engine named it", () => {
+    for (const step of ["create", "mint"] as const) {
+      expect(handoffOf(EXPO_LANE, pm(expoWaitingAnswer(step, { named: false })))?.account).toBe(
+        undefined,
+      );
+    }
+  });
+
+  // A ROTATE IS A PASTE FOR THE ROBOT THE SEAT ALREADY HAS: a new token, opened
+  // at the paste on the lane's own page at the vendor, with no wait behind it.
+  // Every other lane rotates by itself.
+  test("a rotate opens a new token for the robot the seat has, and only on Expo", () => {
+    const qa = expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!;
+    expect(rotateHandoffOf(EXPO_LANE, qa)).toMatchObject({
+      step: "mint",
+      url: "https://expo.dev/accounts/gophrase/settings/access-tokens",
+      account: "crewlet-gophrase-qa",
+      role: { name: "Developer" },
+      renew: true,
+      rotating: true,
+    });
+    expect(rotateHandoffOf(DATADOG_LANE, sre())).toBeUndefined();
+  });
+
+  // DELETING AT THE VENDOR IS A WAIT OF ITS OWN, drawn on the row with its
+  // page; and a vendor that makes its own accounts never hands one off.
+  test("deleting a robot or a token is no handoff, and no other lane has one", () => {
+    const lane = pm(expoWaitingAnswer("mint"));
+    for (const step of ["revoke", "remove"] as const) {
+      expect(
+        handoffOf(EXPO_LANE, {
+          ...lane,
+          sync: { ...lane.sync!, error: { ...lane.sync!.error!, step } },
+        }),
+      ).toBeUndefined();
+    }
+    expect(
+      handoffOf(EXPO_LANE, { ...lane, sync: { ...lane.sync!, outcome: "ok" } }),
+    ).toBeUndefined();
+    expect(handoffOf(DATADOG_LANE, lane)).toBeUndefined();
+  });
+});
+
+// A SCOPE ENTRY IS STORED BY ITS IDENTIFIER AND READ BY ITS NAME: where the
+// vendor names it apart from its ID, the picker labels it by name with the ID
+// beneath, and every sentence names it. One the seat holds and the connection
+// no longer reaches is still offered, by its ID, so a person can clear it.
+describe("a scope entry's name", () => {
+  const named: Lane = {
+    ...JIRA_LANE,
+    scope_names: { ENG: "Engineering", OPS: "Operations" },
+  };
+
+  test("labels the picker by name, with the identifier beneath", () => {
+    expect(scopeChoices(named, ["ENG"])).toEqual([
+      { value: "ENG", label: "Engineering", description: "ENG" },
+      { value: "OPS", label: "Operations", description: "OPS" },
+    ]);
+    expect(scopeChoices(JIRA_LANE, [])).toEqual([
+      { value: "ENG", label: "ENG" },
+      { value: "OPS", label: "OPS" },
+    ]);
+  });
+
+  test("keeps an entry the connection no longer reaches, by its identifier", () => {
+    expect(scopeChoices(named, ["ENG", "GONE"]).at(-1)).toEqual({ value: "GONE", label: "GONE" });
+  });
+
+  test("names the entries in every sentence", () => {
+    expect(scopeWords(named, ["OPS", "ENG"])).toBe("Operations and Engineering");
+    expect(scopeWords(named, ["ENG", "OPS", "GONE"])).toBe("Engineering, Operations and GONE");
+    expect(scopeWords(JIRA_LANE, ["ENG"])).toBe("ENG");
+  });
+});
+
+// A PICKER WITH NOTHING TO OFFER SAYS WHY: the list could not be read, which
+// says nothing about what exists, or it was read and holds nothing. An open
+// connection takes typed entries, so it always has something to offer.
+test("a scope picker with nothing to offer says whether the list was read", () => {
+  const empty: Lane = { ...GITHUB_LANE, scope: undefined };
+  expect(scopeUnavailable({ ...empty, scope_live: false }, [])).toBe(
+    "Crewlet could not read your repositories",
+  );
+  expect(scopeUnavailable(empty, [])).toBe("No repositories to choose from");
+  expect(scopeUnavailable({ ...empty, scope_open: true }, [])).toBeNull();
+  expect(scopeUnavailable({ ...empty, scope_live: false }, ["gophrase/backend"])).toBeNull();
+  expect(scopeUnavailable(GITHUB_LANE, [])).toBeNull();
+});
+
+// A LANE WHERE AN EMPTY SCOPE REACHES NOTHING refuses an agent that is on with
+// none, as the engine would, and says so under the row before the review.
+test("a lane whose empty scope reaches nothing refuses an agent that is on with none", () => {
+  const required: Lane = { ...GITHUB_LANE, scope_required: true };
+  expect(refusedScope(required, { enabled: true, scope: [] }, "SRE")).toBe(
+    "Choose at least one repository for SRE: an agent in no repository can reach nothing.",
+  );
+  expect(refusedScope(required, { enabled: true, scope: ["gophrase/backend"] }, "SRE")).toBeNull();
+  expect(refusedScope(required, { enabled: false }, "SRE")).toBeNull();
+  expect(refusedScope(GITHUB_LANE, { enabled: true, scope: [] }, "SRE")).toBeNull();
+  expect(emptyScopeHint(required, { enabled: true })).toBe(
+    "Not in any repository yet, so it can reach nothing. Choose its repositories.",
+  );
+  expect(emptyScopeHint(GITHUB_LANE, { enabled: true })).toBeNull();
+});
+
+// A LANE THAT IS NOT SCOPED offers no scope, whatever an answer lists.
+test("a scope is offered only on a lane that narrows by scope", () => {
+  expect(scopeApplies(GITHUB_LANE, { enabled: true })).toBe(true);
+  expect(scopeApplies({ ...GITHUB_LANE, scoped: false }, { enabled: true })).toBe(false);
+});
+
+// THE ONLY ENTRY THERE IS: on a lane where an empty scope reaches nothing, a
+// seat turned on takes the one entry a list read just now holds, and nowhere
+// else: not on a lane without the rule, not from several entries or a list
+// that could not be read, and never for a seat that is already on.
+test("a seat turned on takes the only entry there is, and only then", () => {
+  const one: Lane = { ...GITHUB_LANE, scope: ["gophrase/backend"], scope_required: true };
+  expect(onlyScope(one, { enabled: false })).toEqual(["gophrase/backend"]);
+  expect(onlyScope({ ...one, scope_required: false }, { enabled: false })).toBeUndefined();
+  expect(onlyScope({ ...one, scope_live: false }, { enabled: false })).toBeUndefined();
+  expect(onlyScope({ ...one, scope: ["a/b", "a/c"] }, { enabled: false })).toBeUndefined();
+  expect(onlyScope(one, { enabled: true })).toBeUndefined();
+  expect(onlyScope(one, { enabled: false, scope: ["gophrase/backend"] })).toBeUndefined();
+});
+
+// A BOX TOOL READING SEVERAL VARIABLES names every one a person adds, never the
+// settings the engine supplies itself, and tells each agent its own lines, so
+// nobody is told to add half of what their tool needs.
+test("a box tool reading several variables names each agent's own lines", () => {
+  const boxed = (handle: string) =>
+    ({
+      ...offLane(),
+      tool: "no_server",
+      box: {
+        env: [
+          { name: "SCW_ACCESS_KEY", value: `\${SCW_ACCESS_KEY_${handle}}`, by: "you" },
+          { name: "SCW_SECRET_KEY", value: `\${SCW_SECRET_KEY_${handle}}`, by: "you" },
+          { name: "SCW_DEFAULT_PROJECT_ID", value: "p-1", by: "crewlet" },
+        ],
+      },
+    }) satisfies AccessSeatLane;
+  expect(toolWords(EXPO_LANE, boxed("SRE"))).toBe(
+    "Not set up: its sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY",
+  );
+  expect(boxSettings(boxed("SRE"))).toBe("SCW_DEFAULT_PROJECT_ID");
+  expect(boxSettings(offLane())).toBeNull();
+  expect(
+    noToolRemedy(EXPO_LANE, [
+      { name: "SRE", saved: boxed("SRE") },
+      { name: "QA", saved: boxed("QA") },
+    ]),
+  ).toBe(
+    'their sandbox env does not set SCW_ACCESS_KEY and SCW_SECRET_KEY. Add each agent\'s own lines to its sandbox.env in the company document: SRE, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_SRE}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_SRE}"; QA, SCW_ACCESS_KEY: "${SCW_ACCESS_KEY_QA}" and SCW_SECRET_KEY: "${SCW_SECRET_KEY_QA}". Then each tool signs in as its agent.',
+  );
+});
+
+// A LANE WITH BOTH ROUTES (a CLI in the box and a per-seat tool server) is live
+// through either, so a seat with neither is told both, the server first; a box
+// lane with no server is told only its lines, and never about a server.
+test("a box lane that also has a tool server names both routes, the server first", () => {
+  const both: Lane = { ...EXPO_LANE, tool_server: "expo" };
+  const qa = {
+    ...expoAnswer().seats.find((s) => s.handle === "qa")!.lanes.expo!,
+    tool: "no_server" as const,
+  };
+  expect(toolWords(both, qa)).toBe(
+    "Not set up: no expo tool server is declared, and its sandbox env does not set EXPO_TOKEN",
+  );
+  expect(toolWords(both, { ...qa, tool: "server_off" })).toBe(
+    "Not running: the expo tool server is turned off, and its sandbox env does not set EXPO_TOKEN",
+  );
+  expect(noToolRemedy(both, [{ name: "QA", saved: qa }])).toBe(
+    'the company declares no expo tool server, and its sandbox env does not set EXPO_TOKEN. Add the expo tool server under Settings › MCP & tools as one instance per agent, or add EXPO_TOKEN: "${EXPO_TOKEN_QA}" to QA\'s sandbox.env in the company document. Either way its tool signs in as the agent.',
+  );
+  expect(toolWords(EXPO_LANE, qa)).toBe("Not set up: its sandbox env does not set EXPO_TOKEN");
+  expect(noToolRemedy(EXPO_LANE, [{ name: "QA", saved: qa }])).not.toMatch(/tool server/);
 });

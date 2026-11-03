@@ -34,6 +34,26 @@ type LaneAnswer struct {
 	// Administers is whether the lane's setting is an administration grant
 	// (D10), for the review's warning.
 	Administers bool `json:"administers,omitempty"`
+
+	// Box is what the seat's executor box holds for a CLI there to use the
+	// lane ([BoxOf]); nil where the lane's tool is a server.
+	Box *Box `json:"box,omitempty"`
+}
+
+// Box is a seat's executor box as one lane needs it.
+type Box struct {
+	// Env is each variable: the lines a person adds to the seat's box
+	// settings ([ByYou]), then those the engine supplies itself ([ByCrewlet]).
+	Env []BoxLine `json:"env"`
+}
+
+// BoxLine is one variable in a seat's box: Name set to Value. A person's line
+// holds the seat's sealed name as a whole reference (`${EXPO_TOKEN_QA}`); the
+// engine's holds a non-secret setting as configured, a literal or a reference.
+type BoxLine struct {
+	Name  string    `json:"name"`
+	Value string    `json:"value"`
+	By    StepActor `json:"by"`
 }
 
 // SeatAnswer is one seat on the access route.
@@ -117,6 +137,13 @@ type PlanAnswer struct {
 	StepUp bool `json:"step_up,omitempty"`
 }
 
+// CredentialAnswer is the answer to a credential a person pasted for a seat:
+// the sentence they read and the tab as it now stands.
+type CredentialAnswer struct {
+	Detail string `json:"detail"`
+	Access Answer `json:"access"`
+}
+
 // Draft is the body of the plan and save routes: each seat's lanes as the
 // person left them. A seat or lane it leaves out keeps its setting.
 type Draft struct {
@@ -148,11 +175,51 @@ const (
 
 	// ActionDone re-reads the vendor after a person took a step there.
 	ActionDone SeatAction = "done"
+
+	// ActionRelease keeps at the vendor an account a step waits for a person
+	// to delete ("Keep the robot at Expo"): the step closes and Crewlet stops
+	// tracking the account.
+	ActionRelease SeatAction = "release"
 )
 
 // Valid reports whether a is an action this build takes.
 func (a SeatAction) Valid() bool {
 	return slices.Contains([]SeatAction{
 		ActionRotate, ActionRemove, ActionKeep, ActionRestore, ActionRetry, ActionDone,
+		ActionRelease,
 	}, a)
+}
+
+// RefusalField is the part of a seat lane's setting an access refusal is
+// about, so the Agents tab can place the refusal beside that control.
+type RefusalField string
+
+// The parts of a seat lane's setting a refusal names.
+const (
+	FieldLevel       RefusalField = "level"
+	FieldPermissions RefusalField = "permissions"
+	FieldScope       RefusalField = "scope"
+)
+
+// Valid reports whether f is a part this build names.
+func (f RefusalField) Valid() bool {
+	switch f {
+	case FieldLevel, FieldPermissions, FieldScope:
+		return true
+	}
+	return false
+}
+
+// OfferRefusal is a seat lane's setting the vendor does not offer now: the
+// fields of an `access_not_offered` refusal, beside the envelope's own.
+type OfferRefusal struct {
+	Seat   string       `json:"seat"`
+	Lane   Lane         `json:"lane"`
+	Field  RefusalField `json:"field"`
+	Detail string       `json:"detail"`
+
+	// Offered is what the vendor offers instead, where a list says it;
+	// Required is the level a set must hold ([Options.RequiredLevel]).
+	Offered  []string `json:"offered,omitempty"`
+	Required string   `json:"required,omitempty"`
 }

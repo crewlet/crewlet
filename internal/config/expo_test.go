@@ -10,8 +10,7 @@ import (
 // completeExpo is an enabled block with every requirement answered.
 const completeExpo = `    enabled: true
     provisioning:
-      account_name: example-org
-      access_token: "${EXPO_ACCESS_TOKEN}"`
+      account_name: example-org`
 
 // A COMPLETE BLOCK VALIDATES, so the refusals below are requirements rather
 // than a refusal of everything.
@@ -25,22 +24,22 @@ func TestACompleteExpoBlockValidates(t *testing.T) {
 	}
 }
 
-// AN ENABLED BLOCK NAMES ITS ACCOUNT AND ITS TOKEN, each refusal naming the
-// field an operator edits.
+// AN ENABLED BLOCK NAMES ITS ACCOUNT, each refusal naming the field an
+// operator edits.
 func TestExpoRefusesAnIncompleteOrMalformedBlock(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, body, path string
 	}{
 		{"no provisioning", "    enabled: true", "integrations.expo.provisioning"},
-		{"no account", "    enabled: true\n    provisioning: {access_token: \"${T}\"}",
+		{"no account", "    enabled: true\n    provisioning: {}",
 			"integrations.expo.provisioning.account_name"},
-		{"an account written as a mention", "    enabled: true\n    provisioning: {account_name: \"@example-org\", access_token: \"${T}\"}",
+		{"an account written as a mention", "    enabled: true\n    provisioning: {account_name: \"@example-org\"}",
 			"integrations.expo.provisioning.account_name"},
-		{"an account written as an address", "    enabled: true\n    provisioning: {account_name: \"accounts/example-org\", access_token: \"${T}\"}",
+		{"an account written as an address", "    enabled: true\n    provisioning: {account_name: \"accounts/example-org\"}",
 			"integrations.expo.provisioning.account_name"},
-		{"no token", "    enabled: true\n    provisioning: {account_name: example-org}",
-			"integrations.expo.provisioning.access_token"},
+		{"a provisioner token, which no longer exists", "    enabled: true\n    provisioning: " +
+			"{account_name: example-org, access_token: \"${T}\"}", "access_token"},
 	} {
 		err := validateIntegrationDoc(t, "expo", tc.body)
 		if err == nil {
@@ -57,7 +56,7 @@ func TestExpoRefusesAnIncompleteOrMalformedBlock(t *testing.T) {
 // client is built.
 func TestExpoTakesTheAccountByReference(t *testing.T) {
 	t.Parallel()
-	body := "    enabled: true\n    provisioning: {account_name: \"${EXPO_ACCOUNT}\", access_token: \"${T}\"}"
+	body := "    enabled: true\n    provisioning: {account_name: \"${EXPO_ACCOUNT}\"}"
 	if err := validateIntegrationDoc(t, "expo", body); err != nil {
 		t.Fatalf("an account named by reference was refused: %v", err)
 	}
@@ -127,8 +126,8 @@ func TestExpoSeatCredentialsAreTheEnginesOnlyWithAProvisioner(t *testing.T) {
 			t.Errorf("%s: mode = %q, want %q", tc.name, got, tc.want)
 		}
 	}
-	if got := config.SeatSealedFields("expo"); len(got) != 1 || got[0] != "TOKEN" {
-		t.Errorf("sealed fields = %v, want [TOKEN]", got)
+	if got := config.SeatSealedFields("expo"); len(got) != 2 || got[0] != "TOKEN" || got[1] != "RETIRED_TOKEN" {
+		t.Errorf("sealed fields = %v, want [TOKEN RETIRED_TOKEN]", got)
 	}
 }
 
@@ -152,5 +151,34 @@ func TestARoleSandboxEnvValueLayersAsALaunch(t *testing.T) {
 	var none *config.RoleSandbox
 	if _, ok := none.EnvValue("EXPO_TOKEN"); ok {
 		t.Error("no box sets anything")
+	}
+}
+
+// A TURNED-OFF ROBOT'S TOKEN REACHES NO BOX: its sealed name is refused in the
+// seat's box, its tools and its settings, while the token itself is the box's.
+func TestAnExpoRetiredTokenIsNamedNowhere(t *testing.T) {
+	t.Parallel()
+	doc := func(env string) string {
+		return "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    fast:\n      model: claude-golden\n" +
+			"integrations:\n  expo:\n" + completeExpo + "\nroles:\n  - name: QA\n    llm: fast\n" +
+			"    integrations: {expo: {enabled: true}}\n    sandbox:\n      env:\n        " + env + "\n"
+	}
+	parse := func(text string) error {
+		c, err := config.ParseCompany([]byte(text))
+		if err != nil {
+			return err
+		}
+		return c.Validate()
+	}
+	if err := parse(doc("EXPO_TOKEN: ${EXPO_TOKEN_QA}")); err != nil {
+		t.Fatalf("the seat's own token in its box was refused: %v", err)
+	}
+	for _, env := range []string{
+		"EXPO_TOKEN: ${EXPO_RETIRED_TOKEN_QA}",
+		"OLD: prefix-${EXPO_RETIRED_TOKEN_QA}",
+	} {
+		if err := parse(doc(env)); err == nil || !strings.Contains(err.Error(), "EXPO_RETIRED_TOKEN_QA") {
+			t.Errorf("%s = %v, want a refusal naming the retired token", env, err)
+		}
 	}
 }

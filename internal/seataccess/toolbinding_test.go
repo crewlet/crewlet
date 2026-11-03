@@ -163,3 +163,35 @@ func TestASeatsBoxThatSetsItsCLIsVariableIsItsTool(t *testing.T) {
 		t.Errorf("datadog with its key in the box = %q, want no_server", got)
 	}
 }
+
+// EVERY LANE A SERVER READS NAMES THAT SERVER'S ENTRY: the company's own where
+// it declares one (an enabled one first), else the catalogue's conventional
+// name; Expo, whose hosted server reads no seat credential, names none.
+func TestEveryLaneAServerReadsNamesItsEntry(t *testing.T) {
+	t.Parallel()
+	for lane, want := range map[seataccess.Lane]string{
+		seataccess.LaneGitHub: "github", seataccess.LaneDatadog: "datadog",
+		seataccess.LaneCloudflare: "cloudflare", seataccess.LaneGitLab: "gitlab",
+		seataccess.LaneSlack: "slack", seataccess.LaneMattermost: "mattermost",
+		seataccess.LaneJira: "atlassian", seataccess.LaneConfluence: "atlassian",
+		seataccess.LaneExpo: "",
+	} {
+		if got := seataccess.ToolServerOf(&config.Company{}, lane); got != want {
+			t.Errorf("%s: %q, want %q", lane, got, want)
+		}
+	}
+	bound := []config.SeatCredential{{Kind: "datadog", Key: "DD_APPLICATION_KEY"}}
+	declared := &config.Company{MCPServers: []config.MCPServer{
+		{Name: "dd-off", Transport: config.TransportStdio, Command: "my-datadog-server", Shared: org.Off(),
+			Enabled: org.Off(), SeatCredentials: bound},
+		{Name: "dd-ours", Transport: config.TransportStdio, Command: "my-datadog-server", Shared: org.Off(),
+			SeatCredentials: bound},
+	}}
+	if got := seataccess.ToolServerOf(declared, seataccess.LaneDatadog); got != "dd-ours" {
+		t.Errorf("a declared server: %q, want the enabled one, dd-ours", got)
+	}
+	declared.MCPServers = declared.MCPServers[:1]
+	if got := seataccess.ToolServerOf(declared, seataccess.LaneDatadog); got != "dd-off" {
+		t.Errorf("only a declared server turned off: %q, want dd-off", got)
+	}
+}

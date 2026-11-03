@@ -1515,7 +1515,11 @@ function KeyCheck({
         {verdict === "checking" ? "Testing" : together ? "Test keys" : "Test key"}
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
-        <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"}>{verdict.detail}</StatusDot>
+        // THE VERDICT IS A SENTENCE whose end is the remedy, so it wraps rather
+        // than being cut to one line.
+        <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"} wrap>
+          {verdict.detail}
+        </StatusDot>
       ) : keeps ? (
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}

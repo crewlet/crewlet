@@ -50,7 +50,7 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     ],
   },
   { key: "alerts", label: "Observability", lines: [{ kind: "app", key: "datadog" }] },
-  { key: "edge", label: "Edge and DNS", lines: [{ kind: "app", key: "cloudflare" }] },
+  { key: "cloud", label: "Cloud and Infrastructure", lines: [{ kind: "app", key: "cloudflare" }] },
   { key: "mobile", label: "Mobile apps", lines: [{ kind: "app", key: "expo" }] },
 ];
 

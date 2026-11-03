@@ -1606,17 +1606,36 @@ const (
 	// from 5443.7 KiB to 5444.6 KiB (+0.9 KiB, 967 bytes): the icons chunk
 	// +1409 bytes for the two marks, less 442 bytes net across the kit's
 	// renamed chunks, the shell page and the stylesheet. 5445 KiB.
+	// The Agents tab's generic scope and tool mechanics (scope names, a list
+	// that could not be read, a required scope and its single-entry pre-fill,
+	// an open connection's typed entries, a refusal drawn beside its control,
+	// each seat's box lines from the engine and a lane's two tool routes) took
+	// it from 5444.6 KiB to 5447.7 KiB (+3.1 KiB, 3165 bytes): the
+	// integrations model chunk +3096 bytes, its sheet +61 bytes and 8 bytes
+	// elsewhere. 5448 KiB.
+	// A level an agent cannot be given drawn disabled with its reason, a
+	// setup verdict that wraps, and the kit's move to 0.92.0 (a StatusDot's
+	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
+	// bytes): the kit +1467 bytes net across its renamed chunks and its
+	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
+	// The Expo handoff (the Set up sheet a person walks to make each agent's
+	// robot at Expo and paste its token, a rotate through it, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group) took it from 5449.2 KiB to 5456.5 KiB
+	// (+7.3 KiB, 7475 bytes): the integrations model chunk +7310 bytes and its
+	// stylesheet +152 bytes, and 13 bytes across the chunks that import them.
+	// The initial load did not grow. 5457 KiB.
 	// A conversation's next turn continuing the session its last turn left —
 	// the Sessions view saying which launch would continue each session
 	// (`continued_by`), naming the session a turn's first launch was handed
 	// (`base_turn`, a link to that session) and whether its reply reached the
 	// party waiting, net of the Memory tab's Conversations section it
-	// replaces, with its thread list and their turns — took it from 5443.7
-	// KiB to 5441.4 KiB (-2.3 KiB, 2378 bytes), all of it the agents chunk the
-	// tab loads in (about 0.3 KiB gzipped). The initial load did not grow: its
-	// files are the same bytes but for the chunk names they list. It moved
-	// down to 5442 KiB, the measured size's next KiB.
-	treeBudget = 5<<20 + 325<<10
+	// replaces, with its thread list and their turns — took it from 5456.5
+	// KiB to 5454.2 KiB (-2.3 KiB, 2378 bytes), all of it the agents chunk
+	// the tab loads in (268 bytes gzipped). The initial load did not grow:
+	// its files are the same bytes but for the chunk names they list. It
+	// moved down to 5455 KiB, the measured size's next KiB.
+	treeBudget = 5<<20 + 335<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

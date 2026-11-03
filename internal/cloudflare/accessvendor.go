@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -145,9 +146,11 @@ type accessSession struct {
 	now     func() time.Time
 
 	// The account's catalogue, read once per pass and only where a step
-	// writes or compares a policy.
-	mu  sync.Mutex
-	cat *catalogue
+	// writes or compares a policy, and the levels it and the provisioner's
+	// own policy cannot grant, read once where a level is offered or granted.
+	mu   sync.Mutex
+	cat  *catalogue
+	gaps *[]seataccess.LevelGap
 }
 
 // catalogue reads the account's permission groups and zones once.
@@ -172,14 +175,47 @@ func (s *accessSession) catalogue(ctx context.Context) (catalogue, error) {
 	return cat, nil
 }
 
-// Options is Cloudflare's levels, least access first. Fixed: a level is
-// this engine's set of permission groups, not something Cloudflare lists.
-func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+// levelGaps reads, once per pass, the levels the account's catalogue or the
+// provisioner's own policy cannot grant yet ([levelGaps]).
+func (s *accessSession) levelGaps(ctx context.Context) ([]seataccess.LevelGap, error) {
+	cat, err := s.catalogue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	held := s.gaps
+	s.mu.Unlock()
+	if held != nil {
+		return *held, nil
+	}
+	status, err := s.client.Verify(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare: read the provisioner token: %w", reject(err))
+	}
+	unheld, err := readUnheld(ctx, s.client, cat, status.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare: read the provisioner token's own permissions: %w", reject(err))
+	}
+	gaps := levelGaps(cat.unresolvedLevels(), unheld, s.client.TokensURL())
+	s.mu.Lock()
+	s.gaps = &gaps
+	s.mu.Unlock()
+	return gaps, nil
+}
+
+// Options is Cloudflare's levels, least access first, each it cannot grant yet
+// offered with why. The set is fixed: a level is this engine's set of
+// permission groups, not something Cloudflare lists.
+func (s *accessSession) Options(ctx context.Context, lane seataccess.Lane) (seataccess.Options, error) {
+	gaps, err := s.levelGaps(ctx)
+	if err != nil {
+		return seataccess.Options{}, err
+	}
 	out := make([]seataccess.Level, 0, len(levels))
 	for _, l := range levels {
 		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note})
 	}
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true}, nil
+	return seataccess.Options{Lane: lane, Levels: seataccess.OfferGaps(out, gaps), Rotatable: true}, nil
 }
 
 // Observe reads back the token the ledger records for each seat, by ID. A
@@ -283,6 +319,20 @@ func (s *accessSession) policiesFor(ctx context.Context, in seataccess.ApplyInpu
 			Said:   "Cloudflare: " + err.Error(),
 			Remedy: "Choose another level for this agent on the Agents tab",
 			Actor:  seataccess.ByYou,
+		}
+	}
+	// A LEVEL THE PROVISIONER CANNOT GRANT is refused here rather than asked
+	// of Cloudflare, which does not document whether it would grant it.
+	gaps, err := s.levelGaps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if i := slices.IndexFunc(gaps, func(g seataccess.LevelGap) bool { return g.Level == in.Want.Level }); i >= 0 {
+		return nil, &seataccess.Refusal{
+			Said:      "Cloudflare: " + gaps[i].Reason,
+			Remedy:    gaps[i].Remedy + ", or choose a level it holds for this agent on the Agents tab",
+			Actor:     seataccess.ByYou,
+			ActionURL: gaps[i].ActionURL,
 		}
 	}
 	return cat.policies(g), nil

@@ -21,18 +21,20 @@
  * again and install.
  */
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
   Callout,
   DataTable,
   DescriptionList,
+  InlineCode,
   Select,
   SelectionBar,
   Spinner,
   Switch,
   Tag,
+  TagsInput,
   VisuallyHidden,
   type DataTableColumn,
   type DataTableRowTone,
@@ -49,16 +51,19 @@ import type {
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, plural, relTime } from "~/lib/format.ts";
+import { asSentence, fmtDate, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
-import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
+import { accessApi, refusalWords, type AccessDraft, type PlacedRefusal } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
+import { HandoffSheet } from "./HandoffSheet.tsx";
 import {
   accessWords,
   availableActions,
+  boxSettings,
   emptyScopeHint,
+  handoffOf,
   joinLevels,
   lanesOf,
   levelIds,
@@ -68,6 +73,7 @@ import {
   levelsHeading,
   levelSummary,
   noToolRemedy,
+  onlyScope,
   offSentence,
   permissionCount,
   permissionWords,
@@ -75,17 +81,22 @@ import {
   productOnlyNote,
   providedExternally,
   refusedLevel,
+  refusedScope,
+  rotateHandoffOf,
   sameDesired,
   scopeApplies,
+  scopeChoices,
+  scopeUnavailable,
   scopeWords,
   statusOf,
   syncValue,
   toolWords,
+  type Handoff,
   type Lane,
   type SeatAction,
   type Status,
 } from "./logic.ts";
-import { laneWords } from "./words.ts";
+import { laneWords, RETIRED_GENERIC } from "./words.ts";
 
 export interface AgentsAccessProps {
   /** The integration's key, which the access routes are keyed on. */
@@ -140,14 +151,19 @@ const UNSAVED_WORDS = {
 function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
   // (product access only) carries the vendor's note on what it then sees. A
-  // multi-select has no empty row: choosing nothing is that level.
+  // multi-select has no empty row: choosing nothing is that level. A level the
+  // connection cannot grant yet is offered disabled, saying why.
   const group = levelsHeading(lane);
   return lane.levels
     .filter((l) => !(lane.multiple && l.id === ""))
     .map((l) => ({
       value: l.id,
       label: l.custom ? `${l.name} (custom)` : l.name,
-      ...(l.note ? { description: l.note } : {}),
+      ...(l.unavailable
+        ? { description: l.unavailable, disabled: true }
+        : l.note
+          ? { description: l.note }
+          : {}),
       group,
     }));
 }
@@ -171,7 +187,29 @@ export function AgentsAccess({
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  // THE HANDOFF IS HELD AS IT WAS OPENED, so the sheet keeps its robot and
+  // role while the answer behind it moves on to In sync.
+  const [handing, setHanding] = useState<{
+    seat: AccessSeat;
+    lane: Lane;
+    handoff: Handoff;
+  } | null>(null);
   const [said, setSaid] = useState("");
+  // A REFUSAL ABOUT ONE SEAT'S CONTROL, drawn beside that control until the
+  // seat's draft changes.
+  const [refusal, setRefusal] = useState<PlacedRefusal | null>(null);
+  const uid = useId();
+  const refusalId = (seat: AccessSeat, lane: Lane) => `${uid}-refused-${seat.handle}-${lane.key}`;
+  /** The refusal about this seat's lane and one of these controls, or undefined. */
+  const refusalAt = (seat: AccessSeat, lane: Lane, ...fields: PlacedRefusal["field"][]) =>
+    refusal?.seat === seat.handle && refusal.lane === lane.key && fields.includes(refusal.field)
+      ? refusal
+      : undefined;
+  /** What a control a refusal names carries: the refused mark, and the sentence that says why. */
+  const refusedProps = (seat: AccessSeat, lane: Lane, ...fields: PlacedRefusal["field"][]) =>
+    refusalAt(seat, lane, ...fields)
+      ? { error: true, "aria-describedby": refusalId(seat, lane) }
+      : {};
   // WHAT EACH SEAT'S LANE HAS IN FLIGHT, so its own buttons say so and the
   // rest of the table stays usable.
   const [pending, setPending] = useState<Record<string, Pending>>({});
@@ -190,7 +228,7 @@ export function AgentsAccess({
 
   const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
-  const scoped = lanes.some((l) => l.scope !== undefined);
+  const scoped = lanes.some((l) => l.scoped);
   // A HELD TAB says why on each control; a read-only one draws no control at all.
   // A HOLD stops everything; a read-only document stops only what writes it.
   const locked = held !== undefined || readOnly !== undefined || data.syncing;
@@ -207,12 +245,13 @@ export function AgentsAccess({
       const saved = seat.lanes[lane.key];
       if (d && saved && !sameDesired(lane, d, saved.desired)) {
         changes++;
-        refused ??= refusedLevel(lane, d) ?? undefined;
+        refused ??= refusedLevel(lane, d) ?? refusedScope(lane, d, seat.name) ?? undefined;
       }
     }
 
   const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
     setSaid("");
+    setRefusal((r) => (r?.seat === seat.handle && r.lane === lane.key ? null : r));
     setDraft((d) => {
       const merged = { ...desiredOf(seat, lane.key), ...next };
       const lanesDraft = { ...(d[seat.handle] ?? {}) };
@@ -336,7 +375,10 @@ export function AgentsAccess({
               checked={want.enabled}
               disabled={locked || seat.departed}
               title={held}
-              onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
+              onCheckedChange={(checked) => {
+                const only = checked ? onlyScope(lane, want) : undefined;
+                change(seat, lane, only ? { enabled: true, scope: only } : { enabled: checked });
+              }}
             />
           )}
         </>
@@ -364,6 +406,7 @@ export function AgentsAccess({
                 menuClassName="agent-access-menu"
                 multiple
                 ariaLabel={`${seat.name}'s ${lane.name} permissions`}
+                {...refusedProps(seat, lane, "level")}
                 value={levelIds(want.level)}
                 options={levelOptions(lane)}
                 disabled={off || locked || seat.departed}
@@ -383,6 +426,7 @@ export function AgentsAccess({
                 width="full"
                 menuClassName="agent-access-menu"
                 ariaLabel={`${seat.name}'s ${lane.name} access`}
+                {...refusedProps(seat, lane, "level")}
                 value={want.level ?? ""}
                 options={levelOptions(lane)}
                 disabled={off || locked || seat.departed}
@@ -397,6 +441,9 @@ export function AgentsAccess({
                 variant="ghost"
                 disabled={off || locked || seat.departed}
                 title={permissionWords(lane, want.permissions)}
+                aria-describedby={
+                  refusalAt(seat, lane, "permissions") ? refusalId(seat, lane) : undefined
+                }
                 onClick={() => setEditing({ seat, lane })}
               >
                 {permissionCount(lane, want.permissions)}
@@ -409,42 +456,56 @@ export function AgentsAccess({
       },
     },
     scope: {
-      label: laneWords(lanes.find((l) => l.scope !== undefined)?.key ?? "").scope?.noun ?? "Scope",
+      label: laneWords(lanes.find((l) => l.scoped)?.key ?? "").scope?.noun ?? "Scope",
       sortable: false,
       render: ({ seat, lane, want }) => {
-        const off = !want.enabled;
-        const words = laneWords(lane.key);
-        return (
-          <>
-            {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
-              <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
-            ) : lane.scope ? (
-              <Select
-                size="sm"
-                width="full"
-                menuClassName="agent-access-menu"
-                multiple
-                searchable
-                ariaLabel={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
-                value={want.scope ?? []}
-                options={lane.scope.map((o) => ({ value: o, label: o }))}
-                disabled={off || locked || seat.departed}
-                placeholder={words.scope.empty}
-                onChange={(v) =>
-                  change(seat, lane, {
-                    scope: (Array.isArray(v) ? v : [v]).map(String),
-                  })
-                }
-                renderMultiLabel={(sel) =>
-                  sel.length === 0
-                    ? words.scope!.empty
-                    : sel.length <= 2
-                      ? sel.map((s) => s.label).join(", ")
-                      : plural(sel.length, words.scope!.singular, words.scope!.noun.toLowerCase())
-                }
-              />
-            ) : null}
-          </>
+        const words = laneWords(lane.key).scope;
+        if (!scopeApplies(lane, want) || !words) return null;
+        if (readOnly)
+          return <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>;
+        const unavailable = scopeUnavailable(lane, want.scope);
+        if (unavailable) return <span className="agent-access-quiet">{unavailable}</span>;
+        const label = `${seat.name}'s ${lane.name} ${words.noun.toLowerCase()}`;
+        const disabled = !want.enabled || locked || seat.departed;
+        const choices = scopeChoices(lane, want.scope);
+        const pick = (next: string[]) => change(seat, lane, { scope: next });
+        const refused = refusalAt(seat, lane, "scope");
+        // AN OPEN CONNECTION LISTS NOT ALL IT REACHES (a GitHub installation
+        // on every repository), so an entry it does not list may be typed.
+        return lane.scope_open ? (
+          <TagsInput
+            aria-label={label}
+            value={want.scope ?? []}
+            options={choices}
+            allowCustom
+            disabled={disabled}
+            placeholder={words.empty}
+            aria-invalid={refused ? true : undefined}
+            aria-describedby={refused ? refusalId(seat, lane) : undefined}
+            onChange={pick}
+          />
+        ) : (
+          <Select
+            size="sm"
+            width="full"
+            menuClassName="agent-access-menu"
+            multiple
+            searchable
+            ariaLabel={label}
+            {...refusedProps(seat, lane, "scope")}
+            value={want.scope ?? []}
+            options={choices}
+            disabled={disabled}
+            placeholder={words.empty}
+            onChange={(v) => pick((Array.isArray(v) ? v : [v]).map(String))}
+            renderMultiLabel={(sel) =>
+              sel.length === 0
+                ? words.empty
+                : sel.length <= 2
+                  ? sel.map((x) => x.label).join(", ")
+                  : plural(sel.length, words.singular, words.noun.toLowerCase())
+            }
+          />
         );
       },
     },
@@ -515,7 +576,13 @@ export function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(lanes[0]!.key)}`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: ${noToolRemedy(
+            lanes[0]!,
+            withoutTool.flatMap((s) => {
+              const saved = s.lanes[lanes[0]!.key];
+              return saved ? [{ name: s.name, saved }] : [];
+            }),
+          )}`}
         </Callout>
       )}
 
@@ -543,11 +610,14 @@ export function AgentsAccess({
             now={now}
             actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
             pending={pending[row.key]}
-            onAction={(a) =>
-              a === "rotate"
-                ? setRotating({ seat: row.seat, lane: row.lane })
-                : setRemoving({ seat: row.seat, lane: row.lane })
-            }
+            onAction={(a) => {
+              // A ROTATE THAT A PERSON MAKES AT THE VENDOR opens the sheet at
+              // the paste; every other lane rotates by itself.
+              const handoff = a === "rotate" ? rotateHandoffOf(row.lane, row.saved) : undefined;
+              if (handoff) setHanding({ seat: row.seat, lane: row.lane, handoff });
+              else if (a === "rotate") setRotating({ seat: row.seat, lane: row.lane });
+              else setRemoving({ seat: row.seat, lane: row.lane });
+            }}
           />
         )}
         renderAccessoryRow={(row) => {
@@ -569,12 +639,23 @@ export function AgentsAccess({
                 link: links[row.key],
                 onAct: (a) => void act(row.seat, row.lane, a),
                 onInstall: () => void install(row.seat, row.lane),
+                onHandoff: (handoff) => setHanding({ seat: row.seat, lane: row.lane, handoff }),
                 onRemove: () => setRemoving({ seat: row.seat, lane: row.lane }),
               });
           const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
-          return message || hint ? (
+          const placed = refusalAt(row.seat, row.lane, "level", "permissions", "scope");
+          return message || hint || placed ? (
             <div className="agent-access-under">
               {message}
+              {placed && (
+                <p
+                  id={refusalId(row.seat, row.lane)}
+                  className="t-caption agent-access-refused"
+                  role="alert"
+                >
+                  {placed.words}
+                </p>
+              )}
               {hint && <p className="t-caption">{hint}</p>}
             </div>
           ) : null;
@@ -590,7 +671,14 @@ export function AgentsAccess({
       {/* THE KIT'S STICKY BAR, which docks to the foot on a phone and says the
           count as it changes: what is drafted, Discard, and the review. */}
       {!readOnly && (
-        <SelectionBar count={changes} onClear={() => setDraft({})} labels={UNSAVED_WORDS}>
+        <SelectionBar
+          count={changes}
+          onClear={() => {
+            setDraft({});
+            setRefusal(null);
+          }}
+          labels={UNSAVED_WORDS}
+        >
           <Button
             size="small"
             variant="primary"
@@ -620,6 +708,14 @@ export function AgentsAccess({
           // from a newer revision) keeps the draft and reads again; the review
           // plans it again against the revision that came back.
           onStale={reload}
+          // A REFUSAL ABOUT A SEAT ON THIS TABLE is drawn beside its control;
+          // one about a seat the table does not show is said in the banner.
+          onRefused={(r) => {
+            setReview(false);
+            if (rows.some((row) => row.seat.handle === r.seat && row.lane.key === r.lane))
+              setRefusal(r);
+            else setSaid(r.words);
+          }}
         />
       )}
       {editing && (
@@ -646,6 +742,26 @@ export function AgentsAccess({
             await act(removing.seat, removing.lane, "remove");
             setRemoving(null);
           }}
+        />
+      )}
+      {handing && (
+        <HandoffSheet
+          seat={handing.seat}
+          lane={handing.lane}
+          handoff={handing.handoff}
+          onClose={() => setHanding(null)}
+          onPaste={async (token) => {
+            const { detail, access } = await accessApi.credential(
+              kind,
+              handing.seat.handle,
+              handing.lane.key,
+              token,
+            );
+            adopt(access);
+            return detail;
+          }}
+          onCheck={() => void act(handing.seat, handing.lane, "done")}
+          refusal={refusalWords}
         />
       )}
       {rotating && (
@@ -686,6 +802,7 @@ function laneMessage({
   onAct,
   onInstall,
   onRemove,
+  onHandoff,
 }: {
   lane: Lane;
   seat: AccessSeat;
@@ -699,16 +816,18 @@ function laneMessage({
   pending: Pending;
   /** An install link the browser would not open in a new tab, drawn as a link instead. */
   link: string | undefined;
-  onAct: (action: "retry" | "keep" | "restore" | "done") => void;
+  onAct: (action: "retry" | "keep" | "restore" | "done" | "release") => void;
   onInstall: () => void;
   onRemove: () => void;
+  /** Opens the Set up sheet, where only a person can make the seat's account at the vendor. */
+  onHandoff: (handoff: Handoff) => void;
 }): ReactNode {
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
   const keep = !busy && !readOnly;
   const o = saved.observed;
   const press = (
-    action: "retry" | "keep" | "restore" | "done",
+    action: "retry" | "keep" | "restore" | "done" | "release",
     label: ReactNode,
     quiet = false,
   ) => (
@@ -825,6 +944,38 @@ function laneMessage({
           : " The next sync restores Crewlet's setting."}
       </Callout>
     );
+  } else if (saved.desired.enabled && (o.retired?.length ?? 0) > 0) {
+    // AN OLD CREDENTIAL STILL WORKS AT THE VENDOR, which only a person can
+    // delete there: each by the label the vendor shows and when it was made,
+    // in place of the wait that repeats it every pass, and cleared on its own
+    // once the vendor shows it gone.
+    const retired = o.retired!;
+    const words = laneWords(lane.key).retired ?? RETIRED_GENERIC;
+    const one = retired.length === 1;
+    body = (
+      <Callout
+        variant="warning"
+        title={
+          one
+            ? `${words.one} still works at ${lane.name}`
+            : `${retired.length} ${words.many} still work at ${lane.name}`
+        }
+        action={
+          <span className="agent-access-actions">
+            {at(saved.sync?.error?.action_url ?? lane.action_url)}
+            {!busy && press("done", "Done, check again", true)}
+          </span>
+        }
+      >
+        {retired.map((r) => (
+          <p key={r.label}>
+            <InlineCode>{r.label}</InlineCode>
+            {r.since && `, created ${fmtDate(r.since)}`}
+          </p>
+        ))}
+        <p>{`Delete ${one ? "it" : "them"} at ${lane.name}. Crewlet notices once ${one ? "it is" : "they are"} gone.`}</p>
+      </Callout>
+    );
   } else if (
     saved.sync?.outcome === "waiting" ||
     (!saved.sync && saved.plan.some((s) => s.by === "you"))
@@ -840,6 +991,21 @@ function laneMessage({
     const todo = error?.said || waiting?.text;
     if (!todo) return null;
     const install = laneWords(lane.key).install;
+    // KEEPING THE ACCOUNT AT THE VENDOR IS THE PERSON'S CHOICE on the wait to
+    // delete it there, where the lane allows it; Crewlet records it rather
+    // than waits on.
+    const release =
+      error?.step === "remove" && lane.releasable
+        ? (laneWords(lane.key).release ?? `Keep the account at ${lane.name}`)
+        : undefined;
+    // A HANDOFF IS ONE BUTTON THAT OPENS ITS SHEET, which holds the vendor's
+    // page, the account to make and the paste; nothing to check again here.
+    const handoff = busy ? undefined : handoffOf(lane, saved);
+    const control = handoff ? (
+      <HandoffButton handoff={handoff} onOpen={() => onHandoff(handoff)} />
+    ) : (
+      step
+    );
     const where = at(error?.action_url ?? waiting?.action_url);
     body = (
       <Callout
@@ -847,7 +1013,7 @@ function laneMessage({
         title="Waiting on a person"
         action={
           <span className="agent-access-actions">
-            {step ??
+            {control ??
               where ??
               (link ? (
                 <ButtonLink size="small" variant="secondary" href={link} external>
@@ -864,7 +1030,8 @@ function laneMessage({
                   {install}
                 </Button>
               ) : null)}
-            {!busy && !step && press("done", "Done, check again", true)}
+            {!busy && !control && press("done", "Done, check again", true)}
+            {!busy && release && press("release", release, true)}
           </span>
         }
       >
@@ -874,6 +1041,21 @@ function laneMessage({
     );
   }
   return body;
+}
+
+/** What the Set up sheet opens on, as the button that opens it. */
+function handoffLabel(handoff: Handoff): string {
+  if (handoff.step === "create") return "Set up";
+  if (handoff.step === "rerole") return "Fix the role";
+  return handoff.renew ? "Paste a new token" : "Paste its token";
+}
+
+function HandoffButton({ handoff, onOpen }: { handoff: Handoff; onOpen: () => void }) {
+  return (
+    <Button size="small" variant="primary" onClick={onOpen}>
+      {handoffLabel(handoff)}
+    </Button>
+  );
 }
 
 const ACTION_WORDS: Record<SeatAction, string> = {
@@ -905,6 +1087,8 @@ function Details({
 }) {
   const o = saved.observed;
   const outside = managedOutside(lane);
+  // WHAT CREWLET PUTS IN THE SEAT'S BOX ITSELF, beside the lines a person adds.
+  const settings = boxSettings(saved);
   const buttons =
     actions.length > 0 ? (
       <span className="agent-access-detail-actions">
@@ -962,6 +1146,9 @@ function Details({
               ),
             ],
             ["Tool", toolWords(lane, saved)],
+            ...(settings
+              ? [["Set by Crewlet", <span className="mono">{settings}</span>] as const]
+              : []),
             ["Last sync", syncValue(saved, now)],
           ]}
         />

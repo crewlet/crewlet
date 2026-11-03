@@ -2,16 +2,22 @@
  * Per-seat access answers as the engine sends them, for the Agents tab's
  * suites: GoPhrase's Datadog (SRE on the Datadog Admin Role, its tool live,
  * the rest off), its GitHub (every agent on, with the app permissions its
- * old tier registered), its Cloudflare (SRE able to purge, the rest off) and
- * its Expo (QA's robot a Developer, the rest off), built from the fields a
- * case names.
+ * old tier registered), its GitLab (Dev a Developer in a group that lists no
+ * projects), its Cloudflare (SRE able to purge, the rest off) and its Expo
+ * (QA's robot a Developer, the rest off), built from the fields a case names.
  *
  * Times are relative to the moment the fixture is built, so "1d ago" reads
  * the same on every run.
  */
 
-import type { AccessAnswer, AccessOptions, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
-import { lanesOf, type Lane } from "./logic.ts";
+import type {
+  AccessAnswer,
+  AccessBox,
+  AccessOptions,
+  AccessSeat,
+  AccessSeatLane,
+} from "~/contract/access.ts";
+import { lanesOf, type HandoffStep, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
@@ -20,6 +26,7 @@ export const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 const DATADOG_OPTIONS: AccessOptions = {
   lane: "datadog",
+  tool_server: "datadog",
   live: true,
   rotatable: true,
   levels: [
@@ -32,6 +39,7 @@ const DATADOG_OPTIONS: AccessOptions = {
 
 const GITHUB_OPTIONS: AccessOptions = {
   lane: "github",
+  tool_server: "github",
   live: false,
   permissions: [
     { key: "contents", name: "Contents", administers_on_write: true },
@@ -42,6 +50,8 @@ const GITHUB_OPTIONS: AccessOptions = {
     { key: "deployments", name: "Deployments" },
     { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
 };
 
@@ -52,28 +62,64 @@ const MATTERMOST_OPTIONS: AccessOptions = {
     { id: "system_user", name: "Member" },
     { id: "system_user system_post_all_public", name: "Member who posts in any public channel" },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["town-square", "incidents", "releases"],
 };
 
-/** Cloudflare's two fixed levels, each a set of permission groups the engine resolves. */
+/** A GitLab group whose connection lists no projects, so any project in it may be typed. */
+const GITLAB_OPTIONS: AccessOptions = {
+  lane: "gitlab",
+  tool_server: "gitlab",
+  live: true,
+  rotatable: true,
+  levels: [
+    { id: "20", name: "Reporter" },
+    { id: "30", name: "Developer" },
+    { id: "40", name: "Maintainer", administers: true },
+  ],
+  scoped: true,
+  scope_live: true,
+  scope_open: true,
+};
+
+/**
+ * Cloudflare's three fixed levels, each a set of permission groups the engine
+ * resolves; Configure waits on groups the provisioner token does not hold.
+ */
 const CLOUDFLARE_OPTIONS: AccessOptions = {
   lane: "cloudflare",
+  tool_server: "cloudflare",
   live: false,
   rotatable: true,
   levels: [
     { id: "read", name: "Read" },
     { id: "operate", name: "Operate" },
+    {
+      id: "configure",
+      name: "Configure",
+      unavailable:
+        "The Configure level is unavailable until the provisioner token holds Zone Settings: Edit and Response Compression: Edit",
+    },
   ],
 };
 
 /** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
+const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+
 const EXPO_OPTIONS: AccessOptions = {
   lane: "expo",
   live: false,
   rotatable: true,
+  releasable: true,
+  action_url: EXPO_TOKENS_PAGE,
   levels: [
-    { id: "viewer", name: "Viewer" },
-    { id: "runner", name: "Runner" },
+    { id: "viewer", name: "Viewer", note: "View all projects" },
+    {
+      id: "runner",
+      name: "Runner",
+      note: "View all projects and perform low-risk actions on them",
+    },
     { id: "developer", name: "Developer" },
     { id: "release_manager", name: "Release Manager" },
   ],
@@ -100,6 +146,8 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
     { id: "create:comment", name: "Add comments" },
     { id: "administer:space", name: "Admin", administers: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -117,6 +165,8 @@ const JIRA_OPTIONS: AccessOptions = {
     { id: "10003", name: "Member" },
     { id: "10004", name: "Administrator", administers: true },
   ],
+  scoped: true,
+  scope_live: true,
   scope: ["ENG", "OPS"],
 };
 
@@ -124,6 +174,7 @@ export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
 export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
+export const GITLAB_LANE = laneOf(GITLAB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 export const CLOUDFLARE_LANE = laneOf(CLOUDFLARE_OPTIONS);
 export const EXPO_LANE = laneOf(EXPO_OPTIONS);
@@ -225,6 +276,32 @@ export function githubAnswer(): AccessAnswer {
   };
 }
 
+/** GitLab with Dev a Developer on one project, in a group that lists none. */
+export function gitlabAnswer(): AccessAnswer {
+  return {
+    kind: "gitlab",
+    revision: "rev-7",
+    syncing: false,
+    options: [GITLAB_OPTIONS],
+    seats: [
+      seat("dev", "Dev", {
+        gitlab: onLane({
+          variable: "GITLAB_TOKEN_DEV",
+          desired: { enabled: true, level: "30", scope: ["gophrase/backend"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            account: "crewlet-gophrase-dev",
+            level: "30",
+            scope: ["gophrase/backend"],
+            credential: { variable: "GITLAB_TOKEN_DEV", minted_at: ago(DAY) },
+          },
+        }),
+      }),
+    ],
+  };
+}
+
 /** Mattermost with one bot on and in no channel yet. */
 export function mattermostAnswer(): AccessAnswer {
   return {
@@ -318,6 +395,11 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
+/** The line Expo's EAS CLI needs in a seat's box, as the engine sends it. */
+const expoBox = (handle: string): AccessBox => ({
+  env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, by: "you" }],
+});
+
 /**
  * Expo with QA's robot on Developer, its token named in its sandbox env so its
  * tool is live, and PM off at the default level.
@@ -330,10 +412,11 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
     last_sync_at: ago(4 * MIN),
     options: [EXPO_OPTIONS],
     seats: [
-      seat("pm", "PM", { expo: offLane("viewer") }),
+      seat("pm", "PM", { expo: { ...offLane("viewer"), box: expoBox("PM") } }),
       seat("qa", "QA", {
         expo: onLane({
           variable: "EXPO_TOKEN_QA",
+          box: expoBox("QA"),
           desired: { enabled: true, level: "developer" },
           observed: {
             exists: true,
@@ -347,4 +430,86 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
       }),
     ],
   };
+}
+
+const PM_ROBOT = "crewlet-gophrase-pm";
+
+/** The engine's sentence for each wait the Set up sheet opens on, for PM's robot at Runner. */
+const EXPO_WAITS: Record<HandoffStep, string> = {
+  create: `Add a robot named ${PM_ROBOT} with the Runner role at Expo`,
+  mint: `Create a new access token for robot ${PM_ROBOT}, then paste it here`,
+  rerole:
+    "This robot is a Developer on gophrase, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here",
+};
+
+/**
+ * Expo with PM turned on at Runner and waiting on a person for its robot at
+ * one step, QA as in [expoAnswer]. The robot's name is `observed.account`,
+ * the name to give it while it does not exist yet; `named: false` leaves it
+ * off, as an engine that sends none would.
+ */
+export function expoWaitingAnswer(
+  step: HandoffStep = "create",
+  { renew = step !== "create", named = true }: { renew?: boolean; named?: boolean } = {},
+): AccessAnswer {
+  const answer = expoAnswer();
+  const robot = {
+    ...(named ? { account: PM_ROBOT } : {}),
+    ...(step === "create" ? {} : { account_id: "robot-pm" }),
+  };
+  answer.seats[0] = seat("pm", "PM", {
+    expo: {
+      desired: { enabled: true, level: "runner" },
+      observed:
+        step === "create"
+          ? { exists: false, enabled: false, ...robot }
+          : {
+              exists: step === "rerole",
+              enabled: step === "rerole",
+              ...robot,
+              ...(step === "rerole" ? { level: "developer" } : {}),
+              ...(renew
+                ? {
+                    credential: { variable: "EXPO_TOKEN_PM", minted_at: ago(DAY) },
+                    credential_gone: step === "mint",
+                  }
+                : {}),
+            },
+      sync: {
+        at: ago(MIN),
+        outcome: "waiting",
+        steps: [],
+        error: {
+          step,
+          said: EXPO_WAITS[step],
+          remedy: "",
+          actor: "you",
+          action_url: EXPO_TOKENS_PAGE,
+        },
+      },
+      plan: [],
+      tool: "off",
+    },
+  });
+  return answer;
+}
+
+/** QA's robot in sync and holding old tokens besides the sealed one, which Expo still accepts. */
+export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswer {
+  const answer = expoAnswer();
+  const qa = answer.seats[1]!.lanes.expo!;
+  qa.observed.retired = labels.map((label) => ({ label, since: "2026-11-01T09:30:00Z" }));
+  qa.sync = {
+    at: ago(MIN),
+    outcome: "waiting",
+    steps: [],
+    error: {
+      step: "revoke",
+      said: `Delete robot crewlet-gophrase-qa's other tokens ${labels.join(", ")} at Expo`,
+      remedy: "",
+      actor: "you",
+      action_url: EXPO_TOKENS_PAGE,
+    },
+  };
+  return answer;
 }

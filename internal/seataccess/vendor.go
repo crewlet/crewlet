@@ -172,6 +172,55 @@ type ApplyInput struct {
 	// account id for the mint after it, a mint's credential id for the
 	// retire after it ([Minted.CredentialID]). Empty for an op's first step.
 	Prior []StepResult
+
+	// HandIn is the credential a person pasted for this seat ([Ask.HandIn]),
+	// empty where none was. Never logged.
+	HandIn string `json:"-"`
+
+	// Disconnect is a step of the integration's disconnect, after which no
+	// pass reads this seat again ([SyncInput.Disconnect]).
+	Disconnect bool
+
+	// Release is a person keeping the account at the vendor ([Ask.Release]).
+	Release bool
+}
+
+// HandsIn is a session whose seat credential a person creates at the vendor
+// and pastes, because the vendor lets no credential create one: the paste
+// route checks the value with it, and the seat's sync then seals it.
+type HandsIn interface {
+	// CheckHandIn proves value fit for the seat's lane, with reads only. A
+	// [*Refusal] is the person's to fix; any other error is a fault.
+	CheckHandIn(ctx context.Context, in HandInInput) (HandedIn, error)
+}
+
+// HandInInput is one pasted credential and the seat it is for.
+type HandInInput struct {
+	Seat SeatRef
+	Lane Lane
+	Want Desired
+
+	// Record is the seat's ledger record, and Records every seat's of the
+	// kind, so a credential another seat holds is refused.
+	Record  *Record
+	Records map[string]Record
+
+	// Value is the pasted credential. Never logged or echoed.
+	Value string
+}
+
+// HandedIn is a pasted credential that passed its check.
+type HandedIn struct {
+	// Detail is the sentence the person reads.
+	Detail string
+
+	// Rotate reports a replacement for a credential the seat already holds.
+	Rotate bool
+
+	// Account and AccountID are the vendor account the credential proved,
+	// and Label what the vendor shows of the credential (a token's prefix):
+	// what an audit line records in place of the value.
+	Account, AccountID, Label string
 }
 
 // StepResult is what one step did.
@@ -285,6 +334,12 @@ type LaneSpec struct {
 	// Scoped is whether the lane narrows by scope.
 	Scoped bool
 
+	// ScopeRequired is a Scoped lane whose agent, once on, must name at least
+	// one scope entry: one with none would reach nothing. The access routes,
+	// the sync and the document's rules refuse it alike
+	// (config.SeatScopeRequired restates it, held equal by a test).
+	ScopeRequired bool
+
 	// CreatedBy and EnabledBy are who makes the account and who turns it
 	// back on: [ByYou] for a GitHub App's creation and a Slack install.
 	CreatedBy StepActor
@@ -296,10 +351,72 @@ type LaneSpec struct {
 	// reinstall.
 	Rotatable bool
 
-	// BoxEnv is the variable a CLI in the seat's executor box reads the
-	// lane's credential from (Expo's EXPO_TOKEN); empty where its tool is a
-	// server. The seat's own box settings set it to the sealed name.
-	BoxEnv string
+	// Releasable is whether a person may keep at the vendor an account a
+	// step waits for them to delete ([ActionRelease]): an Expo robot keeps
+	// its builds' author. False where what is kept is only a credential,
+	// which would stay live and unwatched.
+	Releasable bool
+
+	// BoxEnv is each variable a CLI in the seat's executor box reads one of
+	// the lane's credentials from, by its sealed field (Expo's EXPO_TOKEN from
+	// TOKEN); empty where its tool is a server. The seat's own box settings
+	// set each to its sealed name ([BoxLines]).
+	BoxEnv []BoxVar
+}
+
+// BoxVar is one variable a box CLI reads a seat credential from: Env, set to
+// the seat's sealed Field, one of [Catalog.Credentials].
+type BoxVar struct {
+	Field string
+	Env   string
+}
+
+// BoxDefaulter is a [Vendor] whose box CLI reads non-secret settings beside
+// the seat's credentials (an organization, a default project). The engine puts
+// them in the box of every seat whose box-CLI lane is on, below every layer a
+// person writes ([BoxDefaults]).
+type BoxDefaulter interface {
+	// BoxDefaults is what the engine puts in the box of the seat whose role
+	// is role.
+	BoxDefaults(c *config.Company, role *config.Role) BoxSet
+}
+
+// DocumentReach is a [Vendor] whose lanes' reach is written in the company
+// document rather than read from the vendor, so it is known whether or not the
+// vendor answers ([WithReach]). Its session's Options answers the same reach.
+type DocumentReach interface {
+	// Reach is what the company's connection reaches on lane, as the
+	// document and its roster write it.
+	Reach(c *config.Company, roster *org.Organization, lane Lane) Reach
+}
+
+// Reach is a lane's reach as the company document writes it: the entries a
+// seat's scope must be within, or Open where it lists none and so reaches
+// whatever the vendor accepts.
+type Reach struct {
+	Scope []string
+	Open  bool
+}
+
+// WithReach is o with its reach from the document where v writes it there
+// ([DocumentReach]), marked as read: a list the document holds is known even
+// while the vendor cannot be asked. o unchanged for any other vendor.
+func WithReach(o Options, v Vendor, c *config.Company, roster *org.Organization) Options {
+	doc, ok := v.(DocumentReach)
+	if !ok || !o.Scoped {
+		return o
+	}
+	r := doc.Reach(c, roster, o.Lane)
+	o.Scope, o.ScopeOpen, o.ScopeLive = slices.Clone(r.Scope), r.Open, true
+	return o
+}
+
+// BoxSet is what a [BoxDefaulter] supplies to one seat's box.
+type BoxSet struct {
+	// Env is each variable and its value: a literal, or a `${VAR}` reference
+	// the launch resolves. Never a secret, since a default is not scrubbed
+	// from the run's output.
+	Env map[string]string
 }
 
 // PermissionSpec is one permission a GitHub App can hold.
@@ -337,9 +454,38 @@ type Options struct {
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
 
+	// Scoped is [LaneSpec.Scoped], set whatever Scope holds, so a lane whose
+	// scope is open or unread is still a scoped lane.
+	Scoped bool `json:"scoped,omitempty"`
+
+	// ScopeNames is each Scope entry's name where the vendor names one apart
+	// from its id, for the pickers; nil where the entry is its own name.
+	ScopeNames map[string]string `json:"scope_names,omitempty"`
+
+	// ScopeLive is whether Scope and ScopeOpen were answered by the vendor's
+	// session just now; false where it could not be read, so an empty Scope
+	// then says nothing about the company's reach.
+	ScopeLive bool `json:"scope_live,omitempty"`
+
+	// ScopeRequired is [LaneSpec.ScopeRequired].
+	ScopeRequired bool `json:"scope_required,omitempty"`
+
+	// ToolServer is the mcp_servers entry a per-seat tool server for the lane
+	// is started from ([ToolServerOf]), so a remedy can name it; empty where
+	// no server reads the lane's credential.
+	ToolServer string `json:"tool_server,omitempty"`
+
 	// Rotatable is whether a person can ask for a seat's credential on this
 	// lane to be rotated ([LaneSpec.Rotatable]).
 	Rotatable bool `json:"rotatable,omitempty"`
+
+	// Releasable is whether a person may keep the account at the vendor
+	// rather than delete it ([LaneSpec.Releasable]).
+	Releasable bool `json:"releasable,omitempty"`
+
+	// ActionURL is where a person takes the lane's [ByYou] steps at the
+	// vendor, which each such step drawn without one of its own carries.
+	ActionURL string `json:"action_url,omitempty"`
 
 	// Managed is [ManagedExternal] where the engine does not provision this
 	// lane for the company (D4b): a seat's switch still binds its tool to
@@ -429,10 +575,18 @@ type NamedSteps interface {
 
 // drawSteps is a vendor's steps for one op, named where the vendor can.
 func drawSteps(v Vendor, in StepsInput) []Step {
+	var out []Step
 	if named, ok := v.(NamedSteps); ok {
-		return named.StepsFor(in)
+		out = named.StepsFor(in)
+	} else {
+		out = v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
 	}
-	return v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
+	for i := range out {
+		if out[i].By == ByYou && out[i].ActionURL == "" {
+			out[i].ActionURL = in.Options.ActionURL
+		}
+	}
+	return out
 }
 
 // Level is one level a vendor offers, as the vendor defines it.
@@ -456,6 +610,11 @@ type Level struct {
 	// cannot ("Product access only": the account has the product, and the
 	// site's permission schemes decide what it sees).
 	Note string `json:"note,omitempty"`
+
+	// Unavailable is why no seat can be given the level yet ([LevelGap]),
+	// empty where one can. A picker offers it disabled with this reason,
+	// rather than as a choice a save would only fail at.
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 // ToolState is whether a seat can use its credential through a tool right now.

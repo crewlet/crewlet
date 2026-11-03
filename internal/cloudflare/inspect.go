@@ -101,28 +101,31 @@ func inspect(
 		return in, err
 	}
 	in.cat = newCatalogue(c.AccountID(), groups, in.zones, configuredZones)
-	for _, level := range Levels() {
-		names, _ := Groups(level)
-		if missing := in.cat.missingGroups(names); len(missing) > 0 {
-			if in.unresolved == nil {
-				in.unresolved = map[string][]string{}
-			}
-			in.unresolved[level] = missing
-		}
-	}
+	in.unresolved = in.cat.unresolvedLevels()
 	err := call(stageOwn, func(ctx context.Context) error {
-		own, found, err := c.Token(ctx, in.status.ID)
-		if err != nil && Status(err) != http.StatusForbidden {
-			return err
-		}
-		// An unreadable own policy says nothing about what it holds, so the
-		// check is skipped rather than guessed at.
-		if err == nil && found {
-			in.unheld = in.cat.unheld(own.Policies)
-		}
-		return nil
+		var err error
+		in.unheld, err = readUnheld(ctx, c, in.cat, in.status.ID)
+		return err
 	})
 	return in, err
+}
+
+// readUnheld is the provisioner groups the token tokenID does not hold, read
+// from its own policy; nil where Cloudflare will not show the token that
+// policy, which says nothing about what it holds, so nothing is guessed.
+func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) ([]string, error) {
+	own, found, err := c.Token(ctx, tokenID)
+	if Status(err) == http.StatusForbidden {
+		// NOT SHOWN, which is an answer rather than a failure: no gap is judged.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return cat.unheld(own.Policies), nil
 }
 
 // unheld is every provisioner group the policies do not allow, by name. A

@@ -5,9 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"sync/atomic"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/expo"
@@ -16,27 +15,28 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
-// fakeVendor is the registered Expo vendor, opened against a fake Expo, with
-// a clock a case can move on.
+const (
+	sealedQA  = "EXPO_TOKEN_QA"
+	retiredQA = "EXPO_RETIRED_TOKEN_QA"
+)
+
+// fakeVendor is the registered Expo vendor, opened against a fake Expo.
 type fakeVendor struct {
 	seataccess.Vendor
-	hc    *http.Client
-	clock *atomic.Pointer[time.Time]
+	hc *http.Client
 }
 
 func (v fakeVendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
-	return expo.OpenAccess(ctx, v.Vendor, in, v.hc, func() time.Time {
-		if at := v.clock.Load(); at != nil {
-			return *at
-		}
-		return time.Now().UTC()
-	})
+	return expo.OpenAccess(ctx, v.Vendor, in, v.hc)
 }
 
-const sealedQA = "EXPO_TOKEN_QA"
+// sinkSource resolves what the test sink holds, as the sealed store does.
+type sinkSource struct{ s *seataccesstest.Sink }
+
+func (s sinkSource) Lookup(name string) (string, bool) { return s.s.Held(name) }
 
 // syncWorld is one company, its Expo account, the ledger and the sealed
-// store, run through the shared sync exactly as the loop runs it.
+// store, run through the shared sync as the loop runs it.
 type syncWorld struct {
 	t       *testing.T
 	expo    *fakeExpo
@@ -45,7 +45,6 @@ type syncWorld struct {
 	ledger  *seataccesstest.Ledger
 	sink    *seataccesstest.Sink
 	drift   []seataccess.DriftRestored
-	clock   *atomic.Pointer[time.Time]
 }
 
 func newSyncWorld(t *testing.T, level string) *syncWorld {
@@ -57,42 +56,27 @@ func newSyncWorld(t *testing.T, level string) *syncWorld {
 	}
 	on := true
 	company := &config.Company{Name: "Acme"}
-	company.Integrations.Expo = &config.Expo{
-		Enabled: true,
-		Provisioning: &config.ExpoProvisioning{
-			AccountName: "${EXPO_ACCOUNT}", AccessToken: "${EXPO_ACCESS_TOKEN}",
-		},
-	}
-	company.Roles = []config.Role{{
-		Name: "QA", Handle: "qa",
-		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on, Level: level}},
-	}}
-	clock := &atomic.Pointer[time.Time]{}
-	return &syncWorld{
-		t: t, expo: f, company: company, clock: clock,
-		vendor: fakeVendor{Vendor: registered, hc: f.server(t), clock: clock},
-		ledger: seataccesstest.NewLedger(), sink: seataccesstest.NewSink(),
-	}
-}
-
-// later moves the vendor's clock past the window a new robot may go unlisted.
-func (w *syncWorld) later() {
-	at := time.Now().UTC().Add(time.Hour)
-	w.clock.Store(&at)
+	company.Integrations.Expo = &config.Expo{Enabled: true,
+		Provisioning: &config.ExpoProvisioning{AccountName: "${EXPO_ACCOUNT}"}}
+	company.Roles = []config.Role{{Name: "QA", Handle: "qa",
+		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on, Level: level}}}}
+	return &syncWorld{t: t, expo: f, company: company,
+		vendor: fakeVendor{Vendor: registered, hc: f.server(t)},
+		ledger: seataccesstest.NewLedger(), sink: seataccesstest.NewSink()}
 }
 
 func (w *syncWorld) seat() *config.RoleExpo { return w.company.Roles[0].Integrations.Expo }
+
+func (w *syncWorld) open() seataccess.OpenInput {
+	return seataccess.OpenInput{Config: w.company, Env: config.NewResolver(
+		config.MapSource{"EXPO_ACCOUNT": testAccountName}, sinkSource{w.sink})}
+}
 
 func (w *syncWorld) syncAsking(asks map[string]seataccess.Ask) seataccess.SyncReport {
 	w.t.Helper()
 	report, err := seataccess.Sync(context.Background(), seataccess.SyncInput{
 		Vendor: w.vendor, Ledger: w.ledger, Sink: w.sink, Pass: "test", By: "test", Asks: asks,
-		Open: seataccess.OpenInput{
-			Config: w.company,
-			Env: config.NewResolver(config.MapSource{
-				"EXPO_ACCOUNT": testAccountName, "EXPO_ACCESS_TOKEN": provisioner,
-			}),
-		},
+		Open:    w.open(),
 		OnDrift: func(_ context.Context, d seataccess.DriftRestored) { w.drift = append(w.drift, d) },
 	})
 	if err != nil {
@@ -103,302 +87,421 @@ func (w *syncWorld) syncAsking(asks map[string]seataccess.Ask) seataccess.SyncRe
 
 func (w *syncWorld) sync() seataccess.SyncReport { return w.syncAsking(nil) }
 
-func (w *syncWorld) record() seataccess.Record {
+// paste is the paste route's work for qa.
+func (w *syncWorld) paste(value string) (seataccess.HandedIn, error) {
+	w.t.Helper()
+	return w.pasteFor("qa", value)
+}
+
+// pasteFor is the paste route's work for one seat: the check, then the seat's
+// sync carrying the value.
+func (w *syncWorld) pasteFor(handle, value string) (seataccess.HandedIn, error) {
+	w.t.Helper()
+	i := slices.IndexFunc(w.company.Roles, func(r config.Role) bool { return r.Handle == handle })
+	if i < 0 {
+		w.t.Fatalf("no seat %s", handle)
+	}
+	role := &w.company.Roles[i]
+	sess, err := w.vendor.Open(context.Background(), w.open())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	records, err := w.ledger.Records(context.Background(), integration.KindExpo)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var rec *seataccess.Record
+	if r, ok := records[handle]; ok {
+		rec = &r
+	}
+	want, _ := seataccess.DesiredOf(role, seataccess.LaneExpo)
+	handed, err := sess.(seataccess.HandsIn).CheckHandIn(context.Background(), seataccess.HandInInput{
+		Seat: seataccess.SeatRef{Handle: handle, Name: role.Name}, Lane: seataccess.LaneExpo, Want: want,
+		Record: rec, Records: records, Value: value,
+	})
+	if err != nil {
+		return handed, err
+	}
+	w.syncAsking(map[string]seataccess.Ask{handle: {HandIn: value, Rotate: handed.Rotate, Lane: seataccess.LaneExpo}})
+	return handed, nil
+}
+
+func (w *syncWorld) lane() seataccess.LaneRecord {
 	w.t.Helper()
 	rec, ok := w.ledger.Record(integration.KindExpo, "qa")
 	if !ok {
 		w.t.Fatal("the ledger has no record for qa")
 	}
-	return rec
+	return rec.Lanes[seataccess.LaneExpo]
 }
 
-// sealed is the token sealed for qa and the robot's live tokens, which must
-// be that one alone.
-func (w *syncWorld) sealed(robotID string) string {
+// waitingOn is the step the seat's lane waits on a person for, with its
+// sentence, or fails.
+func (w *syncWorld) waitingOn(verb seataccess.StepVerb) string {
 	w.t.Helper()
-	value, ok := w.sink.Held(sealedQA)
-	live := w.expo.liveTokens(robotID)
-	if !ok || len(live) != 1 || w.expo.value(live[0]) != value {
-		w.t.Fatalf("sealed=%v live=%v, want the robot's one live token sealed as %s", ok, live, sealedQA)
+	sync := w.lane().Sync
+	if sync == nil || sync.Outcome != seataccess.OutcomeWaiting || sync.Error == nil || sync.Error.Step != verb ||
+		sync.Error.Actor != seataccess.ByYou || sync.Error.ActionURL != expo.AccessTokensURL(testAccountName) {
+		w.t.Fatalf("sync = %+v, want waiting on a person to %s at Expo", sync, verb)
 	}
-	return value
+	return sync.Error.Said
 }
 
-// A SEAT'S WHOLE LIFE THROUGH THE SHARED SYNC: create and seal, a converged
-// pass that writes nothing, drift taken back, level changes, a rotation, off
-// deleting the robot and its tokens, and back on creating a new robot.
-func TestAnExpoSeatThroughTheSync(t *testing.T) {
+func (w *syncWorld) inSync() {
+	w.t.Helper()
+	if sync := w.lane().Sync; sync == nil || sync.Outcome != seataccess.OutcomeOK {
+		w.t.Fatalf("sync = %+v, want in sync", sync)
+	}
+}
+
+// A SEAT'S WHOLE LIFE, SET UP BY A PERSON: turned on, it waits for a robot
+// and makes no call to Expo; the pasted token is checked and sealed; a
+// converged pass only reads; a level change and drift wait for the person to
+// change the role at Expo; off clears the token at once and waits for the
+// robot to be deleted.
+func TestAnExpoSeatSetUpByAPerson(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, config.ExpoLevelRunner)
 
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("turning on reported %+v", report.Findings)
+	w.sync()
+	said := w.waitingOn(seataccess.VerbCreate)
+	for _, want := range []string{"crewlet-acme-qa", "Runner", testAccountName} {
+		if !strings.Contains(said, want) {
+			t.Errorf("%q does not say %q", said, want)
+		}
 	}
-	rec := w.record()
-	if !rec.Held() || rec.Credential == nil || rec.Credential.Variable != sealedQA {
-		t.Fatalf("record = %+v", rec)
+	if w.lane().Observed.Account != "crewlet-acme-qa" {
+		t.Errorf("observed account = %q, want the name to give the robot", w.lane().Observed.Account)
 	}
-	robot, ok := w.expo.robot(rec.Account.ID)
-	if !ok || robot.name != "crewlet-acme-qa" ||
-		!slices.Equal(robot.perms, []expo.Permission{expo.PermissionRun, expo.PermissionView}) {
-		t.Fatalf("robot = %+v", robot)
+	if ops := w.expo.operations(); len(ops) != 0 {
+		t.Fatalf("a seat with no token called Expo: %v", ops)
 	}
-	first := w.sealed(robot.id)
+
+	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	handed, err := w.paste(tok.value)
+	if err != nil {
+		t.Fatalf("paste: %v", err)
+	}
+	if handed.Detail != "Works. Robot crewlet-acme-qa, Runner on example-org. Sealed as EXPO_TOKEN_QA." {
+		t.Errorf("detail = %q", handed.Detail)
+	}
+	if sealed, ok := w.sink.Held(sealedQA); !ok || sealed != tok.value {
+		t.Fatal("the pasted token was not sealed as EXPO_TOKEN_QA")
+	}
+	w.inSync()
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); !rec.Held() || rec.Account.ID != robot.id {
+		t.Fatalf("record = %+v, want the robot recorded", rec)
+	}
 	w.expo.onlyExpo(t)
 
-	writes := len(w.expo.writes())
 	if report := w.sync(); len(report.Findings) != 0 {
 		t.Errorf("a converged pass reported %+v", report.Findings)
 	}
-	if got := w.expo.writes(); len(got) != writes {
-		t.Errorf("a converged pass wrote %q", got[writes:])
-	}
+	w.inSync()
 
-	// DRIFT: somebody makes the robot an admin at Expo.
-	w.expo.mu.Lock()
-	w.expo.robots[robot.id].perms = append(w.expo.robots[robot.id].perms, expo.PermissionAdmin)
-	w.expo.mu.Unlock()
+	// A LEVEL CHANGE HERE is the person's to make at Expo.
+	w.seat().Level = config.ExpoLevelDeveloper
 	w.sync()
-	if got, _ := w.expo.robot(robot.id); !slices.Equal(sortPerms(got.perms), []expo.Permission{expo.PermissionRun, expo.PermissionView}) {
-		t.Errorf("permissions after drift = %v, want the level's restored", got.perms)
+	if said := w.waitingOn(seataccess.VerbRerole); !strings.Contains(said, "Runner") ||
+		!strings.Contains(said, "Developer") {
+		t.Errorf("%q does not name both roles", said)
 	}
-	if len(w.drift) != 1 || w.drift[0].After.Level != config.ExpoLevelRunner {
-		t.Errorf("drift events = %+v, want one restoring runner", w.drift)
-	}
-
-	// A LEVEL CHANGE.
-	w.seat().Level = config.ExpoLevelReleaseManager
+	w.expo.setRole(robot.id, expo.RoleDeveloper)
 	w.sync()
-	want := []expo.Permission{expo.PermissionPublish, expo.PermissionPublishProtected, expo.PermissionRun, expo.PermissionView}
-	if got, _ := w.expo.robot(robot.id); !slices.Equal(sortPerms(got.perms), want) {
-		t.Errorf("permissions after the level change = %v, want %v", got.perms, want)
-	}
-	w.seat().Level = config.ExpoLevelViewer
+	w.inSync()
+
+	// DRIFT AT EXPO waits for the person too, naming both roles.
+	w.expo.setRole(robot.id, expo.RoleReleaseManager)
 	w.sync()
-	if got, _ := w.expo.robot(robot.id); !slices.Equal(got.perms, []expo.Permission{expo.PermissionView}) {
-		t.Errorf("permissions after lowering = %v, want VIEW", got.perms)
+	if said := w.waitingOn(seataccess.VerbRerole); !strings.Contains(said, "Release Manager") {
+		t.Errorf("%q does not name the role at Expo", said)
 	}
+	w.expo.setRole(robot.id, expo.RoleDeveloper)
+	w.sync()
+	w.inSync()
 
-	// ROTATE.
-	w.syncAsking(map[string]seataccess.Ask{"qa": {Rotate: true}})
-	if rotated := w.sealed(robot.id); rotated == first {
-		t.Error("a rotation sealed the same token")
-	}
-
-	// OFF.
+	// OFF: the token leaves the box at once, and the robot is watched until
+	// it is deleted at Expo.
 	off := false
 	w.seat().Enabled = &off
 	w.sync()
-	if got, _ := w.expo.robot(robot.id); !got.deleting {
-		t.Error("the robot's deletion was not scheduled after off")
+	if _, ok := w.sink.Held(sealedQA); ok {
+		t.Error("the token outlived the seat being turned off")
 	}
-	if live := w.expo.liveTokens(robot.id); len(live) != 0 {
-		t.Errorf("live tokens after off = %v", live)
+	if retired, ok := w.sink.Held(retiredQA); !ok || retired != tok.value {
+		t.Fatal("the turned-off token was not kept where no box reads it")
+	}
+	w.waitingOn(seataccess.VerbRemove)
+	w.sync()
+	w.waitingOn(seataccess.VerbRemove)
+	w.expo.deleteActor(robot.id)
+	w.sync()
+	if _, ok := w.sink.Held(retiredQA); ok {
+		t.Error("the retired token outlived its robot's deletion")
+	}
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
+		t.Errorf("record = %+v, want the deleted robot released", rec)
+	}
+}
+
+// A TOKEN EXPO STOPS ACCEPTING IS CLEARED AND ASKED FOR AGAIN, and Expo is not
+// asked with it a second time.
+func TestARevokedExpoTokenIsAskedForAgain(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	w.expo.revoke(tok)
+	w.sync()
+	if said := w.waitingOn(seataccess.VerbMint); !strings.Contains(said, "no longer accepts") {
+		t.Errorf("%q does not say the token was refused", said)
 	}
 	if _, ok := w.sink.Held(sealedQA); ok {
-		t.Error("the sealed token outlived the seat being turned off")
+		t.Error("the refused token is still sealed")
 	}
+	calls := len(w.expo.operations())
+	w.sync()
+	if got := w.expo.operations(); len(got) != calls {
+		t.Errorf("a pass after the refusal called Expo again: %v", got[calls:])
+	}
+	w.waitingOn(seataccess.VerbMint)
 
-	// BACK ON: a new robot, since Expo keeps no switched-off one.
+	// A NEW ROBOT IS ALLOWED after a refusal: the old one may be gone.
+	_, fresh := w.expo.robot("crewlet-acme-qa-2", expo.RoleViewOnly)
+	if _, err := w.paste(fresh.value); err != nil {
+		t.Fatalf("a new robot's token after a refusal: %v", err)
+	}
+	w.inSync()
+}
+
+// A ROTATE IS A NEW TOKEN FOR THE SAME ROBOT, and the old one is the person's
+// to delete at Expo.
+func TestAnExpoRotateIsANewTokenForTheSameRobot(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	robot, first := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(first.value); err != nil {
+		t.Fatal(err)
+	}
+	w.sync()
+
+	_, stranger := w.expo.robot("someone-else", expo.RoleViewOnly)
+	if _, err := w.paste(stranger.value); !refused(err, "not to QA's robot") {
+		t.Fatalf("another robot's token for a rotate = %v", err)
+	}
+	second := w.expo.mint(robot.id)
+	handed, err := w.paste(second.value)
+	if err != nil || !handed.Rotate {
+		t.Fatalf("rotate = %+v, %v", handed, err)
+	}
+	if sealed, _ := w.sink.Held(sealedQA); sealed != second.value {
+		t.Fatal("the new token was not sealed")
+	}
+	if said := w.waitingOn(seataccess.VerbRevoke); !strings.Contains(said, first.prefix) {
+		t.Errorf("%q does not name the old token", said)
+	}
+	w.expo.revoke(first)
+	w.syncAsking(map[string]seataccess.Ask{"qa": {Rotate: true, HandIn: second.value, Lane: seataccess.LaneExpo}})
+	w.inSync()
+}
+
+// EVERY REFUSAL IS THE PERSON'S, beside the field, and seals nothing.
+func TestAnExpoPasteIsRefusedForEachCheck(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.ExpoLevelRunner)
+	_, onAnother := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	w.expo.mu.Lock()
+	for _, a := range w.expo.actors {
+		a.roles = map[string]expo.Role{"another-org": expo.RoleRunner}
+	}
+	w.expo.mu.Unlock()
+	_, developer := w.expo.robot("crewlet-acme-qa", expo.RoleDeveloper)
+	_, admin := w.expo.robot("crewlet-acme-qa", expo.RoleAdmin)
+	_, custom := w.expo.robot("crewlet-acme-qa", expo.RoleCustom)
+	_, unsaid := w.expo.robot("crewlet-acme-qa", "")
+	_, revoked := w.expo.robot("crewlet-acme-qa", expo.RoleRunner)
+	w.expo.revoke(revoked)
+	person := w.expo.person("Avery", expo.RoleRunner)
+	for _, tc := range []struct {
+		name, value, says string
+	}{
+		{"a refused token", revoked.value, "Expo did not accept this token"},
+		{"a person's token", person.value, "belongs to the person Avery"},
+		{"a robot of another account", onAnother.value, "holds no role on example-org"},
+		{"another role", developer.value, "is a Developer on example-org, and you chose Runner"},
+		{"Admin", admin.value, "Agents never hold Admin"},
+		{"a custom role", custom.value, "custom role"},
+		{"a role Expo does not say", unsaid.value, "Expo did not say this robot's role"},
+	} {
+		if _, err := w.paste(tc.value); !refused(err, tc.says) {
+			t.Errorf("%s: %v, want a refusal saying %q", tc.name, err, tc.says)
+		}
+		if _, ok := w.sink.Held(sealedQA); ok {
+			t.Fatalf("%s: a refused token was sealed", tc.name)
+		}
+	}
+}
+
+// A ROBOT IS ONE SEAT'S: another seat's robot is refused, naming that seat.
+func TestAnExpoRobotIsOneSeats(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
 	on := true
+	w.company.Roles = append(w.company.Roles, config.Role{Name: "SRE", Handle: "sre",
+		Integrations: config.RoleIntegrations{Expo: &config.RoleExpo{Enabled: &on}}})
+	robot, tok := w.expo.robot("crewlet-acme-sre", expo.RoleViewOnly)
+	w.ledger.Put(context.Background(), seataccess.Record{Kind: integration.KindExpo, Handle: "sre", Name: "SRE",
+		Account: &seataccess.Account{ID: robot.id, Name: "crewlet-acme-sre", State: seataccess.AccountActive}})
+	if _, err := w.paste(tok.value); !refused(err, "already sre's") {
+		t.Fatalf("another seat's robot = %v", err)
+	}
+}
+
+// refused reports a check refusal saying says.
+func refused(err error, says string) bool {
+	r, ok := errors.AsType[*seataccess.Refusal](err)
+	return ok && strings.Contains(r.Said, says) && r.Remedy != "" && r.Actor == seataccess.ByYou
+}
+
+// A DISCONNECT KEEPS NOTHING: no pass reads the seat again, so its token is
+// cleared outright rather than kept to watch its robot.
+func TestAnExpoDisconnectKeepsNoToken(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seataccess.Sync(context.Background(), seataccess.SyncInput{
+		Vendor: w.vendor, Ledger: w.ledger, Sink: w.sink, Pass: "test", By: "test",
+		Open: w.open(), Disconnect: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{sealedQA, retiredQA} {
+		if _, ok := w.sink.Held(name); ok {
+			t.Errorf("%s outlived the disconnect", name)
+		}
+	}
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
+		t.Errorf("record = %+v, want the robot let go", rec)
+	}
+}
+
+// A ROBOT'S OTHER LIVE TOKENS ARE ASKED FOR ON EVERY PASS until Expo shows them
+// gone, after a first paste of a robot that already had one as after a rotate.
+func TestAnExpoRobotsOtherTokensAreAskedForUntilDeleted(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	robot, old := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	pasted := w.expo.mint(robot.id)
+	if _, err := w.paste(pasted.value); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		w.sync()
+		if said := w.waitingOn(seataccess.VerbRevoke); !strings.Contains(said, old.prefix+"…") {
+			t.Errorf("%q does not name the old token", said)
+		}
+		retired := w.lane().Observed.Retired
+		if len(retired) != 1 || retired[0].Label != old.prefix+"…" || retired[0].Since.IsZero() {
+			t.Fatalf("observed retired = %+v, want the old token with its creation time", retired)
+		}
+		if plan := w.lane().Sync.Steps; len(plan) != 1 || plan[0].Step.Op != seataccess.OpRetire {
+			t.Errorf("steps = %+v, want the retire op alone", plan)
+		}
+	}
+	w.expo.revoke(old)
+	w.sync()
+	w.inSync()
+	if retired := w.lane().Observed.Retired; len(retired) != 0 {
+		t.Errorf("observed retired = %+v after the old token was revoked", retired)
+	}
+}
+
+// TURNED BACK ON, a seat forgets its old robot's token: the robot comes back
+// only through a paste, never by reusing what was kept to watch it.
+func TestAnExpoSeatTurnedBackOnForgetsTheRetiredToken(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "")
+	robot, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	off, on := false, true
+	w.seat().Enabled = &off
+	w.sync()
+	if _, ok := w.sink.Held(retiredQA); !ok {
+		t.Fatal("the turned-off token was not kept to watch its robot")
+	}
 	w.seat().Enabled = &on
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("back on reported %+v", report.Findings)
-	}
-	again := w.record()
-	if !again.Held() || again.Account.ID == robot.id {
-		t.Fatalf("record after back on = %+v, want a new robot", again)
-	}
-	w.sealed(again.Account.ID)
-}
-
-// A TOKEN THE SYNC CANNOT SEAL IS REVOKED AT EXPO, and the seat reports the
-// failure rather than holding a live token nobody has.
-func TestAnExpoTokenThatCannotBeSealedIsRevoked(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.sink.FailRecord = map[string]error{sealedQA: errors.New("the store refused")}
-	report := w.sync()
-	rec := w.record()
-	if !rec.Held() {
-		t.Fatalf("record = %+v, want the created robot recorded", rec)
-	}
-	if live := w.expo.liveTokens(rec.Account.ID); len(live) != 0 {
-		t.Errorf("live tokens = %v, want the unsealed token revoked", live)
-	}
-	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingIdentityFailed {
-		t.Errorf("findings = %+v, want the seat's failure", report.Findings)
-	}
-}
-
-// A TOKEN EXPO ANSWERED WITH NO VALUE is taken back at once, never left live
-// and held by nobody.
-func TestAnExpoTokenWithNoValueIsTakenBack(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.expo.emptyValue = true
 	w.sync()
-	rec := w.record()
-	if live := w.expo.liveTokens(rec.Account.ID); len(live) != 0 {
-		t.Errorf("live tokens = %v, want none", live)
+	for _, name := range []string{sealedQA, retiredQA} {
+		if _, ok := w.sink.Held(name); ok {
+			t.Errorf("%s is sealed after the seat was turned back on", name)
+		}
 	}
-	if _, ok := w.sink.Held(sealedQA); ok {
-		t.Error("an empty token was sealed")
+	w.waitingOn(seataccess.VerbMint)
+	again := w.expo.mint(robot.id)
+	if _, err := w.paste(again.value); err != nil {
+		t.Fatalf("the old robot's new token: %v", err)
+	}
+	if sealed, _ := w.sink.Held(sealedQA); sealed != again.value {
+		t.Error("the new token was not sealed")
 	}
 }
 
-// A TOKEN REVOKED AT EXPO IS REPLACED. The ledger still records the sealed
-// token, and the robot holds no live one, so the next sync mints and seals a
-// fresh token and retires nothing a person added.
-func TestAnExpoTokenRevokedAtExpoIsReMinted(t *testing.T) {
+// KEEPING THE ROBOT AT EXPO closes the delete step, forgets the retired token
+// and says it was the person's choice.
+func TestKeepingAnExpoRobotClosesItsDeleteStep(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, "")
+	if spec, _ := w.vendor.Catalog().Lane(seataccess.LaneExpo); !spec.Releasable {
+		t.Fatal("Expo's lane does not offer keeping its robot")
+	}
+	_, tok := w.expo.robot("crewlet-acme-qa", expo.RoleViewOnly)
+	if _, err := w.paste(tok.value); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	w.seat().Enabled = &off
 	w.sync()
-	rec := w.record()
-	before := w.sealed(rec.Account.ID)
-	w.expo.mu.Lock()
-	for _, tok := range w.expo.tokens {
-		tok.revoked = true
+	w.waitingOn(seataccess.VerbRemove)
+	w.syncAsking(map[string]seataccess.Ask{"qa": {Release: true, Lane: seataccess.LaneExpo}})
+	if _, ok := w.sink.Held(retiredQA); ok {
+		t.Error("the retired token outlived the person keeping the robot")
 	}
-	w.expo.mu.Unlock()
-	someone := w.expo.addToken(rec.Account.ID, "a person's token")
-
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("findings = %+v", report.Findings)
+	steps := w.lane().Sync.Steps
+	if last := steps[len(steps)-1]; !last.Done || !strings.Contains(last.Text, "as you chose") {
+		t.Errorf("steps = %+v, want the delete step closed as the person's choice", steps)
 	}
-	after, ok := w.sink.Held(sealedQA)
-	if !ok || after == before {
-		t.Fatalf("sealed=%v changed=%v, want a fresh token sealed", ok, after != before)
-	}
-	if live := w.expo.liveTokens(rec.Account.ID); !slices.Contains(live, someone.id) || len(live) != 2 {
-		t.Errorf("live tokens = %v, want the new one and the person's own", live)
+	if rec, _ := w.ledger.Record(integration.KindExpo, "qa"); rec.Held() {
+		t.Errorf("record = %+v, want the kept robot no longer tracked", rec)
 	}
 }
 
-// A ROBOT DELETED AT EXPO IS NOT THE SEAT'S ANY MORE: the next sync creates a
-// new one and seals its token.
-func TestAnExpoRobotDeletedAtExpoIsReplaced(t *testing.T) {
+// THE BOX READS THE LIVE TOKEN ALONE: Expo's lane binds EXPO_TOKEN to the
+// seat's sealed token and nothing to the retired one, a person makes and
+// re-enables its robot, and config restates the catalog's sealed fields.
+func TestTheExpoCatalogBindsOnlyTheLiveTokenToTheBox(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.sync()
-	old := w.record().Account.ID
-	w.expo.mu.Lock()
-	delete(w.expo.robots, old)
-	w.expo.mu.Unlock()
-	w.later()
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("findings = %+v", report.Findings)
+	vendor, ok := seataccess.Lookup(integration.KindExpo)
+	if !ok {
+		t.Fatal("the Expo vendor is not registered")
 	}
-	rec := w.record()
-	if !rec.Held() || rec.Account.ID == old {
-		t.Fatalf("record = %+v, want a new robot", rec)
+	cat := vendor.Catalog()
+	spec, ok := cat.Lane(seataccess.LaneExpo)
+	if !ok || spec.CreatedBy != seataccess.ByYou || spec.EnabledBy != seataccess.ByYou ||
+		!spec.Rotatable || !spec.Releasable {
+		t.Fatalf("lane = %+v, want a robot a person makes, rotatable and releasable", spec)
 	}
-	w.sealed(rec.Account.ID)
-}
-
-// A ROBOT UNDER THE ENGINE'S NAME THAT THE LEDGER DOES NOT RECORD is never the
-// seat's: it is not adopted, changed or deleted, and the seat gets its own.
-func TestAnExpoRobotIsNeverAdoptedByName(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	stranger := w.expo.addRobot("crewlet-acme-qa", expo.PermissionAdmin)
-	strangerToken := w.expo.addToken(stranger.id, expo.TokenNote("qa"))
-	w.sync()
-	rec := w.record()
-	if rec.Account.ID == stranger.id {
-		t.Fatal("the seat adopted a robot by its name")
+	want := []seataccess.BoxLine{{Name: "EXPO_TOKEN", Value: "${" + sealedQA + "}", By: seataccess.ByYou}}
+	if got := seataccess.BoxLines(integration.KindExpo, seataccess.LaneExpo, "qa"); !slices.Equal(got, want) {
+		t.Fatalf("box lines = %v, want %v", got, want)
 	}
-	got, _ := w.expo.robot(stranger.id)
-	if got.deleting || !slices.Equal(got.perms, []expo.Permission{expo.PermissionAdmin}) ||
-		!slices.Contains(w.expo.liveTokens(stranger.id), strangerToken.id) {
-		t.Errorf("the stranger robot was touched: %+v", got)
-	}
-}
-
-// A REFUSAL IS A PERSON'S, with the remedy and where to act; a rate limit or
-// a 5xx is a fault the sync retries.
-func TestAnExpoRefusalNamesItsRemedy(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.expo.refuse["CrewletCreateRobot"] = fakeRefusal{code: "UNAUTHORIZED_ERROR", message: "not permitted"}
-	report := w.sync()
-	if len(report.Findings) != 1 {
-		t.Fatalf("findings = %+v, want one", report.Findings)
-	}
-	f := report.Findings[0]
-	if f.Kind != integration.FindingIdentityFailed || f.ActionURL != expo.AccessTokensURL(testAccountName) {
-		t.Errorf("finding = %+v", f)
-	}
-	sync := w.record().Lanes[seataccess.LaneExpo].Sync
-	if sync == nil || sync.Outcome != seataccess.OutcomeFailed || sync.Error == nil ||
-		sync.Error.Actor != seataccess.ByYou || sync.Error.Remedy == "" {
-		t.Errorf("sync = %+v, want a person's refusal with a remedy", sync)
-	}
-}
-
-// A ROBOT EMPTIED BY SOMEBODY ELSE WAITS FOR A PERSON: the engine never strips
-// a robot's permissions itself, so one holding none was changed at Expo, and a
-// pass does not hand them back unasked.
-func TestAnExpoRobotEmptiedByHandWaits(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.sync()
-	rec := w.record()
-	w.expo.mu.Lock()
-	w.expo.robots[rec.Account.ID].perms = nil
-	w.expo.mu.Unlock()
-	writes := len(w.expo.writes())
-	w.sync()
-	if got := w.expo.writes(); len(got) != writes {
-		t.Errorf("writes = %q, want none", got[writes:])
-	}
-	w.syncAsking(map[string]seataccess.Ask{"qa": {Reenable: true}})
-	if got, _ := w.expo.robot(rec.Account.ID); !slices.Equal(got.perms, []expo.Permission{expo.PermissionView}) {
-		t.Errorf("permissions after turning back on = %v, want VIEW", got.perms)
-	}
-}
-
-func sortPerms(perms []expo.Permission) []expo.Permission {
-	out := slices.Clone(perms)
-	slices.Sort(out)
-	return out
-}
-
-// A ROBOT THE LISTING DOES NOT SHOW YET IS STILL THE ONE JUST CREATED: its
-// token is minted on it and sealed, and the next pass finds it and writes
-// nothing, rather than closing the record and creating a second robot.
-func TestAnExpoRobotNotListedYetIsStillTheSeats(t *testing.T) {
-	t.Parallel()
-	w := newSyncWorld(t, "")
-	w.expo.lag = 1
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("findings = %+v", report.Findings)
-	}
-	rec := w.record()
-	w.sealed(rec.Account.ID)
-	// The next listing still misses it: a fault to retry, and nothing written.
-	w.expo.lag = 0
-	w.expo.mu.Lock()
-	w.expo.lagged[rec.Account.ID] = 1
-	w.expo.mu.Unlock()
-	writes := len(w.expo.writes())
-	w.sync()
-	if got := w.expo.writes(); len(got) != writes {
-		t.Errorf("a pass that could not list the robot wrote %q", got[writes:])
-	}
-	if report := w.sync(); len(report.Findings) != 0 {
-		t.Fatalf("the pass that lists it again = %+v", report.Findings)
-	}
-	if got := w.expo.writes(); len(got) != writes {
-		t.Errorf("the robot listed again was written %q", got[writes:])
-	}
-	if again := w.record(); again.Account.ID != rec.Account.ID {
-		t.Errorf("the seat moved to robot %s from %s", again.Account.ID, rec.Account.ID)
-	}
-	w.expo.mu.Lock()
-	robots := len(w.expo.robots)
-	w.expo.mu.Unlock()
-	if robots != 1 {
-		t.Errorf("the account holds %d robots, want one", robots)
+	if !slices.Equal(config.SeatSealedFields("expo"), cat.Credentials) {
+		t.Fatalf("config restates %v, the catalog %v", config.SeatSealedFields("expo"), cat.Credentials)
 	}
 }

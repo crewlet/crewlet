@@ -15,9 +15,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   AccessAnswer,
+  AccessCredentialAnswer,
   AccessDraftRequest,
   AccessInstallLink,
   AccessPlanAnswer,
+  AccessRefusal,
+  AccessRefusalField,
   AccessSeatAction,
 } from "~/contract/access.ts";
 import { pathSegment, rest, RestError } from "~/protocol/rest.ts";
@@ -65,6 +68,16 @@ export const accessApi = {
       {},
       revision === undefined ? undefined : ifMatch(revision),
     )) as AccessAnswer,
+  /**
+   * A credential a person made at the vendor for a seat (Expo's robot token),
+   * for the engine to check and seal. A refusal says why beside the field; the
+   * value is never echoed.
+   */
+  credential: async (kind: string, handle: string, lane: string, value: string) =>
+    (await rest.post(
+      `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/credential`,
+      { value },
+    )) as AccessCredentialAnswer,
   /** A fresh, single-use link to install a seat's app at the vendor (Slack's approval). */
   install: async (kind: string, handle: string, lane: string) =>
     (await rest.post(
@@ -99,6 +112,34 @@ export function refusalWords(err: unknown): string {
     return err.hint ? `${said} ${asSentence(err.hint)}` : said;
   }
   return err instanceof Error ? err.message : "Something went wrong.";
+}
+
+/** A refusal about one seat's control ([AccessRefusal]), in the reader's words, which the tab draws beside it. */
+export interface PlacedRefusal extends Pick<AccessRefusal, "seat" | "field"> {
+  lane: string;
+  words: string;
+}
+
+/** Every control a refusal can name, as a record so a field the contract adds is a type error here. */
+const REFUSAL_FIELDS: Record<AccessRefusalField, true> = {
+  level: true,
+  permissions: true,
+  scope: true,
+};
+
+const isRefusalField = (v: unknown): v is AccessRefusalField =>
+  typeof v === "string" && Object.hasOwn(REFUSAL_FIELDS, v);
+
+/**
+ * Where a refusal belongs: the seat, lane and control an `access_not_offered`
+ * refusal names. Null for any other refusal, or one naming no control, which
+ * the tab says in its banner instead.
+ */
+export function placedRefusal(err: unknown): PlacedRefusal | null {
+  if (!(err instanceof RestError) || err.code !== "access_not_offered") return null;
+  const { seat, lane, field } = err.body;
+  if (typeof seat !== "string" || typeof lane !== "string" || !isRefusalField(field)) return null;
+  return { seat, lane, field, words: refusalWords(err) };
 }
 
 export interface AccessRead extends RestResult<AccessAnswer> {
