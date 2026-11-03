@@ -296,7 +296,7 @@ const (
 	// inflates, and the most the members of a tar hand the reader.
 	//
 	// TWO HUNDRED AND FIFTY-SIX MEBIBYTES: eight times the most an archive is
-	// stored as (internal/executordomain's SessionMaxBytes, 32 MiB), which is
+	// stored as (internal/executorkeep's SessionMaxBytes, 32 MiB), which is
 	// gzip's ratio over JSON text, so an ordinary session's archive reads
 	// whole within it — and one that inflates past it, as anything a box
 	// packs can, stops there rather than holding the engine for as long as
