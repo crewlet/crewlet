@@ -100,6 +100,7 @@ import {
   tsKey,
   utf8Bytes,
 } from "~/lib/format.ts";
+import { droppedWords } from "~/lib/dropped.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -1207,6 +1208,18 @@ export function PhaseCard({
                 )}
               </div>
             </section>
+          )}
+
+          {/* WHAT A COLLECTED RUN'S RECORD DID NOT KEEP, said under the calls
+              it did: a long run's record keeps their head and tail, and this
+              card outlives the run's own record, so the rounds above would
+              otherwise read as everything the executor called. */}
+          {record.callsElided > 0 && (
+            <Callout variant="warning">
+              {plural(record.callsElided, "more call")} the run made{" "}
+              {record.callsElided === 1 ? "isn’t" : "aren’t"} listed: its record didn’t keep{" "}
+              {record.callsElided === 1 ? "it" : "them"}.{droppedWords(record.elidedCalls)}
+            </Callout>
           )}
 
           {record.launch && <LaunchBody record={record} />}

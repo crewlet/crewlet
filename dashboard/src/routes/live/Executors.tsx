@@ -93,9 +93,9 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import { andList } from "~/lib/words.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
+import { droppedWords } from "~/lib/dropped.ts";
 import type {
   BridgeCall,
-  ElidedCall,
   EventRecord,
   ExecutorEnding,
   ExecutorEntry,
@@ -1204,38 +1204,6 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
       </div>
     </Card>
   );
-}
-
-/**
- * What the calls a log dropped from its middle were, by tool, as a sentence
- * that follows the count: " By tool: read_file 120 times (3 failed) and
- * post_message once." Empty where the engine kept no identities (an older
- * engine's log). Calls past the identities' own share keep their count and
- * lose their tool, and are said as such.
- */
-function droppedWords(dropped: readonly ElidedCall[]): string {
-  const byTool = new Map<string, { calls: number; failed: number }>();
-  let unnamed = 0;
-  for (const entry of dropped) {
-    if (!entry.name) {
-      unnamed += entry.calls;
-      continue;
-    }
-    const tally = byTool.get(entry.name) ?? { calls: 0, failed: 0 };
-    tally.calls += entry.calls;
-    tally.failed += entry.failed ?? 0;
-    byTool.set(entry.name, tally);
-  }
-  const parts = [...byTool.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, { calls, failed }]) => {
-      const times = calls === 1 ? "once" : `${calls.toLocaleString()} times`;
-      return failed > 0
-        ? `${name} ${times} (${failed.toLocaleString()} failed)`
-        : `${name} ${times}`;
-    });
-  if (unnamed > 0) parts.push(`${plural(unnamed, "call")} to tools the record didn’t keep`);
-  return parts.length === 0 ? "" : ` By tool: ${andList(parts)}.`;
 }
 
 /**

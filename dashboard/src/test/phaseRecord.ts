@@ -70,6 +70,8 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     launchId: "",
     harnessTurns: 0,
     transcript: "",

@@ -837,6 +837,43 @@ describe("what a launch's record left out", () => {
   });
 });
 
+// WHAT A COLLECTED RUN'S RECORD DID NOT KEEP IS READ OFF ITS PHASE RECORD. The
+// executor's record lists the calls its run's record kept, a long run's head
+// and tail, and says how many more the run made and by tool; a reader that
+// took the list alone would read the kept calls as everything the run did.
+//
+// Mutation: leave the count or the tools off the parsed record, and the card
+// draws a long run as the calls it happened to keep.
+describe("what a collected run's record did not keep", () => {
+  test("is read off the record, the entries that are not counts left out", () => {
+    const record = fromPhaseEvent(
+      phaseEvent({
+        sandbox_id: "box-1",
+        calls_elided: 63,
+        elided_calls: [
+          { name: "comment_on_work_item", calls: 1 },
+          { name: "read_file", calls: 59, failed: 2 },
+          { calls: 3 },
+          { name: "noise", calls: 0 },
+          "not an entry",
+        ],
+      }),
+    )!;
+    expect(record.callsElided).toBe(63);
+    expect(record.elidedCalls).toEqual([
+      { name: "comment_on_work_item", calls: 1, failed: 0 },
+      { name: "read_file", calls: 59, failed: 2 },
+      { calls: 3, failed: 0 },
+    ]);
+  });
+
+  test("a record that kept every call says none", () => {
+    const record = fromPhaseEvent(phaseEvent({ sandbox_id: "box-1" }))!;
+    expect(record.callsElided).toBe(0);
+    expect(record.elidedCalls).toEqual([]);
+  });
+});
+
 describe("the phases that finish while a tab is watching", () => {
   // THE TURN THAT DISAPPEARED. A screen reads two sources: a query answered
   // once at mount, and the seat's live overlay. Neither covers a phase that

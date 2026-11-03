@@ -36,6 +36,7 @@ import type {
   TurnStage,
 } from "~/protocol/index.ts";
 import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
+import type { DroppedCalls } from "./dropped.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 import type { InvocationOutcome } from "~/contract/stops.ts";
@@ -301,6 +302,15 @@ export interface PhaseRecord {
    */
   deliveredRefsElided: number;
   /**
+   * The calls a collected executor's run made that its run's record did not
+   * keep — a long run's dropped middle — and those calls by tool. `tools`
+   * lists only the kept ones, and the run's own record is gone once it ends,
+   * so this is where a reader of the turn learns what the rest were. Zero and
+   * empty on every other phase, and on a run that kept every call.
+   */
+  callsElided: number;
+  elidedCalls: DroppedCalls[];
+  /**
    * The job a record reports: on a launch, the launch itself, and on the
    * executor that resumed from one, the launch it collected. A round can
    * launch more than once, so on a launch it is part of the record's identity
@@ -446,6 +456,19 @@ function str(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/** A record's `elided_calls`, kept to the entries that are what they say. */
+function droppedCalls(v: unknown): DroppedCalls[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .map((e) => ({
+      ...(typeof e.name === "string" && e.name ? { name: e.name } : {}),
+      calls: num(e.calls),
+      failed: num(e.failed),
+    }))
+    .filter((e) => e.calls > 0);
 }
 
 function num(v: unknown): number {
@@ -776,6 +799,8 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     launchId: "",
     harnessTurns: 0,
     transcript: "",
@@ -878,6 +903,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
+    // THE CALLS THE RUN'S RECORD DID NOT KEEP, absent the same way.
+    callsElided: num(p.calls_elided),
+    elidedCalls: droppedCalls(p.elided_calls),
     launchId,
     harnessTurns: 0,
     transcript: "",
@@ -980,6 +1008,10 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     deliveredRefsElided: num(p.delivered_refs_elided),
+    // A LAUNCH'S RECORD lists no calls: they are its round's, on the
+    // executor's record that collected it.
+    callsElided: 0,
+    elidedCalls: [],
     launchId,
     harnessTurns: num(p.harness_turns),
     transcript: String(p.activity_transcript ?? ""),

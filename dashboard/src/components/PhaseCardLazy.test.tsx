@@ -90,6 +90,8 @@ function record() {
     transcriptElidedBytes: 0,
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",

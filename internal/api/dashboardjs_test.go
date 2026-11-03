@@ -1608,7 +1608,13 @@ const (
 	// tool in its callout took it from 5443.7 KiB to 5444.7 KiB (+1.0 KiB,
 	// 1008 bytes), all of it the Executors chunk; every other chunk kept its
 	// size. The initial load did not grow. 5445 KiB.
-	treeBudget = 5<<20 + 325<<10
+	// A collected run's dropped calls said by tool on its execute card, the
+	// wording moved into one helper the card and the board's log share, took
+	// it from 5444.7 KiB to 5445.4 KiB (+0.7 KiB, 687 bytes): the shared
+	// chunk the helper landed in +601 bytes, the phases chunk +319 and the
+	// settled chunk +252, and the Executors chunk -485 for the wording it no
+	// longer carries. The initial load stays within its own budget. 5446 KiB.
+	treeBudget = 5<<20 + 326<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

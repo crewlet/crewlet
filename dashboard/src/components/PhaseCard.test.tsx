@@ -72,6 +72,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     transcriptElidedBytes: 0,
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",
@@ -609,6 +611,41 @@ describe("an executor round's launches", () => {
     render(<PhaseCard record={phase({ key: "turn-1|review|1", phase: "review" })} />);
     expect(screen.queryByText("sandbox")).toBeNull();
     expect(screen.queryByText("claude-code")).toBeNull();
+  });
+
+  // A COLLECTED RUN'S CALLS ITS RECORD DID NOT KEEP ARE SAID, by tool, under
+  // the ones it did: the card outlives the run's own record, and a long run's
+  // record kept only the head and tail of its calls. A run that kept every call
+  // says nothing more.
+  //
+  // Mutation: drop the line, or its tools, and a long run reads as the calls
+  // its record happened to keep.
+  test("says the calls a collected run's record did not keep", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          harness: "claude-code",
+          sandboxId: "box-7",
+          callsElided: 63,
+          elidedCalls: [
+            { name: "comment_on_work_item", calls: 1 },
+            { name: "read_file", calls: 59, failed: 2 },
+            { calls: 3 },
+          ],
+        })}
+        defaultOpen
+      />,
+    );
+    expect(
+      screen.getByText(
+        /^63 more calls the run made aren’t listed: its record didn’t keep them\. By tool: comment_on_work_item once, read_file 59 times \(2 failed\) and 3 calls to tools the record didn’t keep\.$/,
+      ),
+    ).toBeDefined();
+    cleanup();
+    render(
+      <PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} defaultOpen />,
+    );
+    expect(screen.queryByText(/more calls? the run made/)).toBeNull();
   });
 
   // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's

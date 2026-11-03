@@ -74,6 +74,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     transcriptElidedBytes: 0,
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    callsElided: 0,
+    elidedCalls: [],
     trigger: null,
     at: "2026-09-13T10:03:00Z",
     startedAt: "2026-09-13T10:00:00Z",
