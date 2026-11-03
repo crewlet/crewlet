@@ -1795,7 +1795,16 @@ const (
 	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
 	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
 	// the measured size's next KiB: 5487 KiB.
-	treeBudget = 5<<20 + 367<<10
+	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
+	// that is the agent's whole identity: the team to switch to, the name to
+	// type, and a numbered guide to the scope picker derived from the levels'
+	// grants and the lane's refused and unneeded scopes, with Regenerate Token
+	// on a rotate), with Expo's story and builder facts aligned with its
+	// hand-off, took it from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
+	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
+	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
+	// initial load unchanged. The measured size's next KiB: 5493 KiB.
+	treeBudget = 5<<20 + 373<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -341,7 +341,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
 
-	run := newExecutorRun(agent, runEnv.env, runEnv.defaults)
+	run := newExecutorRun(agent, runEnv)
 	// THE RUN'S MODEL ON ITS SESSION, before the session opens: see
 	// [mcpbridge.Session.Model].
 	session.Model = run.model
