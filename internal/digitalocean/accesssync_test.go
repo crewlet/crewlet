@@ -2,6 +2,7 @@ package digitalocean
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -295,8 +296,8 @@ func TestADigitalOceanTokenIsOneSeats(t *testing.T) {
 		t.Fatalf("paste: %v", err)
 	}
 	_, err := w.paste("qa", token)
-	r, ok := err.(*seataccess.Refusal)
-	if !ok || !strings.Contains(r.Said, "already sre's") {
+	var r *seataccess.Refusal
+	if !errors.As(err, &r) || !strings.Contains(r.Said, "already sre's") {
 		t.Fatalf("the same token for qa = %v, want refused as sre's", err)
 	}
 }
