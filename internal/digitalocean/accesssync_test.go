@@ -68,7 +68,9 @@ func newSyncWorld(t *testing.T, level string) *syncWorld {
 		ledger: seataccesstest.NewLedger(), sink: seataccesstest.NewSink()}
 }
 
-func (w *syncWorld) seat() *config.RoleDigitalOcean { return w.company.Roles[0].Integrations.DigitalOcean }
+func (w *syncWorld) seat() *config.RoleDigitalOcean {
+	return w.company.Roles[0].Integrations.DigitalOcean
+}
 
 func (w *syncWorld) open() seataccess.OpenInput {
 	return seataccess.OpenInput{Config: w.company, Derive: testKey, Env: config.NewResolver(

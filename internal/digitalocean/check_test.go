@@ -90,7 +90,7 @@ func TestAPasteIsRefusedWithItsRemedy(t *testing.T) {
 			remedy: "choose Administer here"},
 		{name: "an Administer scope missing", token: fakeToken('o'), level: administer,
 			scopes: removing(scopesOf(administer), "app:access_console"),
-			said: "lacks app:access_console, which Administer needs", remedy: "every scope the list names"},
+			said:   "lacks app:access_console, which Administer needs", remedy: "every scope the list names"},
 		{name: "a level not offered", token: fakeToken('p'), level: "full_access", scopes: scopesOf(administer),
 			said: "not a DigitalOcean level", remedy: "Choose a level"},
 	} {
