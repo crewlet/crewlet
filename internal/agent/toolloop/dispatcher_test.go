@@ -185,6 +185,31 @@ func TestACallTheHarnessRewroteIsRefused(t *testing.T) {
 	}
 }
 
+// giveUpWhileItRuns has the harness give up on the held call once the call has
+// entered its tool, and releases the call only well after that: once the
+// harness has recorded its give-up, and 150 ms more for whatever its give-up
+// carries to reach the host. record is handed the tool's context's error just
+// before the release, so a case reads it once its run is over.
+//
+// ON A SIGNAL, NOT A CLOCK: the harness used to give up 30 ms after making the
+// call, which on a loaded runner came before the call had reached the tool at
+// all. The run then ended with the call never run, and a case about a call
+// that runs out under the phase failed on an order it was not about.
+func giveUpWhileItRuns(ctx context.Context, surf *surface, prov *llmtest.Script,
+	giveUp chan<- struct{}, record func(error)) {
+	<-surf.entered
+	close(giveUp)
+	// THE HARNESS HAS GIVEN UP once it records the call's result, which it
+	// does when its request returns, here cut short. Bounded, so a give-up that
+	// never lands fails the case's own checks rather than hanging it.
+	for deadline := time.Now().Add(10 * time.Second); len(prov.Results()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	record(ctx.Err())
+	close(surf.hold)
+}
+
 // A CALL THE HARNESS GAVE UP ON STILL RUNS OUT UNDER THE PHASE, AND IS RECORDED. The
 // harness's cancel abandons only the delivery: the tool is not cut short half-way
 // through a write — its context is the phase's, which the harness cannot cancel —
@@ -193,22 +218,20 @@ func TestACallTheHarnessGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
+	giveUp := make(chan struct{})
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{Name: "slow", GiveUpOn: giveUp}}},
+		says("it timed out"),
+	))
 	var mu sync.Mutex
 	ctxErr := errors.New("never read")
 	surf.hook = func(ctx context.Context, call llm.ToolCall) {
-		go func() {
-			<-surf.entered
-			time.Sleep(150 * time.Millisecond) // well past the harness's give-up
+		go giveUpWhileItRuns(ctx, surf, prov, giveUp, func(err error) {
 			mu.Lock()
-			ctxErr = ctx.Err()
+			ctxErr = err
 			mu.Unlock()
-			close(surf.hold)
-		}()
+		})
 	}
-	prov := script(runOf(
-		llmtest.Response{Calls: []llmtest.Call{{Name: "slow", GiveUp: 30 * time.Millisecond}}},
-		says("it timed out"),
-	))
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -242,23 +265,21 @@ func TestACallTheHarnessDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
+	giveUp := make(chan struct{})
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{Name: "slow", GiveUpOn: giveUp, Exit: true}}},
+		says("never"),
+	))
 	var mu sync.Mutex
 	ctxErr := errors.New("never read")
 	surf.hook = func(ctx context.Context, call llm.ToolCall) {
-		go func() {
-			<-surf.entered
-			time.Sleep(150 * time.Millisecond)
+		go giveUpWhileItRuns(ctx, surf, prov, giveUp, func(err error) {
 			mu.Lock()
-			ctxErr = ctx.Err()
+			ctxErr = err
 			mu.Unlock()
-			close(surf.hold)
-		}()
+		})
 	}
 	prog := &toolloop.Progress{}
-	prov := script(runOf(
-		llmtest.Response{Calls: []llmtest.Call{{Name: "slow", GiveUp: 30 * time.Millisecond, Exit: true}}},
-		says("never"),
-	))
 	_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, Progress: prog})
 	if err == nil || !strings.Contains(err.Error(), "exited") {
 		t.Fatalf("Run returned %v, want the run's failure", err)
