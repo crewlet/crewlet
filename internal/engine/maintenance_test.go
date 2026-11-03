@@ -117,6 +117,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// THE EXECUTOR LOG'S operation ledger, per node, for the reason
+		// every registered domain's is. Its sessions are NOT here: they are
+		// Replicated, so their retention rides a record (the trash reaper's
+		// retention delete) rather than a local delete — and nor is its
+		// anchor table, which the trim removes like every domain's (below).
+		"executor_ops",
 		// THE IDENTITY ESTATE'S, which sorts here, swept on every data
 		// node by the same per-node job every other domain's is: every data
 		// node runs every domain in the register, whatever its other roles,
@@ -134,6 +140,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// A job of its own, so its deletions are counted under a name
 		// that says which rows went.
 		"iam_ops_session",
+		// THE FLEET'S MCP LISTINGS, in the positions register, which no
+		// clock may age: a listing no reader counts any more (its node
+		// died, or claimed its presence again under a new epoch) and a
+		// schema no listing has named for two sweeps. Nothing else
+		// removes them, so a node rebuilt under a new id would leave its
+		// listings, and every schema they named, for the life of the
+		// deployment (ADR-0074).
+		"mcp_listings",
 		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
 		// this list for exactly the reason the list exists: each
 		// `<domain>_ops` migration says the table is swept and ships
@@ -150,7 +164,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// floor each node read for itself would be a second writer of
 		// rows every copy must hold alike (ADR-0002). The trim removes
 		// them with a trimmed record every applier takes at one
-		// position (ADR-0073), and a `<domain>_anchors` job here would
+		// position (ADR-0080), and a `<domain>_anchors` job here would
 		// be that second writer back.
 		//
 		// NOR THE CODE HOST'S RETIRED PACKS, `code_packs_retired`, for the
@@ -370,7 +384,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 // AN IDLE ASK OUTLASTS THE LONGEST SILENCE OF ONE THAT IS STILL OWED.
 //
 // The idle sweep spares every channel whose ask waits somewhere the engine can
-// see it — a coding run's record, an inbox held by a run, a pause or a spent
+// see it — an executor's record, an inbox held by a run, a pause or a spent
 // budget window — and closes the rest once they have been quiet for
 // [maintenance.ChannelIdleTimeout]. What it cannot see is an ask in flight: a
 // delivery a node that died held unacknowledged, invisible for the broker's

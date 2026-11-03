@@ -716,7 +716,6 @@ function CommentRow({
 const PHASE_WORD: Record<string, string> = {
   execute: "Execute",
   review: "Review",
-  sandbox: "Coding run",
   subagent: "Workers",
   judge: "Judge",
   onboarding: "Onboarding",
@@ -749,7 +748,7 @@ export function turnPills(
       });
       break;
     case "suspended":
-      out.push({ label: "parked on a coding run", variant: "info" });
+      out.push({ label: "parked on its executor", variant: "info" });
       break;
     // A PERSON ENDED IT by pausing the seat with a stop — never drawn as a
     // failure, which it is not: the engine records it apart for that reason.
@@ -864,7 +863,7 @@ export function TurnCard({
 }
 
 /**
- * The turn running on this task now: "SWE is on turn 2 · coding run · for
+ * The turn running on this task now: "SWE is on turn 2 · executing · for
  * 2m", and the way to watch it.
  */
 function LiveRow({

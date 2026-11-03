@@ -82,7 +82,11 @@ from the node's own copy where it has one — carrying the node's own writes as 
 floor so whichever data node answers has applied them. The identity
 directory is read the same way: the seat bindings its inbound routing withholds
 a suspended person's seat by, and the login a lead's tools resolve to a
-person's seat, are answered by a data node, floored on the identity log. What
+person's seat, are answered by a data node, floored on the identity log. So is
+the executor log: the engine's record of the session each of its seats' boxes
+left, which the seat's next launch continues, is written and read through a
+data node too, the writes as the engine's own (see
+[below](#how-a-request-reaches-the-estate)). What
 it publishes about its turns is kept in
 exactly one data node's event log ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
 It joins no **fleet-wide consumer group** whose handler needs data — the
@@ -510,7 +514,7 @@ requests grows with the git nodes times the repositories it names.
 whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes where its code tools built it, naming the
 seat and the turn, work item and model behind it, and of about 755 from its
-coding box, which names the coding run and the coding agent besides (a
+coding box, which names the executor and the harness besides (a
 person's push, naming the token it came through, leaves one of about 623),
 kept 181 days, and its pack's row of about 588,
 kept while the pack is live: a repository's maintainer looks at it every minute and
@@ -542,7 +546,7 @@ push would keep on every data node for its 181 days to answer a question the
 rows' one index already answers: that one; a second index of the push rows in
 log order, where their one index was reordered instead (a second, measured,
 would have added about a quarter to the 395 bytes a push's row weighed then);
-and an index of each coding run's pushes, where the report of [what a run
+and an index of each executor's pushes, where the report of [what a run
 pushed](code-sandbox.md#what-a-run-pushed-is-reported-for-it) scans its
 repositories' pushes since its launch instead — some 40 to 100 bytes a push
 each, 1.8 to 4.5 GB each at 250 000 pushes a day. The
@@ -643,7 +647,7 @@ flowchart TD
   (an applier stopped, the node evicted, its rows below the log), in which case
   only that log's calls go to the other data nodes — its other logs' copies
   keep answering here — and it keeps every seat
-  ([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+  ([ADR-0079](https://github.com/crewlet/crewlet/blob/main/adr/0079-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 - **Otherwise the data nodes, in order**: the node that last answered an
   operation on that log, then a rendezvous order keyed on the asking node's own
   id — with a node that said in the last thirty seconds that its copy of that
@@ -750,6 +754,18 @@ flowchart TD
   write one data node answered *unvouched* — its ledger cannot say whether the
   operation landed — is asked of the next under the same id before the caller
   is told the outcome is unknown.
+- **The executor log is written by the engine alone.** Every other write is a
+  surface's, made on somebody's behalf: a seat's tool, a person's request, the
+  operator's MCP. The executor log's are the engine's own record of what a
+  seat's box did — a session captured, a turn ended, a session past its
+  retention or a removed seat's taken away — so no tool, person or operator
+  surface can make one, and a build gate fails on any surface's code that
+  reaches the writer. Each carries the operation id the log derives for that
+  capture or that end, and moves on under it like a tracker write. Its reads are
+  ordinary reads at the level the caller asks: a launch reads the conversation
+  it continues at `linearizable`, because a seat that moved to this node holds
+  no floor for the end its last turn published through another one
+  ([Read Consistency](../guides/consistency.md#which-logs-can-be-read-at-linearizable)).
 - **Every request and every answer is signed.** A data node runs a write as
   the actor the request names, and answers a chat read for the viewer it
   names, so the request is an instruction, and an
@@ -890,14 +906,17 @@ stopping it.
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
 
-The stream carries the other half: one durable consumer per seat inbox,
-attached only by the node holding that seat's lease. That consumer **is** the
+The stream carries the other half: one durable consumer per seat inbox, plus
+one for the inbox's priority lane, both attached only by the node holding that
+seat's lease. That consumer **is** the
 mailbox — it holds an unowned seat's mail until somebody claims it, and it is
 created with no inactivity threshold precisely so nothing reaps it while a seat
 is between owners. It also has to exist *before* anything publishes: the agent
 and notification streams keep a message only while some durable consumer that
 has not acked it exists, so a subject no consumer covers drops what is
-published to it. See [a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
+published to it, which is why every wake goes through the node's wake queue
+and is refused rather than published while its mailbox is not confirmed. See
+[a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
 and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
 
 **Both halves live on one broker**, deliberately. The coordination KV is
@@ -931,9 +950,9 @@ seat. See
   every agent turn passes through, and it is per node — so an org's ceiling is
   N × the configured value. Size it per node, not per company. This is the one
   knob a fleet genuinely changes the meaning of. (A `providers.llm` entry's own
-  `max_concurrent` is a different knob: it caps that entry's CLI processes,
+  `max_concurrent` is a different knob: it caps that entry's harness processes,
   also per node.)
-- **A spent plan's sit-out.** An entry whose CLI reported a spent plan or a rate
+- **A spent plan's sit-out.** An entry whose harness reported a spent plan or a rate
   limit sits out on the node that heard it, until the reset the vendor named
   (never more than an hour away) or, where it named none, for a window of 1,
   2, 5, then 15 minutes that steps up with each probe the limit refuses.
@@ -1086,8 +1105,8 @@ What each one decides:
   since a name and `@channel` are the same wake. The reasoning is the one that
   makes an agent company different from a human one — a person in a busy room
   reads passively and an agent has no passive read, so every wake is the
-  seat's own coding run in a [box](code-sandbox.md), whose first request
-  carries the CLI's whole harness even where the seat decides the message was
+  seat's own executor in a [box](code-sandbox.md), whose first request
+  carries the harness's whole harness even where the seat decides the message was
   not for it. `max_concurrent` does not bound those runs, since a wake holds a
   slot only while it launches and while its run is collected and reviewed:
   the cap does, and the seats it reaches, each running one at a time. So one

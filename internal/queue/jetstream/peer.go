@@ -62,12 +62,98 @@ func (q *Queue) Peer(ctx context.Context, opts ...queue.Option) (*Queue, error) 
 // is what turned an unrelated merge red on main: a baseline snapshot read
 // empty, the same read a moment later saw the event, and Quiesce — which
 // with nothing attached writes nothing at all — was blamed for it.
+//
+// ON A LANED TOPIC THE LANE'S MAIL IS PART OF IT ([queue.HasLane]), listed
+// first, because a subscription's mail is both of its mailboxes and the lane
+// is the one it takes first.
 func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Event, error) {
 	stream, err := q.streamFor(ctx, topic)
 	if err != nil {
 		return nil, err
 	}
-	cons, err := q.js.Consumer(ctx, stream, consumerName(topic, group))
+	var out []*events.Event
+	if queue.HasLane(topic) {
+		lane := queue.LaneOf(topic)
+		held, laneErr := q.backlogOf(ctx, stream, lane, consumerName(lane, group))
+		if laneErr != nil {
+			return nil, laneErr
+		}
+		out = append(out, held...)
+	}
+	held, err := q.backlogOf(ctx, stream, topic, consumerName(topic, group))
+	if err != nil {
+		return nil, err
+	}
+	return append(out, held...), nil
+}
+
+// Waiting reports what a subscription holds that no handler of this client is
+// running on ([queue.EventQueue.Waiting]).
+//
+// FROM EACH CONSUMER'S OWN STATE, one info request per mailbox: messages it
+// has not delivered plus messages delivered and not acknowledged, which on a
+// mailbox with one group is everything it has not finished (the topic's own
+// consumer and, on a laned topic, the lane's). A message this client's handler
+// is running on is unfinished too, and is taken off ([attachment.running]);
+// one fetched in a drain and not yet dispatched, or handed back for a
+// redelivery, is waiting and stays counted. Consumer state trails a publish by
+// a moment, which a display can carry and a decision could not.
+func (q *Queue) Waiting(ctx context.Context, topic, group string) (queue.Waiting, error) {
+	stream, err := q.streamFor(ctx, topic)
+	if err != nil {
+		return queue.Waiting{}, err
+	}
+	background, err := q.unfinished(ctx, stream, consumerName(topic, group))
+	if err != nil {
+		return queue.Waiting{}, err
+	}
+	var priority int
+	if queue.HasLane(topic) {
+		lane := queue.LaneOf(topic)
+		if priority, err = q.unfinished(ctx, stream, consumerName(lane, group)); err != nil {
+			return queue.Waiting{}, err
+		}
+	}
+	runPriority, runBackground := q.runningOn(attachKey{topic, group})
+	return queue.Waiting{
+		Priority:   max(priority-runPriority, 0),
+		Background: max(background-runBackground, 0),
+	}, nil
+}
+
+// unfinished is what one durable consumer has not finished: undelivered plus
+// delivered and unacknowledged. A consumer the broker does not hold has
+// nothing.
+func (q *Queue) unfinished(ctx context.Context, stream, name string) (int, error) {
+	cons, err := q.js.Consumer(ctx, stream, name)
+	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("inspect consumer %s: %w", name, q.brokerFailed(ctx, err))
+	}
+	info, err := cons.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("consumer info %s: %w", name, q.brokerFailed(ctx, err))
+	}
+	return int(info.NumPending) + info.NumAckPending, nil
+}
+
+// runningOn is the mail this client's handlers on one subscription are running
+// on, per mailbox, summed over its attachments.
+func (q *Queue) runningOn(key attachKey) (priority, background int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, a := range q.attachments[key] {
+		priority += int(a.running.priority.Load())
+		background += int(a.running.background.Load())
+	}
+	return priority, background
+}
+
+// backlogOf is [Queue.Backlog] for one durable consumer reading one subject.
+func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*events.Event, error) {
+	cons, err := q.js.Consumer(ctx, stream, name)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) {
 			return nil, nil

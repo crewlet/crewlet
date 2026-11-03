@@ -125,7 +125,7 @@ var coordinatorEntries = map[string][]entryDrive{
 	"OnStarted": {{
 		name: "a start event, redelivered or not",
 		call: func(t *testing.T, rig *coordRig) {
-			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+			if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 				AgentHandle: "swe", TurnID: "t1",
 			}); err != nil {
 				t.Logf("OnStarted: %v", err)
@@ -219,7 +219,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.FailRun(t.Context(), "t1",
-				types.SandboxFailureSuspensionUnrecorded,
+				types.ExecutorFailureSuspensionUnrecorded,
 				"the suspended conversation could not be written"); err != nil {
 				t.Logf("FailRun: %v", err)
 			}
@@ -413,7 +413,7 @@ func TestEveryStatusHasAPlacement(t *testing.T) {
 	}
 }
 
-// jobFinished queues the result a finished coding job comes back with, so a
+// jobFinished queues the result a launch's finished job comes back with, so a
 // completion has something to collect.
 func jobFinished(_ *testing.T, rig *coordRig) {
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -545,13 +545,13 @@ func answersOnControl(t *testing.T, rig *coordRig) {
 	rig.fireRetries()
 }
 
-// answerByTurnOnTheRow is the answer answer_run gives t1, naming the question
-// the row is on now, as answer_run names it off the row it checked, whatever
-// status the row was placed in.
-func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.SandboxAnswerGiven {
+// answerByTurnOnTheRow is the answer answer_executor gives t1, naming the
+// question the row is on now, as answer_executor names it off the row it
+// checked, whatever status the row was placed in.
+func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.ExecutorAnswerGiven {
 	t.Helper()
 	run, _, _ := rig.pending.Get(t.Context(), "t1")
-	given := types.SandboxAnswerGiven{
+	given := types.ExecutorAnswerGiven{
 		TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "the release branch",
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 		LaunchID: run.LaunchID,
@@ -1000,6 +1000,20 @@ func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, f
 		return false, errRefusedCall
 	}
 	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error) {
+	if s.called("MarkHeldCall") {
+		return HeldCall{}, false, errRefusedCall
+	}
+	return s.inner.MarkHeldCall(ctx, turnID, launch, fence)
+}
+
+func (s *refusingStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
+	if s.called("RecordHeldResult") {
+		return false, errRefusedCall
+	}
+	return s.inner.RecordHeldResult(ctx, turnID, launch, sealed, fence)
 }
 
 func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {

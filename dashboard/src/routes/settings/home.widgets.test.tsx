@@ -171,7 +171,7 @@ describe("the Configuration widget", () => {
 describe("the Models widget", () => {
   const model = (key: string, health: string, used: boolean) => ({
     key,
-    agent: "claude-code",
+    harness: "claude-code",
     model: "sonnet",
     health,
     sign_in: { route: "api-key", resolves: true },

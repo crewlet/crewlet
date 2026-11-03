@@ -31,7 +31,7 @@ import (
 // pushOpening proposes one push of cmds to repo by who through c, asking for
 // change, and answers what became of it. A seat's push git receives is its
 // coding box's, so it names the run that made it — the turn that launched the
-// run, the run's launch and its coding agent — as the engine stamps every one.
+// run, the run's launch and its harness — as the engine stamps every one.
 func pushOpening(t *testing.T, c *code.Committer, repo string, who code.Principal, change *code.ChangeOption,
 	cmds ...code.Command) (code.Proposal, code.ProposeResult) {
 
@@ -40,7 +40,7 @@ func pushOpening(t *testing.T, c *code.Committer, repo string, who code.Principa
 	p.Principal, p.Change = who, change
 	if who.Kind == code.PrincipalAgent {
 		p.Principal.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(),
-			RunID: uuid.NewString(), CodingAgent: "claude-code"}
+			RunID: uuid.NewString(), Harness: "claude-code"}
 	}
 	res, err := c.Propose(t.Context(), p)
 	if err != nil {
@@ -70,15 +70,15 @@ func (n *node) body(id string) string {
 // for a change appends ONE record, which moves the branch and opens the change
 // at the head it set — numbered from the repository's next, into its default
 // branch, the seat its owner and first author, the push its first revision,
-// opened at the record's position with the turn and the coding run that
+// opened at the record's position with the turn and the executor that
 // pushed it — and the answer names the change by its number, read from its
 // row, as does the push's outcome asked of it. The next change the repository
 // opens takes the next number.
 //
 // Mutations: open the change in a record of its own after the push's, and the
 // push appends two records and the change is opened at another position; open
-// it without the push's coding run, and the change says no sandbox run opened
-// it.
+// it without the push's launch, and the change says no executor's launch
+// opened it.
 func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -106,7 +106,7 @@ func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 		got.turn != p.Principal.Run.TurnID || got.run != p.Principal.Run.RunID || got.title != "Retry the upload" ||
 		got.bodyBytes != int64(len("The upload is retried once.")) {
 		t.Fatalf("the change the push opened is %+v, want dev's web!1 from feature into main at C, revision 1, "+
-			"version 1, at the push's record, opened by the turn and the coding run that pushed", got)
+			"version 1, at the push's record, opened by the turn and the executor that pushed", got)
 	}
 	if opened := n.count(`SELECT COUNT(*) FROM code_changes WHERE id = ? AND opened_position = ?`, id,
 		at); opened != 1 {
@@ -579,7 +579,7 @@ func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 	boxed := func(workID string) code.Principal {
 		who := dev
 		who.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), RunID: uuid.NewString(),
-			CodingAgent: "claude-code", WorkBackend: string(types.WorkWorklet), WorkID: workID, WorkKey: "ENG-42",
+			Harness: "claude-code", WorkBackend: string(types.WorkWorklet), WorkID: workID, WorkKey: "ENG-42",
 			WorkProject: "ENG"}
 		return who
 	}

@@ -375,6 +375,12 @@ func (f fakeUsage) PageReadsPage(context.Context, usage.PageReadsQuery, usage.Gr
 
 func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) { return 3, nil }
 
+func (f fakeUsage) ServerToolCalls(_ context.Context, q usage.ServerToolCallsQuery) ([]usage.ServerToolCallsRow, error) {
+	return []usage.ServerToolCallsRow{{Tool: q.Server + ".search", AgentID: f.name, Calls: 2}}, nil
+}
+
+func (f fakeUsage) ToolsElided(context.Context, string, string) (int64, error) { return 7, nil }
+
 // fakeReaders are the readers every node's fake usage half holds of a
 // repository: three, in reader order.
 var fakeReaders = []usage.RepoReader{
@@ -2541,7 +2547,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	}
 }
 
-// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0072.
+// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0079.
 //
 // A router on a node without data, between a peer whose tracker copy is out
 // of service and one whose knowledge base is, alternates tracker and
@@ -2694,7 +2700,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	}
 }
 
-// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0072.
+// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0079.
 //
 // A node whose tracker copy is wrong sends its seats' tracker calls to a peer
 // and still answers their knowledge-base calls from its own pages, and a peer
@@ -2768,7 +2774,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	}
 }
 
-// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0072.
+// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0079.
 // The links are derived from the pages' AND the tasks' bodies and named from
 // both domains' rows, so a node whose tracker copy is out of service runs none
 // of them though its knowledge base serves: its own router asks a peer, and a
@@ -2811,7 +2817,7 @@ func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	}
 }
 
-// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0072. The usage domain's
+// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0079. The usage domain's
 // reads cross like every other domain's: a node whose usage copy is out of
 // service answers its operator's spend and activity screens from a peer's
 // copy, while its tracker reads are still its own; and every one of the
@@ -2846,6 +2852,16 @@ func TestAWrongUsageCopyAnswersNoSpendScreen(t *testing.T) {
 	elided, err := u.ReadsElided(ctx, "2026-10-01", "2026-10-02")
 	if err != nil || elided != 3 {
 		t.Fatalf("reads elided = (%d, %v), want 3", elided, err)
+	}
+	calls, err := u.ServerToolCalls(ctx, usage.ServerToolCallsQuery{From: "2026-10-01", To: "2026-10-02",
+		Server: "linear"})
+	if err != nil || len(calls) != 1 || calls[0].Tool != "linear.search" || calls[0].AgentID == "data-self" ||
+		calls[0].Calls != 2 {
+		t.Fatalf("a server's tool calls = (%+v, %v), want a peer's row for the server asked about", calls, err)
+	}
+	toolsElided, err := u.ToolsElided(ctx, "2026-10-01", "2026-10-02")
+	if err != nil || toolsElided != 7 {
+		t.Fatalf("tools elided = (%d, %v), want 7", toolsElided, err)
 	}
 	for name, read := range map[string]func() (int, error){
 		"seat turns": func() (int, error) {
@@ -3190,7 +3206,7 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	}
 
 	// A WRONG COPY OF A DOMAIN NO SEAT DEPENDS ON IS NOT THE SEAT'S COPY:
-	// admission stays here, and a peer is not asked (ADR-0072).
+	// admission stays here, and a peer is not asked (ADR-0079).
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{"vectors": true} })
 	if served, err = r.Serves(t.Context()); err != nil || served.Tracker {
 		t.Fatalf("a node whose own seat copy admits no seat was admitted on a peer's "+
@@ -3639,7 +3655,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 
 // THE CODE HOST'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
 // names the code domain, so the code copy's own verdict decides whether a
-// node answers it (ADR-0072), and a request carries this node's floor on the
+// node answers it (ADR-0079), and a request carries this node's floor on the
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()

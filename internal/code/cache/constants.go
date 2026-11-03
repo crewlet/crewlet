@@ -236,7 +236,7 @@ const MaxFullRounds = store.MinReaderConns
 // (step=whole). So a repository run every M pushes pays a run's T every M
 // pushes and each of its q requests a push an average of M/2 packs' δ —
 // least at M = √(2T/qδ): for sixteen requests a push (a pipeline's fetches,
-// the clones of the coding runs a push starts), 48 at 100 MB and 152 at a
+// the clones of the executors a push starts), 48 at 100 MB and 152 at a
 // gigabyte. Sixty-four costs the 100 MB a twenty-fifth past its least, and
 // runs a gigabyte's index more often than its least to spare each request a
 // few milliseconds; where pushes come faster, MidxMinInterval and
@@ -269,7 +269,7 @@ const MidxPacks = 64
 // more than the packs — 0.13 s over the 100 MB at 128 packs and at 256, 1.3 s
 // over the gigabyte at 128, 256 and 512 — while what it saves a request
 // follows the packs. The threshold is decided by a clone's pack-objects: the
-// request a cold sync is most often for (a coding run's fresh sandbox makes
+// request a cold sync is most often for (an executor's fresh sandbox makes
 // one first), and the one the index makes wait. Six runs of each, medians and
 // spreads: at 256 packs the index saves that clone 0.55 s over the 100 MB
 // (12.9 s against 12.4; 12.6–13.5 and 11.9–12.9) and 11 s over the gigabyte

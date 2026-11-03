@@ -1321,6 +1321,41 @@ describe("the Spend overview's rows", () => {
     expect(
       block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
     ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+    expect(block(sheet("chatlet-panes.css"), ".chat-activity-list")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) /,
+    );
+  });
+
+  // CHATLET'S ACTIVITY LIST KEEPS THE VIEW'S SIDE LINE. Its rows began at the
+  // view's own edge, the selected fill flush against it and each face 4px in,
+  // while the view's title and its first tab stood on the side line, 20px in;
+  // and the list sat flush against the tab bar. A row pads itself by the first
+  // step, so the list stands that step inside the line and the faces start on
+  // it. The inset is the list's own, inside its column, so the column's
+  // hairline still meets the tab bar.
+  test("Chatlet's Activity list starts its faces on the view's side line", () => {
+    const panes = sheet("chatlet-panes.css");
+    expect(block(panes, ".chat-activity-list")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) 0 var\(--spacing-3\)\s+calc\(var\(--crewlet-chat-pad-x\) - var\(--spacing-2\)\);/,
+    );
+    // WIDE ENOUGH FOR THE ROOM: at the kit's 17rem the clamp took the room's
+    // name off "replied to a thread in #engineering".
+    expect(block(panes, ".chat-activity")).toMatch(/--crewlet-list-detail-list:\s*20rem;/);
+    expect(block(panes, ".chat-activity")).not.toMatch(/padding/);
+    const views = readFileSync(
+      fileURLToPath(new URL("../routes/chatlet/Views.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(views).toMatch(
+      /list=\{\s*<div className="chat-activity-list">\s*<InboxList label="Activity">/,
+    );
+  });
+
+  // A ROOM IN BROWSE ROOMS AND SEARCH'S ROOMS IS THE KIT'S ROW: the name that
+  // wraps rather than running into Join or Open is RoomRow's own rule, held by
+  // its suite in uilet, and no dashboard rule draws a Browse row any more.
+  test("Browse rows are the kit's RoomRow, with no local row styles", () => {
+    expect(sheet("chatlet-panes.css")).not.toMatch(/\.chat-browse-/);
   });
 
   // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail

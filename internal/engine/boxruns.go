@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// boxRuns is the code host's [host.Runs] — the coding runs' rows as a box's
+// boxRuns is the code host's [host.Runs] — the executors' rows as a box's
 // admission reads them — over the sandbox's pending store on the FLEET'S
 // coordination store.
 //
@@ -32,7 +32,7 @@ type boxRuns struct {
 
 var _ host.Runs = boxRuns{}
 
-// codeBoxRuns is the code host's view of this engine's coding runs: their rows
+// codeBoxRuns is the code host's view of this engine's executors: their rows
 // on the fleet's coordination store, and a seat's stop as this node reads it
 // (stoppedBy) — off the same pause record the fence every bridge session a
 // launch opens carries reads (Engine.seatFence), so a box's pushes and its
@@ -67,7 +67,7 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		Ceiling: run.CodeCeiling,
 		Floor:   b.floorOf(run),
 		Provenance: code.RunProvenance{TurnID: run.TurnID, RunID: run.LaunchID, Model: run.Launch.Model,
-			CodingAgent: run.CodingAgent},
+			Harness: run.Harness},
 		Holds: make(map[string]bool, len(run.CodeHolds)),
 	}
 	for _, key := range run.CodeHolds {
@@ -175,7 +175,7 @@ func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) er
 }
 
 // errForeignFloor is a code floor on another log than the code log's.
-var errForeignFloor = errors.New("engine: a coding run's code floor names a position on another log than " +
+var errForeignFloor = errors.New("engine: an executor's code floor names a position on another log than " +
 	"the code log")
 
 // stoppedBy is the code host's reading of a seat's STOP — who paused the

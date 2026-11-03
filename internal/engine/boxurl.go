@@ -31,7 +31,7 @@ type BoxURLs struct {
 	// Git is the code host's base a coding box clones and pushes through
 	// ([sandbox.BoxGitURLVar]): a git node's public listener and /box/git,
 	// or a balancer over every git node's — any git node admits a box, by
-	// its run's row (ADR-0086). Unset, no run is given a repository.
+	// its run's row (ADR-0093). Unset, no run is given a repository.
 	Git BoxURL
 }
 

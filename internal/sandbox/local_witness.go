@@ -26,7 +26,7 @@ import (
 //
 // AND NOTHING ON THE JOB SAYS SO. The next engine finds its wrapper gone and no
 // marker, which is exactly what a job that crashed on its own leaves — an OOM
-// kill, a CLI that died — and that one's partial output IS its result, read and
+// kill, a harness that died — and that one's partial output IS its result, read and
 // judged as a failed run. Read the same way, a job its engine's restart killed
 // resumed its turn with a truncated run as though the run had failed, or, once
 // its box went too, ended the turn.

@@ -16,8 +16,8 @@ import (
 // of its script and records every request it was sent, so a suite drives a
 // whole turn without a real model (the engine rule: tests never call one).
 //
-// A REQUEST THAT OFFERS TOOLS IS A CLI RUN, as every backend's is (ADR-0049):
-// the model connects to the request's tool host the way a CLI's MCP client
+// A REQUEST THAT OFFERS TOOLS IS A harness RUN, as every backend's is (ADR-0049):
+// the model connects to the request's tool host the way a harness's MCP client
 // does (internal/providers/llm/llmtest) and plays rounds in turn, each one's
 // prose and then its calls, until a round calls nothing (the answer) or the
 // host ends the run, a change parked on the person's approval among them. The
@@ -35,7 +35,7 @@ type Model struct {
 	// unready is what the model says its next call would meet, without a
 	// call ([Model.Unready]).
 	unready error
-	// offered is each request's tools as its CLI listed them, and answers
+	// offered is each request's tools as its harness listed them, and answers
 	// every call's answer by its id.
 	offered [][]llm.ToolDef
 	answers map[string]llmtest.Result
@@ -52,7 +52,7 @@ type Round struct {
 	// Input and Output are the tokens the round reports spending.
 	Input, Output int
 	// Deltas are sent, in order, before the round's response is played:
-	// the fragments of its prose a CLI streams while it writes.
+	// the fragments of its prose a harness streams while it writes.
 	Deltas []llm.Delta
 	// Streamed, when set, is closed once the deltas are sent, and Hold,
 	// when set, is waited on after that, so a suite can read the stream
@@ -106,7 +106,7 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	m.mu.Lock()
 	m.offered[at] = c.Offered()
 	m.mu.Unlock()
-	// THE RUN, as a CLI plays it: a round's prose and calls, then the next,
+	// THE RUN, as a harness plays it: a round's prose and calls, then the next,
 	// until a round calls nothing or the host ends the run.
 	for !c.Stopped() {
 		next, err := m.next(ctx, req)
@@ -131,7 +131,7 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	return c.Finish(""), nil
 }
 
-// OfferedAt is the tools the model's request i offered, as its CLI listed
+// OfferedAt is the tools the model's request i offered, as its harness listed
 // them: none for a request that offered no tools.
 func (m *Model) OfferedAt(i int) []llm.ToolDef {
 	m.mu.Lock()
@@ -143,7 +143,7 @@ func (m *Model) OfferedAt(i int) []llm.ToolDef {
 }
 
 // Seen is every message the model read, in order: each request's
-// conversation as it was sent, then every answer its CLI was given over the
+// conversation as it was sent, then every answer its harness was given over the
 // tool session as a tool message. What a suite scans for what reached the
 // model, since a run's answers travel over the session and never in a
 // request.
@@ -199,7 +199,7 @@ func (m *Model) next(ctx context.Context, req llm.Request) (Round, error) {
 	return next, nil
 }
 
-// response is a round as the scripted CLI plays it. Arguments a round marks
+// response is a round as the scripted harness plays it. Arguments a round marks
 // unreadable ([llm.ToolCall.ArgumentsError]) are sent as a model that wrote
 // them would: a JSON value that is not one object.
 func response(r Round) llmtest.Response {
@@ -224,7 +224,7 @@ func response(r Round) llmtest.Response {
 }
 
 // Unready is what the model says, without a call, its next call would meet:
-// nil until a suite sets it ([Model.SetUnready]), as a CLI entry that is
+// nil until a suite sets it ([Model.SetUnready]), as a harness entry that is
 // signed out or spent would.
 func (m *Model) Unready(context.Context) error {
 	m.mu.Lock()

@@ -256,6 +256,37 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
   expect(drawnNames()).toEqual(["Dee", "Dev A", "Dev B"]);
 });
 
+// WHAT WAITS IN A SEAT'S INBOX IS ON ITS CARD, beside its state: a seat that
+// is not working (idle, parked, paused) has no row on Live, so this is where a
+// backlog behind it shows. A seat with nothing waiting says nothing.
+//
+// Mutation: drop the waiting tags from the seat card and neither phrase is drawn.
+test("a seat's card says who and what waits in its inbox", async () => {
+  mount(ORG, [
+    {
+      id: "dee",
+      agent_id: "dee",
+      handle: "dee",
+      role: "Dee",
+      activity: "idle",
+      waiting: { priority: 1, background: 4 },
+    },
+    {
+      id: "dev-a",
+      agent_id: "dev-a",
+      handle: "dev-a",
+      role: "Dev A",
+      activity: "idle",
+      waiting: { priority: 0, background: 0 },
+    },
+  ]);
+  await settle();
+  const card = (name: string) => screen.getByText(name).closest(".seat-card") as HTMLElement;
+  expect(card("Dee").textContent).toContain("1 person waiting");
+  expect(card("Dee").textContent).toContain("4 waiting");
+  expect(card("Dev A").textContent).not.toMatch(/waiting/);
+});
+
 // A SEAT THE ENGINE STILL REPORTS AND THE CHART DROPPED is drawn in its own
 // group rather than vanishing: a revision that removes a seat does not stop
 // the turn it was on.

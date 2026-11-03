@@ -126,7 +126,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0073).
+	// below a floor (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
 )
 

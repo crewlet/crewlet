@@ -16,7 +16,7 @@ const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
 // World is a small company as the routes a write's preview reads answer it,
 // by request path and in each route's own shape: a task with a decision on its
-// thread, a person's priorities, an agent, a parked coding run, a page, an
+// thread, a person's priorities, an agent, a parked executor, a page, an
 // artifact, and a private chat room with a message in it. Every proposing tool
 // called with its [ProposalArgs] previews against it.
 func World() map[string]any {
@@ -46,7 +46,7 @@ func World() map[string]any {
 					map[string]any{"handle": "dev", "name": "Developer", "kind": "agent"}}}}}}},
 		"/agents/pm": map[string]any{"handle": "pm", "role": "Product manager",
 			"live": map[string]any{"activity": "working"}},
-		"/sandbox-runs": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
+		"/executors": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
 			"launch_id": "launch-1", "agent_handle": "dev", "work_key": "ENG-42",
 			"question": "Which branch?", "question_context": "",
 			"decision": map[string]any{"question": "Which branch?", "role": "approver",
@@ -67,6 +67,10 @@ func World() map[string]any {
 			"revision": 4, "message_seq": 12, "member": true,
 			"members": []any{map[string]any{"handle": "pm", "follow_all": true},
 				map[string]any{"handle": "ada"}}},
+		// WHOM A DRAFT IN IT WOULD REACH: pm, who follows the room whole.
+		"/chatlet/channels/" + RecordID + "/reach": map[string]any{"channel_id": RecordID,
+			"reach": map[string]any{"recipients": []any{
+				map[string]any{"handle": "pm", "reason": "follow_all"}}}},
 		"/chatlet/channels/" + RecordID + "/threads/" + RecordID: map[string]any{
 			"channel_id": RecordID, "root": map[string]any{
 				"message": map[string]any{"id": RecordID, "channel_id": RecordID,
@@ -134,7 +138,7 @@ var ProposalArgs = map[string]map[string]any{
 	"pause_agent":               {"handle": "pm", "reason": "Too many hand-offs.", "stop_running": true},
 	"resume_agent":              {"handle": "pm"},
 	"steer_turn":                {"turn_id": RecordID, "note": "Use the staging branch."},
-	"answer_coding_run":         {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
+	"answer_executor":           {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
 	"create_page":               {"title": "Onboarding", "body": "Welcome."},
 	"edit_page":                 {"page": RecordID, "base_version": float64(2), "body": "Step one, then two."},
 	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},

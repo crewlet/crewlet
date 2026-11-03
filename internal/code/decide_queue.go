@@ -985,7 +985,7 @@ func (c *Committer) announceBroken(b Broken, at statelog.Position) {
 }
 
 // publishBroken publishes ONE code_target_broken event for the landing the
-// broken at at named (ADR-0091), on this node's event stream, stamped when,
+// broken at at named (ADR-0098), on this node's event stream, stamped when,
 // under ctx — the announcer's one [checkEventBudget], as an ejection's is: the
 // landing's kind, its change by its repository and number and who landed it,
 // read from this node's rows, and a stream that does not take it logged — the

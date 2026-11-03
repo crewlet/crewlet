@@ -43,9 +43,9 @@ import type {
   AnsweredRun,
   AnsweredWorkAsk,
   CodeInboxNotice,
+  ExecutorRow,
   InboxAnswer,
   InboxNotice,
-  SandboxRun,
   WorkAskRow,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
@@ -569,7 +569,7 @@ describe("the quiet sentences", () => {
 test("a parked run's task is addressed by its id", () => {
   const run = {
     work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
-  } as unknown as SandboxRun;
+  } as unknown as ExecutorRow;
   const row: InboxRow = {
     kind: "decision",
     key: "run:1",
@@ -647,7 +647,7 @@ describe("what Needs you names for the assistant", () => {
       { kind: "decision", key: "d", subject: budget, notices: [] },
       { kind: "condition", key: "e", item: { id: "error-x", subject: "seat", who: "qa" } },
       { kind: "condition", key: "f", item: { id: "stopped-y", subject: "seat", who: "qa" } },
-      { kind: "condition", key: "g", item: { id: "sandbox-turn-2", subject: "run" } },
+      { kind: "condition", key: "g", item: { id: "executor-turn-2", subject: "run" } },
       { kind: "condition", key: "h", item: { id: "posture-draining", subject: "engine" } },
     ] as unknown as InboxRow[];
     expect(inboxResources(needs)).toEqual([
@@ -829,8 +829,8 @@ describe("what was answered", () => {
     expect(followThrough(answered(), undefined)).toBeNull();
   });
 
-  // A CODING RUN'S QUESTION, ANSWERED, IS ONE OF THE SAME ROWS: who asked is
-  // the run's seat, its task the one the run was on, and the answer reads as
+  // AN EXECUTOR'S QUESTION, ANSWERED, IS ONE OF THE SAME ROWS: who asked is
+  // the executor's seat, its task the one it was on, and the answer reads as
   // an ask's does. Mutation: read `ask` off a run's item, and every case
   // here throws.
   const ranAsk = (extra: Partial<AnsweredRun["run"]> = {}): AnsweredRun => ({
@@ -857,9 +857,9 @@ describe("what was answered", () => {
     answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "main", body: "Target main" },
   });
 
-  test("a coding run's answered question is a row of its own, as an ask's is", () => {
+  test("an executor's answered question is a row of its own, as an ask's is", () => {
     const [row] = answeredRows({ handle: "jane", items: [ranAsk()] });
-    // KEYED BY ITS TURN AND THE LAUNCH THAT ASKED: a turn's run asks again.
+    // KEYED BY ITS TURN AND THE LAUNCH THAT ASKED: a turn's executor asks again.
     expect(row!.key).toBe("run:turn-7:q1");
     expect(rowWho(row!, index)?.name).toBe("CTO");
     expect(rowKey(row!)).toBe("LEAD-12");
@@ -895,7 +895,7 @@ describe("what was answered", () => {
       subject: {
         kind: "run",
         at: "2026-09-30T10:55:00Z",
-        run: { turn_id: "turn-7", launch_id: launch } as unknown as SandboxRun,
+        run: { turn_id: "turn-7", launch_id: launch } as unknown as ExecutorRow,
       },
       notices: [],
     });
@@ -940,7 +940,7 @@ describe("what was answered", () => {
     const run: InboxRow = {
       kind: "decision",
       key: "run:turn-7",
-      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as SandboxRun },
+      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as ExecutorRow },
       notices: [],
     };
     const ask: InboxRow = { kind: "decision", key: "ask:c-12", subject: ASK, notices: [] };

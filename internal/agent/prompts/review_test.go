@@ -83,7 +83,7 @@ func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
 }
 
 // THE RUN'S OWN WORK IS IN NO LOG, and every review is told so, because every
-// executor is a coding CLI's own run: its edits, commands, tests and commits
+// executor is a harness's own run: its edits, commands, tests and commits
 // happen in its box, and `## What the agent did` holds only the calls it made
 // to the seat's tools. A reviewer that read the log as everything the agent
 // did called a run that pushed its fix a fabrication and sent a delivered turn
@@ -95,12 +95,12 @@ func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
 func TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog(t *testing.T) {
 	t.Parallel()
 	plain := BuildReview(engineer(), ReviewInput{}).Text
-	contains(t, plain, "ran as a coding CLI with its own shell",
+	contains(t, plain, "ran as a harness with its own shell",
 		"is not in `## What the agent did`", "is not fabrication",
-		"`## What the run delivered`")
+		"`## What the agent delivered`")
 }
 
-// WHAT THE RUN DELIVERED IS EVIDENCE, rendered after what it produced: the
+// WHAT THE AGENT DELIVERED IS EVIDENCE, rendered after what it produced: the
 // branches and pull requests are the one record of its local work besides its
 // own report. Rendered only when there is something to list, and the count
 // the list was bounded by is said rather than dropped.
@@ -110,12 +110,12 @@ func TestTheRunsDeliveredRefsReachTheReviewer(t *testing.T) {
 		Produced:  "PRODUCED:x",
 		Delivered: DeliveredRefs([]string{"acme/api#41", "fix/flake"}, 3),
 	}).Text
-	contains(t, p, "- acme/api#41", "- fix/flake", "(and 3 more the run reported)")
-	order(t, p, "\n## What the agent produced\n", "\n## What the run delivered\n")
+	contains(t, p, "- acme/api#41", "- fix/flake", "(and 3 more the agent reported)")
+	order(t, p, "\n## What the agent produced\n", "\n## What the agent delivered\n")
 
 	// None reported: no section — the header names it conditionally.
 	none := BuildReview(engineer(), ReviewInput{Delivered: DeliveredRefs(nil, 0)}).Text
-	if strings.Count(none, "## What the run delivered") != 1 {
+	if strings.Count(none, "## What the agent delivered") != 1 {
 		t.Errorf("an empty list rendered a section of its own:\n%s", none)
 	}
 }

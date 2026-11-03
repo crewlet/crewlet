@@ -13,9 +13,9 @@ import (
 )
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
-// `usage_turns`, `usage_tokens`, `usage_reads`, `usage_schedule_runs`,
-// `usage_person_tokens`, `usage_repo_read_days` and `usage_repo_reads`, on
-// every data node.
+// `usage_turns`, `usage_tokens`, `usage_reads`, `usage_tool_calls`,
+// `usage_schedule_runs`, `usage_schedule_superseded`, `usage_person_tokens`,
+// `usage_repo_read_days` and `usage_repo_reads`, on every data node.
 //
 // # An apply REPLACES
 //
@@ -64,11 +64,27 @@ const (
 		DELETE FROM usage_tokens WHERE day = ? AND node = ? AND agent_id = ?`
 	applyClearSeatReadsSQL = `
 		DELETE FROM usage_reads WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatToolsSQL = `
+		DELETE FROM usage_tool_calls WHERE day = ? AND node = ? AND agent_id = ?`
+	// A SCHEDULE-DAY'S ROWS ARE IN TWO TABLES, and its guard is the newest
+	// version among both: a node can hold a schedule's superseded fires on a
+	// day its scheduler sent none, and a guard read off the fires alone
+	// would let an older record of that day replace a newer one. Two
+	// statements, each a seek of its table's key, rather than one over a
+	// compound subquery the planner materialises; the fires' named, for
+	// [appliedScheduleSQL]'s reason.
 	applyScheduleNewestSQL = `
-		SELECT MAX(version) FROM usage_schedule_runs
+		SELECT MAX(version)
+		  FROM usage_schedule_runs INDEXED BY sqlite_autoindex_usage_schedule_runs_1
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	applySupersededNewestSQL = `
+		SELECT MAX(version) FROM usage_schedule_superseded
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
 	applyClearScheduleSQL = `
 		DELETE FROM usage_schedule_runs
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	applyClearSupersededSQL = `
+		DELETE FROM usage_schedule_superseded
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
 	applyPersonNewestSQL = `
 		SELECT MAX(version)
@@ -130,8 +146,9 @@ func (a Applier) expire(ctx context.Context, tx *sql.Tx, day string) (int, error
 	}
 	cutoff := w.Shift(-HorizonDays).Label
 	var n int
-	for _, table := range []string{"usage_tokens", "usage_reads", "usage_turns",
-		"usage_schedule_runs", "usage_person_tokens", "usage_repo_reads", "usage_repo_read_days"} {
+	for _, table := range []string{"usage_tokens", "usage_reads", "usage_tool_calls",
+		"usage_turns", "usage_schedule_runs", "usage_schedule_superseded",
+		"usage_person_tokens", "usage_repo_reads", "usage_repo_read_days"} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE day < ?`, cutoff)
 		if err != nil {
 			return 0, fmt.Errorf("usage: expire %s below %s: %w", table, cutoff, err)
@@ -162,6 +179,7 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 
 	for _, clear := range []struct{ table, query string }{
 		{"usage_tokens", applyClearSeatTokensSQL}, {"usage_reads", applyClearSeatReadsSQL},
+		{"usage_tool_calls", applyClearSeatToolsSQL},
 	} {
 		if _, err := tx.ExecContext(ctx, clear.query, s.Day, s.Node, s.Seat); err != nil {
 			return 0, fmt.Errorf("usage: clear %s for %s: %w", clear.table, s, err)
@@ -187,8 +205,9 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 		INSERT INTO usage_turns
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
-			 changes_opened, reviews_given, findings_received, checks_failed, ejections, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tools_elided, changes_opened, reviews_given, findings_received, checks_failed,
+			 ejections, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
 			handle            = excluded.handle,
 			role              = excluded.role,
@@ -200,6 +219,7 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			duration_hist     = excluded.duration_hist,
 			last_ended_at     = excluded.last_ended_at,
 			reads_elided      = excluded.reads_elided,
+			tools_elided      = excluded.tools_elided,
 			changes_opened    = excluded.changes_opened,
 			reviews_given     = excluded.reviews_given,
 			findings_received = excluded.findings_received,
@@ -208,8 +228,8 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			version           = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
-		lastEnded, r.ReadsElided, code.ChangesOpened, code.ReviewsGiven, code.FindingsReceived,
-		code.ChecksFailed, code.Ejections, version); err != nil {
+		lastEnded, r.ReadsElided, r.ToolsElided, code.ChangesOpened, code.ReviewsGiven,
+		code.FindingsReceived, code.ChecksFailed, code.Ejections, version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1
@@ -247,6 +267,25 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 	if err != nil {
 		return 0, fmt.Errorf("usage: write the reads of %s: %w", s, err)
 	}
+	rows += n
+
+	n, err = store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_tool_calls
+			(day, node, agent_id, server, tool, calls, failed, unavailable,
+			 refused, total_ms, last_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Tools),
+		func(i int) []any {
+			t := r.Tools[i]
+			var last int64
+			if !t.LastAt.IsZero() {
+				last = store.EncodeTime(t.LastAt)
+			}
+			return []any{s.Day, s.Node, s.Seat, t.Server, t.Tool, t.Calls, t.Failed,
+				t.Unavailable, t.Refused, t.TotalMS, last}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the tool calls of %s: %w", s, err)
+	}
 	return rows + n, nil
 }
 
@@ -254,33 +293,50 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 func (a Applier) schedule(ctx context.Context, tx *sql.Tx, r Record, at statelog.Position, maxVars int) (int, error) {
 	s := r.Subject
 	version := at.Packed()
-	var held sql.NullInt64
-	if err := tx.QueryRowContext(ctx, applyScheduleNewestSQL,
-		s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule).Scan(&held); err != nil {
-		return 0, fmt.Errorf("usage: read the newest version of %s: %w", s, err)
+	key := []any{s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule}
+	for _, guard := range []string{applyScheduleNewestSQL, applySupersededNewestSQL} {
+		var held sql.NullInt64
+		if err := tx.QueryRowContext(ctx, guard, key...).Scan(&held); err != nil {
+			return 0, fmt.Errorf("usage: read the newest version of %s: %w", s, err)
+		}
+		if held.Valid && held.Int64 >= version {
+			return 0, nil
+		}
 	}
-	if held.Valid && held.Int64 >= version {
-		return 0, nil
-	}
-	if _, err := tx.ExecContext(ctx, applyClearScheduleSQL,
-		s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule); err != nil {
-		return 0, fmt.Errorf("usage: clear the fires of %s: %w", s, err)
+	for _, clear := range []struct{ what, query string }{
+		{"fires", applyClearScheduleSQL}, {"superseded fires", applyClearSupersededSQL},
+	} {
+		if _, err := tx.ExecContext(ctx, clear.query, key...); err != nil {
+			return 0, fmt.Errorf("usage: clear the %s of %s: %w", clear.what, s, err)
+		}
 	}
 	n, err := store.InsertRows(ctx, tx, maxVars, `
 		INSERT INTO usage_schedule_runs
-			(day, node, scope_type, scope_id, name, fired_at, target, outcome,
-			 trace_id, turn_id, version) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Fires),
+			(day, node, scope_type, scope_id, name, fired_at, scheduled_at,
+			 fire_label, target, outcome, trace_id, turn_id, version) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Fires),
 		func(i int) []any {
 			f := r.Fires[i]
 			return []any{s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule,
-				store.EncodeTime(f.At), f.Target, f.Outcome, f.TraceID, f.TurnID,
-				version}
+				store.EncodeTime(f.At), store.EncodeTime(f.ScheduledAt), f.FireLabel,
+				f.Target, f.Outcome, f.TraceID, f.TurnID, version}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("usage: write the fires of %s: %w", s, err)
 	}
-	return n, nil
+	superseded, err := store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_schedule_superseded
+			(day, node, scope_type, scope_id, name, trace_id, at, version) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Superseded),
+		func(i int) []any {
+			sup := r.Superseded[i]
+			return []any{s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule,
+				sup.TraceID, store.EncodeTime(sup.At), version}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the superseded fires of %s: %w", s, err)
+	}
+	return n + superseded, nil
 }
 
 // person replaces one person-day.

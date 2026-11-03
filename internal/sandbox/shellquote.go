@@ -9,8 +9,8 @@ import "strings"
 // newline included, and hands it to the command as one argument.
 //
 // THE ONE QUOTING FUNCTION for every value the engine writes into a command a
-// box's shell reads: a coding agent's invocation and the paths of its
-// artefacts (internal/sandbox/codingagent), the engine's reads of a run's
+// box's shell reads: a harness's invocation and the paths of its
+// artefacts (internal/sandbox/executor), the engine's reads of a run's
 // workspace (internal/engine), and the steps that give a box a repository.
 // Each of those used to carry its own copy of these two lines, and a copy is a
 // second chance to disagree about a quote — the one byte the rule exists for

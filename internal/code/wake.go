@@ -184,7 +184,9 @@ func registryHas(reg *notify.Registry) func(string) bool {
 	}
 }
 
-// inboundOf is the wake one concern's seat is given.
+// inboundOf is the wake one concern's seat is given, PER RECIPIENT: its
+// reason, which the wake's metadata and its origin both carry, is the
+// recipient's own.
 func inboundOf(record MutationRecord, payload any, recordID string, c Concern) notify.Inbound {
 	r := c.Change
 	meta := map[string]string{
@@ -231,6 +233,12 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		// is the deciding node for every code record, so the routing's actor
 		// is the writer here.
 		Writer: writerOf(r),
+		// WHAT STARTS THE TURN THIS WAKES: the change, as the Code screens
+		// name it, under this recipient's own reason — so the turn a review
+		// request or a failed check started is found from the change
+		// (`GET /turns?origin=code_change:<repo>!<number>`), as a chat
+		// message's turn is from the message.
+		Origin: types.TriggerOrigin{Kind: types.OriginCodeChange, ID: r.ChangeRef, Reason: string(c.Reason)},
 	}
 }
 

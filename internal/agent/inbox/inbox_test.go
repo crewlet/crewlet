@@ -170,10 +170,10 @@ func TestAPausedSeatParksAndHoldsItsInbox(t *testing.T) {
 			t.Errorf("%s: parked %d of %d events — a park that drops one loses mail",
 				name, len(got.Events), len(evs))
 		}
-		// NOTHING IS OFFERED to a parked run either: an answer waits behind
-		// a pause like any other mail, because resuming a run is work.
+		// NOTHING IS OFFERED to a parked executor either: an answer waits
+		// behind a pause like any other mail, because resuming it is work.
 		if got.OfferAsSandboxAnswer {
-			t.Errorf("%s: a paused seat offered its mail to a parked coding run", name)
+			t.Errorf("%s: a paused seat offered its mail to a parked executor", name)
 		}
 	}
 	// And the no-model park keeps its own.
@@ -243,8 +243,8 @@ func TestAnOpenQuestionOffersTheDeliveryOnTheOrdinaryPath(t *testing.T) {
 //
 // It used to PARK: requeue the delivery onto the inbox it came from and ack
 // it. Nothing stopped the consumer, so the copy was the next thing it fetched,
-// and every message waiting on a seat a coding job held went round that loop
-// for the length of the job. What reaches here now raced the sandbox hold the
+// and every message waiting on a seat an executor held went round that loop
+// for the length of its run. What reaches here now raced the sandbox hold the
 // coordinator keeps on a busy seat, or found it refused: the hold is named so
 // the dispatcher asks for it again, the delivery is deferred so it keeps its
 // place at the head, and the deferral is noted so the seat host's next renew

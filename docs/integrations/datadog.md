@@ -157,7 +157,8 @@ mcp_servers:
 The engine adds each seat's own key to that seat's instance under
 `DD_APPLICATION_KEY`, the header Datadog's server reads, so no seat block names
 it. The Agents tab reports per seat whether the tool is live, waiting for its
-key, or missing because the company declares no `datadog` server. An admin
+key, missing because the company declares no `datadog` server, or not running
+because the server is turned off (`enabled: false`). An admin
 also has to turn on **MCP Access** in Datadog's organization settings, and the
 seat's role needs `mcp_read` (and `mcp_write` for write tools).
 

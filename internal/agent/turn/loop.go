@@ -125,8 +125,9 @@ type Surface struct {
 	KnownOpenWorld []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
-	// `activate_tool` promotes onto the next round — as against a
-	// first-party tool, which the executor holds from its launch.
+	// `activate_tool` promotes onto the next round — and nothing on a phase
+	// that holds every tool it can reach: the executor, whose MCP tools
+	// are its harness's to keep out of its requests.
 	//
 	// It exists for one sentence: the one a delivery refusal ends with,
 	// saying how to reach the surface the asker is waiting on (see
@@ -547,7 +548,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// every resume that broke before writing anything new (a model at
 		// its usage limit, the reviewer's or the relaunch's, a runner that
 		// could not be built) was settled for good as a turn that had
-		// written, and the coding run's result never reached the seat.
+		// written, and the executor's result never reached the seat.
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.

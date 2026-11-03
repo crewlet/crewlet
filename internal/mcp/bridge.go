@@ -149,8 +149,8 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	s := b.newServer(spec, stop)
 	b.mu.Lock()
 	before := maps.Clone(b.tools)
-	tools := s.toolsFor(defs)
-	s.tools = tools
+	tools, blocked, refused := s.toolsFor(defs)
+	s.tools, s.blocked, s.refused = tools, blocked, refused
 	// RECORDED, NOT JUDGED. An override keyed on a name this instance does
 	// not list changes nothing here, and this is the one place that holds
 	// both the keys and the listing — but one instance's listing is not the
@@ -172,6 +172,12 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	attrs := []any{"server", spec.Name, "tool_count", len(tools), "tool_names", toolNames(tools)}
 	if len(unlisted) > 0 {
 		attrs = append(attrs, "annotation_keys_unlisted", unlisted)
+	}
+	if len(blocked) > 0 {
+		attrs = append(attrs, "tools_blocked", len(blocked))
+	}
+	if len(refused) > 0 {
+		attrs = append(attrs, "tools_refused", len(refused))
 	}
 	b.log.Info("tools_discovered", attrs...)
 	return change, nil
@@ -209,7 +215,9 @@ func (b *Bridge) launch(ctx context.Context, spec Spec) (*client, []toolDef, err
 func (b *Bridge) retain(ctx context.Context, spec Spec, cause error) {
 	supervised, stop := supervision(ctx)
 	s := b.newServer(spec, stop)
-	s.down = &outage{cause: "would not start: " + cause.Error(), since: time.Now()}
+	now := time.Now()
+	s.down = &outage{cause: "would not start: " + cause.Error(), class: ClassOf(cause), since: now}
+	s.failure = &Failure{Class: s.down.class, Said: s.down.cause, At: now}
 	s.attempt = 1
 	b.mu.Lock()
 	b.servers[spec.Name] = s
@@ -232,9 +240,25 @@ func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 		return Change{}, false
 	}
 	before := maps.Clone(b.tools)
-	s.tools = s.toolsFor(defs)
+	s.tools, s.blocked, s.refused = s.toolsFor(defs)
 	s.unlisted = unlistedOverrides(s.spec, defs)
 	s.up(c)
+	return b.reindexLocked(before), true
+}
+
+// relisted files what a session listing its tools again lists (relist.go),
+// unless the session is no longer the one serving s, and reports what the
+// catalogue must change. Under the bridge's lock, as [Bridge.revived] is: a
+// listing that raced a stop or a restart files nothing.
+func (b *Bridge) relisted(s *server, c *client, defs []toolDef) (Change, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.servers[s.spec.Name] != s || s.live() != c {
+		return Change{}, false
+	}
+	before := maps.Clone(b.tools)
+	s.tools, s.blocked, s.refused = s.toolsFor(defs)
+	s.unlisted = unlistedOverrides(s.spec, defs)
 	return b.reindexLocked(before), true
 }
 
@@ -453,6 +477,33 @@ func (b *Bridge) RetryNow(name string) bool {
 	return true
 }
 
+// RestartBefore restarts one server whose current state began before the
+// instant before, and reports what it did ([RestartOutcome]): a serving
+// server's session is ended and a fresh one started at once, a down server's
+// supervisor is asked for an attempt now, and either way its restart schedule
+// starts again. A server that came up, or went down, at or after before is
+// left alone, as is a name the bridge does not supervise.
+//
+// AN INSTANT, NOT A COMMAND, so a request is idempotent and order-free: a
+// caller that hands the same instant twice, or late, restarts exactly what it
+// would have restarted on time, and nothing that started since, which is
+// what lets the fleet's record of a request (internal/coord's MCPRestart) stand for
+// ever without restarting a server again on every node that reads it.
+//
+// cause is what the end is told as, in the server's down sentence while it
+// comes back. It does not wait for the restart, and it does not lift
+// [Supervision.MayStart]: an attempt the owner may not make now is still held
+// back.
+func (b *Bridge) RestartBefore(name string, before time.Time, cause string) RestartOutcome {
+	b.mu.RLock()
+	s, ok := b.servers[name]
+	b.mu.RUnlock()
+	if !ok {
+		return RestartAbsent
+	}
+	return s.restartBefore(before, cause)
+}
+
 // liveToolsOf is one server's contribution to the LIVE catalogue — its tools
 // minus any that another server currently wins the name for.
 func (b *Bridge) liveToolsOf(name string) []*Tool {
@@ -545,6 +596,22 @@ func (b *Bridge) ServerTools(name string) []*Tool {
 	return slices.Clone(s.tools)
 }
 
+// BlockedTools is what one INSTANCE's last listing named and its entry blocks
+// ([Spec.Levels]), in the listing's order: definitions only, never filed and
+// in no catalogue, kept so a reader of what the server lists sees what the
+// operator held back and can let it through again. nil for an instance that
+// blocks nothing, has never listed (a start the bridge is still retrying) or
+// that the bridge does not hold.
+func (b *Bridge) BlockedTools(name string) []*Definition {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	s, ok := b.servers[name]
+	if !ok {
+		return nil
+	}
+	return slices.Clone(s.blocked)
+}
+
 // UnlistedOverrides is every tool_annotations key of the running server
 // instance name that names no tool its listing carries — by the server's own
 // name or with the entry's tool_prefix — sorted, or nil when every key names
@@ -590,7 +657,8 @@ func (b *Bridge) Registrations() []Registration {
 // resolving an agent's account id on its own per-role Jira instance, for
 // instance. Such a caller has the instance name and the server's tool name and
 // no catalogue entry to look up, and it deliberately bypasses tool_prefix and
-// the exclusion list, neither of which is about what the ENGINE may ask.
+// the levels, neither of which is about what the ENGINE may ask: a level
+// decides what an agent is offered.
 //
 // A tool the server refuses is an error here, not a Result: there is no model
 // in this path to show a failure message to. A server that is down is
@@ -609,7 +677,11 @@ func (b *Bridge) Call(ctx context.Context, instance, tool string, args map[strin
 	if c == nil || c.gone() {
 		return nil, fmt.Errorf("%w: %s: %s", ErrNotRunning, instance, s.health(0).Down)
 	}
-	return c.callTool(ctx, tool, args)
+	blocks, err := c.callTool(ctx, tool, args)
+	if err == nil {
+		s.noteAnswer()
+	}
+	return blocks, err
 }
 
 // StderrTail returns a stdio server's last words, for diagnostics — the
@@ -667,7 +739,8 @@ func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
 		for _, t := range b.servers[server].tools {
 			if incumbent, taken := next[t.Name()]; taken {
 				b.log.Warn("tool_name_collision", "tool", t.Name(),
-					"serving", incumbent.Instance(), "shadowed", t.Instance())
+					"serving", incumbent.Instance(), "shadowed", t.Instance(),
+					"detail", ShadowSentence(t.Name(), ServerName(incumbent.Instance())))
 				continue
 			}
 			next[t.Name()] = t

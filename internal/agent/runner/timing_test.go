@@ -225,7 +225,7 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 
 	before := time.Now().UTC()
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "the run succeeded",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.StartedAt.Before(before) {
@@ -249,7 +249,8 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 // the instant and for the span the bridge measured, naming who answered. A
 // record that said "one round" and timed none was a timeline with a hole in
 // it, and a call with no start is one no timeline can place. The round
-// carries no tokens: the run's spend is on its own `sandbox` record.
+// carries no tokens: the run's spend is on each launch's own
+// `executor_collected` record.
 //
 // Mutations: leave the round untimed, state no cap, or drop the calls'
 // measurement on the way to the record, and this goes red.
@@ -270,7 +271,7 @@ func TestACollectedRunStatesOneTimedRoundOverTheRun(t *testing.T) {
 	time.Sleep(ran)
 
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "shipped it",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.RoundsUsed != 1 || len(done.Rounds) != 1 {
@@ -380,7 +381,6 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	play(t, launcher.last(t), run{calls: []llm.ToolCall{
-		activate("read_file"),
 		call(t, "read_file", `{"path":"/a"}`),
 		{ID: "d", Name: subagent.ToolName, Arguments: map[string]any{"tasks": []any{map[string]any{
 			"id": "research", "prompt": "look", "system_prompt": "you research things"}}}},
@@ -413,7 +413,7 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 
 // workerProvider plays a delegated worker that submits at once — the one
 // model a run's delegate call reaches through the engine, since the run's own
-// rounds are its CLI's. Anything else asking it is a fixture wired wrong, and
+// rounds are its harness's. Anything else asking it is a fixture wired wrong, and
 // is refused rather than handed a worker's answer.
 type workerProvider struct{}
 

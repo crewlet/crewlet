@@ -27,7 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE'S BUILD, AT A COST THAT FOLLOWS THE CHANGE (ADR-0085): git's
+// AN ENGINE WRITE'S BUILD, AT A COST THAT FOLLOWS THE CHANGE (ADR-0092): git's
 // own plumbing over exactly the trees the change touches — never read-tree,
 // write-tree, update-index or a checkout, never ls-tree -r or diff-tree -r of
 // the base: no index of the whole tree, ever (TestAnEngineCommitReadsNoWholeTree
@@ -1062,7 +1062,7 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 }
 
 // commitDates are an engine-built commit's two dates (M3-decisions U18, the
-// user's answer (c); ADR-0085): its AUTHOR date the instant the principal
+// user's answer (c); ADR-0092): its AUTHOR date the instant the principal
 // acted — the operation's own, to the second — and its COMMITTER date that
 // instant or its parent's committer date, whichever is later. A parent dated
 // after the operation — a person's clock ahead — would otherwise give a child

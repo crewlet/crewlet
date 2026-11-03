@@ -130,7 +130,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
     ? [...allSeats(state.draft)].filter(({ parent }) => inside.has(parent)).map(({ seat }) => seat)
     : [found.node];
   const working = moving
-    .filter((seat) => isWorking(handleOf(seat), api.agents, api.sandboxes))
+    .filter((seat) => isWorking(handleOf(seat), api.agents, api.executors))
     .map((seat) => seat.data.name);
 
   function move() {

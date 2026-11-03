@@ -72,7 +72,8 @@ type domainCeiling struct {
 	// beside Field, because the floor is the FIELD's (Tier A validates
 	// it) and not the budget's: [MinDomainCeiling] is where scaling stops
 	// unless the entry declares ScalesTo, and the identity log's, the usage
-	// log's and the Dashboard Assistant's fields go well below it.
+	// log's, the Dashboard Assistant's and the executor log's fields go well
+	// below it.
 	// A refusal that offered a smaller ceiling only above that gibibyte
 	// never offered one for a 512 MiB ask whose field takes 64 MiB.
 	Floor int64
@@ -132,7 +133,7 @@ func (c domainCeiling) scaleFloor() int64 {
 // the bound and creates it at 8.3 GiB; a log a later release registers moves
 // the bound again, and that case is what says so. Under the default `nats`
 // bucket, which takes its quarter first, the same re-embedding fits from
-// about 87 GiB free (docs/guides/replication.md, "What the code log's
+// about 88 GiB free (docs/guides/replication.md, "What the code log's
 // reservation costs").
 const StreamBudgetShare = 0.625
 
@@ -145,8 +146,9 @@ const StreamBudgetShare = 0.625
 // because below it a log that grows with a corpus is not a log, it is a window
 // that refuses appends within a week of a company starting work. It is where
 // SCALING stops and it is nobody's floor but theirs: the identity estate's,
-// the usage log's and the Dashboard Assistant's fields go down to 64 MiB, the
-// assistant's entry lets scaling take its unset ceiling down to that floor,
+// the usage log's, the Dashboard Assistant's and the executor log's fields go
+// down to 64 MiB, the assistant's and the executor log's entries let scaling
+// take their unset ceilings down to that floor,
 // any other log that asks for less than a gibibyte keeps what it asked for
 // because scaling never raises, and the capacity verb holds a target to the
 // floor of the log's own field ([capacityBounds]), never to this.
@@ -801,7 +803,8 @@ func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCe
 // followed the volume's free space and was scaled into the logs' share of the
 // broker, and scaling stops at [MinDomainCeiling]. A scaled one is the log's
 // own default scaled into that share down to its field's floor
-// ([domainCeiling.ScalesTo]): the Dashboard Assistant's. A fixed one is the
+// ([domainCeiling.ScalesTo]): the Dashboard Assistant's and the executor
+// log's. A fixed one is the
 // log's own default and nothing else: the identity estate's and the usage
 // log's, which do not follow the volume and whose fields go below the
 // gibibyte. Reading every unset ceiling as derived told an operator refused a

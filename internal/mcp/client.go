@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -34,10 +36,15 @@ var ErrPagination = errors.New("mcp: server pagination is broken")
 // toolDef is one tool as the server described it, before any prefixing,
 // exclusion or override is applied.
 type toolDef struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Annotations Annotations
+	Name string
+	// Title is the tool's own display name (the specification's `title`),
+	// "" where it gives none. Not the annotations' title, which travels in
+	// Annotations: a server may set either, and the listing reads both.
+	Title        string
+	Description  string
+	InputSchema  map[string]any
+	OutputSchema map[string]any
+	Annotations  Annotations
 }
 
 // client is one live MCP session, over either transport.
@@ -52,6 +59,7 @@ type client struct {
 
 	hints *hintTable
 	child *childProcess // nil for HTTP
+	ident *httpIdentity // nil for stdio
 
 	mu      sync.RWMutex
 	session *sdk.ClientSession
@@ -69,6 +77,16 @@ type client struct {
 	end      chan struct{}
 	endOnce  sync.Once
 	endCause string
+
+	// identity is what the server said of itself in the handshake, set
+	// once by connect before the client is handed to anybody.
+	identity Identity
+
+	// listChanged is signalled when the server says its tool list changed
+	// (`notifications/tools/list_changed`), for the supervisor to list the
+	// session again (relist.go). One slot: two notifications before the
+	// supervisor reads one are one request.
+	listChanged chan struct{}
 }
 
 // connect starts (or reaches) a server and completes the MCP handshake.
@@ -80,6 +98,17 @@ type client struct {
 // Nothing raises while it hangs, which is what makes every error branch around
 // it dead code without a deadline.
 func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) {
+	c, err := connectWith(ctx, spec, log, dialing{})
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// connectWith is [connect] over d. A start that fails returns the client
+// beside its error, the stdio child's last words and its exit still to be
+// read ([Test]); nil only for a spec that does not validate.
+func connectWith(ctx context.Context, spec Spec, log *slog.Logger, d dialing) (*client, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
@@ -87,7 +116,8 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		log = logging.Get("mcp.client")
 	}
 
-	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable(), end: make(chan struct{})}
+	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable(), end: make(chan struct{}),
+		listChanged: make(chan struct{}, 1)}
 
 	var (
 		transport sdk.Transport
@@ -96,12 +126,13 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	)
 	switch spec.kind() {
 	case TransportHTTP:
-		transport, ident = newHTTPTransport(spec, log)
-		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", spec.URL)
+		transport, ident = newHTTPTransport(spec, log, d)
+		c.ident = ident
+		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", redact.URL(spec.URL))
 	default:
 		transport, c.child, err = newStdioTransport(spec, log)
 		if err != nil {
-			return nil, err
+			return c, err
 		}
 		c.child.ended, c.child.over = c.markEnded, c.gone
 		log.InfoContext(ctx, "server_starting", "server", spec.Name,
@@ -116,7 +147,10 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 
 	sdkClient := sdk.NewClient(
 		&sdk.Implementation{Name: "crewlet", Version: version.String()},
-		&sdk.ClientOptions{Logger: log},
+		// LISTENING FOR A CHANGED TOOL LIST, which also subscribes to it on
+		// a server that speaks the 2026-07-28 revision: the supervisor lists
+		// the session again, no sooner than its floor (relist.go).
+		&sdk.ClientOptions{Logger: log, ToolListChangedHandler: c.toolsChanged},
 	)
 
 	startCtx, cancel := context.WithTimeout(ctx, spec.startupTimeout())
@@ -125,12 +159,13 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	session, err := sdkClient.Connect(startCtx, probed, nil)
 	if err != nil {
 		c.reportStartFailure(err)
+		class := c.startClass(err)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return nil, fmt.Errorf(
+			return c, classify(class, fmt.Errorf(
 				"mcp: server %q did not connect within %s: %w. Raise startup_timeout_seconds on the server if it legitimately takes longer to start",
-				spec.Name, spec.startupTimeout(), err)
+				spec.Name, spec.startupTimeout(), err))
 		}
-		return nil, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err)
+		return c, classify(class, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err))
 	}
 
 	// The parent's copy of the write end goes NOW, not at stop. While this
@@ -159,11 +194,59 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	serverName := "unknown"
 	// A modern server may decline to identify itself. That is a valid
 	// connection, not a half-open one.
-	if init := session.InitializeResult(); init != nil && init.ServerInfo != nil {
-		serverName = init.ServerInfo.Name
+	if init := session.InitializeResult(); init != nil {
+		c.identity = identityOf(init)
+		if init.ServerInfo != nil {
+			serverName = init.ServerInfo.Name
+		}
 	}
 	log.InfoContext(ctx, "server_initialized", "server", spec.Name, "server_name", serverName)
 	return c, nil
+}
+
+// startClass is why a start whose handshake failed with err failed, from the
+// facts this client holds rather than the SDK's sentence: a local server's
+// command that could not be started, or its process that exited on its own
+// before it answered; a remote server's answer that was not a success. Else
+// what err's own types say ([ClassOf]), which is where a refused dial, a
+// certificate, a host not found and the startup timeout are read.
+//
+// Called after [client.reportStartFailure], which ends the child: an exit the
+// engine caused is not the server's own, and is not read as one.
+func (c *client) startClass(err error) FailureClass {
+	if c.child != nil {
+		if started := c.child.startErr.Load(); started != nil {
+			return classOfCause(*started)
+		}
+		if c.child.hasExited() && c.child.ownExit {
+			return FailExited
+		}
+	}
+	if c.ident != nil {
+		if answered := c.ident.failed.Load(); answered != nil {
+			return answered.class
+		}
+	}
+	return ClassOf(err)
+}
+
+// deathClass is why a session that ended, ended: a local server's process
+// that exited on its own, or a remote server's last answer when it was not a
+// success. Empty otherwise, since a session the engine itself ended, or one
+// whose transport simply stopped hearing, fits no class.
+func (c *client) deathClass() FailureClass {
+	if c.child != nil {
+		if c.child.hasExited() && c.child.ownExit {
+			return FailExited
+		}
+		return ""
+	}
+	if c.ident != nil {
+		if answered := c.ident.failed.Load(); answered != nil {
+			return answered.class
+		}
+	}
+	return ""
 }
 
 // reportStartFailure surfaces the server's own last words and makes sure the
@@ -246,6 +329,24 @@ func (c *client) deathStory() string {
 	return c.endCause
 }
 
+// toolsChanged takes a server's word that its tool list changed: a request
+// that the supervisor list the session again, which it does no sooner than its
+// floor (relist.go). Never blocks the SDK's reader.
+func (c *client) toolsChanged(context.Context, *sdk.ToolListChangedRequest) {
+	select {
+	case c.listChanged <- struct{}{}:
+	default:
+	}
+}
+
+// relistAfter is how long after its last listing the session is listed again:
+// the `ttlMs` that listing stated, held to the schedule floor sets
+// ([RelistAfter]).
+func (c *client) relistAfter(floor time.Duration) time.Duration {
+	ttl, stated := c.hints.listingTTL()
+	return RelistAfter(ttl, stated, floor)
+}
+
 // listTools walks the whole listing, following pagination.
 //
 // It answers to the STARTUP budget rather than the per-call one: discovery is
@@ -265,6 +366,8 @@ func (c *client) listTools(ctx context.Context) ([]toolDef, error) {
 		seen   = map[string]struct{}{}
 		params = &sdk.ListToolsParams{}
 	)
+	// THIS WALK'S HINT, read off its pages as the probe sees them.
+	c.hints.beginListing()
 	for range maxToolPages {
 		res, err := session.ListTools(listCtx, params)
 		if err != nil {
@@ -326,7 +429,12 @@ func (c *client) defOf(t *sdk.Tool) toolDef {
 		c.log.Warn("annotation_probe_missed", "server", c.name, "tool", t.Name)
 		ann = annotationsFromSDK(t.Annotations)
 	}
-	return toolDef{Name: t.Name, Description: description, InputSchema: schema, Annotations: ann}
+	// AN OUTPUT SCHEMA THAT IS NOT AN OBJECT IS NONE: the specification
+	// requires one, and nothing the engine does reads it but the listing,
+	// which shows a schema a person can read or says there is none.
+	output, _ := t.OutputSchema.(map[string]any)
+	return toolDef{Name: t.Name, Title: t.Title, Description: description,
+		InputSchema: schema, OutputSchema: output, Annotations: ann}
 }
 
 // callTool runs one tool and returns its content blocks.

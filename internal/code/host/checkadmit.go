@@ -29,11 +29,11 @@ import (
 //     measures its commit and changes nothing), and so is a request in
 //     protocol v0, whose fetch serves only what an advertisement named,
 //     where a check's box is shown no ref (below) — the box's git, 2.40 or
-//     later, speaks v2 by default. On /box/code/, a coding run's token is
+//     later, speaks v2 by default. On /box/code/, an executor's token is
 //     refused: the API answers a check's box alone, a coding box reading its
 //     repositories through its clone and its tools. On its git, then, its
 //     PLACE IN FLIGHT: at most MaxRunRequests of the attempt's requests at
-//     once on this node, past them 503 run_busy, as a coding run's
+//     once on this node, past them 503 run_busy, as an executor's
 //     (boxlimit.go). A /box/code/ read holds none here: AdmitCheck admits it
 //     and returns, and the read runs on the repository's home git node,
 //     whose second look at the log's head draws on the same attempt's
@@ -78,7 +78,7 @@ import (
 // (gitproc.ShareRun) — the class every box shares, at most half the lane —
 // keyed by its REPOSITORY, `check:<id>`: one push fans out a check per name
 // its file defines, and keyed per attempt a repository's dozen checks took a
-// dozen turns of the class against one coding run's one. Its spool is every
+// dozen turns of the class against one executor's one. Its spool is every
 // box's ONE credential (boxSpool). It acts as NOBODY (admission.principal):
 // the engine runs its repository's own checks file, so its fetch of a
 // `visibility: unit` repository is no read of a principal's — its attempt's
@@ -160,7 +160,7 @@ func (s *Server) admitCheck(ctx context.Context, w http.ResponseWriter, r *http.
 			"default from 2.26 on: it is shown no ref, and protocol v0 fetches only what a ref names")
 		return admission{}, false
 	case !s.holdRun(ctx, checkHold(ref.Attempt)):
-		// ITS PLACE IN FLIGHT, as a coding run's (boxlimit.go): a check's
+		// ITS PLACE IN FLIGHT, as an executor's (boxlimit.go): a check's
 		// file runs code nobody vouches for, and its partial clone's lazy
 		// fetches are its git's own burst.
 		b.unavailable("run_busy", busySentence("this check"))

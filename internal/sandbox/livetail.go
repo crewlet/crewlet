@@ -14,22 +14,22 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// What a running coding run has said so far, pulled from the node that owns it.
+// What a running executor has said so far, pulled from the node that owns it.
 //
 // # Why a pull, and why from the owner
 //
 // A detached run writes its own account of itself into its box — the streamed
 // transcript a runner parses, or its stderr — and nothing leaves the box until
 // the run is collected, when the transcript, held to the record's bound (its
-// start and its end, [MaxRunTextBytes]), rides the run's
-// `agent_phase_completed{phase: sandbox}` record. Between the launch and the
-// collection a person watching the run had nothing: the run could be minutes
-// or hours in, and the turn trace showed a bar and no words.
+// start and its end, [MaxRunTextBytes]), rides the launch's own
+// `executor_collected` record. Between the launch and the collection a person
+// watching the run had nothing: the run could be minutes or hours in, and the
+// turn trace showed a bar and no words.
 //
 // A PUBLISHED stream of it was the alternative, and it is the wrong one: an
 // event per poll per run would fill the event store with the same text over and
 // over for nobody, since almost nobody is watching almost every run. So it is a
-// QUESTION, asked only while somebody looks: `sandbox_tail{turn_id, launch_id}`,
+// QUESTION, asked only while somebody looks: `executor_tail{turn_id, launch_id}`,
 // answered from the box by the node whose incarnation the run's record names as
 // its owner ([PendingRun.Owner]) — or, for a box on an engine host, by the
 // node that launched it ([PendingRun.LaunchNode]), the one node that can reach
@@ -463,7 +463,7 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 	}
 	askCtx, cancel := context.WithTimeout(ctx, r.budget())
 	defer cancel()
-	replies, err := r.Queue.Ask(askCtx, topics.ObserveSandboxTail, raw, 1)
+	replies, err := r.Queue.Ask(askCtx, topics.ObserveExecutorTail, raw, 1)
 	if err != nil {
 		return TailAnswer{}, fmt.Errorf("sandbox: %s could not be asked about run %s: %w",
 			answer.Node, run.TurnID, err)
@@ -537,7 +537,7 @@ func ServeTail(ctx context.Context, q TailServer, owner, node string, pending Pe
 		logTailFailure(ctx, req.TurnID, req.LaunchID, failure, err)
 		return failure
 	}
-	return q.Serve(ctx, topics.ObserveSandboxTail, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, topics.ObserveExecutorTail, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req tailRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("sandbox: a tail request this build cannot read: %w", err)

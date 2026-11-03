@@ -23,7 +23,7 @@ func TestASeatsInboxIsHeldExactlyWhileARunHoldsIt(t *testing.T) {
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	run := rig.launch("t1")
-	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 		AgentHandle: "swe", TurnID: run.TurnID, LaunchID: run.LaunchID,
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
@@ -166,7 +166,7 @@ func TestALaunchHoldsItsSeatFromTheRowItWrites(t *testing.T) {
 	// ITS ANNOUNCEMENT, when it does come round, recounts the same answer
 	// and moves nothing.
 	run := rig.get("t1")
-	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 		AgentHandle: "swe", TurnID: run.TurnID, LaunchID: run.LaunchID,
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
@@ -208,7 +208,7 @@ func TestARecountDoesNotFreeASeatALaunchHeldUnderIt(t *testing.T) {
 		}
 	}
 
-	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 		AgentHandle: "swe", TurnID: "t0",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
@@ -252,8 +252,8 @@ func TestAFailedLaunchGivesItsSeatBack(t *testing.T) {
 		{name: "the box cannot be provisioned", derail: func(r *coordRig) {
 			r.provider.CreateErr = errors.New("no capacity")
 		}},
-		{name: "the coding agent cannot be started", derail: func(r *coordRig) {
-			r.runner.StartErr = errors.New("the coding CLI is not installed")
+		{name: "the harness cannot be started", derail: func(r *coordRig) {
+			r.runner.StartErr = errors.New("the harness is not installed")
 		}},
 		{name: "the turn cannot suspend into the run", derail: func(*coordRig) {}, suspendFails: true},
 	} {
@@ -267,7 +267,7 @@ func TestAFailedLaunchGivesItsSeatBack(t *testing.T) {
 					t.Fatalf("Launch: %v", err)
 				}
 				if err := rig.coordinator.FailRun(t.Context(), "t1",
-					types.SandboxFailureSuspensionUnrecorded, "the conversation could not be written"); err != nil {
+					types.ExecutorFailureSuspensionUnrecorded, "the conversation could not be written"); err != nil {
 					t.Fatalf("FailRun: %v", err)
 				}
 			} else if err == nil {

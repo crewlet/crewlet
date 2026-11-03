@@ -110,18 +110,22 @@ func everySeam(t *testing.T) queries.Sources {
 		Company:  companySource(t, cfg),
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
-		Runs:     &fakeRuns{},
 		Memory:   &memread.Reader{},
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
-		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
+		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
 			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
-		Config: surface,
-		Work:   emptyWork{},
-		Pages:  emptyPages{},
+		// A SEAT'S EXECUTOR SESSIONS: the rows, and the store their sealed
+		// objects open through — two seams, because a node with no object
+		// store still lists the rows.
+		ExecutorSessions: &stubSessions{},
+		SessionObjects:   failingObjects{},
+		Config:           surface,
+		Work:             emptyWork{},
+		Pages:            emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
@@ -153,6 +157,7 @@ func everySeam(t *testing.T) queries.Sources {
 		// `chat_search` is gated on its own seam.
 		Chat:       emptyChat{},
 		ChatSearch: emptyChat{},
+		ChatDraft:  emptyChat{},
 		ChatReads:  coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
@@ -227,6 +232,11 @@ func (emptyChat) Directory(context.Context, string,
 
 func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
 	return estate.ChatSearchAnswer{Hits: []search.ChatHit{}}, nil
+}
+
+func (emptyChat) Reach(_ context.Context, _ chatlet.Actor, channelID, _ string,
+	_ chatlet.NewMessage) (chatlet.Draft, error) {
+	return chatlet.Draft{ChannelID: channelID}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on
@@ -719,7 +729,7 @@ func TestTheSpendChartDrawsExactlyTheEnginesPhaseBands(t *testing.T) {
 // and the dashboard draws it in its BAND's (`PHASE_BANDS`, read by
 // `phaseColor`), so a phase is one colour on every chart. That table is
 // tokens.PhaseBand written out by phase, and it can drift two ways, both
-// silent: an entry the engine folds elsewhere is a coding run drawn as Review
+// silent: an entry the engine folds elsewhere is an executor drawn as Review
 // in one chart and counted as Execute in the next, and a phase the table does
 // not name falls to Auxiliary's hue whatever the engine does with it.
 func TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto(t *testing.T) {

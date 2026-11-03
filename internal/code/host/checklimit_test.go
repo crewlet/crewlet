@@ -14,15 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A CHECK'S BOX PAST ITS RE-SYNCS IS ANSWERED AT ITS SESSION, as a coding
-// run's box is: a check's box asking for an object nobody pushed takes one
-// barrier a request until its attempt's sixteen are spent, and the
-// seventeenth appends none, answered in upload-pack's own form naming the
-// object and when the check's re-syncs come back. Another attempt of the
-// repository's checks finds its repository's checks' bucket spent; and an
-// attempt the rows do not hold is refused on the stale read alone, saying it
-// was not judged again — a box whose attempt was swept asking in a loop paid
-// one barrier a request before.
+// A CHECK'S BOX PAST ITS RE-SYNCS IS ANSWERED AT ITS SESSION, as an executor's
+// box is: a check's box asking for an object nobody pushed takes one barrier a
+// request until its attempt's sixteen are spent, and the seventeenth appends
+// none, answered in upload-pack's own form naming the object and when the
+// check's re-syncs come back. Another attempt of the repository's checks finds
+// its repository's checks' bucket spent; and an attempt the rows do not hold is
+// refused on the stale read alone, saying it was not judged again — a box whose
+// attempt was swept asking in a loop paid one barrier a request before.
 //
 // Mutations: no bucket for a check (boxResync answering nil for one) — the
 // seventeenth fetch appends a barrier — red; the attempt's second read taken

@@ -226,7 +226,7 @@ func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
 // NotPermitted is a question refused by a GRANT ITS OWN DOMAIN DERIVES for the
 // record it named — the code host's on a repository, from the chart
-// (code.GrantOf, ADR-0081) — rather than by the authority table, which
+// (code.GrantOf, ADR-0088) — rather than by the authority table, which
 // admitted the question and decides nothing a repository's grant does. It is
 // [ErrUnauthorized] to [errors.Is].
 //
@@ -808,7 +808,7 @@ func unresolved(ctx context.Context, what string) error {
 // AT THE REGISTRY, ONCE, rather than at each answer that reads something
 // that can be unreachable or refused. It was per answer, and the answers that
 // did not call it were exactly the ones reported: an unreadable lease table
-// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
+// reached `fleet` as a plain failure and `executors` likewise, so a
 // coordination blip rendered as `query_failed` and a 500, telling a client to
 // give up on a screen that would work in a few seconds. The reference had
 // promised a 503 for both.

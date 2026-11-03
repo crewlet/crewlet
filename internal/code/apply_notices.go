@@ -16,7 +16,7 @@ import (
 // concerns nobody, which writes no row) down as
 // ONE ROW PER (record, change, recipient) it reached — every handle each
 // change's routing precedence keeps ([Concerns]) but that routing's own actor
-// — in code_notifications (replicated 0104, keyed so by 0128), as the tracker
+// — in code_notifications (replicated 0108, keyed so by 0132), as the tracker
 // writes tracker_notifications from its records. The change is in the key
 // because one record can tell one handle about several: a batched push that
 // opens two changes mentioning them, a landing that merges two of their
@@ -49,7 +49,7 @@ import (
 //
 // Beside its rows, every record that writes notices adds to each change it
 // tells anybody about how many handles hear of it ([noticesByChange]) —
-// code_changes.notices (replicated 0125), REPRODUCIBLE — whether or not the
+// code_changes.notices (replicated 0129), REPRODUCIBLE — whether or not the
 // recipient's horizon let this node write the row. The count is a pure
 // function of the records, so it is the same on every node, and it is never
 // below the rows any node holds of the change: a node writes at most one row

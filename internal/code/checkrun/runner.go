@@ -42,7 +42,7 @@ type Order interface {
 }
 
 // Boxes is this node's sandbox catalogue as a check's box is made from it —
-// internal/sandbox's Manager satisfies it: a box with no coding agent, the
+// internal/sandbox's Manager satisfies it: a box with no harness, the
 // cells the CURRENT catalogue configures (Placements, the only ones a new box
 // is made in), and the backend a remote box is killed through (Provider, which
 // also answers a cell the catalogue dropped, for the boxes already on it).
@@ -114,7 +114,7 @@ type Timing struct {
 // The production cadences.
 const (
 	// CheckPoll is sandbox.DefaultPollInterval, FIFTEEN SECONDS: the
-	// coding runs' waiter's cadence, so a box is asked about at one rate
+	// executors' waiter's cadence, so a box is asked about at one rate
 	// whatever runs in it — what a check's ending is late by at most, which
 	// a check of minutes does not notice, and one call to the box, one to
 	// its TTL and one read of its row a box every fifteen seconds.

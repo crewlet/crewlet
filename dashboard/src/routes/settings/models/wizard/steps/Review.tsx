@@ -13,8 +13,8 @@
 import { useMemo, type ReactNode } from "react";
 import { Callout, DescriptionList, Disclosure, Link, Spinner, Text } from "@crewlethq/ui";
 import {
-  DEFAULT_CLI_MAX_CONCURRENT,
-  DEFAULT_CLI_TIMEOUT_SECONDS,
+  DEFAULT_HARNESS_MAX_CONCURRENT,
+  DEFAULT_HARNESS_TIMEOUT_SECONDS,
   SEAT_JOB_FIELDS,
 } from "~/contract/models.ts";
 import { href } from "~/app/router.tsx";
@@ -22,7 +22,7 @@ import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { listed } from "~/lib/format.ts";
 import { SEAT_JOBS, agentRoles, type Dropped, type Uses } from "~/lib/modelUses.ts";
 import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
-import { CliMark, MARK_SIZE } from "../../CliMark.tsx";
+import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import type { ModelsData } from "../../data.ts";
 import { JOB_WORDS, seatName } from "../../places.ts";
 import { RUN_IN } from "../../words.ts";
@@ -209,8 +209,8 @@ export function Review({
     token: stored("Subscription token"),
     cloud: CLOUD_FIELDS[draft.cloud].label,
     "host-login": editing
-      ? "CLI login on the host"
-      : "CLI login on the host, made after it is saved",
+      ? "Harness login on the host"
+      : "Harness login on the host, made after it is saved",
     device: editing
       ? "ChatGPT sign-in with a device code"
       : "ChatGPT sign-in with a device code, right after it is saved",
@@ -236,7 +236,7 @@ export function Review({
         </Text>
       ) : null}
       <div className="models-review-head">
-        <CliMark agent={draft.agent} size={MARK_SIZE} named tooltip />
+        <HarnessMark harness={draft.harness} size={MARK_SIZE} named tooltip />
         <span className="col models-review-head__names">
           <Text as="span" variant="body" className="mono models-clamp" title={draft.key}>
             {draft.key || "New model"}
@@ -274,7 +274,7 @@ export function Review({
           ] as const,
           [
             "Limits",
-            `${draft.concurrent || DEFAULT_CLI_MAX_CONCURRENT} processes at once, ${draft.timeout || DEFAULT_CLI_TIMEOUT_SECONDS} s without progress`,
+            `${draft.concurrent || DEFAULT_HARNESS_MAX_CONCURRENT} processes at once, ${draft.timeout || DEFAULT_HARNESS_TIMEOUT_SECONDS} s without progress`,
           ] as const,
           ["Web tools", webToolsWords(draft.webDenied)] as const,
           ["Test call", testRow] as const,
@@ -318,7 +318,7 @@ export function Review({
           <Spinner size="sm" />
           <Text variant="body">
             {check.what === "credential"
-              ? `Testing the ${draft.method === "token" ? "token" : "key"} with the CLI…`
+              ? `Testing the ${draft.method === "token" ? "token" : "key"} with the harness…`
               : "Checking the change with the engine…"}
           </Text>
         </div>

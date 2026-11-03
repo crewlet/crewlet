@@ -26,7 +26,7 @@ const BoxUser = "run"
 //
 // The run's ROW is the authority, read on every request ([Runs]): a run that
 // ended, was reaped or launched again is refused the moment its row says so,
-// whatever its token's expiry. A coding job has no wall-clock limit
+// whatever its token's expiry. An executor has no wall-clock limit
 // (sandbox.Limits), so an expiry shorter than any job a person would leave
 // running fails that job's only durable output, its last push. Seven days —
 // config.DefaultMinAge, the trim's replay window every other "a run's worth

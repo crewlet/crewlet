@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -49,18 +50,19 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 // to choose. Its readers are zero values, because only the estates' names are
 // read here.
 func objectsRuntime() *native {
-	return &native{trackerObjects: &worklet.Reader{}, codeReader: &code.Reader{}}
+	return &native{trackerFiles: &worklet.Reader{}, codeReader: &code.Reader{}}
 }
 
 // collectorEstates is every estate the collector reads on a data node, as
 // [Engine.startCollectorOver] builds them: [objectsRuntime]'s, and the
-// artifacts and assistant logs', which every data node runs
+// artifacts, assistant and executor logs', which every data node runs
 // ([objectEstatesFor]).
 func collectorEstates() []collect.Estate {
-	return objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{}, &assistantdomain.Reader{})
+	return objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{}, &assistantdomain.Reader{},
+		&executordomain.Reader{})
 }
 
-// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0075). A backup reads
+// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0082). A backup reads
 // the log a declaration names past its store copy, and the deferred records of
 // the table it names, to carry the objects a restore's replay names — so a
 // declaration naming another domain's stream or table would have the backup
@@ -198,9 +200,10 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 					arm.toolReader, n.trackerReader != nil)
 			}
 			// THE ESTATES THE COLLECTOR IS BUILT OVER, as [Engine.startCollectorOver]
-			// builds them: the native half's and the artifacts log's, which
-			// every data node runs ([objectEstatesFor]).
-			estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())
+			// builds them: the native half's and the artifacts, assistant and
+			// executor logs', which every data node runs ([objectEstatesFor]).
+			estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader(),
+				e.ExecutorReader())
 			offered := map[string]bool{}
 			for _, estate := range estates {
 				if offered[estate.Name()] {
@@ -230,6 +233,66 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 			})
 			if !report.Status.Collect.Completed {
 				t.Errorf("the collector's first pass did not complete: %+v", report.Status.Collect)
+			}
+		})
+	}
+}
+
+// A NODE WHOSE TRACKER LOG IS NOT RUNNING GETS NO COLLECTOR, not one over the
+// estates that happen to be present: the tracker's file rows would be read as
+// naming nothing, and every project file's object deleted a day later.
+//
+// Mutation: offer an estate that names nothing in place of a tracker log that
+// is not running, in [native.objectEstates], and the references build.
+func TestANodeMissingADeclaredTablesEstateBuildsNoReferences(t *testing.T) {
+	t.Parallel()
+	estates := objectEstatesFor(&native{}, &artifactsdomain.Reader{}, &assistantdomain.Reader{},
+		&executordomain.Reader{})
+	if len(estates) == 0 {
+		t.Fatal("the premise: the artifacts', Ask Crewlet's and the executor log's " +
+			"estates are offered, so the refusal below is about the tracker's alone")
+	}
+	if _, err := collect.Sources(references.All, estates...); err == nil {
+		t.Fatal("references were built with the tracker's estate missing: a " +
+			"collection would read every project file's object as nobody's")
+	}
+}
+
+// THE COLLECTOR RUNS ON A COMPANY THAT KEEPS ITS TRACKER ELSEWHERE.
+//
+// The tracker's log is the core's, applied on every data node whatever
+// `tracker.backend` says, so a company that moved off Worklet still holds the
+// rows naming its project files — and every company's artifacts and Ask
+// Crewlet files name objects besides. The collector starts only with every
+// declared table's estate, and the tracker's was built only where the company
+// ran Worklet: on a company on Jira, or with no tracker, nothing was ever
+// collected or audited, and `crewlet objects migrate` refused, saying the node
+// held no copy of the company's records.
+//
+// Mutation: build the tracker's file reader only where the company runs
+// Worklet again (inside `runTracker` in [Engine.startNative]), and the first
+// case starts no collector and builds no references.
+func TestTheCollectorRunsWhateverTheCompanysTracker(t *testing.T) {
+	t.Parallel()
+	for name, doc := range map[string]string{
+		"no tracker":           nativeCleanupCompany + "tracker:\n  backend: none\n",
+		"Worklet, the control": nativeCleanupCompany,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, _ := aNodeOf(t, doc, statelog.ModeNormal)
+			if e.native.Load() == nil || e.objects == nil {
+				t.Fatal("the premise: a data node that met its company at boot " +
+					"runs its native half and an object store")
+			}
+			if e.objects.duty.Load() == nil {
+				t.Error("no object collector runs on this company: its " +
+					"artifacts' and Ask Crewlet's objects, and the files its " +
+					"tracker once held, are never collected or audited")
+			}
+			if _, err := e.migrationReferences(); err != nil {
+				t.Errorf("an object migration cannot read this company's "+
+					"references: %v", err)
 			}
 		})
 	}

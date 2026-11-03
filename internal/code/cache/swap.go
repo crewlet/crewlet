@@ -25,7 +25,7 @@ import (
 )
 
 // THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
-// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0083). A compaction retires packs — the
+// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0090). A compaction retires packs — the
 // code domain moves their rows into code_packs_retired, the outputs holding
 // every object of them — and each git node's cache learns it from a round: a
 // delta's retired phase, or the retirements a full answer serves above the
@@ -1454,6 +1454,8 @@ var swapFields = []swapField{
 	{name: "memoMu", class: own, why: "the memo's lock of next's own"},
 	{name: "memoListed", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole as next " +
 		"is promoted: the cohorts on next's disk are those inc's record named, listed or not"},
+	{name: "memoUnlisted", class: own, why: "false: no listing of next's tree has failed yet, and a tree a " +
+		"listing still cannot read fails again at the janitor's next pass and raises the alarm again"},
 	{name: "memoVersion", class: own, why: "moved by next's own record as carryMemo moves the memo in " +
 		"(setMemo), past what the swap's state records, so the janitor writes next's state at its tick"},
 	{name: "memoStated", class: own, why: "the memo's version the state the swap wrote records"},

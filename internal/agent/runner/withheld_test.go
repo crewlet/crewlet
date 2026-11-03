@@ -79,11 +79,11 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	if got := prov.roundsOf("onboarding"); got != 3 {
 		t.Fatalf("the pass was asked %d times, want 3", got)
 	}
-	// Round 3 is a CLI run of its own — the one the declined round ended, the
+	// Round 3 is a harness run of its own — the one the declined round ended, the
 	// corrective it was owed opening the next.
 	reqs := prov.requestsFor("onboarding")
 	if len(reqs) != 2 {
-		t.Fatalf("the pass took %d CLI runs, want the declined one and the corrected one", len(reqs))
+		t.Fatalf("the pass took %d harness runs, want the declined one and the corrected one", len(reqs))
 	}
 	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, toolname.MarkOnboarded) {
 		t.Errorf("round 3 opened on %q, want the withheld finishing corrective", last.Content)

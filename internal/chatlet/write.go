@@ -157,7 +157,7 @@ type Store struct {
 
 // Roster is what the write path asks about the company the rooms belong to.
 //
-// A CONSUMER-DEFINED SEAM of three methods, because three of them is all this
+// A CONSUMER-DEFINED SEAM of four methods, because four of them is all this
 // package needs: the org chart is a large surface and a write path that could
 // reach all of it would be one that could decide things the log has no record
 // of.
@@ -177,9 +177,9 @@ type Roster interface {
 	// [Route].
 	Seat(handle string) (exists, human bool)
 
-	// Lead names the seat that answers for a unit's ROOM — the room named
-	// room, recorded as unit's — or empty where nobody does. It is read for
-	// one room kind and one reason: a person who posts in a unit's room and
+	// Lead names the seat that answers for a unit's ROOM (the room named
+	// room, recorded as unit's), or empty where nobody does. It is the
+	// [ReasonAnswerer] of a unit's room: a person who posts there and
 	// names nobody is addressing whoever leads it.
 	//
 	// THE ROOM AS WELL AS ITS UNIT, because whose a unit room is belongs to
@@ -190,6 +190,26 @@ type Roster interface {
 	// that; the implementation answers it by the same rule that decides
 	// who is in the room.
 	Lead(unit, room string) string
+
+	// Senior names the AGENT seat among handles that stands highest in the
+	// org chart: the fewest managers above it, ties broken by the chart's
+	// own order. Empty where none of them is an agent seat the company
+	// has. It is the [ReasonAnswerer] of every named room that is not a
+	// unit's, asked over that room's members.
+	//
+	// THE CHART RATHER THAN THE ROOM decides, because a room made by hand
+	// carries nothing about who is responsible in it: the membership says
+	// who is there, and only the chart says who among them answers for
+	// the others. Seniority is the one ranking every company's chart
+	// already states, so a person who asks a room of six agents a
+	// question is answered by the one the rest report to, or the nearest
+	// thing to it.
+	//
+	// THE RANKING LIVES BEHIND THIS SEAM rather than in this package,
+	// because it is a walk of the chart, and this package reads the chart
+	// through nothing else: a second copy of "who manages whom" here would
+	// be a second answer to it.
+	Senior(handles []string) string
 
 	// Seats is every seat handle the company has, people and agents: the
 	// company an auto-join room accounts for when the setting is turned on
@@ -292,6 +312,14 @@ var (
 
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("chatlet: the room kept changing under this write")
+
+	// ErrMembersChanged reports a membership stated against a read the room
+	// has since moved past ([Store.SetMembers]' expected members): a STALE
+	// READ, which a reader cures by reading the members again, and not a race
+	// this write lost, which [ErrConflict] reports. Told apart so a surface
+	// says which read to make again rather than "it kept changing", which is
+	// not what happened.
+	ErrMembersChanged = errors.New("chatlet: the room's members changed after they were read")
 
 	// ErrArchived reports a room that takes no new messages: a post or a
 	// reply. An edit, a delete and a reaction are still taken there — see
@@ -1095,8 +1123,29 @@ func (a ChannelAuthority) archives(room Channel) error {
 // that matters most: it is what a private room's readability IS, so a node
 // that replayed a room's adds and missed one of its removals would serve a
 // conversation to somebody who was taken out of it.
+//
+// # Stated against the membership the caller read
+//
+// A whole set is built from a read, and the room may have moved since: a
+// screen that changes one member's following restates everybody else as it
+// last saw them, so a member taken out a moment before would be written back
+// in, and for a private room that is read access granted again by somebody
+// who never meant to grant it. expected is that read: the membership (each
+// handle and its following) the caller built the set from. When it is not
+// nil and the room, AS THIS SNAPSHOT HOLDS IT, holds anything else, the write
+// is refused with [ErrMembersChanged], and the caller reads the room again.
+//
+// The room's revision cannot stand in for it: [ChannelRevision] moves with
+// every message said in the room, so a busy room would refuse every change
+// stated against it. A set the room already holds is the no-op every
+// membership write answers, expected or not: a retry of a change that landed
+// finds its own set there, and is told so rather than refused.
+//
+// nil states no expectation, which is the caller that names the whole
+// membership from its own knowledge rather than from a read (a seeding
+// script, a test); a pointer to the empty list expects an empty room.
 func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
-	members []Member) (Written, error) {
+	members []Member, expected *[]Member) (Written, error) {
 
 	if err := actor.seatedOrSystem(); err != nil {
 		return Written{}, err
@@ -1105,7 +1154,7 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 	if opErr != nil {
 		return Written{}, opErr
 	}
-	return s.members(ctx, actor, channelID, opID, func(room Channel, _ []Member) ([]Member, error) {
+	return s.members(ctx, actor, channelID, opID, func(room Channel, held []Member) ([]Member, error) {
 		// A UNIT'S ROOM IS THE CHART'S, and this is the gesture that
 		// could overwrite it wholesale. It is refused here rather than
 		// filtered, because a caller who names a set is stating the
@@ -1121,6 +1170,11 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 				"the next time the company's configuration is applied. Change "+
 				"the unit in the company document instead",
 				ErrForbidden, room.called())
+		}
+		if expected != nil && !slices.Equal(sortedMembers(members), held) &&
+			!slices.Equal(sortedMembers(*expected), held) {
+			return nil, fmt.Errorf("%w: the members of %s changed after they "+
+				"were read", ErrMembersChanged, room.called())
 		}
 		return members, nil
 	})
@@ -1983,63 +2037,13 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		// what it decided before this call answers.
 		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			// THE ROOM IS READ BEFORE ANYTHING ELSE, and not only
-			// for the routing: the applier REFUSES a post into a
-			// room it has no row for, because under a strict replay
-			// the room's create is below this position on the same
-			// log — so publishing one would not fail this caller, it
-			// would stall every node's applier on this domain.
-			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			room, _, err := readRoomTx(ctx, tx, channelID)
-			if err != nil {
-				return statelog.Decision{}, err
+			d, draftErr := s.draft(ctx, tx, actor, channelID, replyTo, id, in, mentions)
+			out = d.room
+			if draftErr != nil {
+				return statelog.Decision{}, draftErr
 			}
-			out = room
-			if room.ArchivedAt != nil {
-				// EVERY WORD OF IT IS STILL READABLE; it takes nothing
-				// new until somebody reopens it, and who may is the
-				// archive's own relation (authz's chat.channel.archive).
-				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrArchived,
-					archivedRoom)
-			}
-			held, err := readMembersTx(ctx, tx, room.ID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := reachable(room, held, actor); err != nil {
-				return statelog.Decision{}, err
-			}
-			root, rootAuthor, err := s.threadOf(ctx, tx, room.ID, replyTo)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			named := s.employed(mentions)
-			payload := MessagePost{
-				V: DocumentVersion, MessageID: id, Body: in.Body,
-				ThreadRoot: root, Mentions: named,
-				Collective: in.Collective, Links: in.Links,
-				Author: actor.Name(), AuthorKind: actor.Kind,
-				// THE RULE [reachable] JUST APPLIED, carried for the
-				// applier to apply again at the record's position.
-				MembersOnly: privateRoom(room.Kind),
-			}
-			message = Message{
-				V: DocumentVersion, ID: id, ChannelID: room.ID,
-				ThreadRoot: root, Author: payload.Author,
-				AuthorKind: payload.AuthorKind, Body: in.Body,
-				Links: in.Links, Mentions: named,
-				Collective: in.Collective,
-			}
-			notify, err := s.notifyOf(ctx, tx, actor, room, message, Routing{
-				ChannelKind: room.Kind, AuthorKind: actor.Kind,
-				Members: held, Mentions: named, Collective: in.Collective,
-				ThreadRoot: root, RootAuthor: rootAuthor,
-			})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return decide(stamp, actor, subject, OpPost, scope, opID, payload, notify, at)
+			message = d.message
+			return decide(stamp, actor, subject, OpPost, scope, opID, d.payload, d.notify, at)
 		},
 	})
 	if err != nil {
@@ -2049,6 +2053,172 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		Channel: out, Message: message, Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
+}
+
+// drafted is a post as its decision forms it: the room it is said in, the
+// payload and the message the record carries, and the routing snapshot a wake
+// is derived from.
+type drafted struct {
+	room    Channel
+	payload MessagePost
+	message Message
+	notify  *Notify
+	routing Routing
+}
+
+// draft forms a post or a reply inside a snapshot, without publishing it.
+//
+// ONE FUNCTION FOR THE POST AND ITS DRY RUN. [Store.post] decides from it, and
+// [Store.Reach] answers a composer from it, so who a draft is told it will
+// reach is what the same words would reach when sent: the same room checks,
+// the same thread, the same mentions and the same routing ([Store.notifyOf]),
+// against the same roster. A preview that routed by a rule of its own would be
+// a second answer that could disagree with the first the day either changed.
+//
+// THE ROOM IS RETURNED EVEN ON A REFUSAL that read it, because the post's
+// answer names the room it refused.
+func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, replyTo,
+	id string, in NewMessage, mentions []string) (drafted, error) {
+
+	// THE ROOM IS READ BEFORE ANYTHING ELSE, and not only for the routing:
+	// the applier REFUSES a post into a room it has no row for, because
+	// under a strict replay the room's create is below this position on
+	// the same log, so publishing one would not fail this caller, it would
+	// stall every node's applier on this domain.
+	room, _, err := readRoomTx(ctx, tx, channelID)
+	if err != nil {
+		return drafted{}, err
+	}
+	out := drafted{room: room}
+	if room.ArchivedAt != nil {
+		// EVERY WORD OF IT IS STILL READABLE; it takes nothing new until
+		// somebody reopens it, and who may is the archive's own relation
+		// (authz's chat.channel.archive).
+		return out, fmt.Errorf("%w: %s", ErrArchived, archivedRoom)
+	}
+	held, err := readMembersTx(ctx, tx, room.ID)
+	if err != nil {
+		return out, err
+	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := reachable(room, held, actor); err != nil {
+		return out, err
+	}
+	root, rootAuthor, err := s.threadOf(ctx, tx, room.ID, replyTo)
+	if err != nil {
+		return out, err
+	}
+	named := s.employed(mentions)
+	out.payload = MessagePost{
+		V: DocumentVersion, MessageID: id, Body: in.Body,
+		ThreadRoot: root, Mentions: named,
+		Collective: in.Collective, Links: in.Links,
+		Author: actor.Name(), AuthorKind: actor.Kind,
+		// THE RULE [reachable] JUST APPLIED, carried for the applier to
+		// apply again at the record's position.
+		MembersOnly: privateRoom(room.Kind),
+	}
+	out.message = Message{
+		V: DocumentVersion, ID: id, ChannelID: room.ID,
+		ThreadRoot: root, Author: out.payload.Author,
+		AuthorKind: out.payload.AuthorKind, Body: in.Body,
+		Links: in.Links, Mentions: named,
+		Collective: in.Collective,
+	}
+	out.routing = Routing{
+		ChannelKind: room.Kind, AuthorKind: actor.Kind,
+		Members: held, Mentions: named, Collective: in.Collective,
+		ThreadRoot: root, RootAuthor: rootAuthor,
+	}
+	out.notify, err = s.notifyOf(ctx, tx, actor, room, out.message, out.routing)
+	if err != nil {
+		return out, err
+	}
+	// WHOM IT REACHED, on the answer as the applier writes it on the row,
+	// so the poster's own answer can say so before a read does.
+	out.message.Reach = reachOf(actor.Kind, out.notify)
+	return out, nil
+}
+
+// Draft is what a post WOULD do if it were sent now: the room, the thread it
+// would join, and whom it would reach ([Reach]), as [Store.Reach] answers it.
+type Draft struct {
+	ChannelID  string `json:"channel_id"`
+	ThreadRoot string `json:"thread_root,omitempty"`
+
+	// Reach is whom the post would wake and why, in routing order; nil for
+	// an author the routing records no reach for (anyone but a person).
+	Reach *Reach `json:"reach,omitempty"`
+
+	// Mentions are the seats the words name, and Collective whether they
+	// address the whole room (`@channel`): the routing's two inputs from
+	// the words, said back so a composer shows what it read.
+	Mentions   []string `json:"mentions,omitempty"`
+	Collective bool     `json:"collective,omitempty"`
+
+	// Quiet is why a draft that reaches no agent reaches none, and empty
+	// when it reaches one: [QuietNoAgent] or [QuietAddressed].
+	Quiet Quiet `json:"quiet,omitempty"`
+}
+
+// Quiet is why a person's post would reach no agent.
+type Quiet string
+
+const (
+	// QuietNoAgent is a room with no agent seat to answer it: no agent
+	// member (for a unit's room, no lead), and none the words name.
+	QuietNoAgent Quiet = "no_agent"
+
+	// QuietAddressed is a post that names only people: it is addressed to
+	// them, so no agent is asked to answer for the room
+	// ([Routing.namesASeat]).
+	QuietAddressed Quiet = "addressed_to_people"
+)
+
+// Reach answers whom a post or a reply would reach if it were sent now,
+// without sending it: a DRY RUN of the post's own decision ([Store.draft]),
+// read in a snapshot of the estate and published nowhere.
+//
+// The same refusals a post meets come back here (a room that is archived, or
+// that the actor may not post in), so a composer learns them before the send
+// rather than after it. A draft with no words is not refused: whom an empty
+// box would reach is what a composer shows before anybody types.
+func (s *Store) Reach(ctx context.Context, actor Actor, channelID, replyTo string,
+	in NewMessage) (Draft, error) {
+
+	if err := actor.seatedOrSystem(); err != nil {
+		return Draft{}, err
+	}
+	if err := checkBody(in.Body); err != nil {
+		return Draft{}, err
+	}
+	mentions := cleanHandles(in.Mentions)
+	if err := checkMentions(mentions); err != nil {
+		return Draft{}, err
+	}
+	var out Draft
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		d, err := s.draft(ctx, tx, actor, channelID, strings.TrimSpace(replyTo), "", in, mentions)
+		if err != nil {
+			return err
+		}
+		out = Draft{
+			ChannelID: d.room.ID, ThreadRoot: d.message.ThreadRoot,
+			Reach: d.message.Reach, Mentions: d.message.Mentions,
+			Collective: d.message.Collective,
+		}
+		if out.Reach != nil && len(out.Reach.Recipients) == 0 {
+			out.Quiet = QuietNoAgent
+			if d.routing.namesASeat(s.roster.Seat, actor.Name()) {
+				out.Quiet = QuietAddressed
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Draft{}, err
+	}
+	return out, nil
 }
 
 // answer is a gesture's answer: [answered]'s, and — where the framework
@@ -2845,9 +3015,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		}
 		routing.ThreadParticipants, routing.Followers = parties, followers
 	}
-	if room.Kind == KindUnit && room.Unit != "" {
-		routing.Lead = s.roster.Lead(room.Unit, room.Name)
-	}
+	routing.Answerer = s.answerer(room, actor, routing)
 
 	candidates, truncated := Resolve(routing)
 	return &Notify{
@@ -2855,7 +3023,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		ChannelKind: room.Kind, ThreadRoot: message.ThreadRoot,
 		Author: message.Author, AuthorKind: message.AuthorKind,
 		Excerpt: Excerpt(message.Body), Mentions: message.Mentions,
-		Lead: routing.Lead,
+		Answerer: routing.Answerer,
 		// ROUTED AT WRITE TIME, so the feed never has to subtract and
 		// can never forget to. The parser routes again against the
 		// roster IT has — a seat may have left between the commit and
@@ -2864,6 +3032,34 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		Recipients:     RecipientsOf(Route(candidates, s.roster.Seat, actor.Name())),
 		WakesTruncated: truncated,
 	}, nil
+}
+
+// answerer resolves the seat a person's post in this room is answered by when
+// it reaches nobody else, or empty.
+//
+// ASKED ONLY WHERE IT CAN BE USED ([answerable]): a record carries an answerer
+// for exactly the messages the routing would wake one for, so a reader of the
+// record never has to wonder whether a named seat was ever eligible. A
+// message that named a seat the company has, a person included, was
+// addressed to them and carries none ([Routing.namesASeat]).
+//
+// A UNIT'S ROOM IS ANSWERED BY THE UNIT'S LEAD, through the chart rather than
+// the membership, because whose a unit room is belongs to the chart: a unit
+// that stops declaring its room leaves a room the chart gives to nobody, and
+// its lead must not go on answering it. Every OTHER named room is answered by
+// its most senior agent member. A private room's answerer is therefore always
+// somebody who can read it, and a room with no agent member has none.
+func (s *Store) answerer(room Channel, actor Actor, routing Routing) string {
+	if !answerable(room.Kind, actor.Kind) || routing.namesASeat(s.roster.Seat, actor.Name()) {
+		return ""
+	}
+	if room.Kind == KindUnit {
+		if room.Unit == "" {
+			return ""
+		}
+		return s.roster.Lead(room.Unit, room.Name)
+	}
+	return s.roster.Senior(memberHandles(routing.Members))
 }
 
 // employed drops the handles the company no longer has.

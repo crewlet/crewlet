@@ -162,7 +162,7 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	}
 }
 
-// AN AGENT CANNOT LOOSEN A GATE (ADR-0081, field by field): the unit's lead at
+// AN AGENT CANNOT LOOSEN A GATE (ADR-0088, field by field): the unit's lead at
 // full_access, which maintains the repository, asks a protect request that
 // loosens main's merge gate in one field — each in turn: merge_by or approvals
 // lowered, a class added to approvals_unless, a human path dropped or its

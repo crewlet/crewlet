@@ -426,8 +426,10 @@ func (t *setChannelMembers) Name() string { return chatlet.SetChannelMembersTool
 func (t *setChannelMembers) Description() string {
 	return "State who is in a room — the WHOLE membership, replacing what it " +
 		"was. Whoever you leave out is taken out, and for a private room that " +
-		"is who may read it. A unit's own room and a direct conversation " +
-		"cannot be changed this way."
+		"is who may read it. Send the membership you read as " +
+		"`expected_members` so a change somebody else made meanwhile is " +
+		"refused rather than written back over. A unit's own room and a " +
+		"direct conversation cannot be changed this way."
 }
 
 func (t *setChannelMembers) Parameters() map[string]any {
@@ -440,6 +442,15 @@ func (t *setChannelMembers) Parameters() map[string]any {
 			},
 			"members": membersSchema("Everybody who is in the room after this " +
 				"call. An empty list empties it."),
+			// THE READ THE SET WAS BUILT FROM, compared inside the write's
+			// own snapshot ([chatlet.Store.SetMembers]): a screen restating
+			// everybody to change one member's following must not write
+			// back over a member somebody took out a moment before.
+			"expected_members": membersSchema("The room's membership as you " +
+				"read it, each member with their follow_all, which the change " +
+				"was built from. If the room holds anybody else now, or " +
+				"anybody follows it differently, the change is refused and you " +
+				"read the room again. An empty list expects an empty room."),
 		},
 		"required": []any{"channel", "members"},
 	}
@@ -465,33 +476,29 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(chatlet.SetChannelMembersTool + " needs `members` — the whole " +
 			"membership after this call; an empty list empties the room."), nil
 	}
-	members, refusal := argMembers(name, args, "members")
+	members, refusal := argMemberSet(name, args, "members", "everybody in the "+
+		"room after this call, or an empty list, [], to empty it")
 	if refusal != nil {
 		return *refusal, nil
 	}
-	// ONLY THE EMPTY LIST EMPTIES THE ROOM. Every other value naming nobody
-	// is refused: a string where the list belongs that names no handle ("",
-	// " , "), which the check at the surface admits as a list, and a list
-	// whose every entry is null. Each is likelier a caller that meant to
-	// send nothing than one that meant to take everybody out — and emptied,
-	// a private room has nobody left who can read it or set its members
-	// again — so the gesture has the one spelling that cannot be anything
-	// else, read by the list's own reader ([argval.List]) rather than as
-	// text.
-	if members == nil {
-		if list, isList := argval.List(args["members"]); !isList || len(list) > 0 {
-			return failed(fmt.Sprintf("%s's `members` names nobody. Send the "+
-				"handles of everybody in the room after this call, or an empty "+
-				"list, [], to empty it.", name)), nil
+	// ABSENT IS NO EXPECTATION, and the same reader as `members` otherwise:
+	// an expectation naming nobody by mistake would be compared against an
+	// empty room and refuse every change, so it too has the one spelling.
+	var expected *[]chatlet.Member
+	if args["expected_members"] != nil {
+		read, readRefusal := argMemberSet(name, args, "expected_members", "everybody "+
+			"in the room as you read it, or an empty list, [], for an empty room")
+		if readRefusal != nil {
+			return *readRefusal, nil
 		}
-		members = []chatlet.Member{}
+		expected = &read
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	const look = "Look at the room's members"
-	written, err := t.deps.Writer.SetMembers(ctx, actor, id, members)
+	written, err := t.deps.Writer.SetMembers(ctx, actor, id, members, expected)
 	if err != nil {
 		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
 	}
@@ -1131,6 +1138,36 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 		return nil, nil
 	}
 	return members, nil
+}
+
+// argMemberSet reads a WHOLE membership under key, which a value that is
+// present and names nobody must spell as the empty list.
+//
+// ONLY THE EMPTY LIST IS NOBODY. Every other value naming nobody is refused:
+// a string where the list belongs that names no handle ("", " , "), which the
+// check at the surface admits as a list, and a list whose every entry is
+// null. Each is likelier a caller that meant to send nothing than one that
+// meant nobody, and for `members` nobody empties a private room, which leaves
+// nobody who can read it or set its members again. So the gesture has the
+// one spelling that cannot be anything else, read by the list's own reader
+// ([argval.List]) rather than as text. want is what the refusal asks for in
+// the value's place. The caller has already decided what an ABSENT key means.
+func argMemberSet(tool string, args map[string]any, key, want string) (
+	[]chatlet.Member, *tools.Result) {
+
+	members, refusal := argMembers(tool, args, key)
+	if refusal != nil {
+		return nil, refusal
+	}
+	if members != nil {
+		return members, nil
+	}
+	if list, isList := argval.List(args[key]); !isList || len(list) > 0 {
+		out := failed(fmt.Sprintf("%s's `%s` names nobody. Send the handles of "+
+			"%s.", tool, key, want))
+		return nil, &out
+	}
+	return []chatlet.Member{}, nil
 }
 
 // argCursors reads read cursors: room id to a packed log position.

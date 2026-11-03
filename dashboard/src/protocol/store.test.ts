@@ -238,6 +238,20 @@ describe("completed phases", () => {
     expect(store.state.phases).toHaveLength(0);
   });
 
+  // A COLLECTED LAUNCH IS KEPT BESIDE THEM. It is the executor round's work —
+  // the report its run wrote and what it spent — and it lands while the turn
+  // is still parked, so a tab watching the turn would otherwise have the
+  // round's card with nothing in it until a reload.
+  test("a collected launch is kept with its payload", () => {
+    const store = new Store();
+    store.applyEvent({
+      ...feedRow("l1", { type: "executor_collected", category: "system" }),
+      payload: { turn_id: "t1", iteration: 1, launch_id: "job-1", response: "fixed it" },
+    } as EventEnvelope);
+    expect(store.state.phases).toHaveLength(1);
+    expect(store.state.phases[0]?.payload?.response).toBe("fixed it");
+  });
+
   test("a redelivered phase does not double", () => {
     const store = new Store();
     store.applyEvent(phaseEvent("p1"));
@@ -435,10 +449,10 @@ describe("subscriptions", () => {
   test("a listener on several changed slices is called once", () => {
     const store = new Store();
     const fn = vi.fn();
-    store.subscribe(["sandboxes", "agents"], fn);
+    store.subscribe(["executors", "agents"], fn);
     // A sandbox move IS a seat move — a seat's effective state folds in
     // whether it is parked on a question — so both slices change together.
-    store.applySandboxes([]);
+    store.applyExecutors([]);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -631,7 +645,7 @@ describe("a live call's heavy fields", () => {
   // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
   // version zero, no body key, `body_withheld` — is never behind for one:
   // asked for whole, the engine would answer the same status again. Its
-  // rounds and its CLI runs are status and still merge as any call's do. The
+  // rounds and its harness runs are status and still merge as any call's do. The
   // CONTROL is the case below, where a version moved past the copy held is
   // fetched.
   // Mutation: count a withheld body field as one the tab is behind on, and a
@@ -932,7 +946,7 @@ describe("a peer this build was not built against", () => {
   test("every kind this build dispatches is not counted", () => {
     const store = new Store();
     const socket = new LiveSocket(store);
-    for (const kind of ["snapshot", "event", "agents", "seats", "sandboxes", "tokens"]) {
+    for (const kind of ["snapshot", "event", "agents", "seats", "executors", "tokens"]) {
       socket.onMessage(JSON.stringify({ kind, data: kind === "snapshot" ? {} : [] }));
     }
     for (const kind of ["budget", "schedules", "org", "tools", "health", "pong"]) {

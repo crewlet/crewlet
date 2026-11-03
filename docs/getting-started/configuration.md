@@ -85,9 +85,10 @@ assistant: {...}                        # optional, Ask Crewlet; off unless enab
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
-                                        #   (an executor run's own rounds are capped by
-                                        #   role.sandbox.max_turns / providers.sandbox.
-                                        #   default_max_turns: the run is its CLI's loop)
+                                        #   (an executor run's own rounds are capped only
+                                        #   where role.sandbox.max_turns / providers.sandbox.
+                                        #   default_max_turns sets a cap: the run is its
+                                        #   harness's loop)
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
   delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
     max_parallel: 3                     # workers running at once within one call
@@ -104,7 +105,7 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   refused: no launch could ever fit
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
   extension_enabled: true               # round-cap extension judge for the onboarding pass
-                                        #   (an executor run is its CLI's loop, which no
+                                        #   (an executor run is its harness's loop, which no
                                         #   judge extends)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
@@ -119,10 +120,16 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   saying how many, once it would exceed 24k
                                         #   characters
     retention_days: 30                  # matches the event store's horizon; applied at next start
+                                        #   (the executor sessions' retention reads it
+                                        #   off the fleet's revision at every pass)
+    max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
+                                        #   sessions may hold (33 MiB..64 GiB); past it a
+                                        #   capture releases the seat's oldest ENDED
+                                        #   turns' sessions, keeping how each ended
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary
-                                        #   model (`llm_auxiliary`), a coding CLI like
+                                        #   model (`llm_auxiliary`), a harness like
                                         #   every model, under a FIXED deadline — 60 s
                                         #   after a turn, 30 s for a turn-start
                                         #   briefing — so point that key at a fast,
@@ -227,15 +234,15 @@ roles:
 ```
 
 Each names a `providers.llm` key (see [Providers](#providers)). Both satellite
-calls run under a fixed deadline and pay a CLI launch each, which is why they
+calls run under a fixed deadline and pay a harness launch each, which is why they
 want a fast model rather than the seat's own — see
 [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency).
 
 `llm_judge` is invoked when the first-turn onboarding pass exhausts its tool-round cap;
 it decides whether the pass is making progress (extend) or thrashing
 (fall through to rescue).  Falls back to `llm` -> `"default"` if unset. An
-executor run is its coding CLI's own loop, bounded by `role.sandbox.max_turns`
-(else `providers.sandbox.default_max_turns`), which no judge extends.
+executor run is its harness's own loop, uncapped unless `role.sandbox.max_turns`
+(else `providers.sandbox.default_max_turns`) sets a cap, which no judge extends.
 See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge)
 section for details.
 
@@ -353,7 +360,7 @@ is **off** unless the company turns it on.
 providers:
   llm:
     assistant:                          # a dedicated entry, recommended
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       timeout_seconds: 90               # one interactive round
       max_concurrent: 4                 # its own slots, apart from the seats'
@@ -368,7 +375,7 @@ assistant:
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
   deep_work:                            # optional: absent is quick mode only
-    llm: assistant-deep                 # a Claude Code entry (agent: claude-code)
+    llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
     timeout_seconds: 1200               # one run's wall clock, 60..1200
     max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
     max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
@@ -379,11 +386,11 @@ assistant:
 | `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
 | `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
-| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a CLI launch of fifteen to twenty-five seconds. |
+| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a harness launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`agent: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
+| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
@@ -408,10 +415,10 @@ across the whole fleet.
 return.** Each `llm` key must name a `providers.llm` entry that is:
 
 - on a profile whose run has **no tool of its own, by construction**, so the
-  CLI's one tool source is the engine's `crewlet` server serving the person's
+  harness's one tool source is the engine's `crewlet` server serving the person's
   own requests: its profile declares `local_tools: denied` and a measured
   `tools_off`, and the argv every Ask Crewlet call runs carries it, with an `mcp`
-  allow list naming the engine's tools alone. A CLI with its own shell or file
+  allow list naming the engine's tools alone. A harness with its own shell or file
   reader on the engine host could read whatever the engine user can, the
   engine's own data and keys included. Today that is `claude-code` and `pi`;
   `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
@@ -420,7 +427,7 @@ return.** Each `llm` key must name a `providers.llm` entry that is:
   `overrides: { web_tools: denied }`. A page the model fetched itself is text
   no authority decision saw, and a fetch is a way out for the person's data.
   Seats keep their web tools; only the entry that sets this loses them. The
-  CLIs that can deny web are `claude-code`, `codex`, `opencode` and `pi`
+  harnesses that can deny web are `claude-code`, `codex`, `opencode` and `pi`
   (see [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host));
   any other is refused.
 
@@ -429,7 +436,7 @@ every `/config` write, each naming the chain member and the entry field to
 change. A stored revision that somehow carries one still applies, so every
 seat keeps running, and Ask Crewlet stays unavailable with that reason
 until the chain is fixed. Run `crewlet llm doctor assistant` before turning
-it on: on the exact argv Ask Crewlet runs it asks the CLI to run a shell
+it on: on the exact argv Ask Crewlet runs it asks the harness to run a shell
 command, to read a file the doctor just wrote and to fetch a page, and reports
 any of the three that succeeded as a problem. Nothing records that run, so the
 chain cannot require it: it is the operator's check to make.
@@ -438,12 +445,12 @@ chain cannot require it: it is the operator's check to make.
 
 ## Providers
 
-Every model a seat runs on is reached through a **coding CLI** the engine
+Every model a seat runs on is reached through a **harness** the engine
 drives as a process — Claude Code for Anthropic's models, Codex for OpenAI's,
 OpenCode for open models on any provider it speaks to — so a `providers.llm`
-entry is that CLI's settings: which CLI, which model in its grammar, and how it
+entry is that harness's settings: which harness, which model in its grammar, and how it
 signs in. [LLM Backends](../concepts/llm-backends.md) is the whole story: why
-there is no other kind of entry, picking a CLI per vendor, isolation, the tool
+there is no other kind of entry, picking a harness per vendor, isolation, the tool
 channel and every sign-in route.
 
 ```yaml
@@ -451,43 +458,43 @@ providers:
   llm:
     default:                            # named provider (referenced by roles via `llm: default`;
                                         #   `default` is also the fallback for a seat naming none)
-      agent: claude-code                # optional — which CLI to drive (default claude-code):
+      harness: claude-code                # optional — which harness to drive (default claude-code):
                                         #   claude-code | codex | opencode | gemini-cli | qwen-code
                                         #   | cursor-agent | copilot | grok | muse-code | kimi-code
                                         #   | hermes | pi | custom
-      model: sonnet                     # REQUIRED — in the CLI's own grammar: an alias or id for
+      model: sonnet                     # REQUIRED — in the harness's own grammar: an alias or id for
                                         #   claude-code (sonnet, opus, claude-opus-5-5), an OpenAI
                                         #   id for codex, <provider>/<model> for opencode. Supports
                                         #   ${ENV_VAR}; a reference that resolves to nothing is
                                         #   REFUSED naming the variable — unlike a missing
                                         #   credential, which still builds: every call then fails
-                                        #   with the CLI's own sign-in error, which names it, where
+                                        #   with the harness's own sign-in error, which names it, where
                                         #   a missing model has no such tell
       run_in: ""                        # optional — where a seat's executor runs when it launches
                                         #   on this entry: direct | container | e2b; empty takes
                                         #   providers.sandbox.default_run_in. Only claude-code and
                                         #   opencode can run an executor, so the field is REFUSED on
-                                        #   any other CLI's entry, where nothing would read it; any
-                                        #   CLI serves the reviewer, workers and side passes
-      state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
-                                        #   under <state_dir>/<agent>. Empty:
-                                        #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
+                                        #   any other harness's entry, where nothing would read it; any
+                                        #   harness serves the reviewer, workers and side passes
+      state_dir: ""                     # optional — the login + per-seat harness homes, each harness
+                                        #   under <state_dir>/<harness>. Empty:
+                                        #   $CREWLET_LLM_HARNESS_HOME/<key>, else ~/.crewlet/llm-harness/<key>.
                                         #   Use a persistent volume in an ephemeral container.
-                                        #   Entries naming the SAME dir and driving the same CLI
+                                        #   Entries naming the SAME dir and driving the same harness
                                         #   share one login (how per-phase models run off one
-                                        #   `crewlet llm login`); on different CLIs they share
-                                        #   nothing, so moving an entry to another CLI applies
-                                        #   live and starts that CLI signed out. Its bundle
-                                        #   (auth.credential_bundle) stays the old CLI's and is
+                                        #   `crewlet llm login`); on different harnesses they share
+                                        #   nothing, so moving an entry to another harness applies
+                                        #   live and starts that harness signed out. Its bundle
+                                        #   (auth.credential_bundle) stays the old harness's and is
                                         #   refused until re-exported from the new one
-      timeout_seconds: 600              # optional — one stretch of a phase's CLI work on this
+      timeout_seconds: 600              # optional — one stretch of a phase's harness work on this
                                         #   host, wall clock (default 600): from its launch, or the
                                         #   end of the tool call it last waited on, to its next
                                         #   call or its exit — the seat's tools are never on it. A
                                         #   breach is a retryable `timeout`. An executor run is
-                                        #   bounded by its round cap instead
-                                        #   (providers.sandbox.default_max_turns)
-      max_concurrent: 4                 # optional — live CLI processes on this host at once
+                                        #   not on this clock: its rounds are capped only where
+                                        #   providers.sandbox.default_max_turns sets a cap
+      max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
                                         #   throttle concurrency hard; a model call made inside one
@@ -496,27 +503,27 @@ providers:
                                         #   runs one at a time
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
-                                        #   engine's, so declare anything else the CLI needs here —
+                                        #   engine's, so declare anything else the harness needs here —
                                         #   for opencode, the key of the provider its model names.
                                         #   An executor run's box gets it too, beneath the seat's
                                         #   role.sandbox.env
       auth:
         mode: subscription              # subscription (default) | api-key | inherit-env | env.
-                                        #   subscription: the CLI's own login, or a headless token.
-                                        #   api-key: ONE key in the CLI's key variable
+                                        #   subscription: the harness's own login, or a headless token.
+                                        #   api-key: ONE key in the harness's key variable
                                         #   (ANTHROPIC_API_KEY for claude-code, CODEX_API_KEY for
-                                        #   codex); refused for a CLI with none (hermes, pi,
+                                        #   codex); refused for a harness with none (hermes, pi,
                                         #   opencode, kimi-code). qwen-code keeps no login, so it
                                         #   is api-key only, with api_key named (its OPENAI_API_KEY
                                         #   is shared with other vendors). inherit-env: forward
                                         #   the engine's own value of either variable. env: the
-                                        #   entry's env alone signs the CLI in (a cloud provider's
+                                        #   entry's env alone signs the harness in (a cloud provider's
                                         #   switch, or a gateway's ANTHROPIC_AUTH_TOKEN); neither
-                                        #   variable reaches the CLI and no login is seeded
+                                        #   variable reaches the harness and no login is seeded
         token: ""                       # optional — ${VAR} holding a headless subscription token;
                                         #   empty falls back to the profile's own variable
                                         #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and
-                                        #   only on a CLI that mints one (claude-code)
+                                        #   only on a harness that mints one (claude-code)
         api_key: ""                     # optional — ${VAR} holding the API key; empty falls back
                                         #   to the profile's own key variable, from the secret
                                         #   store, then the environment — except a shared one
@@ -541,21 +548,21 @@ providers:
     gpt:                                # OpenAI's models through Codex — for a seat's reviewer,
                                         #   workers and side passes (llm_review, llm_subagent, …):
                                         #   Codex runs no executor
-      agent: codex
+      harness: codex
       model: gpt-5
       auth:
         mode: api-key                   # reads CODEX_API_KEY; leave it out to run on a
                                         #   ChatGPT login (`crewlet llm login gpt`)
 
     open:                               # open models through OpenCode
-      agent: opencode
+      harness: opencode
       model: openrouter/qwen/qwen3-coder  # <provider>/<model>, split at the first slash;
                                         #   a bare id is refused on a write
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the key of the provider the model names
 
   sandbox:                              # REQUIRED once the company has an agent seat and an entry
-                                        #   above: every seat's executor runs as its CLI's own run,
+                                        #   above: every seat's executor runs as its harness's own run,
                                         #   in a box from this catalogue (code-sandbox.md)
     local:
       state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
@@ -572,28 +579,31 @@ providers:
     # fake: true                        # the in-process double, for demonstrations;
                                         #   never beside e2b: or local:
     default_run_in: direct              # where a run on an entry with no run_in happens. direct
-                                        #   runs the CLI on this host as the engine's user.
+                                        #   runs the harness on this host as the engine's user.
                                         #   Required unless the catalogue names exactly one
                                         #   cell, or every entry an executor launches on
                                         #   names its own run_in
-    # default_max_turns: 96             # agentic-round cap for one executor run on seats
-                                        #   naming no role.sandbox.max_turns; 0 = uncapped
+    # default_max_turns: 0              # agentic-round cap for one executor run on seats
+                                        #   naming no role.sandbox.max_turns; unset or 0 =
+                                        #   uncapped
     # default_timeout_seconds: 900      # box TTL / keepalive: not a run cap
     # default_pause_ttl_seconds: 1800   # how long a box blocked on a person stays paused;
                                         #   0 = never pause
+    # commit_attribution: true          # credit Crewlet as co-author on the commits a run
+                                        #   makes as itself; false = credit nothing
     # setup: []                         # provisioning steps applied to every box
 ```
 
-**One entry is one CLI on one model, signed in one way.** Per-phase models
+**One entry is one harness on one model, signed in one way.** Per-phase models
 are one entry per model, and entries that share a `state_dir` and drive one
-CLI share one login. A seat's `llm` takes a list, which is how a plan and a key compose:
+harness share one login. A seat's `llm` takes a list, which is how a plan and a key compose:
 `llm: [default, claude-key]` runs on the plan and falls through to the key while
 the plan is spent — see [Falling back between
 entries](../concepts/llm-backends.md#falling-back-between-entries).
 
 **What an entry does not set.** There is no temperature, effort, thinking
 switch, output cap, endpoint or key list on an entry, and none on a call: a
-coding CLI driven headlessly reads its model's behaviour from its own
+harness driven headlessly reads its model's behaviour from its own
 configuration, and an entry holds one sign-in. See [What an entry does not
 set](../concepts/llm-backends.md#what-an-entry-does-not-set).
 
@@ -604,8 +614,8 @@ crewlet llm login default -from-host        # adopt the login this machine alrea
 crewlet llm doctor                          # every entry: binary, version, sign-in, a real tool call
 ```
 
-The CLI itself must be installed on the engine host — see
-[Installation](installation.md#a-coding-cli).
+The harness itself must be installed on the engine host — see
+[Installation](installation.md#a-harness).
 
 ### Embeddings
 
@@ -633,7 +643,7 @@ providers:
                                         #   back to OPENAI_API_KEY, the variable
                                         #   OpenAI's own SDK documents. Embeddings are
                                         #   the one model call the engine makes itself:
-                                        #   a coding CLI computes no vectors
+                                        #   a harness computes no vectors
     base_url: "..."                     # optional — custom endpoint. This is the only
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
@@ -1129,9 +1139,9 @@ stream:
                                     #   takes a flat 1 GiB. SIZED BY A CENSUS,
                                     #   not a rate: one message per (node, day,
                                     #   seat, schedule or person) for 181 days,
-                                    #   about 217 MB for three nodes of forty
+                                    #   about 320 MB for three nodes of forty
                                     #   seats and twenty schedules, and about
-                                    #   12 MB for one node of ten seats — set
+                                    #   18 MB for one node of ten seats; set
                                     #   it toward the 64 MiB floor for a small
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names
@@ -1194,13 +1204,13 @@ stream:
                                     #   changelog's room for a model change.
                                     #   What is asked is scaled with the others,
                                     #   so a 64 GiB first boot creates it at
-                                    #   about 1.4 GiB. It does NOT follow the
+                                    #   about 1.3 GiB. It does NOT follow the
                                     #   mutation log's ceiling as the knowledge
                                     #   base's does: chat grows faster (~32 MB a
                                     #   day against ~22), so following it would
                                     #   make chat the largest ask in the one
                                     #   budget, and a first boot would need
-                                    #   ~136 GiB free rather than ~100 before the
+                                    #   ~138 GiB free rather than ~100 before the
                                     #   vector changelog holds a fifth-year
                                     #   model change clear of the headroom
                                     #   alarm. So if you size
@@ -1223,6 +1233,25 @@ stream:
                                     #   nodes apply
                                     #   (chat.chatlet.message_retention_days),
                                     #   never by a stream bound
+  # executor_log_max_bytes: 536870912
+                                    #   the executor log, where every seat's
+                                    #   executor sessions are NAMED: a row per
+                                    #   turn naming the sealed object its
+                                    #   harness's session is kept in, in the
+                                    #   object store (64 MiB..64 GiB). UNSET
+                                    #   TAKES 512 MiB, sized by the turns the
+                                    #   seats run rather than by the disk, and
+                                    #   scaled down as far as 64 MiB where the
+                                    #   broker is short: about eighteen days of
+                                    #   a completely blocked trim at the
+                                    #   reference company's ~29 MB a day, and
+                                    #   at 64 MiB about two, short of min_age —
+                                    #   past ~30 seats on a small host, set it.
+                                    #   Crossing it refuses the append, and the
+                                    #   top of it is kept for gate records. How
+                                    #   long a session is kept is the company
+                                    #   document's turn_engine.
+                                    #   conversation_session.retention_days
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -2048,9 +2077,9 @@ units:
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
-| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it, and no `sandbox` key, because the executor's run is the seat's code work. Only `claude-code` and `opencode` entries can run the executor: a seat whose chain holds neither is refused at its `llm` (a seat naming no `llm` at the fallback entry's `agent`), naming both remedies, and a chain mixing one with another CLI validates with an advisory warning, since a launch skips the other CLI, which still serves the reviewer, workers and side passes |
+| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it, and no `sandbox` key, because the executor's run is the seat's code work. Only `claude-code` and `opencode` entries can run the executor: a seat whose chain holds neither is refused at its `llm` (a seat naming no `llm` at the fallback entry's `agent`), naming both remedies, and a chain mixing one with another harness validates with an advisory warning, since a launch skips the other harness, which still serves the reviewer, workers and side passes |
 | `llm_review` / `llm_subagent` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
-| `llm_auxiliary` | string | no | Cheap/fast model used by the turn-start prefetch, the condensing of large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a CLI launch under a fixed deadline, so name a fast model — see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
+| `llm_auxiliary` | string | no | Cheap/fast model used by the turn-start prefetch, the condensing of large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a harness launch under a fixed deadline, so name a fast model — see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge) of the onboarding pass; falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
 | `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat alone. Unset inherits it; `false` skips reflection for this seat's turns while still writing its episodes, which are cheap and useful to a person regardless |
@@ -2069,7 +2098,7 @@ units:
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on Worklet it is what an item filed with no `unit` belongs to, whoever filed it (see [Worklet](../guides/worklet.md#which-team-an-item-belongs-to)). **Vendor-neutral**: it names a Worklet project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | What this seat's [executor box](../concepts/code-sandbox.md#a-seats-own-box-settings--rolesandbox) reads beyond `providers.sandbox`. Every agent seat's executor is its coding CLI's own run in a box, placed by the `run_in` of the `providers.llm` entry the launch picks (empty takes `providers.sandbox.default_run_in`), so the block places nothing and gates nothing: **absent means the engine-wide settings alone**. Six keys: `setup`, per-seat provisioning applied after `providers.sandbox.setup`; `env`, the environment injected into the run and where external-service tokens are declared — a `${VAR}` in it that resolves to nothing is left out and the run still starts, its start logging `sandbox_env_unresolved` naming the key ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)); `optional_keys`, the keys of `env` whose absence is expected and so left out without that line — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers`, which of the seat's MCP servers the coding agent gets beside its tool bridge; `pause_ttl_seconds`, how long a box blocked on a person's answer stays paused (unset inherits `providers.sandbox.default_pause_ttl_seconds`, `0` never holds a paused box, negative refused); and `max_turns`, the agentic-round cap on one of the seat's runs (unset inherits `providers.sandbox.default_max_turns`, 96 when that is unset too; `0` uncapped; negative refused). Any other key is refused as unknown. A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
+| `sandbox` | dict | no | What this seat's [executor box](../concepts/code-sandbox.md#a-seats-own-box-settings--rolesandbox) reads beyond `providers.sandbox`. Every agent seat's executor is its harness's own run in a box, placed by the `run_in` of the `providers.llm` entry the launch picks (empty takes `providers.sandbox.default_run_in`), so the block places nothing and gates nothing: **absent means the engine-wide settings alone**. Six keys: `setup`, per-seat provisioning applied after `providers.sandbox.setup`; `env`, the environment injected into the run and where external-service tokens are declared — a `${VAR}` in it that resolves to nothing is left out and the run still starts, its start logging `sandbox_env_unresolved` naming the key ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)); `optional_keys`, the keys of `env` whose absence is expected and so left out without that line — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers`, which of the seat's MCP servers the harness gets beside its tool bridge; `pause_ttl_seconds`, how long a box blocked on a person's answer stays paused (unset inherits `providers.sandbox.default_pause_ttl_seconds`, `0` never holds a paused box, negative refused); and `max_turns`, the agentic-round cap on one of the seat's runs (unset inherits `providers.sandbox.default_max_turns`, 96 when that is unset too; `0` uncapped; negative refused). Any other key is refused as unknown. A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -2146,8 +2175,10 @@ units:
 | `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn, its executor's run included (default `1800`, half an hour: [why](../concepts/scheduling.md#hard-wall-clock-timeout)) |
 | `catchup` | bool | no | Fire one recent missed tick on restart (default `true`) |
 
-> Scheduling requires a database (for the at-most-once `scheduled_runs`
-> ledger). Schedules are **not** inherited by child units.
+> The at-most-once claim on every fire lives in the fleet's
+> [coordination store](../concepts/coordination.md); each node's own
+> `scheduled_runs` table records what it dispatched, and the schedules'
+> history is derived from it. Schedules are **not** inherited by child units.
 
 ---
 
@@ -2440,12 +2471,12 @@ The order is checked on what a push is actually held to, the defaults included: 
 
 `code.scratch` is the policy for the repositories **seats make for themselves**. Beside the projects `code.repos` declares, a person, a unit's lead and a seat can create, rename, archive, delete and restore repositories through their tools ([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools)), and a seat at `full_access` can make a **scratch** repository of its own, named `<handle>.<slug>` after it — an experiment, a spike, a place to try something — which nobody else's tool creates and which takes no protection. Both fields are read off the **current** revision where they are used, so a change holds from its activation:
 
-- **`idle_days`** — how many days a scratch repository may go with no push, rename, settings change or restore before the `code-retention` duty deletes it, restorable for `deleted_retention_days` like any deleted repository: 1 to 365, and unset is 7. Reading a repository is no activity. A scratch repository a **live turn** has named — through any of its tools, its delegated workers or its executor run's bridge, a turn still running or one parked on a coding run — is never deleted while that turn lasts, and keeping it moves no clock: once the turn ends, the repository is deleted at the duty's next pass if it is still idle. A day at least, because a turn records its hold on a repository that has been idle for 22 hours on the repository itself, and two nodes' clocks may disagree by two hours.
+- **`idle_days`** — how many days a scratch repository may go with no push, rename, settings change or restore before the `code-retention` duty deletes it, restorable for `deleted_retention_days` like any deleted repository: 1 to 365, and unset is 7. Reading a repository is no activity. A scratch repository a **live turn** has named — through any of its tools, its delegated workers or its executor's bridge, a turn still running or one parked on its executor — is never deleted while that turn lasts, and keeping it moves no clock: once the turn ends, the repository is deleted at the duty's next pass if it is still idle. A day at least, because a turn records its hold on a repository that has been idle for 22 hours on the repository itself, and two nodes' clocks may disagree by two hours.
 - **`max_per_seat`** — how many scratch repositories one seat may hold: 0 to 1 000, and unset is 50. **Every** scratch repository the seat owns counts until it is purged, a deleted one included, so deleting and creating in a loop holds no more than this; 0 lets no seat create one. A seat at the limit is refused `scratch_limit` naming it.
 
 The 10 000 repositories `code.repos` may list is also what a tool's create of a **project** repository is held to: the project repositories the code host holds, declared and tool-made alike and every one short of purged, so a create at it is refused `repo_limit`. A seat's scratch repositories never count there, so seats' experiments cannot refuse a person's project. Like the rest of the block, `code.scratch` is refused on a company that does not set `code.native`.
 
-`code.checks` is how the company runs the [checks](../concepts/code-host.md#checks) its repositories define in their `.crewlet/checks.yaml`: the file names what to run, and this block decides where, with which of the company's secrets, and for how long at most. A check runs in a [box](../concepts/code-sandbox.md#check-boxes) of `providers.sandbox`'s catalogue, with no coding agent in it. Every field is read off the **current** revision when a check's box is made, and the block is refused on a company that does not set `code.native`:
+`code.checks` is how the company runs the [checks](../concepts/code-host.md#checks) its repositories define in their `.crewlet/checks.yaml`: the file names what to run, and this block decides where, with which of the company's secrets, and for how long at most. A check runs in a [box](../concepts/code-sandbox.md#check-boxes) of `providers.sandbox`'s catalogue, with no harness in it. Every field is read off the **current** revision when a check's box is made, and the block is refused on a company that does not set `code.native`:
 
 - **`run_in`** — the cell a check whose file names none runs in: `container`, a container on a git node, or `e2b`, a remote box. Unset is `providers.sandbox.default_run_in` where that is one of the two, and otherwise no cell, so such a check runs in no box. **`direct` is refused by name**, here and in a repository's file: a check runs a change's own code, which a `direct` box would run as the engine's own user on the engine host — reading what the engine reads, the keyring every run's token is signed under among it. A cell named must be one the catalogue configures (`container` needs `local:`, with an `image` holding git 2.40 or newer and what the checks build with; `e2b` needs `e2b:`), and the engine builds its backend as it does a seat's.
 - **`allow_run_in`** — the cells a repository's checks file may name in a check's own `run_in`, each once. Unset is the one `run_in` resolves to; set, it must hold that one, since a file naming the cell a check naming none runs in would otherwise be refused where the check would have run anyway.
@@ -2480,16 +2511,21 @@ It is read off the **current** revision at every decision and every dial: a decl
 
 ## MCP Servers
 
-**All** MCP tool servers are declared here — including the Jira/Confluence (`atlassian`), Slack, and GitHub servers. A `shared: true` server runs once for everyone; a `shared: false` server is a per-role template, and each agent supplies its own credentials via `role.mcp_env[name]` (env vars for `stdio`, HTTP headers for `http`).
+**All** MCP tool servers are declared here — including the Jira/Confluence (`atlassian`), Slack, and GitHub servers. A `shared: true` server runs once for the agents it is granted to; a `shared: false` server is a per-role template, started for each agent it is granted to with that agent's own values from `role.mcp_env[name]` (env vars for `stdio`, HTTP headers for `http`). Who gets a server is its `access` (absent, every agent seat), or, for one that reads each agent's own vendor credential, the integration's lane; an `mcp_env` block grants nothing (see [Tools & MCP](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)).
 
 ```yaml
 mcp_servers:
   # shared stdio server (one instance for all agents)
   - name: tavily
+    description: Searches and reads the public web   # optional, one line beside its name in each agent's prompt
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    access:                             # optional, absent = every agent seat
+      units: [research]                 # every agent seat in this unit and the units beneath it
+      seats: [pm]                       # and this agent seat
+      except: [research-intern]         # but not this one, though its unit is named
     tool_annotations:                   # it advertises none; every tool only reads the web
       tavily_search:   { read_only: true, open_world: true }
       tavily_extract:  { read_only: true, open_world: true }
@@ -2499,7 +2535,7 @@ mcp_servers:
 
   # per-role stdio server — Jira + Confluence share one mcp-atlassian
   - name: atlassian
-    shared: false                       # per-role: token from role.mcp_env.atlassian
+    shared: false                       # per-role, for each agent on at Jira or Confluence; token from role.mcp_env.atlassian
     command: uvx
     args: ["mcp-atlassian==0.23.1"]
     env:                                # each product the company runs; every ${VAR} must resolve
@@ -2511,13 +2547,24 @@ mcp_servers:
     transport: http                     # stdio | http (default: stdio)
     shared: false                       # per-role: each seat's own app token, bound by the engine
     url: "https://api.githubcopilot.com/mcp/"
+    enabled: true                       # optional, default true; false keeps the entry and starts nothing
     tool_prefix: ""                     # optional — prefix tool names
     tool_annotations: {}                # optional — behavioural-hint overrides (see Tool Capabilities)
+    tools:                              # optional: the level each tool runs at
+      default: allow                    #   allow (the default) or blocked, for every tool levels does not name
+      levels: {}                        #   one tool by the server's own name: allow or blocked
     startup_timeout_seconds: 120        # optional — connect + handshake + discovery
     request_timeout_seconds: 300        # optional — one tool call
+
+  # shared http server the company signs in to with OAuth, once, from its page
+  - name: linear
+    transport: http
+    url: "https://mcp.linear.app/mcp"
+    oauth:
+      client: cimd                      # cimd | dcr | own (own takes client_id and client_secret)
 ```
 
-Full field reference: `name` (required; `crewlet` is reserved — it is the name every coding CLI sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
+Full field reference: `name` (required; lowercase letters, digits and hyphens, at most 32 characters, see [Tools & MCP](../guides/tools-and-mcp.md#naming-a-server-and-its-tools); `crewlet` is reserved, since it is the name every harness sees the seat's own tools under, over its run's session on this host and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box, and a server called the same would be replaced by it there), `enabled` (default `true`; `false` turns the server off and keeps the entry and every `mcp_env` block and box listing that names it, see [Tools & MCP](../guides/tools-and-mcp.md#turning-a-server-off)), `description` (what the server is for, one line of at most 200 characters with no line breaks, listed beside its name in each agent's prompt, see [Tools & MCP](../guides/tools-and-mcp.md#saying-what-a-server-is-for)), `transport` (`stdio`/`http`), `shared` (default `true`), `access` (which agent seats get the server: `units`, each reaching every agent seat beneath it, `seats` and `except`, by unit key and seat handle; absent, every agent seat; refused on a server that reads each agent's own vendor credential, which the integration's lane grants, see [Tools & MCP](../guides/tools-and-mcp.md#choosing-which-agents-get-a-server)), `command`/`args`/`env` (stdio; each key an environment variable name), `url`/`headers` (http; `https`, or plain `http` to this host or a private network, never with a user name or password in it, and each key a header name), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts, see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix` (letters, digits, `_` and `-`, at most 49 characters, put in front of every tool the server serves; a tool whose prefixed name is longer than 50 characters is not offered, see [Tools & MCP](../guides/tools-and-mcp.md#a-tools-name)), `tool_annotations`, `tools` (the level each tool runs at: `default` for every tool `levels` does not name, `levels` for one tool by the server's own name, each `allow`, `approve` or `blocked`; with neither, a tool the server marks read-only runs at `allow` and every other tool at `approve`; a call to a tool at `approve` waits for a person's answer, a blocked tool is never offered to an agent, and a server whose every tool is not at `allow` by `default: allow` is given to no executor box, see [Tools & MCP](../guides/tools-and-mcp.md#setting-each-tools-level)), `startup_timeout_seconds`, `request_timeout_seconds`, `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)), and `oauth` (sign the company in to a shared remote server with OAuth: `grant` is `authorization_code` (the default: a person signs in once, from its page) or `client_credentials` (a service identity the engine signs in as, with no person, see [Tools & MCP](../guides/tools-and-mcp.md#signing-in-as-a-service-identity)); `client` is `cimd`, `dcr` or `own` for a person's sign-in and refused for a service identity; `client_id` and `client_secret` (a `${VAR}`) are the company's own client's, both required for `client_credentials`; and `scopes` what to ask for; refused on a stdio or per-agent server, beside an `Authorization` header and in a box's `sandbox.mcp.servers`, see [Tools & MCP](../guides/tools-and-mcp.md#signing-in-with-oauth)).
 
 ### Timeouts
 
@@ -2545,6 +2592,21 @@ Both deadlines therefore always apply.
 A server that exceeds either deadline is logged and skipped; the rest of
 the company still starts.
 
+### MCP registry
+
+`mcp_registry` names the community registry Settings › MCP & tools searches
+beside the [curated catalogue](../guides/tools-and-mcp.md#the-curated-catalogue-and-a-community-registry)
+when somebody adds a server. Absent, there is no community search.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io   # /v0.1/servers is appended
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | no | The address of a registry that speaks the MCP Registry v0.1 API; the API's `/v0.1/servers` path is appended to it. It must be an `https` address with no credentials, query or fragment, a private host included, because what it answers is drafted into launch lines. A result is only ever a draft for the add flow, marked as not reviewed, and the engine dials nothing a listing names |
+
 ---
 
 ## Environment Variable References
@@ -2562,7 +2624,7 @@ Only the braced identifier form is substituted — `${NAME}` where `NAME` matche
 providers:
   llm:
     default:
-      agent: opencode
+      harness: opencode
       model: "${LLM_MODEL}"                          # resolved where the entry is built
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the secret store first, then the environment

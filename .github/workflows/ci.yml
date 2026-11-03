@@ -454,7 +454,7 @@ jobs:
         name: install what building git needs
         if: steps.git.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
-      # NODE, because this half runs internal/sandbox/codingagent's probe of
+      # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
       # `make test` refuses to start without it (require-node). The probe

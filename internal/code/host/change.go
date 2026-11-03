@@ -140,7 +140,7 @@ func (s *Server) titleChange(l *landing, change *code.ChangeOption, source code.
 // commitHeadBytes is the most of a commit object the title of a change is
 // read from: 64 KiB — its headers (a tree, its parents at 48 bytes each, two
 // identities, a signature of a few kibibytes) and the start of its message,
-// which no commit a person or a coding agent writes takes past it before its
+// which no commit a person or a harness writes takes past it before its
 // subject ends. A commit whose subject it cuts is titled by what was read.
 const commitHeadBytes = 64 << 10
 

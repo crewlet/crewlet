@@ -53,7 +53,7 @@ import (
 //
 // # ONE relay for every domain that announces, and a switch PER DOMAIN
 //
-// A fault is ONE log's (ADR-0072), and so is the verdict that takes a copy out
+// A fault is ONE log's (ADR-0079), and so is the verdict that takes a copy out
 // of service ([copyVerdict]): a knowledge-base applier halted at one page
 // leaves the tracker's, chat's and the artifacts' announcements complete. So
 // whether this node's sockets hear its own applier or a peer's is a fact PER

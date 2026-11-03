@@ -100,7 +100,7 @@ type SearcherOptions struct {
 	SkillsContainer func() string
 
 	// Copies is this node's verdict on the copies its own range is scanned
-	// from (ADR-0072): a copy out of service covers none of the range,
+	// from (ADR-0079): a copy out of service covers none of the range,
 	// which the answer counts missing. Nil scans every copy.
 	Copies search.Copies
 }

@@ -51,7 +51,7 @@ const companyDoc = `name: Nimbus
 providers:
   llm:
     assistant:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       overrides: {web_tools: denied}
 assistant:
@@ -65,11 +65,11 @@ const deepDoc = `name: Nimbus
 providers:
   llm:
     assistant:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       overrides: {web_tools: denied}
     deep:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 assistant:
   enabled: %t

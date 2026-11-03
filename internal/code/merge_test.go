@@ -17,7 +17,7 @@ import (
 
 // A CHANGE'S MERGE, decided by the shipped committer from one snapshot on a
 // real embedded broker, applied by the shipped applier as one record and read
-// back from the rows it wrote (ADR-0089).
+// back from the rows it wrote (ADR-0096).
 
 // seatRef is dev's own branch, under the seats' namespace: what a seat's
 // change is opened from, and what its merge deletes by default (Q4).
@@ -484,7 +484,7 @@ func TestAMergeDeletesOnlyASourceItsMergerMay(t *testing.T) {
 // decide it: a fast-forward to anything but the change's head, or carrying a
 // pack; a merge or a squash carrying none; a merge id that is not its
 // operation's push id; a field the committer stamps sent by the asker; and an
-// asker naming a coding run.
+// asker naming an executor.
 func TestAMergeProposalIsHeldToItsShape(t *testing.T) {
 	t.Parallel()
 	ok := merging("019a0c2e-0000-7000-8000-0000000000aa", "019a0c2e-0000-7000-8000-0000000000bb", dev,
@@ -513,9 +513,9 @@ func TestAMergeProposalIsHeldToItsShape(t *testing.T) {
 		"a stamped principal":       func(p *code.MergeProposal) { p.Merge.Principal = dev },
 		"a stamped source":          func(p *code.MergeProposal) { p.Merge.SourceRef = seatRef },
 		"a stamped landing":         func(p *code.MergeProposal) { p.Merge.Protected = true },
-		"a coding run": func(p *code.MergeProposal) {
+		"an executor": func(p *code.MergeProposal) {
 			p.Asker.Run = code.RunProvenance{TurnID: "turn-1", RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b",
-				CodingAgent: "claude"}
+				Harness: "claude"}
 		},
 		"an override past its bound": func(p *code.MergeProposal) {
 			p.Merge.Override = strings.Repeat("x", code.MaxOverrideReasonBytes+1)

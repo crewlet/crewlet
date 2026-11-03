@@ -27,7 +27,7 @@ import (
 // its two sides are assistantregister.go's; this file is the model chain a turn
 // runs on, the meter it charges and the records it writes.
 
-// AssistantToolSessions is where a turn serves its tools to the CLI its model
+// AssistantToolSessions is where a turn serves its tools to the harness its model
 // runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
 func AssistantToolSessions(e *Engine) *toolsession.Host { return e.sessions }
 

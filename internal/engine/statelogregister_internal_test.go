@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -133,6 +134,10 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// barrier is what the gate reserve is proved against there.
 		assistantdomain.Domain{}.Name(): true,
 		chatlet.Domain{}.Name():         true,
+		// A BARRIER, because a seat reads a conversation's head at
+		// linearizable: an end another node published must be applied
+		// before the next turn reads it.
+		executordomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -174,9 +179,8 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // The shipped figures are pinned, so moving one is a change in this diff:
 // the reference company's 125 a day per seat on the tracker's, the knowledge
 // base's, the artifacts log's, the artifact datastore's and the code host's
-// logs, chat's own
-// 120 on its log, and zero on the identity estate's and the Dashboard
-// Assistant's.
+// logs, chat's own 120 on its log, the executor log's own 60, and zero on the
+// identity estate's and the Dashboard Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		worklet.Domain{}.Name():   new(statelog.LinearizableReadsPerSeatDay),
@@ -189,6 +193,7 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		artifactdata.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
 		chatlet.Domain{}.Name():         new(chatlet.LinearizableReadsPerSeatDay),
 		assistantdomain.Domain{}.Name(): new(0),
+		executordomain.Domain{}.Name():  new(executordomain.LinearizableReadsPerSeatDay),
 		// The tracker's figure: a seat's code tools read at linearizable.
 		code.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
 	}
@@ -286,10 +291,10 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 7 {
+	if claims < 8 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
 			"tracker, the pages, the identity estate, the artifacts, the "+
-			"artifact datastore, the assistant and chat", claims)
+			"artifact datastore, the assistant, chat and the executor log", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -338,10 +343,11 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 7 {
+	if claims < 8 {
 		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
 			"generation record, want the tracker, the pages, the identity "+
-			"estate, the artifacts, the artifact datastore, the assistant and chat", claims)
+			"estate, the artifacts, the artifact datastore, the assistant, chat "+
+			"and the executor log", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -516,6 +522,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		artifactdata.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(),
 		chatlet.Domain{}.Name(),
+		executordomain.Domain{}.Name(),
 		code.Domain{}.Name(),
 	}
 	got := []string{}

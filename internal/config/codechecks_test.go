@@ -188,7 +188,7 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 			path: "code.checks.allow_run_in", kind: "conflict", says: []string{"runs in e2b", "providers.sandbox's default"}},
 		"a check's container with no image": {doc: checksDoc(direct, "run_in: container"),
 			path: "providers.sandbox.local.image", kind: "missing",
-			says: []string{"code.checks.run_in runs in a container", "git 2.40"}, not: []string{"coding-agent"}},
+			says: []string{"code.checks.run_in runs in a container", "git 2.40"}, not: []string{"harness"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -214,7 +214,7 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 			}
 			for _, not := range tc.not {
 				if strings.Contains(p.Message, not) {
-					t.Errorf("message = %q, which says %q of a box no coding agent runs in", p.Message, not)
+					t.Errorf("message = %q, which says %q of a box no harness runs in", p.Message, not)
 				}
 			}
 		})

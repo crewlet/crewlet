@@ -5,7 +5,7 @@
  * # The engine's listing, a page at a time
  *
  * `code_repos` answers the repositories by name, each held to the reader's
- * grant on it: a person reads every repository (ADR-0081), and a seat what its
+ * grant on it: a person reads every repository (ADR-0088), and a seat what its
  * place in the chart relates it to. A page is what the engine SCANNED, not
  * what it kept, so it can be shorter than its limit — or empty with a cursor —
  * and the list pages until no cursor comes back, each page joined to the one
@@ -198,7 +198,7 @@ export function Repositories() {
               shrink: true,
               drop: 2,
               // WHICH SEATS: a person reads every repository whatever this
-              // says (ADR-0081), and the title says so.
+              // says (ADR-0088), and the title says so.
               cell: (r) => (
                 <span title="Which seats read it. Every person reads every repository.">
                   <TableTextCell>

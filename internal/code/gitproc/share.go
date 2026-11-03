@@ -62,7 +62,7 @@ import (
 // A coding box's git ([ShareRun]) HOLDS at most half the lane
 // ([ShareClass.Cap]), even with the other half free. The share orders only who
 // is granted NEXT, so a class that holds every slot with client-paced
-// transfers keeps it for as long as its clients read: a burst of coding-run
+// transfers keeps it for as long as its clients read: a burst of executor
 // launches is a clone a repository each, minutes apiece on a large one, and a
 // box reading slowly holds its slot at objstore.MiBPace's floor — thirty
 // seconds a mebibyte, a gigabyte in eight and a half hours — so with every
@@ -94,7 +94,7 @@ const (
 	// credential and waits in a pipeline nobody watches second by second.
 	ShareMachine ShareClass = "machine"
 
-	// ShareRun is a coding box: the git a seat's detached coding run makes
+	// ShareRun is a coding box: the git a seat's detached executor makes
 	// with its run's credential, behind no person at all — generated code,
 	// whose turn waits behind every person's and machine's and whose class
 	// holds at most half the lane ([ShareClass.Cap]).
@@ -184,12 +184,12 @@ type Share struct {
 
 // maxSharePrincipal is the longest principal [Share.Valid] admits, in bytes.
 //
-// 255: just under four times the longest name an identity is given today —
-// a seat handle and a Tier A token's login both stop at internal/iam's
-// MaxLogin (64), a machine token's name is `pat:` and a uuid, and a coding
-// run's launch id a uuid — so the bound refuses nothing a configuration or
-// the identity directory admits, and leaves a grammar room to widen without
-// this package following it.
+// 255: just under four times the longest name an identity is given today — a
+// seat handle and a Tier A token's login both stop at internal/iam's MaxLogin
+// (64), a machine token's name is `pat:` and a uuid, and an executor's launch
+// id a uuid — so the bound refuses nothing a configuration or the identity
+// directory admits, and leaves a grammar room to widen without this package
+// following it.
 const maxSharePrincipal = 255
 
 // Valid reports a known class and a principal of 1..[maxSharePrincipal]

@@ -341,22 +341,22 @@ task has been reopened four times.
 **One turn, one task.** A turn is charged to the one work item it is on, or to
 nothing — never split. The item is the one its wake was about (a task
 notification, or a Jira, GitHub or GitLab event about one issue), the one the
-colleague who asked for help was on, or the one a coding run it resumes was
-launched on; failing all three, the one task its own writes touched, if they
+colleague who asked for help was on, or the one its executor was launched on
+when it resumes from it; failing all three, the one task its own writes touched, if they
 touched exactly one. A chat message that leads to no task write is charged to
 nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
 attributed on its events and adds to no row here.
 
 **What a turn's tokens include.** Its own phases, the workers it delegated to,
-the round-cap judge, the coding runs it detached, and the **auxiliary** model
+the round-cap judge, its executor's launches, and the **auxiliary** model
 calls it made along the way — the turn-start memory filter, knowledge query and
 episode summary, every rewrite its ledgers and tools needed, and the
 condensing of its card — in input and output, with the prompt cache's share of
-the input beside them. That includes what the engine spends on a coding run
-while no part of the turn is running: an executor run's calls through the
+the input beside them. That includes what the engine spends on its executor
+while no part of the turn is running: the executor's calls through the
 tool bridge (the rewrites its tools ask for, the workers it delegates to) and
-the condensing of a collected run's report, failure or question, which the part
-of the turn that resumes from the run pays. Learning afterwards (reflection,
+the condensing of a collected launch's report, failure or question, which the part
+of the turn that resumes from it pays. Learning afterwards (reflection,
 diary, skills, the conversation ledger's account of the turn) is the seat's own
 and is not charged to the task; it is still on the seat's day in the [spend
 history](budgets-and-spend.md#auxiliary-spend).
@@ -364,11 +364,11 @@ Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.
 
-**A turn that parks is charged per segment.** A turn that launches a coding run
-completes once when it parks and again each time a run it launched is
+**A turn that parks is charged per segment.** A turn that launches its executor
+completes once when it parks and again each time a launch is
 collected — often minutes later, on another node. Each segment adds what it
 spent, and only the first counts as a turn, so a turn that parked twice is
-still one turn on the task. The segment that collects a run pays for that run.
+still one turn on the task. The segment that collects a launch pays for it.
 A turn charged only because of what it wrote is charged when it ends, for
 every segment before it too.
 
@@ -1538,7 +1538,7 @@ drawn for everybody and held with that reason for anybody without it.
   ends in **Load more** and how many of how many are loaded, so no task is
   past the end of a page. A card says what it has cost in **tokens**, what it
   blocks, its labels and — while a seat's turn is on it — who is doing what
-  ("SWE · coding run", "SWE · reviewing · round 2 of 4"), matched on the
+  ("SWE · executing", "SWE · reviewing · round 2 of 4"), matched on the
   task the engine charges that turn to. A card's labels give way to a "+N"
   before its mark row wraps, so the token count keeps its place.
 
@@ -1562,7 +1562,7 @@ drawn for everybody and held with that reason for anybody without it.
   and what the reviewer asked for, the tools it called,
   how long it took and how many tokens, and a link to its trace. While a seat's
   turn is running on the task, the foot of the activity says so ("SWE is on
-  turn 3 · coding run") with a way to watch it live. Each
+  turn 3 · executing") with a way to watch it live. Each
   announced change has **Who this reached**: the people it woke and why. The
   three histories are read a page at a time, and **Earlier activity** reads
   further back — the merged list only ever shows a stretch of time that is
@@ -1992,18 +1992,22 @@ post with and the obligation falls back to any delivery, like every other
 surface the seat cannot reach.
 
 A comment from somebody who is not the assignee, naming nobody and asking
-nobody, still wakes the assignee — unaddressed, which a turn may absorb without
-replying. The result says so in a `warnings` line, because a commenter
-expecting an answer otherwise gets silence with nothing to explain it. An
-agent is told to pass `ask` or mention them; a person commenting from the
-dashboard is told the same thing in a short toast that goes by itself, in the
-words of the comment box rather than the tool's arguments. An answer to a
-question never says it, since an answer expects no reply.
+nobody, leaves the assignee unasked, and the result says how in a `warnings`
+line, because a commenter expecting an answer otherwise gets silence with
+nothing to explain it. Another agent's remark starts no turn at all: it waits
+in the assignee's inbox until they next open the item (see
+[Which notices start a turn](#which-notices-start-a-turn)). A reply in a
+thread the assignee wrote in wakes them, unaddressed, which a turn may absorb
+without replying. The warning tells the agent to pass `ask` or mention them,
+and is read off the routing for the very record the comment publishes, so it
+cannot disagree with who is woken. A person's remark carries no warning,
+because it is the ask: it wakes the assignee, who owes it an answer. An answer
+to a question never warns either, since an answer expects no reply.
 
 **What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
 kept under, the seat they hold (every person holds one), or a token's own
-login where the identity directory binds it to none — beside the coding runs parked on a question to
+login where the identity directory binds it to none — beside the executors parked on a question to
 them, with how many there are in all and when the longest one began. With no
 `handle` it is the caller's own (your own asks are listed whether or not you
 hold `worklet`, since [you may answer what you were asked](#who-may-do-what)),
@@ -2017,9 +2021,9 @@ the choice as the answer, and a parked run is answered by its turn.
 closed in the last seven days, newest closing first, each with who closed it
 (a colleague may answer for you), when, the option chosen or the words, and
 the asker's first record on the task since, which says whether the answer has
-been acted on. A coding run's question is listed beside them for the person
+been acted on. An executor's question is listed beside them for the person
 who answered it, and only for them (it may have been put to a whole team), in
-the same shape: what the run asked, its options and the one chosen,
+the same shape: what the executor asked, its options and the one chosen,
 and when ([Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)).
 It takes the same scope rule. The dashboard's Inbox keeps
 these in a closed **Answered** group at the end of the list; an answer older
@@ -2063,9 +2067,12 @@ half an object either fails to parse it or reads the half it got as the whole.
 
 ## What wakes a seat
 
-A change that concerns somebody becomes a **wake** — a turn on that seat, with
-a prompt written for the reason it reached them. Most wakes are about a task:
-you were assigned it, mentioned on it, watching it, blocked by it.
+A change that concerns somebody becomes a **notice** in their inbox and, when
+it asks something of them, a **wake**: a turn on that seat, with a prompt
+written for the reason it reached them (see
+[Which notices start a turn](#which-notices-start-a-turn)). Most wakes are
+about a task: you were assigned it, mentioned on it, asked on it, blocked by
+it.
 
 **One wake per person per change**, whatever number of reasons name them: the
 first reason in the precedence order wins and the rest are dropped. Somebody
@@ -2155,6 +2162,41 @@ failed tool call to discover. A `purged` wake sends you nowhere for the sharper
 version of the same reason: the row is gone from every data node, so the tool
 would answer `not_found`.
 
+### Which notices start a turn
+
+Every seat a change names gets its notice, in the inbox it reads when it next
+opens the task, and counts as somebody who heard the change when the engine
+decides whether a lead must hear it instead. Whether the notice also starts a
+turn follows its reason and, for five reasons, whether the change asks
+something of the seat that holds it:
+
+| Reason | Starts a turn |
+|---|---|
+| `mention`, `prioritised`, `asked`, `answered`, `thread` | always: the change was put to this seat, or replies to something it wrote |
+| `unblocked`, `blocking`, `routed_to`, `parent_assignee`, `checklist`, `purged` | always: work the seat answers for moved |
+| `assignee`, `collaborator`, `reporter`, `lead_fallback` | for every change except another agent's comment and a change to who watches the task |
+| `watcher` | for a person's comment only |
+| `unassigned`, `unwatched` | never |
+
+So **a person's comment wakes everyone on the task**: a person writing on a
+task speaks to whoever follows it, without naming anybody. **Another agent's
+comment wakes only the seats it names**: by @-mention, with `ask`, by replying
+in a thread they wrote in, or by answering their question. An agent that needs
+the assignee or the reporter to act names them, and the comment tool says so
+in its description and warns when a comment reaches the assignee's inbox and
+no further. A **reporter** hears of its task finishing or reopening, being
+reassigned or removed, and of every comment, and is woken by all of them but
+another agent's comment, since those are when it verifies the outcome. A
+**watcher** follows the task: every change reaches its inbox, and only a
+person's comment starts its turn.
+
+The line is drawn where turns were spent for nothing. A seat woken by another
+agent's status note on a task it followed, or by an acknowledgement of its
+own note, ended its turn having changed nothing, or answered with another
+acknowledgement that woke the first agent to acknowledge it back; a seat
+woken by a change somebody else made to a task it answers for (a status
+moved back, a new dependency, a reassignment) acted on it.
+
 ## A person's own state
 
 A human has a record of their own beside the work: an **inbox**, a **queue**
@@ -2234,7 +2276,7 @@ tomorrow, it is offered once), or a moment you pick, and only the ones inside
 the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
 the write would refuse is never shown. *Mark all read* is `read_through` at the
 newest notice the screen LOADED, so a notice that arrived after you looked is
-still unread. Every one of these sends the notices' own position as `seen`. A question, a parked coding run, a stopped seat and a condition
+still unread. Every one of these sends the notices' own position as `seen`. A question, a parked executor, a stopped seat and a condition
 carry none of these: each leaves the list when it is answered or cleared, and
 answering a question in the Inbox marks the notices that asked it read, so it
 does not come back as an update.

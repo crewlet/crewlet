@@ -23,9 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// A run's note inbox, as its bridge serves it: the steer_take tool a CLI's hook
-// calls, and the notes route a CLI's plugin polls. Every case holds the bridge
-// to what it promises the CLI — the run's own token and nothing else, an answer
+// A run's note inbox, as its bridge serves it: the steer_take tool a harness's hook
+// calls, and the notes route a harness's plugin polls. Every case holds the bridge
+// to what it promises the harness — the run's own token and nothing else, an answer
 // that is never an error, a poll that never outlives its hold — and to deciding
 // nothing about the notes themselves, which the inbox does.
 
@@ -442,11 +442,11 @@ func TestAReadBodyIsCapped(t *testing.T) {
 	}
 }
 
-// STEER_TAKE IS SERVED UNLISTED AND NEVER RECORDED: no CLI offers it to its
-// model, it never reaches the run's surface or its ledger — it is the CLI
+// STEER_TAKE IS SERVED UNLISTED AND NEVER RECORDED: no harness offers it to its
+// model, it never reaches the run's surface or its ledger — it is the harness
 // asking, not the model — and its answer is always text, never an error. Only a
 // boundary of the main agent's loop reaches the inbox: a subagent's batch, an
-// agent id the CLI did not fill in and any other event take nothing.
+// agent id the harness did not fill in and any other event take nothing.
 func TestSteerTakeIsServedUnlistedAndNeverRecorded(t *testing.T) {
 	t.Parallel()
 	f := newSteerFixture(t, time.Minute)
@@ -459,7 +459,7 @@ func TestSteerTakeIsServedUnlistedAndNeverRecorded(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	if slices.ContainsFunc(listed.Tools, func(tl *mcp.Tool) bool { return tl.Name == mcpbridge.SteerTool }) {
-		t.Fatal("steer_take is listed, so a CLI would offer it to its model")
+		t.Fatal("steer_take is listed, so a harness would offer it to its model")
 	}
 	for _, tc := range []struct {
 		args map[string]any
@@ -731,11 +731,11 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// A HOOK WHOSE AGENT THE CLI DID NOT FILL IN TAKES NOTHING, AND IS SAID ONCE.
+// A HOOK WHOSE AGENT THE HARNESS DID NOT FILL IN TAKES NOTHING, AND IS SAID ONCE.
 // Whose loop fired such a hook cannot be told, so it is answered as a
 // subagent's would be — the note waits for a boundary that can be told apart —
 // and the operator is told, once per session, with the run and the seat:
-// without that line, a run whose CLI never substitutes the variable takes no
+// without that line, a run whose harness never substitutes the variable takes no
 // note between its steps and nothing says why. A subagent's own batch is the
 // ordinary case and says nothing.
 //

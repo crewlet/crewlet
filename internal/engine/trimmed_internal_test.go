@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0073.
+// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0080.
 //
 // The trim removes a log's anchors below what it no longer holds by appending
 // the domain's own trimmed record, which [trimmedEncoder] is the switch for. A
@@ -40,7 +40,7 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 	}
 }
 
-// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0073.
+// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0080.
 //
 // The sweeps run on the trim's own goroutine ([retention.run]), and each is
 // paced on this node's applier, so an applier slow but still moving would
@@ -121,7 +121,7 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	}
 }
 
-// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0073. A log with nothing
+// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0080. A log with nothing
 // below its floor this tick is counted and never handed a share, wherever it
 // sits in the order: an equal share for every log that writes anchors spent a
 // share on each idle one, so registering the code log cut the tracker's sweep
@@ -401,7 +401,7 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	}
 }
 
-// THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0073.
+// THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0080.
 //
 // Every applier opens a record's frame before it reads one, so a trimmed
 // record that is not a frame this fleet's keyring opens is refused on every

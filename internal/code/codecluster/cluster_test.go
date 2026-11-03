@@ -948,7 +948,7 @@ func (c *cluster) Advertise(t testing.TB, node string, budget int64) {
 
 // SplitMaintainers has every member of nodes take itself for repoID's
 // maintainer until the case ends (codetest.Cluster): a presence view split
-// between them, which no lease or epoch arbitrates (ADR-0082).
+// between them, which no lease or epoch arbitrates (ADR-0089).
 func (c *cluster) SplitMaintainers(t testing.TB, repoID string, nodes ...string) {
 	t.Helper()
 	c.mu.Lock()
@@ -1008,7 +1008,7 @@ func (c *cluster) confinedOut(repoID string) bool {
 
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }
 
-// Runs is the cluster's coding runs' rows, which every member's git node
+// Runs is the cluster's executors' rows, which every member's git node
 // admits a coding box by.
 func (c *cluster) Runs() *codetest.FixtureRuns { return c.runs }
 

@@ -52,7 +52,8 @@ type ArtifactDataWriter interface {
 
 // ArtifactDataHalf is the datastore a data node serves: its reader and its
 // writer, which every data node runs. A nil half is one this node's core
-// runtime has not built.
+// runtime has not built, and a nil writer beside a reader a node that
+// publishes nothing, as [ArtifactsHalf]'s is.
 type ArtifactDataHalf struct {
 	Reader ArtifactDataReader
 	Writer ArtifactDataWriter

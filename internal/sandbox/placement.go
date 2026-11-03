@@ -28,7 +28,7 @@ package sandbox
 type Placement string
 
 const (
-	// Direct runs the coding agent as a process tree on the engine host,
+	// Direct runs the harness as a process tree on the engine host,
 	// rooted in a per-box directory with HOME and the XDG variables pointed
 	// at it and an allowlisted environment.
 	//
@@ -43,7 +43,7 @@ const (
 	// Container runs a long-lived Docker or Podman container per box, with
 	// the box's home bind-mounted at DefaultHome — the home a remote box's
 	// account has, so a path under it reads the same in both cells. Real
-	// host isolation, at the cost of an image with the coding CLI already
+	// host isolation, at the cost of an image with the harness already
 	// installed.
 	//
 	// IT DOES NOT TAKE A SYSTEM PATH, though this once said it did: a setup
@@ -92,7 +92,7 @@ func (p Placement) OnEngineHost() bool { return p == Direct || p == Container }
 // which gives it no budget of its own either — the kernel charges what a
 // namespace's processes take to the user that created the namespace as well,
 // at every level up to the host's, so a box's watches are the engine user's,
-// spent beside the other seats' coding CLIs and their own file watchers.
+// spent beside the other seats' harnesses and their own file watchers.
 // What a box may take of such a budget is decided by this, never by the box
 // ([CodingSteps]).
 func (p Placement) OwnsKernel() bool { return p.Valid() && !p.OnEngineHost() }

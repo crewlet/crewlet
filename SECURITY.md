@@ -177,12 +177,22 @@ A few things worth knowing when deploying Crewlet:
   name, what every agent is doing (its status), spend, budgets, schedules and
   the tools list. That is deliberate: a company is a shared place, and a
   colleague handed no app still sees what it is doing. What it never carries is
-  a *body* — a prompt, a response, a tool's arguments, a coding run's task or
-  question — which goes only to an administrator, to the seat's lead, and for a
-  coding run's question to the person it is put to; nor a credential, a login
-  of anybody else's, an external contact id or the company-wide trail, which
-  are `admin`'s. If the existence of a seat, an agent's current status or the
-  company's spend must not reach somebody, do not give them a credential
+  a *body* — a prompt, a response, a tool's arguments, an executor's task or
+  question, its live output, or the transcript a seat's executor session keeps
+  of every file the run read and every command's output — which goes only to an
+  administrator and to the seat's lead (`audit.seat.read`, one verb for all of
+  a seat's trail), and for an executor's question to the person it is put to.
+  A session's transcript reaches nobody its live output did not, but it holds
+  more than that output showed: every tool call's whole input and each result's
+  text, where the live output names a call's subject and a failure's first
+  line. So a seat's lead reads the contents of the files their agent's runs
+  read. The transcript is passed through the engine's redaction again as it is
+  read, but that matches known credential shapes, not values: a secret of no
+  recognisable shape that a run read or printed is in it as it was. Nor does
+  the overview carry a credential, a login of anybody else's, an external
+  contact id or the company-wide trail, which are `admin`'s. If the existence of
+  a seat, an agent's current status or the company's spend must not reach
+  somebody, do not give them a credential
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it (everybody, one of
@@ -197,8 +207,8 @@ A few things worth knowing when deploying Crewlet:
   credentials, its people and its deployment — and the configuration it
   writes runs code: a stdio `mcp_servers` entry is a `command` the
   engine starts as its own user on every node that runs seats; a
-  `providers.llm` entry names a coding CLI it runs, and every agent seat's
-  executor is that CLI's own fully permissioned run, which a `run_in: direct`
+  `providers.llm` entry names a harness it runs, and every agent seat's
+  executor is that harness's own fully permissioned run, which a `run_in: direct`
   cell (on the entry, or as `providers.sandbox.default_run_in`) runs, with the
   seat's setup steps, as that same user on the engine host; and a seat's model
   chain (which places its run), credentials and `mcp_env` are part of the same
@@ -225,7 +235,7 @@ A few things worth knowing when deploying Crewlet:
   where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
   often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
   `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
-  stdio MCP server, a coding CLI, a local sandbox's coding agent and the
+  stdio MCP server, a harness, a local sandbox's harness and the
   container runtime's own CLI each get `PATH`, locale, TLS trust and proxy
   settings, the host user's home and temporary directories where they run
   in no box of their own, and what their configuration declares. That keeps the
@@ -306,7 +316,7 @@ A few things worth knowing when deploying Crewlet:
   credential, a leaf link and the operator's nats tool an nkey signing the
   member's challenge, a node's own clients in process — and anything else is
   refused, counted and logged
-  ([ADR-0087](adr/0087-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)).
+  ([ADR-0094](adr/0094-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)).
   That admission is per connection, and a route's credential crosses the
   fleet network in clear once per connection, so it is only as private as that
   network; an external cluster (`stream.type: nats`) admits whom its own
@@ -344,15 +354,15 @@ A few things worth knowing when deploying Crewlet:
   encrypts: the records, the event stream and the coordination store cross the
   fleet network in clear, the coordination store's writes are guarded by
   compare-and-set rather than a signature — except a person's answer to a
-  parked coding run and a person's note to a running one, which the run's
-  record carries sealed under the keyring and which nothing hands to a model
-  until it opens — and the scatters that only answer the question their asker
-  put — history, search, a seat's memory, a sandbox's tail — are not signed.
-  Keep both ports on a private network, and coding boxes off a member's host
-  network. The decisions are
-  [ADR-0031](adr/0031-every-state-log-record-is-signed.md) and ADR-0087, and
+  parked executor and a person's note to a turn whose executor is in its box,
+  which the executor's record carries sealed under the keyring and which
+  nothing hands to a model until it opens — and the scatters that only answer
+  the question their asker put — history, search, a seat's memory, a sandbox's
+  tail — are not signed. Keep both ports on a private network, and coding boxes
+  off a member's host network. The decisions are
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md) and ADR-0094, and
   the note's
-  [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
+  [ADR-0067](adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md).
 - **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
@@ -416,14 +426,14 @@ A few things worth knowing when deploying Crewlet:
   would trust with every viewer's readable rows. See
   `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
 - **Where each executor runs is the isolation decision.** Every agent seat's
-  executor is its coding CLI's own fully permissioned run — Claude Code under
+  executor is its harness's own fully permissioned run — Claude Code under
   `bypassPermissions`, OpenCode with every action allowed but `question` —
   because a headless run has nobody to answer a permission prompt, so the
-  cell it runs in, not the CLI's own prompts, is the isolation model. The cell
+  cell it runs in, not the harness's own prompts, is the isolation model. The cell
   is the one the `providers.llm` entry it launches on names in `run_in`, else
   `providers.sandbox.default_run_in`. `e2b` is a remote VM per run and
   `container` a Docker or Podman container on the engine host; `direct` runs
-  a fully permissioned CLI **as the engine's own user on the engine host**,
+  a fully permissioned harness **as the engine's own user on the engine host**,
   which keeps each box's state apart and not the host — the run can read
   what that user can. Use `direct` only on a dedicated host you are willing
   to hand to an autonomous agent, for the entry that needs the host itself,

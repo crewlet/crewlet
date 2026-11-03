@@ -113,12 +113,12 @@ whether a copy lags rather than whether it is level this instant — and choosin
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
 
-A copy goes out of service one DOMAIN at a time — ADR-0072.
+A copy goes out of service one DOMAIN at a time — ADR-0079.
 
 ## Amendment — a repository's git work is asked of its home git node
 
 The router has a second placement beside the data nodes:
-[ADR-0082](0082-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
+[ADR-0089](0089-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
 operation on a repository's git OBJECTS — a read of its content by object id —
 is asked of the nodes with the `git` role rather than of the data nodes, in the
 repository's rendezvous order over them, its home first, and answered from the

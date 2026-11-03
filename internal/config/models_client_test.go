@@ -8,14 +8,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // THE MODELS SCREEN READS AN ENTRY AS THE ENGINE DOES: the auth modes its
 // editor and its words are keyed on are exactly the engine's closed set, and
 // what it says an unset field means is the default the engine applies — so a
 // page never names claude-code, subscription or ten minutes for an entry the
-// engine runs some other way. And the CLIs it says can run a seat's executor
+// engine runs some other way. And the harnesses it says can run a seat's executor
 // are exactly the ones config holds to the in-box runners, so the screen never
 // tells an operator an entry runs executors that every launch skips. The jobs
 // and the places a run happens are the engine's closed sets, and the field the
@@ -28,7 +28,7 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		name string
 		want []string
 	}{
-		{"CLIAuthMode", strs(config.CLIAgentAuthModes)},
+		{"HarnessAuthMode", strs(config.HarnessAuthModes)},
 		{"ModelJob", strs(config.ProviderJobs)},
 		{"RunnerCellName", strs(config.Placements)},
 	} {
@@ -41,21 +41,21 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		}
 	}
 	seatJobFields(t, tree)
-	body, err := clientsource.Literal(tree, "EXECUTOR_CLI_AGENTS")
+	body, err := clientsource.Literal(tree, "EXECUTOR_HARNESSES")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := clientsource.Strings(body), strs(config.CodingAgents); !slices.Equal(
+	if got, want := clientsource.Strings(body), strs(config.ExecutorHarnesses); !slices.Equal(
 		slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("contract/models.ts EXECUTOR_CLI_AGENTS is %v, want exactly the engine's "+
-			"executor CLIs %v", got, want)
+		t.Errorf("contract/models.ts EXECUTOR_HARNESSES is %v, want exactly the engine's "+
+			"executor harnesses %v", got, want)
 	}
 	var unset config.LLMProvider
 	for _, tc := range []struct{ name, want string }{
-		{"DEFAULT_CLI_AGENT", unset.AgentName()},
-		{"DEFAULT_CLI_AUTH_MODE", string(unset.ResolvedAuthMode())},
-		{"DEFAULT_CLI_TIMEOUT_SECONDS", strconv.FormatFloat(unset.Timeout(), 'f', -1, 64)},
-		{"DEFAULT_CLI_MAX_CONCURRENT", strconv.Itoa(unset.Concurrency())},
+		{"DEFAULT_HARNESS", unset.HarnessName()},
+		{"DEFAULT_HARNESS_AUTH_MODE", string(unset.ResolvedAuthMode())},
+		{"DEFAULT_HARNESS_TIMEOUT_SECONDS", strconv.FormatFloat(unset.Timeout(), 'f', -1, 64)},
+		{"DEFAULT_HARNESS_MAX_CONCURRENT", strconv.Itoa(unset.Concurrency())},
 	} {
 		got, err := clientsource.Scalar(tree, tc.name)
 		if err != nil {
@@ -67,16 +67,16 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 	}
 }
 
-// EVERY BUILT-IN CLI HAS A NAME A PERSON READS. A seat's condition names the
-// CLI its entry drives ("Claude Code subscription limit reached"), and a
+// EVERY BUILT-IN HARNESS HAS A NAME A PERSON READS. A seat's condition names the
+// harness its entry drives ("Claude Code subscription limit reached"), and a
 // profile the table lacked would be shown by its machine name, the one word a
 // person reading the Inbox has never seen. Exactly the built-in profiles, so a
 // name left behind for a profile removed is caught too, bar `custom`: an entry
-// on it describes a CLI of its own, which the dashboard calls by the entry's
+// on it describes a harness of its own, which the dashboard calls by the entry's
 // key, the only name it has.
-func TestEveryBuiltInCLIHasAProductName(t *testing.T) {
+func TestEveryBuiltInHarnessHasAProductName(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Literal(clientsource.Tree(t), "CLI_PRODUCTS")
+	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_PRODUCTS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +84,11 @@ func TestEveryBuiltInCLIHasAProductName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := slices.DeleteFunc(cliprofile.BuiltinNames(), func(name string) bool {
-		return name == string(config.CLICustom)
+	want := slices.DeleteFunc(harnessprofile.BuiltinNames(), func(name string) bool {
+		return name == string(config.HarnessCustom)
 	})
 	if !slices.Equal(slices.Sorted(slices.Values(got)), want) {
-		t.Errorf("contract/models.ts CLI_PRODUCTS names %v, want exactly the built-in profiles %v",
+		t.Errorf("contract/models.ts HARNESS_PRODUCTS names %v, want exactly the built-in profiles %v",
 			slices.Sorted(slices.Values(got)), want)
 	}
 }

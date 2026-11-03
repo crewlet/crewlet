@@ -38,6 +38,31 @@ type Directory interface {
 	SeatInbox(handle string) (uuid.UUID, bool)
 }
 
+// Mailboxes is the one question the service asks of the node that holds the
+// seats' mailboxes before it addresses one: is this seat's complete? An error
+// means not yet.
+//
+// ASKED BEFORE ANYTHING IS RECORDED, because an ask opens a channel and an
+// answer counts a message before either wakes anybody: a wake refused after
+// that left a channel open on a question nobody was woken for. Asked first, a
+// refusal leaves nothing behind, and the caller is told to ask again.
+type Mailboxes interface {
+	ConfirmMailbox(ctx context.Context, seat uuid.UUID) error
+}
+
+// reachable confirms a seat's mailbox before the service records anything
+// addressed to it ([Mailboxes]). A service built with none confirms nothing.
+func (s *Service) reachable(ctx context.Context, handle string, seat uuid.UUID) error {
+	if s.mailboxes == nil {
+		return nil
+	}
+	if err := s.mailboxes.ConfirmMailbox(ctx, seat); err != nil {
+		return fmt.Errorf("a2a: %q cannot be woken yet, so nothing was sent; send it "+
+			"again: %w", handle, err)
+	}
+	return nil
+}
+
 // inbox is where a handle's wake goes, reporting false when nowhere.
 func (s *Service) inbox(handle string) (uuid.UUID, bool) {
 	return s.dir.SeatInbox(handle)
@@ -54,6 +79,10 @@ type Service struct {
 
 	dir Directory
 
+	// mailboxes confirms a seat's mailbox before anything is recorded for
+	// it; nil confirms nothing.
+	mailboxes Mailboxes
+
 	// newID mints channel ids. Injectable so the suite can pin them.
 	newID func() string
 }
@@ -61,6 +90,9 @@ type Service struct {
 // Options configure a Service.
 type Options struct {
 	Directory Directory
+	// Mailboxes confirms a seat's mailbox before an ask or an answer
+	// addressed to it records anything ([Mailboxes]). Nil confirms nothing.
+	Mailboxes Mailboxes
 	Now       func() time.Time
 	NewID     func() string
 }
@@ -84,7 +116,7 @@ func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
 			"addressed — wire the running company's org, or take " +
 			"NewSweeper if this caller only closes and purges channels")
 	}
-	s := &Service{keeper: k, dir: opts.Directory, newID: opts.NewID}
+	s := &Service{keeper: k, dir: opts.Directory, mailboxes: opts.Mailboxes, newID: opts.NewID}
 	if s.newID == nil {
 		s.newID = func() string { return "a2a-" + uuid.New().String()[:12] }
 	}
@@ -152,6 +184,9 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		// and waits on a reply that can never come.
 		return "", fmt.Errorf("%w: %q (human seats and unknown handles have "+
 			"no inbox)", ErrNotAnAgent, ask.Target)
+	}
+	if err := s.reachable(ctx, ask.Target, target); err != nil {
+		return "", err
 	}
 
 	now := s.now()
@@ -237,7 +272,7 @@ type Answer struct {
 	// phases, the reply, and the turn it wakes — reads as ONE trace.
 	//
 	// THE CONTEXT, NOT THE ASK'S EVENT: the turn that answers can end days
-	// after its trigger, in a segment resumed off its coding run's record on
+	// after its trigger, in a segment resumed off its executor's record on
 	// whichever node then holds the seat, which carries the ask's trace and
 	// never the event itself.
 	AskTrace events.TraceContext
@@ -276,6 +311,15 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	if !ok {
 		return fmt.Errorf("%w: %q is not on channel %s", ErrNotParticipant, ans.Sender, ans.ChannelID)
 	}
+	// THE RECIPIENT'S MAILBOX BEFORE THE MESSAGE IS COUNTED, for the reason
+	// an ask confirms its target's ([Mailboxes]). A recipient with no inbox
+	// at all still has the message recorded below, as it always has.
+	seat, addressable := s.inbox(recipient)
+	if addressable {
+		if err := s.reachable(ctx, recipient, seat); err != nil {
+			return err
+		}
+	}
 
 	now := s.now()
 	if _, err := s.channels.CountMessage(ctx, ans.ChannelID, now); err != nil {
@@ -298,7 +342,6 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake.DelegationDepth = ans.DelegationDepth
 	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
 	wake.ParentTurnID = ans.TurnID
-	seat, addressable := s.inbox(recipient)
 	if !addressable {
 		// A counterparty who has been removed or turned into a human seat
 		// since the channel opened. The message is already recorded and

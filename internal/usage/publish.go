@@ -165,7 +165,7 @@ import (
 // starts at the fire, so the floor is exact for them. The rows that can fall
 // outside are the records of a turn whose end states no tally, read off its
 // records — and those reach back to wherever the turn STARTED, which nothing
-// bounds: a park lasts as long as its coding run, which is never stopped on a
+// bounds: a park lasts as long as its executor, which is never stopped on a
 // timer, or as long as a person takes to answer. So a day inside the floor can
 // hold such a turn whose earliest records the sweep has removed, and derived
 // again it reads that turn shorter, with fewer reviews; the join holds every
@@ -1166,6 +1166,13 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 				LastWorkKey: r.LastWorkKey, LastQuery: r.LastQuery})
 		}
 		rec.Reads, rec.ReadsElided = capReads(reads)
+		tools := make([]ToolCalls, 0, len(s.Tools))
+		for _, t := range s.Tools {
+			tools = append(tools, ToolCalls{Server: t.Server, Tool: t.Tool, Calls: t.Calls,
+				Failed: t.Failed, Unavailable: t.Unavailable, Refused: t.Refused,
+				TotalMS: t.TotalMS, LastAt: t.LastAt})
+		}
+		rec.Tools, rec.ToolsElided = capTools(tools)
 		out = append(out, rec)
 	}
 	for _, person := range d.People {
@@ -1196,8 +1203,12 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 			},
 		}
 		for _, f := range s.Fires {
-			rec.Fires = append(rec.Fires, Fire{At: f.At, Target: f.Target,
-				Outcome: f.Outcome, TraceID: f.TraceID, TurnID: f.TurnID})
+			rec.Fires = append(rec.Fires, Fire{At: f.At, ScheduledAt: f.ScheduledAt,
+				FireLabel: f.FireLabel, Target: f.Target, Outcome: f.Outcome,
+				TraceID: f.TraceID, TurnID: f.TurnID})
+		}
+		for _, sup := range s.Superseded {
+			rec.Superseded = append(rec.Superseded, Superseded{TraceID: sup.TraceID, At: sup.At})
 		}
 		out = append(out, rec)
 	}
@@ -1208,6 +1219,7 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		// of it is that day byte for byte.
 		slices.SortFunc(out[i].Tokens, compareCell)
 		slices.SortStableFunc(out[i].Fires, compareFire)
+		slices.SortStableFunc(out[i].Superseded, compareSuperseded)
 		if err := out[i].Subject.Validate(); err != nil {
 			return nil, fmt.Errorf("usage: this node derived an object it cannot "+
 				"address on %s: %w", day, err)
@@ -1307,6 +1319,33 @@ func capReads(reads []Read) ([]Read, int) {
 	}
 	slices.SortFunc(reads, compareReadKey)
 	return reads, elided
+}
+
+// capTools keeps the [ToolsPerSeatDay] most-called entries and counts the
+// rest, on [capReads]' terms: the most-called survive, the newest breaking a
+// tie, and the survivors go back in key order. Nil for a seat-day that called
+// none, so a record without calls carries no `tools` key and is stamped at the
+// base version. It takes the slice it is handed as its own.
+func capTools(tools []ToolCalls) ([]ToolCalls, int) {
+	if len(tools) == 0 {
+		return nil, 0
+	}
+	elided := 0
+	if len(tools) > ToolsPerSeatDay {
+		slices.SortStableFunc(tools, func(a, b ToolCalls) int {
+			if c := cmp.Compare(b.Calls, a.Calls); c != 0 {
+				return c
+			}
+			if c := b.LastAt.Compare(a.LastAt); c != 0 {
+				return c
+			}
+			return compareToolKey(a, b)
+		})
+		elided = len(tools) - ToolsPerSeatDay
+		tools = tools[:ToolsPerSeatDay]
+	}
+	slices.SortFunc(tools, compareToolKey)
+	return tools, elided
 }
 
 func compareReadKey(a, b Read) int {
@@ -1545,6 +1584,9 @@ func summary(r Record) string {
 	}
 	if len(r.Fires) > 0 {
 		out += fmt.Sprintf(" fires=%d", len(r.Fires))
+	}
+	if len(r.Superseded) > 0 {
+		out += fmt.Sprintf(" superseded=%d", len(r.Superseded))
 	}
 	if len(r.RepoReads) > 0 || r.RepoReadersElided > 0 {
 		var reads, bytes int64

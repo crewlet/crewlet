@@ -53,7 +53,7 @@ func quietOptions() Options {
 		Seats:     func() tokens.Seats { return tokens.Seats{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func() any { return nil },
-		Tools:     func() []map[string]any { return nil },
+		Tools:     func() any { return nil },
 		Schedules: func() any { return nil },
 		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:     authz.NoChart{},

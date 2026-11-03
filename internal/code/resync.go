@@ -53,7 +53,7 @@ import (
 // at once on one node, and its seat on that node, before the census's refill
 // paces them.
 //
-// TWICE MaxRunRepos, sixteen at its eight: a coding run given its most
+// TWICE MaxRunRepos, sixteen at its eight: an executor given its most
 // repositories may meet each one's floor short twice — a fetch whose wants a
 // lagging cache lacks, and a request past the bound its admitted row set —
 // before any of it waits on the refill; and a turn's tools meet at most one
@@ -97,10 +97,10 @@ func NewResyncs(now func() time.Time, m *metrics.Recorder) *Resyncs {
 		PrincipalBurst: ResyncBurst, ScopeRate: resyncsPerSecond, ScopeBurst: ResyncBurst}, now), metrics: m}
 }
 
-// THE PRINCIPALS ARE SPELLED BY KIND within their seat's scope: a coding
-// run's launch id and a turn's id are each a uuid nobody chose, but one
-// spelling for both would make "a run's bucket is its own" a property of how
-// ids happen to be minted rather than of the key.
+// THE PRINCIPALS ARE SPELLED BY KIND within their seat's scope: an executor's
+// launch id and a turn's id are each a uuid nobody chose, but one spelling for
+// both would make "a run's bucket is its own" a property of how ids happen to
+// be minted rather than of the key.
 const (
 	runPrincipal  = "run "
 	turnPrincipal = "turn "
@@ -121,7 +121,7 @@ func (r *Resyncs) Turn(seat, turn string) *costlimit.Refusal {
 	return r.limiter.Take(seat, turnPrincipal+turn, 1)
 }
 
-// Box draws one re-sync of a BOX's request — a coding run's ([RunResyncs]) or
+// Box draws one re-sync of a BOX's request — an executor's ([RunResyncs]) or
 // a check's ([CheckKey.Resyncs]), its transfer's at the code host or its read
 // at /box/code/ at the node that answers it, the same bucket either way —
 // counted crewlet.code.box.resyncs by outcome: `taken`, a barrier on the code
@@ -147,7 +147,7 @@ func (r *Resyncs) Box(scope, principal string) *costlimit.Refusal {
 // box, and every read it makes is at its check's session, which holds its one
 // commit — so a check that meets its floor short is a file asking for what
 // nobody pushed, and one keyed by its repository holds the dozen checks a
-// push fans out to the one term a coding run gets: nothing a seat's census
+// push fans out to the one term an executor gets: nothing a seat's census
 // counts, and nothing a person's clients' term was sized for.
 func (k CheckKey) Resyncs() (scope, principal string) {
 	return "check:" + k.RepoID, k.OID + " " + k.Target + " " + k.Name + " " + strconv.Itoa(k.Attempt)

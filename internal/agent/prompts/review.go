@@ -53,7 +53,7 @@ import (
 // the work's merits, which is the reviewer's.
 //
 // THE RUN'S OWN WORK IS IN NO LOG, and the header says so for every seat
-// because every executor is a coding CLI's own run: its edits, commands,
+// because every executor is a harness's own run: its edits, commands,
 // tests and commits happen in its box, and the log holds only the calls it
 // made to the seat's tools over the bridge. A reviewer that read the log as
 // everything the agent did took a run that fixed a bug and pushed the branch
@@ -65,11 +65,11 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
 	"happened, and `→ error` calls did not take effect. `## What the agent " +
 	"produced` is the agent's own account of itself." +
-	"\n**The agent ran as a coding CLI with its own shell.** Its local work " +
+	"\n**The agent ran as a harness with its own shell.** Its local work " +
 	"— editing files, running commands and tests, committing — is not in " +
 	"`## What the agent did`, which lists only the calls it made to your " +
 	"tools. Judge that work on its report and on any branches or pull " +
-	"requests listed under `## What the run delivered`; a missing shell or " +
+	"requests listed under `## What the agent delivered`; a missing shell or " +
 	"test call is not fabrication." +
 	"\n**Delivery is already settled:** the engine checked the agent's " +
 	"delivery claims against this turn's whole log, earlier rounds " +
@@ -173,11 +173,16 @@ type ReviewInput struct {
 
 	// Skills is the tool-skill registry. Review-phase skills are
 	// operator-scoped: a skill listing the review phase surfaces here,
-	// keyed on the role's MCP servers, even though Review has no domain
-	// tools — guidance an operator wants the reviewer to weigh stays
-	// available. Required skills render unmarked here; see
+	// keyed on the seat's MCP servers (MCPServers), even though Review has
+	// no domain tools: guidance an operator wants the reviewer to weigh
+	// stays available. Required skills render unmarked here; see
 	// skillCatalogue.
 	Skills SkillCatalogue
+
+	// MCPServers is every MCP server the seat's registry holds a tool of,
+	// sorted: the servers the work under review could reach, which the
+	// catalogue's server triggers are matched against (see [Surface]).
+	MCPServers []string
 }
 
 // BuildReview renders the Review-phase system prompt, and its outline.
@@ -200,7 +205,7 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 	b.Lead("identity", "Identity", BuildIdentityLine(seat))
 	b.Heading("review_phase", reviewHeader(in))
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseReview, Surface{
-		MCPServers: seat.mcpServers(),
+		MCPServers: in.MCPServers,
 	})...)
 	// Evidence runs oldest-first so the reviewer reads the turn
 	// top-to-bottom as one timeline: earlier rounds, then this round's
@@ -225,7 +230,7 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 		b.Heading("produced", "\n## What the agent produced", in.Produced)
 	}
 	if in.Delivered != "" {
-		b.Heading("delivered_refs", "\n## What the run delivered", in.Delivered)
+		b.Heading("delivered_refs", "\n## What the agent delivered", in.Delivered)
 	}
 	return b.Build()
 }
@@ -246,7 +251,7 @@ func DeliveredRefs(refs []string, elided int) string {
 		lines = append(lines, "- "+ref)
 	}
 	if elided > 0 {
-		lines = append(lines, fmt.Sprintf("- (and %d more the run reported)", elided))
+		lines = append(lines, fmt.Sprintf("- (and %d more the agent reported)", elided))
 	}
 	return strings.Join(lines, "\n")
 }

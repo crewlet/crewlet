@@ -28,7 +28,7 @@ import (
 // for its row and the adoption — in ONE function, land. It has two callers:
 // the relay, which reads git's commands off the hook and hands them over, and
 // an engine write (write.go), a push the engine builds itself rather than one
-// git received (ADR-0085) — a merge_change among them (merge.go), whose
+// git received (ADR-0092) — a merge_change among them (merge.go), whose
 // proposal is its merge record (landing.Merge). A second copy of these steps for the engine's
 // pushes would be a second implementation of what a push is (ADR-0008), and
 // the first rule it got wrong would be one only it broke: Command.Forced,
@@ -803,9 +803,9 @@ const _ = uint64(code.PruneGrace - sandbox.KeptBoxMaxAge - RunTokenTTL)
 // back: a seat branch deleted since the box checked it out — by the seat's
 // own tool, by a person, by the branch's expiry — leaves its commits in the
 // repository FOR code.PruneGrace AFTER THE DELETION: a compaction keeps what
-// no ref reaches (ADR-0083), and the deletion's code_ref_drops row keeps them
+// no ref reaches (ADR-0090), and the deletion's code_ref_drops row keeps them
 // out of every scheduled expunge's drop set until the grace has passed
-// (ADR-0092) — and git sends a commit no ref the box was shown reaches.
+// (ADR-0099) — and git sends a commit no ref the box was shown reaches.
 // Refused, the host's own write would be answered as a forgery of it. The
 // grace is enough because no box's checkout outlives it — the box's lifetime,
 // not one credential's, since a reviewer's send-back or a person's answer

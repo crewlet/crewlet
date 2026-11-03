@@ -96,7 +96,7 @@ func TestAChartGivingAUnitRoomToAnotherUnitMovesItThere(t *testing.T) {
 // A UNIT RENAMED WITHOUT AN ID KEEPS ITS ROOM AND ITS PEOPLE.
 //
 // The seats did not move, so their rows are already right; the room answers
-// to the new key, which is a change a screen and the lead fallback can see,
+// to the new key, which is a change a screen and the room's answerer can see,
 // so it is published — and reported as a re-home rather than as a re-stamp,
 // which would say nothing happened.
 func TestARenamedUnitKeepsItsRoomAndItsPeople(t *testing.T) {

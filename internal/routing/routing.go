@@ -67,6 +67,33 @@
 // woken, never the whole chain: waking every lead in it for every unattended
 // change is how a fallback becomes something people filter out.
 //
+// # Told and woken are two answers
+//
+// Every candidate a [Builder] keeps is TOLD — an applier writes it a notice
+// row — and [Candidate.Wakes] says whether its notice also STARTS A TURN. A
+// domain that draws that line hands the builder its rule
+// ([Builder.StartsTurn]); one that does not wakes everybody it tells. The
+// tracker draws it, because on a live company most of the turns its notices
+// started were for changes that asked their seat nothing: a watcher reading
+// another agent's status note, an assignee reading a colleague's
+// acknowledgement. Those stay in the inbox, read when the seat next opens the
+// task.
+//
+// THE FIRST REASON IS WHAT A HANDLE IS TOLD, AND ANY ORDINARY REASON WAKES IT.
+// Precedence decides which fact a recipient reads, and a stronger fact that
+// starts no turn must not swallow a weaker one that does: the reporter of a
+// task who also wrote in the thread a reply lands in is told "a task you
+// reported", and is still woken, because the reply is to something they
+// wrote. So a later offer of a handle the builder already holds still adds
+// its wake to that candidate, though never its reason. A fallback's or an
+// inbox-only offer's does not: neither is an ordinary reason to hear.
+//
+// AND WHO IS WOKEN IS DECIDED AFTER THE FALLBACK. A candidate told and not
+// woken still heard about the change, so it keeps the fallback quiet as any
+// ordinary survivor does: filtering it out first would turn every quiet
+// change on a watched item into a lead's page, which is the noise the line
+// exists to remove.
+//
 // # Reasons stay the domain's
 //
 // This package declares no reason. A domain's reasons are its own closed set
@@ -130,6 +157,16 @@ type Candidate[R ~string] struct {
 
 	// InboxOnly marks a candidate written to the inbox and never woken.
 	InboxOnly bool
+
+	// Wakes marks a candidate whose notice starts a turn, as its domain's
+	// rule decides ([Builder.StartsTurn]). One that does not is still told —
+	// its notice row is written — and still counts as somebody who heard
+	// about the change when [Route] decides whether the fallback is needed.
+	//
+	// FALSE IS "TOLD, NOT WOKEN", so a candidate is woken only where a
+	// builder said so: every [Builder] sets it, true for every reason of a
+	// domain that names no rule.
+	Wakes bool
 }
 
 // Hears reports whether c is told of a change actor made.
@@ -155,19 +192,37 @@ func (c Candidate[R]) Hears(actor string, wakesActor func(R) bool) bool {
 // package doc). The zero value is ready to use, and one builder serves one
 // record.
 type Builder[R ~string] struct {
-	out   []Candidate[R]
-	named map[string]bool
+	// StartsTurn is the domain's rule for which of its reasons start a turn
+	// ([Candidate.Wakes]). Nil wakes every candidate the builder keeps: the
+	// answer for a domain whose every notice is worth a turn, so a domain
+	// draws the line only by naming it.
+	StartsTurn func(R) bool
+
+	out []Candidate[R]
+	// named is where each handle's one candidate sits in out, so a later
+	// ordinary offer of the same handle can still add its wake.
+	named map[string]int
 
 	// ranks is how many places [Builder.Fallback] has handed out.
 	ranks int
 }
 
-// Add offers handle under reason. An empty handle, and a handle an earlier
-// offer already named, add nothing — the empty one because a snapshot field
-// nothing filled is an empty handle, and a reason whose field went unfilled
-// must route to nobody rather than to a recipient called "".
+// Add offers handle under reason. An empty handle adds nothing, because a
+// snapshot field nothing filled is an empty handle, and a reason whose field
+// went unfilled must route to nobody rather than to a recipient called "".
+// A handle an earlier offer already named keeps that offer's reason, and
+// gains this one's wake where both are ordinary offers (see the package doc,
+// "Told and woken are two answers").
 func (b *Builder[R]) Add(handle string, reason R, addressed bool) {
-	b.claim(Candidate[R]{Handle: handle, Reason: reason, Addressed: addressed})
+	if i, ok := b.named[handle]; ok {
+		if held := &b.out[i]; !held.FallbackOnly && !held.InboxOnly {
+			held.Wakes = held.Wakes || b.wakes(reason)
+		}
+		return
+	}
+	b.claim(Candidate[R]{
+		Handle: handle, Reason: reason, Addressed: addressed, Wakes: b.wakes(reason),
+	})
 }
 
 // AddAll offers each handle in turn, as [Builder.Add] does one.
@@ -200,6 +255,7 @@ func (b *Builder[R]) Fallback(reason R, chain ...string) {
 		b.ranks++
 		b.claim(Candidate[R]{
 			Handle: handle, Reason: reason, FallbackOnly: true, FallbackRank: rank,
+			Wakes: b.wakes(reason),
 		})
 	}
 }
@@ -211,20 +267,25 @@ func (b *Builder[R]) Candidates() []Candidate[R] { return b.out }
 // claim adds c unless its handle is empty or already named — the add-once
 // rule every offer is held to.
 func (b *Builder[R]) claim(c Candidate[R]) {
-	if c.Handle == "" || b.named[c.Handle] {
+	if _, ok := b.named[c.Handle]; c.Handle == "" || ok {
 		return
 	}
 	if b.named == nil {
-		b.named = map[string]bool{}
+		b.named = map[string]int{}
 	}
-	b.named[c.Handle] = true
+	b.named[c.Handle] = len(b.out)
 	b.out = append(b.out, c)
+}
+
+// wakes is the domain's rule for reason, and true where it names none.
+func (b *Builder[R]) wakes(reason R) bool {
+	return b.StartsTurn == nil || b.StartsTurn(reason)
 }
 
 // Route is the post-filter: which of a record's candidates are woken.
 //
-// Four steps, in this order, and the last one is the whole reason the
-// fallback is a chain:
+// Five steps, in this order. The fourth is the whole reason the fallback is
+// a chain, and the fifth is why it comes last:
 //
 //  1. Drop the inbox-only candidates — they are a record, not a wake.
 //  2. Drop the actor, except under a reason wakesActor says is news to them
@@ -238,18 +299,24 @@ func (b *Builder[R]) claim(c Candidate[R]) {
 //     wake — a wake addressed to nobody is one nothing reports.
 //  4. If no ordinary candidate survived, keep the LOWEST-RANKED fallback the
 //     company still employs, and only that one.
+//  5. Keep only the candidates whose notice starts a turn
+//     ([Candidate.Wakes]). AFTER the fallback is decided, never before: a
+//     candidate told and not woken still heard about the change (see the
+//     package doc).
 //
-// THE REGISTRY IS ASKED ONLY ABOUT A HANDLE ROUTE COULD WAKE: never the
-// actor, never an inbox-only candidate, never a fallback while an ordinary
-// candidate survives, and the chain link by link in rank order, stopping at
-// the first link still employed. Steps 2 and 3 are both filters, so taking
-// the record's own step first changes no answer — it changes what the roster
-// is asked, and that is what a domain counts and pays for: the knowledge base
-// logs every handle the roster refused as a dropped recipient, which asked
-// first would count an actor who has since left, or a departed lead whose
-// copy nobody needed, from a change that reached everyone it should; and a
-// snapshot of hundreds of handles costs a lookup per would-be recipient
-// rather than per name.
+// THE REGISTRY IS ASKED ONLY ABOUT A HANDLE WHOSE ANSWER COULD CHANGE THE
+// RESULT: never the actor, never an inbox-only candidate, never a fallback
+// while an ordinary candidate survives, and the chain link by link in rank
+// order, stopping at the first link still employed. An ordinary candidate
+// that will not be woken is asked like one that will, because whether it is
+// still employed is whether it keeps the fallback quiet. Steps 2 and 3 are
+// both filters, so taking the record's own step first changes no answer — it
+// changes what the roster is asked, and that is what a domain counts and pays
+// for: the knowledge base logs every handle the roster refused as a dropped
+// recipient, which asked first would count an actor who has since left, or a
+// departed lead whose copy nobody needed, from a change that reached everyone
+// it should; and a snapshot of hundreds of handles costs a lookup per
+// would-be recipient rather than per name.
 //
 // ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
 // author iam.ActorFor records for them — so the handle their own gestures
@@ -275,7 +342,7 @@ func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 		}
 	}
 	if len(ordinary) > 0 {
-		return ordinary
+		return waking(ordinary)
 	}
 	// THE RANK DECIDES, never the place in the slice a caller assembled —
 	// stable, so two links a caller gave one rank keep the order it gave.
@@ -284,8 +351,20 @@ func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 	})
 	for _, c := range fallback {
 		if employed(c.Handle) {
-			return []Candidate[R]{c}
+			return waking([]Candidate[R]{c})
 		}
 	}
 	return nil
+}
+
+// waking is [Route]'s fifth step: the candidates whose notice starts a turn,
+// in the order given, and nil when none does.
+func waking[R ~string](heard []Candidate[R]) []Candidate[R] {
+	var out []Candidate[R]
+	for _, c := range heard {
+		if c.Wakes {
+			out = append(out, c)
+		}
+	}
+	return out
 }

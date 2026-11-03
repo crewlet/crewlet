@@ -32,10 +32,11 @@ import type { LogPosition } from "./session.ts";
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
-import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { CHECK_PURPOSES, CHECK_STATES, QUEUE_STATES } from "../contract/checks.ts";
-import type { McpServersStatusAnswer } from "../contract/mcp.ts";
+import type { McpMemberServersStatusAnswer, McpServersStatusAnswer } from "../contract/mcp.ts";
+import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
@@ -61,6 +62,7 @@ import type {
 } from "../contract/integrations.ts";
 import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
+import type { ExecutorSessionAnswer, ExecutorSessionsAnswer } from "../contract/sessions.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -348,10 +350,10 @@ export interface PhaseRound {
 }
 
 /**
- * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * One harness run of a phase (`types.PhaseInvocation`): one process driving its
  * own loop over the phase's tools, from launch to exit — the unit the engine
- * observes for every CLI, where a round is one model request that a CLI's
- * record shows for most CLIs and not for all.
+ * observes for every harness, where a round is one model request that a harness's
+ * record shows for most harnesses and not for all.
  */
 export interface PhaseInvocation {
   started_at: string;
@@ -360,7 +362,7 @@ export interface PhaseInvocation {
   provider_key?: string;
   model?: string;
   /**
-   * How the run ended: `end` (its model stopped), `cap` (its CLI's own turn
+   * How the run ended: `end` (its model stopped), `cap` (its harness's own turn
    * cap), `stopped` (the engine ended it) or `failed`. A string rather than a
    * union, so an outcome a newer engine records arrives as itself.
    */
@@ -373,7 +375,7 @@ export interface PhaseInvocation {
   first_round: number;
   last_round: number;
   /**
-   * False for a run whose CLI's record showed no model requests: the whole
+   * False for a run whose harness's record showed no model requests: the whole
    * run is then ONE round, which nothing timed on its own — its span is the
    * run's.
    */
@@ -388,7 +390,7 @@ export interface PhaseInvocation {
 
 /**
  * One tool call a phase is running right now (`types.RunningCall`) — one entry
- * of `running_calls`, since a coding CLI may run a response's calls at once.
+ * of `running_calls`, since a harness may run a response's calls at once.
  */
 export interface RunningCall {
   /** The call's own id: what its `tool_executions` row carries as `call_id`
@@ -410,7 +412,7 @@ export interface PhaseSteer {
   note_id: string;
   /** The kind of step that read it (`types.SteerBoundary`, one of
    *  `STEER_BOUNDARIES`): a round of the engine's loop, or a step of the
-   *  phase's coding run. */
+   *  executor in its box. */
   boundary: string;
 }
 
@@ -425,7 +427,7 @@ export interface WorkItemRef {
 /** Where in a turn a seat is (`livestate.Stage`). */
 export type TurnStage = "context" | "phase" | "parked";
 
-/** The turn a seat is on — running, or parked on a detached coding run. */
+/** The turn a seat is on — running, or parked while its executor runs in its box. */
 export interface LiveTurn {
   turn_id: string;
   work_item?: WorkItemRef | null;
@@ -452,7 +454,7 @@ export interface Paused {
   at: string;
   reason?: string;
   /** Whether the pause also ended the seat's running work: the turn it was
-   *  on, at its next round, and any coding run it had out, at once. */
+   *  on, at its next round, and its executor in its box, at once. */
   stop_running: boolean;
 }
 
@@ -473,10 +475,10 @@ export interface ProviderLimit {
   resets_at: string | null;
   /** When the condition began, in UTC. */
   since: string;
-  /** The CLI the limited entry drives (`claude-code`), a key of
-   *  `CLI_PRODUCTS`; empty where the report did not say. */
-  cli: string;
-  /** Whether that CLI signs in on a plan rather than a metered key. */
+  /** The harness the limited entry drives (`claude-code`), a key of
+   *  `HARNESS_PRODUCTS`; empty where the report did not say. */
+  harness: string;
+  /** Whether that harness signs in on a plan rather than a metered key. */
   subscription: boolean;
 }
 
@@ -551,7 +553,7 @@ export interface LiveCall {
   /** Each round's own timing and tokens, as the loop recorded it. */
   rounds?: PhaseRound[] | null;
   /**
-   * The phase's CLI runs that have ENDED, in order. The run in flight is not
+   * The phase's harness runs that have ENDED, in order. The run in flight is not
    * on it until it ends: its rounds are the ones past every entry's
    * `last_round`. Status, like `rounds`: a reader withheld the body is sent
    * it.
@@ -569,14 +571,14 @@ export interface LiveCall {
    */
   round_started_at?: string;
   /**
-   * When the CLI run in flight was launched — the run whose rounds are past
+   * When the harness run in flight was launched — the run whose rounds are past
    * every entry in `invocations`, which lists only the runs that have ended.
    * Absent between runs.
    */
   run_started_at?: string;
   /**
    * Every tool call running RIGHT NOW, in the order they arrived — a coding
-   * CLI may run a response's calls at once. Absent between calls.
+   * harness may run a response's calls at once. Absent between calls.
    */
   running_calls?: RunningCall[] | null;
   /**
@@ -708,6 +710,17 @@ export interface Overlay {
   /** The seat's models at their usage limit, or null while they are not.
    *  Always present, so a limit that lifted is shed. */
   provider_limit?: ProviderLimit | null;
+  /** What waits in the seat's inbox that no turn is running on yet, as the
+   *  node holding the seat reports it (`livestate.Waiting`); null while no
+   *  holder has reported it, or once its holder went quiet. */
+  waiting?: InboxWaiting | null;
+}
+
+/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
+ *  the seat (the priority lane), `background` the rest of its work. */
+export interface InboxWaiting {
+  priority: number;
+  background: number;
 }
 
 /**
@@ -727,7 +740,7 @@ export interface AgentRow extends Overlay {
   /**
    * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
    * a handle never changes, so neither does this, and no two seats share it.
-   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * THE key a live overlay, an executor's row, a spend row and a phase record
    * carry and pair with this row by — never `role`, which is prose two seats
    * may share.
    */
@@ -738,15 +751,15 @@ export interface AgentRow extends Overlay {
   [key: string]: unknown;
 }
 
-/** One in-flight detached coding run. */
-export interface SandboxEntry {
+/** One executor in flight, in its box. */
+export interface ExecutorEntry {
   turn_id: string;
   /** What the seat was called when the run started — display only; the run
    *  pairs with its seat's row by `agent_id`. */
   role: string;
   agent_handle: string;
   agent_id: string;
-  coding_agent: string;
+  harness: string;
   /** The executor-chain member the run was launched on, and its model — which
    *  a fallback at launch makes other than the chain's head. The member is the
    *  company's configuration and is sent to an admin alone; the model goes to
@@ -792,29 +805,29 @@ export interface SandboxEntry {
  * than an omission: a run's record is DELETED once the run settles and its box
  * is reclaimed, so `sandbox.Active` is every status a record can carry and the
  * terminal pair can never reach a client. How a run ended is on the event
- * stream — the resumed turn's own events, a `sandbox_run_failed` naming the
- * reason, or a `sandbox_run_stopped` naming who stopped it — never on this row.
+ * stream — the resumed turn's own events, an `executor_failed` naming the
+ * reason, or an `executor_stopped` naming who stopped it — never on this row.
  */
-export type SandboxStatus =
+export type ExecutorStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
-/** One durable coding run, as the `sandbox_runs` query answers it. */
-export interface SandboxRun {
-  /** The RUN this job belongs to — one execution of a turn, and this
+/** One executor's durable row, as the `executors` query answers it. */
+export interface ExecutorRow {
+  /** The turn this launch belongs to — one execution of a turn, and this
    *  record's own key. See `adr/0017`. */
   turn_id: string;
-  /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. On a parked run it names the question the
-   *  run waits on, which `answer_run` answers by. Empty on a run the live
-   *  projection knows of before its durable row is read. */
+  /** The launch the row holds NOW — a turn can launch more than one — and
+   *  what `executor_tail` is asked by. On a parked executor it names the
+   *  question it waits on, which `answer_executor` answers by. Empty on an
+   *  executor the live projection knows of before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a turn with no ledgerable
    *  trigger, and on a live entry whose durable row has not been read yet. */
   work_key?: string;
   agent_handle: string;
   role: string;
-  status: SandboxStatus;
-  coding_agent: string;
+  status: ExecutorStatus;
+  harness: string;
   /** The executor-chain member the job was launched on, and its model. Absent
    *  on a live entry that named none; the member is also absent for every
    *  reader but an admin, since it is the company's configuration. */
@@ -862,7 +875,7 @@ export interface SandboxRun {
   answerable_in_chat: boolean;
   /**
    * The answers the run's question let go of, by the id of the delivery each
-   * arrived in (`answer_run` answers it as `answer_id`): an answer here was
+   * arrived in (`answer_executor` answers it as `answer_id`): an answer here was
    * not used, and the run waits on its question again. Absent on a row from an
    * engine that does not say.
    */
@@ -882,7 +895,7 @@ export interface SandboxRun {
    * What this run called through the MCP bridge, in order.
    *
    * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
-   * made by its coding CLI, a process outside the engine, over the MCP bridge
+   * made by its harness, a process outside the engine, over the MCP bridge
    * — minutes or hours apart and possibly across a restart. ALWAYS AN ARRAY on
    * a row the store answered, empty for a run that has called nothing yet;
    * absent where it is not known — a live entry whose row is not read yet, or
@@ -933,7 +946,7 @@ export interface BridgeCall {
  * One slice of spend, in TOKENS — the one unit every call is measured in.
  *
  * THE ENGINE'S BUCKET CARRIES A PRICE BESIDE THESE, AND THIS DECLARES NONE OF
- * IT. Only a subscription coding CLI quotes what a run cost, so a currency
+ * IT. Only a subscription harness quotes what a run cost, so a currency
  * figure covers the minority of calls that quote one while the token count
  * beside it covers all of them — and on a screen the first reads as the
  * company's spend. The dashboard renders tokens only, never money (rule 19 in
@@ -1706,52 +1719,6 @@ export interface ScheduleSpec {
   catchup?: boolean | null;
 }
 
-/**
- * One tool's behavioural hints, as the engine recorded them AT REGISTRATION.
- *
- * EVERY HINT IS A WORD, never a bool, and the third word is the point: "the
- * server did not advertise this" and "the server said no" are different facts,
- * and an absent hint arriving as `false` would read as a positive denial — so
- * a fresh MCP server's unannotated tools would look like proven reads on the
- * one screen an operator audits them on. All three values are truthy, so a
- * careless `if (!ann.read_only)` cannot mean "not read-only" either.
- *
- * A hint this build does not know renders as ITSELF, for the reason the event
- * registry gives: a rolling upgrade puts a newer node's value on an older
- * node's screen.
- */
-export type ToolHint = "yes" | "no" | "unknown";
-
-export interface ToolAnnotations {
-  read_only: ToolHint;
-  destructive: ToolHint;
-  idempotent: ToolHint;
-  open_world: ToolHint;
-}
-
-export interface ToolRow {
-  name: string;
-  description: string;
-  /** `builtin` / `mcp:<server>` / `a2a` — the two-value origin grammar. */
-  source: string;
-  /** A human-readable name the server advertised, when it advertised one. */
-  title?: string;
-  annotations: ToolAnnotations;
-  /**
-   * WHERE calling this puts something in front of somebody outside the turn,
-   * empty for a tool that reaches nobody. The registry's own predicate — not
-   * "was this served by MCP": a proven read-only MCP tool delivers nowhere,
-   * and Worklet's comment tool delivers although it is a builtin.
-   */
-  delivers: string;
-  /**
-   * The JSON Schema the model is offered, ABSENT when the tool takes no
-   * arguments. Absent and `{}` are different: only the first means this build
-   * did not send one.
-   */
-  input_schema?: Record<string, unknown>;
-}
-
 /** One declared schedule, as `schedule.Row` serialises it.
  *
  *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`,
@@ -1796,12 +1763,14 @@ export interface ScheduleRow {
   problem?: string;
 }
 
-/** One fire, from the at-most-once dispatch ledger.
+/** One fire, from the schedules' replicated history: every data node's fires,
+ *  each with what became of it.
  *
- *  `outcome` has exactly three values — `fired`, `skipped_catchup` and
- *  `skipped_paused` (the runner seat was paused when the fire came due) —
- *  because this is a DISPATCH ledger and not a turn-outcome one. Nothing here
- *  can say a turn failed; the turn says that. */
+ *  `outcome` is what the scheduler recorded (`fired`, `skipped_catchup`, or
+ *  `skipped_paused` for a runner seat that was paused when the fire came due),
+ *  or `skipped_superseded` for a fire its seat did not run because a later
+ *  fire of the same schedule ran in its place. None of them is a turn's
+ *  outcome: nothing here can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
   /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
@@ -1810,12 +1779,13 @@ export interface ScheduleRunRow {
    *  node is running. */
   scope_name: string;
   schedule_name: string;
-  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  /** The tick this fire stands for, as the dispatch ledger's own
+   *  at-most-once key. */
   fire_label: string;
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "";
+  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
   trace_id: string;
 }
 
@@ -1827,7 +1797,7 @@ export interface SchedulesAnswer {
   recent_runs?: ScheduleRunRow[];
 }
 
-/** One schedule's own dispatch history, newest first. */
+/** One schedule's own history, newest first. */
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
@@ -3355,7 +3325,7 @@ export interface WorkItemTurn {
   seat: string;
   trigger?: string;
   /** How many completions were charged here; more than one for a turn that
-   *  parked on a coding run. */
+   *  parked on its executor. */
   segments: number;
   /** Input plus output, over every segment — what the task's spend sums. */
   tokens: number;
@@ -3365,8 +3335,8 @@ export interface WorkItemTurn {
   workers?: number;
   sent_back?: number;
   /** How the turn ended, off its newest segment: its decision, `failed`,
-   *  `stopped` where a person's pause ended it, or `suspended` while a coding
-   *  run is still out. */
+   *  `stopped` where a person's pause ended it, or `suspended` while its
+   *  executor is still out in its box. */
   outcome: string;
   phases: string[];
   /** The phase that failed, when `outcome` is `failed` because one did.
@@ -3851,10 +3821,11 @@ export interface PageDetail {
 
 /**
  * A point on one of the engine's state logs, as an answer reports it —
- * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
- * off a write's answer: a position this file declared again would be a second
- * shape for one value, and the floor and a chat cursor would be free to come
- * to mean different things by it.
+ * DECLARED ONCE, in `contract/positions.ts`, which the floor that parses the
+ * same point off a write's answer (`session.ts`) and the answers declared in
+ * the contract import too: a position this file declared again would be a
+ * second shape for one value, and the floor and a chat cursor would be free to
+ * come to mean different things by it.
  *
  * Chatlet needs the shape by name for a reason the other answers do not: a READ
  * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client
@@ -3958,6 +3929,10 @@ export interface ChatMessage {
   mentions?: string[];
   /** `@channel` — the room as a whole. */
   collective?: boolean;
+  /** Whom a PERSON'S message reached and why, in routing order, written by
+   *  the engine from the post's own routing. Absent on everything else; an
+   *  empty `recipients` is a message that reached no agent. */
+  reach?: ChatReach;
   created_at: string;
   edited_at?: string;
   edited_by?: string;
@@ -4020,6 +3995,56 @@ export interface ChatThreadSummary {
   replier_count: number;
 }
 
+/** Why a message woke a seat. OPEN, for a reason a newer engine adds. */
+export type ChatReachReason =
+  | "dm"
+  | "mention"
+  | "reply_to_own_root"
+  | "collective_request"
+  | "answerer"
+  | "reply"
+  | "collective"
+  | "follow"
+  | "follow_all"
+  | (string & {});
+
+/** Whom a person's message reached. */
+export interface ChatReach {
+  /** The agents it woke, in routing order. Absent or empty: no agent. */
+  recipients?: { handle: string; reason: ChatReachReason }[];
+  /** A routing cap left seats out. */
+  truncated?: boolean;
+}
+
+/** A seat's answer to a message it was reached by. */
+export interface ChatAnswer {
+  handle: string;
+  /** The message that answered, and its broker instant. */
+  message_id: string;
+  at: string;
+}
+
+/** Where a person's message stands with the agents it reached. `unknown` is
+ *  a message whose reach was never recorded (stored before messages recorded
+ *  it), which shows no receipt: it is not `no_agent`. OPEN. */
+export type ChatDelivery =
+  "unknown" | "no_agent" | "waiting" | "partly_answered" | "answered" | (string & {});
+
+/** Why a draft would reach no agent: the room has none to answer it, or the
+ *  words name only people. OPEN. */
+export type ChatQuiet = "no_agent" | "addressed_to_people" | (string & {});
+
+/** The `chat_reach{channel_id, body, reply_to?}` answer: whom a draft would
+ *  reach if it were sent now, decided by the post's own routing. */
+export interface ChatDraft {
+  channel_id: string;
+  thread_root?: string;
+  reach?: ChatReach;
+  mentions?: string[];
+  collective?: boolean;
+  quiet?: ChatQuiet;
+}
+
 /** One emoji on one message, with whether this viewer is among the reactors. */
 export interface ChatReaction {
   emoji: string;
@@ -4042,6 +4067,12 @@ export interface ChatMessageView {
   /** The replies under a room post, on a transcript page and on a thread's
    *  root. Absent on a reply, a room event and a post nobody answered. */
   thread?: ChatThreadSummary;
+  /** Which of the agents a person's message reached have answered it, in the
+   *  order they answered. */
+  answered?: ChatAnswer[];
+  /** Where a person's message stands with them; absent on anything that is
+   *  not a person's message. */
+  delivery?: ChatDelivery;
 }
 
 /** The newest message in a room, as the rail previews it. */
@@ -4068,6 +4099,10 @@ export interface ChatChannelSummary {
   revision: number;
   /** THIS VIEWER'S membership flag: every message in the room reaches them. */
   follow_all?: boolean;
+  /** The viewer is in the room. False only for a room listed because they
+   *  starred it and may read it (a team's room they are outside), from which
+   *  nothing reaches them unless it names them. */
+  member: boolean;
   /** Room posts above this viewer's cursor, counted to `chatlet.UnreadLimit`
    *  (100). Their own messages, the tombstones, room events and replies in a
    *  thread do not count: a reply is read in its thread. */
@@ -4344,6 +4379,11 @@ export interface ChatWorking {
    *  engine's hub declares it renders words, so every frame it sends carries
    *  one. */
   status?: string;
+  /** The seat has not started on the message: it waits behind what the seat
+   *  is already doing, and `status` says what ("is queued behind its current
+   *  task"). Drawn as the kit's queued indicator, still, until the turn that
+   *  picks it up takes the line over in place. */
+  queued?: boolean;
 }
 
 /** Who is in one room right now, as the room's screen draws it — derived from
@@ -4828,7 +4868,7 @@ export interface TurnAnswer {
 }
 
 /**
- * What a running coding run has said, read from its box by the node that owns
+ * What an executor has said in its box, read from the box by the node that owns
  * it (`sandbox.Output`), redacted by the engine: what the asker's CURSOR lacks
  * — the text after the offset it holds through (`start`), or on `reset` the
  * last 256 KiB (what the record will hold) in whole lines, which replaces what
@@ -4840,7 +4880,7 @@ export interface TurnAnswer {
  * start 0, and an offset the engine left out at 0 once read as absent, so a
  * delta from 0 was taken for one that did not follow and thrown away.
  */
-export interface SandboxOutput {
+export interface ExecutorOutput {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
@@ -4863,7 +4903,7 @@ export interface SandboxOutput {
 }
 
 /**
- * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
+ * One `executor_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
@@ -4871,8 +4911,8 @@ export interface SandboxOutput {
  * the node that reads its box NAMED where it did not answer
  * (`owner_silent`).
  */
-export interface SandboxTailAnswer {
-  outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
+export interface ExecutorTailAnswer {
+  outcome: (typeof EXECUTOR_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /**
@@ -4884,7 +4924,7 @@ export interface SandboxTailAnswer {
   /** Why the job is not running: the record's status, `replaced`, or absent
    *  where no record is left. */
   status?: string;
-  output?: SandboxOutput;
+  output?: ExecutorOutput;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -5331,10 +5371,13 @@ export interface SecretRow {
   updated_by_kind?: string;
   operator_id?: string;
   /** Which write path last stored it, in that path's own word — `api`,
-   *  `setup`, `provision`, `cli` or `llm-login` — never a word the writer
-   *  chose.
+   *  `setup`, `provision`, `cli`, `llm-login`, `models` or `mcp` — never a
+   *  word the writer chose.
    *  What each means is `provenance` in routes/settings/Secrets.tsx. */
   source: string;
+  /** Whether no reveal answers the value: one stored from Settings › MCP &
+   *  tools, which the engine reads for its `${VAR}` and never hands back. */
+  write_only: boolean;
 }
 
 /**
@@ -5358,7 +5401,7 @@ export interface ConfigReference {
 export interface Snapshot {
   agents?: AgentRow[];
   events?: FeedRow[];
-  sandboxes?: SandboxEntry[];
+  executors?: ExecutorEntry[];
   org?: OrgProjection;
   tools?: ToolRow[];
   health?: EngineHealth;
@@ -5975,8 +6018,8 @@ export interface TurnRow {
    *  suspension. A turn with no completion is either running or died
    *  mid-flight, and those look identical from a list. */
   complete: boolean;
-  /** Whether the turn is waiting on a detached coding run: its newest
-   *  completion is a suspension, and it completes again when the run is
+  /** Whether the turn is waiting on its executor in its box: its newest
+   *  completion is a suspension, and it completes again when the launch is
    *  collected. Never true beside `complete`. */
   parked?: boolean;
   phases: number;
@@ -5995,7 +6038,7 @@ export interface TurnRow {
   error?: string;
   error_kind?: string;
   /** Whether a PERSON ended the turn — a pause with `stop_running` reached it
-   *  at a round, or ended the coding run it was parked on. Never a failure:
+   *  at a round, or ended the executor it was parked on. Never a failure:
    *  a stopped completion carries no `failed`. Absent when nobody stopped it. */
   stopped?: boolean;
   input_tokens: number;
@@ -6010,10 +6053,35 @@ export interface TurnRow {
   models?: string;
   summary?: string;
   trigger?: string;
+  /** What started the turn: the object its earliest trigger named and why it
+   *  reached the seat. Absent where no record names one, and withheld from a
+   *  reader without the object's app. */
+  origin?: TurnOrigin;
   /** The one work item the turn is charged to, off its completion record.
    *  Absent for a turn on nothing — which includes one still running, since a
    *  sole write names its item only at the end. */
   work_item?: TurnWorkItem;
+}
+
+/** What started a turn (`types.TriggerOrigin`). `kind` is `chat_message`
+ *  (`id` the message's, `reason` the routing reason it reached the seat),
+ *  `work_item` (`id` the item's key, `reason` the tracker's), `schedule` (`id`
+ *  its name), `colleague_ask` (`id` the colleague channel's), `code_change`
+ *  (`id` the change as the Code screens name it, `web!42`, `reason` the code
+ *  notice's) or `alarm` (`id` the alarm instance as the alarms page names it,
+ *  `reason` its transition: `fired`, `cleared` or `firing_at_boot`). OPEN, for
+ *  a kind a newer engine adds. */
+export interface TurnOrigin {
+  kind:
+    | "chat_message"
+    | "work_item"
+    | "schedule"
+    | "colleague_ask"
+    | "code_change"
+    | "alarm"
+    | (string & {});
+  id: string;
+  reason?: string;
 }
 
 /** The work item a turn is charged to — `work_item` on the turn events. The
@@ -6348,10 +6416,10 @@ export interface DecisionItem {
   kind: "ask" | "run";
   at: string;
   ask?: WorkAskRow;
-  run?: SandboxRun;
+  run?: ExecutorRow;
 }
 
-/** `decisions`: the open asks put to a person and the coding runs parked on
+/** `decisions`: the open asks put to a person and the executors parked on
  *  a question to them, newest first. */
 export interface DecisionsAnswer {
   handle: string;
@@ -6405,15 +6473,15 @@ export interface AnsweredWorkAsk {
   followed_up?: WorkAskFollowUp;
 }
 
-/** A coding run's question as the record of its answer states it
+/** An executor's question as the record of its answer states it
  *  (`queries.RunAsked`), asked in a work item's ask's shape (ADR-0068). */
 export interface AnsweredRunAsk {
   turn_id: string;
-  /** The launch that asked: a turn's run asks again under a new one. */
+  /** The launch that asked: a turn's executor asks again under a new one. */
   launch_id: string;
-  /** The seat whose coding run asked. */
+  /** The seat whose executor asked. */
   agent_handle: string;
-  /** The question: the title of what the run asked. */
+  /** The question: the title of what the executor asked. */
   question: string;
   /** What the question says beside its title, as Markdown. Always sent, ""
    *  where the run gave none. */
@@ -6426,8 +6494,8 @@ export interface AnsweredRunAsk {
   work_item?: WorkItemRef;
 }
 
-/** One coding run's question a person answered lately and the run took
- *  (`queries.AnsweredRunAsk`). A run's question has no thread, so it carries
+/** One executor's question a person answered lately and the executor took
+ *  (`queries.AnsweredRunAsk`). An executor's question has no thread, so it carries
  *  no `followed_up`, and `answer.by` is always the person it is listed for. */
 export interface AnsweredRun {
   /** When it was answered: `answer.at`. */
@@ -6439,11 +6507,11 @@ export interface AnsweredRun {
 }
 
 /** One question put to a person and closed lately: a work item's ask, or a
- *  coding run's question, which is the one that carries `run`. */
+ *  executor's question, which is the one that carries `run`. */
 export type AnsweredDecision = AnsweredWorkAsk | AnsweredRun;
 
 /** `answered_decisions`: the asks put to a person and closed in the last
- *  week and the coding runs' questions they answered in it, newest closing
+ *  week and the executors' questions they answered in it, newest closing
  *  first, together at most 50. */
 export interface AnsweredDecisionsAnswer {
   handle: string;
@@ -7816,6 +7884,10 @@ export interface RoomMember {
   turn?: string;
   /** For an agent at work in a chat room, the line shown beside its name; empty for the bare indicator. */
   status?: string;
+  /** For an agent, that `status` is about a person's message waiting behind
+   *  what the agent is already doing rather than work under way: the room
+   *  draws the indicator still. Never set for a person. */
+  queued?: boolean;
 }
 
 /** Who is in one room (`presence.Roster`). */
@@ -7904,15 +7976,21 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  mcp_servers_status: McpServersStatusAnswer;
+  /** The administrator's reading, or a member's: narrow on `reading`. */
+  mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
   backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   link_hosts: LinkHostsAnswer;
-  sandbox_runs: { runs: SandboxRun[] };
-  sandbox_tail: SandboxTailAnswer;
+  executors: { runs: ExecutorRow[] };
+  executor_tail: ExecutorTailAnswer;
+  /** A seat's executor sessions, a page at a time — its trail, as the run's
+   *  live output is. */
+  executor_sessions: ExecutorSessionsAnswer;
+  /** One turn's session and a page of its transcript. */
+  executor_session: ExecutorSessionAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
@@ -7947,6 +8025,7 @@ export interface QueryMap {
   chat_channels: ChatChannelsAnswer;
   chat_channel: ChatChannelDetail;
   chat_messages: ChatMessagesAnswer;
+  chat_reach: ChatDraft;
   /* A THREAD IS ITS OWN QUESTION, not a filter on the room: it is opened
      beside the transcript and paged in the opposite direction, because a
      conversation is read forwards. */
@@ -8003,9 +8082,9 @@ export interface QueryMap {
   brand: BrandAnswer;
   /** Every model, in an admin's reading or a member's (Settings › Models). */
   llm_entries: ModelEntriesAnswer;
-  /** Where a model's coding runs can happen, on each node. Admin. */
+  /** Where a model's executors can run, on each node. Admin. */
   llm_runners: RunnersAnswer;
-  /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
+  /** The models a harness can run (`harness`, and `provider` for OpenCode). Admin. */
   llm_models: ModelsAnswer;
   /** One device sign-in (`id`). Admin. */
   llm_device_sign_in: ModelDevice;
@@ -8139,9 +8218,9 @@ export interface CodePushRun {
   work_backend?: string;
   work_key?: string;
   model?: string;
-  /** The coding run behind a box's push, and the coding agent it ran: both or neither. */
+  /** The executor behind a box's push — its launch's job id — and the harness it ran: both or neither. */
   run_id?: string;
-  coding_agent?: string;
+  harness?: string;
 }
 
 /** One push as its repository's history keeps it (`code.PushRow`). */

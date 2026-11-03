@@ -65,7 +65,7 @@ func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string 
 }
 
 // WorkItem is the work item a code wake is about — the one the change
-// implements (ADR-0090) — which is the item the turn it wakes is charged to
+// implements (ADR-0097) — which is the item the turn it wakes is charged to
 // (ADR-0022's trigger rule). None for a change that names none.
 func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 	id := metadata[MetaWorkID]

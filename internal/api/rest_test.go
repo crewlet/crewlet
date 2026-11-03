@@ -22,7 +22,7 @@ import (
 // /query/{what} form was ever wired, so every reader following the published
 // API got nothing. Measured against a running engine before this: /agents,
 // /org, /tools, /events, /schedules, /fleet, /budgets, /integrations,
-// /conversations, /sandbox-runs, /tokens/breakdown and /stream/snapshot were
+// /conversations, /executors, /tokens/breakdown and /stream/snapshot were
 // all Not Found while /query/events answered 200.
 //
 // A route missing is invisible from inside — nothing fails, the surface is

@@ -27,12 +27,11 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CODING BOX'S GIT, MEASURED (ADR-0086): what the two clone recipes cost
+// A CODING BOX'S GIT, MEASURED (ADR-0093): what the two clone recipes cost
 // a box and the git node it clones from (BenchmarkBoxClone), what
 // the box's own git costs once its checkout is made and which of git's
 // box-side settings earn a place in the engine's box git environment
@@ -41,9 +40,9 @@ import (
 // a run launched on the fleet's run store given the repository, its token
 // minted for that launch, its requests through /box/git/ with the run's
 // credential, and its commands run as a box runs them — `sh -c`, under
-// EXACTLY the environment the engine's launch gives it (sandbox.BoxGit over a
-// HOME with no configuration, as a template's box has, and the commit
-// hook's values) — never the gittest client's, whose gc.auto=0 and
+// EXACTLY the git environment the engine's launch gives it (sandbox.BoxGit
+// over a HOME with no configuration, as a template's box has) — never the
+// gittest client's, whose gc.auto=0 and
 // maintenance.auto=false would hide the gc a box's own git does. The node
 // is warm: every pack in its maintainer's index with the bitmap, and a
 // commit-graph written (warmBox), before any timer. Every figure is over
@@ -736,8 +735,10 @@ func boxStatuses(b *testing.B, box *benchBox, checkout string, first time.Durati
 }
 
 // boxCommits is an op=commit arm: one file of the tree changed, then `git
-// commit -qam` timed, an operation — the commit-trailer hook the coding
-// recipe wrote runs in each, as in every box.
+// commit -qam` timed, an operation — git's own commit, with no hook: the
+// recipe writes none, and the attribution hook an executor's commits run is
+// its runner's (internal/sandbox/executor's attribution.go), which this arm
+// does not time.
 func boxCommits(b *testing.B, box *benchBox, checkout string, files int) {
 	b.Helper()
 	pastRacy(b, checkout)
@@ -1146,7 +1147,7 @@ type benchBox struct {
 // write, and answers its box: git, the box's git, first on PATH; a HOME of
 // its own with no configuration, as a template's box has; the engine's box
 // git environment (sandbox.BoxGit) for the run, its base the proxy's
-// /box/git; the commit hook's values; and overrides, pairs of key and value
+// /box/git; and overrides, pairs of key and value
 // handed to git through the environment AFTER the engine's own entries, so
 // for a key both set the arm's wins — what measures a box with a setting of
 // the engine's taken back to git's own.
@@ -1158,11 +1159,6 @@ func newBenchBox(b *testing.B, f *codetest.SoloFleet, rows codetest.Rows, git st
 	proxy := proxyBox(b, f.Nodes()[0])
 	run := f.Runs().Launch(boxSeat, rows.Position, host.BoxGrant{RepoID: rows.Repo.ID, Name: codetest.RepoName,
 		Access: code.AccessWrite, Branch: "refs/heads/" + boxBranch})
-	trailers, err := sandbox.TrailerEnv(boxSeat, run.LaunchID,
-		&types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"})
-	if err != nil {
-		b.Fatal(err)
-	}
 	home := b.TempDir()
 	global := filepath.Join(home, ".gitconfig")
 	if err := os.WriteFile(global, nil, 0o600); err != nil {
@@ -1174,7 +1170,7 @@ func newBenchBox(b *testing.B, f *codetest.SoloFleet, rows codetest.Rows, git st
 	base := []string{"HOME=" + home, "GIT_CONFIG_GLOBAL=" + global, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
 	env := appendConfig(b, boxEnv(b, base, git, sandbox.BoxGit{Base: proxy.srv.URL + "/box/git", User: host.BoxUser,
-		Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"}, trailers), overrides...)
+		Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"}), overrides...)
 	version, err := boxTry(b, b.TempDir(), env, "git version")
 	if err != nil {
 		b.Fatalf("the box's git: %v\n%s", err, version)
@@ -1218,7 +1214,7 @@ func boxRepo(rows codetest.Rows, tip string, cone []string) sandbox.RunRepo {
 }
 
 // boxRepoFor is the repository a box is given for purpose, in the shape
-// sandbox.RunRepo.ValidateFor holds that purpose's to: a coding run's
+// sandbox.RunRepo.ValidateFor holds that purpose's to: an executor's
 // (boxRepo), or a check's — its one commit at tip, on no branch, to read —
 // since a value a purpose does not read is refused rather than ignored.
 func boxRepoFor(rows codetest.Rows, tip string, cone []string, purpose sandbox.ClonePurpose) sandbox.RunRepo {

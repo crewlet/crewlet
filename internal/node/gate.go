@@ -103,7 +103,7 @@ type gate struct {
 // Sized so it does not change the behaviour of any company that runs on one
 // node today, while still bounding the pathological case. A turn's cost here
 // is one model round-trip and its tool loop — a few megabytes, nothing like
-// the 200-400 MB a cli-agent subprocess holds, which is why this is far above
+// the 200-400 MB a harness subprocess holds, which is why this is far above
 // that provider's own max_concurrent of 4. The seat count of a single-node
 // company is the number that matters: the example company runs a handful of
 // seats, a large one runs tens, and a node holding more than 32 seats is one

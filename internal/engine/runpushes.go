@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// runPushes is the coordinator's [sandbox.RunPushes]: what a collected coding
-// run pushed to the company's code host, read from the push rows the host
+// runPushes is the coordinator's [sandbox.RunPushes]: what a collected
+// executor pushed to the company's code host, read from the push rows the host
 // wrote under its launch (code.read's `run_pushes`) — every page to the last,
 // the commands each answered ok, collapsed per (repository, ref).
 //
@@ -57,7 +57,7 @@ type pushReader interface {
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
-// codeRunPushes is the engine's reader of what its coding runs pushed: over the
+// codeRunPushes is the engine's reader of what its executors pushed: over the
 // router's code seam where this node serves the company's code host, and
 // otherwise an error naming why it does not — which the collection says
 // rather than reading as "nothing pushed" (sandbox.Result.PushedUnread).

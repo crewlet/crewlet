@@ -30,7 +30,7 @@ func (r *roundTrip) turnsOf(task, cursor string, limit int) worklet.TaskTurns {
 
 // A TASK'S TURN LIST NUMBERS TURNS, NOT SEGMENTS.
 //
-// A turn that parks on a coding run charges its task once per segment, and
+// A turn that parks on its executor charges its task once per segment, and
 // only one of those segments counts a turn. Listed as rows, one turn would be
 // three cards — the first headed "suspended", which is not how it ended — and
 // numbered by row, "Turn 3" would sit beside a cost panel reading 2 turns. So

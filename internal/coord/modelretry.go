@@ -14,7 +14,7 @@ import (
 // # Who has to agree on it
 //
 // The whole company, now. A sit-out is each node's own memory of a vendor's
-// limit (internal/providers/llm/cliagent's Plan), so a request served by one
+// limit (internal/providers/llm/harness's Plan), so a request served by one
 // node changes nothing on another unless every node hears it. It is one record
 // per entry key in the coordination store, and every node keeps a watched copy
 // of all of them (internal/engine/modelretry.go), as it does of seat pauses.

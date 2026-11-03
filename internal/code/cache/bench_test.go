@@ -1931,7 +1931,7 @@ const lookupFetch = 4
 //     served: the request after a push.
 //   - op=clone is the pack a clone of main is served — pack-objects over the
 //     whole history: the request a cold cache was synced for, and the first
-//     a coding run's fresh sandbox makes.
+//     an executor's fresh sandbox makes.
 //
 // layers=… (100MB) is the same history under a PUBLISHED chain of that many
 // layers, cut as compact's planner keeps one (layerLookupArms): what a lookup

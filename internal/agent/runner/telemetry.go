@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -260,7 +261,7 @@ type Spend struct {
 
 	// Rounds is the provider rounds the turn's completed phases ran, as
 	// each phase record states them — one for each executor run collected,
-	// whose turns are its CLI's own.
+	// whose turns are its harness's own.
 	Rounds int
 
 	// SentBack is how many reviews returned the work for another pass: the
@@ -279,6 +280,14 @@ type Spend struct {
 	// between them was counted short on one and not at all on the other.
 	Reviews    int
 	Unaccepted int
+
+	// Tools is this segment's calls to MCP servers' tools, per (server,
+	// tool): every completed phase's and every delegated worker's, an
+	// executor run's as its bridge recorded them. Like Reviews, it is what
+	// the record that ends the turn states ([types.TurnTally.Tools]), this
+	// segment's share of it, counted here for Reviews' reason: off the
+	// executions themselves, as each phase completes.
+	Tools []types.ToolTally
 
 	// Review is the notes of the NEWEST review that sent the work back —
 	// what the reviewer asked for on the pass that followed. The LAST one,
@@ -321,6 +330,10 @@ func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 	s.Workers++
 	s.WorkerInput += res.InputTokens
 	s.WorkerOutput += res.OutputTokens
+	// ITS CALLS ARE THE TURN'S: a worker reaches its seat's MCP servers
+	// with the seat's grant, so a server's count without them would miss
+	// every call a fan-out made.
+	s.Tools = types.SumToolTallies(s.Tools, toolTallies(res.Executions))
 }
 
 // recordJudge folds one extension judgement into the turn's tally.
@@ -377,6 +390,7 @@ func (s *Spend) record(rec phaseRecord) {
 		s.Response = rec.Result.Text
 	}
 	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
+	s.Tools = types.SumToolTallies(s.Tools, toolTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
 		names := toolNames(rec.Result.Executions)
 		// REPLACED, not appended — see the field's own note.
@@ -386,6 +400,42 @@ func (s *Spend) record(rec phaseRecord) {
 			s.Outcome = rec.Decision
 		}
 	}
+}
+
+// toolTallies counts a phase's calls to MCP servers' tools, per (server,
+// tool), each in exactly one outcome ([types.ToolTally]).
+//
+// BY WHOSE TOOL THE CALL NAMED ([toolloop.Execution.Source]), not by who
+// answered it, so a call the engine refused before any tool ran is counted
+// against the server it was for, in the outcome [mcp.OutcomeOf] files it in.
+// A builtin's call, and a name nothing registered, is no server's and is not
+// counted.
+func toolTallies(execs []toolloop.Execution) []types.ToolTally {
+	var out []types.ToolTally
+	for _, ex := range execs {
+		server, ok := mcp.OriginServer(ex.Source)
+		if !ok {
+			continue
+		}
+		t := types.ToolTally{Server: server, Tool: ex.Name, Calls: 1}
+		switch mcp.OutcomeOf(ex.Origin, ex.Refusal, ex.Failed) {
+		case mcp.CallRefused:
+			t.Refused = 1
+		case mcp.CallUnavailable:
+			t.Unavailable = 1
+		case mcp.CallFailed:
+			t.Failed = 1
+		case mcp.CallAnswered:
+		}
+		// ONLY WHAT WAS MEASURED, for the wire row's reason
+		// ([toolExecutions]): an untimed call adds no time and no instant.
+		if !ex.StartedAt.IsZero() {
+			t.TotalMS = ex.Duration.Milliseconds()
+			t.LastAt = ex.StartedAt.UTC()
+		}
+		out = append(out, t)
+	}
+	return types.SumToolTallies(out)
 }
 
 // toolNames is the called tools in order, including repeats.
@@ -563,9 +613,9 @@ func (e emitter) workItem() *types.WorkItem {
 // and neither caller of started holds that lock.
 //
 // THE ARRAY IS COUNTED FOR EVERY PHASE, although none puts it in the prompt
-// text: a phase on this host has its CLI list the definitions from its
+// text: a phase on this host has its harness list the definitions from its
 // session, and the executor's run from the MCP bridge in its box, and the
-// CLI's own model is billed for every one of them either way, so leaving them
+// harness's own model is billed for every one of them either way, so leaving them
 // out would report the most tool-heavy phase as the slimmest.
 //
 // The token figure is approximate by construction and says so in its field
@@ -671,7 +721,7 @@ func measurePrompt(system, user string, defs []llm.ToolDef) (promptMeasure, erro
 // exists for.
 //
 // WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: the model is sent MORE than this. Its CLI
+// reader of the row will find it: the model is sent MORE than this. Its harness
 // reads the definitions over MCP, annotations and all, and hands them to its
 // model in its own vendor's wrapping.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
@@ -741,7 +791,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		}
 		var failure *llm.Error
 		if errors.As(f.Err, &failure) {
-			fromCLI, fromSubscription = failure.Agent, failure.Subscription
+			fromCLI, fromSubscription = failure.Harness, failure.Subscription
 		}
 	}
 	e.publish(ctx, events.New(types.ProviderFallback{
@@ -759,7 +809,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		ErrorKind:       f.Kind.String(),
 		ResetsAt:        resets,
 
-		FromCLI:          fromCLI,
+		FromHarness:      fromCLI,
 		FromSubscription: fromSubscription,
 	}, e.traceFor(ctx)))
 }
@@ -880,7 +930,7 @@ type phaseRecord struct {
 	// what every phase but the executor is.
 	Run RunRecord
 
-	// RunSteers is what a collected coding run read of the turn's notes —
+	// RunSteers is what a collected executor read of the turn's notes —
 	// see [phaseResult.RunSteers].
 	RunSteers []types.PhaseSteer
 
@@ -955,7 +1005,6 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		// agent_phase_started, so the two-event reconstruction every
 		// consumer did could never produce a duration for one.
 		DurationMS:      int(took / time.Millisecond),
-		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 	}, e.traceFor(ctx)))
 }
@@ -1059,8 +1108,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// The grant's refusals, which is what Notes is documented to
 		// carry for this phase. A child that asked for a tool it could
 		// not have is the first thing to look at when its answer is thin.
-		Notes:   rejectedNote(res.Rejected),
-		Backend: types.BackendNative,
+		Notes: rejectedNote(res.Rejected),
 		// The task's own status — ok / no_result / timed_out / skipped —
 		// which is the one field that says what became of it. It is a
 		// phase's structured verdict, so it rides the same field the
@@ -1140,22 +1188,15 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Notes:             rec.Notes,
 		ToolsAvailable:    rec.Available,
 		ToolCatalogue:     rec.Catalogue,
-		// Set explicitly. BackendNative is the value every consumer reads
-		// as "ran here", and it is NOT the zero value — an empty string
-		// renders as an unknown backend rather than as the normal one.
-		//
-		// It was a CONSTANT here, on every phase, which is why nothing in
-		// the tree ever produced BackendSandbox: an executor's run and three
-		// rounds in this process reported the same backend, and the two
-		// most expensive things a seat does were indistinguishable in the
-		// event log.
-		Backend:         types.BackendNative,
-		ConversationKey: e.turn.ConversationKey,
-		Failed:          rec.Failed,
+		ConversationKey:   e.turn.ConversationKey,
+		Failed:            rec.Failed,
 	}
+	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
+	// harness, the box, what it delivered and which launch it was. Nothing else
+	// says where the phase ran — the phase does (see
+	// [types.AgentPhaseCompleted.Harness]).
 	if rec.Run.Sandboxed() {
-		ev.Backend = types.BackendSandbox
-		ev.CodingAgent = rec.Run.CodingAgent
+		ev.Harness = rec.Run.Harness
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.DeliveredRefsElided = rec.Run.RefsElided
@@ -1201,7 +1242,7 @@ const StoppedKind = "stopped"
 // specific-looking constant.
 //
 // A CODING SANDBOX'S CLASS is one of them, as `sandbox_<class>`
-// ([sandbox.WhyOf]): every executor is its coding CLI's run in a box, and a
+// ([sandbox.WhyOf]): every executor is its harness's run in a box, and a
 // box that could not be started — its provider not answering, refusing the
 // key, a setup somebody has to fix — failed the phase as `error`, while the
 // backend that met it had said what it was. Read before a deadline its chain
@@ -1288,7 +1329,7 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
 		}
 		// The call's own id, which tells two calls of one response apart
-		// — a CLI may run them side by side — and is what a live row's
+		// — a harness may run them side by side — and is what a live row's
 		// running call is matched to once it settles.
 		if ex.CallID != "" {
 			row["call_id"] = ex.CallID
@@ -1298,6 +1339,16 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		}
 		if ex.Server != "" {
 			row["server"] = ex.Server
+		}
+		// WHOSE TOOL IT WAS, answered or refused, and the class the engine
+		// gave a failure it classified: the two facts a server's refused
+		// and unavailable calls are read by (types.ToolExecution). Absent
+		// rather than empty where there is neither.
+		if ex.Source != "" {
+			row["source"] = ex.Source
+		}
+		if ex.Refusal != "" {
+			row["refusal"] = string(ex.Refusal)
 		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a
@@ -1347,7 +1398,7 @@ func phaseSteers(marks []toolloop.SteerMark) []types.PhaseSteer {
 }
 
 // steered records that the turn read a person's note, where read says: at the
-// opening of a round of the engine's loop, or in a coding run's brief.
+// opening of a round of the engine's loop, or in an executor's brief.
 func (e emitter) steered(ctx context.Context, read steer.Read) {
 	if !e.on() {
 		return
@@ -1386,7 +1437,7 @@ func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
 	return out
 }
 
-// phaseInvocations renders a phase's CLI runs in their wire shape.
+// phaseInvocations renders a phase's harness runs in their wire shape.
 func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
 	if len(runs) == 0 {
 		return nil

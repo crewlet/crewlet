@@ -60,7 +60,7 @@ const (
 // BOX'S, the most a seat's push takes of the log: internal/code's measured
 // figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
 // a push costs, measured") and what a box's principal — the seat, the run
-// behind it and the coding run that pushed — its way and the company day its
+// behind it and the executor that pushed — its way and the company day its
 // quota counted it on take of the log beyond it (its push=box arm). A seat's
 // push the engine builds for a tool takes 144 bytes less (its push=agent arm),
 // and which of a company's seats push from their boxes and which through
@@ -163,7 +163,7 @@ const (
 
 // THE REFERENCE COMPANY'S CHANGES, a STATED JUDGEMENT rather than a
 // measurement, since no deployment has reported a day of them: every push is
-// a revision of the change its coding run works on, ten pushes a change, so
+// a revision of the change its executor works on, ten pushes a change, so
 // its 3 000 pushes a day are 300 changes. Each change is opened by a seat's
 // code_open_change, asks one reviewer, takes a review asking for changes with
 // two findings, an answer resolving them, two comments and a thread resolved,
@@ -280,7 +280,7 @@ func codeLogDay() []codeLogTerm {
 		onlyMost bool
 	}{
 		{code.OpPush, "a seat's coding box's push alone in its record, received by git and naming its " +
-			"coding run and its work item's identity beside the turn — the most a seat's push takes, at " +
+			"executor and its work item's identity beside the turn — the most a seat's push takes, at " +
 			"which the day prices every one of the reference company's — as BenchmarkPushLogBytes's " +
 			"push=box arm measures it", referencePushesADay, codePushRecordBytes, false},
 		{code.OpCompact, "a merge: a compaction carrying no layer, as every one BenchmarkCompact's " +
@@ -635,7 +635,7 @@ var codeLogPushVias = map[code.PushVia]string{
 		"at which the day prices every one of the reference company's 3 000 a day, and a " +
 		"person's takes it less still, naming no run and no day",
 	code.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
-		"(code.Proposal.Validate), naming the coding run that pushed, its coding agent and its work " +
+		"(code.Proposal.Validate), naming the executor that pushed, its harness and its work " +
 		"item's identity and project beside the turn — the push term's records (codeLogDay), at which the day " +
 		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
 		"(1 380 bytes alone in its record against a box's 1 625), and none of the reference company's " +
@@ -764,8 +764,8 @@ func principalAbsent(prefix string, carried ...string) map[string]string {
 		return absent
 	}
 	for key, why := range map[string]string{
-		"run.run_id":       "the coding run that pushed, and the measured record is a tool's",
-		"run.coding_agent": "the coding agent a box ran, and the measured record is a tool's",
+		"run.run_id":       "the executor that pushed, and the measured record is a tool's",
+		"run.harness":      "the harness a box ran, and the measured record is a tool's",
 		"run.work_id":      "the work item's identity, which a box's admission alone stamps",
 		"run.work_project": "the work item's project, which a box's admission alone stamps",
 	} {
@@ -811,7 +811,7 @@ var codeLogFields = map[code.OpKind]struct {
 			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
 			"pushes.principal.run.work_id", "pushes.principal.run.work_project", "pushes.principal.run.model",
 			"pushes.principal.run.run_id",
-			"pushes.principal.run.coding_agent", "pushes.via", "pushes.node", "pushes.commands.ref",
+			"pushes.principal.run.harness", "pushes.via", "pushes.node", "pushes.commands.ref",
 			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
 			"pushes.pack.index_bytes", "pushes.pack.reverse_bytes", "pushes.pack.git_checksum",
@@ -876,7 +876,7 @@ var codeLogFields = map[code.OpKind]struct {
 		absent: absent(principalAbsent("owner", "kind", "seat"),
 			map[string]string{
 				"draft": "a draft's open, and the reference change opens ready",
-				"run_id": "the coding run a change is opened for by the engine (internal/engine's run " +
+				"run_id": "the executor a change is opened for by the engine (internal/engine's run " +
 					"changes) rather than by a tool: one UUID more",
 				"mentions": "the asker's mentions, which the committer holds into the routing and takes off " +
 					"the record (code's withRouting)",

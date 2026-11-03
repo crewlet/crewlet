@@ -441,7 +441,7 @@ func announcedWithin(rig *waiterRig, turnID string, within time.Duration) bool {
 	for time.Now().Before(deadline) {
 		rig.queue.mu.Lock()
 		for _, p := range rig.queue.published {
-			if c, ok := p.event.Data.(*types.SandboxRunCompleted); ok && c.TurnID == turnID {
+			if c, ok := p.event.Data.(*types.ExecutorFinished); ok && c.TurnID == turnID {
 				rig.queue.mu.Unlock()
 				return true
 			}

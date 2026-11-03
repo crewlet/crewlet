@@ -99,14 +99,17 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
       ),
     },
     {
-      label: "Coding run",
-      value: change.created_run ? (
-        <a className="mono" href={href(["live", "runs", change.created_run])}>
-          {change.created_run}
-        </a>
-      ) : (
-        <EmptyValue label="None" />
-      ),
+      // THE EXECUTORS BOARD IS KEYED BY THE TURN that launched the executor,
+      // so the launch's own job id is shown and the turn is what it links.
+      label: "Executor",
+      value:
+        change.created_run && change.created_turn ? (
+          <a className="mono" href={href(["live", "executors", change.created_turn])}>
+            {change.created_run}
+          </a>
+        ) : (
+          <EmptyValue label="None" />
+        ),
     },
     {
       label: "Work item",

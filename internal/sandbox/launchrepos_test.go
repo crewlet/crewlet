@@ -13,7 +13,7 @@ import (
 )
 
 // The repositories the cases give a run, valid by [RunRepo.ValidateFor] a
-// coding run ([CloneCoding]).
+// executor ([CloneCoding]).
 const (
 	webRepoID = "0190d8f0-0000-7000-8000-00000000000a"
 	apiRepoID = "0190d8f0-0000-7000-8000-00000000000b"
@@ -179,7 +179,7 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 // the engine mints for the launch the store has just named
 // ([LaunchRequest.RunEnv]): asked once, with the row's launch id, its
 // variables are in the environment of the operator's setup command and of the
-// coding agent, winning over an operator's value of the same name. The run's
+// harness, winning over an operator's value of the same name. The run's
 // telemetry is minted at the job's start and reaches the run alone. The spec
 // the caller built keeps its own map. A launch runs the operator's steps
 // alone — a grant the job carries is cloned by the run, never at launch — and

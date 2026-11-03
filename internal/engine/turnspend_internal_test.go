@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -104,7 +105,7 @@ func resumeTel(item *types.WorkItem, carried *execstate.Uncharged, jobIn, jobOut
 //
 // What a turn charges its work item is a SHARE of what the turn's own records
 // state it spent — the phases, the workers, the judge, the auxiliary calls made
-// inside it and the coding runs it collected — and, across every segment of a
+// inside it and the launches it collected — and, across every segment of a
 // turn, never more than their sum.
 // Folding anything in twice (a resumed phase's pre-park half, a worker counted
 // inside its host phase and again beside it) would show a task costing more
@@ -170,7 +171,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
-// Between the segment that launched a coding run and the one that resumes from
+// Between the segment that launched the executor and the one that resumes from
 // it, the engine spends on the job with no segment running: a run's bridged
 // calls — the auxiliary rewrites its tools asked for, the workers it delegated
 // to — and the condensation of the run's account at collection.
@@ -207,7 +208,7 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 		t.Errorf("cache write = %d, want %d", got.CacheWrite, want)
 	}
 	if want := spend.Workers + job.Workers; got.Workers != want {
-		t.Errorf("workers = %d, want %d with the ones the coding agent delegated to", got.Workers, want)
+		t.Errorf("workers = %d, want %d with the ones the harness delegated to", got.Workers, want)
 	}
 	if got.Turns != 0 {
 		t.Errorf("a resumed segment counted %d turns", got.Turns)
@@ -217,7 +218,7 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 // A SUSPENDED TURN IS COUNTED ONCE AND PAID IN FULL.
 //
 // One turn, two segments, one turn on the task: only the dispatch segment
-// counts a turn, the resumed segment pays for the coding run it collected, and
+// counts a turn, the resumed segment pays for the launch it collected, and
 // a turn charged by its sole write — which a parked segment cannot conclude —
 // is paid for its first half by the segment that finishes it.
 func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
@@ -669,23 +670,31 @@ func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
 // turn's other records are not all on one node — a stateless node's are kept a
 // batch at a time by whichever data node won each claim, and a turn resumed on
 // another node leaves its first segment behind. So the segment that parks hands
-// its span and its reviews on with the conversation, the segment that ends the
-// turn adds its own and says whether the turn failed, and a segment that only
-// parked states nothing — the turn has not ended.
+// its span, its reviews and its MCP tool calls on with the conversation, the
+// segment that ends the turn adds its own and says whether the turn failed, and
+// a segment that only parked states nothing: the turn has not ended.
 //
-// Mutation: leave the carried measurement out of the end, or state one on a
-// parked segment, and this goes red.
+// Mutation: leave the carried measurement out of the end, or the carried tool
+// calls, or state one on a parked segment, and this goes red.
 func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1_700_000_000, 0).UTC()
-	first := runner.Spend{Reviews: 2, SentBack: 1, Unaccepted: 1}
-	second := runner.Spend{Reviews: 1}
+	first := runner.Spend{Reviews: 2, SentBack: 1, Unaccepted: 1, Tools: []types.ToolTally{
+		{Server: "github", Tool: "github_get_issue", Calls: 2, Failed: 1, TotalMS: 300,
+			LastAt: start.Add(10 * time.Second)},
+	}}
+	second := runner.Spend{Reviews: 1, Tools: []types.ToolTally{
+		{Server: "linear", Tool: "linear_list_issues", Calls: 1, Refused: 1},
+		{Server: "github", Tool: "github_get_issue", Calls: 1, TotalMS: 100,
+			LastAt: start.Add(time.Hour + 5*time.Second)},
+	}}
 
 	dispatch := dispatchTel(nil)
 	dispatch.startedAt = start
 	parked := dispatch.chargeFor(first, turn.Result{Suspended: true}, nil, start.Add(time.Minute))
-	if want := (execstate.TurnSoFar{DurationMS: 60_000, Reviews: 2, SentBack: 1, Unaccepted: 1}); parked.soFar == nil || *parked.soFar != want {
-		t.Fatalf("the parked segment hands on %+v, want its own span and reviews %+v", parked.soFar, want)
+	if want := (execstate.TurnSoFar{DurationMS: 60_000, Reviews: 2, SentBack: 1, Unaccepted: 1,
+		Tools: first.Tools}); parked.soFar == nil || !reflect.DeepEqual(*parked.soFar, want) {
+		t.Fatalf("the parked segment hands on %+v, want its own span, reviews and calls %+v", parked.soFar, want)
 	}
 	e, p, tel := failing(t)
 	tel.startedAt = start
@@ -708,11 +717,16 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 			tel.startedAt = start.Add(time.Hour)
 			e.publishTurnCompleted(t.Context(), tel, second, c.res, nil, tel.startedAt.Add(30*time.Second))
 			got := only[*types.TurnCompleted](t, p, "turn_completed")
-			want := types.TurnTally{DurationMS: 90_000, Failed: c.failed, Reviews: 3, SentBack: 1, Unaccepted: 1}
-			if got.Turn == nil || *got.Turn != want {
-				t.Errorf("the record ending the turn states %+v, want both segments' spans "+
-					"and reviews and whether it failed: %+v — never the park in between, "+
-					"which held no seat", got.Turn, want)
+			want := types.TurnTally{DurationMS: 90_000, Failed: c.failed, Reviews: 3, SentBack: 1, Unaccepted: 1,
+				Tools: []types.ToolTally{
+					{Server: "github", Tool: "github_get_issue", Calls: 3, Failed: 1, TotalMS: 400,
+						LastAt: start.Add(time.Hour + 5*time.Second)},
+					{Server: "linear", Tool: "linear_list_issues", Calls: 1, Refused: 1},
+				}}
+			if got.Turn == nil || !reflect.DeepEqual(*got.Turn, want) {
+				t.Errorf("the record ending the turn states %+v, want both segments' spans, "+
+					"reviews and tool calls and whether it failed: %+v, never the park in "+
+					"between, which held no seat", got.Turn, want)
 			}
 			if got.DurationMS != 30_000 {
 				t.Errorf("the ending segment's own duration_ms is %d, want its 30000 — the "+

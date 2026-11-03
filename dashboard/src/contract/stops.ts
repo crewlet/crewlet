@@ -6,10 +6,10 @@
  * `internal/providers/llm.TestTheDashboardKnowsEveryStopReason`, in both
  * directions.
  *
- * THREE REASONS, the ones a coding CLI can honestly name. `end` and `tool_use`
+ * THREE REASONS, the ones a harness can honestly name. `end` and `tool_use`
  * are a round that FINISHED — the model asked for an answer or for a set of
  * calls — so the phase card says nothing about either. `cap` is the one that
- * ends a round unfinished: the CLI's own turn cap stopped its run at this
+ * ends a round unfinished: the harness's own turn cap stopped its run at this
  * request with the model still working, and the phase card's round says so
  * (`CapNote` in components/PhaseCard.tsx). A reason the engine starts
  * recording needs the same decision — a sentence where it ends a round
@@ -21,7 +21,7 @@
 export type StopReason = "end" | "tool_use" | "cap";
 
 /**
- * How one CLI run of a phase ended — `invocations[].outcome` on a phase record,
+ * How one harness run of a phase ended — `invocations[].outcome` on a phase record,
  * the engine's `toolloop.InvocationOutcome`.
  *
  * HELD AGAINST `toolloop.InvocationOutcomes` by

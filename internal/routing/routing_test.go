@@ -58,9 +58,9 @@ func TestTheFirstReasonThatNamesAHandleWins(t *testing.T) {
 	b.Fallback(leadFallback, "bo")
 
 	want := []routing.Candidate[reason]{
-		{Handle: "ana", Reason: mentioned, Addressed: true},
-		{Handle: "bo", Reason: assigned, Addressed: true},
-		{Handle: "cy", Reason: watching},
+		{Handle: "ana", Reason: mentioned, Addressed: true, Wakes: true},
+		{Handle: "bo", Reason: assigned, Addressed: true, Wakes: true},
+		{Handle: "cy", Reason: watching, Wakes: true},
 	}
 	if got := b.Candidates(); !slices.Equal(got, want) {
 		t.Fatalf("the builder kept %+v, want %+v — one candidate per handle, "+
@@ -120,8 +120,8 @@ func TestAFallbackReachesOnlyWhenNobodyOrdinarySurvives(t *testing.T) {
 		// THE RANK DECIDES, never the place in the slice a caller
 		// assembled.
 		{"the lowest rank, wherever it sits", []routing.Candidate[reason]{
-			{Handle: "second", Reason: leadFallback, FallbackOnly: true, FallbackRank: 1},
-			{Handle: "first", Reason: leadFallback, FallbackOnly: true, FallbackRank: 0},
+			{Handle: "second", Reason: leadFallback, FallbackOnly: true, FallbackRank: 1, Wakes: true},
+			{Handle: "first", Reason: leadFallback, FallbackOnly: true, FallbackRank: 0, Wakes: true},
 		}, everyone, "bo", []string{"first"}},
 	} {
 		got := handlesOf(routing.Route(c.cands, c.registry, c.actor, newsToTheActor))
@@ -181,8 +181,8 @@ func TestTheRosterIsAskedOnlyAboutAHandleThatCouldBeWoken(t *testing.T) {
 		// THE RANK ORDERS THE ASKING, never the place in the slice a
 		// caller assembled.
 		{"in rank order, wherever a link sits", []routing.Candidate[reason]{
-			{Handle: "second", Reason: leadFallback, FallbackOnly: true, FallbackRank: 1},
-			{Handle: "first", Reason: leadFallback, FallbackOnly: true, FallbackRank: 0},
+			{Handle: "second", Reason: leadFallback, FallbackOnly: true, FallbackRank: 1, Wakes: true},
+			{Handle: "first", Reason: leadFallback, FallbackOnly: true, FallbackRank: 0, Wakes: true},
 		}, []string{"first"}, "bo",
 			[]string{"second"}, []string{"first", "second"}},
 		// AND THE ACTOR IS ASKED about where a reason wakes them, because
@@ -221,9 +221,9 @@ func TestAFallbacksRankIsItsPlaceInTheChain(t *testing.T) {
 	b.Fallback(leadFallback, "vp")
 
 	want := []routing.Candidate[reason]{
-		{Handle: "ana", Reason: watching},
-		{Handle: "project-lead", Reason: leadFallback, FallbackOnly: true, FallbackRank: 2},
-		{Handle: "vp", Reason: leadFallback, FallbackOnly: true, FallbackRank: 3},
+		{Handle: "ana", Reason: watching, Wakes: true},
+		{Handle: "project-lead", Reason: leadFallback, FallbackOnly: true, FallbackRank: 2, Wakes: true},
+		{Handle: "vp", Reason: leadFallback, FallbackOnly: true, FallbackRank: 3, Wakes: true},
 	}
 	if got := b.Candidates(); !slices.Equal(got, want) {
 		t.Fatalf("the builder kept %+v, want %+v", got, want)
@@ -256,7 +256,7 @@ func TestTheActorHearsOnlyUnderAReasonThatWakesThem(t *testing.T) {
 	// hers became workable is news whoever writes it down.
 	var repair routing.Builder[reason]
 	repair.Add("ana", unblocked, false)
-	want := []routing.Candidate[reason]{{Handle: "ana", Reason: unblocked}}
+	want := []routing.Candidate[reason]{{Handle: "ana", Reason: unblocked, Wakes: true}}
 	if got := routing.Route(repair.Candidates(), everyone, "ana", newsToTheActor); !slices.Equal(got, want) {
 		t.Fatalf("ana's own unblocked record woke %+v, want %+v — the actor "+
 			"hears the notice that is news to them", got, want)
@@ -317,5 +317,62 @@ func TestADepartedHandleKeepsItsRecordAndLosesItsWake(t *testing.T) {
 	}
 	if got := handlesOf(routing.Route(cands, nil, "bo", nil)); !slices.Equal(got, []string{"ana", "gone"}) {
 		t.Fatalf("with no registry the change woke %v, want everybody it concerned", got)
+	}
+}
+
+// WHO IS TOLD AND WHO IS WOKEN ARE TWO ANSWERS, and the second is decided
+// after the fallback.
+//
+// A domain that names which of its reasons start a turn tells everybody its
+// change concerns and wakes only those its rule names. A handle keeps the
+// first reason that named it, and is woken by ANY ordinary reason that did:
+// the stronger fact must not swallow a weaker one that starts a turn. And a
+// candidate told and not woken still heard the change, so it keeps the
+// fallback quiet, or every quiet change on a watched item would page a lead.
+// A domain that names no rule wakes everybody it tells.
+func TestWhoIsToldAndWhoIsWokenAreTwoAnswers(t *testing.T) {
+	t.Parallel()
+	turns := func(r reason) bool { return r != watching && r != assigned }
+	build := func(watchers ...string) []routing.Candidate[reason] {
+		b := routing.Builder[reason]{StartsTurn: turns}
+		b.Add("ana", assigned, true)
+		b.AddAll(watchers, watching, false)
+		b.Add("ana", mentioned, true)
+		b.Fallback(leadFallback, "lead")
+		b.Add("lead", mentioned, true)
+		return b.Candidates()
+	}
+
+	cands := build("bo")
+	want := []routing.Candidate[reason]{
+		{Handle: "ana", Reason: assigned, Addressed: true, Wakes: true},
+		{Handle: "bo", Reason: watching},
+		{Handle: "lead", Reason: leadFallback, FallbackOnly: true, Wakes: true},
+	}
+	if !slices.Equal(cands, want) {
+		t.Fatalf("the builder kept %+v, want %+v — ana told she is assigned and "+
+			"woken by the mention, bo told and not woken, and the lead's later "+
+			"mention adding nothing to a fallback", cands, want)
+	}
+	if got := handlesOf(routing.Route(cands, everyone, "cy", nil)); !slices.Equal(got, []string{"ana"}) {
+		t.Fatalf("woke %v, want ana alone", got)
+	}
+
+	// THE FALLBACK IS DECIDED FIRST: bo heard, so the lead stays quiet even
+	// though nobody is woken; only when bo is gone does the lead hear.
+	if got := routing.Route(cands, everyone, "ana", nil); len(got) != 0 {
+		t.Fatalf("a change only a watcher heard woke %+v — a quiet change paged "+
+			"its lead", got)
+	}
+	employed := func(handle string) bool { return handle != "bo" }
+	if got := handlesOf(routing.Route(cands, employed, "ana", nil)); !slices.Equal(got, []string{"lead"}) {
+		t.Fatalf("with nobody ordinary left the change woke %v, want the lead", got)
+	}
+
+	// NO RULE, EVERYBODY TOLD IS WOKEN.
+	var plain routing.Builder[reason]
+	plain.AddAll([]string{"ana", "bo"}, watching, false)
+	if got := handlesOf(routing.Route(plain.Candidates(), everyone, "cy", nil)); !slices.Equal(got, []string{"ana", "bo"}) {
+		t.Fatalf("a builder with no rule woke %v, want everybody it told", got)
 	}
 }

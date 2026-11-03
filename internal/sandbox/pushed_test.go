@@ -132,11 +132,11 @@ func completeRun(t *testing.T, rig *coordRig, result Result) error {
 // the run's own words: the refs the engine read under its launch — created,
 // moved and deleted, each as it ended, with how many pushes moved it — follow
 // the run's own `Delivered:` line in its report, and ride the resume and the
-// run's own phase record whole. The record is read once a collection, for the
+// launch's own record whole. The record is read once a collection, for the
 // run as its row stands.
 //
 // Mutations: leave the pushed lines out of runReport — red; skip the read in
-// collect — red; leave the refs off the run's phase record — red.
+// collect — red; leave the refs off the launch's record — red.
 func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -174,9 +174,9 @@ func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 		t.Fatalf("the record was read for %+v, want once for the collected run as its row stands", asked)
 	}
 
-	recs := rig.phases()
+	recs := rig.collected()
 	if len(recs) != 1 {
-		t.Fatalf("published %d phase records, want the run's own", len(recs))
+		t.Fatalf("published %d launch records, want the run's own", len(recs))
 	}
 	wantRecs := []types.PushedRefRecord{
 		{Repo: "web", Ref: "refs/heads/seats/swe/ENG-1", Old: oidA, New: oidB, Pushes: 3},
@@ -202,7 +202,7 @@ func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 //
 // Mutations: ask the engine to open for a run that did not succeed — the
 // open flag, red; leave the opened lines out of runReport — red; leave the
-// change off the phase record — red; hand Changes the refs without the
+// change off the launch's record — red; hand Changes the refs without the
 // record's position — red.
 func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	t.Parallel()
@@ -247,7 +247,7 @@ func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, want) {
 		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
 	}
-	if recs := rig.phases(); len(recs) != 1 || len(recs[0].PushedRefs) != 1 || recs[0].PushedRefs[0].Change != "web!7" {
+	if recs := rig.collected(); len(recs) != 1 || len(recs[0].PushedRefs) != 1 || recs[0].PushedRefs[0].Change != "web!7" {
 		t.Errorf("the run's record = %+v, want its ref naming web!7", recs)
 	}
 
@@ -322,7 +322,7 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 		t.Errorf("the resume carries %+v, unread %q; want the reason and no refs", calls[0].Pushed,
 			calls[0].PushedUnread)
 	}
-	if recs := rig.phases(); len(recs) != 1 || !strings.Contains(recs[0].PushedRefsUnread, "not serving") {
+	if recs := rig.collected(); len(recs) != 1 || !strings.Contains(recs[0].PushedRefsUnread, "not serving") {
 		t.Errorf("the run's record = %+v, want it to say why its pushes are unknown", recs)
 	}
 	if line := logs.String(); !strings.Contains(line, "sandbox_pushes_unread") || !strings.Contains(line, "t1") {
@@ -368,7 +368,7 @@ func TestAPushReadThisNodeCancelledHandsTheCollectionBack(t *testing.T) {
 		t.Fatalf("the run is %s with %d collection failures, want it running again and uncounted",
 			got.Status, got.Launch.CollectFailures)
 	}
-	if recs := rig.phases(); len(recs) != 0 {
+	if recs := rig.collected(); len(recs) != 0 {
 		t.Fatalf("an interrupted collection published %d records", len(recs))
 	}
 }

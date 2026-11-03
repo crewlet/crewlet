@@ -133,7 +133,7 @@ func (s *fileSources) addInline(p, content, encoding string) *tools.Result {
 	s.inline += int64(len(data))
 	if s.inline > artifacts.MaxInlineBytes {
 		r := failed(fmt.Sprintf("%s carries more than %d bytes of inline content. Build "+
-			"larger files with your coding run and publish them with `from_sandbox`, or "+
+			"larger files in your box and publish them with `from_sandbox`, or "+
 			"keep them as project files and use `from_project_file`.", s.tool,
 			artifacts.MaxInlineBytes))
 		return &r
@@ -273,33 +273,32 @@ func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result)
 	return "", &r
 }
 
-// openBox reattaches the box of the coding run this turn launched, once per
-// call.
+// openBox reattaches the box this turn's executor runs in, once per call.
 func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) {
 	if s.box != nil {
 		return s.box, nil
 	}
 	if s.caller.turn == nil || !s.caller.agent() {
 		r := refused(tools.RefusalForbidden, s.tool+" reads `from_sandbox` from the box "+
-			"a seat's coding run used in its own turn, and this call has no such turn. "+
+			"a seat's executor ran in during its own turn, and this call has no such turn. "+
 			"Publish the files inline, or from a project file.")
 		return nil, &r
 	}
 	if s.deps.Boxes == nil {
-		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read a coding run's box: "+
+		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read an executor's box: "+
 			"this node runs no sandbox. Publish the files inline instead.")
 		return nil, &r
 	}
 	box, err := s.deps.Boxes.Box(ctx, s.caller.turn)
 	switch {
 	case errors.Is(err, ErrNoBox):
-		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no live run's box "+
-			"to read in this turn: a box is readable by the run working in it, while it "+
-			"runs, and is torn down after it. Build into a directory in your workspace, "+
-			"then publish from it before your run ends.")
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no live box "+
+			"to read in this turn: a box is readable by the executor working in it, while "+
+			"it runs, and is torn down after it. Build into a directory in your workspace, "+
+			"then publish from it before you finish.")
 		return nil, &r
 	case err != nil:
-		r := boxFailure(ctx, s.tool, err, "Could not reattach the coding run's box")
+		r := boxFailure(ctx, s.tool, err, "Could not reattach this turn's box")
 		return nil, &r
 	}
 	s.box = box
@@ -314,7 +313,7 @@ func (s *fileSources) boxPath(raw string) (string, *tools.Result) {
 	clean := path.Clean(p)
 	if p == "" || strings.HasPrefix(p, "/") || clean == ".." || strings.HasPrefix(clean, "../") ||
 		strings.ContainsAny(p, "\x00\n\r") {
-		r := failed(fmt.Sprintf("%s: %q is not a path inside your coding run's workspace. "+
+		r := failed(fmt.Sprintf("%s: %q is not a path inside your workspace. "+
 			"Name it relative to the workspace, e.g. `dist/index.html`.", s.tool, clip(raw)))
 		return "", &r
 	}
@@ -356,32 +355,32 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 		// THE CALLER'S PATH, as a file's is ([fileSources.digest]): it was
 		// told as a fault of this node, and the model gave up on a publish
 		// one corrected argument would have made.
-		r := failed(fmt.Sprintf("%s: %s isn't a directory in your coding run's workspace: "+
+		r := failed(fmt.Sprintf("%s: %s isn't a directory in your workspace: "+
 			"it's missing, or it's a file or a link. Name the directory the build wrote its "+
 			"output to. Nothing was published.", s.tool, dir))
 		return &r
 	case errors.Is(err, ErrNoWorkspace):
 		// NO DIR WOULD LIST, so naming another is no advice: the box has to
 		// hold a build again before anything in it can be published.
-		r := refusedBy(tools.RefusalNotRunning, err, s.tool+": your coding run's workspace "+
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+": your workspace "+
 			"is gone from its box, so nothing in it can be published. Build it again, "+
-			"then publish from it before your run ends.")
+			"then publish from it before you finish.")
 		return &r
 	case errors.Is(err, ErrListIncomplete):
 		// A WALK THAT STOPPED PARTWAY is not the build: published, it shipped
 		// whatever the box could read and dropped the rest without a word.
 		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s couldn't be listed "+
-			"whole in your coding run's box: part of it can't be read, most often a "+
+			"whole in your box: part of it can't be read, most often a "+
 			"directory without read permission. Nothing was published. Make the build's "+
 			"output readable, then publish it again.", s.tool, dir))
 		return &r
 	case err != nil:
-		r := boxFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box")
+		r := boxFailure(ctx, s.tool, err, "Could not list "+dir+" in this turn's box")
 		return &r
 	}
 	switch {
 	case len(listed) == 0:
-		r := failed(fmt.Sprintf("%s found no files under %q in your coding run's box. "+
+		r := failed(fmt.Sprintf("%s found no files under %q in your box. "+
 			"Check where the build wrote its output.", s.tool, dir))
 		return &r
 	case len(listed) > artifacts.MaxFilesPerVersion:
@@ -434,8 +433,8 @@ func (s *fileSources) digest(ctx context.Context, from string,
 		// only a regular file, and one that is missing, a directory or a
 		// link is refused by name. It was told as a fault of this node.
 		if errors.Is(err, sandbox.ErrNotRegularFile) {
-			r := failed(fmt.Sprintf("%s: %s isn't a file in your coding run's workspace: "+
-				"it's missing, or it's a directory or a link. Name a file the run wrote. "+
+			r := failed(fmt.Sprintf("%s: %s isn't a file in your workspace: "+
+				"it's missing, or it's a directory or a link. Name a file written there. "+
 				"Nothing was published.", s.tool, from))
 			return nil, &r
 		}
@@ -670,8 +669,8 @@ func boxFailure(ctx context.Context, tool string, err error, stopped string) too
 		"error", err.Error())
 	switch why {
 	case sandbox.WhyProviderUnavailable:
-		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the coding "+
-			"run's box didn't answer, or its provider failed on its side).", fact,
+		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the executor's "+
+			"box didn't answer, or its provider failed on its side).", fact,
 			"Try again shortly."))
 	case sandbox.WhyProviderLimit:
 		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the sandbox "+

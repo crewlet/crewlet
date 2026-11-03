@@ -274,7 +274,7 @@ func TestGrantsFollowTheChart(t *testing.T) {
 
 	// A PERSON'S STANDING READS NO CHART, AND NO VISIBILITY: a bound
 	// credential maintains, one bound to nobody reads — with a roster and
-	// without one, on a company repository and on a unit one (ADR-0081:
+	// without one, on a company repository and on a unit one (ADR-0088:
 	// visibility narrows seats only).
 	for _, roster := range []code.Roster{r, nil} {
 		for _, repo := range []code.RepoRef{orphan, unitOnly(orphan), unitOnly(platform)} {
@@ -320,7 +320,7 @@ func TestAVisibilityThisBuildDoesNotKnowNarrows(t *testing.T) {
 	}
 }
 
-// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0078's rules need no chart, and
+// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0085's rules need no chart, and
 // a person's push must not depend on a node having read one.
 func TestAPersonsGrantAsksNoRoster(t *testing.T) {
 	t.Parallel()
@@ -980,7 +980,7 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 // A PRINCIPAL NAMES ITSELF ONE WAY: an operator its credential and, where it is
 // bound, a person's handle, and no run; a seat its handle and no credential,
 // and a run only one that names its turn — and a coding box's, its run by the
-// launch's UUID in its canonical spelling together with its coding agent —
+// launch's UUID in its canonical spelling together with its harness —
 // and holds every field within the rules. A proposal refuses a seat's push
 // naming no run, a token bound to nobody's and a principal naming no
 // credential.
@@ -998,7 +998,7 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	}
 	boxed := func(change func(*code.RunProvenance)) code.RunProvenance {
 		return with(func(r *code.RunProvenance) {
-			r.RunID, r.CodingAgent = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "claude-code"
+			r.RunID, r.Harness = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "claude-code"
 			change(r)
 		})
 	}
@@ -1048,10 +1048,10 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
 			r.WorkProject = long
 		})}, false},
-		// A CODING BOX'S RUN: its launch's id and its coding agent, together.
+		// A CODING BOX'S RUN: its launch's id and its harness, together.
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(*code.RunProvenance) {})}, true},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
-			r.CodingAgent = strings.Repeat("a", code.MaxProvenanceBytes)
+			r.Harness = strings.Repeat("a", code.MaxProvenanceBytes)
 		})}, true},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
 			r.RunID = strings.ToUpper(r.RunID)
@@ -1060,16 +1060,16 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 			r.RunID = "launch-1"
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
-			r.CodingAgent = ""
+			r.Harness = ""
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
 			r.RunID = ""
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
-			r.CodingAgent = long
+			r.Harness = long
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
-			r.CodingAgent = "claude\tcode"
+			r.Harness = "claude\tcode"
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana/x"}, false},

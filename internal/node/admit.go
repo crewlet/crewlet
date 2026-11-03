@@ -19,7 +19,7 @@ import (
 //
 // A turn reaches this node by more than one road. A seat's mailbox delivers
 // most of them, and the turn it starts was the only one this package admitted,
-// inside the subscription's handler. A coding run that finishes in its box
+// inside the subscription's handler. An executor that finishes in its box
 // resumes the turn that launched it from the seat's CONTROL topic, and a
 // person's recorded answer resumes a parked run from the sandbox coordinator's
 // own timer: neither is a mailbox delivery, so neither passed the ownership
@@ -65,7 +65,7 @@ import (
 // [Config.SeatTurnEnded] says the seat is free. Once admitted, such a turn
 // HOLDS THE SEAT'S INBOX for as long as it runs ([HoldSeatTurn]), so the
 // mailbox fetches nothing meanwhile: the mail waits on the broker with its
-// order and its delivery count intact, as it does behind a coding run's hold.
+// order and its delivery count intact, as it does behind an executor's hold.
 // A mailbox delivery that was fetched before that hold took effect WAITS for
 // the seat rather than being handed back, because every hand-back spends one
 // of the message's deliveries (queue.OutcomeDefer), and a seat busy for hours
@@ -143,7 +143,7 @@ func mailboxTurn(ctx context.Context) context.Context {
 }
 
 // AdmitTurn admits one turn on handle's seat, or refuses it. A turn that does
-// not come from the seat's mailbox (a coding run's completion, a recorded
+// not come from the seat's mailbox (an executor's completion, a recorded
 // answer's resume) is refused on a busy seat, and once admitted holds the
 // seat's inbox until it is released ([HoldSeatTurn]); a mailbox delivery's
 // turn waits for the seat instead (see "One turn per seat" above).

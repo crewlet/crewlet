@@ -18,7 +18,7 @@ import (
 
 // THE ADMISSION OUTSIDE THE MAILBOX.
 //
-// A seat's mailbox is not the only road to a turn: a coding run that finishes
+// A seat's mailbox is not the only road to a turn: an executor that finishes
 // resumes its turn from the seat's control topic, and a recorded answer's retry
 // from the sandbox coordinator's own timer. A draining node went on starting
 // full turns through both, past its concurrency ceiling, because only the
@@ -498,6 +498,12 @@ func TestAMailboxDeliveryWaitsForABusySeat(t *testing.T) {
 	case <-time.After(gateWaitBound):
 		t.Fatal("the seat's first message never ran")
 	}
+	// The first turn reported from inside itself, so it may still hold the
+	// seat. Wait for it to let go, or the busy turn below is refused by that
+	// turn's last moments instead of standing in for the race this case stages.
+	eventually(t, "the seat's first turn to let it go", func() bool {
+		return !g.n.SeatTurnRunningForTest("ceo")
+	})
 
 	// THE BUSY TURN, admitted without its inbox hold, as a turn that won the
 	// seat in the moment between the mailbox's fetch and its admission.

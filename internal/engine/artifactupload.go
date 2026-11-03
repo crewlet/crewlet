@@ -44,7 +44,7 @@ const (
 )
 
 // ArtifactUploads is this node's upload and publish pipeline: every surface
-// that publishes an artifact (the API, the CLI through it, the agent tools)
+// that publishes an artifact (the API, the harness through it, the agent tools)
 // calls this one.
 func (e *Engine) ArtifactUploads() (*artifactupload.Service, error) {
 	u := &e.uploads

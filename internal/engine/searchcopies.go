@@ -9,7 +9,7 @@ import (
 )
 
 // searchCopies is this node's per-domain verdict as a search participant asks
-// it (ADR-0072): the rows a source is indexed from are its own domain's — a
+// it (ADR-0079): the rows a source is indexed from are its own domain's — a
 // page's the knowledge base's, a task's the tracker's — and the vectors are
 // theirs.
 //

@@ -31,7 +31,7 @@
  *     round's content shares one left edge; see `.round` in screens.css.
  *
  *  4. **The model's words are set as prose, not as code — and as the markdown
- *     they are.** Its speech and a coding run's report get a
+ *     they are.** Its speech and an executor's report get a
  *     proportional face, a real line height and a bounded measure, and are
  *     rendered as markdown read by a model's habits (`Words`): its fenced
  *     JSON is a code block rather than three backticks and a wall of braces,
@@ -95,6 +95,7 @@ import {
   fmtDateTime,
   fmtDuration,
   fmtElapsed,
+  plural,
   relTime,
   tsKey,
   utf8Bytes,
@@ -102,8 +103,10 @@ import {
 import {
   decisionLabel,
   decisionTone,
+  deliveredLine,
   outcomeWords,
   phaseDuration,
+  roundTokens,
   runGroups,
   transcriptLength,
   type Invocation,
@@ -226,7 +229,7 @@ function RunningRecords({ name, args }: { name: string; args: string }) {
 /**
  * One tool call of a round — answered, or still running (`running`).
  *
- * ONE COMPONENT FOR BOTH, because a call is one row for its whole life: a CLI
+ * ONE COMPONENT FOR BOTH, because a call is one row for its whole life: a harness
  * runs a response's calls side by side, each listed while it runs and answered
  * when its result lands, and a row that changed component as it answered would
  * be unmounted and mounted again, closing what the reader had opened.
@@ -298,14 +301,14 @@ function ToolRow({
 }
 
 /**
- * The head of one CLI run's rounds: which entry served it, how many rounds it
+ * The head of one harness run's rounds: which entry served it, how many rounds it
  * made, how long it lived, what it spent and how it ended — or, for the run
  * still in flight, that it is running.
  *
  * A RUN IS WHAT THE ENGINE STARTS AND ENDS, where a round is one model request
- * the CLI's record shows; most phases are one run, and a phase that was
- * steered, delegated or corrected is several — each a CLI process handed the
- * conversation so far. A run whose CLI showed no requests is ONE round, and its
+ * the harness's record shows; most phases are one run, and a phase that was
+ * steered, delegated or corrected is several — each a harness process handed the
+ * conversation so far. A run whose harness showed no requests is ONE round, and its
  * head says so, since that round's timing is the run's.
  */
 function RunHead({
@@ -320,7 +323,7 @@ function RunHead({
   if (!run) {
     return (
       <div className="run-head">
-        <span className="run-name">CLI run {ordinal}</span>
+        <span className="run-name">Harness run {ordinal}</span>
         {live && <Tag variant="info">running</Tag>}
       </div>
     );
@@ -331,7 +334,7 @@ function RunHead({
   return (
     <div className="col gap-1">
       <div className="run-head">
-        <span className="run-name">CLI run {run.run}</span>
+        <span className="run-name">Harness run {run.run}</span>
         {run.providerKey && (
           <span className="t-caption mono" title="the providers.llm entry that served it">
             {run.providerKey}
@@ -345,7 +348,7 @@ function RunHead({
               : `rounds ${run.firstRound}–${run.lastRound}`}
         </span>
         {run.durationMs > 0 && (
-          <span className="t-caption t-num" title="how long the CLI ran">
+          <span className="t-caption t-num" title="how long the harness ran">
             {fmtDuration(run.durationMs)}
           </span>
         )}
@@ -360,7 +363,7 @@ function RunHead({
       </div>
       {!run.requestsObserved && made > 0 && (
         <p className="round-note">
-          Its CLI’s record showed no requests, so the whole run is one round.
+          Its harness’s record showed no requests, so the whole run is one round.
         </p>
       )}
     </div>
@@ -501,7 +504,7 @@ function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
 }
 
 /**
- * A model's words — its speech, a coding run's report — as the markdown it
+ * A model's words — its speech, an executor's report — as the markdown it
  * wrote.
  *
  * MARKDOWN, because that is what models write: the design doc said a model's
@@ -522,11 +525,11 @@ function Words({ text, streaming }: { text: string; streaming?: boolean }) {
 }
 
 /**
- * The sentence under a round the CLI's own turn cap ended (`stop_reason: cap`).
+ * The sentence under a round the harness's own turn cap ended (`stop_reason: cap`).
  *
  * THE ONE STOP REASON THAT ENDS A ROUND UNFINISHED, which is why the reason
  * gate (`contract/stops.ts`) asks for a sentence: an answer and a set of calls
- * are rounds that finished and say nothing, while here the CLI stopped asking
+ * are rounds that finished and say nothing, while here the harness stopped asking
  * with the model still working — the run ended for want of turns, not because
  * the model was done. CAUTION, as a declined round's last word is: the phase
  * goes on to whatever its cap decides.
@@ -534,7 +537,7 @@ function Words({ text, streaming }: { text: string; streaming?: boolean }) {
 function CapNote() {
   return (
     <p className="round-note caution">
-      <TriangleAlertGlyph size="xs" /> The CLI’s own turn cap ended its run here, with the model
+      <TriangleAlertGlyph size="xs" /> The harness’s own turn cap ended its run here, with the model
       still working.
     </p>
   );
@@ -554,7 +557,7 @@ function RoundBlock({
   /** What became of this round when it declined to call a tool; absent otherwise. */
   declined?: Declined;
   rescued: boolean;
-  /** The CLI's own turn cap ended its run at this round. */
+  /** The harness's own turn cap ended its run at this round. */
   capped: boolean;
   now: number;
 }) {
@@ -660,11 +663,139 @@ function WithheldNote({ agentId }: { agentId: string }) {
   );
 }
 
+/**
+ * What one launch of an executor left: the report it wrote back, what it
+ * delivered, and its own account of what it did in its box.
+ *
+ * A LAUNCH IS NOT A MODEL CALL. Its record has no rounds because the engine
+ * drove none — the executor's own loop happened in its box — so its
+ * `response` is the report the executor wrote back, and it carries an activity
+ * log instead. ONE BODY
+ * for a launch drawn inside its round's card and one drawn on its own (its
+ * event's page, or a round whose own record is not in hand), so the two never
+ * say different things about one launch.
+ */
+function LaunchBody({ record }: { record: PhaseRecord }) {
+  const delivered = deliveredLine(record);
+  return (
+    <>
+      {record.response.trim() && (
+        <section className="col gap-1">
+          <div className="t-label">
+            Report
+            <span className="muted"> · what the executor wrote back</span>
+          </div>
+          <Words text={record.response.trim()} />
+        </section>
+      )}
+      {delivered && (
+        <div className="t-caption">
+          <span className="t-label">Delivered</span> {delivered}
+        </div>
+      )}
+      {record.transcript && (
+        // LAZY and closed: the engine bounds it at 256 KiB — its start and
+        // its end — which is a long log to mount for a reader who came for
+        // the report. The count says when it is not the whole.
+        <Disclosure title="Activity" count={transcriptLength(record)} lazy>
+          <p className="prose mono">{record.transcript}</p>
+        </Disclosure>
+      )}
+    </>
+  );
+}
+
+/**
+ * A launch's harness turns, as a header states a phase's rounds: the turns its
+ * harness said its own loop took, or the mark that it said none.
+ */
+function LaunchTurns({ record }: { record: PhaseRecord }) {
+  return record.harnessTurns > 0 ? (
+    <span className="phase-meta t-num" title="the model turns its harness's own loop took">
+      {plural(record.harnessTurns, "turn")}
+    </span>
+  ) : (
+    <span className="phase-meta" title="its harness reported no turns">
+      …
+    </span>
+  );
+}
+
+/**
+ * The launches of an executor's round, inside the round's card: one entry
+ * per launch, oldest first — the harness it ran as, how it ended, what it spent —
+ * over what it left ([LaunchBody]).
+ *
+ * WHY INSIDE. The round is one card because it is one round: a launch is the
+ * work the round's executor did, and a round can take several — an answer
+ * carries an executor that parked on a question on in a second launch, and a
+ * launch lost with its host is relaunched. Drawn as siblings of the round, a turn read
+ * as phases nobody ran, and the round's own card as an executor that spent
+ * nothing.
+ */
+function Launches({ launches, now }: { launches: readonly PhaseRecord[]; now: number }) {
+  return (
+    <section className="col gap-1">
+      <div className="t-label">
+        {launches.length === 1 ? "Its launch" : `Its ${launches.length} launches`}
+        <span className="muted"> · what its harness did in its box</span>
+      </div>
+      <ol className="run-ledger">
+        {launches.map((l, i) => {
+          const took = phaseDuration(l);
+          return (
+            <li key={l.key} className="run">
+              <div className="run-head">
+                <span className="run-name">
+                  {launches.length > 1 ? `Launch ${i + 1}` : "Launch"}
+                </span>
+                {l.harness && (
+                  <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
+                    {l.harness}
+                  </Tag>
+                )}
+                {l.model && (
+                  <span className="t-caption mono" title="the model it ran under">
+                    {l.model}
+                  </span>
+                )}
+                <LaunchTurns record={l} />
+                <span className="phase-meta t-num" title="what the launch spent">
+                  {`${fmtCount(l.totalTokens)} tokens`}
+                </span>
+                {took != null && (
+                  <span className="phase-meta t-num" title="from its launch to its collection">
+                    {fmtDuration(took)}
+                  </span>
+                )}
+                <time className="phase-meta" dateTime={l.at} title={fmtDateTime(l.at)}>
+                  {relTime(l.at, now)}
+                </time>
+                {l.failed ? (
+                  <Tag variant="danger">{failureWords(l.errorKind).tag}</Tag>
+                ) : (
+                  <Tag appearance="outline" title="read off its box when it ended">
+                    collected
+                  </Tag>
+                )}
+              </div>
+              {l.failed && l.error && <Callout variant="danger">{l.error}</Callout>}
+              {l.notes && <Callout variant="neutral">{l.notes}</Callout>}
+              <LaunchBody record={l} />
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 export function PhaseCard({
   record,
   defaultOpen,
   showRole,
   nested,
+  launches,
 }: {
   record: PhaseRecord;
   defaultOpen?: boolean;
@@ -674,13 +805,17 @@ export function PhaseCard({
       `host_phase` has always meant and rendering them as siblings left
       the reader working out which round each belonged to. */
   nested?: PhaseRecord[];
+  /** The launches of this executor's round, oldest first — what each
+      spent, reported and did in its box. Rendered INSIDE this card, for
+      the reason `nested` is: they are this round's work. */
+  launches?: PhaseRecord[];
 }) {
   // Latched: seeded from `defaultOpen` and then owned by the reader. A phase
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
   const ledger = rounds(record.tools, record.narration, record.partial, record.runningCalls);
-  // THE ROUNDS UNDER THE CLI RUN THAT MADE THEM, by the round span each run
+  // THE ROUNDS UNDER THE HARNESS RUN THAT MADE THEM, by the round span each run
   // names. Headed wherever the phase's runs are known: a phase that recorded
   // its runs, and a live one, whose run in flight heads the rounds past every
   // run that has ended — so a running phase and the record it becomes are one
@@ -690,16 +825,14 @@ export function PhaseCard({
   const capped = new Set(
     record.timedRounds.filter((r) => r.stopReason === "cap").map((r) => r.round),
   );
-  // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
-  // engine drove none — the run's own loop happened in a box — so its
-  // `response` is the report the run wrote back, and it carries an activity
-  // log instead.
-  const codingRun = record.phase === "sandbox";
+  // WHAT THE ROUND SPENT: the record's own tokens and its run's launches' —
+  // the executor's record carries none of its own ([roundTokens]).
+  const spent = roundTokens(record, launches);
   const streaming = ledger.some((r) => r.streaming);
-  // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor suspended into a
-  // detached coding run and its round will not move until the run comes
-  // back, so the stage is passed and the alarm stays down for as long as the
-  // run takes.
+  // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor launched in its
+  // box and its round will not move until that launch is collected, so the
+  // stage is passed and the alarm stays down for as long as the executor
+  // takes.
   const parked = record.live && record.stage === "parked";
   const stale = record.live ? staleness(record.at, now, record.stage) : "";
   const took = phaseDuration(record);
@@ -774,6 +907,13 @@ export function PhaseCard({
             {record.taskId}
           </span>
         )}
+        {/* WHICH LAUNCH, on a launch drawn on its own: its phase word is its
+            round's, and the launch id is what tells it from the round's record. */}
+        {record.launch && (
+          <span className="t-cell mono truncate" title="which launch this was">
+            {record.launchId ? `launch ${record.launchId.slice(0, 8)}` : "launch"}
+          </span>
+        )}
         {/* NEUTRAL, because a worker template is an identity. uilet's tone doc
             states the rule this card already kept: a tone says what a thing IS,
             never who it is. */}
@@ -841,16 +981,20 @@ export function PhaseCard({
             rescued
           </Tag>
         )}
-        {record.backend === "sandbox" && (
+        {/* THE BOX A RUN RAN IN, named by the harness that ran there — on the
+            executor that collected a run and on each launch's own record. A
+            phase that ran on the engine host names neither, so it has no
+            badge. */}
+        {(record.harness !== "" || record.sandboxId !== "") && (
           <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-            {record.codingAgent || "sandbox"}
+            {record.harness || "sandbox"}
           </Tag>
         )}
         {record.failed && <Tag variant="danger">{failureWords(record.errorKind).tag}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked
-              ? "parked on its coding run"
+              ? "running in its box"
               : stale === "stalled"
                 ? "no update in 10m"
                 : stale
@@ -874,7 +1018,11 @@ export function PhaseCard({
             phase whose first round had not come back, precisely the case this
             mark is for, fell through and rendered "0r". And the count below it
             was one short on a live phase whose rounds narrated nothing. */}
-        {record.live && !ledger.length && record.roundsUsed === 0 ? (
+        {/* A LAUNCH'S TURNS WHERE A PHASE'S ROUNDS ARE: its rounds were its
+            harness's own, in its box, and the engine drove none of them. */}
+        {record.launch ? (
+          <LaunchTurns record={record} />
+        ) : record.live && !ledger.length && record.roundsUsed === 0 ? (
           <span className="phase-meta" title="this phase has not finished a round yet">
             …
           </span>
@@ -885,20 +1033,23 @@ export function PhaseCard({
         )}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a phase that genuinely spent
-            nothing — one on a subscription CLI backend, which reports no
+            nothing — one on a subscription harness backend, which reports no
             usage at all, or one the engine stopped before its first call came
             back — rendered as "not recorded" on the card an operator opens to
             find out which phase was expensive. `TurnCard` states the rule for
             the turn header above it: absent and zero are different facts and a
             dash claims the first about the second. An ellipsis marks the one
             case where the zero really is an absence. */}
-        {record.live && record.totalTokens === 0 ? (
+        {record.live && spent === 0 ? (
           <span className="phase-meta" title="this phase has not reported its usage yet">
             …
           </span>
         ) : (
-          <span className="phase-meta t-num" title="total tokens">
-            {fmtCount(record.totalTokens)}
+          <span
+            className="phase-meta t-num"
+            title={launches?.length ? "total tokens, its launches included" : "total tokens"}
+          >
+            {fmtCount(spent)}
           </span>
         )}
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
@@ -1015,7 +1166,7 @@ export function PhaseCard({
           )}
 
           {/* The transcript. One block per round — speech, then calls —
-              in the order they happened, under the CLI run that made them.
+              in the order they happened, under the harness run that made them.
               Rounds append, so nothing above an insertion can move, which is
               the whole point. */}
           {ledger.length > 0 && (
@@ -1058,23 +1209,8 @@ export function PhaseCard({
             </section>
           )}
 
-          {codingRun && record.response.trim() && (
-            <section className="col gap-1">
-              <div className="t-label">
-                Report
-                <span className="muted"> · what the coding run wrote back</span>
-              </div>
-              <Words text={record.response.trim()} />
-            </section>
-          )}
-          {codingRun && record.transcript && (
-            // LAZY and closed: the engine bounds it at 256 KiB — its start
-            // and its end — which is a long log to mount for a reader who
-            // came for the report. The count says when it is not the whole.
-            <Disclosure title="Activity" count={transcriptLength(record)} lazy>
-              <p className="prose mono">{record.transcript}</p>
-            </Disclosure>
-          )}
+          {record.launch && <LaunchBody record={record} />}
+          {!!launches?.length && <Launches launches={launches} now={now} />}
 
           {/* The only genuinely empty state. A ROUND is never empty —
               `narrations()` drops an entry blank in both fields and a round

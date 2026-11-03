@@ -79,8 +79,8 @@ func (k RoomKind) typing() bool { return k == RoomChat }
 // agentSlot is which of a seat's members in a room of kind k a touch focused
 // on f is: one per seat in an artifact's room, where the agent's focus moves
 // with its calls, and one per seat PER THREAD in a chat room's, because a seat
-// can be answering in two threads of one room at once (a turn parked behind a
-// coding run keeps its line up while the seat's next turn answers elsewhere),
+// can be answering in two threads of one room at once (a turn parked behind an
+// executor keeps its line up while the seat's next turn answers elsewhere),
 // and taking one down must not take the other with it.
 func (k RoomKind) agentSlot(f Focus) string {
 	if k == RoomChat {
@@ -168,6 +168,12 @@ type Member struct {
 	// indicator. A person's member names none: what a person is doing is
 	// their activity.
 	Status string `json:"status,omitempty"`
+
+	// Queued is, for an agent, that the line is about a person's message
+	// waiting behind what the agent is already doing, not one it is
+	// working on: the room draws it still, and Status says what it waits
+	// behind. Never set for a person.
+	Queued bool `json:"queued,omitempty"`
 }
 
 // Counts are the members of a large room not presented individually.
@@ -193,6 +199,8 @@ type Agent struct {
 	Activity Activity
 	Focus    Focus
 	Status   string
+	// Queued marks the line as a message waiting its turn ([Member.Queued]).
+	Queued bool
 }
 
 // The presence timings, every kind's: how often a node tells the fleet who it

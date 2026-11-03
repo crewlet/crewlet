@@ -66,7 +66,7 @@ func newTailRigOn(t *testing.T, launchNode string) *tailRig {
 	}
 	ctx := t.Context()
 	run := PendingRun{
-		TurnID: "t1", AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
 		SandboxID: box.ID(), Placement: string(Direct), CommandID: "cmd-1",
 		LaunchNode: launchNode,
 	}
@@ -284,7 +284,7 @@ func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
-		TurnID: "t2", AgentHandle: "swe", CodingAgent: "claude-code", Placement: string(Direct),
+		TurnID: "t2", AgentHandle: "swe", Harness: "claude-code", Placement: string(Direct),
 	}, Fence{}); err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +614,7 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rig.client(t).Ask(t.Context(), topics.ObserveSandboxTail, raw, 1); err != nil {
+	if _, err := rig.client(t).Ask(t.Context(), topics.ObserveExecutorTail, raw, 1); err != nil {
 		t.Fatal(err)
 	}
 	if readings(served) != 0 || readings(own) != 0 {
@@ -1172,7 +1172,7 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 	// fault.
 	rig := newTailRig(t)
 	newer := rig.client(t)
-	stop, err := newer.Serve(t.Context(), topics.ObserveSandboxTail, queue.ConcurrentAnswers,
+	stop, err := newer.Serve(t.Context(), topics.ObserveExecutorTail, queue.ConcurrentAnswers,
 		func(context.Context, []byte) ([]byte, error) {
 			return json.Marshal(tailReply{Version: tailWireVersion, Owner: boxOwner,
 				Failed: "a_class_from_a_newer_build"})

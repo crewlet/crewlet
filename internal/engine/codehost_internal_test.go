@@ -214,7 +214,7 @@ func presenceRow(t *testing.T, e *Engine) coord.Lease {
 // answered: the mode stops writes, never the copy.
 func TestAMaintenanceModeNodeRefusesAProposal(t *testing.T) {
 	t.Parallel()
-	e, _ := aNodeInModeOf(t, statelog.ModeMaintenance, codeHostCompany)
+	e, _ := aNodeOf(t, codeHostCompany, statelog.ModeMaintenance)
 	if n := e.native.Load(); n == nil || n.committer == nil {
 		t.Fatal("the premise: the runtime built a committer, which only the gate withholds")
 	}

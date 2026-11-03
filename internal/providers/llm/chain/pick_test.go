@@ -17,7 +17,7 @@ func readiness(refusals map[string]error) func(Member) error {
 }
 
 func sittingOut(key string) error {
-	return &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+	return &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 		Err:     fmt.Errorf("Usage limit reached on %s — sitting out until 2026-10-23T10:01:00Z", key),
 		RetryAt: sitOutUntil}
 }

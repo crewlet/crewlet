@@ -269,7 +269,7 @@ func directoryReads() map[string]directoryIndexed {
 		"a trail row erased":        seek("sqlite_autoindex_iam_history_1", eraseTrailStatement, "{}", "h1"),
 	}
 	// ONE SEAT'S REMOVALS NO BIND HAS STAMPED, sought by the tombstones' own
-	// seat index (replicated 0117) in its third column's order, the person's
+	// seat index (replicated 0121) in its third column's order, the person's
 	// id: SeatHolder's second seek and the leavers a bind stamps and scopes.
 	// A tombstone is permanent, so without the index each is every removal
 	// the company ever made.

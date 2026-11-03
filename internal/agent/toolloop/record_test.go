@@ -184,8 +184,9 @@ func TestAToolCallIsTimedAndNamesItsOrigin(t *testing.T) {
 		if ex.StartedAt.Before(modelEnded) {
 			t.Errorf("%s began at %v, before its round's model half ended at %v", ex.Name, ex.StartedAt, modelEnded)
 		}
-		if ex.Origin != "mcp:github" || ex.Server != "github" {
-			t.Errorf("%s names origin %q server %q, want mcp:github / github", ex.Name, ex.Origin, ex.Server)
+		if ex.Origin != "mcp:github" || ex.Server != "github" || ex.Source != "mcp:github" {
+			t.Errorf("%s names origin %q server %q source %q, want mcp:github / github / mcp:github",
+				ex.Name, ex.Origin, ex.Server, ex.Source)
 		}
 		if ex.CallID == "" {
 			t.Errorf("%s carries no call id", ex.Name)
@@ -193,7 +194,7 @@ func TestAToolCallIsTimedAndNamesItsOrigin(t *testing.T) {
 	}
 	a, b := res.Executions[0], res.Executions[1]
 	if b.StartedAt.Before(a.StartedAt.Add(a.Duration)) {
-		t.Errorf("the second call began at %v, before the first ended — the CLI made them one after another",
+		t.Errorf("the second call began at %v, before the first ended — the harness made them one after another",
 			b.StartedAt)
 	}
 }
@@ -312,7 +313,7 @@ func TestALiveFrameNamesTheRunInFlightApartFromItsRound(t *testing.T) {
 }
 
 // A REQUEST IN FLIGHT HAS ITS OWN ROUND AND ITS OWN INSTANT on the live view.
-// Once a round's calls have all answered, the CLI is asking its model again:
+// Once a round's calls have all answered, the harness is asking its model again:
 // the frame says so — the next round, started after every recorded one, no call
 // running — rather than naming the previous round for as long as the model
 // takes, which is what a reader counts "thinking for 40s" from.
@@ -388,7 +389,7 @@ func TestProgressIsPublishedAsARunOpensAnswersAndAroundEachCall(t *testing.T) {
 		t.Errorf("a reader saw %v, want %v", seen, want)
 	}
 	// A CALL STILL TO COME IS NOT A CALL THAT FAILED: no frame records one
-	// as not run while the CLI is about to make it.
+	// as not run while the harness is about to make it.
 	for i, f := range all {
 		for _, m := range f.Messages {
 			if m.Role == llm.RoleTool && m.Failed {
@@ -465,7 +466,7 @@ func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
 }
 
 // A CALL KNOWS ITS ROUND'S MODEL: each round's calls are told the model that
-// round ran on — the model the CLI's record names for that request, else the
+// round ran on — the model the harness's record names for that request, else the
 // provider's configured identity, the precedence the round's own record
 // follows — so a write a seat's tool makes names the model behind it, and a
 // phase a fallback moved between members names the member that made each

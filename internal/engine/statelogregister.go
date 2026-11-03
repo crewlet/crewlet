@@ -56,7 +56,7 @@ import (
 // wrong: every entry states its generation encoder, every identity-claiming
 // entry its gate, and every entry a feed exactly when its domain declares one.
 // A FOURTH is the TRIMMED record the trim removes a log's anchors by
-// ([registration.Trimmed], ADR-0073), which fails the same silent way — a log
+// ([registration.Trimmed], ADR-0080), which fails the same silent way — a log
 // with anchors and no record keeps one for every subject it ever wrote — so
 // every entry states one exactly when its log writes anchors.
 //
@@ -201,7 +201,7 @@ type registration struct {
 	// NoBarrier is the explicit form of a nil Barrier. See Barrier.
 	NoBarrier bool
 
-	// Trimmed encodes the trim's TRIMMED record (ADR-0073) as one of this
+	// Trimmed encodes the trim's TRIMMED record (ADR-0080) as one of this
 	// domain's own records: what removes the log's arbitration anchors below
 	// its first surviving record on every node, in the transaction that
 	// applies it ([statelog.SweepAnchors]). Nil for a domain whose log
@@ -289,19 +289,21 @@ type writeSeams struct {
 // kind of party and the credential ([iam.ActorFor]), and the identity
 // estate's writer judges the gesture's authority — admin — on the party's
 // own grants, at the record rather than only at the route, because a gate
-// record can be published by a CLI, a test and a duty as well as through
+// record can be published by a harness, a test and a duty as well as through
 // one.
 type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 	readmit bool) (statelog.Result, error)
 
 // register is every domain this build runs, in a FIXED order.
 //
-// THE ARTIFACTS DOMAINS AND THE ASSISTANT'S ARE APPENDED LAST, artifacts before
-// its datastore and the assistant after both, from entries declared beside
-// their wiring (artifactsregister.go, artifactdataregister.go and
-// assistantregister.go) so each domain's entry is written where the rest of its
-// engine wiring lives. Appending keeps every existing domain's position,
-// which is the order every operator surface already reports in.
+// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT, THE EXECUTOR LOG AND THE CODE
+// HOST ARE APPENDED LAST, in the order they joined, from entries declared
+// beside their wiring (artifactsregister.go, artifactdataregister.go,
+// assistantregister.go, chatregister.go and executorregister.go; the code
+// host's below) so each domain's entry is written where the rest of its engine
+// wiring lives. Appending keeps every existing
+// domain's position, which is the order every operator surface already
+// reports in.
 func register() []registration {
 	return slices.Concat([]registration{
 		{
@@ -619,19 +621,19 @@ func register() []registration {
 			},
 		},
 	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
-		chatRegistrations(), codeRegistrations())
+		chatRegistrations(), executorRegistrations(), codeRegistrations())
 }
 
 // codeRegistrations is the code host's entry in the register: the company's
-// git repositories, the TENTH domain, registered last, after chat's. Its
-// declaration, applier, write seams, barrier, read model, trimmed record,
-// generation record, node gate, wake feed and Tier A ceiling
+// git repositories, the ELEVENTH domain, registered last, after the executor
+// log's. Its declaration, applier, write seams, barrier, read model, trimmed
+// record, generation record, node gate, wake feed and Tier A ceiling
 // (`stream.code_log_max_bytes`).
 func codeRegistrations() []registration {
 	return []registration{
 		{
-			// THE COMPANY'S GIT REPOSITORIES (ADR-0077): the tenth domain
-			// and its eighth strict, identity-claiming one — settings,
+			// THE COMPANY'S GIT REPOSITORIES (ADR-0084): the eleventh domain
+			// and its ninth strict, identity-claiming one — settings,
 			// protections, refs, packs and pushes as rows only its applier
 			// writes, a pack's bytes one object a push in the object store.
 			Domain: code.Domain{},
@@ -780,7 +782,7 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
 				"a trimmed-record encoder=%v on a log that writes anchors=%v — a log "+
 				"with anchors and no record keeps one for every subject it ever "+
-				"wrote, and a record on a log with none removes nothing (ADR-0073)",
+				"wrote, and a record on a log with none removes nothing (ADR-0080)",
 				name, entry.Trimmed != nil, anchors)
 		}
 		if err := checkReadModel(entry); err != nil {
@@ -1095,7 +1097,7 @@ func (s *stateLog) verifierFor(domain statelog.Domain) (*recordseal.Verifier, er
 // derive the same record key, because both read the same bytes. (This said the
 // references arrived verbatim, which would have split every record's signature
 // across exactly that fleet.) The embedded broker's credentials derive from
-// the same material, by the same rule (ADR-0087).
+// the same material, by the same rule (ADR-0094).
 func recordKeyring(boot *config.Bootstrap) recordseal.Keyring {
 	if boot == nil {
 		return recordseal.Keyring{}
@@ -1114,6 +1116,6 @@ func recordKeyring(boot *config.Bootstrap) recordseal.Keyring {
 // verified under — [recordKeyring] over its own Tier A — for the one reader
 // outside the engine that opens a log's frames itself: the backup, which reads
 // the records a restore replays past its store copy for the files they name
-// (internal/backup, ADR-0075). Handed this rather than reading Tier A again,
+// (internal/backup, ADR-0082). Handed this rather than reading Tier A again,
 // so the backup and the appliers can never open a record under two keyrings.
 func (e *Engine) RecordKeyring() recordseal.Keyring { return recordKeyring(e.boot) }

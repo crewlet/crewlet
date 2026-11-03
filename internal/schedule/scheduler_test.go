@@ -87,14 +87,16 @@ func (q *fakeQueue) lifecycleEvents() int {
 	return n
 }
 
-// countingLedger wraps a ledger and counts the claims that reached it, so a
-// case can assert that a gated tick did not merely fail to publish but never
-// reached the store at all.
+// countingLedger wraps a ledger and counts the claims and minute reads that
+// reached it, so a case can assert that a gated tick did not merely fail to
+// publish but never reached the store at all.
 type countingLedger struct {
-	inner  *MemoryLedger
-	mu     sync.Mutex
-	claims int
-	err    error
+	inner   *MemoryLedger
+	mu      sync.Mutex
+	claims  int
+	reads   int
+	err     error
+	readErr error
 }
 
 func newCountingLedger() *countingLedger { return &countingLedger{inner: NewMemoryLedger()} }
@@ -110,19 +112,32 @@ func (c *countingLedger) Claim(ctx context.Context, run Run) (bool, error) {
 	return c.inner.Claim(ctx, run)
 }
 
+func (c *countingLedger) MinuteClaimed(ctx context.Context, minute FireMinute) (bool, error) {
+	c.mu.Lock()
+	c.reads++
+	err := c.readErr
+	c.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	return c.inner.MinuteClaimed(ctx, minute)
+}
+
 func (c *countingLedger) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.claims
 }
 
+func (c *countingLedger) readCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
+}
+
 func (c *countingLedger) rows(t *testing.T) []Run {
 	t.Helper()
-	rows, err := c.inner.Recent(t.Context(), 100)
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	return rows
+	return c.inner.Rows()
 }
 
 // --- fixtures -------------------------------------------------------------
@@ -169,26 +184,41 @@ type harness struct {
 	q      *fakeQueue
 	ledger *countingLedger
 	org    *org.Organization
+	opts   Options
 	mu     sync.Mutex
 }
+
+// testClaimRetention is the memory every harness ledger is said to have: the
+// fleet's week, so a case sits where the engine does.
+const testClaimRetention = 7 * 24 * time.Hour
 
 func build(t *testing.T, o *org.Organization, apply ...func(*Options)) *harness {
 	t.Helper()
 	h := &harness{t: t, q: newQueue(), ledger: newCountingLedger(), org: o}
 	opts := Options{
-		Publisher: h.q,
-		Org:       h.currentOrg,
-		Ledger:    h.ledger,
+		Publisher:      h.q,
+		Org:            h.currentOrg,
+		Ledger:         h.ledger,
+		ClaimRetention: testClaimRetention,
 	}
 	for _, fn := range apply {
 		fn(&opts)
 	}
-	s, err := New(opts)
+	h.opts = opts
+	h.restart()
+	return h
+}
+
+// restart replaces the scheduler with a fresh one over the same ledger, queue
+// and company, the way a process restart does: the new one has evaluated no
+// tick, so its first is the catchup pass.
+func (h *harness) restart() {
+	h.t.Helper()
+	s, err := New(h.opts)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		h.t.Fatalf("New: %v", err)
 	}
 	h.s = s
-	return h
 }
 
 func (h *harness) currentOrg() *org.Organization {
@@ -228,7 +258,8 @@ func (h *harness) tick(now time.Time) int {
 
 func TestNewRefusesAnUnusableWiring(t *testing.T) {
 	t.Parallel()
-	ok := Options{Publisher: newQueue(), Org: func() *org.Organization { return nil }, Ledger: NewMemoryLedger()}
+	ok := Options{Publisher: newQueue(), Org: func() *org.Organization { return nil }, Ledger: NewMemoryLedger(),
+		ClaimRetention: testClaimRetention}
 	for _, tc := range []struct {
 		name string
 		opts Options
@@ -240,6 +271,11 @@ func TestNewRefusesAnUnusableWiring(t *testing.T) {
 		// indistinguishable from a correct one until there are two nodes,
 		// and then every company gets two standups.
 		{"no ledger", func() Options { o := ok; o.Ledger = nil; return o }(), ErrNoLedger},
+		// No default either. A guessed retention longer than the ledger's
+		// real one has a restart judge a fire the ledger forgot, and record
+		// as missed a fire that ran.
+		{"no claim retention", func() Options { o := ok; o.ClaimRetention = 0; return o }(), ErrNoClaimRetention},
+		{"a negative claim retention", func() Options { o := ok; o.ClaimRetention = -time.Hour; return o }(), ErrNoClaimRetention},
 		{"a tick at minute granularity", func() Options { o := ok; o.Tick = time.Minute; return o }(), ErrTickTooLong},
 		{"a tick above minute granularity", func() Options { o := ok; o.Tick = 5 * time.Minute; return o }(), ErrTickTooLong},
 	} {
@@ -489,7 +525,7 @@ func TestAHandleNamingNoSeatDoesNotBurnTheClaim(t *testing.T) {
 	h := build(t, roleOrg())
 	entry := Entries(h.currentOrg())[0]
 	loc := time.UTC
-	if h.s.fire(t.Context(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) {
+	if h.s.fire(t.Context(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) != fireNotSent {
 		t.Fatal("fire to an unknown handle reported success")
 	}
 	if got := h.ledger.count(); got != 0 {
@@ -747,6 +783,147 @@ func TestASkipRowDoesNotSuppressALaterFireOfThatMinute(t *testing.T) {
 	h.seed(tickAt(8, 59, 30))
 	if got := h.tick(tickAt(9, 0, 30)); got != 1 {
 		t.Fatalf("later Tick = %d, want 1 — the skip row must not consume the fire's claim", got)
+	}
+}
+
+// A TICK THAT FIRED IS NOT A MISSED TICK. The live failure: the most recent
+// fire before a restart had run, the restart came after the catchup window,
+// and the first tick recorded that fire as skipped as well, so the schedule's
+// history showed one tick twice, fired and skipped. Every outcome a runner's
+// claim can carry counts: a paused seat's fire was held back on purpose, and
+// is not a miss either.
+func TestARestartAfterAHandledTickRecordsNothing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		paused  bool
+		outcome Outcome
+	}{
+		{"fired", false, OutcomeFired},
+		{"skipped paused", true, OutcomeSkippedPaused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := build(t, roleOrg(), func(o *Options) {
+				o.Paused = func(uuid.UUID) (bool, error) { return tc.paused, nil }
+			})
+			h.seed(tickAt(8, 59, 30))
+			h.tick(tickAt(9, 0, 30))
+			published := len(h.q.published)
+			claims := h.ledger.count()
+
+			// Eight hours on: the 09:00 fire is far outside a daily
+			// schedule's two-hour window.
+			h.restart()
+			if got := h.tick(tickAt(17, 0, 0)); got != 0 {
+				t.Fatalf("catchup Tick = %d, want 0", got)
+			}
+			rows := h.ledger.rows(t)
+			if len(rows) != 1 || rows[0].Outcome != tc.outcome {
+				t.Fatalf("ledger rows = %v, want only the %s row: the restart recorded the tick "+
+					"that ran as missed too", rows, tc.outcome)
+			}
+			if got := h.ledger.count(); got != claims {
+				t.Fatalf("the restart made %d claim(s), want none", got-claims)
+			}
+			if got := len(h.q.published); got != published {
+				t.Fatalf("the restart published %d event(s), want none", got-published)
+			}
+		})
+	}
+}
+
+// One runner's fire is enough. A unit's standup fanned out to two members ran
+// at 09:00 for both; the minute is theirs, and a skip naming no runner beside
+// it would say the standup did not happen.
+func TestARestartAfterAFannedOutTickRecordsNothing(t *testing.T) {
+	t.Parallel()
+	h := build(t, unitOrg(org.TargetEach))
+	h.seed(tickAt(8, 59, 30))
+	if got := h.tick(tickAt(9, 0, 30)); got != 2 {
+		t.Fatalf("Tick = %d, want 2", got)
+	}
+	h.restart()
+	h.tick(tickAt(17, 0, 0))
+	for _, row := range h.ledger.rows(t) {
+		if row.Outcome == OutcomeSkippedCatchup {
+			t.Fatalf("ledger rows = %v: the restart recorded a skip for a minute both members ran",
+				h.ledger.rows(t))
+		}
+	}
+}
+
+// The other half: a minute NOBODY holds was missed, and a restart still says
+// so, once. The engine was down at 09:00 and comes back at 17:00.
+func TestARestartAfterAMissedTickRecordsOneSkip(t *testing.T) {
+	t.Parallel()
+	h := build(t, roleOrg())
+	h.tick(tickAt(17, 0, 0))
+	rows := h.ledger.rows(t)
+	if len(rows) != 1 || rows[0].Outcome != OutcomeSkippedCatchup || rows[0].TargetHandle != "" {
+		t.Fatalf("ledger rows = %v, want one skipped_catchup row naming no runner", rows)
+	}
+	if !rows[0].ScheduledAt.Equal(tickAt(9, 0, 0)) || rows[0].FireLabel != "20260608T0900" {
+		t.Fatalf("the skip is for %v (%s), want the missed 09:00 tick",
+			rows[0].ScheduledAt, rows[0].FireLabel)
+	}
+}
+
+// Two restarts, one miss. The second restart finds the first one's skip
+// holding the minute, so it neither claims nor announces the miss again: the
+// log line every restart used to write came from a claim the ledger refused.
+func TestTwoRestartsAfterAMissedTickRecordOneSkip(t *testing.T) {
+	t.Parallel()
+	h := build(t, roleOrg())
+	h.tick(tickAt(17, 0, 0))
+	claims := h.ledger.count()
+
+	h.restart()
+	h.tick(tickAt(18, 0, 0))
+	if rows := h.ledger.rows(t); len(rows) != 1 {
+		t.Fatalf("ledger rows = %v, want the one skip", rows)
+	}
+	if got := h.ledger.count(); got != claims {
+		t.Fatalf("the second restart made %d claim(s), want none: it recorded the same miss again",
+			got-claims)
+	}
+}
+
+// AN UNREADABLE LEDGER RECORDS NOTHING. Nothing is dispatched either way, and
+// the choice is between a history row missing and a history row invented: a
+// skip written without knowing whether the fire ran is a miss that may never
+// have happened.
+func TestAnUnreadableMinuteRecordsNoSkip(t *testing.T) {
+	t.Parallel()
+	h := build(t, roleOrg())
+	h.ledger.readErr = errors.New("store unreachable")
+	if got := h.tick(tickAt(17, 0, 0)); got != 0 {
+		t.Fatalf("Tick = %d, want 0", got)
+	}
+	if got := h.ledger.count(); got != 0 {
+		t.Fatalf("the tick made %d claim(s) on a minute it could not read, want none", got)
+	}
+}
+
+// PAST THE LEDGER'S MEMORY, nothing is judged. A monthly report fired on the
+// first; a restart on the twentieth asks a ledger that has forgotten that
+// claim, reads the minute unclaimed, and recorded the report as missed.
+func TestARestartPastTheClaimRetentionJudgesNothing(t *testing.T) {
+	t.Parallel()
+	monthly := org.Schedule{Name: "report", Cron: "0 9 1 * *", Task: "x"}
+	h := build(t, roleOrg(monthly))
+	h.tick(time.Date(2026, time.June, 20, 12, 0, 0, 0, time.UTC))
+	if got := h.ledger.readCount() + h.ledger.count(); got != 0 {
+		t.Fatalf("the ledger saw %d call(s), want none for a fire older than it remembers", got)
+	}
+
+	// Inside the retention the same schedule is judged as before: a miss
+	// nobody holds is recorded.
+	recent := build(t, roleOrg(monthly))
+	recent.tick(time.Date(2026, time.June, 5, 12, 0, 0, 0, time.UTC))
+	rows := recent.ledger.rows(t)
+	if len(rows) != 1 || rows[0].Outcome != OutcomeSkippedCatchup {
+		t.Fatalf("ledger rows = %v, want one skipped_catchup row for the 1 June fire", rows)
 	}
 }
 

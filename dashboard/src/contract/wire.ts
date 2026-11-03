@@ -25,7 +25,7 @@ export type PushKind =
   | "event"
   | "agents"
   | "seats"
-  | "sandboxes"
+  | "executors"
   | "tokens"
   | "budget"
   | "schedules"
@@ -88,7 +88,7 @@ export interface InboxChange {
  *
  * An `agents` push carries these only when their version moved since the last
  * push for the same call — they move once a round, once a tool call or once a
- * CLI run, while the row is pushed five times a second as a round streams —
+ * harness run, while the row is pushed five times a second as a round streams —
  * and names every version always. The store keeps the copy it holds of a field the push left
  * out, and asks for the call whole (`live_call`) when a push names a version
  * newer than the one it holds: the push that moved it was dropped. A field
@@ -186,8 +186,8 @@ export const MAX_ARTIFACT_ROOMS = 8;
 /**
  * What a seat is doing: the ONE seat-state vocabulary, served on every
  * `agents` row as `activity` and computed by the engine alone
- * (`internal/api/livestate/activity.go`) from the seat's turn, its coding
- * runs' durable record, its pause, its placement across the fleet and its
+ * (`internal/api/livestate/activity.go`) from the seat's turn, its
+ * executor's durable record, its pause, its placement across the fleet and its
  * budget windows. A screen maps it to a tone and a label and derives nothing.
  *
  * EXACTLY THE ENGINE'S `livestate.Activities`, held both ways by

@@ -630,7 +630,7 @@ func TestABoxKeepsTheNameItWasGiven(t *testing.T) {
 }
 
 // A STOPPED SEAT'S BOX PUSHES NOTHING: a person's pause with stop_running is
-// the emergency stop, and a detached coding run is not fenced by it, so its
+// the emergency stop, and a detached executor is not fenced by it, so its
 // box's push advertisement and receive-pack are refused, naming who stopped
 // the seat — while its fetches are served, a pause that stops no running
 // work pushes, and a node that has not yet read the pauses answers a push
@@ -919,7 +919,7 @@ func TestABoxPushHoldsEverySeatBranchItPushes(t *testing.T) {
 
 // A BOX'S PUSH NAMES ITS RUN: its row's principal is the run's seat as an
 // agent, stamped with the run — its turn, its launch, its work item, its
-// model and its coding agent — received over git.
+// model and its harness — received over git.
 //
 // Mutation: principal answering the person's shape for a box — the row names
 // no run — red.
@@ -935,7 +935,7 @@ func TestABoxPushNamesItsRun(t *testing.T) {
 	}
 	row := boxRow(t, c, branch)
 	want := code.RunProvenance{TurnID: ref.TurnID, RunID: ref.LaunchID, WorkBackend: "native", WorkKey: "ENG-1",
-		Model: "fixture-model", CodingAgent: "claude-code"}
+		Model: "fixture-model", Harness: "claude-code"}
 	if row.Run != want || row.Via != code.ViaGit || row.ActorSeat != codetest.FixtureAlice ||
 		row.ActorKind != string(code.PrincipalAgent) {
 		t.Errorf("the box's push row is %+v (actor %q %q seat %q), want run %+v via git as agent %s", row.Run,
@@ -958,7 +958,7 @@ func TestABoxPushOnAnItemWithALongKeyLands(t *testing.T) {
 	ref, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
 	long := strings.Repeat("group/", 48) + "project!12"
 	c.Fleet.Runs().SetProvenance(ref, code.RunProvenance{WorkBackend: "gitlab", WorkKey: long,
-		WorkProject: strings.TrimSuffix(long, "!12"), Model: "fixture-model", CodingAgent: "claude-code"})
+		WorkProject: strings.TrimSuffix(long, "!12"), Model: "fixture-model", Harness: "claude-code"})
 	clone := box.Clone(c.BoxURL(0))
 	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
 	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"

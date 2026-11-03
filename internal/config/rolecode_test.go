@@ -13,7 +13,7 @@ import (
 // ONE TIER VOCABULARY, WRITTEN TWICE, WHICH MUST NOT DRIFT.
 //
 // role.code.access is the tier the engine's own code host caps a seat's grant
-// by (internal/code's Tier, ADR-0081). config owns the vocabulary, since it is
+// by (internal/code's Tier, ADR-0088). config owns the vocabulary, since it is
 // where a person writes and the validator reads it, and internal/code spells
 // its tiers as config's constants; it is held here all the same, element by
 // element, because a tier added on one side and not the other would validate

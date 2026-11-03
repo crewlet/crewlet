@@ -24,7 +24,7 @@ import (
 // are (authz.ActionCodePurgeUnreachable: human-only, step-up), so no seat is
 // offered it and no model's say-so erases what the company's code held; and
 // the tool holds it to the repository's grant, maintain or above, read once
-// the repository is — every person maintains every repository (ADR-0078), so
+// the repository is — every person maintains every repository (ADR-0085), so
 // what that refuses is a principal of a kind a future grant ranks lower. A
 // credential bound to nobody purges nothing ([code.UnboundDetail]): the
 // request names the person who asked, for its attribution, and nobody is no

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +60,20 @@ type Dispatcher struct {
 	// Turn runs the seat's turn once the guards have passed.
 	Turn func(ctx context.Context, req Request) (turn.Result, error)
 
+	// Settled is told the wakes a delivery has finished with: every
+	// constituent of a partition the dispatch acknowledged, whether a turn
+	// ran on it or it was settled without one (worked already, answered a
+	// parked run, parked). It is what takes a person's queued line down
+	// once their message no longer waits ([Engine.settleWaiting]). nil
+	// settles nothing.
+	Settled func(ctx context.Context, handle string, wakes []string)
+
+	// running counts the dispatches in progress per seat, which is how
+	// "this seat is busy right now" is answered for a person's message
+	// that reaches it meanwhile ([Dispatcher.Running]).
+	runningMu sync.Mutex
+	running   map[string]int
+
 	// Park requeues a partition and reports whether it landed. The
 	// dispatcher acks only on true: acking a park whose requeue failed
 	// drops the work entirely.
@@ -101,7 +116,7 @@ type Dispatcher struct {
 	// failure, and its redelivery meets the backend's own sit-out.
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
 
-	// Answer offers a delivery to a parked coding run as the reply to the
+	// Answer offers a delivery to a parked executor as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
 	// [sandbox.AnswerDisposition].
 	//
@@ -288,7 +303,7 @@ type Request struct {
 	// The identity, never the inbox partition key beside it: this field is
 	// what reaches the conversation ledger, the turn telemetry that becomes
 	// the event store's conversation_key tag and the episodes column, and
-	// the row a detached coding run reports back through.
+	// the row a detached executor reports back through.
 	//
 	// THE PARTITION KEY IS NOT A FIELD HERE. It is read straight off the
 	// events at each of the four places that want it (see [partitionKeyOf])
@@ -379,6 +394,20 @@ func (r Request) Ask() []*events.Event {
 // queue backend's handler guard, which NAKs a panic, so a defect was run again
 // up to the whole delivery budget. See [Dispatcher.recoverPanic].
 func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) (result queue.Result) {
+	d.enter(handle)
+	defer d.leave(handle)
+	// SETTLED ONCE THE OUTCOME IS FINAL, which is why this is deferred
+	// FIRST: deferred calls run last to first, so it runs after the panic
+	// recovery below has decided what a recovered dispatch answers. See
+	// [settledBy] for which wakes a dispatch has finished with.
+	defer func() {
+		if d.Settled == nil {
+			return
+		}
+		if wakes := settledBy(ctx, result, evs); len(wakes) > 0 {
+			d.Settled(ctx, handle, wakes)
+		}
+	}()
 	held := holding{events: evs}
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -386,6 +415,69 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		}
 	}()
 	return d.dispatch(ctx, handle, evs, &held)
+}
+
+// Running reports whether a delivery of the seat is being dispatched on this
+// node right now: a turn of it is running, or about to.
+func (d *Dispatcher) Running(handle string) bool {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	return d.running[handle] > 0
+}
+
+func (d *Dispatcher) enter(handle string) {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	if d.running == nil {
+		d.running = map[string]int{}
+	}
+	d.running[handle]++
+}
+
+func (d *Dispatcher) leave(handle string) {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	if d.running[handle]--; d.running[handle] <= 0 {
+		delete(d.running, handle)
+	}
+}
+
+// settledBy is the wakes a dispatch has finished with, whose queued lines come
+// down ([Dispatcher.Settled]).
+//
+// EVERY WAKE OF AN ACKNOWLEDGED DELIVERY: a turn ran on it, or it was settled
+// without one. A delivery handed back (a Nak or a Defer) comes back, and its
+// person is still waiting, EXCEPT a wake the hand-back dead-letters: the
+// backend retires a message whose deliveries are spent rather than return it,
+// so nothing would ever pick it up and end its line. Which ones those are is
+// each message's own headroom as the queue states it
+// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent.
+func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []string {
+	if result.Outcome == queue.OutcomeAck {
+		return wakeIDsOf(evs)
+	}
+	var out []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if left, known := queue.DeliveriesLeftFor(ctx, ev.ID); known && left <= 0 {
+			out = append(out, ev.ID.String())
+		}
+	}
+	return out
+}
+
+// wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
+// held under ([notify.WaitingNotice.Wake]).
+func wakeIDsOf(evs []*events.Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		if ev != nil {
+			out = append(out, ev.ID.String())
+		}
+	}
+	return out
 }
 
 // holding is what one delivery is still answerable for, narrowed as the stages
@@ -475,7 +567,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	// THE BUDGET, BEFORE THE DELIVERY IS CLAIMED: before the completion
-	// ledger reads it, before a parked coding run is offered it as an
+	// ledger reads it, before a parked executor is offered it as an
 	// answer — resuming one charges tokens exactly as a turn does — and
 	// before any model is asked anything. A seat whose capped window is
 	// refusing cannot run a round, and a turn started anyway is refused on
@@ -521,7 +613,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	//
 	// AFTER THE LEDGER, because the completion ledger has already said
 	// which of these events were worked, and a trigger that produced a turn
-	// must not also be spliced into somebody's coding run.
+	// must not also be spliced into somebody's executor.
 	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, surviving) {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
@@ -578,7 +670,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// constituents, and only the ask a model is handed is merged.
 	trigger := routing.Events
 	if routing.Coalesce {
-		merged, ok := mergeNotifications(d.promptRegistry(), routing.Events)
+		merged, ok := mergePartition(d.promptRegistry(), routing.Events)
 		if !ok {
 			// A PARTITION THAT CANNOT BE MERGED degrades to per-event
 			// dispatch: requeue the tail FIRST, then run the head in the
@@ -630,13 +722,17 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// the two lines about a turn that do not name its trace, which is
 	// precisely when an operator is looking for them.
 	//
-	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace comes from
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES, and the trace is the
+	// one the merged trigger carries. For a conversation's digest that is
 	// the first event of the partition, the same event describeTurn takes the
-	// trigger from — ten Slack comments become one turn under one trace. The
-	// others are already recorded as the turn's interactions; a span cannot
-	// have two parents, and inventing a root to hold them would put a node
-	// above the webhook that actually happened.
-	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
+	// trigger from, so ten comments on one thread become one turn under one
+	// trace and the others are recorded as the turn's interactions: a span
+	// cannot have two parents, and inventing a root to hold them would put a
+	// node above the webhook that actually happened. For a schedule's waiting
+	// fires it is the LATEST fire's, because that fire is the run and each
+	// earlier one is recorded as superseded under its own trace
+	// ([Dispatcher.noteSuperseded]).
+	ctx = tracing.WithRemote(ctx, triggerTrace(trigger))
 	depth, chain := delegationOf(routing.Events)
 	// MINTED HERE, at the one frame that knows a partition is about to
 	// RUN, because both halves of the dispatch's own bookkeeping need it:
@@ -666,6 +762,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// for a direct message's thread reply, where the record would otherwise
 	// name the whole DM channel and say nothing about which batch collapsed.
 	d.noteCoalesced(ctx, handle, partitionKeyOf(routing.Events), routing)
+	d.noteSuperseded(ctx, handle, routing.Events, trigger)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
 		req.History = history
@@ -679,7 +776,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	// The acting seat travels the same way, and for the same reason: the
-	// only consumer is a leaf. A provider gives every seat its own CLI
+	// only consumer is a leaf. A provider gives every seat its own harness
 	// home, because seven seats on one subscription sharing one
 	// home would read each other's transcripts — and an unbound call would
 	// silently put them all back in one. Bound HERE, at the single place a
@@ -1111,7 +1208,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // guard protects, and both stop offering at the same reserve.
 //
 // ON THIS NODE'S LOG EITHER WAY, and the two lines are different facts.
-// Refusing means the delivery becomes an ordinary turn while a coding run may
+// Refusing means the delivery becomes an ordinary turn while an executor may
 // still be parked on its question — the answer route giving up its claim on a
 // message, invisible anywhere else. Offering while the PARTITION's own number
 // is inside the reserve means the hand-back this may cause will also spend a
@@ -1134,7 +1231,7 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 			"reserve", sandbox.AnswerDeliveryReserve,
 			"detail", "every message of this delivery has spent nearly all of its "+
 				"deliveries, so what is left is kept for the ordinary route rather "+
-				"than offered to a parked coding run again; handing it back once "+
+				"than offered to a parked executor again; handing it back once "+
 				"more risks the broker dead-lettering the reply instead")
 		return false
 	}
@@ -1143,15 +1240,15 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 			"seat", handle, "partition_deliveries_left", least,
 			"reserve", sandbox.AnswerDeliveryReserve,
 			"detail", "a message of this delivery still has the deliveries to spare, "+
-				"so a parked coding run is being offered it; another message in the "+
+				"so a parked executor is being offered it; another message in the "+
 				"same partition is inside the reserve, and a hand-back returns the "+
 				"whole partition, so that one may dead-letter")
 	}
 	return true
 }
 
-// answered offers a delivery to a coding run of this seat that is waiting for
-// somebody to answer its question, and reports what to do with it.
+// answered offers a delivery to one of this seat's executors that is waiting
+// for somebody to answer its question, and reports what to do with it.
 //
 // FAIL-OPEN WHERE NOTHING WAS MATCHED. A missing seam, a partition with no key
 // at all and a lookup the coordinator could not make all report
@@ -1430,7 +1527,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 //
 // EXPORTED AND SEPARATE because a turn has two ways of ending and both owe
 // the conversation an entry. An ordinary turn ends here, in the dispatcher.
-// A turn that suspended on a detached coding run ends somewhere else
+// A turn that suspended on a detached executor ends somewhere else
 // entirely — in another process, on another node, days later — and that path
 // recorded nothing at all: the thread's history stopped at the moment the run
 // detached, so the seat's next turn on it re-read a conversation in which the
@@ -1459,8 +1556,8 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 	if d.Conversations == nil || conversation == "" || !policy.Records() {
 		return
 	}
-	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached coding
-	// run, and its Result carries the self_iterate the suspend returns and
+	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached
+	// executor, and its Result carries the self_iterate the suspend returns and
 	// an empty artifact — so filing it wrote the seat's "reply" to the
 	// thread as a decision it never made and an answer it never gave, and
 	// the next turn on that thread read it back as what this one had done.
@@ -1826,6 +1923,49 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string
 	}, tracing.TraceOf(ctx))
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
+}
+
+// noteSuperseded records every scheduled fire the turn's trigger stands for
+// and does not run ([mergeScheduledFires]), each under that fire's OWN trace.
+//
+// UNDER ITS OWN TRACE because a fire's trace is how its schedule history finds
+// what became of it: the run is found by the turn under the kept fire's trace,
+// and a fire that was not run is found by this record under its own. Recorded
+// at the merge, like the coalescing record beside it, because this is the one
+// frame that holds both the constituents and the run they became. A turn that
+// fails and comes back merges again and records again, which a reader asking
+// "was this fire run" answers the same way.
+//
+// Best effort and nil-safe, like the records beside it.
+func (d *Dispatcher) noteSuperseded(ctx context.Context, handle string, evs, trigger []*events.Event) {
+	if d.Observe == nil || len(trigger) != 1 {
+		return
+	}
+	kept, ok := events.DataAs[*types.TaskAssigned](trigger[0])
+	if !ok || kept == nil || len(kept.Missed) == 0 {
+		return
+	}
+	missed := make(map[string]bool, len(kept.Missed))
+	for _, m := range kept.Missed {
+		missed[m.TaskID] = true
+	}
+	for _, ev := range evs {
+		fire, ok := events.DataAs[*types.TaskAssigned](ev)
+		if !ok || fire == nil || !missed[fire.TaskID] {
+			continue
+		}
+		rec := events.New(types.ScheduledFireSuperseded{
+			ScopeType:    fire.ScopeType,
+			ScopeID:      fire.ScopeID,
+			ScheduleName: fire.Schedule,
+			TargetHandle: handle,
+			TaskID:       fire.TaskID,
+			ScheduledAt:  dueAt(ev, fire).Format(time.RFC3339),
+			SupersededBy: kept.TaskID,
+		}, events.TraceContext{TraceID: ev.TraceID, ParentSpanID: ev.SpanID})
+		rec.Source = "engine." + ev.Source
+		d.Observe(ctx, rec)
+	}
 }
 
 // noteSkipped records every constituent the completion ledger already worked.

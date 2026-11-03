@@ -14,7 +14,7 @@
 // listed here fails the build, and so does a listed table the schema does not
 // have, or one whose key column no index leads with.
 //
-// # Required, retired and derived (ADR-0074)
+// # Required, retired and derived (ADR-0081)
 //
 // Every declaration states its STANDING ([objstore.Standing]), and the gate
 // below refuses one that states none of the three, and holds each entry's to
@@ -83,7 +83,7 @@
 // in a domain the engine reads no estate of fails the build rather than the
 // boot.
 //
-// # The log half (ADR-0075)
+// # The log half (ADR-0082)
 //
 // A backup reads more than rows: a restore brings its store copy back and
 // replays the declaring domain's log from the copy's position — and a newer
@@ -101,6 +101,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -110,7 +111,8 @@ import (
 // pushes stored and, for a grace, the ones a record retired, the parts of each
 // repository's published multi-pack-index layers, the logs its failed checks
 // kept, an artifact's version files and assets, the files of the company's
-// adopted brand, and the files a person's assistant conversations keep.
+// adopted brand, the files a person's assistant conversations keep, and the
+// sealed sessions a seat's executor runs continue from.
 var All = []objstore.ReferenceTable{
 	worklet.FileObjectReferences,
 	code.PackReferences,
@@ -121,6 +123,7 @@ var All = []objstore.ReferenceTable{
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,
 	assistantdomain.FileObjectReferences,
+	executordomain.SessionObjectReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

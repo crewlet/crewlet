@@ -71,7 +71,6 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ExecutorInput{
-		Discoverable: "- MCP server `github`",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
 		// it gates is inside the bytes held stable across rounds — and the
 		// code tools for the same reason, for the code guidance — the
@@ -81,7 +80,6 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",
-		Skills:            allSkills(),
 	}
 	// What a round actually changes, and where it goes: the user message.
 	var userMessages []string
@@ -91,9 +89,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 			PriorWork:       ledgerAfter(round),
 		}).Text)
 		return BuildExecutor(seat, frozen).Text
-	}, BuildExecutor(seat, ExecutorInput{
-		Discoverable: "- MCP server `github`", AvailableTools: frozen.AvailableTools,
-	}).Text)
+	}, BuildExecutor(seat, ExecutorInput{AvailableTools: frozen.AvailableTools}).Text)
 
 	// Guard the guard: if the per-round state never moved, the stability
 	// assertion above tested nothing at all.
@@ -150,11 +146,7 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
-	exec := ExecutorInput{
-		Discoverable:   "- MCP server `github`",
-		AvailableTools: []string{"post_message"},
-		Skills:         allSkills(),
-	}
+	exec := ExecutorInput{AvailableTools: []string{"post_message"}}
 	review := ReviewInput{Intent: "Post.", Outcome: "delivered", Skills: allSkills()}
 	stableAcrossRounds(t, "turn",
 		func(int) string { return BuildExecutor(seat, exec).Text + BuildReview(seat, review).Text },
@@ -162,31 +154,29 @@ func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 }
 
 // Assembly is deterministic for the same inputs, which is a stronger claim
-// than "stable across rounds": the seat's MCP servers live in a map, and Go
-// randomises map iteration on every range. Unsorted, that order would reach
-// the skill catalogue and could reorder a prompt between two builds in the
-// same process.
+// than "stable across rounds": a catalogue may answer in any order (a registry
+// keyed by a map does), and an order that leaked into the prompt could reorder
+// it between two builds in the same process.
 func TestAssemblyIsDeterministic(t *testing.T) {
 	t.Parallel()
-	// A wide MCP surface, so a map-order leak has plenty of room to show.
-	o := acme()
-	o.Role("eng").MCPEnv = map[string]map[string]string{
-		"atlassian": {}, "github": {}, "gitlab": {},
-		"slack": {}, "mattermost": {}, "custom-a": {}, "custom-b": {},
-	}
-	seat := seatIn(o, "eng")
+	// A wide MCP surface, given out of order, so a leaked order has plenty
+	// of room to show.
+	seat := seatIn(acme(), "eng")
+	worker := []Phase{PhaseSubagent}
 	cat := &fakeCatalogue{skills: []fakeSkill{
-		{key: "mcp:slack", mcpServer: "slack", summary: "S"},
-		{key: "mcp:github", mcpServer: "github", summary: "G"},
-		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
-		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
+		{key: "mcp:slack", mcpServer: "slack", summary: "S", phases: worker},
+		{key: "mcp:github", mcpServer: "github", summary: "G", phases: worker},
+		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A", phases: worker},
+		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M", phases: worker},
 	}}
-	in := ExecutorInput{Skills: cat, Discoverable: "- x: does x"}
+	in := SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: []string{
+		"slack", "custom-b", "github", "mattermost", "gitlab", "custom-a", "atlassian",
+	}}
 
 	const builds = 200
-	first := BuildExecutor(seat, in).Text
+	first := BuildSubagent(seat, in).Text
 	for i := 2; i <= builds; i++ {
-		if got := BuildExecutor(seat, in).Text; got != first {
+		if got := BuildSubagent(seat, in).Text; got != first {
 			t.Fatalf("build %d of %d differs from the first\n%s", i, builds, firstDiff(first, got))
 		}
 	}

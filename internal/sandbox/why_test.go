@@ -317,7 +317,7 @@ func TestASetupFailureIsClassedByWhoseItIs(t *testing.T) {
 	}
 }
 
-// A CELL OR A CODING AGENT THE CATALOGUE DOES NOT HAVE is configuration: a
+// A CELL OR A HARNESS THE CATALOGUE DOES NOT HAVE is configuration: a
 // person's providers.sandbox, which no wait changes.
 func TestACatalogueGapIsConfiguration(t *testing.T) {
 	t.Parallel()
@@ -330,8 +330,8 @@ func TestACatalogueGapIsConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, spec := range map[string]sandbox.Spec{
-		"a cell nobody configured": {Placement: sandbox.Direct, CodingAgent: "claude-code"},
-		"a runner nobody has":      {Placement: sandbox.E2B, CodingAgent: "unheard-of"},
+		"a cell nobody configured": {Placement: sandbox.Direct, Harness: "claude-code"},
+		"a runner nobody has":      {Placement: sandbox.E2B, Harness: "unheard-of"},
 	} {
 		_, _, err := m.Acquire(context.Background(), spec, nil)
 		if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {

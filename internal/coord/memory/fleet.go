@@ -44,7 +44,7 @@ type Fleet struct {
 	channels  map[string]coord.Channel
 	follows   map[string]followEntry
 	chatReads map[string]coord.ChatReadState
-	fires     map[string]time.Time
+	fires     map[string]map[string]time.Time
 	custody   map[string]string
 	rebases   map[string]rebaseEntry
 	runs      map[string]coord.Record
@@ -77,6 +77,7 @@ type Fleet struct {
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
 	floors      map[string]coord.TrimFloor
+	feedMarks   map[string]coord.FeedMark
 	backups     map[string]coord.BackupPoint
 	maintenance map[string]coord.MaintenanceOperation
 	admissions  map[string]coord.Admission
@@ -84,7 +85,7 @@ type Fleet struct {
 	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, runWatchers the open
-	// watches of each sandbox run by its turn id, and chatReadWatchers the
+	// watches of each executor's row by its turn id, and chatReadWatchers the
 	// open watches of the chat read state, each told of every change under
 	// the lock that made it.
 	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}
@@ -95,6 +96,26 @@ type Fleet struct {
 	// with its own open watches.
 	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
+
+	// listings are each node's listing of each MCP server, by its key, and
+	// schemas each definition's schemas by its digest.
+	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
+	schemas  map[string]coord.MCPToolSchema
+
+	// restarts are the MCP restarts people asked for, by entry
+	// ([coord.MCPRestartEntry]).
+	restarts entryRecords[coord.MCPRestart, coord.MCPRestartUpdate]
+
+	// checks are each MCP server's latest test, by the server's name.
+	checks entryRecords[coord.MCPCheck, coord.MCPCheck]
+	// accepted are the definitions MCP tools' levels were decided on, by
+	// their whole key.
+	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
+
+	// grants and mcpSignIns are each MCP server's OAuth grant and its
+	// sign-in in progress, by the server's name.
+	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
+	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
@@ -144,7 +165,7 @@ func NewFleet() *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		chatReads:    map[string]coord.ChatReadState{},
-		fires:        map[string]time.Time{},
+		fires:        map[string]map[string]time.Time{},
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
@@ -157,6 +178,12 @@ func NewFleet() *Fleet {
 		uploads:      map[string]versioned{},
 		retries:      newRetryRecords(),
 		signIns:      newSignInRecords(),
+		listings:     newListingRecords(),
+		restarts:     newRestartRecords(),
+		checks:       newCheckRecords(),
+		grants:       newGrantRecords(),
+		mcpSignIns:   newMCPSignInRecords(),
+		accepted:     newAcceptedRecords(),
 	}
 }
 
@@ -708,18 +735,38 @@ func normalizeChannel(ch coord.Channel) coord.Channel {
 
 // ---- the scheduled-fire claims ----------------------------------------- //
 
-// ClaimFire records one fire identity, reporting whether this call wrote it.
-func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, error) {
-	if key == "" {
-		return false, errors.New("coord/memory: a fire claim needs a key")
+// ClaimFire records one runner's claim on a minute, reporting whether this
+// call wrote it.
+//
+// KEPT BY MINUTE, each minute's runners together, which is the shape the KV
+// backend's keys have and what lets [Fleet.FireMinuteClaimed] answer without
+// reading every claim.
+func (f *Fleet) ClaimFire(_ context.Context, minute, runner string, at time.Time) (bool, error) {
+	if minute == "" {
+		return false, errors.New("coord/memory: a fire claim needs a minute")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, taken := f.fires[key]; taken {
+	runners := f.fires[minute]
+	if _, taken := runners[runner]; taken {
 		return false, nil
 	}
-	f.fires[key] = at.UTC()
+	if runners == nil {
+		runners = map[string]time.Time{}
+		f.fires[minute] = runners
+	}
+	runners[runner] = at.UTC()
 	return true, nil
+}
+
+// FireMinuteClaimed reports whether any runner, or none, holds the minute.
+func (f *Fleet) FireMinuteClaimed(_ context.Context, minute string) (bool, error) {
+	if minute == "" {
+		return false, errors.New("coord/memory: a fire minute read needs a minute")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.fires[minute]) > 0, nil
 }
 
 // ---- the custody claims ----------------------------------------------- //

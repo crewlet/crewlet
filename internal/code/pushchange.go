@@ -36,11 +36,11 @@ import (
 //
 // A push lands or not by its commands alone: options that are no change's, a
 // push that does not single out one branch, and a change its decide refuses —
-// no live target, the source at its target's commit — leave the push to land
-// as one that asked for nothing, and its pusher is told in one line what
-// became of the change ([ChangeAnswer]). A push refused for a typo in an
-// option would send its pusher to push the same commits again, and a coding
-// run's push refused for its change would lose the work it delivers.
+// no live target, the source at its target's commit — leave the push to land as
+// one that asked for nothing, and its pusher is told in one line what became of
+// the change ([ChangeAnswer]). A push refused for a typo in an option would
+// send its pusher to push the same commits again, and an executor's push
+// refused for its change would lose the work it delivers.
 //
 // # Open it, or name the change the push moves
 //

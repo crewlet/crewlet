@@ -13,7 +13,7 @@ import (
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit, and not a provisioning one: a coding job is never
+// NOT a run-time limit, and not a provisioning one: a launched job is never
 // force-stopped on a timer, and the waiter refreshes a running box's TTL to
 // this value every tick so the clock never kills it — as the launch refreshes
 // the box it is still provisioning ([keepProvisioning]), so no sum of setup
@@ -44,7 +44,7 @@ const provisionRefresh = DefaultPollInterval
 const DefaultPauseTTL = 1800 * time.Second
 
 // ConfigError reports providers.sandbox being misconfigured — a placement
-// with no backend behind it, or a coding agent with no registered runner.
+// with no backend behind it, or a harness with no registered runner.
 type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
@@ -64,11 +64,11 @@ type ManagerOptions struct {
 	// DefaultPlacement is where a seat that names none runs. It MUST be a
 	// key of Providers: a default naming a backend nobody configured is
 	// the failure this whole reshape exists to make impossible, and it is
-	// checked here rather than at the first coding run.
+	// checked here rather than at the first launch.
 	DefaultPlacement Placement
 
-	// Runners are the coding agents a box can run, by CLI name. A launch
-	// names its own — the CLI of the executor-chain member it launches on —
+	// Runners are the harnesses a box can run, by harness name. A launch
+	// names its own — the harness of the executor-chain member it launches on —
 	// so there is no default among them to fall back to.
 	Runners map[string]Runner
 
@@ -88,10 +88,16 @@ type ManagerOptions struct {
 	DefaultPauseTTL *time.Duration
 
 	// DefaultMaxTurns caps the agentic rounds of a run on a seat that names
-	// none: providers.sandbox.default_max_turns, whose default and its reason
-	// are the config's. Zero is uncapped — an explicit setting this layer
-	// passes through rather than a value it fills in.
+	// none: providers.sandbox.default_max_turns, zero for uncapped as the
+	// config's own zero is (the reason is the config's). This layer passes it
+	// through and fills nothing in.
 	DefaultMaxTurns int
+
+	// AttributeCommits is whether every run's own commits credit Crewlet
+	// (providers.sandbox.commit_attribution, whose default and its reason
+	// are the config's) — see [Manager.CommitAttribution]. False credits
+	// nothing.
+	AttributeCommits bool
 
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
 	// applied to every box before a role's own extras. The engine ships
@@ -129,6 +135,9 @@ type Manager struct {
 	maxTurns  int
 	setup     []SetupStep
 	telemetry *OtelReceiver
+
+	// attributes is [ManagerOptions.AttributeCommits].
+	attributes bool
 }
 
 // NewManager validates the options and returns the manager.
@@ -147,7 +156,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		}
 	}
 	if len(opts.Runners) == 0 {
-		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
+		return nil, &ConfigError{msg: "providers.sandbox: no harness runners registered"}
 	}
 	m := &Manager{
 		providers: maps.Clone(opts.Providers),
@@ -157,6 +166,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		maxTurns:  max(opts.DefaultMaxTurns, 0),
 		setup:     slices.Clone(opts.DefaultSetup),
 		telemetry: opts.Telemetry,
+
+		attributes: opts.AttributeCommits,
 	}
 	if m.placement == "" && len(m.providers) == 1 {
 		// One backend is not a choice, so nothing is being decided for the
@@ -362,12 +373,12 @@ func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 // BoxTimeout is the TTL the waiter refreshes a running box to on every tick.
 func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
 
-// RunnerFor returns the runner for a coding agent.
+// RunnerFor returns the runner for a harness.
 func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 	runner, ok := m.runners[codingAgent]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no coding-agent runner registered for %q (have: %s)",
+			"no harness runner registered for %q (have: %s)",
 			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
@@ -383,14 +394,14 @@ type SpecInput struct {
 	// provider default.
 	Placement Placement
 
-	// CodingAgent is the runner the box runs: the CLI of the executor-chain
+	// Harness is the runner the box runs: the harness of the executor-chain
 	// member the launch picked. REQUIRED, and passed through as given — a
 	// runner chosen apart from the entry whose login and model the run
 	// carries is a run that cannot read either, so there is nothing to
 	// default it to. An empty one is refused at the launch.
-	CodingAgent string
-	Timeout     time.Duration
-	PauseTTL    *time.Duration
+	Harness  string
+	Timeout  time.Duration
+	PauseTTL *time.Duration
 
 	// MaxTurns is the seat's round cap. Nil inherits the provider default;
 	// an explicit 0 is uncapped, which is how a seat escapes a company-wide
@@ -402,11 +413,30 @@ type SpecInput struct {
 	CredentialFiles map[string]string
 }
 
+// CommitAttribution is the credit a run's own commits carry under this
+// manager's catalogue: a — Crewlet as co-author, the seat and its work item
+// where the run is a seat's, and the run where it has a page to be named by —
+// or nil where the company turned the credit off, which names nothing at all:
+// a company that does not want Crewlet in its history wants no Crewlet
+// trailer in it either. Every launch path asks it, so a run is credited
+// however it was launched ([RunRequest.Attribution]).
+//
+// ASKED OF THE MANAGER rather than carried on the [Spec], because a spec is
+// written onto a run's records and this is the catalogue's say at the moment
+// of the launch: a revision that turns it off reaches the next launch, not a
+// run already started.
+func (m *Manager) CommitAttribution(a CommitAttribution) *CommitAttribution {
+	if !m.attributes {
+		return nil
+	}
+	return &a
+}
+
 // BuildSpec overlays per-role inputs onto the provider defaults.
 func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
 		Placement:       in.Placement,
-		CodingAgent:     in.CodingAgent,
+		Harness:         in.Harness,
 		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
@@ -438,7 +468,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	return spec
 }
 
-// Acquire provisions a box for spec, installs the coding agent, and applies
+// Acquire provisions a box for spec, installs the harness, and applies
 // the launch's setup steps.
 //
 // On install OR setup failure the box is torn down before the error
@@ -452,7 +482,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // each to its own timeout, and their sum is bounded by nothing the box's
 // timer knows of.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(spec.CodingAgent)
+	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -463,20 +493,20 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	return box, runner, nil
 }
 
-// AcquireBox provisions a box for spec with NO CODING AGENT — a check's box,
+// AcquireBox provisions a box for spec with NO HARNESS — a check's box,
 // which runs a repository's own command and nothing of a seat's — and applies
 // setup to it: [Manager.Acquire] less the runner's install, torn down on a
 // setup failure the same way.
 //
 // WHAT A CODING BOX CARRIES AND THIS ONE DOES NOT, each refused rather than
-// dropped, since a caller that sets one meant a coding run:
+// dropped, since a caller that sets one meant an executor:
 //
-//   - a CODING AGENT ([Spec.CodingAgent]): none is installed, and on a remote
-//     cell the agent's name picks the box's image;
+//   - a HARNESS ([Spec.Harness]): none is installed, and on a remote cell
+//     the harness's name picks the box's image;
 //   - a LOGIN ([Spec.CredentialFiles]): a check runs a change's own code, and
 //     a subscription login seeded beside it is a model's credential that code
 //     reads;
-//   - a RUN'S GRANTS ([Spec.Repos]): they ride a coding run's row, which no
+//   - a RUN'S GRANTS ([Spec.Repos]): they ride an executor's row, which no
 //     such box has; its repository is its clone step's ([CloneRecipe]);
 //   - the CATALOGUE'S DEFAULT CELL: an empty [Spec.Placement] is where a seat
 //     that names none runs (providers.sandbox.default_run_in), never this
@@ -488,26 +518,26 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 //
 // AND NONE OF THE OPERATOR'S SETUP: the steps applied are exactly setup,
 // never the catalogue's own ([Manager.DefaultSetup], providers.sandbox.setup),
-// which provisions coding boxes for their agents — their env and files are
-// often credentials, and a check runs a change's own code. A coding run's
+// which provisions coding boxes for their harnesses — their env and files are
+// often credentials, and a check runs a change's own code. An executor's
 // launch hands those steps in itself; this box's caller hands in its git's
 // floor and its checkout ([GitVersionStep], [CloneRecipe]).
 func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, error) {
 	switch {
-	case spec.CodingAgent != "":
-		return nil, fmt.Errorf("sandbox: a box with no coding agent names none, and this one names %q",
-			spec.CodingAgent)
+	case spec.Harness != "":
+		return nil, fmt.Errorf("sandbox: a box with no harness names none, and this one names %q",
+			spec.Harness)
 	case len(spec.CredentialFiles) > 0:
-		return nil, fmt.Errorf("sandbox: a box with no coding agent is seeded no login, and this one is "+
+		return nil, fmt.Errorf("sandbox: a box with no harness is seeded no login, and this one is "+
 			"given %d credential files", len(spec.CredentialFiles))
 	case len(spec.Repos) > 0:
-		return nil, fmt.Errorf("sandbox: a box with no coding agent is no run, so it holds no run's grants, "+
+		return nil, fmt.Errorf("sandbox: a box with no harness is no run, so it holds no run's grants, "+
 			"and this one is given %d repositories: its repository is its clone step's", len(spec.Repos))
 	case spec.Placement == "":
-		return nil, fmt.Errorf("sandbox: a box with no coding agent names its cell: the catalogue's default " +
+		return nil, fmt.Errorf("sandbox: a box with no harness names its cell: the catalogue's default " +
 			"is where a seat that names none runs (providers.sandbox.default_run_in)")
 	case spec.Placement == Direct:
-		return nil, fmt.Errorf("sandbox: a box with no coding agent never runs %s: it runs a repository's own "+
+		return nil, fmt.Errorf("sandbox: a box with no harness never runs %s: it runs a repository's own "+
 			"command, which there would run as the engine's own user on the engine host, reading what the "+
 			"engine reads", Direct)
 	}
@@ -521,7 +551,7 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 // configured tokens at provisioning time. A failure of either tears the box
 // down before it is answered ([Manager.discard]), and the box is kept alive
 // from its creation until both are done ([keepProvisioning]), for a check's
-// box as for a coding run's.
+// box as for an executor's.
 func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
 	placement := spec.Placement
 	if placement == "" {
@@ -563,7 +593,7 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
 		"sandbox_id", box.ID(), "placement", string(placement),
-		"coding_agent", spec.CodingAgent, "setup_steps", names)
+		"harness", spec.Harness, "setup_steps", names)
 	return box, nil
 }
 
@@ -577,7 +607,7 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 // THE WAITER'S KEEPALIVE DOES NOT REACH A BOX BEING PROVISIONED: it refreshes
 // the boxes of RUNNING rows that name one, and a launch's row is LAUNCHING
 // with no box on it until the box is ready. Everything provisioning runs — the
-// coding agent's install, the operator's setup, the box's git check and a
+// harness's install, the operator's setup, the box's git check and a
 // clone for each repository ([MaxRunRepos]), one after another, each up to its
 // own timeout ([DefaultSetupTimeout]) — ran inside the timer the box was
 // created or reconnected with alone, and a sum past it had the provider reap
@@ -656,7 +686,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // Reconnect reattaches to an existing (possibly paused) box: Connect
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
-// which is why a box is only ever reattached for the CLI it was installed for.
+// which is why a box is only ever reattached for the harness it was installed for.
 // A repository on the engine's code host is never provisioning: the run
 // checks each out itself, with the commands `code_checkout` answers, so the
 // box keeps what an earlier job cloned and is given nothing here.
@@ -674,7 +704,7 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		return nil, nil, err
 	}
 	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
-		"placement", string(placement), "coding_agent", codingAgent)
+		"placement", string(placement), "harness", codingAgent)
 	return box, runner, nil
 }
 

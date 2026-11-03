@@ -7,7 +7,7 @@ import "context"
 // it.
 //
 // A TYPE BESIDE THE FUNCTIONS, because the reads cross the estate's router
-// (ADR-0072): the API holds whatever answers them — a data node's own copy,
+// (ADR-0079): the API holds whatever answers them — a data node's own copy,
 // or the router asking a data node whose usage copy is in service — and asks
 // both the same way. A node whose usage copy was wrong answered its spend and
 // activity screens from it while every other domain's reads went to a peer.
@@ -81,6 +81,16 @@ func (r Reader) ReadsElided(ctx context.Context, from, to string) (int64, error)
 // RepoReadsPage is [RepoReadsPage] over r's estate.
 func (r Reader) RepoReadsPage(ctx context.Context, q RepoReadsQuery, after Group, budget int) (Page[RepoReader], error) {
 	return RepoReadsPage(ctx, r.Estate, q, after, budget)
+}
+
+// ServerToolCalls is [ServerToolCalls] over r's estate.
+func (r Reader) ServerToolCalls(ctx context.Context, q ServerToolCallsQuery) ([]ServerToolCallsRow, error) {
+	return ServerToolCalls(ctx, r.Estate, q)
+}
+
+// ToolsElided is [ToolsElided] over r's estate.
+func (r Reader) ToolsElided(ctx context.Context, from, to string) (int64, error) {
+	return ToolsElided(ctx, r.Estate, from, to)
 }
 
 // RepoReadsElided is [RepoReadsElided] over r's estate.

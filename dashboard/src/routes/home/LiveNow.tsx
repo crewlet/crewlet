@@ -65,8 +65,8 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
           }}
         />
       ) : shown.length === 0 ? (
-        // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: a coding run is
-        // out for a seat whose turn record has not reached the projection. An
+        // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: an executor is
+        // out in its box for a seat whose turn record has not reached the projection. An
         // empty list under a count of them would read as a list that failed.
         <WidgetQuery
           error={null}

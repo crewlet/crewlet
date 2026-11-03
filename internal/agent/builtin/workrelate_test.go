@@ -193,8 +193,9 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	}
 }
 
-// THE WARNING NAMES WHAT THE CALLER CANNOT SEE: a comment that asks nobody
-// still wakes the assignee, unaddressed, which a turn may absorb in silence.
+// THE WARNING NAMES WHAT THE CALLER CANNOT SEE: an agent's comment that asks
+// and names nobody does not wake the assignee at all (worklet's routing), so a
+// turn that meant to hand them something would hand it to nobody.
 func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -220,13 +221,15 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 			"and says nothing about it — a commenter expecting an answer gets " +
 			"silence with nothing to explain it")
 	}
-	if text, _ := warnings[0].(string); !strings.Contains(text, "ask") {
-		t.Errorf("the warning is %q and does not name the remedy", warnings[0])
+	if text, _ := warnings[0].(string); !strings.Contains(text, "ask") ||
+		!strings.Contains(text, "is not woken") {
+		t.Errorf("the warning is %q, want it to say the assignee is not woken "+
+			"and name the remedy", warnings[0])
 	}
 	// AND A PERSON'S SURFACE IS HANDED THE SAME CAVEAT, whose words for a
 	// person are what the act route answers: the model's sentence above
 	// names an argument a person has no control for.
-	if len(got.Caveats) != 1 || got.Caveats[0] != caveat.UnaddressedComment("pm") {
+	if len(got.Caveats) != 1 || got.Caveats[0] != caveat.UnaddressedComment("pm", false) {
 		t.Errorf("the result carries %+v, want the unaddressed comment's caveat", got.Caveats)
 	}
 	// AND AN ASK SILENCES IT, because then somebody IS being asked.

@@ -18,7 +18,7 @@ import (
 // trigger labelled them, whether it continues its own session or starts
 // afresh, and nothing the reply says, nor anything in the question the run's
 // own session wrote, opens or closes a fence. An answer given by turn
-// (answer_run) came from a person the engine let answer the run, its
+// (answer_executor) came from a person the engine let answer the run, its
 // requester, its seat's lead or an administrator, and is that person's
 // instruction to it (ADR-0068): read defused, never fenced, under their name.
 //

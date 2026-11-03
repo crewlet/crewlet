@@ -5,8 +5,14 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -113,7 +119,7 @@ func (r engineRuntime) Work() WorkState {
 // for one row of the agent screen and wrong for the rest. The shared surface
 // is the one every seat has, which is the honest answer to "what does this
 // company run".
-func (r engineRuntime) Tools() []ToolInfo {
+func (r engineRuntime) Tools() []queries.ToolRow {
 	company := r.engine.Company()
 	if company == nil || company.Tools == nil {
 		return nil
@@ -129,49 +135,115 @@ func (r engineRuntime) Tools() []ToolInfo {
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
 	delivers := snapshot.Deliveries()
-	out := make([]ToolInfo, 0, len(entries))
+	out := make([]queries.ToolRow, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, toolInfo(entry, delivers[entry.Name()]))
+		out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
+	}
+	// AND WHAT THE FLEET LISTS that no registry here holds: a per-agent
+	// server's tools, whose children run on the nodes holding its seats
+	// and on no other. From the engine's watched copy and the schemas it
+	// has read, never the store, since a push builds this; a copy not yet
+	// answered adds nothing, and the engine re-sends the catalogue when it
+	// is.
+	if live, ok := r.engine.LiveMCPListings(); ok {
+		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolSchemas())...)
 	}
 	return out
 }
 
-// toolInfo is one registry entry as the catalogue carries it.
-//
-// A FUNCTION RATHER THAN A LOOP BODY so it can be exercised without an engine.
-// The mapping had a defect nothing could reach: it re-spelled the origin
-// instead of passing the registry's own, and every reader of the prefix — the
-// screen's origin column, its per-origin counts, the published reference —
-// silently read a company running MCP servers as one running none.
-func toolInfo(entry tools.Entry, delivers string) ToolInfo {
-	return ToolInfo{
-		Name:        entry.Name(),
-		Description: entry.Tool.Description(),
-		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
-		// re-spelled: `builtin`, or `mcp:` and the bare server name.
-		// This stripped the prefix and sent the server's name alone,
-		// which disagreed with every reader of it — the screen's
-		// origin column splits on the colon and rendered the server
-		// as if it were the grammar's own word, its "from MCP
-		// servers" count tested for the prefix and therefore read
-		// zero on a company running servers, and the published API
-		// reference documents the prefixed form.
-		Source: entry.Origin,
-		Annotations: ToolAnnotations{
-			Title:       entry.Annotations.Title,
-			ReadOnly:    entry.Annotations.ReadOnly.String(),
-			Destructive: entry.Annotations.Destructive.String(),
-			Idempotent:  entry.Annotations.Idempotent.String(),
-			OpenWorld:   entry.Annotations.OpenWorld.String(),
-		},
-		Delivers: delivers,
-		// The schema the MODEL is offered, read rather than rebuilt. The
-		// map is the tool's own and this path only serialises it; an MCP
-		// server restarting replaces the whole Tool rather than writing
-		// into its schema, so there is nothing here for a running turn to
-		// race with.
-		InputSchema: entry.Tool.Parameters(),
+// Listings is the engine's watched copy of the fleet's MCP listings.
+func (r engineRuntime) Listings() queries.MCPListingReader { return r.engine }
+
+// MCPInstances is the engine's read of one server's instances across the
+// fleet ([engine.Engine.MCPInstances]).
+func (r engineRuntime) MCPInstances() queries.MCPInstanceReader { return r.engine }
+
+// MCPRestarter is the engine's restart of an MCP server, its refusals mapped
+// onto the route's ([mcpRestarter]).
+func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: r.engine} }
+
+// LatestAlarms is the engine's latest alarm evaluation
+// ([engine.Engine.LatestAlarms]).
+func (r engineRuntime) LatestAlarms() []statelog.Alarm { return r.engine.LatestAlarms() }
+
+// MCPChecker is the engine's test of an MCP server and check of an address,
+// its refusals mapped onto the routes' ([mcpChecker]).
+func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engine} }
+
+// MCPChecks is the engine's read of each MCP server's latest test.
+func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
+
+// MCPApprovals is the answer desk over the fleet's runs and this node's
+// queue, the one `answer_executor` answers a run through; untyped nil without
+// a fleet store or a queue, which answers an approval unavailable.
+func (r engineRuntime) MCPApprovals() mcpapi.Approvals {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil || backends.Queue == nil {
+		return nil
 	}
+	return sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(backends.Fleet), Queue: backends.Queue,
+		Seal: r.engine.AnswerSeal()}
+}
+
+// MCPAccepted is the fleet's store of accepted definitions; untyped nil
+// without a fleet store, which answers a review unavailable.
+func (r engineRuntime) MCPAccepted() AcceptedStore {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil {
+		return nil
+	}
+	return backends.Fleet
+}
+
+// MCPValues is the fleet's secret store under the engine's keyring; untyped
+// nil without a fleet store, which [mcpapi.New] refuses.
+func (r engineRuntime) MCPValues() mcpapi.ValueStore {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil {
+		return nil
+	}
+	return fleetsecrets.New(backends.Fleet, r.engine.Cipher())
+}
+
+// MCPSignIns is the engine's OAuth sign-in of an MCP server, its refusals
+// mapped onto the routes' ([mcpSignIns]).
+func (r engineRuntime) MCPSignIns() mcpapi.SignIns { return mcpSignIns{e: r.engine} }
+
+// MCPGrants is the engine's read of each MCP server's OAuth grant.
+func (r engineRuntime) MCPGrants() queries.MCPGrantReader { return r.engine }
+
+// MCPLanding is the engine finishing a sign-in where the vendor sends the
+// person back, its refusals mapped onto the page's ([mcpLanding]).
+func (r engineRuntime) MCPLanding() webhooks.MCPSignIns { return mcpLanding{e: r.engine} }
+
+// Builtins is the engine's own tools as this node's seats are offered them:
+// the registry's built-ins, and the discovery pair.
+//
+// THE REGISTRY'S BUILT-INS, not a list of every tool the engine could offer,
+// because a company on Jira holds no Worklet tool and a catalogue listing one
+// would tell a reader its agents can call what they are never offered.
+//
+// THE PAIR READ OFF THE RUNNER, which builds it, bound to no surface: this
+// reads each one's name, description and schema and calls nothing, and a
+// second description of either written here would drift from the one the
+// model is shown.
+func (r engineRuntime) Builtins() []queries.ToolRow {
+	company := r.engine.Company()
+	if company == nil || company.Tools == nil {
+		return nil
+	}
+	snapshot := company.Tools.Snapshot()
+	delivers := snapshot.Deliveries()
+	var out []queries.ToolRow
+	for _, entry := range snapshot.Entries() {
+		if entry.Origin == tools.OriginBuiltin {
+			out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
+		}
+	}
+	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
+		out = append(out, queries.CatalogueRow(entry, ""))
+	}
+	return out
 }
 
 // ShuttingDown is the engine's own flag, which is set at the first moment of

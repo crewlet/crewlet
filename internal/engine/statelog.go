@@ -67,7 +67,7 @@ import (
 // admission says so itself ([statelog.Domain.GatesSeatAdmission]), which is
 // how the vector domain's coverage number stays a number rather than an
 // outage. Whether a domain's copy is WRONG is a different question, asked of
-// every domain ([stateLog.judgeCopy], ADR-0072).
+// every domain ([stateLog.judgeCopy], ADR-0079).
 
 // domainHost is the broker as this node's state log needs it.
 //
@@ -1583,7 +1583,7 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 	return entry.Barrier
 }
 
-// trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0073) on
+// trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0080) on
 // its own log, or nil for a domain whose log writes no anchor and so has none
 // to remove — the compacted vectors and usage.
 //
@@ -1758,7 +1758,7 @@ func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint
 // no row at all, or why its row could not be read.
 //
 // ONE READ PER PASS, NEVER ONE PER JUDGEMENT. A pass that judges every
-// domain's copy ([stateLog.judgeCopy], ADR-0072) reads each domain's floor
+// domain's copy ([stateLog.judgeCopy], ADR-0079) reads each domain's floor
 // once, for all of them, rather than once for each judgement it makes.
 //
 // EACH DOMAIN BY ITS KEY ([readFloorsOf]), never by listing the register:
@@ -2205,7 +2205,7 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 // one would be the outage the number exists to avoid — and stating it on the
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip. This is ADMISSION only; whether a copy is
-// WRONG is asked of every domain ([stateLog.judgeCopy], ADR-0072).
+// WRONG is asked of every domain ([stateLog.judgeCopy], ADR-0079).
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
 	if s == nil {
 		return true, ""
@@ -2250,7 +2250,7 @@ func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []health
 // context: a vectors stream with no leader left the knowledge base's health
 // UNREAD, which keeps whatever verdict it last had, so a pages fault starting
 // meanwhile went unseen for as long as the vectors group stayed down —
-// ADR-0072's isolation broken by the order of a loop. Read at once, a log that
+// ADR-0079's isolation broken by the order of a loop. Read at once, a log that
 // does not answer is unread on its own, and a reading takes the slowest one
 // round trip rather than the sum of them.
 //
@@ -2296,7 +2296,7 @@ func readHealthsWith(ctx context.Context, runs []*runningLog,
 //
 // # Every domain, each on its own
 //
-// EVERY REGISTERED DOMAIN IS JUDGED, whatever it declares — ADR-0072. A
+// EVERY REGISTERED DOMAIN IS JUDGED, whatever it declares — ADR-0079. A
 // domain's copy that is wrong is one this node takes OUT OF SERVICE for that
 // domain's operations alone ([localEstate.For]): they go to the other data
 // nodes, while every other domain's copy keeps answering here and the node
@@ -4616,18 +4616,7 @@ func (e *Engine) counted(ctx context.Context, s *stateLog, now time.Time) ([]str
 	if nodes, err := e.watchedHolders().LiveData(ctx); err == nil {
 		live = nodes
 	}
-	var db *store.DB
-	if e.backends != nil {
-		db = e.backends.Store
-	}
-	counted := map[string]bool{}
-	for _, domain := range registeredDomains() {
-		tombs, _ := logTombstones(ctx, db, domain, 0)
-		for _, n := range statelog.CountedSet(now, reportedPositions(rows, domain.Name()), live, tombs) {
-			counted[n.NodeID] = true
-		}
-	}
-	return slices.Sorted(maps.Keys(counted)), nil
+	return slices.Sorted(maps.Keys(e.countedOn(ctx, rows, live, now))), nil
 }
 
 // recipients is how many nodes OTHER THAN THIS ONE the fleet counts on the
@@ -5211,7 +5200,7 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 //
 // NOT ITS ARBITRATION ANCHORS, which are the replicated estate's: the trim
 // removes them with a trimmed record every node applies at one position
-// (ADR-0073, [retention.sweepAnchors]), because a node deleting below a floor
+// (ADR-0080, [retention.sweepAnchors]), because a node deleting below a floor
 // it read for itself would be a second writer of rows every copy must hold
 // alike (ADR-0002).
 type domainLedger struct {

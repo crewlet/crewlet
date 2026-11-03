@@ -48,12 +48,14 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: github
+    tools: {default: allow}
     transport: http
     shared: false
     url: "https://mcp.example.com/"
     headers:
       X-Workspace: "acme"
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "tracker-server"
 roles:
@@ -286,11 +288,15 @@ integrations:
     token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-an-atlassian-server"
+    access: {seats: [ceo]}
   - name: tracker
+    tools: {default: allow}
     shared: false
     command: "/nonexistent/definitely-not-a-tracker-server"
+    access: {seats: [cto]}
 roles:
   - name: CEO
     handle: ceo
@@ -393,7 +399,7 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 	}
 }
 
-// A CODING AGENT IS NOT OFFERED A SERVER WHOSE SEAT CREDENTIALS ARE MISSING,
+// A HARNESS IS NOT OFFERED A SERVER WHOSE SEAT CREDENTIALS ARE MISSING,
 // by the rule a seat's own child is started by.
 //
 // The box gets the servers role.sandbox.mcp.servers names, with the seat's
@@ -402,9 +408,11 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 // authenticate": the agent then spent a round finding that out, or the server
 // acted as nobody. The neighbour whose credential resolves is still offered,
 // with it.
-func TestACodingAgentIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
+func TestAHarnessIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
 	t.Parallel()
 	company := heldBackCompany(t)
+	// Granted to every agent, so the CEO's box may hold it.
+	configured(t, company, "tracker").Access = nil
 	seat := company.Org.AgentSeatByHandle("ceo")
 	seat.MCPEnv["tracker"] = map[string]string{"SEAT_TOKEN": "${CEO_TRACKER_TOKEN}"}
 	env := config.NewResolver(config.MapSource{"CEO_TRACKER_TOKEN": "tracker-ceo"})
@@ -432,7 +440,7 @@ func TestACodingAgentIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.
 // engine's own child of the same server does: the server's env, its headers
 // and its url, beside the seat's credentials.
 //
-// They were handed to the box verbatim and written into the coding CLI's
+// They were handed to the box verbatim and written into the harness's
 // config as `${VAR}` text. OpenCode reads `{env:VAR}`, so a shared key reached
 // its server as the literal, and Claude Code expands one from the run env,
 // which holds no company secret unless a seat repeats it there.
@@ -447,10 +455,12 @@ providers:
       model: claude-sonnet-5
 mcp_servers:
   - name: search
+    tools: {default: allow}
     command: "search-server"
     env:
       SEARCH_KEY: "${SEARCH_KEY}"
   - name: docs
+    tools: {default: allow}
     transport: http
     shared: false
     url: "https://${DOCS_HOST}/mcp"

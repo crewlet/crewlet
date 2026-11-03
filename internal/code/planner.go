@@ -64,12 +64,12 @@ const (
 	// refsKey is code_refs' PRIMARY KEY index, (repo_id, ref).
 	refsKey = "sqlite_autoindex_code_refs_1"
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
-	// (replicated migration 0077): the live refs alone, in key order.
+	// (replicated migration 0081): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)
-	// (replicated migrations 0081 and 0089): a repository's changes in number
+	// (replicated migrations 0085 and 0093): a repository's changes in number
 	// order, which is the only way to a repository's revisions, authors and
 	// bodies — they carry no repo_id of their own.
 	changesNumberKey = "code_changes_number_idx"
@@ -82,7 +82,7 @@ const (
 	// code_packs_retired_repo_idx as packsKey does with code_packs_added_idx.
 	retiredKey = "sqlite_autoindex_code_packs_retired_1"
 	// dropsKey is code_ref_drops' PRIMARY KEY index, (repo_id, at, position,
-	// ref, old) (replicated migration 0084): a repository's ref drops by the
+	// ref, old) (replicated migration 0088): a repository's ref drops by the
 	// instant their records landed, the one order every statement over them
 	// reads — the push apply's expiry, a purge part's and the final purge's
 	// removal, and the purge's bounded count. It is the table's only index,
@@ -91,7 +91,7 @@ const (
 	dropsKey = "sqlite_autoindex_code_ref_drops_1"
 	// queueKey is code_queue's PRIMARY KEY index, (repo_id, entry_id), which
 	// shares its leading column with code_queue_enqueued_idx (repo_id,
-	// target_ref, enqueued_at; replicated migration 0136) as packsKey does
+	// target_ref, enqueued_at; replicated migration 0140) as packsKey does
 	// with code_packs_added_idx: once that index was added, a read of one
 	// entry by its key sought it on repo_id alone, every entry the
 	// repository's queues ever kept within their history. So a statement that

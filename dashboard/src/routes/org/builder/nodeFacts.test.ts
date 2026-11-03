@@ -5,12 +5,12 @@
  * What these protect: the engine's answers about a node are read only from a
  * check of the draft as it stands; the provider an unpinned seat runs on follows the
  * engine's own fallback; a credential reaches a screen only as the name of a
- * sealed entry; and a seat counts as working while a turn or a coding run is
+ * sealed entry; and a seat counts as working while a turn or its executor is
  * in flight.
  */
 
 import { describe, expect, test } from "vitest";
-import type { AgentRow, CompanyDocument, OrgProjection, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument, OrgProjection, ExecutorEntry } from "~/protocol/index.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { locate } from "./model/draft.ts";
@@ -288,12 +288,12 @@ describe("live state", () => {
     handle: "dev",
     activity,
   });
-  const run: SandboxEntry = {
+  const run: ExecutorEntry = {
     turn_id: "t",
     role: "Dev",
     agent_handle: "dev",
     agent_id: "a",
-    coding_agent: "claude",
+    harness: "claude",
     sandbox_id: "s",
     task: "Fix",
     status: "running",
@@ -301,10 +301,10 @@ describe("live state", () => {
     question_context: "",
   };
 
-  test("a seat is working while a turn runs or a coding run waits, and not while idle", () => {
+  test("a seat is working while a turn runs or its executor waits, and not while idle", () => {
     expect(isWorking("dev", [agent("working")], [])).toBe(true);
     expect(isWorking("dev", [agent("idle")], [run])).toBe(true);
-    // A coding run is work in flight even when no live row names the seat.
+    // An executor in its box is work in flight even when no live row names the seat.
     expect(isWorking("dev", [], [run])).toBe(true);
     expect(isWorking("dev", [agent("idle")], [])).toBe(false);
     // A seat parked on a question still has its work in flight.

@@ -138,7 +138,7 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		"the boxes' directory listing": "ls " + q(filepath.Dir(filepath.Dir(box.Home()))),
 		"a write outside the box":      "echo x > " + q(filepath.Join(filepath.Dir(h.data), "planted")),
 		"a write to the cli install":   "echo x >> " + q(h.cli),
-		// The host's own temporary root, where a CLI left at its default
+		// The host's own temporary root, where a harness left at its default
 		// would make its per-uid directory: refused, which is why every
 		// temp root is pointed inside the box rather than this let through.
 		"a directory under the host's /tmp": "mkdir -p " + q(hostTmpProbe),
@@ -158,7 +158,7 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		t.Error("a confined job wrote outside its box")
 	}
 	if got, _ := os.ReadFile(h.cli); strings.Contains(string(got), "x") && !strings.Contains(string(got), "cli-ran") {
-		t.Error("a confined job changed the CLI's install")
+		t.Error("a confined job changed the harness's install")
 	}
 
 	allowed := map[string]string{
@@ -257,21 +257,21 @@ func TestAConfinementWithoutAMechanismIsRefused(t *testing.T) {
 }
 
 // TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox is the opt-in smoke for
-// the real CLI under this host's confinement: one headless run asked to use
-// its Bash tool. It needs a signed-in CLI, so it runs only where
+// the real harness under this host's confinement: one headless run asked to use
+// its Bash tool. It needs a signed-in harness, so it runs only where
 // CREWLET_CONFINED_CLAUDE_SMOKE=1 and CLAUDE_CODE_OAUTH_TOKEN are set, and
-// otherwise logs what it did not check and passes. The temp roots the CLI
+// otherwise logs what it did not check and passes. The temp roots the harness
 // resolves are held by TestAConfinedHostBoxCannotReachTheEngine on every run.
 func TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox(t *testing.T) {
 	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	if os.Getenv("CREWLET_CONFINED_CLAUDE_SMOKE") != "1" || token == "" {
 		t.Log("the real Claude Code smoke runs only with CREWLET_CONFINED_CLAUDE_SMOKE=1 " +
-			"and CLAUDE_CODE_OAUTH_TOKEN set; the CLI's Bash tool under confinement was not checked")
+			"and CLAUDE_CODE_OAUTH_TOKEN set; the harness's Bash tool under confinement was not checked")
 		return
 	}
 	cli, err := exec.LookPath("claude")
 	if err != nil {
-		t.Fatalf("the smoke was asked for, but no claude CLI is on PATH: %v", err)
+		t.Fatalf("the smoke was asked for, but no claude harness is on PATH: %v", err)
 	}
 	if cli, err = filepath.EvalSymlinks(cli); err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox(t *testing.T) {
 	}
 	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "confined-42") ||
 		strings.Contains(res.Stdout, "EPERM") {
-		t.Fatalf("the CLI's Bash tool did not run in a confined box: exit %d\nstdout: %s\nstderr: %s",
+		t.Fatalf("the harness's Bash tool did not run in a confined box: exit %d\nstdout: %s\nstderr: %s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
 }

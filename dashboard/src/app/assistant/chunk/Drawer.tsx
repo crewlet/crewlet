@@ -21,7 +21,7 @@
  * it (a screenshot): each is uploaded at once and drawn as a chip with its
  * thumbnail, and one the engine would refuse is refused above the composer
  * in words that say what to do. Above it, while the
- * engine knows the model cannot answer (signed out, its plan spent, its CLI
+ * engine knows the model cannot answer (signed out, its plan spent, its harness
  * unable to start), a notice says so in the engine's words and Send stays off
  * with that reason: the reader is told before they ask, never after a wait.
  * An administrator's notice also opens the models' settings.

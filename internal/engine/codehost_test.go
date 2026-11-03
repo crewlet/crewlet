@@ -109,7 +109,7 @@ func bindOps(t *testing.T, e *engine.Engine) {
 // token. The token states its grants, as every Tier A token must, and lists
 // the tracker, which decides nothing a case here reads: what a credential may
 // do to a repository is the standing of the seat the directory binds it to
-// (ADR-0081).
+// (ADR-0088).
 func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
@@ -191,7 +191,7 @@ func TestACompanyWithoutNativeCodeBuildsNoHost(t *testing.T) {
 }
 
 // A GIT NODE VERIFIES A BOX'S TOKEN, ITS CODE HOST BUILT OR NOT: the box
-// tokens — a coding run's and a check's — are built at New over the fleet's
+// tokens — an executor's and a check's — are built at New over the fleet's
 // keyring, whatever the company runs, so a node whose box routes find no code
 // host to serve them — which tells a box why only once its token verifies
 // (api.CodeSurface.VerifyBox) — verifies a token another node of the fleet

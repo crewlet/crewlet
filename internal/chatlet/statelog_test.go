@@ -55,7 +55,7 @@ func TestTheChatDomainIsACertifiedDomain(t *testing.T) {
 			// THE PRODUCTION ENCODER of the read index's barrier, which the
 			// suite holds to writing no row.
 			EncodeBarrier: chatlet.EncodeBarrier,
-			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0073).
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
 			EncodeTrimmed: chatlet.EncodeTrimmed,
 		}
 	})
@@ -80,6 +80,7 @@ type suiteRoster struct{}
 
 func (suiteRoster) Seat(handle string) (exists, human bool) { return handle == "suite", true }
 func (suiteRoster) Lead(string, string) string              { return "" }
+func (suiteRoster) Senior([]string) string                  { return "" }
 func (suiteRoster) Seats() []string                         { return []string{"suite"} }
 
 // encodeSuiteGate is the eviction record a peer's store publishes onto this

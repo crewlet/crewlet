@@ -34,7 +34,7 @@ func refused(kind llm.ErrorKind, err error) error {
 
 // THE CHAIN IS UNREADY ONLY WHEN EVERY MEMBER IS, and then it reports the
 // failure that clears first: a spent plan (the earliest reset, a named one
-// before an unnamed one) over a login over a CLI that cannot start. A member
+// before an unnamed one) over a login over a harness that cannot start. A member
 // that cannot say may answer, so it makes the chain ready.
 //
 // Mutation: return the first member's failure without sorting, and the mixed

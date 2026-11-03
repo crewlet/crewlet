@@ -160,10 +160,11 @@ func readsIn(calls []Call, opts FormatOptions) int {
 // load-bearing then: the delivery gate took a different view of each. Nothing
 // takes two views of one list.
 //
-// JSON tags are load-bearing, not decoration: a detached sandbox run ends the
-// turn and its completion starts a NEW one, so without round-tripping the
-// ledger through the pending run's persisted state the resumed turn would
-// forget every earlier round and could re-fire its deliveries.
+// JSON tags are load-bearing, not decoration: a detached executor ends the
+// turn's segment and its completion starts a NEW one, so without
+// round-tripping the ledger through the pending run's persisted state the
+// resumed turn would forget every earlier round and could re-fire its
+// deliveries.
 type Iteration struct {
 	Iteration int `json:"iteration"`
 

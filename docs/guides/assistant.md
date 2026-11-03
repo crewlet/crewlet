@@ -107,7 +107,7 @@ offered only to a person who could make the same change on its screen:
 | Reorder priorities, mark inbox notices | People holding Worklet | The person's own record |
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
-| Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
+| Pause or resume an agent, steer a running turn, answer an executor | Whoever may do it on the seat's screen | The operator control the screen sends |
 | Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people Ask Crewlet names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
@@ -124,9 +124,9 @@ does not.
 ## Turning it on
 
 1. **Add a dedicated `providers.llm` entry** for Ask Crewlet that meets
-   Ask Crewlet's rules: a CLI run with no tool of its own beside the engine's
+   Ask Crewlet's rules: a harness run with no tool of its own beside the engine's
    `crewlet` server, and
-   `overrides: { web_tools: denied }`. Which CLIs qualify, and why the others
+   `overrides: { web_tools: denied }`. Which harnesses qualify, and why the others
    are refused, is stated once in the
    [Configuration Reference](../getting-started/configuration.md#ask-crewlet)
    and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
@@ -156,7 +156,7 @@ kept and purged on their normal retention; nothing is deleted by turning it off.
 
 ## Choosing the model
 
-Every round is one launch of the vendor's CLI, so the model and the CLI's
+Every round is one launch of the vendor's harness, so the model and the harness's
 start time decide how quickly people get an answer. A mid-tier model is the
 recommended starting point: choosing among roughly thirty tools and shaping
 their arguments is where small models fail measurably, and a frontier model's
@@ -165,7 +165,7 @@ per-round cost is rarely justified for lookups.
 Before switching models, run the evaluation suites against the candidate
 (`crewlet assistant eval`, below). Keep `turn_timeout_seconds` at its default
 of 900 seconds unless measurements on your hosts justify another value: a
-turn of thirty steps is thirty-one rounds, and each round pays the CLI's start
+turn of thirty steps is thirty-one rounds, and each round pays the harness's start
 time.
 
 ## Briefs
@@ -273,7 +273,7 @@ These limits are fixed, not configured:
 
 ## Deep work
 
-Deep work lets Ask Crewlet hand a large task to a coding agent with its own
+Deep work lets Ask Crewlet hand a large task to a harness with its own
 tools (shell, files, web search and fetch, image reading) for up to twenty
 minutes at a time (ADR-0054). It is off unless `assistant.deep_work` names an
 entry:
@@ -282,7 +282,7 @@ entry:
 providers:
   llm:
     assistant-deep:
-      agent: claude-code     # deep work runs the CLI's own loop and tools, in a box
+      harness: claude-code     # deep work runs the harness's own loop and tools, in a box
       model: sonnet
       # run_in: e2b          # optional; see "Where a run happens"
 assistant:
@@ -296,8 +296,8 @@ assistant:
 ```
 
 The entry must be Claude Code: a run on the engine host is confined around that
-CLI's own install and temporary directories, which no other CLI has been
-measured against, and a run parked on a proposal is continued in that CLI's own
+harness's own install and temporary directories, which no other harness has been
+measured against, and a run parked on a proposal is continued in that harness's own
 session after the approval. A run's
 wall clock never passes the read grant of the turn it belongs to, which is why
 twenty minutes is the ceiling; a longer task proposes, waits and continues on
@@ -309,7 +309,9 @@ the company's budgets like any turn's, and appear on the spend history as
 
 Its only way into Crewlet is the person's own Ask Crewlet tools, served to it
 over the engine's tool bridge, so every read is the person's request and every
-change a proposal they approve. No API token, grant or engine credential is
+change a proposal they approve. It is held to that bridge: unlike a seat's
+executor, it starts no MCP server a repository it checked out, its box or the
+account it signs in with would add (`--strict-mcp-config`). No API token, grant or engine credential is
 placed in its box; it holds a bridge token valid for that run alone, which
 stops working when the run ends. It does reach the web, always: a page can try
 to steer it, and it could carry what it read out in an address it fetches.
@@ -469,21 +471,21 @@ suite is under `examples/assistant-evals/`.
 | No model | `crewlet llm doctor <key>` for each `assistant.llm` member, and the engine log for the chain's refusal |
 | Not a person | The caller is a token or a token's session. Sign in as the person |
 | No permission | The person's account and the authority table's assistant column for the verbs they expected |
-| Signed out (`model_signed_out`) | The CLI's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
+| Signed out (`model_signed_out`) | The harness's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
 | Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Add a second model to `assistant.llm` to keep answering through a limit |
-| Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the CLI's own start time on the host |
-| Cannot be started (`model_unavailable`) | The CLI's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
+| Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the harness's own start time on the host |
+| Cannot be started (`model_unavailable`) | The harness's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
 
 **The model's state is checked before anyone asks.** When every model in
 `assistant.llm` is known unusable, the drawer says so above its composer and
 disables Send rather than letting a person ask and wait for a failure. What
 the node knows comes from its own calls and configuration, never from a call
 made to check: a spent plan until its reset, a login a call was refused on, a
-CLI with nothing that signs it in, or a CLI that could not start. A login
+harness with nothing that signs it in, or a harness that could not start. A login
 written with `crewlet llm login`, or any call through the entry that answers,
 clears it at once; with no new evidence the node tries the model again after
 ten minutes, so a sign-in the engine cannot see never keeps Ask Crewlet away
 for longer. An administrator is shown the command that fixes it, and anybody
 else is told to ask an administrator. The codes are listed in the
 [API reference](../reference/api-endpoints.md#how-a-turn-fails-on-the-model).
-| Answers are slow | `crewlet.assistant.first_output.latency`, the entry's `max_concurrent`, and the CLI's own start time on the host |
+| Answers are slow | `crewlet.assistant.first_output.latency`, the entry's `max_concurrent`, and the harness's own start time on the host |

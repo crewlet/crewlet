@@ -54,7 +54,7 @@ func (e *Engine) learningBudget(c *Company) func(context.Context, *org.Role) (bo
 // A NO IS RECORDED AS THE GATE'S REFUSAL ([meter.turnAway]). Both callers ask
 // immediately before the work and make no call on false, so the refusal is
 // the reflection stage's auxiliary calls turned away — and the window's
-// `refused_at` says so. Unrecorded, a seat whose day its own coding run had
+// `refused_at` says so. Unrecorded, a seat whose day its own executor had
 // filled declined every pass and every rewrite while every screen said
 // nothing had been refused.
 func (e *Engine) reflectionRoom(ctx context.Context, c *Company, handle string) (bool, error) {

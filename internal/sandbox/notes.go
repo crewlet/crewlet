@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A person's notes to a turn whose coding run is out, on the run's own record.
+// A person's notes to a turn whose executor is out, on the run's own record.
 //
 // # Who has to agree on them: the whole company, now
 //
@@ -70,8 +70,8 @@ type RunSteer struct {
 	// or waiting, in the order they were filed.
 	Notes []RunNote `json:"notes,omitempty"`
 
-	// Pulled is the job whose coding CLI has asked for notes at least once
-	// — what tells a run whose CLI never read its notes from one that had
+	// Pulled is the job whose harness has asked for notes at least once
+	// — what tells a run whose harness never read its notes from one that had
 	// none to read.
 	Pulled string `json:"pulled,omitempty"`
 
@@ -167,7 +167,7 @@ func (r PendingRun) unreadNotes() bool { return len(r.UnreadNotes()) > 0 }
 // NoteRead is where a note was read: the phase, iteration and round on the
 // phase's own scale, the kind of step (the agent layer's vocabulary, carried as
 // text: the record is this package's wire format and imports no agent
-// package), and the job whose CLI read it — empty for a read the engine's own
+// package), and the job whose harness read it — empty for a read the engine's own
 // loop made. At is when, on the clock of the node whose write recorded it, for
 // a person to read; Order is the place of that write among the record's reads
 // ([RunSteer.Reads]), which is what orders them — a note's Seq orders the reads
@@ -397,7 +397,7 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 	return taken, nil
 }
 
-// MarkPulled records that a job's coding CLI has asked for notes. See the
+// MarkPulled records that a job's harness has asked for notes. See the
 // contract on [PendingStore].
 func (s *CoordStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if launch == "" {

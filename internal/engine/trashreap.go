@@ -163,6 +163,11 @@ func (e *Engine) trashSources() []trashreap.Source {
 	if src, ok := e.assistantSource(); ok {
 		out = append(out, src)
 	}
+	// AND THE SEATS' EXECUTOR SESSIONS, on the company's conversation
+	// retention, never a turn whose run is still live.
+	if src, ok := e.executorSource(); ok {
+		out = append(out, src)
+	}
 	return out
 }
 

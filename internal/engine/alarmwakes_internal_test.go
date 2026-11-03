@@ -360,7 +360,7 @@ func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
 // generated from it) and the concept page's paragraph on the outbox each name
 // the figure an operator reads a drop against, and nothing else ties them to
 // the constant — the bound has moved once already (1024 to 2048, when the code
-// log became the tenth domain), and a figure left behind tells an operator the
+// log joined the register), and a figure left behind tells an operator the
 // outbox holds what it does not. So each is read where it states the bound and
 // held to the constant.
 //

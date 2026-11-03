@@ -19,12 +19,12 @@ func (r *waiterRig) launchUntil(turnID string, deadline time.Time) PendingRun {
 	}
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: r.now, Deadline: deadline,
+		Harness: "claude-code", CreatedAt: r.now, Deadline: deadline,
 	}, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion(t *testing.T) {
 		t.Errorf("the resume carries the run's question %q and branch %q; want neither, as nothing is "+
 			"waiting on them", calls[0].Run.Question, calls[0].Run.Branch)
 	}
-	recs := rig.phases()
+	recs := rig.collected()
 	if len(recs) != 1 || strings.Contains(recs[0].Notes, "stopped to ask") || !recs[0].Failed ||
 		!strings.Contains(recs[0].Error, "It had asked: which branch?") {
 		t.Errorf("the run's record is %+v; want it failed at its cap, not stopped to ask, "+

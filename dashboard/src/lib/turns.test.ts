@@ -77,9 +77,9 @@ test("a turn that ended, or that no seat is running, is not running now", () => 
   expect(runningNow(row({ turn_id: "t-dead" }), [seat()])).toBeNull();
 });
 
-test("a turn parked on its coding run says so", () => {
+test("a turn parked while its executor runs in its box says so", () => {
   const parked = seat({ turn: { turn_id: "t-7", stage: "parked" } } as Partial<AgentRow>);
-  expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked · coding run");
+  expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked · executing");
 });
 
 // ---------------------------------------------------------------------------

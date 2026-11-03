@@ -11,9 +11,9 @@ type phaseKey struct{}
 
 // A CALL CARRIES WHAT ITS RUN WAS SERVED WITH, AND ENDS WITH THE PHASE ALONE.
 // The backend puts on the context it serves a run under what that run's calls
-// need — the CLI backend lends its slot there to a model call made inside one
+// need — the harness backend lends its slot there to a model call made inside one
 // of them, which otherwise deadlocks an entry with one slot — while a call is
-// the phase's: the run's context ending (its CLI stopped, a fallback taking
+// the phase's: the run's context ending (its harness stopped, a fallback taking
 // over) cancels nothing a tool is half-way through, and the phase's does.
 //
 // Mutation: run calls under the phase's context alone, and the served value is

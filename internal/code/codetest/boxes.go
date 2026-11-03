@@ -58,7 +58,7 @@ func NewCheckTokens(t testing.TB) *host.CheckTokens {
 	return tokens
 }
 
-// FixtureRuns is the fleet's coding runs' rows, in memory: the [host.Runs]
+// FixtureRuns is the fleet's executors' rows, in memory: the [host.Runs]
 // every git node of a fleet admits a box by. A case launches a run on it
 // (Launch), ends, relaunches or removes it, stops its seat, and makes the
 // store fail — and reads back every floor raise the hosts made (Raises) and
@@ -115,7 +115,7 @@ func (r *FixtureRuns) Launch(seat string, floor statelog.Position, grants ...hos
 	r.runs[ref.TurnID] = &host.BoxRun{Ref: ref, Live: true, Status: "running", Seat: seat,
 		Repos: append([]host.BoxGrant(nil), grants...), Floor: floor,
 		Provenance: code.RunProvenance{TurnID: ref.TurnID, RunID: ref.LaunchID, WorkBackend: "native",
-			WorkKey: "ENG-1", Model: "fixture-model", CodingAgent: "claude-code"}}
+			WorkKey: "ENG-1", Model: "fixture-model", Harness: "claude-code"}}
 	return ref
 }
 

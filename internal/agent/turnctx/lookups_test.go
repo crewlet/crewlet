@@ -18,7 +18,7 @@ type (
 
 // A TURN'S LOOKUPS ARE THE WHOLE TURN'S: what one phase looked up is what every
 // Turn derived from it reads — a phase session's, a delegated worker's and the
-// bridge's for a coding CLI — and what a derived Turn looked up is its parent's
+// bridge's for an executor — and what a derived Turn looked up is its parent's
 // too, so a repository a turn names is resolved once however many of its
 // parts read it. A key is its consumer's own: another type spelling the same
 // value names nothing.

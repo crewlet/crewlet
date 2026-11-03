@@ -118,7 +118,7 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 // withSeatControls is opts with the seat controls [operator.New] requires,
 // wired as a node wires them — over the fleet's own record and its queue, the
 // company's chart, the fleet's signed steer channel and the run records a note
-// to a coding run is filed on — here an in-memory fleet and queue nobody else
+// to an executor is filed on — here an in-memory fleet and queue nobody else
 // reads, a company with no chart, a channel under a key no node of any case
 // holds, and run records no turn has ([noRunRecords]).
 func withSeatControls(opts operator.Options) operator.Options {
@@ -132,7 +132,7 @@ func withSeatControls(opts operator.Options) operator.Options {
 }
 
 // noRunRecords is the run records [withSeatControls] files a note on: a fleet
-// in which no turn has launched its coding run. A node's own seal every note
+// in which no turn has launched its executor. A node seals every note
 // under the fleet keyring (internal/engine, runsteer.go), which no case here
 // holds, and none of these cases sends a note.
 type noRunRecords struct{}

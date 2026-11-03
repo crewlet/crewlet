@@ -14,13 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // "RETRY NOW" AND "CLEAR", FLEET-WIDE (M10 of the Models design).
 //
 // A sit-out is each node's own memory of a vendor's limit, kept on the
-// entry's sign-in ([cliagent.Plan]): a request a person makes through one node
+// entry's sign-in ([harness.Plan]): a request a person makes through one node
 // changes nothing on another unless every node hears it. So the request is a
 // coordination record, one per entry ([coord.ModelRetry]), and every node
 // keeps a watched copy of the class, as it does of seat pauses
@@ -28,7 +28,7 @@ import (
 // that entry, a node:
 //
 //  1. clears the entry's sign-in of every window opened by a report dated
-//     BEFORE the stamp ([cliagent.Plan.Clear]); a report after it stands, since
+//     BEFORE the stamp ([harness.Plan.Clear]); a report after it stands, since
 //     the vendor said it after the person asked; and
 //  2. fires now every provider-park probe whose chain names the entry, so a
 //     seat parked on it is tried at once ([Engine.rearmLimitProbesNaming]); a
@@ -41,7 +41,7 @@ import (
 // ([Engine.clearRemovedModelRetries]).
 
 // ModelRetryProbeBudget bounds the one call "retry now" makes before it writes
-// the record: SIXTY SECONDS, past a coding CLI's cold start and a one-word
+// the record: SIXTY SECONDS, past a harness's cold start and a one-word
 // answer (3 to 10 s measured), and short enough that a person waiting on the
 // button is told within a minute. A vendor that has not answered by then has
 // not shown the limit is over. EXPORTED because the Models screen waits on a
@@ -170,7 +170,7 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 	e.retries.mu.Unlock()
 
 	cleared := false
-	if agent, ok := e.cliEntry(r.Key); ok {
+	if agent, ok := e.harnessEntry(r.Key); ok {
 		cleared = agent.Plan().Clear(r.At)
 	}
 	armed := e.rearmLimitProbesNaming(ctx, r.Key)
@@ -182,8 +182,8 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 			"tried again now")
 }
 
-// cliEntry is the active revision's coding-CLI entry under key.
-func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
+// harnessEntry is the active revision's harness entry under key.
+func (e *Engine) harnessEntry(key string) (*harness.Provider, bool) {
 	c := e.Company()
 	if c == nil || c.Models == nil {
 		return nil, false
@@ -192,8 +192,8 @@ func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
 	if !ok {
 		return nil, false
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	return agent, isCLI
+	agent, isHarness := provider.(*harness.Provider)
+	return agent, isHarness
 }
 
 // RetryModel stops every node sitting an entry out.
@@ -222,7 +222,7 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 	if !mode.Valid() {
 		return RetryResult{}, fmt.Errorf("engine: a retry is %q or %q, not %q", coord.RetryProbe, coord.RetryClear, mode)
 	}
-	agent, ok := e.cliEntry(key)
+	agent, ok := e.harnessEntry(key)
 	if !ok {
 		return RetryResult{}, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}
@@ -275,7 +275,7 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 // the same sign-in and state directory, with a record of its own rather than
 // the node's: what its one call meets is the vendor's word, never the entry's
 // window.
-func (e *Engine) probeSibling(key string) (*cliagent.Provider, error) {
+func (e *Engine) probeSibling(key string) (*harness.Provider, error) {
 	c := e.Company()
 	if c == nil || c.Config == nil {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
@@ -284,7 +284,7 @@ func (e *Engine) probeSibling(key string) (*cliagent.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}
-	return BuildCLIAgent(key, spec, e.resolver(), nil)
+	return BuildHarness(key, spec, e.resolver(), nil)
 }
 
 // probeEntry makes one call on provider, the entry under key, as the provider
@@ -333,23 +333,43 @@ func (e *Engine) fleetSitsOut(ctx context.Context, key string) (bool, error) {
 }
 
 // liveModelRows is every live node's published model rows, by node id; a node
-// whose heartbeat carried no status is absent.
+// whose heartbeat carried no status is absent. With no coordination store,
+// this node's own rows.
 func (e *Engine) liveModelRows(ctx context.Context) (map[string][]coord.ModelStatus, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return map[string][]coord.ModelStatus{e.selfNode(): e.modelStatus(ctx)}, nil
+	}
+	statuses, err := e.liveStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]coord.ModelStatus, len(statuses))
+	for node, status := range statuses {
+		out[node] = status.Models
+	}
+	return out, nil
+}
+
+// liveStatuses is every live node's published heartbeat, by node id: one
+// listing of the presence leases. A node whose heartbeat carried no status is
+// absent, never a node with nothing to report; with no coordination store the
+// listing is empty, and a reader that needs this node's own rows reads them.
+func (e *Engine) liveStatuses(ctx context.Context) (map[string]coord.NodeStatus, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return map[string]coord.NodeStatus{}, nil
 	}
 	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]coord.ModelStatus, len(leases))
+	out := make(map[string]coord.NodeStatus, len(leases))
 	for _, lease := range leases {
 		status, ok := coord.StatusFromMeta(lease.Meta)
 		if !ok {
 			continue
 		}
 		node, _ := coord.ClassNode.Name(lease.Resource)
-		out[node] = status.Models
+		out[node] = status
 	}
 	return out, nil
 }

@@ -389,7 +389,7 @@ func TestTheReportSaysWhichLogsWindowsItCouldNotRead(t *testing.T) {
 // list. The acknowledgements and the admissions are read beside each open
 // window, and a failed read of either was taken as an empty register: every
 // participant named as owing a restart, or nobody's admission holding the
-// window, both printed by the CLI and the dashboard as facts.
+// window, both printed by the harness and the dashboard as facts.
 //
 // Mutation: answer the whole participant set, or nobody, for an unreadable
 // register, or leave either flag unset.

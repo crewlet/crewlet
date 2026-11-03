@@ -184,6 +184,31 @@ func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
 	return d.appliedVersions(ctx)
 }
 
+// ForeignMigrations is every schema version this database has recorded that
+// this binary does not carry, in order: a newer build's, applied before this
+// node was rolled back to an older one. The migration runner steps over them
+// (it applies what this binary carries and nothing else), so the node boots,
+// and what it cannot do is read the tables they made — which may hold rows
+// that matter to a caller about to act on "nothing names this", the object
+// store's collector above all.
+func (d *DB) ForeignMigrations(ctx context.Context) ([]string, error) {
+	applied, err := d.AppliedMigrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	carried, err := schemaVersions(d.estate)
+	if err != nil {
+		return nil, err
+	}
+	var foreign []string
+	for _, v := range applied {
+		if !slices.Contains(carried, v) {
+			foreign = append(foreign, v)
+		}
+	}
+	return foreign, nil
+}
+
 // appliedVersions reads the ledger through ONE CONNECTION DRAWN FROM THIS
 // HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a replicated estate closed
 // after [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than

@@ -145,18 +145,18 @@ type PromptSize struct {
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
 	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
 	// description, parameters}` per tool — chosen so a single number means
-	// the same thing whichever CLI served the phase, and so a seat whose
-	// fallback chain moved it between CLIs is comparable with itself.
+	// the same thing whichever harness served the phase, and so a seat whose
+	// fallback chain moved it between harnesses is comparable with itself.
 	//
-	// SO IT IS A FLOOR, and the backend never sends exactly it: every CLI
+	// SO IT IS A FLOOR, and the backend never sends exactly it: every harness
 	// lists those definitions over MCP — a phase on this host from its tool
 	// session, the executor's run in its box from the bridge — and hands
 	// them to its model in its own vendor's wrapping. The same property
 	// ApproximateTokens' ratio has, for the same reason: a figure that
-	// changed shape with the CLI could not be compared across a chain or
+	// changed shape with the harness could not be compared across a chain or
 	// across builds, and comparison is what this row exists for.
 	//
-	// THE OPENING ARRAY. A mid-phase activate_tool adds a tool the CLI lists
+	// THE OPENING ARRAY. A mid-phase activate_tool adds a tool the harness lists
 	// from then on, so a phase that promotes three MCP tools sends more than
 	// this says.
 	ToolBytes int `json:"tool_bytes"`

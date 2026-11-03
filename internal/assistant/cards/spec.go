@@ -203,6 +203,12 @@ type Items struct {
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
 	// named, indents a tree.
 	ID, Label, Fact, Depth string
+	// Flag, where set, makes Fact a FLAG: an item whose fact is true reads
+	// these words, and one whose fact is false or absent reads nothing. A
+	// bare "true" beside a name says nothing to the person reading the card
+	// or to the model reading its digest, and a flag that is off is not a
+	// fact worth a word on every other line.
+	Flag string
 	// Plain marks a list of plain values, each item its own label (the
 	// standing policies, a list of sentences), so Label names no path, and
 	// its id its place in the list.
@@ -363,6 +369,10 @@ func (s Spec) Validate() error {
 			if it.Noun.One == "" || it.Noun.Many == "" {
 				return fmt.Errorf("cards: the items at %q need a noun for one and for many",
 					it.Path)
+			}
+			if it.Flag != "" && it.Fact == "" {
+				return fmt.Errorf("cards: the items at %q word a flag but name no fact "+
+					"path to read it from", it.Path)
 			}
 			links = append(links, it.Open)
 		}
@@ -583,6 +593,9 @@ func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 			// a plain policy came out as its own label and again as its fact.
 			item := wire.EntityItem{Kind: it.Kind, ID: text(field(raw, it.ID)),
 				Label: text(field(raw, it.Label)), Fact: text(field(raw, it.Fact))}
+			if it.Flag != "" {
+				item.Fact = flagged(item.Fact, it.Flag)
+			}
 			if it.Plain {
 				// A PLAIN VALUE HAS NO ID OF ITS OWN: its place in the list
 				// is what tells two apart, from 1 as the page numbers them.
@@ -753,6 +766,15 @@ func cell(typ wire.ColumnType, v any) any {
 
 // text is a value as a person reads it: a string as it is, a number as written,
 // a list of plain values joined, and a record by the name it carries.
+// flagged is a flag's value as an item's fact: the spec's words where it is
+// true, and nothing otherwise.
+func flagged(value, words string) string {
+	if value == strconv.FormatBool(true) {
+		return words
+	}
+	return ""
+}
+
 func text(v any) string {
 	switch t := v.(type) {
 	case nil:

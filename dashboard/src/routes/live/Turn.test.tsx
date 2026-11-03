@@ -51,10 +51,10 @@ describe("problemCount", () => {
   test("the flag is deduped against its own record, never against the rows", () => {
     // The case a plain `||` swallowed: a reviewer-failed turn that ALSO
     // recovered a provider hand-off has two independent problems, and only
-    // one of them is a row. `sandbox_run_failed` is a failure the engine
+    // one of them is a row. `executor_failed` is a failure the engine
     // publishes elsewhere, so it does not describe this turn's stop either.
     expect(problemCount([row("provider_fallback")], true)).toBe(2);
-    expect(problemCount([row("sandbox_run_failed")], true)).toBe(2);
+    expect(problemCount([row("executor_failed")], true)).toBe(2);
     // …and the dedupe still fires when the stop record is among several.
     expect(problemCount([row("provider_fallback"), row("turn.guard_breach")], true)).toBe(2);
   });
@@ -227,6 +227,7 @@ describe("turnFacts", () => {
       phases: [],
       own: [phaseRecord()],
       nested: new Map(),
+      launches: new Map(),
       rec: {} as TurnView["rec"],
       role: "",
       trigger: null,
@@ -317,6 +318,37 @@ describe("turnFacts", () => {
     expect(fact(view({ own }), "Tokens")?.note).toBe(undefined);
   });
 
+  // THE EXECUTOR'S RUN IS THE TURN'S OWN WORK. The executor's record states
+  // its round with no tokens — the engine made no model call for it — and the
+  // run's spend is on each launch's own record, filed inside the round. So the
+  // figure counts the launches, where the turn list counts them too.
+  //
+  // Mutation: sum the turn's own records alone, and the figure is the
+  // executor's zero.
+  test("tokens count the executor's launches as the turn's own", () => {
+    const own = [phaseRecord({ inputTokens: 0, outputTokens: 0 })];
+    const launches = new Map([
+      [
+        "turn-1|execute|1",
+        [
+          phaseRecord({
+            key: "turn-1|execute|1|job-1",
+            launch: true,
+            inputTokens: 9_000,
+            outputTokens: 700,
+          }),
+          phaseRecord({
+            key: "turn-1|execute|1|job-2",
+            launch: true,
+            inputTokens: 500,
+            outputTokens: 50,
+          }),
+        ],
+      ],
+    ]);
+    expect(fact(view({ own, launches }), "Tokens")?.value).toBe("9,500 in · 750 out");
+  });
+
   // THE AUXILIARY SPEND INSIDE THE TURN IS ITS COST AND NO PHASE'S, so it is
   // noted beside the figure as the workers are — and the figure with its notes
   // is the turn list's for the same turn.
@@ -349,7 +381,7 @@ describe("turnFacts", () => {
     const running = fact(view({ running: true, stage: "phase", liveCall }), "Phase");
     expect([running?.value, running?.note]).toEqual(["Execute", "round 3 of 25"]);
     const parked = fact(view({ running: true, stage: "parked", parked: true }), "Phase");
-    expect([parked?.value, parked?.note]).toEqual(["Execute", "waiting on a coding run"]);
+    expect([parked?.value, parked?.note]).toEqual(["Execute", "executor running in its box"]);
   });
 
   test("a settled turn's phases hold one line, with its iterations as the note", () => {

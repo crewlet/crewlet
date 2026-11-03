@@ -36,7 +36,7 @@ answers:
           duration_ms: 4200
           total_tokens: 18000
           failed: true
-          error: "the claude-code CLI never reached the seat's tools: it did not list the crewlet server's tools"
+          error: "the claude-code harness never reached the seat's tools: it did not list the crewlet server's tools"
           error_kind: server
           work_item: {key: FAIR-2}
 script:
@@ -46,7 +46,7 @@ script:
   - say: >-
       The Software Engineer is working on FAIR-3, and the Product Manager and the
       QA Engineer are idle. The QA Engineer's last turn, on FAIR-2, failed because
-      its coding CLI never reached the seat's tools, so it could not act.
+      its harness never reached the seat's tools, so it could not act.
 expect:
   calls: [list_agents, list_turns]
   never: [open_in_app]

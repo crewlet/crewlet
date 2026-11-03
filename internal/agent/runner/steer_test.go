@@ -179,7 +179,7 @@ type steeringWorker struct {
 	box *steer.Box
 
 	mu sync.Mutex
-	// runs are each kind's CLI runs, requests what each run was opened on,
+	// runs are each kind's harness runs, requests what each run was opened on,
 	// and responses how many model requests each kind was asked for across
 	// them.
 	runs      map[string][]*llmtest.Conn
@@ -248,13 +248,13 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 	if n := prov.responses["worker"]; n < 2 {
 		t.Fatalf("the worker ran %d rounds; this case needs a round after the offer", n)
 	}
-	// NOT PAUSED FOR IT: a steerable loop ends its CLI's run once a note is
+	// NOT PAUSED FOR IT: a steerable loop ends its harness's run once a note is
 	// waiting, and the next run reads it — so a worker steered by mistake
 	// would show a second run that opens on the note. One run, its rounds
-	// one CLI loop, is a worker the note never reached.
+	// one harness loop, is a worker the note never reached.
 	workers := prov.requests["worker"]
 	if len(workers) != 1 {
-		t.Errorf("the worker took %d CLI runs, want one the note never ended", len(workers))
+		t.Errorf("the worker took %d harness runs, want one the note never ended", len(workers))
 	}
 	for i, req := range workers {
 		if holds(req) {
@@ -423,7 +423,7 @@ func TestAResumeCarriesTheRunsReadNotes(t *testing.T) {
 }
 
 // THE EXECUTE RECORD LISTS ITS ROUND'S READS — every job's of the round, its
-// briefs' and its CLI's, at the run's one round, each with where it was read —
+// briefs' and its harness's, at the run's one round, each with where it was read —
 // and no note a reviewer, the first segment or an earlier round's run read. A
 // job carried on with a person's answer continues the asking job's round, whose
 // calls the record lists first, so the notes the asking job read are listed
@@ -446,7 +446,7 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 	collector, _ := buildWith(t, entries, buildOpts{pub: pub,
 		resume: &runner.Resume{State: parked.State, Answer: "posted",
 			Bridged: play(t, req, deliver(t, "posted")),
-			Run:     runner.RunRecord{LaunchID: "job-2", CodingAgent: "claude-code"},
+			Run:     runner.RunRecord{LaunchID: "job-2", Harness: "claude-code"},
 			Steered: []steer.Read{
 				read("earlier-round", types.SteerBoundaryToolBatch, types.PhaseExecute, 1, "job-0"),
 				read("reviewer", types.SteerBoundaryRound, types.PhaseReview, 1, ""),
@@ -473,7 +473,7 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 }
 
 // A FRESH SESSION'S BRIEF CARRIES EVERY READ NOTE; A CONTINUED ONE'S ONLY THE NEW.
-// A run carried on with a person's answer continues the asking run's own CLI
+// A run carried on with a person's answer continues the asking run's own harness
 // session where it can, which already holds every note it read — so its
 // prompt is the answer and the notes since; a fresh run started instead holds
 // nothing, so its brief carries every note the turn read and then the new ones.

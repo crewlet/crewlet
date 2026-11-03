@@ -93,7 +93,7 @@ type Service struct {
 	// roster, org and tools are the config-derived surfaces. See Options.
 	roster    func() []map[string]any
 	org       func() any
-	tools     func() []map[string]any
+	tools     func() any
 	schedules func() any
 
 	// placement reads the seat leases for the seat-state vocabulary's
@@ -196,11 +196,14 @@ type Options struct {
 	//
 	// Org answers `any` because its shape is an explicit public type owned
 	// by package api (the anonymous org projection), and api imports this
-	// package, so naming the type here would be an import cycle. This
-	// service only carries the value to the wire and never reads into it.
+	// package, so naming the type here would be an import cycle. Tools
+	// answers `any` too: its row is internal/api/queries' (the shape
+	// `mcp_servers_status` sends as well), and that package reaches the
+	// engine, which a transport has no reason to build against. This
+	// service only carries either value to the wire and never reads into it.
 	Roster    func() []map[string]any
 	Org       func() any
-	Tools     func() []map[string]any
+	Tools     func() any
 	Schedules func() any
 
 	// Placement is which of the company's agent seats some node in the
@@ -375,8 +378,8 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		s.hub.Broadcast(Push(KindEvent, env, now))
 	}
 	s.pushAgents(change, now)
-	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
+	if change.Executors {
+		s.hub.Broadcast(Push(KindExecutors, ExecutorRows(s.state.ActiveExecutors()), now))
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
@@ -391,18 +394,18 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 }
 
-// ReconcileSandboxes lands a read of the durable run record on the projection
+// ReconcileExecutors lands a read of the durable run record on the projection
 // and pushes the sandbox set when it moved — which is what corrects every open
 // panel when an event that would have was lost.
 //
 // AND THE SEATS WHOSE STATE IT MOVED: a seat's runs are read from this record,
 // so a question found here makes its seat need somebody on every open screen at
 // the same moment the panel shows it.
-func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf time.Time) {
-	change := s.state.ReconcileSandboxes(records, asOf)
+func (s *Service) ReconcileExecutors(records []livestate.ExecutorRecord, asOf time.Time) {
+	change := s.state.ReconcileExecutors(records, asOf)
 	now := s.now()
-	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
+	if change.Executors {
+		s.hub.Broadcast(Push(KindExecutors, ExecutorRows(s.state.ActiveExecutors()), now))
 	}
 	s.pushAgents(change, now)
 }
@@ -510,7 +513,7 @@ func (s *Service) RefreshPlacement() {
 // It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
 // that audience may receive (see [needs]), each SHAPED for it exactly as its
 // push is ([Shaped]): the seats' live calls masked to their status where the
-// audience may not read their trail, the coding runs likewise, and the org
+// audience may not read their trail, the executors likewise, and the org
 // tree in the variant the audience reads.
 //
 // The one read it makes is the seat leases ([Service.RefreshPlacement]),
@@ -533,7 +536,7 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		// true.
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
-		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
+		"executors": ExecutorRows(s.state.ActiveExecutors()),
 		"tokens":    SpendRollup(s.TokenRollup()),
 		"budget":    s.state.Budget(),
 	}
@@ -565,7 +568,7 @@ var snapshotKinds = map[string]Kind{
 	"tools":     KindTools,
 	"schedules": KindSchedules,
 	"events":    KindEvent,
-	"sandboxes": KindSandboxes,
+	"executors": KindExecutors,
 	"tokens":    KindTokens,
 	"budget":    KindBudget,
 }
@@ -577,9 +580,20 @@ var snapshotKinds = map[string]Kind{
 // Exported because a config apply has to re-send it: the client's own doc
 // says a merge cannot express a deletion, so a revision that removed a role
 // would leave its card on screen until someone reloaded the page.
+//
+// EACH SEAT'S STATUS AND NOT ITS CALL IN FLIGHT ([livestate.LiveState.MergeRoster]),
+// so the read grows with the seats and not with what they are doing: a call
+// carries its prompt, its rounds and its tool executions, and `GET /agents`
+// that carried every seat's was refused to the assistant (whose step reads 64
+// KiB) exactly while the company was busy. The call stays where a live view
+// reads it: the handshake snapshot ([Service.Snapshot]), the `agents` pushes,
+// and its own question, `live_call{agent_id}`. The `seats` push loses nothing
+// by it either: the client merges it over the row it holds, so a key it does
+// not carry keeps the call the pushes delivered, where a whole call on every
+// config apply overwrote it.
 func (s *Service) Roster() AgentRows {
 	s.RefreshPlacement()
-	return AgentRows(s.state.MergeAgents(s.currentRoster()))
+	return AgentRows(s.state.MergeRoster(s.currentRoster()))
 }
 
 // AudienceFor is what principal p may receive on this node: [NewAudience] over
@@ -633,7 +647,7 @@ func (s *Service) Org() any { return s.currentOrg() }
 
 // Tools is this node's catalogue, for the same re-send. It changes on an
 // apply too — a revision that adds an MCP server adds its tools.
-func (s *Service) Tools() []map[string]any { return s.currentTools() }
+func (s *Service) Tools() any { return s.currentTools() }
 
 // Schedules is the configured rows as the `schedules` push carries them.
 //
@@ -653,7 +667,7 @@ func (s *Service) currentOrg() any { return s.org() }
 
 func (s *Service) currentSchedules() any { return s.schedules() }
 
-func (s *Service) currentTools() []map[string]any { return s.tools() }
+func (s *Service) currentTools() any { return s.tools() }
 
 // CompanyPublished re-sends every push a published company changes — the
 // roster, the org tree, the tool catalogue and the schedules — to every client
@@ -831,6 +845,10 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 				// five seconds too (seat.SweepInterval), so a faster
 				// read would find nothing newer.
 				s.RefreshPlacement()
+				// AND THE INBOX COUNTS OF A NODE THAT WENT AWAY, which
+				// publishes nothing that could clear them
+				// ([livestate.LiveState.ExpireWaiting]).
+				s.pushAgents(s.state.ExpireWaiting(), s.now())
 			}
 		}
 	}()

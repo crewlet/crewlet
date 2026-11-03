@@ -638,7 +638,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Doclet backend: the engine's own pages
 
-`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every data node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's — the tracker's, the vector index's, the identity estate's, usage's, chat's and the code host's — inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every data node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
@@ -946,9 +946,9 @@ sequenceDiagram
   call, exactly what the reply spent is recorded on the company's counter,
   whatever becomes of the answer — an empty reply the tool declines to show
   ("The model wrote no answer") included, since its tokens are spent the moment
-  the CLI replies.
+  the harness replies.
 - **A model at its usage limit is a wait.** Where the asker's auxiliary model
-  has reached a usage limit its CLI reported, nothing is launched and nothing is
+  has reached a usage limit its harness reported, nothing is launched and nothing is
   spent: the person is told the model has reached its limit, with the
   company's models as where an administrator gives it a fallback, and the
   answer carries the time until the model is tried again as its
@@ -1101,7 +1101,7 @@ A read names the pages it reached (`pages[{id, container, title, rank}]`), the b
 | `search` | The seat ran `search_knowledge`; `pages` are the hits it was shown, ranked, and `query` is what it searched for. | the phase that called it |
 | `prefetch` | The turn-start `## Relevant knowledge` block put these pages in front of the seat; `query` is the auxiliary model's. | none — it runs before the first phase |
 | `skill_loaded` | The seat loaded a [tool skill](tool-skills.md)'s body with `load_tool_skill`; the page is the one the skill was read from. | the phase that loaded it |
-| `skill_injected` | A phase's prompt carried the tool-skill catalogue; `pages` are the pages behind each skill it listed. One read per rendered catalogue — the executor's, the reviewer's, and each delegate worker's. | the phase whose prompt it was |
+| `skill_injected` | A phase was offered tool skills: its prompt carried the catalogue, or its harness was handed them as its own; `pages` are the pages behind each skill offered. One read per rendered catalogue — the reviewer's and each delegate worker's — and per launch of the executor's run. | the phase offered them |
 
 Three rules keep the record honest:
 

@@ -203,8 +203,8 @@ func commitTo(repo string) map[string]any {
 		"files": []any{map[string]any{"op": "put", "path": "README.md", "content": "hello"}}}
 }
 
-// bridgedCall makes one bridged call of name with args, as the box's coding
-// agent does, failing the case unless it answered.
+// bridgedCall makes one bridged call of name with args, as the box's
+// harness does, failing the case unless it answered.
 func (b bridgedRun) bridgedCall(t *testing.T, name string, args map[string]any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -233,14 +233,14 @@ func liveHolds(t *testing.T, runs interface {
 }
 
 // modellessCompany is [executorCompany]'s one-seat epoch with its executor on
-// an entry that names no model: the launch leaves the coding CLI to choose its
+// an entry that names no model: the launch leaves the harness to choose its
 // own.
 func modellessCompany(t *testing.T) (*Company, *org.Role) {
 	t.Helper()
 	return chainCompany(t, chainMember{key: "api", agent: "claude-code"})
 }
 
-// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: an executor's coding CLI
+// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: an executor's harness
 // makes its calls through the bridge, in rounds the engine never sees, so each
 // bridged call is made on the model the run's launch pointed the CLI at — the
 // one a seat's code write names on its push, as a tool loop round's call names

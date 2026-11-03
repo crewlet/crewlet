@@ -101,7 +101,7 @@ type Fleet interface {
 	// Token is a token bound to the human seat person; "" is one bound to
 	// nobody.
 	Token(t testing.TB, person string) string
-	// Runs is the fleet's coding runs' rows — the one store every git
+	// Runs is the fleet's executors' rows — the one store every git
 	// node's host admits a coding box by (NewBox) — which a case launches,
 	// ends and relaunches runs on.
 	Runs() *FixtureRuns
@@ -162,13 +162,13 @@ type Fleet interface {
 	// routing, as a seat's tool asks one: the production estate router,
 	// asking the git nodes — each serving its git lane on the broker, as the
 	// engine serves one — in the repository's rendezvous order, its home
-	// first (ADR-0082), and stamping the walk's first attempt home itself.
+	// first (ADR-0089), and stamping the walk's first attempt home itself.
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
-	// Write is an engine write (ADR-0085) through the fleet's routing, as a
+	// Write is an engine write (ADR-0092) through the fleet's routing, as a
 	// seat's or a person's tool asks one: the production estate router
 	// asking the git nodes — each serving its git writes' lane on the
 	// broker, as the engine serves one — in the repository's rendezvous
-	// order, its home first (ADR-0082), the walk stamping its first attempt
+	// order, its home first (ADR-0089), the walk stamping its first attempt
 	// home itself (code.EngineWrite.Home) and asking the next git node the
 	// same write where one ran nothing or went silent (code.git_write).
 	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
@@ -682,7 +682,7 @@ func (f *SoloFleet) Nodes() []Node {
 // (Fleet).
 func (f *SoloFleet) Token(_ testing.TB, person string) string { return f.creds.Token(person) }
 
-// Runs is the fleet's coding runs' rows (Fleet).
+// Runs is the fleet's executors' rows (Fleet).
 func (f *SoloFleet) Runs() *FixtureRuns { return f.runs }
 
 // ClientGit is the git every person a case makes on the fleet runs (Fleet).

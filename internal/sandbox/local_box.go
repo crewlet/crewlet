@@ -39,8 +39,8 @@ type hostCommand struct {
 // A control command produces a line or two; this exists for the pathological
 // case — a runtime that streams a pull progress bar, an image whose entrypoint
 // floods stderr — where an unbounded buffer would be the engine's memory. The
-// coding job's own output does not come through here at all: it is redirected
-// to files inside the box and read back by the runner.
+// launched job's own output does not come through here at all: it is
+// redirected to files inside the box and read back by the runner.
 const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
@@ -96,7 +96,7 @@ func wholeRunes(b []byte) []byte {
 	return b
 }
 
-// containerCLI is the container runtime's own CLI as this backend drives it:
+// containerCLI is the container runtime's own harness as this backend drives it:
 // the binary [ResolveContainerRuntime] picked, and the variables an operator
 // DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
@@ -122,11 +122,11 @@ type containerCLI struct {
 // and a plugin its own settings — and a fixed list with no
 // way to add to it leaves an operator whose runtime needs one of those with
 // no way to say so. The declared layer wins over the fixed one, because a
-// value an operator wrote down for this CLI is a decision and the host's is a
+// value an operator wrote down for this harness is a decision and the host's is a
 // default.
 //
-// The run environment a coding agent gets is NOT here: it travels as an
-// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// The run environment a harness gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this harness holds
 // is what the runtime needs and nothing a box does. A bare `-e NAME` in
 // `local.run_args` therefore copies only a name this environment carries,
 // which is what the configuration's advisory about one says.
@@ -250,10 +250,10 @@ var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
 // childEnv is the allowlisted host environment plus the box's home, its
 // temporary directory and the run env.
 //
-// Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
+// Allowlisted for the same reason the harness backend allowlists: the engine's
 // environment holds the org's chat token, its collector credential
 // (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
-// the coding agent has any business reading.
+// the harness has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
@@ -331,7 +331,7 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	})
 }
 
-// StartBackground spawns the detached coding job in its own session.
+// StartBackground spawns a launch's detached job in its own session.
 //
 // Spawned directly rather than backgrounded inside a throwaway shell, because
 // the pid has to be usable for three different things and only a direct spawn
@@ -522,6 +522,13 @@ func (b *directBox) escapeError(path string) error {
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
+	return b.WriteStream(ctx, path, bytes.NewReader(content))
+}
+
+// WriteStream implements [Sandbox]: the write [directBox.WriteFile] makes, its
+// content read a piece at a time into the file staged beside the path
+// ([writeHomeFile]).
+func (b *directBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
 	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
@@ -530,7 +537,7 @@ func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) 
 		return b.explain(path, rel, localErrorf("local sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, readUnder(ctx, content)))
 }
 
 // ReadFile is EMPTY-ON-MISSING: the detached runner polls for marker and
@@ -732,7 +739,7 @@ func (b *containerBox) explain(path, rel string, err error) error {
 // file it named, or with a named pipe whose open never returned.
 //
 // Rewritten per call rather than kept: extra differs between the setup steps
-// and the coding job, and a stale file would hand one phase another's
+// and the launched job, and a stale file would hand one phase another's
 // environment.
 func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	merged := make(map[string]string, len(b.env)+len(extra))
@@ -793,7 +800,7 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
 //
-// `docker exec` would otherwise block for the whole length of a coding job;
+// `docker exec` would otherwise block for the whole length of a launched job;
 // backgrounding and echoing $! lets the exec return at once while the job
 // keeps running under the container's PID 1. That PID 1 is started with
 // --init precisely so it reaps the job when it finishes — an unreaped process
@@ -920,6 +927,12 @@ func trailingPID(output string) string {
 }
 
 func (b *containerBox) WriteFile(ctx context.Context, path string, content []byte) error {
+	return b.WriteStream(ctx, path, bytes.NewReader(content))
+}
+
+// WriteStream implements [Sandbox]: on the host side of the mount, as every
+// other access to the box's files is.
+func (b *containerBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
 	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
@@ -928,7 +941,7 @@ func (b *containerBox) WriteFile(ctx context.Context, path string, content []byt
 		return b.explain(path, rel, localErrorf("container sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, readUnder(ctx, content)))
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
@@ -1090,13 +1103,17 @@ func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 // of the path leads the write out of the box; and anything at the path that
 // is not a regular file — a link, a named pipe, a directory — is refused as a
 // [NotRegularFileError] naming what is there, and left as the box made it.
-func writeHomeFile(l boxLayout, rel, path string, content []byte) error {
+//
+// The content is read as it is copied into the staged file, so a source that
+// fails part way leaves the staged file to be removed and the one at rel as it
+// was ([hostbox.ReplaceFileIn]).
+func writeHomeFile(l boxLayout, rel, path string, content io.Reader) error {
 	home, err := l.openHome()
 	if err != nil {
 		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
 	}
 	defer func() { _ = home.Close() }()
-	if err := replaceIn(home, rel, content); err != nil {
+	if err := replaceFrom(home, rel, content); err != nil {
 		return fmt.Errorf("local sandbox: write %s: %w", path, err)
 	}
 	return nil

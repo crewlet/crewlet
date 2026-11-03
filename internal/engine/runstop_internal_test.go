@@ -18,10 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS CODING RUN INCLUDED.
+// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS EXECUTOR INCLUDED.
 //
 // The seat's turn hears a stop at its next round; the run that turn launched is
-// its coding CLI's own process, with no rounds the engine sees, and it used to
+// its harness's own process, with no rounds the engine sees, and it used to
 // run on to its end. These cases hold the engine to the rest of the promise:
 // every way a stop reaches a seat this node holds ends its running run, and
 // the turn that was waiting on the run is closed as stopped — the same records
@@ -80,11 +80,11 @@ func recordsOf(q *memory.Queue, turnID string) stopRecords {
 			if data.TurnID == turnID {
 				out.stops = append(out.stops, ev)
 			}
-		case *types.SandboxRunStopped:
+		case *types.ExecutorStopped:
 			if data.TurnID == turnID {
 				out.runStops = append(out.runStops, ev)
 			}
-		case *types.SandboxRunFailed:
+		case *types.ExecutorFailed:
 			if data.TurnID == turnID {
 				out.runLosses = append(out.runLosses, ev)
 			}
@@ -101,7 +101,7 @@ func closedAsStopped(t *testing.T, q *memory.Queue, turnID string) stopRecords {
 	t.Helper()
 	got := recordsOf(q, turnID)
 	if len(got.runLosses) != 0 {
-		t.Fatalf("the stopped run was announced as a loss: %d sandbox_run_failed", len(got.runLosses))
+		t.Fatalf("the stopped run was announced as a loss: %d executor_failed", len(got.runLosses))
 	}
 	if len(got.runStops) == 0 {
 		t.Fatal("the run's stop was never announced")

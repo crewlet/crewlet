@@ -97,7 +97,7 @@ func mirrorService(t *testing.T) *stream.Service {
 		Seats:     func() tokens.Seats { return tokens.Seats{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func() any { return map[string]any{} },
-		Tools:     func() []map[string]any { return nil },
+		Tools:     func() any { return nil },
 		Schedules: func() any { return []any{} },
 		Chart:     authz.NoChart{},
 		Holders:   holdsNobody{},

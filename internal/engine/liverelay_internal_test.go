@@ -662,7 +662,7 @@ func TestABatchNobodyCanAskForIsNeverCopied(t *testing.T) {
 
 // ONE DOMAIN'S WRONG COPY IS RELAYED ALONE.
 //
-// A fault is one log's (ADR-0072): a node whose chat copy is out of service
+// A fault is one log's (ADR-0079): a node whose chat copy is out of service
 // still has a sound tracker copy, whose applier's movements are complete. So
 // its sockets hear chat from a peer — and its own chat applier is withheld —
 // while its inbox movements are its own tracker applier's, unrelayed; only

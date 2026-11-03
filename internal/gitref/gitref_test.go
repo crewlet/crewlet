@@ -122,7 +122,7 @@ func TestValidRefAgreesWithGit(t *testing.T) {
 // as it is written rather than expanding @{-1} or @ against a HEAD.
 //
 // It is every caller's rule — the configuration's default branch, a push's
-// branch, the branch a coding run records — so a case any of them depends on
+// branch, the branch an executor records — so a case any of them depends on
 // is a row here, held to git, never a table of a caller's own.
 func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 	c := gittest.NewClient(t)

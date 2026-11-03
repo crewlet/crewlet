@@ -30,6 +30,19 @@ export function knownKind(kind: ChatKind): boolean {
 }
 
 /**
+ * Whether only the people in the room may read it or write to it: a private
+ * room, and a direct conversation, which is the people in it.
+ *
+ * THE ENGINE'S OWN QUESTION, asked the engine's way (`privateRoom` in
+ * `internal/chatlet`, which its read gate `Visible` and its write gate
+ * `reachable` both ask). A screen that asked a narrower one, "is it private",
+ * would offer a box the engine refuses in a conversation the reader has left.
+ */
+export function membersOnly(kind: ChatKind): boolean {
+  return kind === "private" || isDirect(kind);
+}
+
+/**
  * Why a room of a kind this build cannot classify takes nothing from here:
  * the composer's reason and the membership note alike, so the one fact is
  * said one way wherever it holds a control.
@@ -134,6 +147,28 @@ export function roomTitle(
  */
 export function roomWhere(kind: ChatKind, title: string): string {
   return isDirect(kind) || kind === "unit" ? title : `#${title}`;
+}
+
+/**
+ * Whether a room is a conversation between the reader and `actor` alone.
+ *
+ * A SENTENCE ABOUT WHAT THE ACTOR DID THERE NAMES NO ROOM: a one-to-one
+ * conversation is titled by the other person, so "Product Manager replied to
+ * a thread in Product Manager" only repeated the name it began with. A group
+ * conversation and every named room are still named. Where the room's people
+ * are not in hand, a one-to-one conversation (`dm`) holds the reader and one
+ * other, and whoever acted in it who is not the reader is that other.
+ */
+export function isConversationWith(
+  kind: ChatKind,
+  actor: string,
+  viewer: string,
+  participants?: readonly string[],
+): boolean {
+  if (kind !== "dm" || !actor || actor === viewer) return false;
+  if (participants === undefined) return true;
+  const others = participants.filter((handle) => handle && handle !== viewer);
+  return others.length === 1 && others[0] === actor;
 }
 
 /**

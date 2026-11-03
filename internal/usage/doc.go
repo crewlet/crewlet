@@ -91,7 +91,10 @@
 // counts, its ended turns (count, failed, reviewed, first-pass, send-backs and
 // a mergeable duration [Hist]), and the pages it read — capped at
 // [ReadsPerSeatDay] with the remainder counted. A schedule-day: every fire the
-// node's scheduler recorded. A person-day: what the seats' auxiliary model
+// node's scheduler recorded, with the tick it stands for, and every fire of the
+// schedule a seat on the node did not run because a later fire ran in its
+// place, filed on the day the node recorded that ([ScheduleRuns] joins the two
+// by trace). A person-day: what the seats' auxiliary model
 // spent for a human seat — a question answered on the operator surface, a pass
 // on a unit a person leads — by the same cells, and nothing else, since a
 // person has no agent id, no turns and no reads ([KindPerson]). A
@@ -101,7 +104,7 @@
 // reads of a flush at a time (types.CodeFetched, internal/code/readaudit) —
 // with how often and how many bytes, capped at [ReadersPerRepoDay] with the
 // remainder counted
-// ([KindRepoRead], record version 2: the one kind a build at version 1
+// ([KindRepoRead], record version 4: the one kind a build below version 4
 // retains rather than applies). A record is always the cumulative value; an
 // apply REPLACES.
 //

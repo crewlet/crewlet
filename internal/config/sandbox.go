@@ -36,7 +36,7 @@ const (
 	// PlacementDirect runs a process tree on the ENGINE HOST in a per-box
 	// directory, with HOME and the XDG variables pointed at it and an
 	// allowlisted environment. That isolates STATE — no box sees another's
-	// checkout, memory or credentials — but NOT THE HOST: the coding agent
+	// checkout, memory or credentials — but NOT THE HOST: the harness
 	// runs as the engine user, so it reads what that user reads and
 	// reaches what its credentials reach. Right for a workstation or a
 	// dedicated VM; wrong for a shared host.
@@ -76,7 +76,7 @@ func (p Placement) backend() string {
 // SandboxProvider is the engine-wide CATALOGUE of cells every agent seat's
 // executor runs in.
 //
-// Every agent seat's executor is its coding CLI's own run, in a box: this
+// Every agent seat's executor is its harness's own run, in a box: this
 // block says WHICH BOXES EXIST, the providers.llm entry the run launches on
 // picks the cell (`run_in`, else `default_run_in`), and a seat's own
 // role.sandbox adds what that seat's box reads beyond the engine-wide
@@ -94,7 +94,7 @@ type SandboxProvider struct {
 	E2B *E2BSandbox `yaml:"e2b,omitempty" json:"e2b,omitempty" desc:"The remote backend. Absent = run_in: e2b is refused."`
 
 	// Local configures the engine host as a backend, so a run can use the
-	// subscription CLI login `crewlet llm login` already established, with
+	// subscription harness login `crewlet llm login` already established, with
 	// no remote account and no API key. Absent means no run may be placed
 	// `run_in: direct` or `run_in: container`.
 	//
@@ -118,7 +118,7 @@ type SandboxProvider struct {
 	//
 	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS
 	// CONFIGURED, and the absence of one is the point: `direct` runs the
-	// coding agent as the engine user with the engine's filesystem access
+	// harness as the engine user with the engine's filesystem access
 	// and `e2b` bills a remote account, so neither may be chosen for an
 	// operator who did not say which they meant. `local:` alone is two
 	// cells, not one — it serves both `direct` and `container` — so it
@@ -133,7 +133,7 @@ type SandboxProvider struct {
 	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
 
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
-	// limit: a coding job is never force-stopped on a timer, and the
+	// limit: an executor is never force-stopped on a timer, and the
 	// waiter refreshes a running box's TTL every tick so the clock never
 	// kills it — as a launch refreshes the box it is still provisioning, so
 	// no sum of setup steps races it either. Effectively the
@@ -163,18 +163,42 @@ type SandboxProvider struct {
 	// take, for seats that name none (role.sandbox.max_turns). Read it
 	// through [SandboxProvider.MaxTurns].
 	//
-	// THE ONLY ROUND BOUND ON EVERY AGENT SEAT'S TURN. An executor run is
-	// deliberately never force-stopped on a clock — see
-	// default_timeout_seconds — so nothing else stops one that is
-	// thrashing rather than working, and the box's own TTL is refreshed on
-	// every waiter tick precisely so that it cannot. Unset takes
-	// [defaultSandboxMaxTurns]; an explicit 0 is uncapped, which is how a
-	// company opts out.
+	// UNCAPPED UNLESS SET. A run is its harness's own loop, and how many
+	// rounds its task takes is the harness's to judge, as it is when a person
+	// runs it: the engine does not end a run part-way on a count nobody
+	// chose. A company that wants a bound sets one here, and a positive value
+	// becomes the harness's own turn cap — Claude Code's --max-turns,
+	// OpenCode's agent steps. Without one, a run ends when it finishes, at a
+	// scheduled turn's timeout_seconds, or when a person stops it: it is
+	// never stopped on its box's clock (see default_timeout_seconds), and a
+	// token budget holds every launch to its floor and charges the run when
+	// it is collected, never part-way through.
 	//
-	// A POINTER, because those are three states and an int has two: an
-	// unset field's zero would read as "uncapped", so every company that
-	// said nothing would run without the one bound its turns have.
-	DefaultMaxTurns *int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped."`
+	// A PLAIN INT, because zero — the field left out or written 0 — is
+	// uncapped and every other value is the cap itself. It was a pointer
+	// while leaving it out took a shipped cap of 96 and only an explicit 0
+	// turned that off; with no default left to take, a pointer would tell
+	// nothing apart.
+	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
+
+	// CommitAttribution says whether every commit an executor authors as
+	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
+	// `Crewlet-Seat:` naming the seat it is the executor of, `Crewlet-Run:`
+	// naming the run's turn, and `Crewlet-Work-Item:` naming the item that
+	// turn is charged to. Git adds it, through a hook
+	// the run's box is given (internal/sandbox/executor), so it holds
+	// whatever the model remembers, and only on the run's own commits: a
+	// person's commit the run amends, cherry-picks or rebases keeps no
+	// credit. Read it through [SandboxProvider.AttributesCommits].
+	//
+	// ON UNLESS TURNED OFF, because a commit that says where it came from is
+	// what a reader of the history needs by default, and the credit changes
+	// nothing a commit does. A company that does not want Crewlet named in
+	// its repositories' history sets false.
+	//
+	// A POINTER, because unset is "on": a plain bool's zero would turn the
+	// credit off for every company that said nothing.
+	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing."`
 
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
@@ -229,16 +253,6 @@ func (e *E2BSandbox) validate(path Path) error {
 const (
 	defaultSandboxTimeoutSeconds  = 900.0
 	defaultSandboxPauseTTLSeconds = 1800.0
-
-	// defaultSandboxMaxTurns is 96 because it is now the only round bound
-	// on every agent seat's turn. The engine's own executor loop was capped
-	// at 48 rounds once its extension judge had granted all it could
-	// (turn_engine's execute ceiling, twice its 24-round base), and that was
-	// for engine-tool work alone. One run now also does the shell, edit and
-	// test steps code work adds, each a CLI turn of its own, so twice that
-	// ceiling: room for a real task's reading, editing and checking, and
-	// still a wall a run that is thrashing hits within one turn.
-	defaultSandboxMaxTurns = 96
 )
 
 // Timeout is the box TTL, applying the default.
@@ -250,14 +264,22 @@ func (s *SandboxProvider) Timeout() float64 {
 }
 
 // MaxTurns is the agentic-round cap one executor run takes when its seat
-// names none, applying the default: an explicit 0 is uncapped, and unset is
-// [defaultSandboxMaxTurns]. Nil-safe, so a company with no catalogue reads
-// the default rather than panicking: such a company runs no box at all.
+// names none, zero for uncapped ([SandboxProvider.DefaultMaxTurns]).
+// Nil-safe, so a company with no catalogue reads uncapped rather than
+// panicking: such a company runs no box at all.
 func (s *SandboxProvider) MaxTurns() int {
-	if s == nil || s.DefaultMaxTurns == nil {
-		return defaultSandboxMaxTurns
+	if s == nil {
+		return 0
 	}
-	return *s.DefaultMaxTurns
+	return s.DefaultMaxTurns
+}
+
+// AttributesCommits reports whether an executor's own commits credit Crewlet
+// ([SandboxProvider.CommitAttribution]): unless the company set false.
+// Nil-safe, as [SandboxProvider.MaxTurns] is: a company with no catalogue
+// runs no box, so nothing reads the answer.
+func (s *SandboxProvider) AttributesCommits() bool {
+	return s == nil || s.CommitAttribution == nil || *s.CommitAttribution
 }
 
 // PauseTTL is the paused-box TTL as configured, or nil when the field is
@@ -314,7 +336,7 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 // happens, or empty when the catalogue cannot answer that on its own.
 //
 // EMPTY IS A REAL ANSWER, not a failure to compute one: `direct` runs the
-// coding agent as the engine user with the engine's own filesystem access,
+// harness as the engine user with the engine's own filesystem access,
 // and `e2b` bills a remote account. Guessing either for an operator who wrote
 // neither is the kind of default that is discovered afterwards. Validation
 // turns the empty answer into a message naming both fields that would fix it.
@@ -405,10 +427,10 @@ func (s *SandboxProvider) validate(path Path) error {
 			"must be 0 (the %v s default) or positive, got %v",
 			defaultSandboxTimeoutSeconds, s.DefaultTimeoutSeconds)
 	}
-	if s.DefaultMaxTurns != nil && *s.DefaultMaxTurns < 0 {
+	if s.DefaultMaxTurns < 0 {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
-			"%d (a round cap cannot be negative; omit the field for the default "+
-				"of %d, or set 0 for uncapped)", *s.DefaultMaxTurns, defaultSandboxMaxTurns)
+			"%d (a round cap cannot be negative; omit the field, or set 0, to "+
+				"leave executor runs uncapped)", s.DefaultMaxTurns)
 	}
 	// A NEGATIVE value is refused: an unbounded pause is the leak this knob
 	// exists to prevent.
@@ -476,10 +498,9 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 type LocalSandbox struct {
 	// Image is the container image, required wherever an executor run or a
 	// check is placed in a container, with deliberately no default: a box
-	// whose image lacks the coding-agent CLI fails only once an agent tries
-	// to use it, and a check's box needs git and whatever its checks build
-	// with.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the coding-agent CLI installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container."`
+	// whose image lacks the harness fails only once an agent tries to use
+	// it, and a check's box needs git and whatever its checks build with.
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
@@ -494,8 +515,8 @@ type LocalSandbox struct {
 
 	// Network is the container network. Empty uses the runtime's default.
 	// Setting `none` cuts the box off entirely — which also cuts off the
-	// coding agent's LLM, so only do it for purely local work.
-	Network string `yaml:"network,omitempty" json:"network,omitempty" desc:"Container network; setting it to none also cuts off the coding agent's LLM."`
+	// harness's LLM, so only do it for purely local work.
+	Network string `yaml:"network,omitempty" json:"network,omitempty" desc:"Container network; setting it to none also cuts off the harness's LLM."`
 
 	// RunArgs are spliced into the container run command (--cpus,
 	// --memory, extra mounts, --user). This is where a container box is
@@ -616,7 +637,7 @@ func (l *LocalSandbox) validate(path Path) error {
 // providers.sandbox.setup and role.sandbox.setup, but for the one exception:
 // a repository on this company's own code host is a run's GRANT, which the
 // engine clones into the box itself after these steps, with the run's own
-// credential (ADR-0086) — and no step's env may set the variables that
+// credential (ADR-0093) — and no step's env may set the variables that
 // credential and its clones read ([ReservedSandboxEnv]).
 type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
@@ -639,11 +660,11 @@ type SandboxSetupStep struct {
 	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value."`
 
 	// Commands run in order after the files land. A non-zero exit fails
-	// the whole acquisition — the coding agent's brief promises this
+	// the whole acquisition — the harness's brief promises this
 	// environment, so a partially provisioned box must never reach a run.
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty" desc:"Shell commands run in order; a non-zero exit fails the box."`
 
-	// Env is merged into the coding agent's run environment.
+	// Env is merged into the harness's run environment.
 	//
 	// It stays VERBATIM here and is resolved exactly once, with the rest
 	// of the sandbox env at launch. Resolving it at load as well would
@@ -663,11 +684,11 @@ type SandboxSetupStep struct {
 	// own block's half, for why an executor run starts either way.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, or paths of files, whose value may resolve to nothing; left out quietly rather than logged as a gap in the run's environment."`
 
-	// Brief is the paragraph handed to the coding agent: what this step
+	// Brief is the paragraph handed to the harness: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
 	// and substituting engine-host environment into it would be surprising
 	// at best.
-	Brief string `yaml:"brief,omitempty" json:"brief,omitempty" desc:"What this step made true about the box, told to the coding agent."`
+	Brief string `yaml:"brief,omitempty" json:"brief,omitempty" desc:"What this step made true about the box, told to the harness."`
 
 	// TimeoutSeconds is how long each of this step's commands may run.
 	//
@@ -719,19 +740,17 @@ func (s *SandboxSetupStep) validate(path Path) error {
 }
 
 // ReservedSandboxEnv is every variable the ENGINE sets in a box's environment
-// itself — a coding run's or a check's — and so the names no env an operator
+// itself — an executor's or a check's — and so the names no env an operator
 // writes for a box may carry: the box's access to the engine's own code host —
-// its git credential and the base its clones and pushes reach, which a coding
-// run's box and a check's are both given — the values the coding clone's
-// commit-trailer hook writes, and what a check's box is told of its check
-// ([ReservedCheckEnv]). A closed list, which the validator reads here and the
+// its git credential and the base its clones and pushes reach, which an
+// executor's box and a check's are both given — and what a check's box is told
+// of its check ([ReservedCheckEnv]). A closed list, which the validator reads here and the
 // engine's tests hold to the variables each launch sets: every executor
 // launch on a node serving the code host sets every name but the check's own,
 // whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
-	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
-		"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}, ReservedCheckEnv()...)
+	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
 }
 
 // ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
@@ -739,7 +758,7 @@ func ReservedSandboxEnv() []string {
 // that commit is measured against, the check's name and its attempt — where
 // its box reads that commit without a clone, and where its command writes the
 // summary its result is reported with. Beside them a check's box is given the
-// code host's credential and base, as a coding run's is; every name of both is
+// code host's credential and base, as an executor's is; every name of both is
 // in [ReservedSandboxEnv].
 func ReservedCheckEnv() []string {
 	return []string{"CREWLET_CHECK_REPO", "CREWLET_CHECK_SHA", "CREWLET_CHECK_BASE", "CREWLET_CHECK_NAME",
@@ -767,13 +786,6 @@ var reservedSandboxEnvReasons = map[string]string{
 		"launch of a run that names repositories, and a value here would break its clones and pushes",
 	"CREWLET_GIT_URL": "it is the base a run that names repositories clones and pushes them from " +
 		"(CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git elsewhere",
-	"CREWLET_GIT_TRAILER_SEAT": "it is the seat the coding clone's commit hook writes into every commit's " +
-		"trailers, and a value here would make a box commit's trailers disagree with its push's record",
-	"CREWLET_GIT_TRAILER_RUN": "it is the launch the coding clone's commit hook writes into every commit's " +
-		"trailers, and a value here would make a box commit's trailers disagree with its push's record",
-	"CREWLET_GIT_TRAILER_WORK_ITEM": "it is the work item the coding clone's commit hook writes into every " +
-		"commit's trailers, and a value here would make a box commit's trailers disagree with its push's " +
-		"record",
 }
 
 // validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
@@ -784,9 +796,9 @@ var reservedSandboxEnvReasons = map[string]string{
 //
 // AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
 // about running depends on it, since the engine's own value wins over every
-// other source of a box's environment for the names it sets (a coding launch's
-// environment, sandbox.LaunchRequest.RunEnv; a check's, which names its
-// secrets beside them) — so a stored revision carrying one runs as it did, a
+// other source of a box's environment for the names it sets (an executor
+// launch's environment, sandbox.LaunchRequest.RunEnv; a check's, which names
+// its secrets beside them) — so a stored revision carrying one runs as it did, a
 // later build may relax the rule, and this build applies whatever its newer
 // peer admitted. What it refuses is a setting that READS as working: one the
 // engine overwrites on every box it sets the name in, and on every other box a

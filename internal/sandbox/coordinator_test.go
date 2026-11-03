@@ -373,15 +373,15 @@ func (r *coordRig) recoverSeat(ctx context.Context, owner string, epoch int64) e
 // schedule in turn included only on the next call.
 func (r *coordRig) fireRetries() int { return r.retries.fire() }
 
-// failures is every SandboxRunFailed the coordinator announced, deduped
+// failures is every ExecutorFailed the coordinator announced, deduped
 // across the two topics each one goes to.
-func (r *coordRig) failures() []types.SandboxRunFailed {
+func (r *coordRig) failures() []types.ExecutorFailed {
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
-	var out []types.SandboxRunFailed
+	var out []types.ExecutorFailed
 	seen := map[string]bool{}
 	for _, p := range r.queue.published {
-		payload, ok := p.event.Data.(*types.SandboxRunFailed)
+		payload, ok := p.event.Data.(*types.ExecutorFailed)
 		if !ok || seen[p.event.ID.String()] {
 			continue
 		}
@@ -392,12 +392,12 @@ func (r *coordRig) failures() []types.SandboxRunFailed {
 }
 
 // completion is the signal the waiter raises for the job the row holds now.
-func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events.Event) {
+func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Event) {
 	run := r.get(turnID)
-	payload := types.SandboxRunCompleted{
+	payload := types.ExecutorFinished{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
+		SandboxID: run.SandboxID, Harness: run.Harness,
 	}
 	return payload, events.New(payload, events.TraceContext{TraceID: run.TraceID})
 }
@@ -406,7 +406,7 @@ func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events
 // the busy gate
 // ---------------------------------------------------------------------
 
-// A coding job can run for hours, far past any broker ack window, so its
+// An executor can run for hours, far past any broker ack window, so its
 // seat's mail is parked rather than consumed and held.
 func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	t.Parallel()
@@ -416,7 +416,7 @@ func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the seat was busy before the start event arrived")
 	}
-	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 		AgentHandle: "swe", TurnID: "t1",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
@@ -438,7 +438,7 @@ func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
-	started := types.SandboxRunStarted{AgentHandle: "swe", TurnID: "t1"}
+	started := types.ExecutorLaunched{AgentHandle: "swe", TurnID: "t1"}
 	for range 3 {
 		if err := rig.coordinator.OnStarted(t.Context(), started); err != nil {
 			t.Fatalf("OnStarted: %v", err)
@@ -592,7 +592,7 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 // job's ONLY segment — days later, possibly on another node, with nothing
 // collected. The job's tokens therefore travel on the row with its question,
 // or the turn's work item is charged for the collection and never for the
-// coding run that asked.
+// launch that asked.
 func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -644,7 +644,7 @@ func TestARedeliveredStartDuringAResumeDoesNotParkTheSeatForGood(t *testing.T) {
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
-		if err := rig.coordinator.OnStarted(ctx, types.SandboxRunStarted{
+		if err := rig.coordinator.OnStarted(ctx, types.ExecutorLaunched{
 			AgentHandle: r.AgentHandle, TurnID: r.TurnID,
 		}); err != nil {
 			t.Errorf("OnStarted: %v", err)
@@ -778,8 +778,8 @@ func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
 		t.Errorf("reported %v as stopped, want the turn whose claim is stuck", got)
 	}
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded {
-		t.Fatalf("announced %+v, want one %q", failed, types.SandboxFailureClaimStranded)
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureClaimStranded {
+		t.Fatalf("announced %+v, want one %q", failed, types.ExecutorFailureClaimStranded)
 	}
 	if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
 		t.Errorf("SeatRuns = held %v / awaiting %v, want neither: the seat's only run is over",
@@ -862,7 +862,7 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 		relaunched = res.SandboxID
 		// The relaunch's start event reaches the seat before the turn
 		// breaks, so the seat is counted busy on the relaunched job.
-		if err := rig.coordinator.OnStarted(ctx, types.SandboxRunStarted{
+		if err := rig.coordinator.OnStarted(ctx, types.ExecutorLaunched{
 			AgentHandle: r.AgentHandle, TurnID: r.TurnID,
 		}); err != nil {
 			t.Errorf("OnStarted: %v", err)
@@ -911,7 +911,7 @@ func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
-			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+			if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 				AgentHandle: "swe", TurnID: "t1",
 			}); err != nil {
 				t.Fatalf("OnStarted: %v", err)
@@ -1135,7 +1135,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 // A RELAUNCH CONTINUES IN THE BOX ITS TURN LEFT. A reviewer that sends the
 // work back relaunches the executor on the same work, and the checkout is the
 // expensive half of a run: the collect pauses the box rather than tearing it
-// down, and the relaunch — the same CLI in the same cell — reattaches to it
+// down, and the relaunch — the same harness in the same cell — reattaches to it
 // rather than provisioning beside it.
 //
 // THROUGH THE REAL LAUNCH, not a hand-written status flip: a case that set the
@@ -1292,12 +1292,12 @@ func TestAKeptBoxIsDatedFromItsFirstAttach(t *testing.T) {
 	}
 }
 
-// A RELAUNCH ON ANOTHER CLI RECLAIMS THE BOX IT LEAVES. Launch-time fallback
-// picks a member at every launch, so a turn's next job can run another CLI
-// than its last — which the box was installed for and no other CLI can run in.
+// A RELAUNCH ON ANOTHER HARNESS RECLAIMS THE BOX IT LEAVES. Launch-time fallback
+// picks a member at every launch, so a turn's next job can run another harness
+// than its last — which the box was installed for and no other harness can run in.
 // The attach overwrites the row's reference, so a box the relaunch walked
 // away from was named by nothing: no settle, no reaper would ever reclaim it.
-func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
+func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	opencode := NewFakeRunner("opencode")
@@ -1313,7 +1313,7 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 	var relaunch LaunchResult
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
-		req.Spec.CodingAgent = "opencode"
+		req.Spec.Harness = "opencode"
 		res, err := rig.launchVia(ctx, m, req)
 		if err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -1327,7 +1327,7 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if relaunch.Reused || relaunch.SandboxID == run.SandboxID {
-		t.Fatalf("relaunch = %+v, want a fresh box for the other CLI", relaunch)
+		t.Fatalf("relaunch = %+v, want a fresh box for the other harness", relaunch)
 	}
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the claude-code box %q reclaimed as the opencode job "+
@@ -1337,9 +1337,9 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("the opencode runner started %d jobs, want the relaunch", len(opencode.Started()))
 	}
 	got := rig.get("t1")
-	if got.SandboxID != relaunch.SandboxID || got.CodingAgent != "opencode" {
+	if got.SandboxID != relaunch.SandboxID || got.Harness != "opencode" {
 		t.Fatalf("row = box %q on %q, want the relaunch's box %q on opencode",
-			got.SandboxID, got.CodingAgent, relaunch.SandboxID)
+			got.SandboxID, got.Harness, relaunch.SandboxID)
 	}
 }
 
@@ -1415,8 +1415,8 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	}
 }
 
-// THE LAUNCH WINDOW. A coding job can finish between the launch starting it
-// and the turn writing the conversation a resume re-enters — a few
+// THE LAUNCH WINDOW. An executor's job can finish between the launch starting
+// it and the turn writing the conversation a resume re-enters — a few
 // milliseconds on an idle host, hundreds on a loaded one, and every trivial
 // run is a candidate. Claiming there hands the coordinator a run it cannot
 // resume, and its only honest answer to that is to fail the turn: the agent's
@@ -1475,7 +1475,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 	}{
 		{"the box cannot be read back", func(r *coordRig) {
 			r.runner.CollectErr = errBoxGoneMidRead
-		}, types.SandboxFailureCollect},
+		}, types.ExecutorFailureCollect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newCoordRig(t)
@@ -1507,7 +1507,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 			// running the turn reads the seat's control topic.
 			topicsSeen := rig.queue.topics()
 			for _, want := range []string{
-				topics.Event(types.SandboxRunFailed{}.EventType()),
+				topics.Event(types.ExecutorFailed{}.EventType()),
 				sweControl(),
 			} {
 				if !slices.Contains(topicsSeen, want) {
@@ -1570,7 +1570,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 		{"a suspension the engine could not record", func(t *testing.T, rig *coordRig) {
 			rig.launching("t1")
 			if err := rig.coordinator.FailRun(t.Context(), "t1",
-				types.SandboxFailureSuspensionUnrecorded,
+				types.ExecutorFailureSuspensionUnrecorded,
 				"the suspended conversation could not be written"); err != nil {
 				t.Fatalf("FailRun: %v", err)
 			}
@@ -1770,9 +1770,9 @@ func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
 			t.Errorf("reported %v as stopped, want the turn nothing will ever resume", got)
 		}
 		failed := rig.failures()
-		if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded {
+		if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureClaimStranded {
 			t.Fatalf("announced %+v, want one %q: a lost turn cannot be quieter than the "+
-				"question it was about to ask", failed, types.SandboxFailureClaimStranded)
+				"question it was about to ask", failed, types.ExecutorFailureClaimStranded)
 		}
 		if held, awaits := rig.coordinator.SeatRuns("swe"); held || awaits {
 			t.Errorf("SeatRuns = held %v / awaiting %v, want neither on a seat whose only "+
@@ -1832,8 +1832,8 @@ func TestAReapedAbandonedTailIsAnnounced(t *testing.T) {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureAbandoned {
-		t.Fatalf("failures = %+v, want one %q", failed, types.SandboxFailureAbandoned)
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureAbandoned {
+		t.Fatalf("failures = %+v, want one %q", failed, types.ExecutorFailureAbandoned)
 	}
 }
 
@@ -1955,12 +1955,12 @@ func (s endedFirst) DecideEnding(ctx context.Context, turnID string, d Decision,
 // ---------------------------------------------------------------------
 
 // questions is every clarification the coordinator announced.
-func (r *coordRig) questions() []types.SandboxClarificationRequested {
+func (r *coordRig) questions() []types.ExecutorAsked {
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
-	var out []types.SandboxClarificationRequested
+	var out []types.ExecutorAsked
 	for _, p := range r.queue.published {
-		if ask, ok := p.event.Data.(*types.SandboxClarificationRequested); ok {
+		if ask, ok := p.event.Data.(*types.ExecutorAsked); ok {
 			out = append(out, *ask)
 		}
 	}
@@ -2049,9 +2049,9 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		if err != nil {
 			t.Errorf("Get: %v", err)
 		}
-		completion := types.SandboxRunCompleted{
+		completion := types.ExecutorFinished{
 			AgentHandle: next.AgentHandle, TurnID: next.TurnID, LaunchID: next.LaunchID,
-			SandboxID: next.SandboxID, CodingAgent: next.CodingAgent,
+			SandboxID: next.SandboxID, Harness: next.Harness,
 		}
 		if err := rig.coordinator.OnCompleted(ctx, completion, events.New(completion, events.TraceContext{})); err != nil {
 			t.Errorf("the next job's completion: %v", err)
@@ -2307,7 +2307,7 @@ type statusAtAsk struct {
 }
 
 func (s *statusAtAsk) Publish(ctx context.Context, topic string, ev *events.Event) error {
-	if ask, ok := ev.Data.(*types.SandboxClarificationRequested); ok {
+	if ask, ok := ev.Data.(*types.ExecutorAsked); ok {
 		run, _, err := s.rig.pending.Get(ctx, ask.TurnID)
 		if err != nil {
 			return err
@@ -2331,7 +2331,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 			rig.launch("t1")
 			if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
 				SandboxID: rig.get("t1").SandboxID, CommandID: "cmd-1",
-				CodingAgent: "claude-code", PauseTTLSec: ttl,
+				Harness: "claude-code", PauseTTLSec: ttl,
 			}, Fence{}); err != nil {
 				t.Fatalf("AttachSandbox: %v", err)
 			}
@@ -2443,7 +2443,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
-		rig.runner.StartErr = errors.New("the coding agent would not start")
+		rig.runner.StartErr = errors.New("the harness would not start")
 		req := launchReq(r.TurnID)
 		if _, err := rig.launchVia(ctx, rig.manager, req); err == nil {
 			t.Error("the relaunch started a job the fixture refuses")
@@ -2608,7 +2608,7 @@ func (r *coordRig) deliverControl(t *testing.T) {
 	r.queue.mu.Lock()
 	var completions []*events.Event
 	for _, p := range r.queue.published {
-		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == sweControl() {
+		if _, ok := p.event.Data.(*types.ExecutorFinished); ok && p.topic == sweControl() {
 			completions = append(completions, p.event)
 		}
 	}
@@ -3716,7 +3716,7 @@ func TestAHeldSeatsHandBackIsCountedLikeAnyOther(t *testing.T) {
 	// A SECOND RUN OF THE SAME SEAT, holding it while the first waits for a
 	// person: the one shape where both counts are non-zero at once.
 	rig.launch("t2")
-	if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+	if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 		Agent: sweID, AgentHandle: "swe", TurnID: "t2",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)
@@ -3878,7 +3878,7 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: run.SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
+		SandboxID: run.SandboxID, Harness: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -3912,9 +3912,9 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	var found *types.SandboxClarificationRequested
+	var found *types.ExecutorAsked
 	for _, p := range rig.queue.published {
-		if ask, ok := p.event.Data.(*types.SandboxClarificationRequested); ok {
+		if ask, ok := p.event.Data.(*types.ExecutorAsked); ok {
 			found = ask
 		}
 	}
@@ -3951,7 +3951,7 @@ func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
 	for _, p := range rig.queue.published {
-		if ask, ok := p.event.Data.(*types.SandboxClarificationRequested); ok {
+		if ask, ok := p.event.Data.(*types.ExecutorAsked); ok {
 			if strings.Contains(ask.Question, secret) {
 				t.Fatalf("a credential was announced: %q", ask.Question)
 			}
@@ -4215,7 +4215,7 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	rig.coordinator.settleFailed(ctx, run, types.SandboxFailureCollect,
+	rig.coordinator.settleFailed(ctx, run, types.ExecutorFailureCollect,
 		"the box could not be read back")
 
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
@@ -4243,7 +4243,7 @@ func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 	rig.coordinator.countRun("swe", StatusRunning)
 
 	if err := rig.coordinator.FailRun(t.Context(), "t1",
-		types.SandboxFailureSuspensionUnrecorded, "the conversation could not be written"); err != nil {
+		types.ExecutorFailureSuspensionUnrecorded, "the conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
@@ -4254,8 +4254,8 @@ func TestFailingARunThatCouldNotSuspendReclaimsItsBox(t *testing.T) {
 		t.Fatal("the seat stayed parked on a run that never suspended")
 	}
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureSuspensionUnrecorded {
-		t.Fatalf("failures = %+v, want one %q", failed, types.SandboxFailureSuspensionUnrecorded)
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureSuspensionUnrecorded {
+		t.Fatalf("failures = %+v, want one %q", failed, types.ExecutorFailureSuspensionUnrecorded)
 	}
 }
 
@@ -4270,7 +4270,7 @@ func TestFailingARunWhoseSuspensionLandedLeavesItAlone(t *testing.T) {
 	run := rig.launch("t1")
 
 	if err := rig.coordinator.FailRun(t.Context(), "t1",
-		types.SandboxFailureSuspensionUnrecorded, "the write timed out"); err != nil {
+		types.ExecutorFailureSuspensionUnrecorded, "the write timed out"); err != nil {
 		t.Fatalf("FailRun: %v", err)
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning || got.SandboxID != run.SandboxID {
@@ -4290,7 +4290,7 @@ func TestFailingARunThatIsAlreadyGoneDoesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	if err := rig.coordinator.FailRun(t.Context(), "never-launched",
-		types.SandboxFailureSuspensionUnrecorded, "gone"); err != nil {
+		types.ExecutorFailureSuspensionUnrecorded, "gone"); err != nil {
 		t.Fatalf("FailRun of a missing run: %v", err)
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
@@ -4371,8 +4371,8 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 		t.Fatalf("announced %d lost runs, want one for each of the seat's five", len(failed))
 	}
 	for _, f := range failed {
-		if f.Reason != types.SandboxFailureSeatRemoved || f.AgentHandle != "swe" {
-			t.Errorf("announcement %+v, want reason %q for seat swe", f, types.SandboxFailureSeatRemoved)
+		if f.Reason != types.ExecutorFailureSeatRemoved || f.AgentHandle != "swe" {
+			t.Errorf("announcement %+v, want reason %q for seat swe", f, types.ExecutorFailureSeatRemoved)
 		}
 	}
 	if rig.coordinator.SeatHeldBySandbox("swe") {
@@ -4422,9 +4422,9 @@ func TestRetiringASeatByItsIDEndsItsRunsAndNoNamesakes(t *testing.T) {
 		t.Fatalf("another seat with the same handle had its run disturbed: %+v", got)
 	}
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureSeatRemoved || failed[0].AgentHandle != "swe" {
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureSeatRemoved || failed[0].AgentHandle != "swe" {
 		t.Fatalf("announced %+v, want the one run lost as %q under the handle it ran as",
-			failed, types.SandboxFailureSeatRemoved)
+			failed, types.ExecutorFailureSeatRemoved)
 	}
 	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Fatal("the retired seat is still tracked as busy under the handle its runs carried")
@@ -4476,7 +4476,7 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 		t.Fatalf("the newer lease's run was disturbed: %+v", got)
 	}
 	// Nor is it announced as lost: the newer owner is continuing it, and a
-	// sandbox_run_failed naming an abandoned tail would tell the board and
+	// executor_failed naming an abandoned tail would tell the board and
 	// the seat a turn died that did not.
 	if failed := rig.failures(); len(failed) != 0 {
 		t.Fatalf("announced %+v for a run a newer lease owns", failed)
@@ -4508,8 +4508,8 @@ func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
 		t.Fatalf("the retry: %v", err)
 	}
 	rig.finished("t1")
-	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.SandboxFailureSeatRemoved {
-		t.Fatalf("failures = %+v, want the run announced once as %q", failed, types.SandboxFailureSeatRemoved)
+	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.ExecutorFailureSeatRemoved {
+		t.Fatalf("failures = %+v, want the run announced once as %q", failed, types.ExecutorFailureSeatRemoved)
 	}
 }
 
@@ -4565,7 +4565,7 @@ func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (Pend
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK the row was launched for.
 //
-// A coding run is detached: the row is read minutes or days later, possibly
+// An executor runs detached: the row is read minutes or days later, possibly
 // on another node, with no trigger left to re-derive the key from, so the
 // row's WorkKey is the only place it survives. The completion, the question
 // and the failure are the three gestures a resumed turn's identity travels

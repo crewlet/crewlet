@@ -168,7 +168,7 @@ type GitOptions struct {
 	Faults *codefault.Script
 	// Credentials are who the node's guard admits, and the seat each is.
 	Credentials *Credentials
-	// Runs is the fleet's coding runs' rows, which the node's host admits a
+	// Runs is the fleet's executors' rows, which the node's host admits a
 	// coding box by — ONE store for every git node of a fleet, as every node
 	// reads the one pending store on the fleet's coordination store; nil is
 	// one of the node's own (NewFixtureRuns).

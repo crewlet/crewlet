@@ -31,7 +31,7 @@ describe("a brief", () => {
       "Brief me on this decision",
     );
     expect(briefQuestion(context({ kind: "run", id: "r1", noun: "run" }))).toBe(
-      "Brief me on this coding run",
+      "Brief me on this executor",
     );
     expect(briefQuestion(context({ kind: "room", id: "r2", noun: "room" }))).toBe(
       "Brief me on this room",

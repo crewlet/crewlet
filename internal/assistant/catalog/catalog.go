@@ -155,7 +155,7 @@ const (
 	// table the API bound, and sends nothing ([DescribeAPITool]).
 	KindDocs Kind = "docs"
 	// KindDeep hands the task to a deep-work run ([DeepWorkTool]): the
-	// coding CLI with its own tools, reaching Crewlet only through the
+	// harness with its own tools, reaching Crewlet only through the
 	// person's other tools, bridged (ADR-0054). It sends nothing itself.
 	KindDeep Kind = "deep"
 	// KindBrief is a brief turn's answer ([BriefTool]): the engine checks it,

@@ -58,7 +58,7 @@ func TestPendingStoreContract(t *testing.T) {
 // and a wake that could not name one carries none either — so two absences
 // comparing equal would make every such delivery the answer to every such run,
 // and the first thing a person said to a seat would splice into somebody
-// else's coding job. A store only hands over a seat's parked runs as
+// else's executor. A store only hands over a seat's parked runs as
 // candidates and the value decides which of them a delivery answers
 // ([sandbox.ConversationRef.Best]), so the rule is asserted here, on the value,
 // where every caller that matches a delivery to a run inherits it.

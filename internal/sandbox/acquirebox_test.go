@@ -60,7 +60,7 @@ func boxManager(t *testing.T, cells map[Placement]Provider) (*Manager, *FakeRunn
 // handed, with the spec's environment: no runner's install and none of the
 // catalogue's own setup — that provisions coding boxes, and a check runs a
 // change's own code. A step that fails takes the box with it, as Acquire's
-// does. What a coding box carries and this one must not — a coding agent, a
+// does. What a coding box carries and this one must not — a harness, a
 // login, a run's grants, the catalogue's default cell, the direct cell — is
 // refused before any backend is asked for a box.
 //
@@ -82,7 +82,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 			t.Fatalf("AcquireBox: %v", err)
 		}
 		if runner.Installed(box.ID()) {
-			t.Error("a box for a check had the coding agent installed")
+			t.Error("a box for a check had the harness installed")
 		}
 		var ran []string
 		for _, exec := range container.Box(box.ID()).Execs() {
@@ -97,7 +97,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 		if container.Box(box.ID()).Closed() {
 			t.Error("a box that provisioned whole was torn down")
 		}
-		if specs := container.seen(); len(specs) != 1 || specs[0].CodingAgent != "" ||
+		if specs := container.seen(); len(specs) != 1 || specs[0].Harness != "" ||
 			len(specs[0].CredentialFiles) != 0 || specs[0].TimeoutSec != 660 {
 			t.Errorf("the backend was asked for %+v, want one box naming no agent and seeded no login", specs)
 		}
@@ -126,7 +126,7 @@ func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 		spec Spec
 		says string
 	}{
-		"a coding agent":        {Spec{Placement: Container, CodingAgent: "claude-code"}, `names "claude-code"`},
+		"a harness":             {Spec{Placement: Container, Harness: "claude-code"}, `names "claude-code"`},
 		"a login":               {Spec{Placement: Container, CredentialFiles: map[string]string{".claude/.credentials.json": "/srv/login"}}, "credential files"},
 		"a run's grants":        {Spec{Placement: Container, Repos: []RunRepo{{Repo: "web"}}}, "grants"},
 		"the catalogue default": {Spec{Env: env}, "names its cell"},

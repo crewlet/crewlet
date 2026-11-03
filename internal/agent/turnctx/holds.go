@@ -29,7 +29,7 @@ import (
 // in one write through the attached writer — a call that resolves several
 // seats' branches (a comparison's base and head, a change's source and
 // target) pays one compare-and-set on its run row, not one each. A launch
-// resolves no repository (ADR-0086: a run checks out what it needs through
+// resolves no repository (ADR-0093: a run checks out what it needs through
 // `code_checkout` once its row exists), so a launch takes no key of its own:
 // it writes the set it reads onto the row it opens ([Holds.Seal]).
 //

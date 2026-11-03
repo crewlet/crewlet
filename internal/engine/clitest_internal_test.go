@@ -11,20 +11,20 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// A coding CLI for a case that drives a WHOLE TURN through the engine.
+// A harness for a case that drives a WHOLE TURN through the engine.
 //
-// Every phase that offers tools reaches its CLI through a session in the
-// engine's directory, and the CLI calls them over MCP in its own loop — so a
-// case's model is a scripted CLI on the real session ([llmtest.Script]), never
+// Every phase that offers tools reaches its harness through a session in the
+// engine's directory, and the harness calls them over MCP in its own loop — so a
+// case's model is a scripted harness on the real session ([llmtest.Script]), never
 // a provider that hands calls back in its answer. What this adds is the choice
 // of WHICH run a phase plays: a turn interleaves its phases with text calls
 // (its rewrites, its summaries) in an order a case should not have to
 // predict, so a run is picked from the tools the phase offers, the way the
 // phases themselves tell apart.
 
-// phasedCLI plays, for each call that offers tools, the run pick chooses from
+// phasedHarness plays, for each call that offers tools, the run pick chooses from
 // the names the phase offers; a call that offers none is answered by text.
-type phasedCLI struct {
+type phasedHarness struct {
 	model string
 
 	// pick is the run a phase plays, from the tools it offers.
@@ -34,11 +34,11 @@ type phasedCLI struct {
 	text func(ctx context.Context, req llm.Request) (*llm.Completion, error)
 }
 
-var _ llm.Provider = phasedCLI{}
+var _ llm.Provider = phasedHarness{}
 
-func (p phasedCLI) Model() string { return p.model }
+func (p phasedHarness) Model() string { return p.model }
 
-func (p phasedCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+func (p phasedHarness) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if req.Tools == nil {
 		if p.text == nil {
 			return &llm.Completion{Model: p.model, Content: "done", StopReason: llm.StopEnd}, nil
@@ -53,12 +53,12 @@ func (p phasedCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	return script.Complete(ctx, req)
 }
 
-// offeredTo is the names a request's tool host offers — what the CLI lists
+// offeredTo is the names a request's tool host offers — what the harness lists
 // over its session before its model's first request.
 func offeredTo(req llm.Request) ([]string, error) {
 	host, ok := req.Tools.(interface{ Offered() []toolsession.Tool })
 	if !ok {
-		return nil, errors.New("phasedCLI: the request's tool host lists no tools")
+		return nil, errors.New("phasedHarness: the request's tool host lists no tools")
 	}
 	var names []string
 	for _, tool := range host.Offered() {
@@ -89,7 +89,7 @@ func calling(name string, args map[string]any, usage llm.Usage) llmtest.Run {
 }
 
 // withSessions gives an engine a case built by hand the session directory
-// [New] makes: every turn's phases serve their tools to the CLI through it.
+// [New] makes: every turn's phases serve their tools to the harness through it.
 func withSessions(t *testing.T, e *Engine) *Engine {
 	t.Helper()
 	e.sessions = testSessions(t)

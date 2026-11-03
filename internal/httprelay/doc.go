@@ -60,7 +60,9 @@
 // stream rather than a complete one that was cut. A holder whose frames go
 // unacknowledged for [Idle] treats the entry as gone and cancels the exchange's
 // request. An entry whose client hangs up sends CLOSE, and the holder cancels
-// at once.
+// at once; so does an entry whose OPEN went unanswered, since the holder may
+// have started the exchange all the same, and a CLOSE that overtakes its OPEN
+// keeps the request from starting at all.
 //
 // # Every message is signed
 //

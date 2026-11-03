@@ -6,12 +6,12 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its heartbeat publishes it (M9 of
 // the Models design): one row per entry of the active revision, built from the
-// entry's sign-in [cliagent.Plan] (its sit-out, last answer and last failure),
+// entry's sign-in [harness.Plan] (its sit-out, last answer and last failure),
 // the provider park (the seats waiting on it), and the login watcher.
 //
 // ON THE HEARTBEAT, for the reason [coord.NodeStatus.MCP] is: each of these is
@@ -44,8 +44,8 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 			rows = append(rows, row)
 			continue
 		}
-		agent, isCLI := provider.(*cliagent.Provider)
-		if !isCLI {
+		agent, isHarness := provider.(*harness.Provider)
+		if !isHarness {
 			rows = append(rows, row)
 			continue
 		}
@@ -68,7 +68,7 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 // holds every model, else the one scoped to the entry's own model argument. A
 // window scoped to another model does not hold this entry, so it is not this
 // entry's sit-out.
-func sitOutFor(state cliagent.PlanState, model string) *coord.ModelSitOut {
+func sitOutFor(state harness.PlanState, model string) *coord.ModelSitOut {
 	for _, out := range state.SittingOut {
 		if out.Model != "" && out.Model != model {
 			continue

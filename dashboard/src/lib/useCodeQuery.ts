@@ -114,7 +114,7 @@ export interface CodeQueryOptions {
  * WHAT A PAGE DROPS IS FEW ONCE THE ENGINE SETTLES WHAT ENDED: a change that
  * closes or merges has its stored readiness cleared by the record that ends
  * it, and its asks for review settled by its home's next pass (replicated
- * 0122), so neither `needs=person` nor `needs=review` walks an ended change
+ * 0126), so neither `needs=person` nor `needs=review` walks an ended change
  * past that pass. What is left to drop is a change of a repository the reader
  * may not read, one that ended since its home last looked, and one whose
  * readiness, judged at the read, has moved off a person since it was stored:

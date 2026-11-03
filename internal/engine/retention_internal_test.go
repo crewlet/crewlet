@@ -1151,7 +1151,8 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	if len(want) < 8 {
 		t.Fatalf("%d registered log(s) take barriers, want at least the tracker's, "+
 			"the knowledge base's, the identity estate's, the artifacts log's, the "+
-			"artifact datastore's, the assistant's, chat's and the code log's: %v",
+			"artifact datastore's, the assistant's, chat's, the executor log's and the "+
+			"code log's: %v",
 			len(want), want)
 	}
 	r := &retention{state: e.core.Load().log, fleet: e.backends.Fleet, nodeID: "node-a",

@@ -54,7 +54,7 @@ func TestASeatsGitHubAppIsOnTheRuntimeSeat(t *testing.T) {
 // Both were declared on the config type, mapped onto the runtime seat by
 // nothing, and read off the document — so a seat's round cap silently became
 // the provider default and its setup steps stopped running, which leaves a
-// coding agent promised an environment its box does not have.
+// harness promised an environment its box does not have.
 func TestASeatsSandboxCapAndSetupAreOnTheRuntimeSeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})

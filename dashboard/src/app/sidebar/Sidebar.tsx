@@ -109,11 +109,10 @@ import {
   WORKSPACES,
   landingPath,
   pathShown,
-  sectionOpen,
+  settingsSectionOpen,
   workspaceShown,
   workspaceMissing,
   workspaceOf,
-  workspaceRow,
   type WorkspaceRow,
 } from "~/app/nav.ts";
 import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
@@ -164,8 +163,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // section that lists them opens for — by the rule every lock is drawn by —
   // so the panel never asks a question the engine would refuse.
   const readsReport = useMemo(() => {
-    const backups = workspaceRow("settings")?.sections.find((s) => s.key === "backups");
-    return held !== null && backups !== undefined && sectionOpen(backups, held);
+    return held !== null && settingsSectionOpen("backups", held);
   }, [held]);
 
   // MOD+\ IS THE SIDEBAR'S KEY IN EITHER SHAPE OF THE FRAME. Where the
@@ -629,7 +627,7 @@ function StarredSection({ path, stars }: { path: string[]; stars: ReturnType<typ
  * The turns running now, one row per seat the engine says is WORKING: the
  * seat's badge with its status, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
- * phase it is on open, or a parked turn's coding run live above its phases.
+ * phase it is on open, or a parked turn's executor live above its phases.
  *
  * THE SAME SET AS THE FIGURE ON LIVE, and THE SAME ROWS AS HOME'S LIVE NOW:
  * both are `runningShortList`, in the order every list of running turns draws

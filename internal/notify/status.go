@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -259,6 +260,12 @@ type StatusPost struct {
 	// Text is the phrase, empty on a backend that renders none
 	// ([StatusPoster.SupportsStatusText]).
 	Text string
+
+	// Queued says the work has not started: a person's message in this
+	// conversation is waiting behind something the seat is already doing
+	// ([StatusDriver.Queue]). A backend that can draw the difference draws
+	// it; one that cannot shows Text, which says so in words.
+	Queued bool
 }
 
 // statusRequestTimeout bounds every request an indicator makes: the raise,
@@ -287,6 +294,13 @@ type session struct {
 	// a post names ([StatusPost.Turn]). Guarded by the driver's mutex.
 	holds []string
 
+	// waits are the person's messages in this conversation that are
+	// waiting for the seat to finish what it is doing ([StatusDriver.Queue]),
+	// each with the order it was queued in. They hold the indicator open
+	// too: with no turn holding it, it says the message is queued. Guarded
+	// by the driver's mutex.
+	waits []wait
+
 	// seed fixes which lines this conversation draws, and rotation counts
 	// the phase changes it has been through — together they are what make
 	// the text stable while a phase holds and different when it moves on.
@@ -314,6 +328,47 @@ type session struct {
 	// raise can land after the clear. See "Stopped between posts" above.
 	stop chan struct{}
 	done chan struct{}
+}
+
+// wait is one person's message queued behind the seat's current work: the
+// wake that carries it, the order it was queued in on this driver, and when.
+type wait struct {
+	wake string
+	seq  uint64
+	at   time.Time
+}
+
+// maxWaitAge is the longest a queued line stands for one message with nothing
+// ending it, the backstop under every way a wait is meant to end: the turn
+// that picks the message up ([StatusDriver.Begin], then Dequeue), the dispatch
+// that settles it, including a hand-back that dead-letters it (the engine's
+// Dispatcher.Settled), the seat leaving this node ([StatusDriver.ClearFor])
+// and the driver stopping ([StatusDriver.Stop]). A wait one of those missed
+// would otherwise be re-asserted on every heartbeat for the life of the
+// process.
+//
+// ONE HOUR, and a judgment rather than a measurement: nothing bounds how long
+// a seat may legitimately be busy (an executor run has no run-time limit), so
+// any bound can end a line that was still true. An hour is twice the ack
+// window a running turn's own mail must settle in (jetstream DefaultAckWait),
+// long enough that only a seat held by an executor outlasts it; past it the
+// seat's own state on Live and the Agents page says more than a line that has
+// not moved. Ending the line never touches the message, which stays on the
+// seat's inbox.
+const maxWaitAge = time.Hour
+
+// queued reports whether this indicator says "queued": somebody's message is
+// waiting and no turn is working here yet. Caller holds the driver's mutex.
+func (s *session) queued() bool { return len(s.holds) == 0 && len(s.waits) > 0 }
+
+// firstWait is the order of this conversation's earliest waiting message.
+// Caller holds the driver's mutex and has checked there is one.
+func (s *session) firstWait() uint64 {
+	first := s.waits[0].seq
+	for _, w := range s.waits[1:] {
+		first = min(first, w.seq)
+	}
+	return first
 }
 
 // hold records turn as the newest holder: appended, or moved to the end if it
@@ -345,8 +400,9 @@ type StatusOptions struct {
 	Mode    StatusMode
 	Phrases Phrases
 
-	// Now is the clock; only used for logging cadence, so a test need not
-	// supply one.
+	// Now is the clock: how long a settled message is remembered
+	// ([StatusDriver.Dequeue]) and how old a queued line is ([maxWaitAge]).
+	// Nil is the wall clock, so a test need not supply one.
 	Now func() time.Time
 }
 
@@ -367,11 +423,27 @@ type StatusDriver struct {
 	poster  StatusPoster
 	mode    StatusMode
 	phrases Phrases
+	now     func() time.Time
 
 	mu       sync.Mutex
 	sessions map[statusKey]*session
 	stopped  bool
+
+	// queuedSeq orders the waits this driver has queued, across every
+	// conversation, so a message can say how many tasks are ahead of it.
+	queuedSeq uint64
+
+	// settled remembers the wakes [StatusDriver.Dequeue] was told about,
+	// for [settledFor], so an announcement that arrives AFTER the turn that
+	// picked its message up (the two travel separately) queues nothing: a
+	// wait added then would hold the line up as "queued" once that turn
+	// ends, for a message already answered.
+	settled map[string]time.Time
 }
+
+// settledFor is how long a settled wake is remembered: far longer than an
+// announcement takes to arrive, and short enough that the map stays small.
+const settledFor = 5 * time.Minute
 
 // NewStatusDriver builds the driver for one backend.
 //
@@ -391,10 +463,15 @@ func NewStatusDriver(opts StatusOptions) *StatusDriver {
 	if phrases.pools == nil {
 		phrases = NewPhrases(nil)
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &StatusDriver{
 		poster:   opts.Poster,
 		mode:     mode,
 		phrases:  phrases,
+		now:      now,
 		sessions: map[statusKey]*session{},
 	}
 }
@@ -462,8 +539,21 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 		// JOIN, do not re-raise. The indicator is already up and its
 		// heartbeat is running; a second raise would reset the text a
 		// reader is watching to this turn's line for no reason.
+		//
+		// UNLESS IT SAID "QUEUED": the work it was waiting for has just
+		// started, so the same indicator moves on to this turn's phase in
+		// place, rather than coming down and going up again under the
+		// person watching it.
+		started := s.queued()
 		s.hold(turnID)
+		if started {
+			s.phase = phase
+			s.rotation++
+		}
 		d.mu.Unlock()
+		if started {
+			s.wake()
+		}
 		return &StatusSession{driver: d, key: key, turn: turnID}
 	}
 
@@ -478,7 +568,7 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 	}
 	// DETACHED FROM THE CALLER'S CONTEXT, because the indicator outlives the
 	// call that raised it in the one case it matters most: a turn that
-	// suspends into a detached coding run ends its own context and keeps the
+	// suspends on a detached executor ends its own context and keeps the
 	// indicator up (see [StatusSession.End]). Its values stay — the trace a
 	// debug line is filed under — and nothing cancels it: the goroutine ends
 	// on [session.stop], and each request on its own deadline.
@@ -496,8 +586,8 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 
 // Rejoin takes back the hold a turn already has on a live indicator.
 //
-// It is what a RESUMED turn calls. A turn that suspended into a detached
-// coding run ended with keepAlive, so its indicator is still up and still
+// It is what a RESUMED turn calls. A turn that suspended on a detached
+// executor ended with keepAlive, so its indicator is still up and still
 // heartbeating; the turn that re-enters that conversation minutes later needs
 // the hold back so it can end it for real — and it CANNOT call Begin, because
 // a resume has no trigger to raise from: the parked run's own row deliberately
@@ -531,7 +621,7 @@ func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
 // ClearFor takes down every indicator this driver holds for one seat.
 //
 // Called when this node stops running the seat. A kept-alive session is the
-// reason it has to exist: a turn that suspended into a detached coding run
+// reason it has to exist: a turn that suspended on a detached executor
 // leaves its indicator up deliberately, and the resume lands on whichever node
 // holds the seat WHEN THE BOX FINISHES. Left alone, a node that has handed the
 // seat on would re-assert "is thinking…" every refresh interval, for a turn it
@@ -591,7 +681,7 @@ func (s *StatusSession) Phase(phase string) {
 //
 // The indicator comes down only when the LAST holder ends. keepAlive holds it
 // up regardless — the suspend case, where this same turn resumes once a
-// detached coding run completes and the person is still waiting. The resumed
+// detached executor completes and the person is still waiting. The resumed
 // half takes this hold back with [StatusDriver.Rejoin], and ends it without
 // keepAlive; a node that never sees that resume takes it down when it stops
 // running the seat ([StatusDriver.ClearFor]).
@@ -615,10 +705,162 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 		d.mu.Unlock()
 		return
 	}
+	if len(sess.waits) > 0 {
+		// A MESSAGE STILL WAITING here keeps the indicator up, now
+		// saying it is queued: the turn that ended was not the one it
+		// waits for.
+		d.mu.Unlock()
+		sess.wake()
+		return
+	}
 	delete(d.sessions, s.key)
 	d.mu.Unlock()
 
 	d.retire(ctx, []*session{sess})
+}
+
+// Queue raises the indicator for a person's message that is waiting behind
+// something the seat is already doing, saying it is queued and how many tasks
+// are ahead of it; it reports whether this driver took it.
+//
+// THE SAME INDICATOR A TURN RAISES, keyed on the same conversation, so the
+// turn that picks the message up joins it ([StatusDriver.Begin]) and moves it
+// on to its phase in place, and [StatusDriver.Dequeue] takes the wait away
+// once the message no longer waits. Nothing else changes about the lifecycle:
+// one goroutine posts, a heartbeat keeps it alive, and a seat this node stops
+// running takes it down ([StatusDriver.ClearFor]).
+//
+// ONLY WHERE WORDS ARE DRAWN. A backend whose indicator is a composer typing
+// line says "writing" whatever it is told, and a queued message is not being
+// written, so on such a backend this raises nothing.
+func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata map[string]string) bool {
+	if d.mode == StatusOff || handle == "" || wake == "" || !d.poster.SupportsStatusText() {
+		return false
+	}
+	conv, ok := ConversationOf(metadata, d.poster.StatusBackend())
+	if !ok || !d.Shows(metadata) {
+		return false
+	}
+	key := statusKey{handle: handle, channel: conv.Channel, thread: conv.Thread}
+	d.mu.Lock()
+	if d.stopped {
+		d.mu.Unlock()
+		return false
+	}
+	if _, done := d.settled[handle+"\x00"+wake]; done {
+		d.mu.Unlock()
+		return false
+	}
+	d.queuedSeq++
+	now := d.now()
+	if s, live := d.sessions[key]; live {
+		if !slices.ContainsFunc(s.waits, func(w wait) bool { return w.wake == wake }) {
+			s.waits = append(s.waits, wait{wake: wake, seq: d.queuedSeq, at: now})
+		}
+		queued := s.queued()
+		d.mu.Unlock()
+		if queued {
+			s.wake()
+		}
+		return true
+	}
+	s := &session{
+		key: key, waits: []wait{{wake: wake, seq: d.queuedSeq, at: now}},
+		seed: wake,
+		poke: make(chan struct{}, 1),
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	loopCtx := context.WithoutCancel(ctx)
+	d.sessions[key] = s
+	d.mu.Unlock()
+	go d.run(loopCtx, s)
+	return true
+}
+
+// Dequeue takes away the waits of the given wakes for one seat: each message
+// has been picked up by a turn or settled without one. An indicator held by
+// nothing else comes down; one a turn holds carries on; one still holding
+// another waiting message stays queued, and every queued indicator of the
+// seat is told again how many tasks are ahead of it.
+func (d *StatusDriver) Dequeue(ctx context.Context, handle string, wakes []string) {
+	if handle == "" || len(wakes) == 0 {
+		return
+	}
+	d.mu.Lock()
+	d.rememberSettled(handle, wakes)
+	var gone, again []*session
+	removed := false
+	for key, s := range d.sessions {
+		if key.handle != handle {
+			continue
+		}
+		before := len(s.waits)
+		s.waits = slices.DeleteFunc(s.waits, func(w wait) bool { return slices.Contains(wakes, w.wake) })
+		if len(s.waits) == before {
+			continue
+		}
+		removed = true
+		if len(s.holds) == 0 && len(s.waits) == 0 {
+			delete(d.sessions, key)
+			gone = append(gone, s)
+		}
+	}
+	if removed {
+		for key, s := range d.sessions {
+			if key.handle == handle && s.queued() {
+				again = append(again, s)
+			}
+		}
+	}
+	d.mu.Unlock()
+	for _, s := range again {
+		s.wake()
+	}
+	d.retire(ctx, gone)
+}
+
+// rememberSettled records wakes a dispatch has finished with, and forgets the
+// ones older than [settledFor]. Caller holds the driver's mutex.
+func (d *StatusDriver) rememberSettled(handle string, wakes []string) {
+	now := d.now()
+	if d.settled == nil {
+		d.settled = map[string]time.Time{}
+	}
+	for key, at := range d.settled {
+		if now.Sub(at) > settledFor {
+			delete(d.settled, key)
+		}
+	}
+	for _, wake := range wakes {
+		d.settled[handle+"\x00"+wake] = now
+	}
+}
+
+// queuedAhead is how many tasks are ahead of a queued indicator's earliest
+// message: the one the seat is doing now, and every message of the same seat
+// queued before it on this driver. Caller holds the driver's mutex.
+func (d *StatusDriver) queuedAhead(s *session) int {
+	first := s.firstWait()
+	ahead := 1
+	for key, other := range d.sessions {
+		if key.handle != s.key.handle || other == s {
+			continue
+		}
+		for _, w := range other.waits {
+			if w.seq < first {
+				ahead++
+			}
+		}
+	}
+	return ahead
+}
+
+// queuedLine is what a queued indicator says beside the seat's name.
+func queuedLine(ahead int) string {
+	if ahead <= 1 {
+		return "is queued behind its current task"
+	}
+	return "is queued behind " + strconv.Itoa(ahead) + " tasks"
 }
 
 // Conversation is the thread this session's indicator sits in.
@@ -743,8 +985,35 @@ func (d *StatusDriver) run(ctx context.Context, s *session) {
 		if s.stopped() {
 			return
 		}
+		// AND A WAIT PAST ITS AGE ENDS HERE ([maxWaitAge]). An indicator
+		// it was the last thing holding comes down: this goroutine took it
+		// out of the map, so no teardown will, and it is between posts, so
+		// its clear cannot be overtaken by one.
+		if d.expire(s) {
+			d.clear(ctx, s.key)
+			return
+		}
 		d.repost(ctx, s)
 	}
+}
+
+// expire drops the session's waits older than [maxWaitAge], and reports
+// whether that left it holding nothing, in which case it has also been taken
+// out of the driver's map. A session a teardown already took out is the
+// teardown's to clear, and is left to it.
+func (d *StatusDriver) expire(s *session) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(s.waits) == 0 {
+		return false
+	}
+	now := d.now()
+	s.waits = slices.DeleteFunc(s.waits, func(w wait) bool { return now.Sub(w.at) > maxWaitAge })
+	if len(s.holds) > 0 || len(s.waits) > 0 || d.sessions[s.key] != s {
+		return false
+	}
+	delete(d.sessions, s.key)
+	return true
 }
 
 // stopped reports whether a teardown has asked this session's goroutine to
@@ -766,13 +1035,19 @@ func (s *session) stopped() bool {
 // rather than lossy.
 func (d *StatusDriver) repost(ctx context.Context, s *session) {
 	d.mu.Lock()
-	text := d.phrases.Pick(s.phase, s.seed, s.rotation)
+	queued := s.queued()
+	var text string
+	if queued {
+		text = queuedLine(d.queuedAhead(s))
+	} else {
+		text = d.phrases.Pick(s.phase, s.seed, s.rotation)
+	}
 	turn := s.newest()
 	d.mu.Unlock()
-	d.post(ctx, s.key, turn, text)
+	d.post(ctx, s.key, turn, text, queued)
 }
 
-func (d *StatusDriver) post(ctx context.Context, key statusKey, turn, text string) {
+func (d *StatusDriver) post(ctx context.Context, key statusKey, turn, text string, queued bool) {
 	ctx, cancel := context.WithTimeout(ctx, statusRequestTimeout)
 	defer cancel()
 	if !d.poster.SupportsStatusText() {
@@ -781,7 +1056,7 @@ func (d *StatusDriver) post(ctx context.Context, key statusKey, turn, text strin
 		text = ""
 	}
 	if !d.poster.SetStatus(ctx, StatusPost{Handle: key.handle, Channel: key.channel,
-		Thread: key.thread, Turn: turn, Text: text}) {
+		Thread: key.thread, Turn: turn, Text: text, Queued: queued}) {
 		log.DebugContext(ctx, "working_status_not_raised", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)
 	}

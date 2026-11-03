@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S MERGE, AS ONE RECORD ITS GATE DECIDES (ADR-0089): a change merges
+// A CHANGE'S MERGE, AS ONE RECORD ITS GATE DECIDES (ADR-0096): a change merges
 // into its target by a MERGE RECORD ([Merge]) on the REPOSITORY's own subject,
 // the one its pushes, its changes' lifecycles and its merge queues are on,
 // decided by its committer alone ([Committer.ProposeMerge]) — so a change's
@@ -157,7 +157,7 @@ type MergeProposal struct {
 	// every approval its gate counts, is judged from the chart of the
 	// deciding node's epoch. A token bound to nobody merges nothing. A seat's
 	// merge may name the turn that asked it, which its push row records; it
-	// names no coding run, since a merge is a tool call's, never a box's.
+	// names no executor, since a merge is a tool call's, never a box's.
 	Asker Principal `json:"asker"`
 	// Seen is the code log's position the merge was built at — zero for one
 	// that read none. The committer DECIDES AT OR PAST IT, or refuses
@@ -202,7 +202,7 @@ type MergeResult struct {
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
 // naming the field), before it is queued: an operation id this engine does not
-// accept; an asker that is no principal, or names a coding run; a Seen that is
+// accept; an asker that is no principal, or names an executor; a Seen that is
 // no position on the code log; a drop epoch below zero; a repository id that
 // is no UUID in its canonical spelling; a merge id that is not [WritePushID] of the operation
 // id; a change id that is no bare UUIDv7; a target that is no branch a change
@@ -277,7 +277,7 @@ func (p MergeProposal) validFields() error {
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
 	case p.Asker.Run.RunID != "":
 		return badField("asker.run.run_id", "a merge is a tool call's, whose run is its turn: it names no "+
-			"coding run")
+			"executor")
 	}
 	if !p.Seen.IsZero() {
 		switch {

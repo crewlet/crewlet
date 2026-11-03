@@ -95,7 +95,7 @@ func operatorOnlyTools(t *testing.T) []string {
 }
 
 // everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
-// that are not the tracker's: answering a parked coding run, pausing and
+// that are not the tracker's: answering a parked executor, pausing and
 // resuming a seat, steering a running turn, answering a question from the
 // company's knowledge, who read a unit's repository and a person's own marks
 // on their code inbox — each a person's decision, audit or gesture, served on
@@ -168,7 +168,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			only = append(only, tool.Name())
 		}
 	}
-	for _, name := range append([]string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
 		builtin.CodeRepoReadersTool, builtin.CodeMarkInboxTool}, chatlet.OperatorOnlyTools()...) {
 		if !slices.Contains(only, name) {

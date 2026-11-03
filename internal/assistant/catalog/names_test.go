@@ -438,7 +438,7 @@ func TestASeatIsShownByItsNameAndAFailedTurnByItsReason(t *testing.T) {
 
 	turns, _ := catalog.Lookup("list_turns")
 	answer = []byte(`{"turns":[{"turn_id":"t1","role":"QA Engineer","failed":true,` +
-		`"error":"the CLI never reached the seat's tools","error_kind":"server"}]}`)
+		`"error":"the harness never reached the seat's tools","error_kind":"server"}]}`)
 	res, err = catalog.Shape(turns, map[string]any{"handle": "qa"}, exec.Response{Status: http.StatusOK,
 		Body: answer}, provenance.NewBoundary(), wednesday, cards.Options{})
 	if err != nil {

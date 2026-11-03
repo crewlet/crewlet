@@ -1,0 +1,369 @@
+package sandbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
+)
+
+// A TOOL CALL THAT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK DOES:
+// ADR-0077.
+//
+// A seat's executor that calls an MCP tool at Needs approval (an `mcp_servers`
+// entry's `tools` level `approve`, or a tool its hints start there) does not
+// run it. Its bridge records the call on the run's row as the job's question
+// ([PendingStore.RecordAsk], an [Ask] carrying a [HeldCall]), tells the harness
+// to end its turn, and the collection parks the run on it with the seat freed,
+// exactly as it parks on `ask_and_wait` (ADR-0068): one question per job, no
+// replay of anything the job did after it, and an answer pinned to the job
+// that asked. A person answers it with `POST /mcp-approvals/{id}`, choosing
+// one of the three options every held call offers ([HeldChoices]); the run's
+// resume makes the call for `once` and `always` and hands the result to the
+// job that carries the work on, and answers `forbidden` for `deny`.
+//
+// # Who may answer it, and how
+//
+// Only the route's people (an administrator, or a lead of the seat's unit, a
+// person and never the assistant), through the route alone. A chat reply on
+// the conversation the run was launched from never answers a held call
+// ([ConversationRef.Answers]), and `answer_executor` refuses one: either would
+// let anybody the run reports to approve a call their own grant does not
+// reach. The seat holding the run spends an answer that does not name the held
+// call by its id ([HeldCall.ID], [types.ExecutorAnswerGiven.Approval]), and
+// one that names it for a question that is not one.
+//
+// # The arguments are sealed, and so is the result
+//
+// What the call would send is the run's own business and often a credential's
+// worth: an issue body, a query, an address. So the arguments ride the row
+// encrypted under the fleet keyring ([CallSeal], AEAD, bound to the run, the
+// job and the call), opened only for a person who may answer it and for the
+// resume that makes the call. What the call returned is sealed beside them
+// once it is made, for the job that carries the work on.
+//
+// # The call is made at most once
+//
+// A resume can be attempted more than once for one answer: a failed attempt
+// gives its claim back, and a node that took the seat over revives an answer
+// no resume holds. So the resume marks the call on the row as being made
+// before it makes it ([PendingStore.MarkHeldCall]), under the claim's fence,
+// and records its result after ([PendingStore.RecordHeldResult]). Neither is
+// cleared by anything but the next job's opening. A resume that finds the call
+// marked and its result recorded hands the job that result; one that finds it
+// marked and no result says so, and the call is never made again, since it may
+// or may not have taken effect.
+
+// The three answers every held call offers, as a [decision.Option] id the
+// person's answer names ([HeldDecision]).
+const (
+	// HeldOnce makes the call, this once.
+	HeldOnce = "once"
+	// HeldAlways makes the call and sets the tool to Always allow on its
+	// server's entry, so the next call runs without asking. The route
+	// writes the level before it answers, as a configuration write at a
+	// recent step-up (internal/api/mcpapi).
+	HeldAlways = "always"
+	// HeldDeny does not make the call: the run is told it was refused
+	// ([RefusalForbidden]).
+	HeldDeny = "deny"
+)
+
+// HeldChoices is every answer, in the order a person is offered them.
+var HeldChoices = []string{HeldOnce, HeldAlways, HeldDeny}
+
+// heldMismatch reports whether given is an answer by turn that the run's held
+// call, or its lack of one, refuses: an answer to a held call that does not
+// name it by its id, or one naming a held call the run's question is not.
+func heldMismatch(run PendingRun, given types.ExecutorAnswerGiven) bool {
+	if run.HeldCall == nil {
+		return given.Approval != ""
+	}
+	return given.Approval == "" || given.Approval != run.HeldCall.ID
+}
+
+// HeldResume is the held call an answer carries its run on with
+// ([AskedRun.Held]): the call as the claimed row recorded it, the choice the
+// person made, and the two writes the resume makes it under, on the claim's
+// terms and fence ([PendingStore.MarkHeldCall],
+// [PendingStore.RecordHeldResult]).
+type HeldResume struct {
+	// TurnID is the run, which every seal of the call is bound to.
+	TurnID string
+	// Call is the held call as the claim read it.
+	Call HeldCall
+	// Choice is the answer: [HeldOnce], [HeldAlways] or [HeldDeny].
+	Choice string
+	// Mark records that the call is being made, and answers the held call
+	// as the row then holds it and whether this mark is the first: false
+	// means some attempt marked it before, and it is not made again.
+	Mark func(ctx context.Context) (HeldCall, bool, error)
+	// Record records what the call returned, sealed.
+	Record func(ctx context.Context, sealed string) error
+}
+
+// askedWith is [askedRun] with the claimed run's held call, where its question
+// is one, and the writes that make it under the claim's fence.
+func (c *Coordinator) askedWith(claimed PendingRun, words AnswerWords) *AskedRun {
+	asked := askedRun(claimed, words)
+	if claimed.HeldCall == nil {
+		return asked
+	}
+	fence := fenceOf(claimed)
+	turnID, launch := claimed.TurnID, claimed.LaunchID
+	asked.Held = &HeldResume{
+		TurnID: turnID, Call: *claimed.HeldCall, Choice: words.Choice,
+		Mark: func(ctx context.Context) (HeldCall, bool, error) {
+			return c.pending.MarkHeldCall(ctx, turnID, launch, fence)
+		},
+		Record: func(ctx context.Context, sealed string) error {
+			recorded, err := c.pending.RecordHeldResult(ctx, turnID, launch, sealed, fence)
+			if err == nil && !recorded {
+				err = fmt.Errorf("%w: run %s", ErrHeldCallUnclaimed, turnID)
+			}
+			return err
+		},
+	}
+	return asked
+}
+
+// HeldMakes reports whether answer choice makes the call: once or always.
+func HeldMakes(choice string) bool { return choice == HeldOnce || choice == HeldAlways }
+
+// HeldDecision is the decision a held call is asked as: its question, the
+// three answers, and the evidence (the work item the run was on, where it was
+// on one). Role approver, since the answer decides the call. No
+// recommendation: the engine asks on the model's behalf and has no view.
+func HeldDecision(question string, evidence []decision.Evidence) *decision.Decision {
+	return &decision.Decision{
+		Question: question,
+		Options: []decision.Option{
+			{ID: HeldOnce, Label: "Allow once", Detail: "Make this call, and ask again next time."},
+			{ID: HeldAlways, Label: "Always allow",
+				Detail: "Make this call, and set the tool to run without asking from now on."},
+			{ID: HeldDeny, Label: "Deny", Detail: "Do not make this call; the run is told it was refused."},
+		},
+		Evidence: evidence,
+		Role:     decision.RoleApprover,
+	}
+}
+
+// HeldCall is a call to a tool at Needs approval that a run's job made and the
+// engine did not, recorded on the run's row with the question it is asked as
+// ([PendingRun.HeldCall]).
+//
+// THE JSON TAGS ARE A WIRE FORMAT, as the row's are, and the section carries
+// the keys a later build adds to it ([HeldCall.Extra]).
+type HeldCall struct {
+	// ID names the held call: what `POST /mcp-approvals/{id}` answers it
+	// by, and what the answer the seat's holder records must name. Minted
+	// when the call is held; a uuid.
+	ID string `json:"id"`
+
+	// LaunchID is the job that made the call, which the question is
+	// pinned to as every question is.
+	LaunchID string `json:"launch_id"`
+
+	// Server is the MCP server's configured name; Tool the tool's name as
+	// the run called it (the server's `tool_prefix` applied), Raw the
+	// server's own name for it, which a level is set by; Digest the
+	// definition the run was offered and a person approves
+	// (internal/mcp's Definition.Digest), which the resume holds the call
+	// to.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	Raw    string `json:"raw"`
+	Digest string `json:"digest"`
+
+	// Arguments are the call's arguments in their canonical form, sealed
+	// ([CallSeal.SealArguments]): never on the row in the clear.
+	Arguments string `json:"arguments"`
+
+	// HeldAt is when the call was held.
+	HeldAt time.Time `json:"held_at"`
+
+	// CallingAt is when a resume began making the call
+	// ([PendingStore.MarkHeldCall]): zero until then, and from then on the
+	// reason no resume makes it again.
+	CallingAt time.Time `json:"calling_at,omitzero"`
+
+	// Result is what the call returned, sealed ([CallSeal.SealResult]),
+	// and MadeAt when it was recorded; both empty until the call returns,
+	// and empty for good where the node making it stopped first.
+	Result string    `json:"result,omitempty"`
+	MadeAt time.Time `json:"made_at,omitzero"`
+
+	// Extra is every key of the section this build does not know: see
+	// wirekeys.go.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// Calling reports whether a resume has begun making the call.
+func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
+
+// Made reports whether the call's result is recorded.
+func (h HeldCall) Made() bool { return !h.MadeAt.IsZero() }
+
+// MarshalJSON writes the section with the keys a later build added to it.
+func (h HeldCall) MarshalJSON() ([]byte, error) {
+	type plain HeldCall
+	return marshalCarrying(plain(h), wireKeys(reflect.TypeFor[HeldCall]()), h.Extra)
+}
+
+// UnmarshalJSON reads the section and keeps the keys this build does not know.
+func (h *HeldCall) UnmarshalJSON(raw []byte) error {
+	type plain HeldCall
+	p := plain(*h)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[HeldCall]()))
+	if err != nil {
+		return err
+	}
+	*h = HeldCall(p)
+	h.Extra = extra
+	return nil
+}
+
+// validate is the held call's own contract, beside the ask it rides with: it
+// names the call, its server and tool, and carries sealed arguments, and the
+// ask's decision is the one every held call is asked as.
+func (h HeldCall) validate(decided *decision.Decision) []error {
+	var found []error
+	for _, field := range []struct{ name, value string }{
+		{"held_call.id", h.ID}, {"held_call.server", h.Server}, {"held_call.tool", h.Tool},
+		{"held_call.raw", h.Raw}, {"held_call.arguments", h.Arguments},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			found = append(found, fieldRefusal(field.name, "is empty, and a held call names "+
+				"the call, its server and tool, and carries its sealed arguments"))
+		}
+	}
+	if h.Arguments != "" && !secrets.IsEnvelope(h.Arguments) {
+		found = append(found, fieldRefusal("held_call.arguments", "is not sealed, and a held "+
+			"call's arguments are never on the row in the clear"))
+	}
+	if h.Calling() || h.Made() || h.Result != "" {
+		found = append(found, fieldRefusal("held_call", "is already being made, and a call is "+
+			"held before anything makes it"))
+	}
+	if decided == nil || !slices.Equal(decided.OptionIDs(), HeldChoices) {
+		found = append(found, fieldRefusal("decision", "is not the one a held call is asked "+
+			"as: a held call offers "+words.And(HeldChoices)))
+	}
+	return found
+}
+
+// CallSeal seals a held call's arguments and its result onto its run's row and
+// opens them again: AEAD under the fleet keyring ([secrets.Cipher]), each
+// bound to the run, the job, the call and which of the two it is, so a value
+// sealed for one call never opens as another's, nor an argument as a result.
+//
+// NOT [AnswerSeal], which signs and does not encrypt: an answer is an
+// instruction the row must not forge, while a call's arguments and result are
+// words the row must not show.
+type CallSeal struct{ cipher secrets.Cipher }
+
+// ErrNoCallSeal is a held call with nothing to seal it under: a node built
+// without the fleet keyring's cipher.
+var ErrNoCallSeal = errors.New("sandbox: this node has no keyring cipher to seal a held call under")
+
+// NewCallSeal is a seal over cipher, or nil without one.
+func NewCallSeal(cipher secrets.Cipher) *CallSeal {
+	if cipher == nil {
+		return nil
+	}
+	return &CallSeal{cipher: cipher}
+}
+
+// heldAAD binds a sealed part of a held call to where it belongs.
+func heldAAD(part, turnID string, h HeldCall) string {
+	return "sandbox/held_call/" + part + "|" + turnID + "|" + h.LaunchID + "|" + h.ID + "|" +
+		h.Server + "|" + h.Raw + "|" + h.Digest
+}
+
+// SealArguments seals a call's canonical arguments for the held call h of run
+// turnID (its ID, launch, server, raw name and digest set).
+func (s *CallSeal) SealArguments(turnID string, h HeldCall, args map[string]any) (string, error) {
+	if s == nil {
+		return "", ErrNoCallSeal
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	body, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: encoding the arguments of held call %s: %w", h.ID, err)
+	}
+	return s.cipher.Encrypt(string(body), heldAAD("arguments", turnID, h))
+}
+
+// OpenArguments opens held call h's arguments, as run turnID's row carries it.
+func (s *CallSeal) OpenArguments(turnID string, h HeldCall) (map[string]any, error) {
+	if s == nil {
+		return nil, ErrNoCallSeal
+	}
+	plain, err := s.cipher.Decrypt(h.Arguments, heldAAD("arguments", turnID, h))
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: opening the arguments of held call %s: %w", h.ID, err)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(plain), &args); err != nil {
+		return nil, fmt.Errorf("sandbox: the arguments of held call %s do not decode: %w", h.ID, err)
+	}
+	return args, nil
+}
+
+// MaxHeldResultBytes bounds what a held call's result hands the run that
+// carries the work on, cut past it with the cut said
+// (internal/textcut.Within).
+//
+// THE PAGE AN ANSWER IS HELD TO (internal/agent/builtin's MaxRunAnswerBytes,
+// [MaxAskContextBytes]), because it travels where an answer does: sealed onto
+// the run's row, read whole on every status flip and listing of active runs
+// until the run is carried on, and then the next prompt of the run, which its
+// harness re-sends with every request it makes from then on. A tool's answer
+// past a page is one the run reads again by calling the tool, now that it may.
+const MaxHeldResultBytes = MaxAskContextBytes
+
+// HeldResult is what a held call returned once a person let it be made: its
+// output as the run reads it, and whether the tool reported a failure.
+type HeldResult struct {
+	Output string `json:"output"`
+	Failed bool   `json:"failed"`
+}
+
+// SealResult seals what held call h of run turnID returned.
+func (s *CallSeal) SealResult(turnID string, h HeldCall, result HeldResult) (string, error) {
+	if s == nil {
+		return "", ErrNoCallSeal
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: encoding the result of held call %s: %w", h.ID, err)
+	}
+	return s.cipher.Encrypt(string(body), heldAAD("result", turnID, h))
+}
+
+// OpenResult opens what held call h of run turnID returned.
+func (s *CallSeal) OpenResult(turnID string, h HeldCall) (HeldResult, error) {
+	if s == nil {
+		return HeldResult{}, ErrNoCallSeal
+	}
+	plain, err := s.cipher.Decrypt(h.Result, heldAAD("result", turnID, h))
+	if err != nil {
+		return HeldResult{}, fmt.Errorf("sandbox: opening the result of held call %s: %w", h.ID, err)
+	}
+	var result HeldResult
+	if err := json.Unmarshal([]byte(plain), &result); err != nil {
+		return HeldResult{}, fmt.Errorf("sandbox: the result of held call %s does not decode: %w", h.ID, err)
+	}
+	return result, nil
+}

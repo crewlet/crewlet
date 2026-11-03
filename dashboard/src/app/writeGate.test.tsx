@@ -190,8 +190,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/chatlet/Room.tsx": {
     why:
-      "a room's Join bar in place of its composer, for a room the reader may read and is " +
-      "not in (join_channel), the room's own refusal said once above the transcript",
+      "a room's Join bar above its composer, for a room the reader may read and is not " +
+      "in (join_channel), or the star a team's room offers in its place, and in the " +
+      "composer's place where the engine takes no post, the room's own refusal said once " +
+      "above the transcript",
     suite: "routes/chatlet/Access.test.tsx",
   },
   "routes/chatlet/scope.tsx": {
@@ -233,7 +235,9 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/chatlet/Dialogs.test.tsx",
   },
   "routes/chatlet/Details.tsx": {
-    why: "a room's details pane: Leave room (leave_channel)",
+    why:
+      "a room's details pane: Leave room (leave_channel), and each agent member's " +
+      "gets-every-message switch (set_channel_members), held with the room's sentence",
     suite: "routes/chatlet/Details.test.tsx",
   },
   "routes/chatlet/notify.tsx": {
@@ -302,7 +306,7 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   EditProjectButton: "write_project",
   PinButton: "set_pins",
   AnswerAsk: "comment_on_work_item",
-  AnswerRunButton: "answer_run",
+  AnswerRunButton: "answer_executor",
   SaveViewButton: "save_work_view",
   MessageSeatButton: "create_work_item",
   AssignToSeatButton: "update_work_item",

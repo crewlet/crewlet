@@ -378,7 +378,7 @@ func TestAPeerTheServerCannotDialIsRefused(t *testing.T) {
 }
 
 // A FLEET URL CARRIES NO CREDENTIAL. A fleet's broker credentials are derived
-// from secrets.keys (ADR-0087): the engine writes each route's userinfo itself,
+// from secrets.keys (ADR-0094): the engine writes each route's userinfo itself,
 // and a leaf link presents an nkey, beside which a URL's userinfo would be sent
 // in clear. So a userinfo in a peer or a leaf URL — `user:pass@` or a bare
 // `token@`, with a scheme or without one — is refused at that element, and no

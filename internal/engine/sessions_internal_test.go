@@ -10,7 +10,7 @@ import (
 )
 
 // The engine's tool sessions: ONE directory per process, made at boot and
-// removed by the teardown, which every phase's CLI reaches its seat's tools
+// removed by the teardown, which every phase's harness reaches its seat's tools
 // through (internal/toolsession).
 
 // sessionDirs is the session directories under dir — what a boot left behind.

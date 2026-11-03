@@ -137,7 +137,7 @@ func TestOneSeatByHandleNarrowsEventsTheAxisAndTurns(t *testing.T) {
 
 // THE TURNS THAT ENDED ARE ONE COMPLETION EACH.
 //
-// A turn that parked on a coding run and resumed writes two completion
+// A turn that parked on its executor and resumed writes two completion
 // records, the first marked `suspended`; `suspended=false` is what a turns
 // axis counts over, so the parked-and-resumed turn is one bar rather than
 // two. Three-valued: absent is every record, and a word that is neither is

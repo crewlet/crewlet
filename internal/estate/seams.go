@@ -23,7 +23,7 @@ import (
 
 // The asking half: the seams every node's tools are handed, each answered by a
 // data node whose copy of the operation's domain serves — this one where it
-// does (ADR-0072).
+// does (ADR-0079).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -679,11 +679,13 @@ func (c Chat) PatchChannel(ctx context.Context, actor chatlet.Actor, channelID s
 	return out, err
 }
 
-// SetMembers replaces a room's members.
+// SetMembers replaces a room's members, against the membership the caller
+// read where it names one.
 func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-	members []chatlet.Member) (chatlet.Written, error) {
-	out, err := call(ctx, c.r, opChatSetMembers, nil,
-		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members})
+	members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetMembers, nil, chatSetMembersArgs{
+		Actor: actor, ChannelID: channelID, Members: members, Expected: expected,
+	})
 	c.settled(out)
 	return out, err
 }
@@ -727,6 +729,14 @@ func (c Chat) Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo
 		chatReplyArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
 	c.settled(out)
 	return out, err
+}
+
+// Reach answers whom a post or a reply would reach if it were sent now,
+// without sending it: the post's own decision, run dry on a data node.
+func (c Chat) Reach(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Draft, error) {
+	return call(ctx, c.r, opChatReach, nil,
+		chatReachArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
 }
 
 // Edit rewrites a message its actor wrote.
@@ -965,7 +975,7 @@ func (k Knowledge) Building(ctx context.Context) bool {
 }
 
 // Usage is the usage domain's reads (ADR-0020), answered by a data node whose
-// usage copy is in service — this node's own where it is one (ADR-0072).
+// usage copy is in service — this node's own where it is one (ADR-0079).
 type Usage struct{ r *Router }
 
 // Usage answers the usage domain.
@@ -1047,6 +1057,19 @@ func allPages[R any](ctx context.Context,
 // of company days, on every node.
 func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) {
 	return call(ctx, u.r, opUsageReadsElided, nil, readsElidedArgs{From: from, To: to})
+}
+
+// ServerToolCalls answers every node's calls to one MCP server's tools over a
+// range of company days, one row per (tool, seat).
+func (u Usage) ServerToolCalls(ctx context.Context, q usage.ServerToolCallsQuery) (
+	[]usage.ServerToolCallsRow, error) {
+	return call(ctx, u.r, opUsageServerToolCalls, nil, q)
+}
+
+// ToolsElided answers how many (server, tool) entries the per-seat-day cap
+// dropped over a range of company days, on every node.
+func (u Usage) ToolsElided(ctx context.Context, from, to string) (int64, error) {
+	return call(ctx, u.r, opUsageToolsElided, nil, readsElidedArgs{From: from, To: to})
 }
 
 // RepoReadersAnswer is one page of a repository's readers, summed across every
@@ -1302,7 +1325,7 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 
 // Read answers a read of the code host: a person's or a surface's, and the
 // engine's own that no principal makes — a cache's `introduced` backfill, a
-// compactor's `compaction_due` listing, a collected coding run's `run_pushes`.
+// compactor's `compaction_due` listing, a collected executor run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
@@ -1332,7 +1355,7 @@ func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnsw
 }
 
 // GitRead asks the repository's home git node for one read of its content by
-// object id, and its runner-up when the home cannot answer (ADR-0082). Its
+// object id, and its runner-up when the home cannot answer (ADR-0089). Its
 // floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.FloorOf]
 // supplies where the reader's own writes must be in the copy it reads.
 func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -1341,7 +1364,7 @@ func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 
 // MergePreview asks the repository's home git node what merging q.Head into
 // q.Base would do — by the merge the home records a change's mergeability by
-// — and its runner-up when the home cannot answer (ADR-0082), as a read by
+// — and its runner-up when the home cannot answer (ADR-0089), as a read by
 // object id is asked. Its floor is the query's own
 // (code.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
 // asker's own pushes must be in the copy it merges. It never raises this
@@ -1351,8 +1374,8 @@ func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (c
 }
 
 // GitWrite asks the repository's home git node to build one engine write and
-// land it as a push (ADR-0085), and its runner-up with the same write — the
-// same push — where the home ran nothing or went silent (ADR-0082). Its floor
+// land it as a push (ADR-0092), and its runner-up with the same write — the
+// same push — where the home ran nothing or went silent (ADR-0089). Its floor
 // is the write's own (code.EngineWrite.Fresh), as a read's is.
 //
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it

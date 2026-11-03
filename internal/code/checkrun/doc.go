@@ -1,6 +1,6 @@
 // Package checkrun RUNS A REPOSITORY'S QUEUED CHECKS on a git node: every git
 // node walks the queued attempts oldest first, claims the ones it ranks first
-// for, makes each a box with no coding agent in it (internal/sandbox's
+// for, makes each a box with no harness in it (internal/sandbox's
 // AcquireBox), runs its command there and records how it ended — and a
 // repository's HOME sweeps the attempts whose runner is gone.
 //
@@ -67,7 +67,7 @@
 //
 // # What a check's box holds
 //
-// No coding agent, no model's sign-in, no subscription login, none of
+// No harness, no model's sign-in, no subscription login, none of
 // providers.sandbox.setup ([sandbox.Manager.AcquireBox] refuses each): a
 // check runs a change's own code, and every credential beside it is one that
 // code reads. Its environment is EXACTLY the company's check secrets its

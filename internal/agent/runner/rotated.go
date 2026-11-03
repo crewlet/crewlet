@@ -8,14 +8,14 @@ import "github.com/crewlet/crewlet/internal/provenance"
 //
 // # Why the round is carried on, not collected
 //
-// A process's environment cannot change, and the coding CLIs re-read no file
+// A process's environment cannot change, and the harnesses re-read no file
 // for a token, so a job that was running when its entry's credential was
 // rotated keeps the old one until it ends. Where the vendor revoked the old
 // one, the job ends refused, though the entry already signs in with the new
 // credential. Judged as the round's outcome, that refusal would fail the turn
 // for a reason the round no longer has. So the resumed turn relaunches its
 // executor for the same round, on the entry that ran it, which now hands the
-// new credential to every launch: in the job's box, continuing its own CLI
+// new credential to every launch: in the job's box, continuing its own harness
 // session where the launch can, so the work in its working tree and its
 // conversation carry on.
 //
@@ -28,7 +28,7 @@ import "github.com/crewlet/crewlet/internal/provenance"
 // `submit_work` is on the round's calls had finished its work, and the round
 // is collected from those calls.
 type Rotated struct {
-	// SessionID is the refused job's CLI session, which the relaunch
+	// SessionID is the refused job's harness session, which the relaunch
 	// continues where it runs in that job's box.
 	SessionID string
 

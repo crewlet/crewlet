@@ -645,7 +645,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// here wants a mark released, and a release on a path that cannot
 	// happen is a release that does nothing.
 	// A PARKED TURN DOES NOT SPEND IT, and that is the one condition on
-	// this guard. Every agent seat's executor is a detached coding run, so
+	// this guard. Every agent seat's executor is a detached run in a box, so
 	// every such turn parks at its launch: the park publishes
 	// `turn_completed` carrying the suspend's own self_iterate, and its
 	// RESUMED half publishes under the same run — so marking the park

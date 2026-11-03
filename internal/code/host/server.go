@@ -43,7 +43,7 @@ type Estate interface {
 	Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 }
 
-// Boxes is what admits a box (boxadmit.go): a coding run's tokens and the run
+// Boxes is what admits a box (boxadmit.go): an executor's tokens and the run
 // rows its grants come from, and a check's tokens — whose box is admitted by
 // its attempt's row, which the Estate reads (checkadmit.go).
 type Boxes struct {
@@ -52,7 +52,7 @@ type Boxes struct {
 	Checks *CheckTokens
 }
 
-// Runs is the coding runs' rows as a box's admission reads them — the sandbox
+// Runs is the executors' rows as a box's admission reads them — the sandbox
 // pending store on the fleet's coordination store, which every node reaches
 // (the engine's adapter). Declared here, by its consumer.
 type Runs interface {
@@ -86,7 +86,7 @@ type Runs interface {
 	Hold(ctx context.Context, ref BoxRunRef, keys []string) error
 }
 
-// BoxRun is one coding run as the host judges a box by it.
+// BoxRun is one executor as the host judges a box by it.
 type BoxRun struct {
 	// Ref is the row's turn id and its CURRENT launch.
 	Ref BoxRunRef
@@ -113,8 +113,8 @@ type BoxRun struct {
 	// Provenance is what the run's pushes are stamped with: TurnID the
 	// row's turn, RunID its launch, WorkBackend, WorkID, WorkKey and
 	// WorkProject its work item — the id and the project what a change its
-	// push opens carries the item by — Model its launch's model, CodingAgent
-	// its coding agent — as the row holds them: the host fits each to the
+	// push opens carries the item by — Model its launch's model, Harness
+	// its harness — as the row holds them: the host fits each to the
 	// code domain's bound where it stamps a push (admission.principal).
 	Provenance code.RunProvenance
 	// Holds are the row's code holds as admission read them, a set: the
@@ -385,7 +385,7 @@ type Server struct {
 	chainPack    time.Duration
 	chainObjects int64
 
-	// runRequests is every coding run's requests in flight here, by its
+	// runRequests is every executor's requests in flight here, by its
 	// launch, under runsMu (boxlimit.go).
 	runsMu      sync.Mutex
 	runRequests map[string]int

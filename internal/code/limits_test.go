@@ -145,7 +145,7 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		At:       time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC), Actor: strings.Repeat("a", 64),
 		ActorKind: "operator", ActorSeat: strings.Repeat("s", 64), Via: widestVia,
 		Run: code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
-			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: runField},
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", Harness: runField},
 		Node: strings.Repeat("n", 64), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: code.MaxPackBytes,
 		IntroducedCount: 1 << 30, ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC),
 	}
@@ -529,7 +529,7 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	// still fits; the bytes of the day its committer stamps are in its bound.
 	// The smallest a seat makes is one the engine built, naming its turn
 	// alone: a push git received from a seat is its coding box's, which names
-	// its coding run as well.
+	// its executor as well.
 	seat := minimal
 	seat.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
 		Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}

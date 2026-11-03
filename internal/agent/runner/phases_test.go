@@ -27,10 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider is the model behind every phase's CLI runs that the engine
+// scriptedProvider is the model behind every phase's harness runs that the engine
 // drives — which the executor is not: its run is played by a [playLauncher] —
 // scripted PER PHASE: each phase reads its own stream of responses, one per
-// model request, and a run is told which phase it is by the tools its CLI was
+// model request, and a run is told which phase it is by the tools its harness was
 // offered.
 //
 // Not a flat sequence: each phase runs its own loop and a phase that calls a
@@ -40,7 +40,7 @@ import (
 // distinguishes the phases.
 //
 // A STREAM OF RESPONSES, NOT A LIST OF RUNS, because the runs are not the
-// model's to choose: its CLI asks it again after every call it makes, and the
+// model's to choose: its harness asks it again after every call it makes, and the
 // engine ends a run when the phase finishes, parks or is corrected. So a run
 // plays the phase's next responses until one calls nothing — the model's
 // answer — or the engine ends it, and the next run of the phase picks the
@@ -48,7 +48,7 @@ import (
 // model that keeps answering the same way.
 //
 // THROUGH THE REAL SESSION: every response reaches the phase's dispatcher as a
-// CLI's record does, and every call reaches the phase's tools over MCP
+// harness's record does, and every call reaches the phase's tools over MCP
 // (llmtest.Conn).
 type scriptedProvider struct {
 	review, onboarding []llmtest.Response
@@ -58,13 +58,13 @@ type scriptedProvider struct {
 	n    map[string]int
 }
 
-// scriptedRun is one CLI run the provider played.
+// scriptedRun is one harness run the provider played.
 type scriptedRun struct {
 	which string
 	req   llm.Request
 	conn  *llmtest.Conn
 
-	// offered is the tool list the CLI read before each response it played
+	// offered is the tool list the harness read before each response it played
 	// — one per model request, an activation's effect included.
 	offered [][]llm.ToolDef
 }
@@ -101,7 +101,7 @@ func (p *scriptedProvider) Complete(ctx context.Context, req llm.Request) (*llm.
 	})
 }
 
-// phaseOffering names the phase a run is from the tools its CLI was offered.
+// phaseOffering names the phase a run is from the tools its harness was offered.
 func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
@@ -109,8 +109,8 @@ func phaseOffering(offered []string) string {
 	case slices.Contains(offered, toolname.MarkOnboarded):
 		return "onboarding"
 	default:
-		// Nothing else runs a CLI through the engine's loop on a seat's
-		// turn: the executor is its CLI's own run. A run landing here is a
+		// Nothing else runs a harness through the engine's loop on a seat's
+		// turn: the executor is its harness's own run. A run landing here is a
 		// phase this fixture does not know, and it is answered with nothing
 		// a phase could mistake for a decision.
 		return "other"
@@ -128,7 +128,7 @@ func (p *scriptedProvider) scriptOf(which string) []llmtest.Response {
 	}
 }
 
-// runsFor is every CLI run one phase made, in order.
+// runsFor is every harness run one phase made, in order.
 func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -141,14 +141,14 @@ func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
 	return out
 }
 
-// allRuns is every CLI run, of every phase, in order.
+// allRuns is every harness run, of every phase, in order.
 func (p *scriptedProvider) allRuns() []*scriptedRun {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.runs)
 }
 
-// requestsFor returns the request each of one phase's CLI runs was handed, in
+// requestsFor returns the request each of one phase's harness runs was handed, in
 // order: the conversation a run opens on.
 func (p *scriptedProvider) requestsFor(which string) []llm.Request {
 	var out []llm.Request
@@ -180,7 +180,7 @@ func (p *scriptedProvider) offeredFor(which string) [][]string {
 	return out
 }
 
-// answered is what every call one phase's CLI made was answered, in order:
+// answered is what every call one phase's harness made was answered, in order:
 // what the model read back from its tools.
 func (p *scriptedProvider) answered(which string) []llmtest.Result {
 	var out []llmtest.Result
@@ -238,24 +238,18 @@ func submitWork(t *testing.T) llm.ToolCall {
 		`{"outcome":"blocked","summary":"nothing to do here","evidence":"no write tool yet"}`)
 }
 
-// activate is the discovery half of a delivery. MCP TOOLS ARE NOT ON THE
-// STARTING SURFACE — that is the whole point of discovery — so a run that
-// posts has to promote the tool first, exactly as a real one does over the
-// bridge.
-func activate(name string) llm.ToolCall {
-	return llm.ToolCall{ID: "act", Name: "activate_tool", Arguments: map[string]any{"name": name}}
-}
-
-// activating is [activate] as a response of an engine-driven phase.
+// activating is an engine-driven phase promoting one tool onto its surface:
+// the onboarding pass, which reaches its knowledge-base tools by discovery.
+// An executor never does — it holds every tool its seat does from its launch.
 func activating(name string) llmtest.Response {
 	return calling(llmtest.Call{Name: toolname.Activate, Args: `{"name":"` + name + `"}`})
 }
 
-// deliver is the ordinary delivery a run makes: discover, call, report.
+// deliver is the ordinary delivery a run makes: call, report. The MCP tool is
+// on its surface from its launch, as every tool its seat holds is.
 func deliver(t *testing.T, summary string) run {
 	t.Helper()
 	return run{calls: []llm.ToolCall{
-		activate("slack_post"),
 		{ID: "post", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"`+summary+`","deliveries":["slack_post"]}`),
@@ -352,6 +346,11 @@ type buildOpts struct {
 	// withheld is what the seat's surfaces leave out (runner.Config.Withheld),
 	// for the cases about a tool the authority table refuses the seat.
 	withheld []string
+
+	// boxServers are the seat's MCP servers that run in its executor's box
+	// (role.sandbox.mcp.servers), for the cases about what the bridge
+	// leaves to the box.
+	boxServers []string
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -395,6 +394,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	if len(opts.boxServers) > 0 {
+		role.Sandbox = &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: opts.boxServers}}
+	}
 	// The reviewer names its own key when one is configured; the executor
 	// runs on `llm`, which is what makes it the seat's model rather than a
 	// second spelling of one. With only a default present both miss and
@@ -452,7 +454,6 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	t.Parallel()
 	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{}, 1, "", nil, run{calls: []llm.ToolCall{
-			activate("slack_post"),
 			{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}},
 			call(t, runner.SubmitWorkTool, `{
 				"outcome":"delivered","summary":"posted the weekly summary",
@@ -477,8 +478,8 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 	// What the run CALLED, arguments and all: the delivery check, the
 	// citations and the ledger read it.
-	if len(w.Calls) != 3 || w.Calls[1].Name != "slack_post" || w.Calls[1].Args["channel"] != "C1" {
-		t.Errorf("calls = %+v, want the run's own three", w.Calls)
+	if len(w.Calls) != 2 || w.Calls[0].Name != "slack_post" || w.Calls[0].Args["channel"] != "C1" {
+		t.Errorf("calls = %+v, want the run's own two", w.Calls)
 	}
 	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
@@ -488,13 +489,10 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 		t.Errorf("surface deliveries = %v, want slack_post on its own server",
 			surface.Deliveries)
 	}
-	// The discovery pair is among them: its own entries prove it read-only
-	// ([runner.DiscoveryTools]), which is what a stopped bridged run reads
-	// too. The ledger skips the pair by name, so marking it a read renders
-	// nothing new.
-	want := []string{"slack_history", toolname.ListMCPServerTools, toolname.Activate}
-	if !slices.Equal(surface.KnownReads, want) {
-		t.Errorf("surface known reads = %v, want %v", surface.KnownReads, want)
+	// The executor holds no discovery pair ([TestTheExecutorHoldsEveryToolItsSeatDoes]),
+	// so none of it is among the reads.
+	if !slices.Equal(surface.KnownReads, []string{"slack_history"}) {
+		t.Errorf("surface known reads = %v", surface.KnownReads)
 	}
 }
 
@@ -502,7 +500,16 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 // advance is what the planner used to do — against a catalogue it was never
 // shown — and every wrong guess became a tool the actor did not have when it
 // turned out to need it.
-func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
+// THE EXECUTOR HOLDS EVERY TOOL ITS SEAT DOES, from its launch: the first-party
+// ones and every MCP server's, and no discovery pair. Its harness keeps a large
+// server's tools out of the requests that do not need them itself — Claude
+// Code's tool search, OpenCode's Code Mode — which is what the pair used to do
+// by hand, two rounds at a time. And the prompt names none of them: each one's
+// definition reaches the run over the bridge, under the server it comes from.
+//
+// Mutation: put the discovery pair back on the executor's surface, or offer the
+// first-party tools alone, and this goes red.
+func TestTheExecutorHoldsEveryToolItsSeatDoes(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -514,23 +521,42 @@ func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	offered := toolNames(req.Surface.ToolDefs())
 	slices.Sort(offered)
 	want := []string{
-		"activate_tool", "list_mcp_server_tools", "lookup_colleague", "reflect",
+		"jira_create", "lookup_colleague", "reflect", "slack_history", "slack_post",
 		runner.SubmitWorkTool,
 	}
 	slices.Sort(want)
 	if !slices.Equal(offered, want) {
 		t.Errorf("offered %v, want %v", offered, want)
 	}
-	// A real server publishes dozens and a model shown all of them acts
-	// against a wall of text. Discovery is a tool call, which also keeps the
-	// prompt prefix stable while a server's catalogue changes underneath.
-	if slices.Contains(offered, "slack_post") {
-		t.Errorf("an MCP tool was offered directly: %v", offered)
+	if strings.Contains(req.System, "slack_post") || strings.Contains(req.System, "## Tools to discover") {
+		t.Errorf("the prompt lists what the surface already offers:\n%s", req.System)
 	}
-	// But the CATALOGUE names the server, or discovery has nothing to aim
-	// at.
-	if !strings.Contains(req.System, "slack") {
-		t.Error("the prompt does not name the MCP server")
+}
+
+// A SERVER THAT RUNS IN THE BOX IS NOT OFFERED OVER THE BRIDGE: its harness
+// reaches it in the box, under the same name, and a run that held it twice —
+// once in its box and once over the bridge — would see every one of its tools
+// twice. The seat's other servers are still offered.
+//
+// Mutation: drop the box's servers from executorActive's filter, and slack_post
+// is offered over the bridge too.
+func TestAServerThatRunsInTheBoxIsNotOfferedOverTheBridge(t *testing.T) {
+	t.Parallel()
+	launcher := &playLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher, boxServers: []string{"slack"}})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	offered := toolNames(launcher.last(t).Surface.ToolDefs())
+	for _, inBox := range []string{"slack_post", "slack_history"} {
+		if slices.Contains(offered, inBox) {
+			t.Errorf("%s, of a server that runs in the box, is offered over the bridge too: %v",
+				inBox, offered)
+		}
+	}
+	if !slices.Contains(offered, "jira_create") {
+		t.Errorf("the seat's other server is not offered: %v", offered)
 	}
 }
 
@@ -791,7 +817,7 @@ func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 
 // A RUNNER NEEDS ITS REGISTRIES, ITS SESSION HOST AND ITS LAUNCHER, and
 // refuses at assembly without one: every phase the engine drives reaches its
-// CLI's tools through the host, and every executor is a launched run — so a
+// harness's tools through the host, and every executor is a launched run — so a
 // runner missing either cannot run a phase every turn has, and finding that
 // out at the first one fails a turn on a mistake made where the runner was
 // built.

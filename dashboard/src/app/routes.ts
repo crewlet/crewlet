@@ -279,7 +279,7 @@ export type FramedScreen =
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
-  | { screen: "runs"; id?: string }
+  | { screen: "executors"; id?: string }
   | { screen: "a2a"; id?: string }
   | { screen: "trace"; id: string }
   | { screen: "events" }
@@ -632,8 +632,8 @@ function live(rest: string[], screen: Make, under: Under): Route {
   switch (first) {
     case "turns":
       return screen(id ? { screen: "turn", id } : { screen: "turns" });
-    case "runs":
-      return screen(id ? { screen: "runs", id } : { screen: "runs" });
+    case "executors":
+      return screen(id ? { screen: "executors", id } : { screen: "executors" });
     case "a2a":
       return screen(id ? { screen: "a2a", id } : { screen: "a2a" });
     case "events":

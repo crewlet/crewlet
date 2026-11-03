@@ -178,9 +178,9 @@ func (f *fixture) free() { f.freed.Do(func() { close(f.release) }) }
 func (f *fixture) closeFence() { err := errSeatMoved; f.fence.Store(&err) }
 func (f *fixture) openFence()  { f.fence.Store(nil) }
 
-// dial connects a client the way a coding CLI's own does: it lists the tools
+// dial connects a client the way a harness's own does: it lists the tools
 // before it calls one, and re-lists when told the list changed — relistDelay
-// after the notice, as a CLI that re-reads it a moment later.
+// after the notice, as a harness that re-reads it a moment later.
 func (f *fixture) dial(relistDelay time.Duration) *mcp.ClientSession {
 	f.t.Helper()
 	cs, _ := f.connect(relistDelay)
@@ -211,7 +211,7 @@ func (f *fixture) connect(relistDelay time.Duration) (*mcp.ClientSession, func()
 	return cs, hangUp
 }
 
-// call makes one call and waits for its answer, as a CLI does on a run that
+// call makes one call and waits for its answer, as a harness does on a run that
 // goes on.
 func (f *fixture) call(cs *mcp.ClientSession, name string, args any) *mcp.CallToolResult {
 	f.t.Helper()

@@ -115,6 +115,7 @@ func TestSubagentPromptOrdersParentThenSkillsThenDiscoverableThenPreamble(t *tes
 		ParentSystemPrompt: "PARENT-PROMPT-MARKER",
 		Discoverable:       "- foo: Does foo.",
 		Skills:             cat,
+		MCPServers:         engineerServers,
 	}).Text
 	order(t, p, "PARENT-PROMPT-MARKER", "GITHUB-SUMMARY",
 		"## Tools to discover", SubagentPreamble)
@@ -185,11 +186,11 @@ func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
 }
 
 // A NOTE READS THE SAME WHEREVER IT LANDS. It reaches a model at the opening of
-// a run of the engine's loop, in a coding run's brief, and inside a coding run
-// where its CLI places a hook's context — so it names who sent it and through
-// what, says it arrived while the work was under way and is the later word, and
-// says nothing about where it arrived, which would be false in every place but
-// one. The note itself is last and verbatim.
+// a run of the engine's loop, in an executor's brief, and inside its run, where
+// its harness places a hook's context — so it names who sent it and through what,
+// says it arrived while the work was under way and is the later word, and says
+// nothing about where it arrived, which would be false in every place but one.
+// The note itself is last and verbatim.
 func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
 	t.Parallel()
 	msg := SteerMessage("ada", "  post to #staging, not #general  ")

@@ -68,7 +68,8 @@ func woken(routed []notify.Routed) []string {
 // is relayed exactly when its routing tells a seat something, and the parser
 // wakes exactly those seats — each once, under the reason the record's routing
 // gives it, with an id derived from the record, the change and the seat, the
-// change's name, and who wrote what it announces. A person the same record
+// change's name, who wrote what it announces, and the change as what starts
+// the turn it wakes, under that seat's own reason. A person the same record
 // tells is never queue-woken: their notice row is written all the same, and
 // is where they read it. A record that tells nobody but its actor, or only
 // persons, is acknowledged with no delivery, as is a push that moves no
@@ -78,7 +79,8 @@ func woken(routed []notify.Routed) []string {
 // relay a record whatever its routing tells (drop wakesASeat) → the ask of a
 // person alone, and the aside nobody hears, are relayed; derive the wake id
 // from the change rather than the record → the comment's wakes collapse into
-// the ask's.
+// the ask's; name no origin, or one reason for every recipient, → the ask's
+// and the comment's origins are wrong.
 func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -128,6 +130,10 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 		t.Errorf("the wake is %+v, want web!1 by its id on the code source, carrying the ask's note", wake.Inbound)
 	case wake.Writer == nil || wake.Writer.Kind != iam.ActorAgent || wake.Writer.Seat != "dev":
 		t.Errorf("the wake says %+v wrote it, want the seat dev", wake.Writer)
+	case wake.Origin != (types.TriggerOrigin{Kind: types.OriginCodeChange, ID: "web!1",
+		Reason: string(code.ReasonReviewRequested)}):
+		t.Errorf("the wake names %+v as what starts its turn, want the change web!1, asked to review",
+			wake.Origin)
 	}
 
 	askPerson := converse(t, w, asking(repo, change, dev, "founder"))
@@ -149,6 +155,11 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 		if r.Writer == nil || r.Writer.Kind != iam.ActorHuman || r.Writer.Seat != "founder" {
 			t.Errorf("%s's wake says %+v wrote it, want the person, as the seat founder they hold",
 				r.To.Handle, r.Writer)
+		}
+		if want := (types.TriggerOrigin{Kind: types.OriginCodeChange, ID: "web!1",
+			Reason: r.Metadata[code.MetaVia]}); r.Origin != want {
+			t.Errorf("%s's wake names %+v as what starts its turn, want %+v: the change, under its own "+
+				"reason", r.To.Handle, r.Origin, want)
 		}
 		if r.WakeID == wake.WakeID {
 			t.Errorf("%s's wake of the comment has the ask's id, so it would collapse into it", r.To.Handle)

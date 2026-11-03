@@ -21,7 +21,7 @@ import (
 // route to the seats whose role carries the health grant (internal/alarmwake),
 // and retried until the broker takes it.
 //
-// ADR-0088: the publish IS the write. The delivery on the inbound stream is
+// ADR-0095: the publish IS the write. The delivery on the inbound stream is
 // the durable record the wakes are derived from, so nothing commits beside it
 // and no publish trails a commit; what this outbox owes is that a transition
 // the tracker handed on is published, in the order it was made, however long

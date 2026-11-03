@@ -69,7 +69,7 @@ func (p *probeTool) callModels() []string {
 	return append([]string(nil), p.models...)
 }
 
-// connect dials an executor run's bridge the way its box's coding agent does,
+// connect dials an executor run's bridge the way its box's harness does,
 // reporting the error rather than failing on it.
 func connect(t *testing.T, endpoint string) (*mcp.ClientSession, error) {
 	t.Helper()
@@ -293,7 +293,7 @@ func TestARecoveredRunsSurfaceKeepsWhatItsCallsActivated(t *testing.T) {
 }
 
 // A RECOVERED RUN'S CALLS ARE MADE ON THE MODEL ITS LAUNCH NAMED. Every call a
-// box makes over the bridge carries the model the run's CLI was pointed at
+// box makes over the bridge carries the model the run's harness was pointed at
 // ([mcpbridge.Session.Model]), which a seat's code write names on its push. The
 // launch's session is given it from the launch; the session a recovering node
 // opens has only the run's row to give it from, and the row records it

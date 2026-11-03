@@ -685,7 +685,7 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 // listing it.
 //
 // The frame before a tool call lists it; the frame after it returns does not.
-// A coding CLI runs a response's calls at once, so a frame lists every call in
+// A harness runs a response's calls at once, so a frame lists every call in
 // flight, and one returning leaves the others running. Carrying the previous
 // frame's list forward, like the prompt is carried, would leave a call that
 // returned drawn as running.
@@ -756,7 +756,7 @@ func TestEveryCallInFlightAppearsAndEachClears(t *testing.T) {
 // recorded.
 //
 // The phase is over, and a failed card still reading "running" against a tool
-// call that will never return is the streaming caret again. Which CLI run
+// call that will never return is the streaming caret again. Which harness run
 // died, and on whose entry, is what the failure record's runs say — the run
 // that failed is on it and on no progress frame before it.
 //
@@ -826,5 +826,41 @@ func TestTheLiveCallCarriesTheNotesItsPhaseRead(t *testing.T) {
 	call.Steers[0] = "scribbled"
 	if again := liveCallOf(t, s, "Lead"); again.Steers[0] == "scribbled" {
 		t.Error("a reader's copy of the call aliases the projection's own list")
+	}
+}
+
+// THE ROSTER IS THE SEATS' STATUS WITHOUT THEIR CALLS. MergeAgents (the
+// handshake a live view opens from) carries the call; MergeRoster (`GET
+// /agents`, the agents dataset, the `seats` push) carries everything else the
+// overlay says and no call, so its size is bounded by the seats.
+//
+// Mutation: write the call in mergeStatus and the roster row carries it.
+func TestTheRosterCarriesTheStatusAndNotTheCall(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress",
+		with(planCall(), map[string]any{"round_num": 0, "response": "a long answer"}),
+		streamOnly))
+
+	roster := s.MergeRoster([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})[0]
+	for _, key := range []string{"live_call", "live_call_seq"} {
+		if _, present := roster[key]; present {
+			t.Errorf("the roster row carries %s", key)
+		}
+	}
+	for _, key := range []string{"activity", "stopped_reason", "current_phase", "turn",
+		"last_turn", "last_error", "budget", "paused", "current_iteration"} {
+		if _, present := roster[key]; !present {
+			t.Errorf("the roster row lost %s with the call", key)
+		}
+	}
+	if roster["handle"] != "lead" {
+		t.Errorf("the roster row lost the static field: %v", roster)
+	}
+
+	merged := s.MergeAgents([]map[string]any{{"agent_id": "Lead"}})[0]
+	if call, _ := merged["live_call"].(*livestate.LiveCall); call == nil || call.Response != "a long answer" {
+		t.Errorf("the snapshot's row lost the call: %v", merged["live_call"])
 	}
 }

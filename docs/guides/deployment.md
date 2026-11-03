@@ -27,7 +27,7 @@ nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 state log is signed under it, because a record is an instruction the next node
 applies and the broker's admission vouches for a connection, never a message
 (ADR-0031). An embedded fleet's broker admits only keys derived from it too
-(ADR-0087). `crewlet secrets keygen` mints
+(ADR-0094). `crewlet secrets keygen` mints
 one and prints the export line; a node without one refuses to start, naming the
 field. Every node of a fleet needs the **same** keyring — one keyed differently
 would refuse every peer's records, and every browser signed in against one
@@ -147,7 +147,7 @@ alarm across the nodes.
 The engine keeps ten ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the code host's log, the
 identity estate's log, the usage log, the artifacts log, the artifact
-datastore's log, Ask Crewlet's log and the chat log. Each log's byte ceiling is
+datastore's log, Ask Crewlet's log, the chat log and the executor log. Each log's byte ceiling is
 **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
@@ -157,9 +157,9 @@ that volume's free space.
 The node sizes the ceilings together to fit five eighths of what that limit
 leaves once the object store's `nats` bucket (below) has its reservation. A log
 derived from the disk that would be scaled below 1 GiB is **held at 1 GiB**
-instead, Ask Crewlet's log gives way down to its own 64 MiB floor, and any
-other log whose own default is smaller than a gibibyte is held at what it asked
-for, so a fresh node has a floor it cannot go below.
+instead, Ask Crewlet's log and the executor log give way down to their own 64 MiB
+floor, and any other log whose own default is smaller than a gibibyte is held
+at what it asked for, so a fresh node has a floor it cannot go below.
 
 #### The minimum room for a fresh node
 
@@ -177,14 +177,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
 | Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
-| **The ten logs together** | **8.56 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.85 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The executor log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.executor_log_max_bytes` |
+| **The eleven logs together** | **8.62 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.87 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **11.42 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **15.22 GiB
-free** on the volume holding `stream.store_dir` (about 16.3 GB). With the
+So the broker needs a limit of at least **11.50 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **15.33 GiB
+free** on the volume holding `stream.store_dir` (about 16.5 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 8.56 GiB alone needs 11.42 GiB free. These are the least that **boots**:
+logs' 8.62 GiB alone needs 11.50 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -197,7 +198,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **9.56 GiB**, which three quarters of **12.75 GiB free** reaches.
+  limit of **9.62 GiB**, which three quarters of **12.83 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
@@ -207,15 +208,22 @@ configuration reserves, split into the logs and the bucket.
   than the minimum for its configuration.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
-`stream.usage_log_max_bytes` and `stream.assistant_log_max_bytes` accept
-64 MiB. The other seven fields accept no less than 1 GiB, so setting them only
-moves the figure up.
+`stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes` and
+`stream.executor_log_max_bytes` accept 64 MiB. The other seven fields accept no
+less than 1 GiB, so setting them only moves the figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
-  log's and Ask Crewlet's fields go down to 64 MiB, far below the
-  others, because the identity log grows with headcount and sign-ins,
-  Ask Crewlet's with how many people ask it (a month of a ten-person company's
-  questions fits in 64 MiB), and the usage log is a census of
-  node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
+  log's, Ask Crewlet's and the executor log's fields go down to 64 MiB, far
+  below the others, because the identity log grows with headcount and
+  sign-ins, Ask Crewlet's with how many people ask it (a month of a ten-person
+  company's questions fits in 64 MiB), the executor log with the turns the
+  seats run (it names each turn's session rather than holding it, so about
+  three weeks of a ten-seat company's turns fit in 64 MiB — but only about
+  two days of the hundred-seat reference company's, short of the seven days
+  of `min_age` the trim keeps, so a company of more than about thirty seats
+  on a host this small sets `stream.executor_log_max_bytes` itself, which no
+  scaling moves, or gives the broker the room for the default; the
+  `log_ceiling_short` alarm names the log that is short), and the usage log
+  is a census of node-days (about 18 MB for a ten-seat node's 181 days), and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
@@ -224,9 +232,10 @@ moves the figure up.
   log each for a quarter of the mutation log's, the code log for two thirds
   of the mutation log's, the chat log for 8 GiB, capped at a sixteenth of the
   free space (so the whole of it is asked from 128 GiB free), the identity
-  estate's log and Ask Crewlet's for a flat 512 MiB each and the usage log for
-  a flat 1 GiB — none of the last three is derived from the disk at all,
-  because the identity and Ask Crewlet logs grow with headcount and the usage
+  estate's log, Ask Crewlet's and the executor log for a flat 512 MiB each
+  and the usage log for a flat 1 GiB — none of the last four is derived from
+  the disk at all, because the identity and Ask Crewlet logs grow with
+  headcount, the executor log with the turns the seats run, and the usage
   log's size is a count of node-days rather than a rate, so more disk buys
   them nothing. The chat log's ask does not follow the mutation log's as the
   knowledge base's does, so if you set `stream.tracker_log_max_bytes` for a
@@ -235,16 +244,16 @@ moves the figure up.
   They are scaled down together whenever they ask for more than the logs'
   share — five eighths of what the broker's limit leaves once the `nats`
   bucket has taken its quarter of it, about 35 % of the free space on a first
-  boot — which is every volume with less than about 651 GiB free (with the
-  mutation log at its 64 GiB clamp the ten ask for 228⅔ GiB: 64 + 64 +
-  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8); from there up each log gets what it
+  boot — which is every volume with less than about 652 GiB free (with the
+  mutation log at its 64 GiB clamp the eleven ask for 229⅙ GiB: 64 + 64 +
+  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½); from there up each log gets what it
   asked for. With the objects in S3 no bucket is reserved and the share is
   five eighths of three quarters of the broker's limit, about 47 % of the free
-  space, so from about 488 GiB free.
+  space, so from about 489 GiB free.
 - **The code log's ask is paid whether or not anything pushes.** Below about
-  651 GiB free it comes out of the other logs' share: at 100 GiB free the
+  652 GiB free it comes out of the other logs' share: at 100 GiB free the
   mutation log and the vector changelog are created at 9.1 GiB each rather
-  than 11.1, at 256 GiB at 24.9 rather than 30.7 — windows about a fifth
+  than 11.1, at 256 GiB at 24.9 rather than 30.6 — windows about a fifth
   shorter for a blocked trim — and the knowledge base's, the artifacts and
   the artifact datastore's logs by the same proportion. A company that hosts
   no code and is short of room sets `stream.code_log_max_bytes: 1073741824`
@@ -256,8 +265,9 @@ moves the figure up.
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
   `stream.code_log_max_bytes`, `stream.artifacts_log_max_bytes`,
   `stream.artifact_data_log_max_bytes`, `stream.iam_log_max_bytes`,
-  `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes` or
-  `stream.chat_log_max_bytes` later, changes nothing about streams that
+  `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes`,
+  `stream.chat_log_max_bytes` or `stream.executor_log_max_bytes` later,
+  changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
@@ -494,8 +504,8 @@ config mistake into a half-minute hang with the same message at the end.
 one without it.** Empty selects an in-memory member: a restart loses that
 member's replicas, and the same server holds the KV buckets carrying the
 fleet's shared records — the token counters, the completion ledger, open
-agent-to-agent asks, claimed scheduled fires, detached (and billed) sandbox
-runs. The rule is asked of the broker, not of the roles: every **member** —
+agent-to-agent asks, claimed scheduled fires, the records of executors out
+in their (billed) boxes. The rule is asked of the broker, not of the roles: every **member** —
 every `data` node on the embedded broker — sets `store_dir` whatever else it
 does, a single node included, because an in-memory member creates every
 stream it provisions in memory. A leaf and a client of an external cluster
@@ -579,7 +589,7 @@ another's.
 
 Every connection to an embedded broker presents a key derived from
 `secrets.keys`, and the broker admits exactly four kinds of connection
-([ADR-0087](../../adr/0087-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)):
+([ADR-0094](../../adr/0094-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)):
 
 - a **route** from another member, presenting the route credential derived
   from a key of its keyring;
@@ -837,12 +847,13 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the ten state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the eleven state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
-`CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`), a stream per extra subject namespace a company
-publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
+`CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
+`CREWLET_EXECUTOR_LOG`), a stream per extra subject namespace a company
+publishes under, two durable consumers per seat mailbox (the inbox and its
+priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
 leases and the fencing epochs, and nineteen in the fleet store holding the
 shared records — the object store's backend record and its collector's report
@@ -970,8 +981,8 @@ metadata group, so a member stalled against a group that has not settled
 waits there, where nothing used to report it at all. The read of each state
 log's ceiling that sizes the logs before any of them is created is the same
 kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
-nine are asked at once, so a broker that answers none of them costs one
-lookup ceiling rather than nine in a row. The object store's
+ten are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than ten in a row. The object store's
 bucket is looked up and created as one step, and writes one line over the two
 (`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,
@@ -1191,7 +1202,7 @@ crewlet run -config crewlet.yaml    # engine + embedded API on :80
 
 (`-api-port 8000` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:8000/webhooks/gitlab`). **Port 80 buys exactly one thing**: a webhook URL with no `:port` suffix, which matters when the address is pasted into a vendor's UI by hand or has to survive a proxy that rewrites ports. It costs a privileged bind — as a non-root process on Linux that needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or `CAP_NET_BIND_SERVICE`.
 
-The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-cli.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
+The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-code.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and fails its boot at once, naming the address, before it has recovered anything.
 
@@ -1318,7 +1329,7 @@ What to point where:
   is the vendors' address too; the two are two fields because here they
   cannot be one. Both are Tier A, because both are facts about where the
   operator published this deployment's sockets.
-- **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
+- **The dashboard and the harness** stay on `api.port`: `crewlet` commands that
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
 - **A node without the `ingress` role** serves the network its
   [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
@@ -1392,7 +1403,7 @@ nothing probes it, as long as its boxes have the fleet's address (below).
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-Every agent seat's executor is its coding CLI's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). A `direct` box is a process of the seats node's host, so it dials that node's own `api.port` on loopback, where the node serves it the bridge to its own host's loopback alone — the commands above need no bridge address at all. A box in any other cell — `container`, `e2b` — or a `direct` one on a seats node started with `-api-port 0` dials `CREWLET_MCP_BRIDGE_URL`, so give **both** nodes the same value there: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so a seats node needs no port of its own for those — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
+Every agent seat's executor is its harness's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). A `direct` box is a process of the seats node's host, so it dials that node's own `api.port` on loopback, where the node serves it the bridge to its own host's loopback alone — the commands above need no bridge address at all. A box in any other cell — `container`, `e2b` — or a `direct` one on a seats node started with `-api-port 0` dials `CREWLET_MCP_BRIDGE_URL`, so give **both** nodes the same value there: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so a seats node needs no port of its own for those — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
 
 **With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** only the ingress node binds `api.public.port`: a node without `ingress` binds no public port, so the two processes share one Tier A file as they are.
 
@@ -1444,8 +1455,8 @@ user's home. A relative `state_dir` is read against the directory the engine
 was started in. A seat's box is `<box root>/boxes/<id>`, and an
 [Ask Crewlet deep-work run](assistant.md#where-a-run-happens) placed on
 the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
-A box holds its run's checkout, its coding CLI's home with a copy of the
-entry's login, its temporary files (`TMPDIR` and the CLI's own temporary root
+A box holds its run's checkout, its harness's home with a copy of the
+entry's login, its temporary files (`TMPDIR` and the harness's own temporary root
 point inside it) and whatever the run installs and builds, and it is removed
 when its run ends ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)).
 
@@ -1464,7 +1475,7 @@ one holding `store.path` and `stream.store_dir`: a run that fills the volume it
 writes on stops everything else writing there, and a store and a broker with
 no room stop the node. Whether that volume should outlive the engine's
 container is what a run's working tree is worth across a deploy
-([below](#a-restart-and-the-coding-runs-on-its-host)).
+([below](#a-restart-and-the-executors-on-its-host)).
 
 **The box root bounds where a box's files land, not what a `direct` run may
 write.** A `direct` run is a process of the engine's own user with no mount
@@ -1475,7 +1486,7 @@ home, the one directory mounted into it, and the container's own layer, which
 its runtime keeps. A deep-work run on the engine host writes its own box and
 nothing else.
 
-### A restart and the coding runs on its host
+### A restart and the executors on its host
 
 A seat's executor in a `direct` cell is a process tree of the node's own host,
 detached into a session of its own so that it outlives the engine's process —
@@ -1483,31 +1494,31 @@ and it does, when only that process dies. What usually replaces an engine takes
 more than the process: a container restart takes every process in the
 container, a systemd unit stopped or restarted kills every process in its
 control group (the default `KillMode=control-group`), and a host reboot takes a
-`container` box's job as well. So a run's job does not survive a deploy of the
-node it runs on, and none of these needs a setting of its own to be safe: the
-node finds the job **lost** when it is back — its box records the engine
-process that last saw the job running, and that process is gone too — and the
-run's round is **carried on** in a fresh run rather than its truncated output
-judged as a result. Where the box's directory survived the restart
+`container` box's launch as well. So an executor's launch does not survive a
+deploy of the node it runs on, and none of these needs a setting of its own to
+be safe: the node finds the launch **lost** when it is back — its box records
+the engine process that last saw it running, and that process is gone too — and
+the executor's round is **carried on** in a fresh launch rather than its
+truncated output judged as a result. Where the box's directory survived the restart
 (`providers.sandbox.local.state_dir` on a disk that outlives the process), the
-fresh run continues in it, its working tree as the lost job left it, changes
+fresh launch continues in it, its working tree as the lost launch left it, changes
 it had not committed included; where it did not — a pod recreated with its
-scratch volume — the fresh run starts in a new box from whatever the lost job
-pushed. Either way what the lost job did through the seat's tools stands, and
-a round is carried on after at most two lost jobs (see
+scratch volume — the fresh launch starts in a new box from whatever the lost one
+pushed. Either way what the lost launch did through the seat's tools stands, and
+a round is carried on after at most two lost launches (see
 [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 
-What a deploy costs a run is therefore the work it had not committed, or not
-pushed where its box does not survive, and the restart of the run that
+What a deploy costs an executor is therefore the work it had not committed, or
+not pushed where its box does not survive, and the restart of the launch that
 carries it on. Keep `state_dir` on a volume that outlives the engine's
-container where a run's working tree is worth keeping across a deploy.
+container where an executor's working tree is worth keeping across a deploy.
 
 ### When the host runs out of memory
 
 A `direct` box is a process tree of the node's own host, in the engine's own
-container or systemd unit, so its coding CLI and everything that CLI builds
+container or systemd unit, so its harness and everything that harness builds
 are counted against the same memory as the engine. Size a node that runs
-`direct` boxes for all of it at once: the engine, its host-run CLI calls
+`direct` boxes for all of it at once: the engine, its host-run harness calls
 (each `providers.llm` entry's `max_concurrent` of them, at 200–400 MB a call)
 and one run per seat at work, a build included (see
 [Replica count](#replica-count)). A `container` box can be bounded on its
@@ -1664,7 +1675,7 @@ the snapshot of the company's secrets its `${VAR}` references resolve from, the
 company built from its document, its shared MCP servers (each bounded by its
 own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
-setting), its sandboxes, Worklet's, Doclet's and Chatlet's halves, its coding CLIs' credential bundles,
+setting), its sandboxes, Worklet's, Doclet's and Chatlet's halves, its harnesses' credential bundles,
 the first apply of the revision it boots on, and the dashboard's projection. A probe
 sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup
@@ -1781,7 +1792,7 @@ never comes up.
 **Run one `crewlet run`, and scale up before you scale out.** A single
 engine handles many concurrent turns — agent handlers are
 goroutines, so the practical ceiling is your model plans' and keys' rate
-limits and host memory — every model call is a coding CLI process of 200–400 MB:
+limits and host memory — every model call is a harness process of 200–400 MB:
 the reviewer's, the workers' and the side passes', up to each `providers.llm`
 entry's `max_concurrent` (4) at once, and beside them one executor run per seat
 at work, on the engine host itself for a `direct` cell, which no
@@ -1842,18 +1853,18 @@ draining, and rolling upgrades. The two things that bite hardest:
 > then raise `stream.replicas` and restart — a node refuses to start while any
 > object is short, so the resize comes first.
 
-**A sandbox run record the engine cannot read.** Every reader of the sandbox
-runs lists them: the boot's epoch floor (before a node claims a seat, it raises
-each seat's fencing epoch above the highest epoch that seat's runs carry), each
-seat's recovery, the completion poll, the lookup that matches a reply to a
-parked run, a seat's retirement, and the dashboard. A record that does not
-decode is skipped by all of them and logged at error as
-`sandbox_run_undecodable` with its key, and every run they can read is worked
+**An executor record the engine cannot read.** Every reader of the
+executors' records lists them: the boot's epoch floor (before a node claims a
+seat, it raises each seat's fencing epoch above the highest epoch that seat's
+records carry), each seat's recovery, the completion poll, the lookup that
+matches a reply to a parked executor, a seat's retirement, and the dashboard. A
+record that does not decode is skipped by all of them and logged at error as
+`sandbox_run_undecodable` with its key, and every record they can read is worked
 as usual, so the node starts and its seats are prepared. Its seat, status and
 owner cannot be known, so nothing polls, resumes or ends it, and nothing
-deletes or rewrites it: a retirement ends the seat's readable runs and leaves
-it as it is. A listing of the runs that fails as a whole still stops the boot,
-naming the bucket. Remove the record once you know its run is over (its box,
+deletes or rewrites it: a retirement ends the seat's readable records and leaves
+it as it is. A listing of the records that fails as a whole still stops the boot,
+naming the bucket. Remove the record once you know its executor is over (its box,
 if any, is the provider's to reclaim):
 
 - **An external NATS cluster** (`stream.type: nats`): with the NATS CLI,
@@ -1915,7 +1926,7 @@ ahead of time when you would rather not do it on the startup path.
 
 What a fleet gets right, each of which was a real defect before:
 
-- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each CLI run opens and again before and after each of its tool calls, as the tool bridge does around each call of the seat's executor run — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
+- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each harness run opens and again before and after each of its tool calls, as the tool bridge does around each call of the seat's executor run — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
@@ -1931,7 +1942,7 @@ a resume — a run's collection off the seat's control topic, the review and any
 relaunch it sends back, or a person's answer carrying a parked run on, inline
 or retried — until it and its settle return. The executor run in its box holds
 no slot, and each seat runs at most one at a time. It is per node — so an org's ceiling becomes N × the configured
-value. Size it per node, not per company. And a spent plan: an entry whose CLI reported its
+value. Size it per node, not per company. And a spent plan: an entry whose harness reported its
 vendor's rate limit sits out on the node that heard it — until the reset the
 vendor named, never more than an hour away, or, where it named none, for a
 window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
@@ -2112,7 +2123,7 @@ cache on its own disk. What such a node needs from its host:
   GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read
   neither, whatever they hold. A local sandbox box
   that runs as the engine (`run_in: direct`) on a node from that image runs this
-  git too, so a coding agent's `git grep -P` fails there; a `container` or
+  git too, so a harness's `git grep -P` fails there; a `container` or
   `e2b` box runs its own image's git. The node serves a clone with git's
   single-pack reuse — the bitmap's preferred pack sent as it is stored, every
   other object as git packs any object, a stored delta reused and a whole copy
@@ -2566,10 +2577,10 @@ from that map — a guard test fails if the two drift.
 | `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_invitation_cancelled`, `iam_login_failures`, `iam_mfa_reset`, `iam_password_changed`, `iam_password_reset`, `iam_password_reset_issued`, `iam_recovery_code_used`, `iam_second_factor_throttled`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_started`, `iam_stepup_completed`, `statelog_record_tampered`, `statelog_record_unverifiable` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
-| `lifecycle` | `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `model_acted`, `operator_acted`, `org_started`, `org_stopped`, `seat_access_drift_restored`, `seat_paused`, `seat_resumed` |
+| `lifecycle` | `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `mcp_server_acted`, `model_acted`, `operator_acted`, `org_started`, `org_stopped`, `seat_access_drift_restored`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
-| `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `sandbox_run_stopped`, `scheduled_task_fired`, `task_assigned` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `executor_collected`, `change_merged`, `change_opened`, `code_check_finished`, `code_expunged`, `code_fetched`, `code_imported`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `task` | `executor_asked`, `executor_answered`, `executor_finished`, `executor_failed`, `executor_launched`, `executor_stopped`, `scheduled_fire_superseded`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
 **The map is also the admission list.** A type that is not in it is not written
@@ -2589,12 +2600,13 @@ decision as a value, so the rule below can be checked rather than remembered.
 | `raw_webhook` | Already recorded | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
-| `sandbox_answer_given` | Already recorded | The command an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's control topic, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row, same reason as `a2a_request`. |
+| `executor_answer_given` | Already recorded | The command an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's control topic, and never a turn. What the answer became is **already** a row (`executor_answered`), and that a person gave it is their `operator_acted` row, same reason as `a2a_request`. |
 | `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `operator_tools_changed` | Already recorded | A **nudge** between nodes that what one node's [operator catalogue](../reference/api-endpoints.md#operatormcp--your-own-assistant) is built from changed, so every node tells the MCP clients listening on it to list their tools again — the listing may reach any node, and the last nudge follows the last node's change. The apply that moved the catalogue is **already** a row (`config_revision_applied`), so a durable row per node per change would record one revision once more per member of the fleet. |
 | `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
-| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `seat_inbox_waiting` | Periodic snapshot | A **snapshot** of what waits in the inboxes of the seats one node holds, published every five seconds when a count moved and every thirty when none did, so a durable row per report is readings the next one supersedes; the live projection holds the current one. |
+| `budget_meters` | Periodic snapshot | A **snapshot** of the shared token counters, published by every node on a 15-second tick and at once when a budget window first refuses a charge, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows, per launch of an executor's run in the `executor_collected` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 **Nothing an anonymous caller can pace is written here.** Every categorised
 type also records who authors its rate — this company's own work (`engine`), an
@@ -2662,7 +2674,7 @@ flowchart TD
     B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
     C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
-    E["<b>llm.run</b><br/>one per CLI run, which drives its own requests"]
+    E["<b>llm.run</b><br/>one per harness run, which drives its own requests"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     A --> B --> C --> D
@@ -2674,7 +2686,7 @@ flowchart TD
 **Five span names, and that is the whole set.** `webhook.receive`,
 `agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.run` and
 `tool.call`, alongside `schedule.fire` for cron-started work. A phase is one or
-more runs of its CLI, and each run's tool calls are its children: a run's span
+more runs of its harness, and each run's tool calls are its children: a run's span
 ends once every call it made has settled, and carries the model, the run's
 whole token spend, its call count and how it ended (`crewlet.outcome`: `end`,
 `cap`, `stopped` or `failed`).
@@ -2685,8 +2697,8 @@ round, the tool and its outcome, and token counts. Everything about what a turn
 decision — is already in the [event store](#the-event-store), and a span
 carries what no event does, which is **duration**.
 
-Only the CLI *run* is spanned — not each request the CLI made inside it, which
-the engine reads from the CLI's own record onto the phase event, and not the
+Only the harness *run* is spanned — not each request the harness made inside it, which
+the engine reads from the harness's own record onto the phase event, and not the
 fallback chain and each member tried beneath it, which would nest a span per
 member and tell you nothing you could act on. Which member answered is on the
 phase event.
@@ -2730,7 +2742,7 @@ The full set of variables, including the protocol, the service name and the
 sampling ratio, is in
 [Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
 The engine's exporter and the sandbox OTLP forwarder read the **same** endpoint
-and headers on purpose: a coding agent's spans land in the same backend as the
+and headers on purpose: a harness's spans land in the same backend as the
 turn that started them, nested underneath it.
 
 #### Correlating logs with traces
@@ -3243,7 +3255,7 @@ and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter
 and the next charge the scope admits clears it, as does the window turning
 over. The gate turns work away in two ways, and both are recorded: it refuses
 a round's charge, or — once a window is already full, because a context
-assembly, a rewrite, a coding run, a person's answers or an earlier round took
+assembly, a rewrite, an executor's launch, a person's answers or an earlier round took
 it there — the work is turned away before its first call, since that call
 would be billed and then refused. That second way is every refusal of a full
 window the engine can see coming: a turn stops its next call, the
@@ -3257,7 +3269,7 @@ nothing. Because the counter carries every round it refused, `GET /budgets`,
 the live meter and the park all read a window that refused a round **over** its
 ceiling by the round that crossed it, never just short of it; `refused_at` is
 when the gate last said no. A window filled with nothing asked of it since — a
-background pass, a coding run whose turn has not resumed, and no delivery,
+background pass, an executor whose turn has not resumed, and no delivery,
 question or pass for that scope after it — carries no `refused_at` until
 something is, though its `state` is already `refusing`.
 
@@ -3270,10 +3282,10 @@ stop by the time their size is known, so each is **post-charged** — added to
 the counters in the windows it is recorded in, without a verdict — behind a
 gate that reads the room left *before* it starts:
 
-- **A coding run** — every seat's executor. Its box spends while the turn is
-  parked, so its tokens are known only when the run is collected, and they
-  reach both the seat's counter and the company's in the windows the run is
-  collected in. A run that takes a counter past its cap is logged as
+- **An executor's launch** — every seat's executor, in its box. Its box spends
+  while the turn is parked, so its tokens are known only when the launch is
+  collected, and they reach both the seat's counter and the company's in the
+  windows the launch is collected in. A launch that takes a counter past its cap is logged as
   `sandbox_spend_over_budget`. Its gate is
   `turn_engine.executor_min_budget_tokens` (default 25 000): every launch, a
   turn's first and each relaunch, is refused while a capped window of the seat
@@ -3311,7 +3323,7 @@ gate that reads the room left *before* it starts:
 
 In each case the next round the seat or the company attempts is refused
 against the recorded figure — and for a turn's own auxiliary calls, and for a
-coding run its resumed turn collects, that round is refused before it is sent:
+launch its resumed turn collects, that round is refused before it is sent:
 the turn's meter holds what the post-charge answered, or reads it once before
 the resumed turn's first call.
 
@@ -3360,4 +3372,4 @@ inside the process to hook them, because the engine loads no plugins.
 - **Communication permissions** — agents can only post to channels they're members of
 - **Manager handoffs**: agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and a model at its usage limit as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent
-- **Executor runs** — every agent seat's executor is its coding CLI's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so it is for a dedicated host you are willing to hand to an autonomous agent, the entry that needs the host itself, or a first run on your own machine while its seats take work from you alone, and any other deployment places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))
+- **Executor runs** — every agent seat's executor is its harness's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so it is for a dedicated host you are willing to hand to an autonomous agent, the entry that needs the host itself, or a first run on your own machine while its seats take work from you alone, and any other deployment places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))

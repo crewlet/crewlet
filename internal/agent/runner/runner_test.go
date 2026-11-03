@@ -223,16 +223,37 @@ func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 
 // Nothing citable at all is a different message: the model has not called an
 // outward tool yet, and telling it to pick from an empty list is useless.
+//
+// HOW TO DELIVER, AND HOW TO FIND A TOOL ONLY WHERE ONE CAN BE FOUND: an
+// executor holds every tool it can reach, so its refusal says to call the tool
+// that delivers and names no discovery tool, which is on no executor's surface;
+// a phase that reaches its MCP tools by discovery is told how to find one.
+//
+// Mutation: name the discovery pair whatever the surface, and the executor is
+// sent to two tools it does not hold.
 func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
 	t.Parallel()
-	decode := decodeWork(turn.ToolReply(""),
-		func() []ledger.Call { return []ledger.Call{{Name: "slack_history"}} }, deliverySurface)
-	err := mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)
+	read := func() []ledger.Call { return []ledger.Call{{Name: "slack_history"}} }
+	claim := `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`
+	err := mustErr(t, decodeWork(turn.ToolReply(""), read, deliverySurface), claim)
 	if !strings.Contains(err.Error(), "nothing has been delivered yet") {
 		t.Errorf("err = %v", err)
 	}
+	if !strings.Contains(err.Error(), "Call the tool that delivers") {
+		t.Errorf("the refusal does not say how to deliver: %v", err)
+	}
+	if strings.Contains(err.Error(), "list_mcp_server_tools") {
+		t.Errorf("a surface with nothing to discover was sent to discovery: %v", err)
+	}
+
+	discovering := func() turn.Surface {
+		s := deliverySurface()
+		s.Discoverable = []string{"slack_post"}
+		return s
+	}
+	err = mustErr(t, decodeWork(turn.ToolReply(""), read, discovering), claim)
 	if !strings.Contains(err.Error(), "list_mcp_server_tools") {
-		t.Errorf("the refusal does not say how to find the tool: %v", err)
+		t.Errorf("a phase that discovers its MCP tools is not told how to find one: %v", err)
 	}
 }
 

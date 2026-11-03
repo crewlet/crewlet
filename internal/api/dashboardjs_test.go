@@ -799,7 +799,7 @@ func pricesInModule(module []byte) []priceFound {
 // and never in money.
 //
 // The engine records a price where one is reported — only a subscription
-// coding CLI quotes one — and it is on the wire. A currency covering that
+// harness quotes one — and it is on the wire. A currency covering that
 // minority of calls, beside a token count covering all of them, reads as the
 // company's spend and is a fraction of it, so the client declares no price
 // field and draws none. dashboard/src/money.test.tsx holds the source and the
@@ -1172,11 +1172,11 @@ const (
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
 	// link. A model's usage limit as one condition per entry (ADR-0064): the
-	// queue's wording of it and the CLI names it is said in, the time of day
+	// queue's wording of it and the harness names it is said in, the time of day
 	// it lifts, its remedy in the link table, and the store keeping a row a
 	// push leaves as it was, all in the attention queue and the store the
 	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
-	// that link. Steering a turn whose coding run is out, merged beside it (the
+	// that link. Steering a turn whose executor is out, merged beside it (the
 	// shared write hook reading a press label's own sentence for its receipt,
 	// `landed`, which says when a note is read, in the seats chunk the entry
 	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
@@ -1187,7 +1187,7 @@ const (
 	// later without a reader waiting for it. The frame it joined measured
 	// 349.0 KiB (357,410 bytes): the steering above came to 348.8 KiB once
 	// merged beside the flattening that drawing what prose names moved out of
-	// the renderer (`lib/markdownText.ts`), and a coding run's question asked
+	// the renderer (`lib/markdownText.ts`), and an executor's question asked
 	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
 	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
 	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
@@ -1214,7 +1214,18 @@ const (
 	// the fill screens' scrollbars), and the entry script and the kit's
 	// shared chunks 0.2 KiB more each. It moved to 379 KiB, which is 2.07
 	// seconds on that link. A follow-up ships the conversation parts' rules
-	// as a lazy Chatlet sheet, which brings it back under.
+	// as a lazy Chatlet sheet, which brings it back under. uilet 0.86.1 took
+	// it from about 378.2 KiB to 380.3 KiB (+2.1 KiB): the one sheet carries
+	// 1.5 KiB more (the inbox row's head with its time floated on the first
+	// line, a ListDetail list that scrolls, and the rules of 0.85.0 and
+	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
+	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
+	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
+	// link. The MCP sign-in (the Inbox's words for its two alarm kinds, which
+	// the entry carries as it carries every MCP kind's, and the settings code
+	// Rollup shares into the Access chunk) took it past 381.0 KiB by about
+	// 0.2 KiB: the entry script +105 bytes and the Access chunk +76 bytes,
+	// gzipped. It moved to 382 KiB, which is 2.09 seconds on that link.
 	// The code host, merged beside all of it, adds what it added to the frame
 	// it was built on, about 3 KiB there: its own changes to the frame (the
 	// store_full refusal's sentence among the act errors, a wait said in
@@ -1242,7 +1253,11 @@ const (
 	// the frame's code routes, keys, palette hits and sheet rules, and the
 	// bundler splitting two helpers into chunks of their own beside a merge
 	// of two shared ones. Still under 383 KiB.
-	initialBudget = 383 << 10
+	// Merged with main's uilet 0.86.1 and MCP sign-in, each measured on its
+	// own side above, the two add: the code host's 4.3 KiB over the 378.2 KiB
+	// both sides started from, on main's 381.2 KiB, is about 385.5 KiB, so it
+	// moved to 386 KiB.
+	initialBudget = 386 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1321,7 +1336,7 @@ const (
 	// preview hook the draft file card now shares. 4493 KiB, which still
 	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
 	// the assistant's card rendering took it to 4499.8 KiB: the live view's
-	// CLI runs, their calls in flight and a run drawn before its first round.
+	// harness runs, their calls in flight and a run drawn before its first round.
 	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
 	// card value drawn as what it is (a list as its items, a body as code,
 	// page text as an inert preview, a colour beside its chip) took it to
@@ -1406,14 +1421,14 @@ const (
 	// section matched by its path and name, Home's spent week through the
 	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
 	// still refuses a doubled baseline. A model's usage limit as one
-	// condition per entry (ADR-0064): its wording, the CLI names and its
+	// condition per entry (ADR-0064): its wording, the harness names and its
 	// remedy, the store keeping a row a push leaves as it was, and the Inbox
 	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
 	// refuses a doubled baseline. The review's fixes (a failure's own text
 	// and the spend by model entry kept to an admin, the provider split
 	// offered to an admin alone, and the card that says so) took it to
 	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
-	// baseline. Saying what became of an answer to a parked coding run (sent,
+	// baseline. Saying what became of an answer to a parked executor (sent,
 	// recorded while its seat is busy and on what, answered, or not used and
 	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
 	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
@@ -1429,10 +1444,10 @@ const (
 	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
 	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
 	// still refuses a doubled baseline. Saying that a person's stop ended a
-	// seat's coding run (a stopped turn's tag and a stopped run's span drawn
+	// seat's executor (a stopped turn's tag and a stopped run's span drawn
 	// closed rather than failed, a seat whose last turn "was stopped", the
 	// task's "stopped by a person" pill and the pause dialog's words) and
-	// steering a turn whose coding run is out (Steer offered on a parked turn,
+	// steering a turn whose executor is out (Steer offered on a parked turn,
 	// and a note read inside a run drawn on the run's bar in the words of its
 	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
 	// refuses a doubled baseline. The hardening of inline links merged beside
@@ -1441,7 +1456,7 @@ const (
 	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
 	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
 	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
-	// refuses a doubled baseline. A coding run's question asked and answered
+	// refuses a doubled baseline. An executor's question asked and answered
 	// as a decision (the run's ask drawn with the decision components, its
 	// options read back with the chosen one marked, and its answered history
 	// in the Inbox's Answered group), all in lazy chunks, took it to
@@ -1521,6 +1536,85 @@ const (
 	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
 	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
 	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
+	// Each launch of an executor's run drawn inside its round's Execute card
+	// rather than as a phase of its own (the `executor_collected` record read
+	// by the turn, the phase lists, the waterfall and the executors board)
+	// took it from 5253.5 KiB to 5259.0 KiB (+5.5 KiB): the settled turn
+	// chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB
+	// and the wire protocol +0.6 KiB. 5260 KiB.
+	// uilet 0.86.1 (an inbox row's head that wraps with its time floated on
+	// the first line, a leading slot that fits a 32px face and a ListDetail
+	// list that scrolls in its own column, with 0.85.0 and 0.86.0's
+	// AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell and
+	// RailList) and Chatlet's Activity fixes took it from 5259.8 KiB to
+	// 5280.3 KiB (+20.5 KiB): the one sheet +11.5 KiB, the kit's chunks
+	// +8.2 KiB net (its dist chunk +6.8 KiB and shared chunks +4.0 KiB, less
+	// 2.6 KiB out of the entry script), the lazy sheets +0.3 KiB and +0.6 KiB
+	// elsewhere, Chatlet's chunk +0.1 KiB of it. 5281 KiB.
+	// The MCP alarms in an administrator's Inbox (each kind's words, and the
+	// MCP servers question asked of a reader the MCP section opens for, in the
+	// attention queue the entry loads) took it from 5280.7 KiB to 5282.3 KiB
+	// (+1.6 KiB): the entry script +1.4 KiB, the remedy chunk +0.1 KiB and the
+	// Inbox chunk under 0.1 KiB. The initial load went from 380.3 KiB to
+	// 380.8 KiB, inside its budget. 5283 KiB.
+	// uilet 0.89.0 (RoomRow, a List or PersonRow row's own action and note,
+	// a Switch held with a reason or drawn without its label, 0.87.0's
+	// DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's
+	// membership work (each agent member's gets-every-message switch, the
+	// team room choice in New room, the star on a team's room read from
+	// outside it, the composer wherever the engine takes the post, Browse
+	// rows on RoomRow) took it from 5282.3 KiB to 5288.0 KiB (+5.7 KiB):
+	// Chatlet's chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks
+	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
+	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
+	// 5288 KiB.
+	// Chatlet's delivery receipts (DeliveryReceipt under a person's message,
+	// and the composer's line saying whom a draft will reach, read from
+	// chat_reach once the typing settles) took it from 5288.0 KiB to
+	// 5290.7 KiB (+2.7 KiB): Chatlet's chunk +2.7 KiB and Chatlet's sheet
+	// under 0.1 KiB, with the debounce moving out of its own chunk into the
+	// shared links chunk. The receipt's own styles were already in the one
+	// sheet with 0.89.0. 5291 KiB.
+	// Settings › MCP & tools rebuilt with page tabs (the Servers tab's alarms,
+	// figures and table, a server's page with four tabs, the restart, disable
+	// and remove flows, the built-in catalogue and its drawer, and the page's
+	// words for every engine value), replacing the shipped Tools screen, took
+	// it from 5290.7 KiB to 5328.2 KiB (+37.5 KiB): the settings chunk
+	// +31.0 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
+	// shared settings code Rollup moved into it, and +1.0 KiB in the kit's
+	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
+	// page is all in the settings chunk, so the initial load only lost that
+	// 0.4 KiB. 5329 KiB.
+	// The Sessions view under an agent's Memory tab (the seat's executor
+	// sessions, the latest begun first, and one session's transcript a page
+	// at a time: its entries, the states a session that cannot be read is
+	// answered in, and the account of how its turn ended) took it from
+	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
+	// view loads in. The initial load is unchanged: keepInView, which
+	// Conversations and Sessions share, is a module of the Memory tab's own
+	// rather than of lib/scroller.ts, which the shell imports, and a
+	// transcript's prose takes the shared .prose rule rather than a rule of
+	// its own in the one sheet. 5339 KiB.
+	// The MCP sign-in (the state, auth method, alarm kinds and fix the page
+	// and the Inbox name, the Remove dialog's sentence, and the contract's
+	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
+	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
+	// +0.3 KiB. 5341 KiB.
+	// The changed-tools alarm (its kind and review fix in the Inbox's and the
+	// page's words, and the page's alarm row) took it from 5341.0 KiB to
+	// 5341.7 KiB (+0.8 KiB): the settings chunk +0.5 KiB, the entry script
+	// +0.2 KiB and the Access chunk +0.1 KiB. 5342 KiB.
+	// Settings › MCP & tools' add and edit wizard (its source, name,
+	// connection, sign-in, test and review steps, the Test and Replace value
+	// dialogs), net of the Add dialog and its form helpers it replaces, took
+	// it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP
+	// sign-in, from 5338.8 KiB to 5381.5 KiB, that was the settings chunk
+	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
+	// setup wizard, key and value rows, source editor and file drop the
+	// wizard is the first settings screen to draw), and 5.6 KiB less of
+	// shared code Rollup moved between chunks and of the Add dialog's rules
+	// out of the one sheet. The page is all in the settings chunk, so the
+	// initial load did not grow. 5385 KiB.
 	// The code host's screens, merged beside it (the Code workspace: its
 	// repositories, a repository's files and history, its changes with their
 	// reviews, checks and merge queue, and their words), took it from 5253.0
@@ -1540,7 +1634,13 @@ const (
 	// embedded, about 124 KiB every binary carried for a test. Built into
 	// static/protocol, which nothing embeds, it is out of the tree. Still
 	// 5429 KiB.
-	treeBudget = 5<<20 + 309<<10
+	// Merged with main's executor launches, uilet 0.86.1 and 0.89.0, Chatlet's
+	// receipts and membership, the Sessions view and Settings › MCP & tools
+	// above, each measured on its own side from about 5253 KiB, the two add:
+	// the code host's +28 KiB on main's 5384.9 KiB, less main's 0.8 KiB of
+	// wire protocol that static/protocol keeps out of the tree, measured
+	// 5412.5 KiB. 5413 KiB.
+	treeBudget = 5<<20 + 293<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

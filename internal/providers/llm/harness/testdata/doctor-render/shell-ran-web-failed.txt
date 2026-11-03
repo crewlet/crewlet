@@ -1,0 +1,20 @@
+provider      : sub
+harness       : custom
+binary        : <binary>
+version       : fake-cli 1.0.0
+written for   : unknown
+state dir     : <state>
+credentials   : none on disk
+token env     : n/a — this harness mints no headless token
+sign-in       : none the engine hands the harness — but the smoke test was answered, so it authenticates some other way (an endpoint that takes no key, or a credential in its own configuration)
+token usage   : estimated (4 characters per token)
+system prompt : seats: in the transcript, under the harness's own (the profile declares no channel)
+              : side passes: in the transcript, under the harness's own (the profile declares no channel)
+smoke test    : failed — the "custom" profile has no mcp block, so a seat's phase on this entry cannot be handed its tools and is refused (text functions still run); declare providers.llm.sub.overrides.mcp
+local tools   : denied by profile; probe: SHELL RAN
+web           : allowed; failed
+problems:
+  - the "custom" profile reads no usage figures, so budgets for seats on this provider run on estimates
+  - failed — the "custom" profile has no mcp block, so a seat's phase on this entry cannot be handed its tools and is refused (text functions still run); declare providers.llm.sub.overrides.mcp
+  - the "custom" profile says local tools are denied, but the harness ran a shell command on the engine host — the vendor's denial flag is not taking effect on this build (unknown); check overrides against the installed version before running seats on it
+  - the "custom" harness could not fetch https://www.cloudflare.com/cdn-cgi/trace with its own web tool (it said: "The fetch was blocked by a proxy."). Web is meant to stay on for every subscription seat: check that no vendor sandbox flag cuts the network and that the egress proxy reaches the child environment (env / passthrough_env)

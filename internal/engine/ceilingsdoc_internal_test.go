@@ -224,11 +224,12 @@ func gibWords(t *testing.T, bytes int64) string {
 		return fmt.Sprintf("%d GiB", bytes/gib)
 	case bytes%(gib/2) == 0:
 		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
-	case (3*bytes+3)%gib < 6:
-		// A WHOLE NUMBER OF THIRDS, to the byte an ask of two thirds of a
+	case (6*bytes+6)%gib < 12:
+		// A WHOLE NUMBER OF SIXTHS, to the byte an ask of two thirds of a
 		// clamp is floored to: the code log asks for two thirds of the
-		// mutation log's, so every sum it is in ends in one, which the pages
-		// write as the vulgar fraction [gibText] spells (228⅔).
+		// mutation log's, and the half-gibibyte logs beside it add halves to
+		// that third, so a sum ends in a sixth, which the pages write as the
+		// vulgar fraction [gibText] spells (229⅙).
 		return gibText(bytes) + " GiB"
 	}
 	t.Fatalf("%d bytes is no whole or half GiB; teach gibWords and the pages "+

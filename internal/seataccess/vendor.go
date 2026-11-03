@@ -469,6 +469,11 @@ const (
 	// in `mcp_servers`: the seat has an account and no tool to use it with.
 	ToolNoServer ToolState = "no_server"
 
+	// ToolServerOff is a kind whose every tool server the company has turned
+	// off (`enabled: false`): declared, and started for nobody until it is
+	// turned back on.
+	ToolServerOff ToolState = "server_off"
+
 	// ToolWaiting is a declared server whose credential is not sealed yet.
 	ToolWaiting ToolState = "waiting"
 

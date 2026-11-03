@@ -39,7 +39,7 @@ type Paused struct {
 
 	// StopRunning is whether the pause also ended the seat's running work
 	// rather than letting it finish: the turn it was on, at its next round,
-	// and a coding run it had out, at once.
+	// and an executor it had out, at once.
 	StopRunning bool `json:"stop_running"`
 }
 

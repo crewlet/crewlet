@@ -54,6 +54,11 @@ type SubagentInput struct {
 	// matching to tools this worker can actually call.
 	AvailableTools []string
 
+	// MCPServers is every MCP server the worker's grant holds a tool of,
+	// sorted: what the catalogue's server triggers are matched against, as
+	// the worker's guard matches them (see [Surface]).
+	MCPServers []string
+
 	// Discoverable is what the worker can reach but was not granted up
 	// front, rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]
 	// — present only when the worker is discovery-capable. It also decides
@@ -89,7 +94,7 @@ func BuildSubagent(seat Seat, in SubagentInput) Prompt {
 	b.Lead("task", "Task", in.ParentSystemPrompt)
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseSubagent, Surface{
 		Tools:      in.AvailableTools,
-		MCPServers: seat.mcpServers(),
+		MCPServers: in.MCPServers,
 	})...)
 	rules := SubagentPreamble
 	if section := discoverableSection(in.Discoverable); section != nil {

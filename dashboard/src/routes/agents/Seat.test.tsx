@@ -28,10 +28,26 @@ import type {
   OrgProjection,
   ScheduleRow,
 } from "~/protocol/index.ts";
+import { EVERY_QUESTION, session as floors } from "~/protocol/session.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { settled } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+
+// EVERY ROW A LIST KEEPS IN ITS VIEW, recorded: jsdom lays nothing out, so
+// where a list scrolled to is nothing a case can read, and the call is. The
+// real one still runs.
+const keptInView = vi.hoisted(() => [] as HTMLElement[]);
+vi.mock("~/routes/agents/seat/keepInView.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/routes/agents/seat/keepInView.ts")>();
+  return {
+    ...real,
+    keepInView: (box: HTMLElement, row: HTMLElement) => {
+      keptInView.push(row);
+      real.keepInView(box, row);
+    },
+  };
+});
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -176,12 +192,77 @@ const EVERY_ACT = [
   "update_work_item",
   "pause_seat",
   "resume_seat",
-  "answer_run",
+  "answer_executor",
   "open_dm",
 ];
 
 /** An answer, or how to answer from the question's own parameters. */
 type Answer = unknown | ((params: Record<string, unknown>) => unknown);
+
+/** The turn the sessions below are of, a run id as the engine spells one. */
+const SESSION_TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
+
+/** Where on the executor log the sessions below were read. */
+const LOG_AT = { stream: "CREWLET_EXECUTOR_LOG", generation: 1, seq: 9 };
+
+/** One turn's executor session as `executor_sessions` lists it: a completed
+ *  turn whose session is kept, with `over` laid on top. */
+function sessionRow(over: Record<string, unknown> = {}) {
+  return {
+    turn_id: SESSION_TURN,
+    conversation_key: "chatlet:room:eng",
+    work_key: "",
+    harness: "claude-code",
+    harness_version: "2.1.310",
+    captured_at: "2026-09-21T09:50:00Z",
+    ended_at: "2026-09-21T09:51:00Z",
+    ending: { outcome: "completed" },
+    ask_excerpt: "Fix the flaky provisioner test.",
+    kept: true,
+    object_bytes: 41234,
+    ...over,
+  };
+}
+
+/** A page of a seat's executor sessions, with `over` laid on top. */
+function sessionsList(sessions: unknown[], over: Record<string, unknown> = {}) {
+  return {
+    handle: "swe",
+    sessions,
+    read_level: "stale",
+    position: LOG_AT,
+    complete: true,
+    ...over,
+  };
+}
+
+/** A page of one session's transcript as `executor_session` answers it, with
+ *  `over` laid on top. */
+function transcriptPage(over: Record<string, unknown> = {}) {
+  return {
+    handle: "swe",
+    session: sessionRow(),
+    state: "read",
+    entries: [],
+    from: 0,
+    bounds: {
+      entries: 200,
+      bytes: 1 << 20,
+      entry_bytes: 16 << 10,
+      line_bytes: 32 << 20,
+      read_bytes: 256 << 20,
+    },
+    read_level: "stale",
+    position: LOG_AT,
+    complete: true,
+    ...over,
+  };
+}
+
+/** One entry of a transcript, `kind` the model's unless named. */
+function said(text: string, kind = "model") {
+  return { kind, text, bytes: text.length };
+}
 
 /**
  * What the engine answers a question no case names — each in the shape the
@@ -221,6 +302,16 @@ const DEFAULTS: Record<string, unknown> = {
     entries: [],
     held_by: "node-1",
   },
+  // THE MEMORY TAB LISTS THE SEAT'S EXECUTOR SESSIONS beside its threads, so
+  // every case that opens it is answered a list — none, here — and a session
+  // the address names reads as one whose turn captured nothing.
+  executor_sessions: sessionsList([]),
+  executor_session: (params: Record<string, unknown>) =>
+    transcriptPage({
+      session: sessionRow({ turn_id: params.turn_id, kept: false, object_bytes: 0 }),
+      state: "none",
+      why: "nothing of this turn's session was captured",
+    }),
   turns: { turns: [], next: null },
   agent: { llm_history: [], next: "" },
   inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
@@ -242,6 +333,7 @@ let reply: { status: number; body: unknown };
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  keptInView.length = 0;
   asked = [];
   posted = [];
   reply = { status: 200, body: { tool: "pause_seat", outcome: "applied" } };
@@ -2328,6 +2420,459 @@ test("a thread opened from the address does not scroll the page to it", async ()
   }
 });
 
+// CHOOSING ANOTHER THREAD SHOWS THAT THREAD'S TURNS, from its loading state.
+// The choice asks again with the new `conversation=`, and until that answer
+// arrives the one in hand is the last thread's: its turns drawn under the new
+// thread's name read as the new thread's own.
+test("choosing another thread never shows the last thread's turns under it", async () => {
+  const other = "slack:C0TEAM/1709290000.000200";
+  const listed = {
+    handle: "swe",
+    held_by: "node-2",
+    conversations: [
+      { key: THREAD, turns: 1, last_at: "2026-03-01T09:00:00Z" },
+      { key: other, turns: 1, last_at: "2026-03-01T08:00:00Z" },
+    ],
+    conversations_total: 2,
+  };
+  let answer: (entries: unknown[]) => void = () => undefined;
+  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      conversations: (p: Record<string, unknown>) =>
+        p.conversation === other
+          ? new Promise((resolve) => {
+              answer = (entries) => resolve({ ...listed, entries });
+            })
+          : {
+              ...listed,
+              entries:
+                p.conversation === THREAD
+                  ? [
+                      {
+                        turn_id: "t1",
+                        at: "2026-03-01T09:00:00Z",
+                        intent: "The first thread's turn.",
+                      },
+                    ]
+                  : [],
+            },
+    },
+  });
+  expect(await screen.findByText("The first thread's turn.")).toBeTruthy();
+  const row = screen.getAllByRole("button").find((b) => b.getAttribute("title") === other)!;
+  fireEvent.click(row);
+  await waitFor(() => expect(screen.queryByText("The first thread's turn.")).toBeNull());
+  act(() =>
+    answer([{ turn_id: "t2", at: "2026-03-01T08:00:00Z", intent: "The other thread's turn." }]),
+  );
+  expect(await screen.findByText("The other thread's turn.")).toBeTruthy();
+  expect(screen.queryByText("The first thread's turn.")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// The Memory tab's executor sessions
+// ---------------------------------------------------------------------------
+
+// A SEAT WHOSE TURNS CAPTURED NOTHING SAYS SO, and when a session appears —
+// rather than drawing an empty list a reader cannot tell from one that failed.
+test("a seat with no executor sessions says so under its memory", async () => {
+  mount("#/company/org/seats/swe?tab=memory", { answers: { agent_memory: memoryOf() } });
+  expect(await screen.findByText("No sessions recorded")).toBeTruthy();
+  expect(screen.getByText("A turn's session appears here once its run is collected.")).toBeTruthy();
+  expect(askedFor("executor_sessions")[0]?.params).toMatchObject({ handle: "swe" });
+});
+
+// CHOOSING A SESSION OPENS ITS TRANSCRIPT, asked of the engine by its turn as
+// every question about a turn names it, under the account of how the turn
+// ended — the brief, the model's words, a note a person sent the run, each
+// labelled by who it is from.
+test("choosing a session opens its transcript, asked by its turn", async () => {
+  mount("#/company/org/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: transcriptPage({
+        entries: [
+          said("Fix the flaky provisioner test.", "brief"),
+          said("## A note from ada, sent while this turn was running\n\nTarget main.", "note"),
+          said("Running the tests first."),
+        ],
+      }),
+    },
+  });
+  const row = await screen.findByRole("button", { name: /Fix the flaky provisioner test\./ });
+  expect(askedFor("executor_session")).toHaveLength(0);
+  fireEvent.click(row);
+  expect(await screen.findByText("Running the tests first.")).toBeTruthy();
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(askedFor("executor_session").at(-1)?.params).toMatchObject({
+    handle: "swe",
+    turn_id: SESSION_TURN,
+  });
+  expect(screen.getByText("Note")).toBeTruthy();
+  expect(screen.getByText(/40 KiB kept/)).toBeTruthy();
+});
+
+// A SESSION WHOSE OBJECT IS GONE IS A WARNING SAYING SO, in the engine's own
+// sentence — never an empty transcript, which would read as a run that did
+// nothing.
+test("a session whose object is gone is said, not drawn as an empty transcript", async () => {
+  const why = "the object store no longer holds this session's object";
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: transcriptPage({ state: "missing", why }),
+    },
+  });
+  expect(await screen.findByText(why)).toBeTruthy();
+  expect(screen.getByText("The session is gone.")).toBeTruthy();
+  expect(screen.queryByText("No entries")).toBeNull();
+});
+
+// THE LIST AND THE TRANSCRIPT EACH PAGE ON, by the cursor each answer hands
+// out, and a page after the first is drawn after it.
+test("the sessions and a session's transcript each page on", async () => {
+  const older = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c12";
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: (p: Record<string, unknown>) =>
+        p.cursor === "c1"
+          ? sessionsList([sessionRow({ turn_id: older, ask_excerpt: "An older turn's ask." })])
+          : sessionsList([sessionRow()], { next_cursor: "c1" }),
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor === "k.1.1"
+          ? transcriptPage({ from: 1, entries: [said("The second page.")] })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("The second page.")).toBeTruthy();
+  expect(screen.getByText("The first page.")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
+  expect(await screen.findByText("An older turn's ask.")).toBeTruthy();
+});
+
+// CHOOSING ANOTHER SESSION SHOWS THAT SESSION, from its loading state: the one
+// before it — its account and its entries — is never drawn under the next
+// one's heading while the next is being read.
+test("choosing another session never shows the last one's transcript under it", async () => {
+  const other = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c13";
+  let answer: (value: unknown) => void = () => undefined;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([
+        sessionRow(),
+        sessionRow({ turn_id: other, ask_excerpt: "The other turn's ask." }),
+      ]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.turn_id === other
+          ? new Promise((resolve) => {
+              answer = resolve;
+            })
+          : transcriptPage({ entries: [said("The first session's words.")] }),
+    },
+  });
+  expect(await screen.findByText("The first session's words.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /The other turn's ask\./ }));
+  await waitFor(() => expect(screen.queryByText("The first session's words.")).toBeNull());
+  act(() =>
+    answer(
+      transcriptPage({
+        session: sessionRow({ turn_id: other }),
+        entries: [said("The other session's words.")],
+      }),
+    ),
+  );
+  expect(await screen.findByText("The other session's words.")).toBeTruthy();
+});
+
+// A PAGE THAT NO LONGER FOLLOWS ON IS REFUSED, and the reader is told so — in
+// words naming no cause the screen cannot know, the session captured again or
+// a node of another release answering — and offered the transcript from its
+// start, the one way on, rather than a refusal with no way past it. Read again,
+// focus is on the transcript's heading: the button pressed is gone with the
+// pages it stood under.
+test("a page of an older capture offers the transcript again from its start", async () => {
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: (p: Record<string, unknown>) => {
+        if (p.cursor) throw new Error("bad_params");
+        return transcriptPage({
+          entries: [said("The first page.")],
+          cut: "entries",
+          next_cursor: "k.1.1",
+        });
+      },
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText(/later pages no longer follow on/)).toBeTruthy();
+  const before = askedFor("executor_session").length;
+  fireEvent.click(screen.getByRole("button", { name: "Read it again from the start" }));
+  await waitFor(() => expect(askedFor("executor_session").length).toBeGreaterThan(before));
+  expect(askedFor("executor_session").at(-1)?.params).not.toHaveProperty("cursor");
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Transcript" }));
+});
+
+// A NEWER CAPTURE THAN THE TRANSCRIPT ON SCREEN IS OFFERED, never swapped in
+// under the reader: the list says the session was captured since, and the
+// reader reads the newer capture from its start when they choose to — focus
+// then on the transcript's heading, the button pressed being gone.
+test("a newer capture of the open session is offered from its start", async () => {
+  const later = "2026-09-21T09:55:00Z";
+  let reads = 0;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow({ captured_at: later })]),
+      executor_session: () =>
+        ++reads === 1
+          ? transcriptPage({ entries: [said("What the first capture held.")] })
+          : transcriptPage({
+              session: sessionRow({ captured_at: later }),
+              entries: [said("What the newer capture holds.")],
+            }),
+    },
+  });
+  expect(await screen.findByText("What the first capture held.")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "Read the newer capture" }));
+  expect(await screen.findByText("What the newer capture holds.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Read the newer capture" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Transcript" }));
+});
+
+/** The transcript's own card: the account, the entries and what is said
+ *  under them, apart from the list beside it. */
+function transcriptCard(): HTMLElement {
+  const card = screen.getByRole("heading", { name: "Transcript" }).closest(".thread-detail-card");
+  expect(card, "the transcript's card is not drawn").not.toBeNull();
+  return card as HTMLElement;
+}
+
+// A FIRST PAGE ASKED AGAIN FOR A NEWER CAPTURE IS OFFERED, NEVER DRAWN. A write
+// from this tab asks every question again, the transcript's first page among
+// them, and its answer may be of a capture since: drawn, it replaced the
+// entries under the reader with nothing to say so; with a page held, it set
+// the pages bridging to a capture they can never meet. The entries read stay,
+// and the newer capture is offered from its start.
+test("a first page answered again for a newer capture is offered, never drawn", async () => {
+  const later = "2026-09-21T09:55:00Z";
+  let captured = sessionRow().captured_at;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: () => sessionsList([sessionRow({ captured_at: captured })]),
+      executor_session: () =>
+        captured === later
+          ? transcriptPage({
+              session: sessionRow({ captured_at: later }),
+              entries: [said("What the newer capture holds.")],
+            })
+          : transcriptPage({ entries: [said("What the first capture held.")] }),
+    },
+  });
+  expect(await screen.findByText("What the first capture held.")).toBeTruthy();
+  const before = askedFor("executor_session").length;
+  captured = later;
+  act(() => {
+    floors.written(null, null, [EVERY_QUESTION]);
+  });
+  await waitFor(() => expect(askedFor("executor_session").length).toBeGreaterThan(before));
+  expect(await screen.findByRole("button", { name: "Read the newer capture" })).toBeTruthy();
+  expect(screen.getByText("What the first capture held.")).toBeTruthy();
+  expect(screen.queryByText("What the newer capture holds.")).toBeNull();
+});
+
+// HOW THE TURN ENDED FOLLOWS THE LIST'S ROW. A turn's end is recorded with no
+// new capture, so it reaches the list's poll and never the transcript's first
+// page, read once — which went on saying the turn had not ended beside a list
+// saying how it did. And a reconnect asks the list again, never the
+// transcript.
+test("how a turn ended follows the list's row once its transcript is read", async () => {
+  let ending: Record<string, unknown> | null = null;
+  const { store } = mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: () =>
+        sessionsList([sessionRow({ ending, ended_at: ending ? "2026-09-21T10:30:00Z" : null })]),
+      executor_session: transcriptPage({
+        session: sessionRow({ ending: null, ended_at: null }),
+        entries: [said("Running the tests first.")],
+      }),
+    },
+  });
+  expect(await screen.findByText("Running the tests first.")).toBeTruthy();
+  expect(within(transcriptCard()).getByText("not ended")).toBeTruthy();
+  const listed = askedFor("executor_sessions").length;
+  const read = askedFor("executor_session").length;
+  ending = { outcome: "completed", decision: "done" };
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await waitFor(() => expect(askedFor("executor_sessions").length).toBeGreaterThan(listed));
+  await waitFor(() => expect(within(transcriptCard()).queryByText("not ended")).toBeNull());
+  expect(within(transcriptCard()).getByText("completed")).toBeTruthy();
+  expect(askedFor("executor_session")).toHaveLength(read);
+});
+
+// A FAILED POLL OF THE LIST LEAVES THE TRANSCRIPT, AND ITS PAGES, WHERE THEY
+// ARE. The transcript was drawn inside the list's answer, so a poll that timed
+// out or was refused replaced it with the list's failure, and the pages the
+// reader had loaded were read again from the first once a poll came back.
+test("a failed poll of the list leaves the open transcript and its pages", async () => {
+  let failing = false;
+  const { store } = mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: () => {
+        if (failing) throw new Error("unavailable");
+        return sessionsList([sessionRow()]);
+      },
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor === "k.1.1"
+          ? transcriptPage({ from: 1, entries: [said("The second page.")] })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("The second page.")).toBeTruthy();
+  const listed = askedFor("executor_sessions").length;
+  failing = true;
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await waitFor(() => expect(askedFor("executor_sessions").length).toBeGreaterThan(listed));
+  await settle();
+  expect(screen.getByText("The first page.")).toBeTruthy();
+  expect(screen.getByText("The second page.")).toBeTruthy();
+  expect(screen.queryByText(/Fix the flaky provisioner test\./)).toBeNull();
+});
+
+// A LATER PAGE THAT CANNOT BE READ SAYS SO AFTER THE ENTRIES. Every page is
+// read from the archive's start, so a first page can read whole and a later
+// one meet the damage — an archive cut short past the entries shown, an object
+// gone since — and come back with no entries and no cursor: read only from the
+// first page's state, the transcript looked as if the run had ended there.
+test("a later page that cannot be read says so after the entries", async () => {
+  const why =
+    "this session opened, and is not an archive of its harness's format: " +
+    "it ends part way through";
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor === "k.1.1"
+          ? transcriptPage({ from: 1, state: "malformed", why })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText(/The rest of this transcript could not be read/)).toBeTruthy();
+  expect(within(transcriptCard()).getByText(new RegExp(why))).toBeTruthy();
+  expect(screen.getByText("The first page.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load more of the transcript" })).toBeNull();
+});
+
+// A PAGE CUT WHERE NO LATER PAGE CAN GO FURTHER SAYS SO, a first page as much
+// as a later one; and one that read nothing says nothing of it could be shown —
+// never "No entries", which says the harness recorded nothing.
+test("a page cut at the read's own bound says the rest cannot be shown", async () => {
+  const sessions = { agent_memory: memoryOf(), executor_sessions: sessionsList([sessionRow()]) };
+  const address = `#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`;
+  mount(address, {
+    answers: {
+      ...sessions,
+      executor_session: transcriptPage({ entries: [said("All a read reached.")], cut: "read" }),
+    },
+  });
+  expect(await screen.findByText("All a read reached.")).toBeTruthy();
+  expect(screen.getByText(/The rest of this session cannot be shown.*256 MiB/)).toBeTruthy();
+  cleanup();
+
+  mount(address, {
+    answers: {
+      ...sessions,
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor === "k.1.1"
+          ? transcriptPage({ from: 1, entries: [said("All a read reached.")], cut: "read" })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  expect(screen.queryByText(/cannot be shown/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("All a read reached.")).toBeTruthy();
+  expect(screen.getByText(/The rest of this session cannot be shown.*256 MiB/)).toBeTruthy();
+  cleanup();
+
+  mount(address, {
+    answers: { ...sessions, executor_session: transcriptPage({ entries: [], cut: "read" }) },
+  });
+  expect(await screen.findByText(/None of this session can be shown.*256 MiB/)).toBeTruthy();
+  expect(screen.queryByText("No entries")).toBeNull();
+});
+
+// A SESSION THE ADDRESS NAMES IS KEPT IN ITS LIST'S VIEW once the rows are
+// drawn: on opening, the list has no rows until it is answered, which is after
+// the first render, and a list that kept the row in view only then opened at
+// its top with the pressed row out of sight. A thread the address names is
+// kept so as well.
+test("a session or a thread the address names is kept in its list's view", async () => {
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([
+        sessionRow({
+          turn_id: "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c19",
+          ask_excerpt: "Another ask.",
+        }),
+        sessionRow(),
+      ]),
+    },
+  });
+  await waitFor(() =>
+    expect(
+      keptInView.some((row) => row.textContent?.includes("Fix the flaky provisioner test.")),
+    ).toBe(true),
+  );
+  cleanup();
+
+  keptInView.length = 0;
+  mount(`#/company/org/seats/swe?tab=memory&conversation=${encodeURIComponent(THREAD)}`, {
+    answers: { agent_memory: memoryOf(), conversations: threads([]) },
+  });
+  await waitFor(() =>
+    expect(keptInView.some((row) => row.getAttribute("title") === THREAD)).toBe(true),
+  );
+});
+
 const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
   scope_type: "role",
   scope_id: "swe",
@@ -2550,7 +3095,7 @@ test("a parked run is answered from its seat with its context and options", asyn
   const { store } = mount("#/company/org/seats/swe", {
     answers: {
       viewer: { ...OPERATOR, acts: EVERY_ACT },
-      sandbox_runs: {
+      executors: {
         runs: [
           {
             turn_id: "t-7",
@@ -2575,13 +3120,13 @@ test("a parked run is answered from its seat with its context and options", asyn
     agents: [WORKING],
   });
   act(() =>
-    store.applySandboxes([
+    store.applyExecutors([
       {
         turn_id: "t-7",
         role: "SWE",
         agent_handle: "swe",
         agent_id: "a-swe",
-        coding_agent: "claude",
+        harness: "claude",
         sandbox_id: "box-1",
         status: "awaiting_clarification",
         started_at: "2026-09-21T09:45:50Z",
@@ -2591,7 +3136,7 @@ test("a parked run is answered from its seat with its context and options", asyn
     ]),
   );
   await settle();
-  expect(screen.getByText(/A coding run is waiting on a question:/).textContent).toContain(
+  expect(screen.getByText(/This seat's executor is waiting on a question:/).textContent).toContain(
     "Which retry ceiling should the client use?",
   );
   fireEvent.click(screen.getByRole("button", { name: "Answer" }));
@@ -2601,7 +3146,7 @@ test("a parked run is answered from its seat with its context and options", asyn
   fireEvent.click(within(dialog).getByRole("button", { name: /Three/ }));
   await waitFor(() => expect(posted).toHaveLength(1));
   expect(posted[0]).toEqual({
-    tool: "answer_run",
+    tool: "answer_executor",
     args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
   });
 });

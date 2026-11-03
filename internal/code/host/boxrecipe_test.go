@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -17,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -33,10 +33,10 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 // version check, the coding clone and the check's single-commit checkout —
 // run as a box runs them, `sh -c` in the box's working directory, under git
 // (the box's git: the pin, or the client floor's 2.40.4) with EXACTLY the
-// environment the engine gives a box (sandbox.BoxGit, ADR-0086): its run's
+// environment the engine gives a box (sandbox.BoxGit, ADR-0093): its run's
 // credential on /box/git/, answered by the engine's credential helper, the
-// code host's base as CREWLET_GIT_URL, the seat's commit identity, and the
-// commit hook's values — over a git environment of the box's own whose
+// code host's base as CREWLET_GIT_URL and the seat's commit identity — over
+// a git environment of the box's own whose
 // global credential helper answers as a PERSON, which the engine's reset must
 // keep from ever answering the code host.
 //
@@ -44,9 +44,12 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 //   - The coding clone leaves HEAD on the run's branch at its base, the cone's
 //     files checked out — directories git's cone mode would read as patterns
 //     among them — and not one blob outside the cone in the object store,
-//     the commit-trailer hook in place; a commit made there pushes as the
-//     run, lands a push row naming the run, and the commit the host holds
-//     carries the seat's identity and the run's three trailers.
+//     and no hook of its own: what a commit made in the box carries is the
+//     run's attribution, which the executor's runner installs for every
+//     repository the run commits in (internal/sandbox/executor's
+//     attribution.go), never a property of a checkout. A commit made there
+//     pushes as the run, lands a push row naming the run, and the commit the
+//     host holds carries the seat's identity and nothing the recipe added.
 //   - The coding clone holds the default branch and nothing of the other
 //     seats' branches already on the host — not one of their commits, no
 //     remote-tracking ref but origin/main — and its fetch refspec names main
@@ -59,10 +62,10 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 //     branch nobody pushed, where the clone wants no branch at all; and a
 //     base no ref reaches any more (a deleted branch's commit).
 //   - The single-commit checkout leaves HEAD detached at the commit, one
-//     commit of history, the cone's files alone, and no commit hook.
+//     commit of history, the cone's files alone, and no hook.
 //
-// Mutations: drop the hook command from the coding recipe — the pushed commit
-// carries no trailer, red; check the coding clone out at what its clone's
+// Mutations: write a commit hook in the coding recipe — the clone holds one
+// and the pushed commit carries its trailers, red; check the coding clone out at what its clone's
 // HEAD names rather than its base — the base cases off the default branch,
 // red; drop --skip-checks — the cone naming [odd] and !bang is refused, red;
 // drop --single-branch — the clone holds every seat's work, tracks every
@@ -119,13 +122,8 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	run := f.Runs().Launch(codetest.FixtureAlice, rows.Position, host.BoxGrant{RepoID: rows.Repo.ID,
 		Name: codetest.RepoName, Access: code.AccessWrite, Branch: "refs/heads/" + branch},
 		host.BoxGrant{RepoID: loneRows.Repo.ID, Name: lone, Access: code.AccessWrite, Branch: loneOwn})
-	trailers, err := sandbox.TrailerEnv(codetest.FixtureAlice, run.LaunchID,
-		&types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	box := boxEnv(t, person.Git().Environ(), git, sandbox.BoxGit{Base: f.Nodes()[0].URL() + "/box/git",
-		User: host.BoxUser, Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"}, trailers)
+		User: host.BoxUser, Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"})
 
 	runStep(t, t.TempDir(), box, sandbox.GitVersionStep())
 
@@ -168,12 +166,9 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		[]string{"+refs/heads/main:refs/remotes/origin/main"}) {
 		t.Errorf("the coding clone's fetch refspec is %q, want main's alone", got)
 	}
-	hook := filepath.Join(clone, ".git", "hooks", "prepare-commit-msg")
-	if body, err := os.ReadFile(hook); err != nil || string(body) != sandbox.TrailerHook {
-		t.Errorf("the coding clone's hook is %q (%v), want TrailerHook", body, err)
-	}
-	if info, err := os.Stat(hook); err != nil || info.Mode().Perm() != 0o755 {
-		t.Errorf("the coding clone's hook is not mode 0755: %v %v", info, err)
+	if hooks := writtenHooks(t, clone); len(hooks) > 0 {
+		t.Errorf("the coding clone wrote the hooks %q: a commit's attribution is its run's, never the checkout's",
+			hooks)
 	}
 
 	// GIT'S MONITOR is no clone's: the coding clone leaves it unset, and the
@@ -206,8 +201,9 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 
 	// A COMMIT MADE IN THE BOX, under its run, pushes AS THE RUN — the
 	// engine's helper answering /box/git/ with the run's token — lands a push
-	// row naming the run, and carries the seat's identity and the run's
-	// trailers on the host.
+	// row naming the run, and carries the seat's identity on the host and
+	// no trailer of the recipe's: the push row, stamped from the run's own
+	// record, is its provenance.
 	if err := os.WriteFile(filepath.Join(clone, "src", "a.txt"), []byte("a, changed in the box\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -229,12 +225,9 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		"FETCH_HEAD")); got != "Alice <alice@seats.invalid> / Alice <alice@seats.invalid>" {
 		t.Errorf("the box's commit is %q, want the seat's identity as its author and committer", got)
 	}
-	got := strings.Split(strings.TrimSpace(client.Run(t, work, "log", "-1",
-		"--format=%(trailers:only,unfold)", "FETCH_HEAD")), "\n")
-	want := []string{"Crewlet-Seat: " + codetest.FixtureAlice, "Crewlet-Run: " + run.LaunchID,
-		"Crewlet-Work-Item: native ENG-7"}
-	if !slices.Equal(got, want) {
-		t.Errorf("the pushed commit carries %q, want %q", got, want)
+	if got := strings.TrimSpace(client.Run(t, work, "log", "-1", "--format=%(trailers:only,unfold)",
+		"FETCH_HEAD")); got != "" {
+		t.Errorf("the pushed commit carries the trailers %q, want none the recipe added", got)
 	}
 
 	// THE AGENT'S OWN FETCHES: a plain `git fetch` in the box brings nothing
@@ -336,16 +329,15 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		t.Errorf("the check's checkout holds %s commits of history, want 1", got)
 	}
 	sameFiles(t, "the check's checkout", checkout, "README", "src/a.txt", "src/lib/b.txt")
-	if _, err := os.Lstat(filepath.Join(checkout, ".git", "hooks", "prepare-commit-msg")); err == nil {
-		t.Error("the check's checkout has a commit hook: a check box commits nothing")
+	if hooks := writtenHooks(t, checkout); len(hooks) > 0 {
+		t.Errorf("the check's checkout wrote the hooks %q: a check box commits nothing", hooks)
 	}
 }
 
 // boxEnv is a box's environment over the client environment env, as the
 // engine's launch makes it: git's directory first on PATH, and over env — its
-// own git configuration kept — the engine's box git environment (g) and the
-// commit hook's values.
-func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit, hook map[string]string) []string {
+// own git configuration kept — the engine's box git environment (g).
+func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit) []string {
 	t.Helper()
 	run := map[string]string{}
 	for _, kv := range env {
@@ -357,7 +349,6 @@ func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit, hook map[s
 		t.Fatalf("the box's git environment: %v", err)
 	}
 	maps.Copy(run, engine)
-	maps.Copy(run, hook)
 	run["PATH"] = filepath.Dir(git) + string(os.PathListSeparator) + os.Getenv("PATH")
 	out := make([]string, 0, len(run))
 	for _, name := range slices.Sorted(maps.Keys(run)) {
@@ -509,6 +500,27 @@ func pushOffMain(t *testing.T, p *codetest.Person, work, url, base, ref string) 
 	}
 	p.Git().Run(t, work, "checkout", "-q", "main")
 	return commit
+}
+
+// writtenHooks is every hook the checkout at dir holds that git's own template
+// did not write: the entries of its .git/hooks with no ".sample" suffix, which
+// is how git names each one it installs as an example and never runs.
+func writtenHooks(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, ".git", "hooks"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read %s's hooks: %v", dir, err)
+	}
+	var written []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sample") {
+			written = append(written, e.Name())
+		}
+	}
+	return written
 }
 
 // trackedBranches is every remote-tracking branch of the repository at dir,

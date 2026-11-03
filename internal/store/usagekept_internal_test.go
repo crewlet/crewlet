@@ -61,6 +61,8 @@ func TestEveryUsageCountSeeksItsWindow(t *testing.T) {
 		{"the reads", usageReadsSQL},
 		{"the repository reads", usageRepoReadsSQL},
 		{"the changes and reviews", usageCodeSQL},
+		{"the tool calls", usageToolsSQL},
+		{"the superseded fires", usageSupersededSQL},
 	} {
 		query, args := s.sql(w)
 		plan := planOf(t, db, query, args)

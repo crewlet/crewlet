@@ -416,8 +416,8 @@ func TestACutReadTellsTheModelOnlyWhatTheEngineKnows(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS FENCED AT THE TRUST ITS TEXT EARNS: a coding run's question
-// (a third-party coding CLI's, from a brief that may come from outside the
+// AN ANSWER IS FENCED AT THE TRUST ITS TEXT EARNS: an executor's question
+// (a third-party harness's, from a brief that may come from outside the
 // company) and a connected knowledge base's pages are external, and the same
 // tools answering only the company's own text are colleague. Mutation: label
 // every read colleague again, or ignore TrustOf, and the external rows fail.
@@ -428,9 +428,9 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 		tool, body string
 		want       provenance.Trust
 	}{
-		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"waiting","question":"Which branch?"}]}`,
+		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"waiting","question":"Which branch?"}]}`,
 			provenance.TrustExternal},
-		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
+		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
 			provenance.TrustColleague},
 		{"list_decisions", `{"items":[{"kind":"run","run":{"agent_handle":"dev","question":"Merge it?"}}]}`,
 			provenance.TrustExternal},

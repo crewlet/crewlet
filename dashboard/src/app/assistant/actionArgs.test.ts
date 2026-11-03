@@ -58,7 +58,7 @@ const URL_KEYS: Record<string, Readonly<Record<string, UrlActionKey>>> = {
       "Feed",
       [
         { value: "all", label: "All activity" },
-        { value: "runs", label: "Coding runs" },
+        { value: "runs", label: "Executors" },
       ],
       "filter",
       "all",

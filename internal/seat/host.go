@@ -38,7 +38,7 @@ type heldSeat struct {
 	//
 	// The seat enters the held set BEFORE the hook, so the heartbeat renews
 	// its lease throughout: an acquire spawns MCP children and recovers an
-	// interrupted sandbox run, which can outlast a TTL, and a lease that
+	// interrupted executor, which can outlast a TTL, and a lease that
 	// lapsed mid-acquire would let a peer claim a seat this node is halfway
 	// through building. But it must admit NOTHING until the hook returns —
 	// the hook attaches the consumer LAST precisely because a seat that
@@ -243,10 +243,11 @@ type Config struct {
 	Protocol int
 
 	// Clock is this node's clock, for measuring how long ago a renew
-	// succeeded. Nil means time.Now. It is NEVER used to decide whether a
-	// lease has expired — that is the store's clock, and a node comparing
-	// its own wall clock to a deadline hands two nodes the same seat the
-	// first time an NTP step separates them.
+	// succeeded, on both of its readings ([elapsed]). Nil means time.Now. It
+	// is NEVER used to decide whether a lease has expired: that is the
+	// store's clock, and a node comparing its own wall clock to a deadline
+	// hands two nodes the same seat the first time an NTP step separates
+	// them.
 	Clock func() time.Time
 }
 
@@ -413,6 +414,25 @@ func orInt(v, fallback int) int {
 
 func (h *Host) now() time.Time { return h.clock() }
 
+// elapsed is how long before now then was, for the age of a renew: the larger
+// of the two readings an instant read from the clock carries.
+//
+// BOTH, BECAUSE EACH IS WRONG ONE WAY. The monotonic reading ignores a wall
+// clock stepped back, which would make a renew look younger than it is, but
+// it STOPS while the host sleeps (mach_absolute_time on macOS,
+// CLOCK_MONOTONIC on Linux), and the store's TTL does not: measured on it
+// alone, a node that slept past its TTL woke still holding every seat, and
+// went on admitting turns as the seat until its next heartbeat failed to
+// renew, while the store had expired the lease and a peer could hold it. The
+// wall reading counts the sleep, and a step back shortens it. The larger is
+// never younger than the renew really is, since a sleep and a step back each
+// hold back one reading only; a step forward makes a renew look older than it
+// is, which costs a refused admission or a seat dropped early, never a seat
+// held past its lease.
+func elapsed(now, then time.Time) time.Duration {
+	return max(now.Sub(then), now.Round(0).Sub(then.Round(0)))
+}
+
 // NodeID is the stable node id this host registers presence under.
 func (h *Host) NodeID() string { return h.nodeID }
 
@@ -508,13 +528,13 @@ func (h *Host) MayStart(handle string) (int64, bool) {
 		h.mu.Unlock()
 		return 0, false
 	}
-	elapsed := h.now().Sub(held.renewedAt)
+	age := elapsed(h.now(), held.renewedAt)
 	epoch := held.lease.Epoch
 	h.mu.Unlock()
 
-	if elapsed > h.heartbeat {
+	if age > h.heartbeat {
 		log.Info("seat_admission_stale", "seat", handle,
-			"seconds_since_renew", elapsed.Seconds(), "heartbeat_seconds", h.heartbeat.Seconds())
+			"seconds_since_renew", age.Seconds(), "heartbeat_seconds", h.heartbeat.Seconds())
 		return 0, false
 	}
 	return epoch, true
@@ -546,7 +566,7 @@ func (h *Host) Provable(handle string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	held := h.held[handle]
-	return held != nil && h.now().Sub(held.renewedAt) < h.ttl
+	return held != nil && elapsed(h.now(), held.renewedAt) < h.ttl
 }
 
 // EpochFor is the fencing token for a seat, or false if not held here.
@@ -762,7 +782,7 @@ func (h *Host) stampBeat() {
 //
 // THE HEARTBEAT FIRST, before anything the start claims. The first pass runs
 // each claimed seat's acquire hook inline, and a hook spawns MCP children,
-// hydrates the seat's memory and recovers its interrupted sandbox run, which
+// hydrates the seat's memory and recovers its interrupted executor, which
 // can outlast a TTL: the seat is in the held set while it does precisely so
 // that the heartbeat renews its lease throughout ([heldSeat]). Started after
 // that pass, as it was, the heartbeat renewed nothing on the one pass where
@@ -863,9 +883,26 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 // readiness probe reads, because a node its fleet cannot see is not doing the
 // work it was started for, however healthy it looks from inside.
 func (h *Host) HoldsPresence() bool {
+	_, held := h.PresenceEpoch()
+	return held
+}
+
+// PresenceEpoch is the epoch of the presence lease this node holds now, and
+// false whenever [Host.HoldsPresence] would answer no.
+//
+// THE INCARNATION A PEER COUNTS THIS NODE BY. A lease that lapsed is never
+// renewed, only claimed again at a new epoch, so a record a node files under
+// its presence epoch (an MCP listing, internal/coord's mcplisting.go) is one
+// its peers stop counting the moment the presence it was filed under lapses,
+// and a node that sees its epoch move knows a sweep may have removed what it
+// filed under the old one.
+func (h *Host) PresenceEpoch() (int64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.nodeLease != nil && !h.draining && h.now().Sub(h.presenceRenewedAt) < h.ttl
+	if h.nodeLease == nil || h.draining || elapsed(h.now(), h.presenceRenewedAt) >= h.ttl {
+		return 0, false
+	}
+	return h.nodeLease.Epoch, true
 }
 
 // Draining reports whether this node has stopped claiming.

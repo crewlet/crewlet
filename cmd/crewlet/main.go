@@ -48,7 +48,6 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -184,8 +183,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	// answers.
 	//
 	// NOR FOR THE RELAY, which sets up nothing at all. It is the process a
-	// coding CLI starts as a seat's MCP server, so its stdout IS the protocol
-	// stream and its environment is whatever the CLI chose to pass: the log
+	// harness starts as a seat's MCP server, so its stdout IS the protocol
+	// stream and its environment is whatever the harness chose to pass: the log
 	// level, format and file below would read variables it must not depend on.
 	// See internal/mcprelay.
 	if cmd != "run" && cmd != mcprelay.Command {
@@ -278,7 +277,7 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	case "assistant":
 		return runAssistant(environ, rest, stdout, stderr)
 	case "mcp-relay":
-		// The literal is mcprelay.Command, which the argv a CLI is handed is
+		// The literal is mcprelay.Command, which the argv a harness is handed is
 		// built from; a case of the switch is read as the binary's command
 		// list ([TestTheRelayIsDispatchedUnderItsOwnName] holds the two
 		// together).
@@ -332,13 +331,13 @@ Usage:
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
                               sessions and tokens
-  crewlet llm <cmd>           Log in, verify and export the coding CLIs every model
+  crewlet llm <cmd>           Log in, verify and export the harnesses every model
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet assistant eval      Run evaluation cases through Ask Crewlet,
                               on their own scripts or against a candidate model
-  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
+  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's harness
                               starts, relaying its stdio to the engine's tools
   crewlet gitlab <cmd>        Register a GitLab group's webhook and its signing secret
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
@@ -1893,7 +1892,7 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	closeAssistant(ctx, s.assistant, log)
 	// AND EVERY HELD POLL FOR A RUN'S NOTES, for the same reason — one this
 	// node serves from its own opening and one it relays to the session's
-	// holder alike: released at once and turned away as a 503 the CLI pauses
+	// holder alike: released at once and turned away as a 503 the harness pauses
 	// on before it polls again, on this node's successor once it has the
 	// seat. A relayed tool call or read is left to finish within the grace.
 	s.bridge.Shutdown()
@@ -1998,7 +1997,7 @@ func shutdownListener(ctx context.Context, l *apiListener, listener string, log 
 // IT IS NOT AN UPPER BOUND ON EVERY REQUEST THIS LISTENER CAN BE HOLDING, and
 // the exception is deliberate on both sides. The drain keeps serving
 // [mcpbridge.PathPrefix], whose sessions carry NO idle timeout on purpose (see
-// [mcpbridge.Bridge.Handler]) because a coding agent legitimately goes quiet
+// [mcpbridge.Bridge.Handler]) because a harness legitimately goes quiet
 // for as long as a build takes. A node stopped while such a session is open
 // therefore spends the whole grace here and logs api_shutdown_failed, and that
 // is the honest outcome rather than a fault: the run is one this process will
@@ -2130,6 +2129,9 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 	}
 	return configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
+		// AND EACH MCP SERVER'S OAUTH GRANT, which a removal of the server
+		// revokes: the engine's own.
+		Grants: e,
 		// THE POINTER, without which the write routes have nothing to
 		// activate against. It was missing, so every /config write on
 		// this binary reached a nil plane: the live-edit path that is the
@@ -2165,6 +2167,10 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// a vendor (D10), from the vendors' own offers, so every authored
 		// write asks a person's fresh step-up for one.
 		Raises: e.SeatAccessRaises,
+		// AND THE COMPANY'S CREDENTIAL STORE, the one /secrets writes: a
+		// removal of an MCP server offers the values only it read and
+		// deletes the ones the caller names.
+		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 	})
 }
 
@@ -2296,12 +2302,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, errors.New("api: the engine opened no assistant estate: " +
 			"engine.New opens it beside the identity estate on every node holding the estate")
 	}
+	executorValues := e.ExecutorReader()
+	if executorValues == nil {
+		return nil, errors.New("api: the engine opened no executor estate: " +
+			"engine.New opens it beside the identity estate on every node holding the estate")
+	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
-		// record can move, and the assistant's, which a rotation waits out.
-		Identity: keyring, Assistant: assistantValues,
+		// record can move, and the assistant's and the executor sessions',
+		// which a rotation waits out.
+		Identity: keyring, Assistant: assistantValues, Executor: executorValues,
 		// AND THE CONFIG SURFACE, so a write of a value the company reads
 		// re-activates the revision that reads it (ADR-0070), through the
 		// same Reload `POST /config/reload` performs.
@@ -2474,7 +2486,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// EVERY DATA NODE'S company days, for every named spend window
 			// and its series — the replicated usage domain (ADR-0020),
 			// through the estate's router, so a node whose usage copy is
-			// out of service answers from a peer's (ADR-0072).
+			// out of service answers from a peer's (ADR-0079).
 			Usage: e.UsageReads(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
@@ -2513,7 +2525,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// through the reader the collector's duty resumes from, so a
 			// report left behind by a move of the files is none here too.
 			Objects: e.Backends(),
-			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because
 			// the answerer it registered on every node is the other
@@ -2576,7 +2587,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// surface waiting for its first report from one that will
 			// never get one.
 			Converges: e.Converges,
-			// The DURABLE record of detached coding runs, whole: the
+			// The DURABLE record of every detached executor, whole: the
 			// board needs the row's own facts (the branch, the pause
 			// TTL, the bridge's call log) that the live panel, which
 			// is reconciled against this same record, does not carry.
@@ -2590,11 +2601,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
 			// seal says: opened under this node's fleet keyring.
 			RunAnswers: e.AnswerSeal(),
+			// WHAT A HELD CALL WOULD SEND, sealed on its run's row and
+			// opened under this node's fleet keyring for who may approve
+			// it.
+			HeldCalls: sandbox.NewCallSeal(e.Cipher()),
 			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
 			// owns the run. The ENGINE's reader, because the answerer
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
-			SandboxTail: sandboxTails(e),
+			ExecutorTail: executorTails(e),
+			// A SEAT'S EXECUTOR SESSIONS: the rows through the estate
+			// router, so a node without `data` answers as one with it,
+			// and each session's sealed bytes through the fleet's one
+			// object store, opened under this node's keyring.
+			ExecutorSessions: executorSessionReads(e),
+			SessionObjects:   sessionObjects(e, log),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -2843,11 +2864,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "a seat paused before this process started shows as paused "+
 				"from its next pause or resume; the pause itself is in force")
 	}
-	// AND THE RUNNING CODING RUNS, from the durable record every node
-	// opens, before the handover for the seed's reason: a run parked on a
-	// question for days is exactly the one the events of this process's
-	// lifetime will never mention. Then every interval, which is what
-	// corrects a panel whose completion event never arrived.
+	// AND THE EXECUTORS OUT IN THEIR BOXES, from the durable record every
+	// node opens, before the handover for the seed's reason: an executor
+	// parked on a question for days is exactly the one the events of this
+	// process's lifetime will never mention. Then every interval, which is
+	// what corrects a panel whose completion event never arrived.
 	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
 	if err = runs.Reconcile(seedCtx); err != nil {
 		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
@@ -3759,12 +3780,41 @@ func memoryReads(e *engine.Engine) queries.SeatMemory {
 	return nil
 }
 
-// sandboxTails is this node's run-output reader, as the read surface wants it
+// executorTails is this node's run-output reader, as the read surface wants it
 // — converted for [memoryReads]'s reason: a nil *TailReader in the interface
 // would register a question whose every answer panics.
-func sandboxTails(e *engine.Engine) queries.SandboxTails {
-	if r := e.SandboxTails(); r != nil {
+func executorTails(e *engine.Engine) queries.ExecutorTails {
+	if r := e.ExecutorTails(); r != nil {
 		return r
 	}
 	return nil
+}
+
+// executorSessionReads is the executor log's reads through this node's estate
+// router, as the read surface wants them, or nil on an engine with no router —
+// which leaves the sessions questions unregistered rather than registered over
+// a reader that cannot answer.
+func executorSessionReads(e *engine.Engine) queries.ExecutorSessions {
+	if reads, ok := engine.ExecutorSessionReads(e); ok {
+		return reads
+	}
+	return nil
+}
+
+// sessionObjects is the store a session's sealed object is opened through, or
+// nil — converted for [memoryReads]'s reason — on a node with no object store,
+// and on one whose keyring cannot open a sealed stream, which is logged: the
+// sessions are still listed there, and no transcript is read.
+func sessionObjects(e *engine.Engine, log *slog.Logger) queries.SessionObjects {
+	store, err := e.ExecutorSessions()
+	if err != nil {
+		log.Warn("executor_session_transcripts_off", "error", err.Error(),
+			"detail", "this node's keyring cannot open a session's sealed stream, so it "+
+				"answers no session's transcript; the keyring's own error names what to fix")
+		return nil
+	}
+	if store == nil {
+		return nil
+	}
+	return store
 }

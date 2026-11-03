@@ -1,11 +1,11 @@
 /**
- * A model that signs in with its CLI's own login on a node: each node's login
- * as the CLI's status command last reported it, the command that makes one
+ * A model that signs in with its harness's own login on a node: each node's login
+ * as the harness's status command last reported it, the command that makes one
  * there, and a check of the node that answers.
  *
  * NEVER A SIGN-IN OF OUR OWN. The person runs the command on the node and
  * finishes the vendor's sign-in in their browser; the dashboard never sees the
- * login, only whether the CLI says it holds one. Shared by the model's page
+ * login, only whether the harness says it holds one. Shared by the model's page
  * (its Sign-in card, which a host sign-in action opens rather than the edit
  * wizard: design QA Minor 12) and the wizard's Method step.
  */

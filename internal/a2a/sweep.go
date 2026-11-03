@@ -51,7 +51,7 @@ func newKeeper(channels Store, pub queue.Publisher, now func() time.Time) (keepe
 // channel has been quiet.
 //
 // DECLARED HERE, by its one caller, and implemented by the engine, which is the
-// only party that knows where an ask can wait: on the record of a coding run
+// only party that knows where an ask can wait: on the record of an executor
 // whose turn took it up, which can wait days on a person's question; or in the
 // seat's inbox, held while one of its runs works — a run has no clock bound —
 // or while a person has paused the seat, or while its budget window is spent.
@@ -102,7 +102,7 @@ type Sweeper struct {
 //
 // AN [Owed] IS REQUIRED, for the reason the service requires a directory: a
 // sweep that cannot ask closes every channel idle past its timeout, among them
-// the ask a coding run is still working on, and the answer that arrives later
+// the ask an executor is still working on, and the answer that arrives later
 // is dropped with nothing reporting it as more than an ordinary closed channel.
 // A nil now takes [time.Now] in UTC, so the zero-value path is the real one.
 func NewSweeper(channels Store, pub queue.Publisher, owed Owed, now func() time.Time) (*Sweeper, error) {
@@ -112,7 +112,7 @@ func NewSweeper(channels Store, pub queue.Publisher, owed Owed, now func() time.
 	}
 	if owed == nil {
 		return nil, fmt.Errorf("a2a: no judge of whether an idle channel's answer is still " +
-			"owed, so the sweep would close the ask a colleague's coding run is still working on")
+			"owed, so the sweep would close the ask a colleague's executor is still working on")
 	}
 	return &Sweeper{keeper: k, owed: owed}, nil
 }

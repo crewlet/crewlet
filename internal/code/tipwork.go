@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0091): every landing
+// A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0098): every landing
 // on a protected target leaves a row (code_landings) and moves its green row
 // (code_green) only where its record proved the target's required checks —
 // a queue's landing, which its candidates' checks proved, and a
@@ -27,7 +27,7 @@ import (
 // never by a flag of its own: a green record moves the one row, so it writes
 // the same few rows however many landings lie beneath it, and a target that
 // gathered any backlog of unproven landings behind a red tip greens again on
-// the first tip that passes (replicated 0137).
+// the first tip that passes (replicated 0141).
 //
 // A TipDue is everything the home decides its next step from, in ONE
 // snapshot: the target's green row, the checks its gate requires, and its
@@ -94,7 +94,7 @@ type TipDue struct {
 	// InFlight is a commit of the target's other than its newest landing's
 	// that a tip attempt is still queued or running on — the ROUND IN FLIGHT,
 	// which the newest waits for before it is dispatched — read by the index
-	// partial on exactly those attempts (replicated 0138), so it is found
+	// partial on exactly those attempts (replicated 0142), so it is found
 	// wherever that commit lies, past the window included; "" for none.
 	InFlight string `json:"in_flight,omitempty"`
 }

@@ -60,7 +60,7 @@ import (
 // # A repository is its grant's, the health grant or not
 //
 // The health grant gives a seat the deployment's view, never a repository's
-// content or rows beyond its own repository grant (ADR-0081): code_status's
+// content or rows beyond its own repository grant (ADR-0088): code_status's
 // one-repository form resolves the name as the code tools do, refused
 // `not_permitted` where the seat may not read it, and the hottest repositories
 // a git node names are held to the same grant — a seat's answer leaves out
@@ -86,7 +86,7 @@ import (
 // seat's whole view.
 //
 // code_status's repository reads are code reads besides, which the requester
-// ceiling holds further (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague
+// ceiling holds further (ADR-0088, [CodeDeps.callerOn]): in a turn a colleague
 // seat woke, each is read for that seat as well, so the hot list leaves out
 // what the colleague may not read and counts it withheld, and the
 // one-repository form is refused as the code tools refuse a read above the
@@ -1020,7 +1020,7 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 // is left out, as indices into entries in the list's order — and how many
 // repositories ranked above the list's cut it left out for that.
 //
-// AN OPERATOR READS EVERY REPOSITORY (ADR-0081: a person maintains every one,
+// AN OPERATOR READS EVERY REPOSITORY (ADR-0088: a person maintains every one,
 // and a token reads every one), so a person's list is cut without a read — and
 // a person's call is no deputy, so it reads for nobody else either. A SEAT is
 // held to its own grant, through the code tools' one resolution of a name

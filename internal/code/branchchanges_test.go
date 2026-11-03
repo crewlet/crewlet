@@ -10,7 +10,7 @@ import (
 )
 
 // A BRANCH IS NAMED BY THE LIVE CHANGE IT HEADS: a `branch_changes` read — the
-// engine's own, what it names a collected coding run's delivered refs by —
+// engine's own, what it names a collected executor's delivered refs by —
 // answers each branch it names that heads a live change, a draft's included,
 // in the order it names the repositories and their branches, and leaves out
 // one that heads none, one whose change is closed, and one that does not

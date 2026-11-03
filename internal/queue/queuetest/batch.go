@@ -799,7 +799,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// itself. That is the one condition the in-memory twin happened to
 		// check, so a hold stopped the real broker and did not stop the
 		// twin: the loop went on running turns for partitions 2..N on a seat
-		// whose inbox had just been held for a detached coding run, which is
+		// whose inbox had just been held for a detached executor, which is
 		// exactly the "no turn starts" the hold exists to buy. A suite that
 		// covers only the deferral certifies a behaviour production does not
 		// have.
@@ -967,7 +967,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// goes back through the same budget check as a failure. The twin
 		// spliced its undispatched partitions into the mailbox untouched,
 		// so on a seat whose drains are stopped over and over — a lease
-		// that keeps moving, an inbox held for one parked coding run
+		// that keeps moving, an inbox held for one detached executor
 		// after another — the same message rode round for ever on a
 		// counter that never moved, while the identical message on the
 		// shipped broker was walking through its twenty-five.
@@ -1335,6 +1335,27 @@ func (s *suite) runContractPolicy(t *testing.T) {
 		}
 		if got := labelsOf(parts[0].Items); !equalStrings(got, []string{"early", "late"}) {
 			t.Fatalf("within-partition order = %v, want [early late]", got)
+		}
+	})
+
+	t.Run("a_priority_partition_dispatches_before_an_older_one", func(t *testing.T) {
+		t.Parallel()
+		// A drain that took a laned topic's priority mail and filled in
+		// behind it with older background mail dispatches the priority
+		// partition first: the lane is taken first so a person waiting is
+		// answered first, and aging alone would hand that back.
+		t0 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+		older := newConvEvent("a", "background")
+		older.Timestamp = t0
+		person := newConvEvent("b", "direct")
+		person.Timestamp = t0.Add(time.Hour)
+		queue.Prioritize(person)
+		newer := newConvEvent("c", "news")
+		newer.Timestamp = t0.Add(2 * time.Hour)
+
+		got := orderedKeys([]*events.Event{older, newer, person})
+		if !equalStrings(got, []string{"direct", "background", "news"}) {
+			t.Fatalf("dispatch order = %v, want [direct background news]", got)
 		}
 	})
 

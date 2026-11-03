@@ -11,7 +11,7 @@
  * by a RELATIVE path, because this build has no `~` alias.
  */
 
-export { Store } from "./store.ts";
+export { Store, PHASE_RECORD_TYPES } from "./store.ts";
 export type { ChatLive, ChatRoomLive, HeldChatChange, StoreState, Slice } from "./store.ts";
 export {
   LiveSocket,

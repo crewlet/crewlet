@@ -77,8 +77,8 @@ export function absorbedInto(event: EventRecord): string {
  *
  * A FAILED row is `went_wrong` whatever its SET says. The failure taxonomy is
  * the engine's (`events.Failed` — the type, the payload's own flag, or the
- * store's tag), and a sandbox run that came back failed is something that went
- * wrong on this turn even though `sandbox_run_completed` is ordinary work.
+ * store's tag), and a launch that came back failed is something that went
+ * wrong on this turn even though `executor_finished` is ordinary work.
  *
  * ABSORPTION OUTRANKS EVEN THAT, which is the one precedence worth stating
  * because it looks like an exception and is not: the destination draws the
@@ -289,7 +289,7 @@ export interface PromptWeight {
  * claim a structure nobody measured and present two prompts as a range of
  * one. So each is drawn, in publish order, keyed by its event.
  *
- * The executor's own launch measures the prompt its coding CLI was handed
+ * The executor's own launch measures the prompt its harness was handed
  * once, as the phase opens; a run's collection re-enters no conversation, so
  * it publishes no measurement of its own.
  */

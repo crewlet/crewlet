@@ -157,10 +157,16 @@ const (
 	// ObserveRead is where one history question is scattered. Every node
 	// serves it and answers from its own store; the asker merges.
 	ObserveRead = ObservePrefix + "read"
-	// ObserveSandboxTail is where a request for a running coding run's live
-	// output is scattered (internal/sandbox, `sandbox_tail`). Every node
-	// serves it and only the incarnation that owns the run answers.
-	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
+	// ObserveExecutorTail is where a request for the live output of a box an
+	// executor is running in is scattered (internal/sandbox, which answers
+	// the `executor_tail` query). Every node serves it and only the
+	// incarnation that owns the run answers.
+	ObserveExecutorTail = ObservePrefix + "executor_tail"
+	// ObserveMCPInstances is where a read of one MCP server's instances is
+	// scattered to the nodes said to hold them (internal/engine,
+	// mcpinstances.go). Every node with an engine serves it, and only a node
+	// the request names answers, from its own bridges.
+	ObserveMCPInstances = ObservePrefix + "mcp_instances"
 
 	// SandboxPrefix prefixes the subjects the code sandbox's nodes reach
 	// each other on about a run's box (internal/sandbox, boxhost.go): a box
@@ -180,6 +186,21 @@ const (
 	// look at it now ([queue.EventQueue.Broadcast]): its work was just
 	// submitted, or its box just left to its host.
 	SandboxNudge = SandboxPrefix + "nudge"
+
+	// MCPCheckPrefix prefixes the subjects a test of an MCP server crosses
+	// (internal/engine, mcpcheck.go): the node a person asked through asks
+	// the nodes that run the server, or the node holding the one seat it is
+	// tested for, to test it where it runs.
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a test is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], worth nothing once the
+	// person who asked has gone. Its result is the server's latest test in
+	// the coordination store, and the request is audited where it arrived.
+	MCPCheckPrefix = "crewlet.mcp_check."
+	// MCPCheck is where one test is scattered. Every node with an engine
+	// serves it, and only a node the request names answers (for a seat's
+	// test, only the node holding the seat).
+	MCPCheck = MCPCheckPrefix + "test"
 
 	// SteerPrefix prefixes the subjects a person's note to a running turn
 	// crosses (internal/agent/steer).
@@ -255,6 +276,20 @@ func AgentInboxGroup(seat uuid.UUID) string {
 	}
 	return AgentGroupPrefix + seat.String()
 }
+
+// AgentInboxLaneSuffix is appended to a seat's inbox to name its priority
+// lane ([AgentInboxLane]).
+//
+// `.lane` RATHER THAN `.priority`, because the hand-built subject guard reads
+// every constant here as a marker, and `.priority` ends ordinary names
+// elsewhere (a task's priority field) that are nobody's subject.
+const AgentInboxLaneSuffix = ".lane"
+
+// AgentInboxLane names a seat inbox's priority lane: the inbox's second
+// mailbox, where a person's message waits ahead of the seat's background work
+// (queue.LaneOf). It is not itself an inbox, so [SeatFromInbox] does not read
+// it as one.
+func AgentInboxLane(inbox string) string { return inbox + AgentInboxLaneSuffix }
 
 // AgentControl returns the seat's sandbox-control subject.
 //

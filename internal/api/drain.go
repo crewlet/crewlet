@@ -52,11 +52,11 @@ const DrainRetryAfter = 30 * time.Second
 //     renders a page, and it goes with the rest rather than being carved out,
 //     because a per-route list is what the default below exists to avoid.
 //   - The sandbox bridge and the telemetry edge are SERVED. They carry the tool
-//     calls and the spans of coding runs that started before the drain, and a
-//     detached run OUTLIVES the turn that started it: the turn suspended the
-//     moment the run detached, so the drain never waits on one (see
-//     docs/concepts/code-sandbox.md, where being detached is what keeps a
-//     coding job out of the drain). Refusing these therefore shortens no drain
+//     calls and the spans of executors launched before the drain, and a
+//     detached executor OUTLIVES the turn that launched it: the turn suspended
+//     the moment the executor detached, so the drain never waits on one (see
+//     docs/concepts/code-sandbox.md, where being detached is what keeps an
+//     executor out of the drain). Refusing these therefore shortens no drain
 //     and does nothing but break a run mid-flight against the node still
 //     holding its bridge session and its receiver.
 //   - A git FETCH ALREADY BEGUN is SERVED: the upload-pack RPC, a POST, which
@@ -222,7 +222,7 @@ func (a *App) draining() bool { return a.runtime != nil && a.runtime.ShuttingDow
 // so "nothing running" alone would close the listener between two rounds of
 // one fetch ([gitExchangeGap]). Nothing else: a request the gate refused
 // started nothing, and every other request the listener is serving — a
-// dashboard's socket, a coding run's bridge session — is the listener's grace
+// dashboard's socket, an executor's bridge session — is the listener's grace
 // to end, as is an upload RPC let through in the instant after the wait ended
 // and before the listener closed.
 //

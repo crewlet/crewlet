@@ -45,6 +45,11 @@
 // is one keyring — and reports the engine's rows as a count rather than by
 // name ([Rekeyed]).
 //
+// # A write-only value is opened for the resolver alone
+//
+// [Store.All] opens a write-only row ([Store.SetWriteOnly]); [Store.Get] and
+// [Store.Values] refuse it. Later writes of the name and a rekey keep the mark.
+//
 // # A plain put is right for a credential and wrong for a key
 //
 // An operator's rotation is last-write-wins by design. The engine's own keys
@@ -122,7 +127,18 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	if err := secrets.CheckValue(value); err != nil {
 		return err
 	}
-	return s.put(ctx, name, value, by, source, now)
+	return s.put(ctx, name, value, by, source, now, false)
+}
+
+// SetWriteOnly is [Store.Set] sealing a row marked write-only
+// ([secrets.ErrWriteOnly]).
+func (s *Store) SetWriteOnly(ctx context.Context, name, value string, by secrets.Author,
+	source secrets.Source, now time.Time) error {
+
+	if err := s.writable(name, value, source); err != nil {
+		return err
+	}
+	return s.put(ctx, name, value, by, source, now, true)
 }
 
 // Create is [Store.Set] only where no value is stored under name, reporting
@@ -196,6 +212,7 @@ func (s *Store) Reclaim(ctx context.Context, name, value string, by secrets.Auth
 	}
 	rec := provenance(name, by, source, now)
 	rec.OpID = opID
+	rec.WriteOnly = held.WriteOnly
 	if rec, err = s.seal(rec, value); err != nil {
 		return false, err
 	}
@@ -236,12 +253,22 @@ func operatorWriteName(name string) error {
 	return secrets.CheckName(name)
 }
 
-// put seals a value under its own name and writes it, once the caller's view
-// has established the name is one it may write.
+// put seals and writes a value, marked write-only when writeOnly says so or the
+// row it replaces is. A race with the read exposes nothing: the put replaces
+// the value whole.
 func (s *Store) put(ctx context.Context, name, value string, by secrets.Author,
-	source secrets.Source, now time.Time) error {
+	source secrets.Source, now time.Time, writeOnly bool) error {
 
-	rec, err := s.seal(provenance(name, by, source, now), value)
+	if !writeOnly {
+		held, found, err := s.fleet.Secret(ctx, name)
+		if err != nil {
+			return fmt.Errorf("fleetsecrets: read %s: %w", displayName(name), err)
+		}
+		writeOnly = found && held.WriteOnly
+	}
+	rec := provenance(name, by, source, now)
+	rec.WriteOnly = writeOnly
+	rec, err := s.seal(rec, value)
 	if err != nil {
 		return err
 	}
@@ -279,7 +306,7 @@ func (s *Store) seal(rec coord.SecretRecord, value string) (coord.SecretRecord, 
 	return rec, nil
 }
 
-// Get unseals one value.
+// Get unseals one value; a write-only row is refused, unopened.
 //
 // The error says WHICH failure it was and never carries the value or the
 // envelope: a decrypt error that echoed its input would put ciphertext into a
@@ -291,17 +318,21 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 	if err := operatorName(name); err != nil {
 		return "", err
 	}
-	return s.get(ctx, name)
+	return s.get(ctx, name, true)
 }
 
-// get opens one row, once the caller's view has established it may.
-func (s *Store) get(ctx context.Context, name string) (string, error) {
+// get opens one row the caller's view may read, refusing a write-only row
+// when refuseWriteOnly is set.
+func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (string, error) {
 	rec, found, err := s.fleet.Secret(ctx, name)
 	if err != nil {
 		return "", fmt.Errorf("fleetsecrets: read %s: %w", name, err)
 	}
 	if !found {
 		return "", fmt.Errorf("%w: %s", secrets.ErrNotFound, name)
+	}
+	if refuseWriteOnly && rec.WriteOnly {
+		return "", fmt.Errorf("%w: %s", secrets.ErrWriteOnly, name)
 	}
 	value, err := s.cipher.Decrypt(rec.Value, secrets.AADForVar(name))
 	if err != nil {
@@ -319,6 +350,8 @@ func (s *Store) get(ctx context.Context, name string) (string, error) {
 // THE ENGINE'S ROWS ARE NOT OPENED, and that is the other half of the reserved
 // namespace: no reference can name one, so decrypting the blind-index key into
 // each node's resolver on every apply was all exposure and no use.
+//
+// It opens write-only rows too: resolving `${VAR}` is what they are for.
 //
 // It FAILS CLOSED on the first row it cannot open. A partial snapshot is the worst outcome available: the names that are
 // missing resolve to whatever the environment happens to hold, which is the
@@ -368,6 +401,8 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 // one: no reference can name an engine row, so a caller asking for one has
 // built its list from something other than a document.
 //
+// A write-only row asked for refuses the whole read ([WriteOnlyError]).
+//
 // It FAILS CLOSED on a row it was asked for and cannot open, for [Store.All]'s
 // reason — an answer missing that name would let it resolve from whatever the
 // environment holds — and opens nothing it was not asked for, so an
@@ -394,6 +429,15 @@ func (s *Store) Values(ctx context.Context, names []string) (map[string]string, 
 	if err != nil {
 		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
+	var writeOnly []string
+	for _, row := range rows {
+		if wanted[row.Name] && row.WriteOnly {
+			writeOnly = append(writeOnly, row.Name)
+		}
+	}
+	if len(writeOnly) > 0 {
+		return nil, &WriteOnlyError{Names: writeOnly}
+	}
 	for _, row := range rows {
 		if !wanted[row.Name] {
 			continue
@@ -406,6 +450,16 @@ func (s *Store) Values(ctx context.Context, names []string) (map[string]string, 
 	}
 	return out, nil
 }
+
+// WriteOnlyError names, sorted, the write-only rows a read asked for. It is a
+// [secrets.ErrWriteOnly].
+type WriteOnlyError struct{ Names []string }
+
+func (e *WriteOnlyError) Error() string {
+	return secrets.ErrWriteOnly.Error() + ": " + strings.Join(e.Names, ", ")
+}
+
+func (e *WriteOnlyError) Unwrap() error { return secrets.ErrWriteOnly }
 
 // List reports what the operator has stored, without opening anything.
 //
@@ -529,6 +583,8 @@ type Rekeyed struct {
 // nothing and costs one read — which is what makes this safe to put in a
 // deploy script.
 //
+// The write-only mark is kept with the provenance.
+//
 // THE PROVENANCE IS KEPT: a rekey re-seals a value it did not choose, so each
 // row goes on saying who stored it, through what and when. It used to stamp
 // the rekeyer and `rekey` over every row, which made every credential in the
@@ -650,7 +706,7 @@ func record(row coord.SecretRecord) secrets.Record {
 		Name: row.Name, KeyID: row.KeyID, UpdatedAt: row.UpdatedAt,
 		UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
 		OperatorID: row.OperatorID, Source: secrets.Source(row.Source),
-		Version: row.Version,
+		Version: row.Version, WriteOnly: row.WriteOnly,
 	}
 }
 
@@ -679,7 +735,7 @@ func (e *Estate) Get(ctx context.Context, name string) (string, error) {
 	if err := secrets.CheckEstateName(name); err != nil {
 		return "", err
 	}
-	return e.store.get(ctx, name)
+	return e.store.get(ctx, name, false)
 }
 
 // Create seals and writes one of the engine's own rows only where no row is
@@ -709,4 +765,84 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 		return false, fmt.Errorf("fleetsecrets: create %s: %w", displayName(name), err)
 	}
 	return created, nil
+}
+
+// Held is one of the engine's own rows as [Estate.Held] opens it: its value,
+// and the store's version of the row it was read at, which [Estate.Swap]
+// writes over.
+type Held struct {
+	Value   string
+	Version uint64
+}
+
+// Held opens one of the engine's own rows with the version it was read at,
+// reporting false, and no error, where no row is stored under name.
+//
+// FOR A ROW THE ENGINE REPLACES, which a key is not: an MCP server's OAuth
+// grant is renewed at its vendor and rewritten each time, and the rewrite is
+// only safe at the version the renewal began from ([Estate.Swap]).
+func (e *Estate) Held(ctx context.Context, name string) (Held, bool, error) {
+	if e == nil || e.store.cipher == nil {
+		return Held{}, false, secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return Held{}, false, err
+	}
+	rec, found, err := e.store.fleet.Secret(ctx, name)
+	if err != nil {
+		return Held{}, false, fmt.Errorf("fleetsecrets: read %s: %w", displayName(name), err)
+	}
+	if !found {
+		return Held{}, false, nil
+	}
+	value, err := e.store.cipher.Decrypt(rec.Value, secrets.AADForVar(name))
+	if err != nil {
+		return Held{}, false, fmt.Errorf("fleetsecrets: open %s: %w", displayName(name), err)
+	}
+	return Held{Value: value, Version: rec.Version}, true, nil
+}
+
+// Swap seals value over one of the engine's own rows only while the row is
+// still at version, reporting whether it wrote. False is a LOST RACE (the row
+// moved or went away since the caller read it, [Estate.Held]), never a
+// failure, and the caller re-reads before deciding anything again.
+//
+// THE ONE REWRITE OF A ROW THE ENGINE REPLACES. A plain put of a renewed
+// grant over one another node renewed meanwhile would keep the token the
+// vendor has already retired and lose the one it issued.
+func (e *Estate) Swap(ctx context.Context, name, value string, version uint64, by secrets.Author,
+	source secrets.Source, now time.Time) (bool, error) {
+
+	if e == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, source); err != nil {
+		return false, err
+	}
+	rec, err := e.store.seal(provenance(name, by, source, now), value)
+	if err != nil {
+		return false, err
+	}
+	wrote, err := e.store.fleet.UpdateSecret(ctx, rec, version)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: re-seal %s: %w", displayName(name), err)
+	}
+	return wrote, nil
+}
+
+// Delete removes one of the engine's own rows, reporting whether one was
+// there. Only the engine's view deletes an engine row: the operator's
+// [Store.Unset] refuses every reserved name.
+func (e *Estate) Delete(ctx context.Context, name string) (bool, error) {
+	if e == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return false, err
+	}
+	removed, err := e.store.fleet.DeleteSecret(ctx, name)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: delete %s: %w", displayName(name), err)
+	}
+	return removed, nil
 }

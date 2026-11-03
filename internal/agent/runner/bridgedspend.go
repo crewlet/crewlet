@@ -31,11 +31,11 @@ func (r *Runner) ownMeter() meter {
 }
 
 // BridgedSpend is what an executor run's BRIDGED calls cost the engine: the
-// auxiliary calls the seat's tools made for the coding agent and the workers
+// auxiliary calls the seat's tools made for the harness and the workers
 // it delegated to.
 //
 // ITS OWN METER, because those calls happen after the segment that launched
-// the run has ended. The CLI calls the seat's tools over the bridge for as long
+// the run has ended. The harness calls the seat's tools over the bridge for as long
 // as it runs — minutes or hours, often on a node that is not the one the turn
 // resumes on — while the launching segment charged what it had spent the
 // moment it parked. Counted on that segment's tally, every bridged call
@@ -44,7 +44,7 @@ func (r *Runner) ownMeter() meter {
 // the run's row with each call it records, and the segment that resumes from
 // the run pays it.
 //
-// Safe for concurrent use: a coding agent calls tools in parallel.
+// Safe for concurrent use: a harness calls tools in parallel.
 type BridgedSpend struct {
 	aux *auxspend.Tally
 

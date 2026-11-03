@@ -315,7 +315,7 @@ func previewsAsked(halves map[string]*fakeGit) map[string]int {
 	return out
 }
 
-// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0082): for each of a
+// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0089): for each of a
 // thousand repositories, the first git node asked — and the one that answers,
 // every node answering — is the first of rendezvous.Order(repository, every
 // live git node), from a node that holds nothing and from a git node whose own
@@ -1063,7 +1063,7 @@ func TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp(t *testing.T) {
 	}
 }
 
-// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0082, the scale critic's rule):
+// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0089, the scale critic's rule):
 // over four git nodes, the walk's first attempt is stamped home and every later
 // one is not — the one node a walk lets start a download of a repository it
 // holds no copy of — and once the home has gone silent, the router asks it
@@ -1153,7 +1153,7 @@ func stamped(halves map[string]*fakeGit) []string {
 	return out
 }
 
-// A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0082). A
+// A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0089). A
 // home confirmed behind the company's configuration — shed, or stuck because
 // its apply failed while a peer applied, and live in the git placement all the
 // while — refuses every seat's read `behind_config` before it syncs anything,
@@ -1620,11 +1620,11 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 		p.Principal, p.Commands[0].Ref = asker, ref
 		return p
 	}
-	// A seat's push git receives is its coding box's, naming the run that
-	// pushed and its coding agent beside the turn that launched it.
+	// A seat's push git receives is its coding box's, naming the executor
+	// run that pushed and its harness beside the turn that launched it.
 	seatPush := code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
 		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
-			RunID: "019a0c2e-0000-7000-8000-00000000b0c5", CodingAgent: "claude-code"}}
+			RunID: "019a0c2e-0000-7000-8000-00000000b0c5", Harness: "claude-code"}}
 	f := newFleet(t, "data-a", "data-b")
 	o := rendezvous.Order(repo, []string{"data-a", "data-b"})
 	behind, current := f.nodes[o[0]], f.nodes[o[1]]
@@ -1898,8 +1898,8 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 	}
 }
 
-// AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0082,
-// ADR-0085). A write is idempotent by its push id, derived from its
+// AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0089,
+// ADR-0092). A write is idempotent by its push id, derived from its
 // operation, so wherever its home ran none of it the walk asks the runner-up
 // the very write the home was asked — the same operation, the same push:
 //

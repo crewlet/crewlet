@@ -24,7 +24,7 @@ import (
 //
 // # A segment, not a turn
 //
-// A turn that detaches a coding run completes more than once under one run id:
+// A turn that detaches its executor completes more than once under one run id:
 // the dispatch segment parks, and each collected run resumes a segment of its
 // own — minutes later, often on another node. Each segment charges what IT
 // spent, under an operation id DERIVED from the segment ([segmentOpID]): the
@@ -48,7 +48,7 @@ import (
 // attribution), never from the records, which the ledger flushes later and
 // the fleet reads at query time; the card is rewritten after the charge is
 // decided, so it tallies on its own and is added as the charge is written
-// ([Engine.withCards]). A resumed segment adds the collected coding run it
+// ([Engine.withCards]). A resumed segment adds the collected launch it
 // resumed from, which no phase of the engine's own ran — and what the ENGINE
 // spent on that run while no segment was running (turnTelemetry.jobEngine):
 // a run's bridged calls, whose auxiliary rewrites and delegated workers are
@@ -265,7 +265,7 @@ func (t turnTelemetry) closingAfter(parked segmentCharge, at time.Time) turnTele
 }
 
 // segmentOutcome is how a segment ended, in the vocabulary a task's turn list
-// reads: parked on a coding run, stopped by a person, failed, or the turn's own
+// reads: parked on its executor, stopped by a person, failed, or the turn's own
 // decision.
 //
 // STOPPED IS NOT FAILED, here as on the turn's completion

@@ -71,7 +71,7 @@ func TestTheChatPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.PresenceSubject("chat", uuid.New()),
 	}
 	// Every other log, read off the one list of them rather than written out
-	// again — a list held to the package's own constants — so an eleventh log is
+	// again — a list held to the package's own constants — so a twelfth log is
 	// refused here the day it is declared.
 	for _, prefix := range everyLogPrefix() {
 		if prefix != topics.ChatLogPrefix {

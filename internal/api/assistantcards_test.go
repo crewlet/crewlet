@@ -218,7 +218,7 @@ type cardsWorld struct {
 	building *atomic.Bool
 }
 
-// filledWorld is [cardsCompany] with its tracker, work index, coding runs,
+// filledWorld is [cardsCompany] with its tracker, work index, executors,
 // pages, knowledge base, budgets, backups and artifacts answering a value with
 // every field set, and one node of the fleet reporting, so each read answers
 // rows to hold its card to.
@@ -435,7 +435,7 @@ func (c filledChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearch
 	return answer, nil
 }
 
-// filledRuns is a node running one coding run, filled, parked on a question
+// filledRuns is a node running one executor, filled, parked on a question
 // put to the fixture's person, so it is also what waits on them.
 type filledRuns struct{}
 

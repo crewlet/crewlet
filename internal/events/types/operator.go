@@ -50,6 +50,7 @@ var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
 	ModelActed{}.EventType(),
+	MCPServerActed{}.EventType(),
 	AssistantConversationRead{}.EventType(),
 	AssistantTurnCompleted{}.EventType(),
 }
@@ -101,7 +102,7 @@ const (
 	TransportMCP = "mcp"
 	// TransportWork is the human write surface's routes, `/worklet/…`,
 	// `/doclet/pages/…` and `/chatlet/…` (internal/api/workapi): the scriptable
-	// resource REST a CLI or a script writes through, which calls the
+	// resource REST a harness or a script writes through, which calls the
 	// same dispatch rather than the tools directly, and whose verbs with
 	// no tool are recorded under it too.
 	TransportWork = "work"
@@ -136,7 +137,7 @@ type AssistantRef struct {
 // over MCP, the human write surface's tool-backed routes and the Dashboard
 // Assistant's approved writes call the same catalogue, and a person's git
 // client pushes through the code host — a person transport of its own
-// (ADR-0078), one record a push (internal/code/host). An audit that depended
+// (ADR-0085), one record a push (internal/code/host). An audit that depended
 // on which one a person used would be missing whichever surface nobody
 // tested.
 //

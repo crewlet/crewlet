@@ -97,7 +97,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0073).
+	// below a floor (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
 
 	// OpCompact merges some of a repository's packs into fewer: the outputs'
@@ -488,7 +488,7 @@ const (
 
 	// OpMerge merges a change into its target ([Merge]), on the repository's
 	// own subject, decided by its committer alone through the change's merge
-	// gate from one snapshot ([Committer.ProposeMerge], ADR-0089): ONE
+	// gate from one snapshot ([Committer.ProposeMerge], ADR-0096): ONE
 	// RECORD merges the change, moves the target onto the merge's commit and
 	// lands that move as a push.
 	//
@@ -998,7 +998,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0073) as a record this domain's applier decodes — the barrier's split:
+// ADR-0080) as a record this domain's applier decodes — the barrier's split:
 // the framework decides when one is appended, what it removes and the floor
 // its subject names, and this domain what a record on its log looks like.
 //

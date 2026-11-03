@@ -653,9 +653,9 @@ func (b *changeBook) move(e PushEntry) {
 // book numbers (the apply), open or a draft as the change says; its
 // description, where it has one; its pusher as its owner and first author,
 // with what made the push — the turn behind a seat's push and, for a push its
-// coding box made, the coding run that pushed ([RunProvenance.RunID]) — as the
-// turn and the sandbox run that opened it, an open's own ([ChangeOpen.TurnID],
-// [ChangeOpen.RunID]); and its first revision, made by the push. From here on
+// coding box made, the executor's launch that pushed ([RunProvenance.RunID])
+// — as the turn and the launch that opened it, an open's own
+// ([ChangeOpen.TurnID], [ChangeOpen.RunID]); and its first revision, made by the push. From here on
 // it is a live change on its source and into its target, which the record's
 // later entries revise, merge or close as any other, at the version the open
 // gave it: the record that opens a change is its first, however many of its

@@ -76,8 +76,8 @@ Whether a satellite is also a **replica** is the `data` role's answer and
 nothing else's. A satellite that holds data applies every one of the
 company's shared state logs (Worklet, Doclet, the
 search vectors, the identity directory, every data node's usage history, the
-artifacts, their datastores, Ask Crewlet's conversations and
-Chatlet) into its own database, exactly as a core node does. A stateless one applies
+artifacts, their datastores, Ask Crewlet's conversations, Chatlet, the
+seats' executor sessions and the code host) into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
 for either.
@@ -370,8 +370,8 @@ Two failures to know by sight:
 
 Worklet, Doclet, the search vectors, the identity
 directory, every data node's usage history, the artifacts, their datastores,
-Ask Crewlet's conversations and Chatlet are [replicated state
-machines](replication.md).
+Ask Crewlet's conversations, Chatlet, the seats' executor sessions and the
+code host are [replicated state machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
 applies every log into its own copy of the rows — so it answers questions
 about each one locally, and so it can donate a snapshot of all of them to a
@@ -431,7 +431,7 @@ HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat code]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat executor code]"
 ```
 
 ---
@@ -449,16 +449,17 @@ the dependency surface before choosing a host for it:
 - **For a stateless satellite, a data node that answers.** Its seats' tracker,
   knowledge-base and chat tools, their searches and its tool-skill walks
   are each a request to a data node over the broker — no inbound port, the
-  same link. It is admitted to claim seats only once a data node answers
+  same link — and so is the engine's record of the session each of its seats'
+  executor boxes leaves, which that seat's next launch reads back. It is admitted to claim seats only once a data node answers
   that its own copy is level with its logs, and while none answers its tools
   fail naming the estate nobody served rather than answering from nothing. What it publishes about its
   own turns is handed to a data node's event log (the audit trail cannot live
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
   memory does and is rehydrated after a restart.
-- **The coding CLI of every model its seats name, installed and signed in
+- **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
-  is a CLI the node runs, and it calls its own vendor over outbound HTTPS. A
+  is a harness the node runs, and it calls its own vendor over outbound HTTPS. A
   network with no egress at all can still work if the role's models are
   OpenCode entries whose model names an on-premises server.
 - **The MCP servers its role declares, installed on that host** — the
@@ -545,8 +546,8 @@ for you:
 - The satellite **launches** the run. For an `e2b` cell it must reach the
   sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
   `container` cell runs on the satellite's own host, where `direct` needs
-  the coding CLI installed, and `container` the container runtime and an
-  image with the coding CLI in it.
+  the harness installed, and `container` the container runtime and an
+  image with the harness in it.
 - Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
   box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the

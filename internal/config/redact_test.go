@@ -552,6 +552,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			"material at it",
 		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
 			"to, a number of characters, never a password",
+		"Code.RemoteCredentials": "a table of variables' NAMES and the hosts each " +
+			"may be sent to, never a value: the secret store holds the value",
 		"MCPServer.SeatCredentials": "which seat credential a server reads and " +
 			"under which key: integration, field and key names, never a value; " +
 			"the engine binds the sealed value itself",

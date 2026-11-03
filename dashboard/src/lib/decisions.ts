@@ -17,7 +17,7 @@ import type {
   AgentRow,
   BudgetWindow,
   DecisionsAnswer,
-  SandboxRun,
+  ExecutorRow,
   WorkAskRow,
 } from "~/protocol/index.ts";
 
@@ -32,7 +32,7 @@ export interface SeatCondition {
 
 export type DecisionSubject =
   | { kind: "ask"; at: string; ask: WorkAskRow }
-  | { kind: "run"; at: string; run: SandboxRun }
+  | { kind: "run"; at: string; run: ExecutorRow }
   | { kind: "seat"; at?: string; seat: SeatCondition };
 
 /**

@@ -36,6 +36,8 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks, settled } from "~/test/settle.ts";
+import type { ToolRow } from "~/contract/tools.ts";
+import { ADMIN_STATUS } from "~/routes/settings/mcp-tools/fixtures.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -59,7 +61,7 @@ const ADMIN_VIEWER = {
  * The app over a socket that never connects — and, where a case reads a
  * screen only an admin reads, one whose `viewer` question answers `viewer`.
  */
-function mount(viewer: unknown = null) {
+function mount(viewer: unknown = null, answers: Readonly<Record<string, unknown>> = {}) {
   const store = new Store();
   const socket = new LiveSocket(store);
   if (viewer !== null) {
@@ -68,7 +70,9 @@ function mount(viewer: unknown = null) {
       (what, ...rest) =>
         what === "viewer"
           ? Promise.resolve(viewer)
-          : (real as (w: string, ...r: unknown[]) => Promise<unknown>)(what, ...rest);
+          : Object.hasOwn(answers, what)
+            ? Promise.resolve(answers[what])
+            : (real as (w: string, ...r: unknown[]) => Promise<unknown>)(what, ...rest);
   }
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -340,7 +344,7 @@ describe("routing", () => {
     const routes = [
       ["live", "turns", "11111111-1111-4111-8111-111111111111"],
       ["live", "traces", "22222222-2222-4222-8222-222222222222"],
-      ["live", "runs", "33333333-3333-4333-8333-333333333333"],
+      ["live", "executors", "33333333-3333-4333-8333-333333333333"],
       ["live", "events", "44444444-4444-4444-8444-444444444444"],
       ["live", "a2a", "55555555-5555-4555-8555-555555555555"],
       ["company", "schedules", "role", "ceo", "standup"],
@@ -405,59 +409,57 @@ describe("routing", () => {
   /**
    * A TOOL NAME IS A THIRD PARTY'S STRING, and `servers` is a legal one.
    *
-   * `#/settings/mcp-tools/servers/{name}` filters the catalogue by origin and
-   * `#/settings/mcp-tools/{name}` is one tool's page, the address `objects.ts`
-   * builds and where a tool row's `Open ↗` goes. Discriminating on the WORD
-   * took the page away from a tool actually called `servers` and dropped the
-   * reader on the unfiltered catalogue, which is the regression the switch's
-   * own comment says it fixed. The tail's LENGTH is what tells them apart:
-   * the router encodes each segment whole, so a tool page is always exactly
-   * one tail segment and the filter always two.
+   * `#/settings/mcp-tools/{name}` is one tool's address, the one `objects.ts`
+   * builds, and `#/settings/mcp-tools/servers/{name}` is a server's page.
+   * Discriminating on the WORD would take the address away from a tool
+   * actually called `servers`; the tail's LENGTH is what tells them apart,
+   * since the router encodes each segment whole, so a tool is always exactly
+   * one tail segment and a server's page two. A tool's address opens the tool
+   * where the page shows it: a server's tool on its server's Tools tab,
+   * searched for it.
    */
-  test("a tool named `servers` keeps its page, and the origin filter keeps its", async () => {
+  test("a tool named `servers` opens on its server's page, and a server's page keeps its", async () => {
     const annotations = {
       read_only: "yes",
       destructive: "no",
       idempotent: "yes",
       open_world: "no",
     } as const;
-    const catalogue = [
-      { name: "servers", description: "", source: "mcp:acme", annotations, delivers: "" },
-      { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
+    const catalogue: ToolRow[] = [
+      {
+        name: "servers",
+        description: "",
+        source: "mcp:search",
+        annotations,
+        risk: "read_only",
+        risk_declared: true,
+        external: false,
+        delivers: "",
+        group: "",
+        gate: "",
+      },
     ];
+    const answers = { mcp_servers_status: ADMIN_STATUS };
 
     location.hash = "#/settings/mcp-tools/servers";
-    const one = mount(ADMIN_VIEWER);
-    one.store.applyTools(catalogue);
-    one.view.rerender(
-      <ClientContext.Provider value={{ store: one.store, socket: one.socket }}>
-        <Router>
-          <App />
-        </Router>
-      </ClientContext.Provider>,
-    );
-    // The addressed tool is drawn above the catalogue in its own header —
-    // once the viewer has said this reader is an admin, whose screen it is.
+    const one = mount(ADMIN_VIEWER, answers);
+    act(() => one.store.applyTools(catalogue));
     await waitFor(() =>
-      expect(one.view.container.querySelector(".crewlet-object-header")).not.toBeNull(),
+      expect(location.hash).toBe("#/settings/mcp-tools/servers/search?tab=tools&q=servers"),
     );
     one.view.unmount();
     cleanup();
 
     location.hash = "#/settings/mcp-tools/servers/github";
-    const two = mount(ADMIN_VIEWER);
-    two.store.applyTools(catalogue);
-    two.view.rerender(
-      <ClientContext.Provider value={{ store: two.store, socket: two.socket }}>
-        <Router>
-          <App />
-        </Router>
-      </ClientContext.Provider>,
+    const two = mount(ADMIN_VIEWER, answers);
+    act(() => two.store.applyTools(catalogue));
+    // Two segments is a SERVER'S PAGE, under its own head.
+    await waitFor(() =>
+      expect(two.view.container.querySelector(".crewlet-object-header")?.textContent).toMatch(
+        /GitHub/,
+      ),
     );
-    // Two segments is the FILTER, so no tool is addressed and the catalogue
-    // stands alone.
-    await waitFor(() => expect(screen.queryByText("Checking your access to MCP Tools")).toBeNull());
-    expect(two.view.container.querySelector(".prof-head")).toBeNull();
+    expect(location.hash).toBe("#/settings/mcp-tools/servers/github");
   });
 
   test("a seat that does not exist explains itself", () => {
@@ -495,7 +497,6 @@ describe("a section, for a reader holding none of its grants", () => {
         "people",
         "service-accounts",
         "tokens",
-        "mcp-tools",
         "limits",
         "storage",
         "secrets",
@@ -631,14 +632,8 @@ describe("a section, for a reader holding none of its grants", () => {
       expect(within(content()).queryByText(SIGN_IN), section.key).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
-      // Tools' figures are the registry the socket pushes every reader — no
-      // read was refused for them — so they are the figures kept.
-      if (section.key !== "mcp-tools") {
-        expect(
-          document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
-        ).toBeNull();
-        expect(content().querySelector(".crewlet-statcard")).toBeNull();
-      }
+      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag")).toBeNull();
+      expect(content().querySelector(".crewlet-statcard")).toBeNull();
     },
   );
 
@@ -676,7 +671,7 @@ describe("a section, for a reader holding none of its grants", () => {
         .getAllByRole("link")
         .find((a) => a.getAttribute("href") === href);
     await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
-    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/Needs Admin access/);
+    expect(row("#/settings/mcp-tools")?.textContent).toBe("MCP & tools");
     expect(row("#/settings/limits")?.textContent).toMatch(/Needs Admin access/);
     expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Worklet access/);
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
@@ -708,14 +703,15 @@ describe("a section, for a reader holding none of its grants", () => {
     expect(view.container.querySelector('nav[aria-label="Your rooms"]')).toBeNull();
   });
 
-  // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
-  // seat may call is how the company is run.
+  // THE CHARTER IS PUBLIC, and so is MCP & tools: a member reads each
+  // server's condition and its tools, which is why an agent lacks one, in a
+  // reading that names no launch line or credential.
   //
   // PRINCIPLES ARE JUDGED ON THE ANSWER, so the case waits for the frame to
   // have applied it: the sidebar locking Worklet is that answer drawn. Judged
   // any sooner, the frame has not been told who is reading, and the page is
   // open to them whatever its rule says.
-  test("the company's Principles are open to anybody, and MCP Tools is Admin's", async () => {
+  test("the company's Principles and MCP & tools are open to every member", async () => {
     location.hash = buildHash(["company"]);
     const principles = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
     const sidebar = await screen.findByRole("navigation", { name: "Navigation" });
@@ -734,7 +730,12 @@ describe("a section, for a reader holding none of its grants", () => {
     cleanup();
     location.hash = buildHash(["settings", "mcp-tools"]);
     mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["worklet"] }));
-    expect(await screen.findByText("You need Admin access")).toBeDefined();
+    // THE SCREEN, and not the frame's refusal: its own read is what the
+    // engine answers this member in their reading.
+    await waitFor(() =>
+      expect(screen.queryByText("Checking your access to MCP & tools")).toBeNull(),
+    );
+    expect(screen.queryByText("You need Admin access")).toBeNull();
   });
 });
 

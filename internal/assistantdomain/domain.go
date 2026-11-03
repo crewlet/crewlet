@@ -221,7 +221,7 @@ func (Domain) OpsTable() string { return "assistant_ops" }
 // GatesSeatAdmission reports that no seat depends on this domain's copy: no
 // seat reads a conversation on its turn path, so a stalled assistant copy must
 // not stop a node admitting seats. The copy is still judged and goes out of
-// service for its own readers (ADR-0072): a stalled strict replay is a fault,
+// service for its own readers (ADR-0079): a stalled strict replay is a fault,
 // and the framework refuses every read of it.
 func (Domain) GatesSeatAdmission() bool { return false }
 

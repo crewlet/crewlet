@@ -28,7 +28,7 @@ import (
 // # Read by object id, of the repository's home
 //
 // A tree, a file, a history, a blame and a diff are the repository's CONTENT,
-// answered by its home git node (estate.CodeSeam.GitRead, ADR-0082) and never
+// answered by its home git node (estate.CodeSeam.GitRead, ADR-0089) and never
 // by the rows — the code tools' own reads, one implementation. A revision a
 // request names by a ref — a branch, a tag, a whole ref, or `HEAD` for the
 // default branch — is resolved first, at the caller's freshness, in ONE read

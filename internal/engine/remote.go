@@ -200,7 +200,7 @@ func dataNodesOf(held []coord.Lease) []string {
 }
 
 // gitNodesOf is the nodes with the git role among a listing of presence
-// leases: the git nodes a repository's git work is asked of (ADR-0082). Read
+// leases: the git nodes a repository's git work is asked of (ADR-0089). Read
 // as every role reads off a peer's row — one this build cannot read is every
 // role — so a peer whose row is unreadable is asked as a git node too, and
 // answers `no_backend` where it is none, which the walk asks last for half a

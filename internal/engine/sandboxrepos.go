@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// launchRepos is what a coding run's checkout resolves to on the company's own
-// code host (ADR-0086): its grants, the code floor they were read at, the
+// launchRepos is what an executor's checkout resolves to on the company's own
+// code host (ADR-0093): its grants, the code floor they were read at, the
 // engine's steps giving the box each one — the client-floor check, then one
 // clone each, then, in a cell whose boxes own their kernel, git's file-system
 // monitor ([sandbox.CodingSteps]) — and the colleague whose grant bounds the
@@ -29,7 +29,7 @@ type launchRepos struct {
 	ceiling string
 }
 
-// resolveRunRepos resolves the repositories a coding run of turn t checks out
+// resolveRunRepos resolves the repositories an executor of turn t checks out
 // into launchRepos, or refuses — as a [*builtin.RefusedCheckout] the seat
 // reads, naming the repository and the reason — anything the seat may not be
 // given:
@@ -80,7 +80,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 			node = e.node.ID()
 		}
 		log.WarnContext(ctx, "sandbox_git_url_unset", "turn_id", t.RunID, "node", node,
-			"detail", "a coding run checked out a repository on the code host and this node cannot give its "+
+			"detail", "an executor checked out a repository on the code host and this node cannot give its "+
 				"box git access: set "+sandbox.BoxGitURLVar+" to a git node's public listener and /box/git")
 		return launchRepos{}, builtin.CheckoutUnavailable(fmt.Sprintf("this node cannot give a box git "+
 			"access: %s is not set on %s (the base a box dials for /box/git/, a git node's public listener); "+
@@ -109,7 +109,7 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 }
 
 // runCheckouts is where `code_checkout` gives a running job a repository
-// (ADR-0086): resolved for the turn's seat ([Engine.resolveRunRepos]) and
+// (ADR-0093): resolved for the turn's seat ([Engine.resolveRunRepos]) and
 // granted on the job's own row, through the pending-run store of the sandbox
 // runtime this node holds at the moment of the call — READ PER CALL, for
 // [runAsks]' reason.

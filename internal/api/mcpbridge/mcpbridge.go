@@ -1,10 +1,10 @@
-// Package mcpbridge serves one detached run's tool surface to the coding CLI in
+// Package mcpbridge serves one detached run's tool surface to the harness in
 // its box, over MCP on HTTP: a seat's executor, or a person's Dashboard
 // Assistant deep work (ADR-0054), each decided as its own [Caller].
 //
 // # What this is for
 //
-// Every seat's executor is its coding CLI's own agentic run, detached in a
+// Every seat's executor is its harness's own agentic run, detached in a
 // sandbox box: the vendor's own loop drives the model, with its own shell and
 // editor, and the engine's job is to hand that loop the seat's tools.
 // Those tools cannot be shipped into the box — most are MCP children holding the
@@ -14,7 +14,7 @@
 //
 // # A transport, beside the one every run on this host uses
 //
-// A CLI that runs on this host — the reviewer, a worker, the onboarding pass,
+// A harness that runs on this host — the reviewer, a worker, the onboarding pass,
 // a side pass — reaches its phase's tools through a unix socket
 // (internal/toolsession). A box is another machine, or another network
 // namespace, so it reaches them over HTTP instead, on a listener this node
@@ -41,7 +41,7 @@
 //     the seat to stop, while it runs. A call is refused once either has
 //     happened — and every call after it, each on the run's record as
 //     refused — rather than made as a seat this node no longer speaks for.
-//   - THE ORDER CALLS ARRIVED IN. A CLI makes a response's calls at once, and
+//   - THE ORDER CALLS ARRIVED IN. A harness makes a response's calls at once, and
 //     each is placed in the run's call log when it is admitted rather than
 //     when it returns ([tools.Surface.Admit]), so the repeat count an
 //     operation id carries does not depend on which tool finished first.
@@ -59,9 +59,9 @@
 //   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-job, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
 //   - THE MODEL A CALL WAS MADE ON. A tool loop tells each call its round's
-//     model; a bridged call was made by a vendor CLI's own loop, whose rounds
+//     model; a bridged call was made by a harness's own loop, whose rounds
 //     the engine never sees, so each is told the model the run's launch
-//     pointed that CLI at ([Session.Model]) — the one a seat's code write
+//     pointed that harness at ([Session.Model]) — the one a seat's code write
 //     names on its push, so a run's pushes name one model whichever path
 //     made them.
 //   - A DURABLE LEDGER. A run outlives its launching turn and can outlive the
@@ -73,15 +73,17 @@
 //     the one.
 //
 // What it does NOT add is what belongs to a tool loop: rounds, a terminator, a
-// budget's per-request refusal. A detached run's loop is its CLI's own, the
+// budget's per-request refusal. A detached run's loop is its harness's own, the
 // engine's phase is suspended while it runs, and those are settled when the run
 // is collected and its turn resumes. A person's notes to the turn it serves
-// from the run's note inbox, at the CLI's own boundaries — see steer.go, "A
-// NOTE INBOX" — and decides nothing about them.
+// from the run's note inbox, at the harness's own boundaries — see steer.go, "A
+// NOTE INBOX" — and decides nothing about them. A load of one of the run's own
+// skills, which its harness reports, it records as the run's own load of the
+// Tool Skill it stands for — see skills.go.
 //
 // # A run outlives the process that opened its session
 //
-// The box goes on calling for as long as its CLI runs, and the process that
+// The box goes on calling for as long as its harness runs, and the process that
 // launched it can restart in the meantime, or its seat move to a peer. So
 // nothing the box holds names THAT PROCESS. Its token is signed under the
 // fleet's keyring (internal/runtoken over the keys every node holds), and it
@@ -199,7 +201,7 @@ const PathPrefix = "/mcp/"
 
 // serverName is what the bridge calls itself in the MCP handshake, and the
 // key the engine writes it under in a box's server list — the name a run on
-// this host lists the same tools under, so the tool prefix a coding agent sees
+// this host lists the same tools under, so the tool prefix a harness sees
 // (`mcp__crewlet__…`) is one spelling in every phase. Defined by config
 // because config is where the name is RESERVED: an mcp_servers entry called
 // the same thing would be overwritten by the bridge in every executor's box,
@@ -241,9 +243,9 @@ type Session struct {
 	Handle string
 	Role   string
 
-	// Model is the model the run's launch pointed its coding CLI at — the
+	// Model is the model the run's launch pointed its harness at — the
 	// value the launch records on the run's row (sandbox.LaunchRecord.Model)
-	// — or "" where it named none and left the CLI to choose. Every bridged
+	// — or "" where it named none and left the harness to choose. Every bridged
 	// call carries it as the model it was made on ([toolloop.CallModel]), the
 	// value a tool loop gives a call from its round, so a seat's code write
 	// made through this bridge names the model its run's other writes name.
@@ -301,12 +303,20 @@ type Session struct {
 	Fence func() error
 
 	// Steer is the run's note inbox, which the bridge serves to the run's
-	// CLI between its steps — see steer.go. Closed with the opening that
+	// harness between its steps — see steer.go. Closed with the opening that
 	// serves it: the run's end, a relaunch that replaces it and the seat
 	// leaving this node all close it. Nil serves no notes: the notes route
 	// answers 404 and steer_take answers nothing, which is what a run with
 	// nothing to steer — the assistant's deep work — has.
 	Steer SteerInbox
+
+	// Skills are the skills the run's harness was handed as its OWN
+	// (internal/sandbox, RunRequest.Skills), by the name it lists each
+	// under to the key of the Tool Skill it is: a load the harness reports
+	// by that name is recorded as the run's own load of the key — see
+	// skills.go. Nil hands none: the skill route answers 404, skill_loaded
+	// records nothing, and load_tool_skill is listed as any other tool.
+	Skills map[string]string
 
 	mu sync.Mutex
 	// live is the session's current opening: what a token minted at its
@@ -343,11 +353,16 @@ func (s *Session) caller() Caller {
 	if s.Caller != nil {
 		return s.Caller
 	}
-	if seat, ok := s.Surface.(*tools.Surface); ok && seat != nil {
+	if seat := s.seat(); seat != nil {
 		return seatCaller{surface: seat}
 	}
 	return nil
 }
+
+// seat is the session's surface where it is a seat's, or nil: Ask Crewlet's
+// deep work hands the bridge a surface of its own, which acts for a person and
+// holds no MCP server's tools.
+func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 
 // Ledger is the durable record of a bridged run's calls.
 //
@@ -357,7 +372,7 @@ func (s *Session) caller() Caller {
 type Ledger interface {
 	// Append records one finished call. An error is LOGGED, never
 	// returned to the box: the tool already ran and its effect already
-	// happened, so failing the call would tell a coding agent to retry
+	// happened, so failing the call would tell a harness to retry
 	// work that has been done.
 	Append(ctx context.Context, runID string, call Call) error
 }
@@ -369,7 +384,7 @@ type Call struct {
 	tools.Call
 
 	// Seq is the call's place in the order the calls REACHED the session,
-	// after [Session.LastSeq] — the order the CLI made them in, which is not
+	// after [Session.LastSeq] — the order the harness made them in, which is not
 	// the order they finish in when it makes several at once.
 	Seq int
 
@@ -384,6 +399,17 @@ type Call struct {
 	// — and empty where no tool did.
 	Origin string
 	Server string
+
+	// Source is whose tool the call named, answered or refused
+	// ([toolloop.ToolResult.Source]), and empty for a call nothing
+	// resolved: one made after the run's tools closed, or whose arguments
+	// did not parse.
+	Source string
+
+	// Held marks a call to a tool at Needs approval that the seat's surface
+	// recorded as the run's question rather than made
+	// ([toolloop.ToolResult.Held], ADR-0077): the call that ends the job.
+	Held bool
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -476,7 +502,7 @@ type Options struct {
 
 // DefaultTTL is how long a run's endpoint stays valid.
 //
-// Four hours, matched to the thing it has to outlive: a coding run that stops
+// Four hours, matched to the thing it has to outlive: an executor that stops
 // to ask a person something is parked until they answer, and the ordinary
 // human latency on that is hours rather than minutes. Shorter and a run comes
 // back to a dead endpoint through no fault of its own; much longer and a
@@ -512,7 +538,7 @@ func New(opts Options) (*Bridge, error) {
 	}
 	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
 	// [Bridge.Close] ends every MCP session the moment the run ends — and
-	// a coding agent legitimately goes quiet for as long as a build or a
+	// a harness legitimately goes quiet for as long as a build or a
 	// test suite takes, so an idle clock here would cut a live run off from
 	// its tools mid-job for no reason the run could see.
 	//
@@ -529,7 +555,14 @@ func New(opts Options) (*Bridge, error) {
 		if opened == nil {
 			return nil
 		}
-		return opened.server.MCP()
+		// THE SERVER THE ROUTE NAMES: the engine's own at the job's endpoint,
+		// one of the seat's MCP servers beneath it ([ServerPattern]), and
+		// none for a server the opening does not serve.
+		ep := opened.endpoint(r.PathValue("server"))
+		if ep == nil {
+			return nil
+		}
+		return ep.server.MCP()
 	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true})
 	return b, nil
 }
@@ -1221,8 +1254,10 @@ func (s *Session) Connections() int {
 		return 0
 	}
 	n := 0
-	for range opened.server.MCP().Sessions() {
-		n++
+	for _, ep := range opened.order {
+		for range ep.server.MCP().Sessions() {
+			n++
+		}
 	}
 	return n
 }
@@ -1242,7 +1277,13 @@ type binding struct {
 	// held here because the Session value can be opened again for another.
 	id      string
 	session *Session
-	server  *toolsession.Server
+	// servers are the MCP servers the opening serves, by the name a route
+	// names each by: "" for the engine's own tools, and each of the seat's
+	// MCP servers under its own name (servers.go). order is the same, the
+	// engine's own first. Set once as the opening is built, and read-only
+	// after.
+	servers map[string]*endpoint
+	order   []*endpoint
 	// caller is who the opening's every call is decided as, fixed when it
 	// opened ([Session.caller]).
 	caller Caller
@@ -1273,9 +1314,13 @@ type binding struct {
 	// ([Session.Steer]), and closed when it ends; nil once it has.
 	steer SteerInbox
 
-	// unsubstituted says once, per opening, that the CLI's hooks name no
+	// unsubstituted says once, per opening, that the harness's hooks name no
 	// agent the bridge can tell apart — see [binding.takeSteer].
 	unsubstituted sync.Once
+
+	// skillUnsubstituted says once, per opening, that the harness's hook names
+	// no skill it loaded — see [binding.loadSkill].
+	skillUnsubstituted sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1283,19 +1328,42 @@ var _ toolsession.Dispatcher = (*binding)(nil)
 func newBinding(ctx context.Context, s *Session, where route) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
 		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer}
-	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
+	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its
+	// tools as it is built, and which endpoint lists a tool is read off the
+	// map — a server built before its siblings were filed would list theirs,
+	// and keep listing them until the surface next changed.
+	names := Servers(s.Surface)
+	opened.servers = make(map[string]*endpoint, 1+len(names))
+	for _, name := range append([]string{""}, names...) {
+		ep := &endpoint{opening: opened, name: name}
+		opened.servers[name] = ep
+		opened.order = append(opened.order, ep)
+	}
+	title := s.Role + " (" + s.Handle + ")"
+	for _, ep := range opened.order {
+		instructions := ""
+		if ep.name != "" {
+			instructions = instructionsOf(s.seat(), ep.name)
+		}
+		ep.server = toolsession.NewServer(ep.listedName(), title, instructions, ep)
+	}
+	own := opened.servers[""].server
 	// steer_take, ANSWERED BEFORE THE TOOLS ARE: never listed, never handed
-	// to the run's surface, never recorded — see steer.go.
-	opened.server.MCP().AddReceivingMiddleware(opened.steerMiddleware)
+	// to the run's surface, never recorded — see steer.go. On the engine's
+	// own server, where the run's hooks name it.
+	own.MCP().AddReceivingMiddleware(opened.steerMiddleware)
+	// skill_loaded, ANSWERED THE SAME WAY, for the same reason: a hook's
+	// report, never listed and never a call of the model's — see skills.go.
+	own.MCP().AddReceivingMiddleware(opened.skillMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
-	// ([toolsession.Server.HoldAnswersForRelist]): the coding CLIs that run in
+	// ([toolsession.Server.HoldAnswersForRelist]): the harnesses that run in
 	// a box (Claude Code, OpenCode) re-read their tool list when told it
 	// changed, and answered at once one asks its model again before the
 	// re-list lands, offering the tool it just activated a request late.
-	// Unconditional, because the bridge is told nothing of which CLI dials
+	// Unconditional, because the bridge is told nothing of which harness dials
 	// it, and the cost on one that never re-lists is the hold's own short
 	// bound on an activation's answer, never a refusal.
-	opened.server.HoldAnswersForRelist()
+	own.HoldAnswersForRelist()
 	return opened
 }
 
@@ -1339,9 +1407,11 @@ func (o *binding) endKeeping(keep SteerInbox) {
 	if inbox != nil && inbox != keep {
 		inbox.Close()
 	}
-	for ss := range o.server.MCP().Sessions() {
-		if err := ss.Close(); err != nil {
-			log.Debug("mcp_bridge_session_close", "error", err)
+	for _, ep := range o.order {
+		for ss := range ep.server.MCP().Sessions() {
+			if err := ss.Close(); err != nil {
+				log.Debug("mcp_bridge_session_close", "error", err)
+			}
 		}
 	}
 }
@@ -1365,11 +1435,17 @@ func (o *binding) over() bool {
 
 // Offered is what the surface offers now, with the hints the registry holds
 // for each, so a box's client can tell a read from a write.
+//
+// The bridge's own skill loader is left out for a harness that loads its
+// skills itself ([binding.offeredTool]).
 func (o *binding) Offered() []toolsession.Tool {
 	surface := o.session.Surface
 	defs := surface.ToolDefs()
 	out := make([]toolsession.Tool, 0, len(defs))
 	for _, def := range defs {
+		if !o.offeredTool(def.Name) {
+			continue
+		}
 		out = append(out, toolsession.Tool{Def: def, Annotations: surface.AnnotationsOf(def.Name)})
 	}
 	return out
@@ -1386,29 +1462,29 @@ const (
 	// replaced by a relaunch.
 	endedNote = "This run has ended; this call was not run. End your turn now."
 
-	// stoppedNote answers a call once the run's tools are closed: the seat
-	// moved off this node, a person asked it to stop, or a tool failed
+	// stoppedNote answers a call once the executor's tools are closed: the
+	// seat moved off this node, a person asked it to stop, or a tool failed
 	// inside the engine.
-	stoppedNote = "This run's tools are closed and this call was not run. " +
+	stoppedNote = "Your tools are closed and this call was not run. " +
 		"End your turn now."
 
 	// unrunNote answers a call the seat's surface could not run at all,
-	// because the turn the run belongs to was torn down under it.
-	unrunNote = "This call was not run, because the turn this coding run belongs " +
-		"to has ended. End your turn now."
+	// because the turn the executor works for was torn down under it.
+	unrunNote = "This call was not run, because the turn you are working for " +
+		"has ended. End your turn now."
 
 	// failedInsideNote answers the call that broke inside the engine.
-	failedInsideNote = "This call failed inside the engine, and this run's tools are " +
+	failedInsideNote = "This call failed inside the engine, and your tools are " +
 		"now closed. End your turn now."
 
 	// suspendNote answers a tool that would park the caller's own loop,
-	// which a detached run does not have.
-	suspendNote = "This tool cannot be used from a coding run; it suspends the " +
+	// which an executor in its box does not have.
+	suspendNote = "This tool cannot be used from inside a box; it suspends the " +
 		"caller's own loop."
 )
 
 // Call decides and runs one call a box made. It never fails as a Go error: a
-// call that could not run is a failed result the CLI hands its model.
+// call that could not run is a failed result the harness hands its model.
 //
 // The request's context is not handed over ([toolsession.Dispatcher.Call]) —
 // see the package doc, "a call is the run's, not the request's".
@@ -1485,7 +1561,7 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	case res.Suspend:
 		// A SUSPEND CANNOT CROSS THIS BOUNDARY. It parks a tool loop with
 		// the call unanswered so the conversation can be persisted and
-		// re-entered; a detached run's loop is its CLI's own, which would
+		// re-entered; a detached run's loop is its harness's own, which would
 		// simply wait on an answer that never comes. No seat tool asks for
 		// it — the Dashboard Assistant's quick mode parks on a proposal
 		// this way, and its deep work's surface answers a proposal with a
@@ -1499,7 +1575,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
-			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server}
+			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server,
+			Source: res.Source}
 	}
 
 	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
@@ -1508,11 +1585,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}
+	recorded := args
+	if res.Held {
+		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
+		// sealed beside its question (ADR-0077), and the call log is
+		// read in the clear by everybody who reads the seat's trail.
+		recorded = nil
+	}
 	o.record(Call{
-		Call: tools.Call{Name: in.Name, Args: args, Output: res.Output, Failed: res.Failed,
+		Call: tools.Call{Name: in.Name, Args: recorded, Output: res.Output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
-		Origin: res.Origin, Server: res.Server,
+		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }
@@ -1531,7 +1615,7 @@ func (o *binding) execute(admitted toolloop.Admitted, name string, args map[stri
 	// nothing ([turnctx.WithJob]).
 	//
 	// AND THE MODEL THE CALL WAS MADE ON, set here and nowhere else on this
-	// path: a vendor CLI's own loop made it, and the one model the engine
+	// path: a harness's own loop made it, and the one model the engine
 	// knows that loop runs is the one the run's launch named
 	// ([Session.Model]).
 	ctx := turnctx.WithJob(toolloop.WithCallModel(o.caller.Acting(o.ctx), o.session.Model),
@@ -1563,7 +1647,7 @@ func (o *binding) stopLocked(why error) {
 	log.WarnContext(o.ctx, "mcp_bridge_run_stopped", "run_id", o.session.RunID,
 		"seat", o.session.Handle, "reason", why.Error(),
 		"detail", "every later tool call of this run is refused, and the run's "+
-			"coding CLI is told to end its turn")
+			"harness is told to end its turn")
 }
 
 // seatCaller decides a call as the seat a surface's turn names.
@@ -1621,7 +1705,7 @@ var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " 
 //
 // BEST EFFORT, and the reason is that the alternative is worse. The tool has
 // already run and its effect has already happened, so failing the call would
-// tell a coding agent to retry work that is done — the duplicate-post failure
+// tell a harness to retry work that is done — the duplicate-post failure
 // the whole delivery machinery exists to prevent. A lost ledger row costs the
 // reviewer one line of evidence after a restart; a duplicated side effect
 // costs somebody two identical messages.

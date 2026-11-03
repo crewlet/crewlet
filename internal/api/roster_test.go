@@ -379,7 +379,7 @@ func TestTheSnapshotCarriesTheOrgTree(t *testing.T) {
 // THE TOOL CATALOGUE COMES FROM THE ENGINE, and only from one.
 func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, &fakeRuntime{tools: []api.ToolInfo{
+	a := rosterApp(t, &fakeRuntime{tools: []queries.ToolRow{
 		{Name: "lookup_colleague", Description: "who is who", Source: "builtin"},
 		{Name: "tracker_search", Description: "find work", Source: "tracker"},
 	}})
@@ -405,10 +405,10 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 // say what its tools are NAMED and nothing about which of them can write.
 func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, &fakeRuntime{tools: []api.ToolInfo{
+	a := rosterApp(t, &fakeRuntime{tools: []queries.ToolRow{
 		{
 			Name: "post_message", Description: "say something", Source: "slack",
-			Annotations: api.ToolAnnotations{
+			Annotations: queries.ToolHints{
 				ReadOnly: "no", Destructive: "no",
 				Idempotent: "unknown", OpenWorld: "yes",
 			},
@@ -417,7 +417,7 @@ func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
 		},
 		{
 			Name: "lookup_colleague", Description: "who is who", Source: "builtin",
-			Annotations: api.ToolAnnotations{
+			Annotations: queries.ToolHints{
 				ReadOnly: "yes", Destructive: "unknown",
 				Idempotent: "unknown", OpenWorld: "unknown",
 			},

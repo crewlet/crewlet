@@ -267,6 +267,31 @@ const (
 	opOnceWrite
 )
 
+// opOrigin is who originates a write: a SURFACE, on somebody's behalf, or the
+// ENGINE, recording what its own runs did.
+//
+// A DIFFERENT QUESTION FROM THE CLASS, which says what a failover may repeat:
+// the origin says who may make the write at all, and so what a surface must be
+// ready to answer about it. A surface's write — a seat's tool, a person's
+// request, the operator's own MCP — is somebody's, and a refusal of it is
+// somebody's to read, so the person's write surface classes it and names the
+// object it was about ([SurfaceWriteDomains]). The engine's is nobody's: no
+// tool, no person and no operator surface asks for it, so no surface has a
+// refusal of it to class or an object of it to name, and none may hold the
+// facade it is made through.
+type opOrigin int
+
+const (
+	// originSurface is a write a surface makes on somebody's behalf. The
+	// zero value, because every write but the engine's own record is one.
+	originSurface opOrigin = iota
+
+	// originEngine is a write the engine makes of its own accord, through a
+	// facade only the engine is handed ([ExecutorWrites]): the executor
+	// log's, which records what a seat's box did.
+	originEngine
+)
+
 // request is one operation, as the asking node sends it — signed whole
 // ([Envelopes]), so every field below is one the fleet wrote.
 type request struct {
@@ -389,7 +414,7 @@ const (
 	// node evicted, its rows below the log), so it answers none of that
 	// domain's operations until the copy recovers, while every other
 	// domain's copy keeps serving and its own seats' calls on this one go to
-	// the other data nodes ([LocalBackends.For], ADR-0072).
+	// the other data nodes ([LocalBackends.For], ADR-0079).
 	unservedOutOfService unservedReason = "out_of_service"
 
 	// unservedUnauthenticated: the request's envelope does not verify on
@@ -472,7 +497,7 @@ type opSpec struct {
 
 	// domain is the domain whose COPY the operation reads — the verdict the
 	// router and the server ask before running it here ([LocalBackends.For],
-	// ADR-0072) — or [SeatCopy] for admission's ping. floorStream is that
+	// ADR-0079) — or [SeatCopy] for admission's ping. floorStream is that
 	// domain's log, the one log its floors are on ([Router.floorsFor],
 	// [ready]), or empty for an operation that carries no floor
 	// ([op.floorless]): what it reads is not the log's rows at a position
@@ -497,6 +522,10 @@ type opSpec struct {
 	// actor says whether the operation acts AS somebody, which a request
 	// then has to name.
 	actor bool
+
+	// origin is who originates a write ([opOrigin]): a surface unless the
+	// declaration says the engine ([op.byEngine]).
+	origin opOrigin
 
 	// ungated operations run on a node that is a worse one to ask ([worse]):
 	// they ask the copy's own gate themselves ([opPing]).
@@ -576,18 +605,27 @@ func (o op[A, R]) attemptBy(of func(A, Timing) time.Duration) op[A, R] {
 // so a new operation's types are checked the moment it is declared.
 var registry = map[string]*opSpec{}
 
-// WriteDomains is every domain this router carries a write for, by its
-// state-log name, sorted — read off the operation table, so a domain whose
-// first write operation is declared is in it from that line on.
+// SurfaceWriteDomains is every domain a SURFACE writes through this router, by
+// its state-log name, sorted — read off the operation table, so a domain whose
+// first surface write is declared is in it from that line on.
 //
-// EXPORTED for the gates that must cover every routed domain: a surface
-// that classes a writer's refusal or names a write's object outside a tool
-// (internal/agent/builtin's WriterClass and ObjectArgs) declares each domain
-// once, and a domain routed here and not declared there is a person's
-// content refusal answered as a fault.
-func WriteDomains() []string {
+// EXPORTED for the gates that must cover every domain a surface writes: a
+// surface that classes a writer's refusal or names a write's object outside a
+// tool (internal/agent/builtin's WriterClass and ObjectArgs) declares each
+// domain once, and a domain a surface writes here and not declared there is a
+// person's content refusal answered as a fault.
+//
+// THE ENGINE'S OWN WRITES ARE NOT IN IT ([originEngine]). No tool, no person
+// and no operator surface makes one, so a surface has no refusal of them to
+// class and no object of them to name: declaring the executor log there could
+// only be met by borrowing an argument some operator tool takes for something
+// else, and that is a declaration the surfaces would then answer by.
+func SurfaceWriteDomains() []string {
 	seen := map[string]bool{}
 	for _, spec := range registry {
+		if !spec.surfaceWrite() {
+			continue
+		}
 		domain := spec.domain
 		if domain == GitCopy {
 			// A GIT WRITE lands on the code log, as a push the code host
@@ -595,11 +633,16 @@ func WriteDomains() []string {
 			// domain's: no state log is named "git".
 			domain = codeDomain
 		}
-		if spec.class != opRead && domain != SeatCopy {
-			seen[domain] = true
-		}
+		seen[domain] = true
 	}
 	return slices.Sorted(maps.Keys(seen))
+}
+
+// surfaceWrite reports a write a surface originates ([originSurface]), on
+// any domain but [SeatCopy], which no write is about: what
+// [SurfaceWriteDomains] collects.
+func (s *opSpec) surfaceWrite() bool {
+	return s.class != opRead && s.domain != SeatCopy && s.origin == originSurface
 }
 
 // define declares an operation, with the domain whose copy it reads — and
@@ -679,7 +722,7 @@ func (o op[A, R]) floorless() op[A, R] {
 // the verdict of each is asked before it runs here, and a node whose copy of
 // any of them is out of service answers `out_of_service` naming that copy,
 // which sends the asker on to a node whose copies of all of them serve
-// (ADR-0072). Routed on its own domain alone, it answered from a copy the node
+// (ADR-0079). Routed on its own domain alone, it answered from a copy the node
 // had stopped serving. Its FLOOR stays on its own domain's log: a second
 // floor would hold it to an applier its answer does not wait on.
 func (o op[A, R]) alsoReads(domains ...string) op[A, R] {
@@ -738,6 +781,25 @@ func (o op[A, R]) ungated() op[A, R] {
 	return o
 }
 
+// byEngine declares a write the ENGINE originates ([originEngine]): one no
+// surface makes, kept out of [SurfaceWriteDomains] and reached only through a
+// facade the engine alone is handed. A property of the declaration rather than
+// of the request, since the asking node's router carries a surface's write and
+// the engine's alike; what holds the class is the gate over the packages that
+// serve a person or a model.
+//
+// A READ HAS NO ORIGINATOR a surface could be — the engine's reads are
+// ordinary reads, gated like every other — so declaring one is a build that
+// cannot mean what it says, and panics.
+func (o op[A, R]) byEngine() op[A, R] {
+	if o.spec.class == opRead {
+		panic(fmt.Sprintf("estate: %s is a read, and only a write has an originator: "+
+			"a read the engine makes is an ordinary read", o.spec.name))
+	}
+	o.spec.origin = originEngine
+	return o
+}
+
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
 // arguments say so: a page or chat write whose actor carries the caller's own
 // operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its operation
@@ -773,7 +835,7 @@ func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 }
 
 // keyedOnGit declares an operation on a repository's GIT OBJECTS, asked of the
-// git nodes rather than the data nodes (ADR-0082): in [rendezvous.Order] of
+// git nodes rather than the data nodes (ADR-0089): in [rendezvous.Order] of
 // key(args) over every live git node — the repository's HOME first, its
 // runner-up next — with a node that ran nothing for it asked last for
 // [suspectFor] and one that went silent last of all, no sticky node, and this
@@ -808,7 +870,7 @@ func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] 
 
 // judgesGrant declares an operation that JUDGES A GRANT from the serving
 // node's chart wherever pred holds of its decoded arguments — a read whose
-// asker is a seat, whose grant on a repository is the chart's (ADR-0081). On
+// asker is a seat, whose grant on a repository is the chart's (ADR-0088). On
 // a node CONFIRMED behind the company's configuration ([Backend.Current]
 // false: shed or stuck, never lag alone) such an operation is answered
 // [errDecidesNoGrant] before it runs — `behind_config`, saying it decides no

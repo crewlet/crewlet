@@ -15,7 +15,7 @@
 // code_refs at the position its state names, its packs exactly the
 // code_packs there, and [Cache.Sync] writes it by CONVERGENCE — derive the
 // target from the rows, make the directory equal to it — never by replaying
-// what happened (ADR-0077). TestNothingButSyncWritesACache holds that from
+// what happened (ADR-0084). TestNothingButSyncWritesACache holds that from
 // both sides: the files under internal/code that write the filesystem or run
 // a git process that may write are a reviewed list, each with its reason, and
 // seeded interleavings of what a node's cache meets — pushes, refused
@@ -50,7 +50,7 @@
 // did, which only a read at the log's head can say. A log RECREATED under it
 // — provisioned anew, its stamp not the one the cache read under — shows in
 // any answer's stream identity, and a delta keyed to it is read again whole.
-// A log RESTORED from an older copy keeps its identity (ADR-0076), so only
+// A log RESTORED from an older copy keeps its identity (ADR-0083), so only
 // where it ends shows it: a LINEARIZABLE answer below a position this process
 // read — any repository's, since one log is under every one — is the log gone
 // back, and the cache reads the repository whole and converges to what it
@@ -139,7 +139,7 @@
 // the read made after the not-found decides it. A copy behind the log may
 // name a pack a purge has since removed, and even a read at the log's head
 // may name a row that has left the log since — removed by a purge's part, or
-// retired, its object kept only for its grace (ADR-0074) — whose object the
+// retired, its object kept only for its grace (ADR-0081) — whose object the
 // collector has deleted meanwhile. A head that still names the pack makes it
 // missing, final, at once: nothing is installed again, since no read makes
 // the store hold the object. One that no longer names it converges the round
@@ -253,7 +253,7 @@
 //
 // A DERIVED FILE is one the cache writes from what an incarnation already
 // holds — its packs, its refs — and that no row names, and every one is a
-// DECLARATION in DerivedFiles (derived.go, ADR-0079): what it is a function
+// DECLARATION in DerivedFiles (derived.go, ADR-0086): what it is a function
 // of, every write that makes it (its trigger, lane, deadline, memory charge,
 // the file and git subcommand that run it, and its argument list), the files
 // it owns and the files a write of it holds only while it runs, its check, the
@@ -994,7 +994,7 @@
 // file no row names that no retirement accounts for — a log gone back, a row
 // gone with no record retiring it. Neither leaves a copy a reader may hold IN
 // PLACE: git opens a pack lazily, part way through a run, so no pin of a file
-// could say which a running process will touch (ADR-0083). The round applies
+// could say which a running process will touch (ADR-0090). The round applies
 // to its end on the incarnation it holds, and then SWAPS it (swap.go): the
 // next incarnation is staged under scratch/ by HARD LINKS of every pack the
 // live rows still name (the live set, kept by every round), HEAD, config, the
@@ -1356,7 +1356,7 @@
 // run beside, each field its bytes and two more (its tag and its length) —
 // about 80 at a run's usual sizes, a turn id's 36 bytes, a tracker's work
 // item and a model id, and a coding box's push about 50 more, its run id's 36
-// bytes and a coding agent's name ("claude-code") — by the format's arithmetic
+// bytes and a harness's name ("claude-code") — by the format's arithmetic
 // rather than a run of the benchmark, whose pushes are a person's. A lookup that misses, every run
 // searched, over four million commits: 0.54, 3.7, 15.5 and 29.8 µs at 1, 8, 32
 // and 64 runs ([MaxProvenanceRuns] says what that decides). A cold node's

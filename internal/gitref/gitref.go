@@ -7,8 +7,8 @@
 // REPOSITORY ([ParseRemoteURL]), which an import or a mirror dials.
 //
 // Configuration validates a document with it at `crewlet validate`, the code
-// domain decides a push with it, the sandbox judges with it the branch a
-// coding run names — the one a parked run records for its re-seed, and each
+// domain decides a push with it, the sandbox judges with it the branch an
+// executor names — the one a parked run records for its re-seed, and each
 // one a run's report says it delivered — and the git process wrapper reads a
 // remote's URL with it before it hands git one to dial. Two copies of one grammar drift
 // (ADR-0008) — a name `crewlet validate` accepts and a push then refuses, or

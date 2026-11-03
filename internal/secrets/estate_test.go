@@ -26,6 +26,10 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"iam/nested//key", true, false},
 		{"iam/Nested/x/key", true, false},
 		{"iam/", true, false},
+		// AN MCP SERVER'S GRANT, under the engine's own owner.
+		{"mcp/linear/refresh", true, true},
+		{"mcp/", true, false},
+		{"MCP_LINEAR_TOKEN", false, false},
 		// NEITHER: an operator's name, and a slash under nobody's owner.
 		{"GITLAB_TOKEN", false, false},
 		{"IAM_PERSON_X_DEK", false, false},

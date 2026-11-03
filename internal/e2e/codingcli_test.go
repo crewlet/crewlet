@@ -27,10 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE EXECUTOR'S CODING CLI: this test binary again, standing in for Claude
+// THE EXECUTOR'S HARNESS: this test binary again, standing in for Claude
 // Code inside a real box.
 //
-// Every agent seat's executor is its coding CLI's own run: the engine picks a
+// Every agent seat's executor is its harness's own run: the engine picks a
 // claude-code or opencode member of the seat's executor chain, opens a session
 // on its tool bridge, provisions a box, and the runner starts `claude` there
 // detached, with the brief, the seat's standing instructions and an MCP config
@@ -46,7 +46,7 @@ import (
 // with no prompt does, its system prompt off `--append-system-prompt-file`, its
 // tool surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
 // bridge over a REAL MCP session, and loops —
-// each round asked of the scripted model exactly as the scripted CLI on the
+// each round asked of the scripted model exactly as the scripted harness on the
 // engine host asks one ([modelRequest]: the brief, the tools the bridge
 // listed by the server's own names, the system prompt on the append channel
 // and the run so far), and each call the model answers made over the bridge
@@ -59,8 +59,8 @@ import (
 // ([codingHooks]): after each batch of calls has its results (PostToolBatch)
 // and as it is about to finish (Stop), each hook a call of its tool over the
 // run's own bridge session with the event and the agent id filled in. What a
-// hook hands back is what the CLI does with it: its transcript line printed as
-// the CLI's informational line, and its additional context — a person's note —
+// hook hands back is what the harness does with it: its transcript line printed as
+// the harness's informational line, and its additional context — a person's note —
 // put before the model's next request, or, at Stop, the turn continued with it.
 //
 // SO THE SCRIPTED MODEL IS ONE MODEL FOR BOTH HALVES. The executor's rounds
@@ -68,13 +68,13 @@ import (
 // offered tools, so a case scripting what the executor calls
 // ([scriptedModel.callOnExecute]) scripts what the run calls.
 
-// codingCLIEnv makes a re-execution of this binary the stand-in coding CLI
+// harnessEnv makes a re-execution of this binary the stand-in harness
 // rather than the suite, and its value is the address of the model that
-// answers it — one variable for both, as [scriptedCLIEnv] is.
+// answers it — one variable for both, as [scriptedHarnessEnv] is.
 //
 // It reaches the child through the shim's own `env`, which bakes it in: the
-// box hands its CLI an environment of its own making, never the engine's.
-const codingCLIEnv = "CREWLET_E2E_CODING_CLI"
+// box hands its harness an environment of its own making, never the engine's.
+const harnessEnv = "CREWLET_E2E_CODING_CLI"
 
 // What a case may vary about a run, read off the run's own environment —
 // which is role.sandbox.env, the ONLY route an external value has into a box,
@@ -106,7 +106,7 @@ const (
 
 // codingVersion is the release the stand-in reports by default: 2.1.310, the
 // Claude Code the runner's fixtures were measured on, at or past the oldest a
-// run is started with its note hooks on (codingagent's claudeNotesFloor).
+// run is started with its note hooks on (executor's claudeNotesFloor).
 const codingVersion = "2.1.310 (Claude Code)"
 
 // The modes a run can be in.
@@ -124,7 +124,7 @@ const (
 	// can hold a run open across what it is testing, a restart, without a
 	// sleep that a loaded machine outlasts. Its one call is made AFTER the
 	// release, on a session it opens then, because that is the call a real
-	// CLI makes after its engine restarted: the run outlives the process
+	// harness makes after its engine restarted: the run outlives the process
 	// that opened its bridge session, and its submission has to reach the
 	// one that rebuilt it. It asks no model.
 	codingModeHeld = "held"
@@ -136,6 +136,12 @@ const (
 	// [codingReleaseEnv], so a case reads the run's row while the run still
 	// holds it, and carries on to the submission the model scripts.
 	codingModePush = "push"
+	// codingModeApproval calls a tool at Needs approval over the seat's
+	// bridge ([heldToolName], the e2e binary's own stdio MCP server), is
+	// told the call was held, is refused the submission it tries after it,
+	// and ends without submitting, as a harness told to end its turn does.
+	// The run carrying it on, told the call's answer, does the work.
+	codingModeApproval = "approval"
 )
 
 // codingQuestion is what a [codingModeAsk] run asks, and codingOptions the
@@ -158,9 +164,18 @@ const (
 // is handed on its argv.
 const codingModel = "claude-golden"
 
-// codingSession is the session id every stand-in run reports, as Claude Code
-// names the conversation a run was.
-const codingSession = "sess-e2e"
+// codingTranscript is where a stand-in run keeps its session's transcript, as
+// Claude Code keeps it: `<CLAUDE_CONFIG_DIR>/projects/<CLAUDE_CODE_PROJECT_DIR_NAME>/<session>.jsonl`,
+// both of which the run's wrapper pins in every box — so a run started without
+// them is one the engine started wrong, and says so.
+func codingTranscript(session string) (string, error) {
+	config, project := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CLAUDE_CODE_PROJECT_DIR_NAME")
+	if config == "" || project == "" {
+		return "", fmt.Errorf("the run was started without CLAUDE_CONFIG_DIR (%q) and "+
+			"CLAUDE_CODE_PROJECT_DIR_NAME (%q), which its wrapper pins", config, project)
+	}
+	return filepath.Join(config, "projects", project, session+".jsonl"), nil
+}
 
 // codingMaxRounds bounds a run that names no --max-turns: a model that never
 // stops calling tools is a fixture bug, and an unbounded loop would hold a box
@@ -172,16 +187,16 @@ const codingMaxRounds = 16
 // endpoint.
 //
 // THE SAME FORK-BOMB GUARD as [scriptedEntry]'s: a child that somehow lost
-// [codingCLIEnv] falls through to the suite with a filter matching nothing.
+// [harnessEnv] falls through to the suite with a filter matching nothing.
 // And GORACE, for the reason that entry sets it.
 func codingShim(endpoint string) string {
 	return fmt.Sprintf("#!/bin/sh\n"+
-		"# The executor's coding CLI: the e2e test binary, standing in for Claude\n"+
+		"# The executor's harness: the e2e test binary, standing in for Claude\n"+
 		"# Code. See internal/e2e/codingcli_test.go.\n"+
 		"exec env %s=%s %s=%s %s '-test.run=^$' \"$@\"\n",
-		codingCLIEnv, shellQuote(endpoint),
+		harnessEnv, shellQuote(endpoint),
 		procgrouptest.GORACE, shellQuote(procgrouptest.StandInRaceOptions()),
-		shellQuote(scriptedCLIBinary))
+		shellQuote(scriptedHarnessBinary))
 }
 
 // writeCodingShim writes [codingShim] for endpoint under dir and returns its
@@ -203,7 +218,7 @@ func writeCodingShim(dir, endpoint string) (string, error) {
 // have their own tests in internal/sandbox.
 //
 // THE BOX'S BIN DIRECTORY IS ON THE RUN'S PATH: the wrapper prepends
-// `$HOME/.crewlet/bin` to the login shell's PATH, so a CLI a setup step copies
+// `$HOME/.crewlet/bin` to the login shell's PATH, so a harness a setup step copies
 // there is the `claude` the run's command line names.
 func codingSandbox(boxes, shim string) string {
 	return fmt.Sprintf(`  sandbox:
@@ -214,7 +229,7 @@ func codingSandbox(boxes, shim string) string {
       - name: coding-cli
         commands:
           - %q
-        brief: The stand-in coding CLI is installed.
+        brief: The stand-in harness is installed.
 `, boxes, `mkdir -p "$HOME/.crewlet/bin" && cp `+shellQuote(shim)+
 		` "$HOME/.crewlet/bin/claude" && chmod +x "$HOME/.crewlet/bin/claude"`)
 }
@@ -225,12 +240,12 @@ func codingSandbox(boxes, shim string) string {
 //
 // A VENDOR'S ENTRY WITH NOTHING OVERRIDDEN, because nothing of it runs on this
 // host: a seat's chain names it after the scripted entry, so every phase on the host
-// takes the scripted CLI at the chain's head, and the executor's launch skips
-// that member (its CLI has no in-box runner) to take this one. What the entry
-// decides is what the runner is handed — its CLI, its model, its cell.
+// takes the scripted harness at the chain's head, and the executor's launch skips
+// that member (its harness has no in-box runner) to take this one. What the entry
+// decides is what the runner is handed — its harness, its model, its cell.
 func codingEntry(key, stateDir string) string {
 	return fmt.Sprintf(`    %s:
-      agent: claude-code
+      harness: claude-code
       model: %s
       state_dir: %q
 `, key, codingModel, stateDir)
@@ -245,10 +260,14 @@ func shellQuote(s string) string {
 // brief it read on stdin.
 type codingArgs struct {
 	brief, systemFile, mcpConfig, settings string
+	// plugins are the directories `--plugin-dir` names: the run's own
+	// skills, as Claude Code is handed them ([codingSkills]).
+	plugins []string
 	// resume is the session `--resume` names: the asking run's own, which
-	// a run carrying it on with the answer continues.
-	resume   string
-	maxTurns int
+	// a run carrying it on with the answer continues; session the one
+	// `--session-id` names, which a run that starts one is started under.
+	resume, session string
+	maxTurns        int
 }
 
 // codingInvocation is what a run records of how it was started
@@ -278,8 +297,15 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 			out.systemFile, err = value(i)
 		case "--mcp-config":
 			out.mcpConfig, err = value(i)
+		case "--plugin-dir":
+			var dir string
+			if dir, err = value(i); err == nil {
+				out.plugins = append(out.plugins, dir)
+			}
 		case "--resume":
 			out.resume, err = value(i)
+		case "--session-id":
+			out.session, err = value(i)
 		case "--max-turns":
 			var raw string
 			if raw, err = value(i); err == nil {
@@ -297,8 +323,11 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 }
 
 // codingStream is the stream-json the stand-in prints: Claude Code's message
-// shapes, one object a line.
-type codingStream struct{ out io.Writer }
+// shapes, one object a line, each naming the session the run works in.
+type codingStream struct {
+	out     io.Writer
+	session string
+}
 
 func (s codingStream) line(v any) {
 	raw, _ := json.Marshal(v)
@@ -306,14 +335,14 @@ func (s codingStream) line(v any) {
 }
 
 func (s codingStream) init(tools []string) {
-	s.line(map[string]any{"type": "system", "subtype": "init", "session_id": codingSession,
+	s.line(map[string]any{"type": "system", "subtype": "init", "session_id": s.session,
 		"tools": tools})
 }
 
 // toolUse is one call as Claude Code streams it: under the name it gives an MCP
 // server's tool, `mcp__<server>__<tool>`.
 func (s codingStream) toolUse(id, name string, input map[string]any) {
-	s.line(map[string]any{"type": "assistant", "session_id": codingSession,
+	s.line(map[string]any{"type": "assistant", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{
 			"type": "tool_use", "id": id,
 			"name": "mcp__" + config.ToolServerName + "__" + name, "input": input,
@@ -321,14 +350,14 @@ func (s codingStream) toolUse(id, name string, input map[string]any) {
 }
 
 func (s codingStream) toolResult(id, text string, failed bool) {
-	s.line(map[string]any{"type": "user", "session_id": codingSession,
+	s.line(map[string]any{"type": "user", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{
 			"type": "tool_result", "tool_use_id": id, "content": text, "is_error": failed,
 		}}}})
 }
 
 func (s codingStream) text(text string) {
-	s.line(map[string]any{"type": "assistant", "session_id": codingSession,
+	s.line(map[string]any{"type": "assistant", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}})
 }
 
@@ -337,29 +366,29 @@ func (s codingStream) text(text string) {
 func (s codingStream) result(subtype, text string, turns int, spent replyUsage) {
 	s.line(map[string]any{
 		"type": "result", "subtype": subtype, "is_error": false, "result": text,
-		"session_id": codingSession, "num_turns": turns,
+		"session_id": s.session, "num_turns": turns,
 		"usage": spent.claudeUsage(),
 	})
 }
 
-// runCodingCLI is the stand-in coding CLI: it does what its mode says, prints
+// runHarness is the stand-in harness: it does what its mode says, prints
 // its stream, and returns its exit status.
 //
-// A FAILURE IS THE CLI'S OWN, on stderr with a non-zero exit, which the runner
+// A FAILURE IS THE HARNESS'S OWN, on stderr with a non-zero exit, which the runner
 // reports as the run failing with that account — so the reason reaches the
 // turn's record rather than a case timing out with nothing said.
-func runCodingCLI(endpoint string) int {
+func runHarness(endpoint string) int {
 	fail := func(format string, args ...any) int {
-		fmt.Fprintf(os.Stderr, "coding CLI: "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "harness: "+format+"\n", args...)
 		return 1
 	}
 	args := os.Args[1:]
 	// A VERSION PROBE IS ANSWERED AS CLAUDE CODE ANSWERS IT, and nothing else
 	// happens: no brief read, no invocation recorded, no mode run. A run wired
-	// to its notes asks `claude --version` before it starts the CLI, to decide
-	// its hooks and its system text (codingagent's claudeNotesGate); a
+	// to its notes asks `claude --version` before it starts the harness, to decide
+	// its hooks and its system text (executor's claudeNotesGate); a
 	// stand-in that ran the probe as a run held a held case's wait in the
-	// probe rather than in the CLI, answered nothing, and left the gate to its
+	// probe rather than in the harness, answered nothing, and left the gate to its
 	// fallback, so no case ran the branch a real release takes.
 	if slices.Equal(slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
 		// The shim's own filter for the test framework ([codingShim]),
@@ -390,22 +419,43 @@ func runCodingCLI(endpoint string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	stream := codingStream{out: os.Stdout}
+	// THE SESSION THE RUN WORKS IN, as Claude Code takes it: the one it
+	// resumes, or the one it was started under — and the runner names one
+	// on every run, so a run started with neither is one it started wrong.
+	session := cmp.Or(parsed.resume, parsed.session)
+	if session == "" {
+		return fail("the run was started with neither --resume nor --session-id")
+	}
+	transcript, err := codingTranscript(session)
+	if err != nil {
+		return fail("%v", err)
+	}
+	stream := codingStream{out: os.Stdout, session: session}
 	// A RUN CARRYING ON AN ASKING RUN, its session resumed with the answer
 	// as its prompt: whatever the mode, it does the work now, as Claude Code
 	// resuming a conversation answers its next prompt. Asking again would be
 	// a run that never reads the answer it asked for. The session it names
-	// is the one every stand-in run reports, which is what the asking run's
-	// collection recorded.
+	// must be one whose transcript the box holds, as Claude Code's must: the
+	// asking run's own, which it wrote where every run in a box files it.
 	if parsed.resume != "" {
-		if parsed.resume != codingSession {
-			return fail("asked to resume session %q, and the run that asked was %q",
-				parsed.resume, codingSession)
+		if _, err := os.Stat(transcript); err != nil {
+			return fail("No conversation found with session ID: %s (%v)", parsed.resume, err)
 		}
 		if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 			return fail("%v", err)
 		}
 		return 0
+	}
+	// A RUN THAT STARTS ITS SESSION FILES ITS TRANSCRIPT, as Claude Code does
+	// from its first message: where a run carrying it on in this box looks
+	// for it, and where the run's script packs it from once the run exits.
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		return fail("filing the session's transcript: %v", err)
+	}
+	opened, _ := json.Marshal(map[string]any{"type": "user", "sessionId": session,
+		"message": map[string]any{"role": "user", "content": parsed.brief}})
+	if err := os.WriteFile(transcript, append(opened, '\n'), 0o600); err != nil {
+		return fail("filing the session's transcript: %v", err)
 	}
 	switch mode := cmp.Or(os.Getenv(codingModeEnv), codingModeWork); mode {
 	case codingModeWork, codingModePush:
@@ -428,17 +478,31 @@ func runCodingCLI(endpoint string) int {
 		}
 		stream.result("success", codingHeldReport, 1, replyUsage{})
 		return 0
+	case codingModeApproval:
+		// A RUN CARRYING ON A HELD CALL is told what became of it, in its own
+		// session or as a fresh run, and does the work.
+		if strings.Contains(parsed.brief, heldAnswered) || strings.Contains(parsed.brief, heldReseeded) {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+				return fail("%v", err)
+			}
+			return 0
+		}
+		if err := codingCallHeld(context.Background(), parsed, hooks, stream); err != nil {
+			return fail("%v", err)
+		}
+		stream.result("success", "waiting on a person's approval", 1, replyUsage{})
+		return 0
 	case codingModeAsk:
 		// A FRESH RUN CARRYING ON ONE THAT ASKED is told the question and
 		// the answer in its brief, and does not ask again: it does the work,
-		// as a real CLI told what it was about to ask would.
+		// as a real harness told what it was about to ask would.
 		if strings.Contains(parsed.brief, codingQuestion) {
 			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 				return fail("%v", err)
 			}
 			return 0
 		}
-		// ONLY AS THE RUN WAS TOLD TO. A real CLI parks on a question only
+		// ONLY AS THE RUN WAS TOLD TO. A real harness parks on a question only
 		// because its standing instructions say how, so a stand-in that
 		// asked whatever it was told would pass a launch that never told it.
 		if told, err := toldHowToAsk(parsed); err != nil || !told {
@@ -502,10 +566,15 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 	if rounds <= 0 {
 		rounds = codingMaxRounds
 	}
-	// THE REQUEST THE SCRIPTED CLI ON THE HOST POSTS, so the one script
+	// THE REQUEST THE SCRIPTED HARNESS ON THE HOST POSTS, so the one script
 	// answers both: the brief as the prompt, the bridge's tools by the
 	// server's own names, and every earlier round of this run.
-	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names}
+	skills, err := codingSkills(args.plugins)
+	if err != nil {
+		return err
+	}
+	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names,
+		Skills: skills}
 	var spent replyUsage
 	// finish plays the run's Stop hooks with its last word said: a note one
 	// hands back continues the turn, as Claude Code continues it, and
@@ -549,7 +618,7 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 				}
 			}
 			if call.Name == runner.SubmitWorkTool && !failed {
-				// THE RUN'S LAST WORD is what it submitted, as a CLI
+				// THE RUN'S LAST WORD is what it submitted, as a harness
 				// that finished by reporting ends on its report.
 				report, _ = input["summary"].(string)
 				report = cmp.Or(report, "Submitted the work.")
@@ -583,7 +652,7 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 // Every command's output goes to stderr, and to [codingPushLogEnv]'s file
 // with the failure itself: stdout is the run's stream. A refused checkout
 // (refused) is only said there: the run carries on to what the model does
-// next, as a CLI handed a refusal does.
+// next, as a harness handed a refusal does.
 func pushThroughCheckout(ctx context.Context, answer string, refused bool) error {
 	stderr := io.Writer(os.Stderr)
 	if path := os.Getenv(codingPushLogEnv); path != "" {
@@ -595,12 +664,12 @@ func pushThroughCheckout(ctx context.Context, answer string, refused bool) error
 		stderr = io.MultiWriter(os.Stderr, kept)
 	}
 	if refused {
-		fmt.Fprintf(stderr, "coding CLI: code_checkout was refused, so nothing was pushed:\n%s\n", answer)
+		fmt.Fprintf(stderr, "harness: code_checkout was refused, so nothing was pushed:\n%s\n", answer)
 		return nil
 	}
 	err := pushThrough(ctx, answer, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "coding CLI: the push failed: %v\n", err)
+		fmt.Fprintf(stderr, "harness: the push failed: %v\n", err)
 	}
 	return err
 }
@@ -640,7 +709,7 @@ func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
 	}
 	// SAID, so a case that finds no push tells a push git accepted from one
 	// never made.
-	fmt.Fprintln(stderr, "coding CLI: git pushed web")
+	fmt.Fprintln(stderr, "harness: git pushed web")
 	// HELD UNTIL THE CASE HAS READ THE ROW: the run's grants leave with it.
 	release := os.Getenv(codingReleaseEnv)
 	for deadline := time.Now().Add(2 * time.Minute); release != ""; {
@@ -715,7 +784,7 @@ func readCodingHooks(path string) (codingHooks, error) {
 // play plays every hook at event as Claude Code does on the main agent's own
 // boundary: a call of its tool over the run's bridge session, its input's
 // ${hook_event_name} and ${agent_id} filled in (the main agent's id is empty).
-// Each answer's transcript line is printed as the CLI prints it, and what they
+// Each answer's transcript line is printed as the harness prints it, and what they
 // hand the model is answered, joined. A call that fails is the run's failure:
 // the bridge answers this tool with text always.
 func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event string,
@@ -750,7 +819,7 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 		if out.SystemMessage != "" {
 			stream.line(map[string]any{"type": "system", "subtype": "informational",
 				"content": event + " says: " + out.SystemMessage, "level": "notice",
-				"session_id": codingSession})
+				"session_id": stream.session})
 		}
 		if note := out.HookSpecificOutput.AdditionalContext; note != "" {
 			notes = append(notes, note)
@@ -761,7 +830,7 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 
 // codingAsk is a [codingModeAsk] run's calls: its structured question, over a
 // session it opens on the seat's bridge, the submission the bridge refuses it
-// once it has asked, then the Stop hook its CLI runs as it ends its turn.
+// once it has asked, then the Stop hook its harness runs as it ends its turn.
 func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
@@ -793,7 +862,7 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream c
 		return fmt.Errorf("asking over the bridge: %s", out)
 	}
 	// AND A SUBMISSION AFTER THE QUESTION IS REFUSED, through the seat's real
-	// surface: the job is parked, and a CLI that submits rather than ending
+	// surface: the job is parked, and a harness that submits rather than ending
 	// is told so rather than told its work was delivered (ADR-0068).
 	id = claudeID("toolu_")
 	submission := map[string]any{"outcome": "delivered", "summary": "Done before the answer."}
@@ -824,7 +893,7 @@ func toldHowToAsk(args codingArgs) (bool, error) {
 // codingHeldSubmit is a released [codingModeHeld] run's one call: its
 // submission, over a session it opens on the seat's bridge now — and the run's
 // hooks after it, which take any note a person sent while it was held. It asks
-// no model, so a note goes no further than the CLI's own transcript line; the
+// no model, so a note goes no further than the harness's own transcript line; the
 // record of its reading is the engine's.
 func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
@@ -884,7 +953,7 @@ func bridgeURL(path string) (string, error) {
 }
 
 // askModel asks the scripted model one round, posting the request the
-// scripted CLI on the engine host posts ([cliRun.ask]), and answers its reply.
+// scripted harness on the engine host posts ([harnessRun.ask]), and answers its reply.
 func askModel(endpoint string, req modelRequest) (modelReply, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -922,4 +991,79 @@ func callOverBridge(ctx context.Context, session *mcp.ClientSession, id, name st
 		return err.Error(), true
 	}
 	return callText(res), res.IsError
+}
+
+// codingSkills is what Claude Code lists to its model of the skills in plugins:
+// each skill of each plugin as `<plugin>:<name> — <description>`, read as Claude
+// Code reads them — the plugin's name off its `.claude-plugin/plugin.json`, a
+// skill's name and description off its SKILL.md's frontmatter — sorted. A
+// plugin that does not read is the run's failure, as a broken plugin is a
+// Claude Code run's load error.
+func codingSkills(plugins []string) ([]string, error) {
+	var out []string
+	for _, dir := range plugins {
+		raw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json")) //nolint:gosec // the run's own plugin, in its box
+		if err != nil {
+			return nil, fmt.Errorf("reading the plugin at %s: %w", dir, err)
+		}
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return nil, fmt.Errorf("decoding the plugin at %s: %w", dir, err)
+		}
+		if manifest.Name == "" {
+			return nil, fmt.Errorf("the plugin at %s names nothing", dir)
+		}
+		files, err := filepath.Glob(filepath.Join(dir, "skills", "*", "SKILL.md"))
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			raw, err := os.ReadFile(file) //nolint:gosec // the run's own plugin, in its box
+			if err != nil {
+				return nil, err
+			}
+			name, description, err := skillFrontmatter(string(raw))
+			if err != nil {
+				return nil, fmt.Errorf("the skill at %s: %w", file, err)
+			}
+			out = append(out, manifest.Name+":"+name+" — "+description)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// skillFrontmatter is a SKILL.md's name and description: the two lines of its
+// frontmatter the runner writes, each value a JSON string.
+func skillFrontmatter(file string) (name, description string, err error) {
+	head, ok := strings.CutPrefix(file, "---\n")
+	if !ok {
+		return "", "", errors.New("no frontmatter")
+	}
+	head, _, ok = strings.Cut(head, "\n---\n")
+	if !ok {
+		return "", "", errors.New("the frontmatter does not end")
+	}
+	for _, line := range strings.Split(head, "\n") {
+		key, value, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		var decoded string
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return "", "", fmt.Errorf("%s is not a quoted value: %w", key, err)
+		}
+		switch key {
+		case "name":
+			name = decoded
+		case "description":
+			description = decoded
+		}
+	}
+	if name == "" {
+		return "", "", errors.New("the frontmatter names no skill")
+	}
+	return name, description, nil
 }

@@ -19,7 +19,7 @@ import (
 // cloneBase is the commit the cases' repositories are given at.
 const cloneBase = "0123456789abcdef0123456789abcdef01234567"
 
-// cloned is a repository a coding run is given, valid by its grammar.
+// cloned is a repository an executor is given, valid by its grammar.
 func cloned() sandbox.RunRepo {
 	return sandbox.RunRepo{
 		Repo: "web", RepoID: "0190d8f0-0000-7000-8000-00000000000a", Base: cloneBase,
@@ -119,7 +119,7 @@ func TestARunRepoIsHeldToItsGrammar(t *testing.T) {
 	}
 }
 
-// A RUN REPOSITORY IS HELD TO ITS PURPOSE: a coding run's works on a branch;
+// A RUN REPOSITORY IS HELD TO ITS PURPOSE: an executor's works on a branch;
 // a check's is one commit — a base, no branch, read access, since its box's
 // credential never pushes. A value a purpose does not read is refused, never
 // ignored, and so is a purpose this build does not know.
@@ -148,7 +148,7 @@ func TestARunRepoIsHeldToItsPurpose(t *testing.T) {
 		r       sandbox.RunRepo
 		purpose sandbox.ClonePurpose
 	}{
-		"a coding run with no branch":        {with(cloned(), func(r *sandbox.RunRepo) { r.Branch = "" }), sandbox.CloneCoding},
+		"an executor with no branch":         {with(cloned(), func(r *sandbox.RunRepo) { r.Branch = "" }), sandbox.CloneCoding},
 		"a check with no commit":             {with(checked(), func(r *sandbox.RunRepo) { r.Base = "" }), sandbox.CloneSingleSHA},
 		"a check on a branch":                {with(checked(), func(r *sandbox.RunRepo) { r.Branch = "main" }), sandbox.CloneSingleSHA},
 		"a check that may push":              {with(checked(), func(r *sandbox.RunRepo) { r.Access = sandbox.RepoWrite }), sandbox.CloneSingleSHA},
@@ -172,22 +172,15 @@ func fill(paths []string) {
 // is changed with.
 func TestTheCloneRecipesAreTheirShapes(t *testing.T) {
 	t.Parallel()
-	hook := sandbox.ShellQuote(sandbox.TrailerHook)
 	coding := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
   git -C 'web' fetch --quiet --no-tags --filter=blob:none origin '` + cloneBase + `' &&
-  git -C 'web' checkout --quiet -B 'seats/swe/ENG-7' '` + cloneBase + `' &&
-  { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
-    { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
+  git -C 'web' checkout --quiet -B 'seats/swe/ENG-7' '` + cloneBase + `'
 fi`
 	empty := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
-  git -C 'web' symbolic-ref HEAD 'refs/heads/seats/swe/ENG-7' &&
-  { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
-    { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
+  git -C 'web' symbolic-ref HEAD 'refs/heads/seats/swe/ENG-7'
 fi`
 	single := `if [ ! -e 'web'/.git ]; then
   git init --quiet 'web' && git -C 'web' remote add origin "$CREWLET_GIT_URL"/'web.git' &&
@@ -238,15 +231,15 @@ func syntax(t *testing.T, name, command string) {
 // a stand-in git that records every call, a branch holding a command
 // substitution and a quote, and cone directories holding a quote, glob
 // characters and a leading '!', reach git as one argument each, and nothing in
-// them runs. The coding recipe writes the commit-trailer hook byte for byte
-// with mode 0755 — only where no hook of that name exists, a file or a
-// dangling link — and the check's recipe writes none. A box that already
-// holds the checkout runs nothing at all.
+// them runs. Neither recipe writes a commit hook: what a commit made in the
+// box carries is the run's own attribution, which its runner gives every
+// repository the run commits in (internal/sandbox/executor's attribution.go),
+// never a property of one checkout. A box that already holds the checkout runs
+// nothing at all.
 //
 // Mutations: interpolate the branch unquoted — the stand-in's arguments and a
-// file named x, red; write the hook in the single-sha recipe — red; drop the
-// hook's existence guard — the box's own hook is replaced, red; drop the
-// checkout's guard — the second run clones again, red.
+// file named x, red; write a hook in either recipe — red; drop the checkout's
+// guard — the second run clones again, red.
 func TestACloneStepsValuesArriveAsLiteralArguments(t *testing.T) {
 	t.Parallel()
 	const url = "https://git.example.com/box/git"
@@ -254,11 +247,7 @@ func TestACloneStepsValuesArriveAsLiteralArguments(t *testing.T) {
 case "$1" in
 clone|init)
   for dir in "$@"; do :; done
-  mkdir -p "$dir/.git/hooks" "$dir/.git/objects/info"
-  case "$1:${STUB_HOOK-}" in
-  clone:file) printf 'the box template' > "$dir/.git/hooks/prepare-commit-msg" ;;
-  clone:link) ln -s nowhere "$dir/.git/hooks/prepare-commit-msg" ;;
-  esac ;;
+  mkdir -p "$dir/.git/hooks" "$dir/.git/objects/info" ;;
 esac
 exit 0`)
 	r := cloned()
@@ -266,13 +255,13 @@ exit 0`)
 	r.Paths = []string{"src", "dir with 'quote'", "[odd]", "!bang"}
 	cone := []string{"src", "dir with 'quote'", "[odd]", "!bang"}
 
-	run := func(t *testing.T, box string, step sandbox.SetupStep, hook string) [][]string {
+	run := func(t *testing.T, box string, step sandbox.SetupStep) [][]string {
 		t.Helper()
 		calls := filepath.Join(t.TempDir(), "calls")
 		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
 		cmd.Dir = box
 		cmd.Env = []string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
-			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "STUB_HOOK=" + hook, "HOME=" + t.TempDir()}
+			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "HOME=" + t.TempDir()}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", step.Name, err, out)
 		}
@@ -297,7 +286,7 @@ exit 0`)
 			t.Fatal(err)
 		}
 		box := t.TempDir()
-		calls := run(t, box, step, "")
+		calls := run(t, box, step)
 		want := [][]string{
 			{"clone", "--quiet", "--single-branch", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
@@ -308,15 +297,8 @@ exit 0`)
 		if _, err := os.Stat(filepath.Join(box, "x")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("a value of the step ran as a command: x exists (%v)", err)
 		}
-		hook := filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")
-		body, err := os.ReadFile(hook)
-		if err != nil || string(body) != sandbox.TrailerHook {
-			t.Errorf("the coding clone's hook is %q (%v), want TrailerHook byte for byte", body, err)
-		}
-		if info, err := os.Stat(hook); err != nil || info.Mode().Perm() != 0o755 {
-			t.Errorf("the coding clone's hook is not mode 0755: %v %v", info, err)
-		}
-		if again := run(t, box, step, ""); len(again) != 0 {
+		noHook(t, box, "the coding clone")
+		if again := run(t, box, step); len(again) != 0 {
 			t.Errorf("a box already holding the checkout ran %q", again)
 		}
 	})
@@ -329,34 +311,12 @@ exit 0`)
 			t.Fatal(err)
 		}
 		box := t.TempDir()
-		sameCalls(t, run(t, box, step, ""), [][]string{
+		sameCalls(t, run(t, box, step), [][]string{
 			{"clone", "--quiet", "--single-branch", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "symbolic-ref", "HEAD", "refs/heads/" + r.Branch},
 		})
-		if body, err := os.ReadFile(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); err != nil ||
-			string(body) != sandbox.TrailerHook {
-			t.Errorf("the empty repository's hook is %q (%v)", body, err)
-		}
-	})
-	t.Run("a hook the box's git put there", func(t *testing.T) {
-		t.Parallel()
-		step, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
-		if err != nil {
-			t.Fatal(err)
-		}
-		box := t.TempDir()
-		run(t, box, step, "file")
-		if body, _ := os.ReadFile(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); string(body) !=
-			"the box template" {
-			t.Errorf("the box's own hook became %q, want it left as it was", body)
-		}
-		box = t.TempDir()
-		run(t, box, step, "link")
-		if target, err := os.Readlink(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); err != nil ||
-			target != "nowhere" {
-			t.Errorf("the box's own hook link became %q (%v), want it left as it was", target, err)
-		}
+		noHook(t, box, "the empty repository's clone")
 	})
 	check := r
 	check.Branch, check.Access = "", sandbox.RepoRead
@@ -367,17 +327,14 @@ exit 0`)
 			t.Fatal(err)
 		}
 		box := t.TempDir()
-		sameCalls(t, run(t, box, step, ""), [][]string{
+		sameCalls(t, run(t, box, step), [][]string{
 			{"init", "--quiet", "web"},
 			{"-C", "web", "remote", "add", "origin", url + "/web.git"},
 			{"-C", "web", "fetch", "--quiet", "--no-tags", "--depth=1", "--filter=blob:none", "origin", cloneBase},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "checkout", "--quiet", "--detach", cloneBase},
 		})
-		if _, err := os.Lstat(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); !errors.Is(err,
-			os.ErrNotExist) {
-			t.Errorf("a check's checkout has a commit hook (%v): a check box commits nothing", err)
-		}
+		noHook(t, box, "a check's checkout")
 	})
 }
 
@@ -755,9 +712,19 @@ func TestTheVersionStepHoldsABoxsGitToTheClientFloor(t *testing.T) {
 	if code, stderr := run(t, t.TempDir()); code != 3 || !strings.Contains(stderr, "this box has no git") {
 		t.Errorf("a box with no git: exit %d, %q", code, stderr)
 	}
-	for _, g := range boxGits(t) {
-		if code, stderr := run(t, withPath(filepath.Dir(g.path))); code != 0 {
-			t.Errorf("the %s git fails the version step: exit %d, %q", g.name, code, stderr)
+	for name, path := range map[string]string{"pinned": gittest.Require(t), "client floor": gittest.ClientFloor(t)} {
+		if code, stderr := run(t, withPath(filepath.Dir(path))); code != 0 {
+			t.Errorf("the %s git fails the version step: exit %d, %q", name, code, stderr)
 		}
+	}
+}
+
+// noHook fails t if the clone in box holds a prepare-commit-msg hook: a
+// commit's attribution is its run's, never a checkout's.
+func noHook(t *testing.T, box, what string) {
+	t.Helper()
+	if _, err := os.Lstat(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); !errors.Is(err,
+		os.ErrNotExist) {
+		t.Errorf("%s has a commit hook (%v): a commit's attribution is its run's, never a checkout's", what, err)
 	}
 }

@@ -14,12 +14,15 @@
 // — every board, every task, every page and every room a tool touches — and ask
 // the fourth whose record a login names and who holds each human seat, and a
 // node that serves requests asks it what a presented machine token is checked
-// against, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE
-// ESTATE and SERVES it over the broker ([Serve]), and every node's tools are
-// handed facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker, knowledge-base, chat and usage reads and the operator's
-// own MCP — for the reason a data node's own seats are: read straight off the
+// against; and the engine records on the executor log what each of its seats'
+// boxes did, which the seat's next launch reads back. So something has to
+// answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE and SERVES it over the
+// broker ([Serve]), and every node's tools are handed facades of one
+// [Router], which answers in-process where this node's copy serves and asks
+// another data node otherwise. The engine's record of its runs goes through
+// the same router ([ExecutorWrites]), and so do the operator's surfaces — the
+// API's tracker, knowledge-base, chat and usage reads and the operator's own
+// MCP — for the reason a data node's own seats do: read straight off the
 // node's copy, a node whose copy of a domain was out of service answered its
 // operator from the very copy it had stopped serving its seats from.
 //
@@ -64,6 +67,10 @@
 // committer's decide collapses onto the push's row — so it moves on as a
 // tracker write does.
 //
+// An EXECUTOR write is a tracker write's case: the operation id on its call is
+// the one the executor log derives for that execution, so a repeat under it
+// is the same operation, and an unanswered or unvouched one moves on under it.
+//
 // # A push is asked of its repository's committer
 //
 // Every other operation is asked of THIS node first and then of the node that
@@ -101,7 +108,7 @@
 // merge gate, or a dequeue — under its asker's operation id, from which an
 // enqueue's entry id is derived, so no retry queues a change twice; and so is
 // a change's MERGE (`code.merge`) — one record its merge gate decides from one
-// snapshot, which merges the change and moves its target (ADR-0089) — under
+// snapshot, which merges the change and moves its target (ADR-0096) — under
 // its builder's operation id, from which the merge's push id is derived, so
 // no retry lands a branch twice. A WRITE
 // OF A CHANGE'S CONVERSATION (`code.conversation`) — an ask for review, a
@@ -182,6 +189,29 @@
 // [ErrOutcomeUnknown] and the same operation id is the retry, since "nobody ran
 // it" is the claim a caller acts on by writing again.
 //
+// # Who originates a write: a surface, or the engine
+//
+// The class says what a failover may repeat; the ORIGIN says who may make the
+// write at all ([opOrigin]). Every write above but one log's is a SURFACE's —
+// a seat's tool, a person's request, the operator's own MCP — made on
+// somebody's behalf, so a refusal of it is somebody's to read: the person's
+// write surface classes it and names the object it was about, and every domain
+// a surface writes is declared to those surfaces, read off this router's own
+// table ([SurfaceWriteDomains]). The code host's own work is a surface's write
+// too — a compaction, a mirror's sync, a check's result, a merge the queue
+// builds — because it carries out what somebody asked of a repository, and
+// its refusals are that repository's, which the person's surface classes as it
+// does a push's. The executor log's writes are the ENGINE's:
+// its record of what its own runs did — a harness's session captured, a turn
+// ended, a session aged out, a removed seat's taken away — which nobody asks
+// for and no surface may make (ADR-0073). So they are declared to no surface,
+// and they are reached through a writer facade the engine alone holds
+// ([ExecutorWrites]). Two gates hold the class, one on each side: every write
+// on the executor log is declared the engine's, and no package that serves a
+// person or a model (a seat's tools, the API and its operator MCP, Ask
+// Crewlet, the binary) names that facade or the domain's writer. The log's
+// reads are ordinary reads, which a surface may hold ([ExecutorReads]).
+//
 // # A domain's copy that is WRONG is out of service; one that LAGS is a worse node
 //
 // A domain's copy that is wrong — its applier halted, the node evicted from
@@ -198,7 +228,7 @@
 // from the copy of its own domain, and a participant whose VECTORS copy is
 // out of service asks that verdict itself, in the scanner, and answers
 // without the half, saying so ([search.Copies]). And the seats were never the
-// problem, the copy was, so the node keeps them. This is ADR-0072, which
+// problem, the copy was, so the node keeps them. This is ADR-0079, which
 // refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
 // served by — what admission asks of — is every domain that gates seat
 // admission at once ([SeatCopy]).
@@ -284,9 +314,9 @@
 // An operation on a repository's git OBJECTS — a read by object id of a tree,
 // a file, a diff, a MERGE PREVIEW of two commits ([opCodeMergePreview], a read
 // too), and an ENGINE WRITE, a seat's or a person's commit built beside a copy
-// of them and landed as a push (ADR-0085) — is answered by a node with the
+// of them and landed as a push (ADR-0092) — is answered by a node with the
 // `git` role from its own cache, never by a data node's copy.
-// That is ADR-0082, amending ADR-0025: the router's walk has a second
+// That is ADR-0089, amending ADR-0025: the router's walk has a second
 // placement beside the data nodes, every live git node ([RouterOptions.Git]),
 // keyed by repository ([op.keyedOnGit]), and such an operation names the git
 // half rather than a domain's copy ([GitCopy]), so no copy verdict, no
@@ -376,7 +406,7 @@
 // layers, whose passes over their listings read the presence view again for
 // every repository they asked about one at a time. Both ask by one charge,
 // the largest of their steps', so both writers of a repository's packs run
-// on one node (ADR-0084), and a maintainer two nodes both believe in is one the
+// on one node (ADR-0091), and a maintainer two nodes both believe in is one the
 // committer takes once, as a home's work is.
 //
 // # Which data nodes to ask is answered from memory
@@ -507,10 +537,11 @@
 // registered sentinel it matches and every registered type it carries (see
 // errors.go), and the far side rebuilds an error that answers the same
 // questions. A sentinel or an error type added to the packages whose errors
-// cross — this one's, the tracker's, the knowledge base's, chat's, the state
-// log's and the identity estate's with the vocabulary its answers are judged in
-// — is a build failure until it is registered. An operation answered in-process
-// returns its own error, which answers every question without the wire's help.
+// cross — this one's, every domain's an operation floors on (the executor
+// log's among them), the state log's and the identity estate's with the
+// vocabulary its answers are judged in — is a build failure until it is
+// registered. An operation answered in-process returns its own error, which
+// answers every question without the wire's help.
 //
 // AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
 // rebuilds a type from its exported fields and so cannot rebuild one of those

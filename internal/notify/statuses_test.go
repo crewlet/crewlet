@@ -113,7 +113,7 @@ func TestStoppingTheSetClearsEveryBackend(t *testing.T) {
 
 // RELEASING ONE TURN'S HOLD LEAVES EVERY OTHER TURN'S INDICATOR UP.
 //
-// A detached coding run that parks on a question has STOPPED — the agent is
+// A detached executor that parks on a question has STOPPED — the agent is
 // waiting on a person — so the turn that suspended into it gives its hold
 // back. What must not go with it is the indicator of a second turn working in
 // the same thread: the session is shared and reference-counted by turn id, and

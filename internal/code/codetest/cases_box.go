@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 )
 
-// CODING BOXES: a seat's coding run reaching the code host as a git user,
+// CODING BOXES: a seat's executor reaching the code host as a git user,
 // through /box/git/ with its run's token — admitted by its run's row, its
 // reads at its run's SESSION on the code log, which every ref answer it is
 // shown and every push it lands raises (M3-decisions M3-O56).
@@ -94,12 +94,14 @@ func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 // (M3-decisions U25 a): the code host refuses nothing because of a trailer and
 // stamps every push row from the run's row alone. A box of run R1 pushes a
 // commit whose trailers name another seat, another live run R2 and another
-// work item; a commit with no trailer; and a commit whose message claims R2
-// a hundred times. All land, every row names R1's seat, launch, coding agent
-// and work item, and R2's pushes are none.
+// work item — R2 by its turn, as a run's attribution names it
+// (internal/sandbox/executor's attribution.go); a commit with no trailer;
+// and a commit whose message claims R2 a hundred times. All land, every row
+// names R1's seat, turn, launch, harness and work item, and R2's pushes are
+// none.
 //
-// Mutation: stamp run_id from the newest commit's Crewlet-Run trailer → the
-// forged and the many rows name R2, red.
+// Mutation: stamp the run's turn from the newest commit's Crewlet-Run
+// trailer → the forged and the many rows name R2's turn, red.
 func aBoxPushIsRecordedByItsRunWhateverItsTrailersSay(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -113,10 +115,10 @@ func aBoxPushIsRecordedByItsRunWhateverItsTrailersSay(t *testing.T, newFleet New
 	clone := box.Clone(c.BoxURL(0))
 	branch := code.SeatNamespace(FixtureAlice) + "work"
 	messages := []string{
-		"a box's change\n\nCrewlet-Seat: " + FixtureLead + "\nCrewlet-Run: " + r2.LaunchID +
+		"a box's change\n\nCrewlet-Seat: " + FixtureLead + "\nCrewlet-Run: " + r2.TurnID +
 			"\nCrewlet-Work-Item: jira OPS-9\n",
 		"a box's change with no trailer",
-		"a box's change claiming another run\n\n" + strings.Repeat("Crewlet-Run: "+r2.LaunchID+"\n", 100),
+		"a box's change claiming another run\n\n" + strings.Repeat("Crewlet-Run: "+r2.TurnID+"\n", 100),
 	}
 	for i, message := range messages {
 		box.Commit(clone, map[string]string{fmt.Sprintf("src/%d.txt", i): "the box's work\n"}, message)
@@ -135,11 +137,12 @@ func aBoxPushIsRecordedByItsRunWhateverItsTrailersSay(t *testing.T, newFleet New
 		t.Fatalf("%d box pushes have rows, want %d", len(boxes), len(messages))
 	}
 	for _, row := range boxes {
-		if row.ActorSeat != FixtureAlice || row.Run.RunID != r1.LaunchID || row.Run.CodingAgent != "claude-code" ||
-			row.Run.WorkBackend != "native" || row.Run.WorkKey != "ENG-1" {
-			t.Errorf("push %s is recorded as seat %q, run %q by %q, work %s %s; want run %s's: seat %s, "+
-				"claude-code, native ENG-1", row.PushID, row.ActorSeat, row.Run.RunID, row.Run.CodingAgent,
-				row.Run.WorkBackend, row.Run.WorkKey, r1.LaunchID, FixtureAlice)
+		if row.ActorSeat != FixtureAlice || row.Run.TurnID != r1.TurnID || row.Run.RunID != r1.LaunchID ||
+			row.Run.Harness != "claude-code" || row.Run.WorkBackend != "native" || row.Run.WorkKey != "ENG-1" {
+			t.Errorf("push %s is recorded as seat %q, turn %q, launch %q by %q, work %s %s; want run %s's: "+
+				"seat %s, launch %s, claude-code, native ENG-1", row.PushID, row.ActorSeat, row.Run.TurnID,
+				row.Run.RunID, row.Run.Harness, row.Run.WorkBackend, row.Run.WorkKey, r1.TurnID, FixtureAlice,
+				r1.LaunchID)
 		}
 	}
 	answer, err := c.Fleet.Nodes()[0].Read(c.Ctx, code.ReadQuery{Kind: code.ReadRunPushes, Limit: 200,

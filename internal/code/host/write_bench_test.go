@@ -40,7 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// AN ENGINE WRITE, MEASURED (ADR-0085): from the call of the code write tool a
+// AN ENGINE WRITE, MEASURED (ADR-0092): from the call of the code write tool a
 // seat's turn makes to the pack adopted into the copy (BenchmarkEngineWrite),
 // and its build alone (BenchmarkEngineCommit). What each arm reports confirms
 // or replaces the budgets an engine write is held to — every term of
@@ -592,7 +592,7 @@ const (
 )
 
 // BenchmarkEngineWrite is AN ENGINE WRITE, FROM ITS TOOL'S CALL TO ITS PACK
-// ADOPTED (ADR-0085): each write the call of a code write tool a seat's turn
+// ADOPTED (ADR-0092): each write the call of a code write tool a seat's turn
 // makes — the real one (builtin.CodeTools: code_commit_files, code_revert,
 // code_create_branch, called as the seat's registry calls it past its
 // authority gate, an in-memory decision), on a node holding nothing of its
@@ -1271,7 +1271,7 @@ func (bp *besidePusher) paced(ctx context.Context, n int) ([]time.Duration, erro
 	return took, nil
 }
 
-// BenchmarkEngineCommit is AN ENGINE COMMIT'S BUILD ALONE (ADR-0085: build.go's
+// BenchmarkEngineCommit is AN ENGINE COMMIT'S BUILD ALONE (ADR-0092: build.go's
 // plan, its one read of the copy, its new files hashed, its touched
 // directories written a level at a time, its commit, and its pack and that
 // pack's index-pack --strict), as the host times it (crewlet.code.host.write.

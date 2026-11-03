@@ -98,6 +98,9 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		jobs = append(jobs, maintenance.LedgerJobs(
 			ledgerstore.NewConversations(db), e.ConversationRetention)...)
 	}
+	// THE FLEET'S MCP LISTINGS, which no age may forget: what a node that
+	// died or restarted left behind, and the schemas nothing names any more.
+	jobs = append(jobs, e.mcpListingJobs()...)
 	if fleet := e.backends.Fleet; fleet != nil {
 		// The one shared surface swept here, and the exception the
 		// coordination store's own retention rule makes room for: its
@@ -120,7 +123,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// became mandatory, and both jobs vanished behind a warning.
 		//
 		// AND WITH THE ENGINE'S ANSWER TO WHETHER A QUIET CHANNEL IS STILL
-		// OWED, so the ask a coding run is working on — or one waiting in a
+		// OWED, so the ask an executor is working on — or one waiting in a
 		// seat's held inbox — is not closed under it: see [colleagueOwed].
 		if queue := e.backends.Queue; queue != nil {
 			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue,
@@ -326,10 +329,11 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		LeaseTTL: e.leaseTTL,
 		Roster:   e.activeSeats,
 		Runs:     e.retireSeatRuns,
+		Sessions: e.retireSeatSessions,
 	})
 }
 
-// retireSeatRuns ends a retired seat's detached coding runs, for the mailbox
+// retireSeatRuns ends a retired seat's detached executors, for the mailbox
 // retirement that holds the seat's lease under owner and epoch.
 //
 // BY THE SEAT'S ID, which is what the retiring mailbox is filed and named
@@ -352,14 +356,14 @@ func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, own
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
 		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
-			"retired seat %s left coding runs behind", seat)
+			"retired seat %s left its executor in a box", seat)
 	}
 	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("engine: reading the coding runs of retired seat %s: %w", seat, err)
+		return fmt.Errorf("engine: reading the executor records of retired seat %s: %w", seat, err)
 	}
 	if len(runs) > 0 {
-		return fmt.Errorf("engine: retired seat %s still has %d coding runs and this node runs no "+
+		return fmt.Errorf("engine: retired seat %s still has %d executor records and this node runs no "+
 			"sandbox coordinator to end them (no company it has served configures providers.sandbox); "+
 			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
 			"node applies a company that configures providers.sandbox", seat, len(runs))

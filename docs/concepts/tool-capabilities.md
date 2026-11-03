@@ -180,7 +180,7 @@ flowchart TD
 **The outbound half is not optional.** Both MCP surfaces this engine serves —
 `/operator/mcp`, which hands a company's tracker, knowledge base and chat to
 an operator's own assistant, and the sandbox bridge, which hands a seat's tools to
-a coding agent — advertise each tool's hints alongside its schema. A surface
+a harness — advertise each tool's hints alongside its schema. A surface
 that published only names and schemas would give those clients no way to tell
 `search_work_items` from `remove_work_item`: a client that asks a person before
 an irreversible call would have nothing to ask on, and one that skips the
@@ -217,7 +217,7 @@ denies such tools.
   allowlist already curates the worker surface.
 
 First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools,
-and the parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
+and any discovery pair but the worker's own, `activate_tool` / `list_mcp_server_tools`) are denied
 separately by name, because they are Crewlet's *own* tools and naming them
 is not a third-party coupling.
 
@@ -301,9 +301,9 @@ name or the catalogue name with the entry's `tool_prefix` applied (for a
 Slack server with `tool_prefix: slack_`, `conversations_add_message`
 **or** `slack_conversations_add_message`; the raw name wins when both are
 present), so keying by the name you see in the catalogue never silently
-no-ops. A key that is neither — a tool the server does not list, or one
-it lists under another name — overrides nothing. The server's row on
-**Settings › MCP Tools** names every key no started instance lists
+no-ops. A key that is neither (a tool the server does not list, or one
+it lists under another name) overrides nothing. The server's Tools tab on
+**Settings › MCP & tools** names every key no started instance lists
 (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
 and each instance's `tools_discovered` log line names the keys its own
 listing does not answer (`annotation_keys_unlisted`). Only the first is a

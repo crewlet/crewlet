@@ -50,7 +50,7 @@ test("a test runs a real call, says each check by its name, and refreshes the pa
   expect(checkModel).toHaveBeenCalledWith("sonnet", { smoke: true }, expect.any(AbortSignal));
   const lines = await screen.findByRole("list", { name: "Test results" });
   const items = within(lines).getAllByRole("listitem");
-  expect(items[0]!.textContent).toContain("CLI installed");
+  expect(items[0]!.textContent).toContain("Harness installed");
   expect(items[1]!.textContent).toContain("Signs in");
   expect(items[1]!.textContent).toContain("The API key was refused. Store a new key.");
   expect(onDone).toHaveBeenCalledTimes(1);
@@ -79,16 +79,18 @@ test("a refused test says the engine's sentence and changes nothing behind it", 
   expect(onDone).not.toHaveBeenCalled();
 });
 
-// A token the CLI never used was not refused by the vendor, and saying so sent
+// A token the harness never used was not refused by the vendor, and saying so sent
 // the reader to a login that changed nothing.
-test("an auth failure of a credential the CLI never used says so", () => {
+test("an auth failure of a credential the harness never used says so", () => {
   const token = { route: "token" as const, expiresAt: null };
-  expect(failureWords("auth", token, "unread")).toBe("The CLI did not use the subscription token");
+  expect(failureWords("auth", token, "unread")).toBe(
+    "The harness did not use the subscription token",
+  );
   expect(failureWords("auth", { route: "api-key", expiresAt: null }, "unread")).toBe(
-    "The CLI did not use the API key",
+    "The harness did not use the API key",
   );
   expect(failureWords("auth", { route: "credentials", expiresAt: null }, "unread")).toBe(
-    "The CLI's login on the host was refused",
+    "The harness's login on the host was refused",
   );
   expect(failureWords("auth", token, "refused")).toBe("The subscription token was refused");
   expect(failureWords("auth", token)).toBe("The subscription token was refused");

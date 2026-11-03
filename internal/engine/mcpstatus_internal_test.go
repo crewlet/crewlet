@@ -15,7 +15,7 @@ import (
 
 // mcpStatusCompany is a company with one shared and one per-role server, both
 // pointing at a binary that does not exist — so every start fails the way a
-// vendor CLI missing from an image fails.
+// vendor harness missing from an image fails.
 func mcpStatusCompany(t *testing.T, withShared bool) *Company {
 	t.Helper()
 	shared := ""

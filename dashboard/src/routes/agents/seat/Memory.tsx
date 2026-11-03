@@ -1,15 +1,18 @@
 /**
- * What a seat remembers, and what it has said on surfaces the engine does not
- * own.
+ * What a seat remembers, what it has said on surfaces the engine does not own,
+ * and — its Sessions, last (`Sessions.tsx`) — what its harness wrote on each
+ * turn.
  *
  * # Read from the node that holds the seat
  *
  * A seat's memory is written to the store of the node running it, and a
  * compacted changelog carries it to whichever node holds the seat next — so
  * the holder's copy is the one kept current, and any other node's may be a
- * placement behind. Both answers here are the HOLDER'S (`held_by`), asked
- * across the fleet; a seat no node holds answers `none`, with nothing in it,
- * and the tab says why rather than drawing a seat that remembers nothing.
+ * placement behind. The memory and the threads here are the HOLDER'S
+ * (`held_by`), asked across the fleet; a seat no node holds answers `none`,
+ * with nothing in it, and the tab says why rather than drawing a seat that
+ * remembers nothing. The Sessions are not: their rows are the replicated
+ * estate's and their bytes the fleet's object store's, so any node answers.
  *
  * # A header counts the whole, a list shows the newest
  *
@@ -28,7 +31,7 @@ import {
   UsersGlyph,
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { reveal } from "~/lib/scroller.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -37,8 +40,10 @@ import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/fo
 import { plainText } from "~/lib/markdownText.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
+import { keepInView } from "./keepInView.ts";
+import { Sessions } from "./Sessions.tsx";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
-import type { ConversationEntry } from "~/protocol/index.ts";
+import type { ConversationEntry, ConversationsAnswer } from "~/protocol/index.ts";
 
 export function Memory({ seat, now }: { seat: Seat; now: number }) {
   const handle = seat.handle;
@@ -125,6 +130,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
         )}
       </QueryState>
       <Conversations seat={seat} now={now} />
+      <Sessions seat={seat} now={now} />
     </div>
   );
 }
@@ -160,17 +166,6 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   // opens at its top rather than jumping to it.
   const chose = useRef(false);
   const list = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (!thread) return;
-    // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone
-    // — `scrollIntoView` would move the page too.
-    const box = list.current;
-    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    if (box && row) keepInView(box, row);
-    if (!chose.current) return;
-    chose.current = false;
-    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
-  }, [thread]);
   const threads = useQuery(
     "conversations",
     { handle: seat.handle, ...(thread ? { conversation: thread } : {}) },
@@ -178,6 +173,41 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   );
   const data = threads.data;
   const rows = data?.conversations ?? [];
+  // THE CHOSEN ROW STAYS IN ITS LIST'S VIEW, scrolled within the list alone —
+  // `scrollIntoView` would move the page too — ONCE IT IS DRAWN: a thread the
+  // address named on opening has no row until the threads are answered, which
+  // is after the first render, so this waits for the row rather than for the
+  // choice, and keeps each choice in view once.
+  const keptFor = useRef("");
+  const drawn = rows.some((row) => row.key === thread);
+  useLayoutEffect(() => {
+    if (!thread) {
+      keptFor.current = "";
+      return;
+    }
+    if (!drawn || keptFor.current === thread) return;
+    keptFor.current = thread;
+    const box = list.current;
+    const row = box?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (box && row) keepInView(box, row);
+  }, [thread, drawn]);
+  useLayoutEffect(() => {
+    if (!thread || !chose.current) return;
+    chose.current = false;
+    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
+  }, [thread]);
+  // THE ANSWER IN HAND WHEN A THREAD IS CHOSEN IS THE LAST THREAD'S: the
+  // choice asks again with the new `conversation=`, and until that answer
+  // arrives the one in hand still carries the turns of the thread before —
+  // which, drawn under the new thread's name, read as its turns. So a thread's
+  // turns are drawn only from an answer read since it was chosen: which answer
+  // was in hand at the choice is kept from the render that saw it.
+  const [chosenOver, setChosenOver] = useState<{
+    thread: string;
+    answer: ConversationsAnswer | null;
+  }>({ thread, answer: null });
+  if (chosenOver.thread !== thread) setChosenOver({ thread, answer: data });
+  const turns = data !== null && data !== chosenOver.answer ? data : null;
   return (
     <section className="col gap-2" aria-labelledby="prof-conversations">
       <h3 id="prof-conversations" className="prof-section-title">
@@ -246,7 +276,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
               // A COUNT IS A FACT ABOUT THE THREAD THE READER OPENED: with
               // none open the answer carries no entries, and a 0 there would
               // be a quantity stated about a thread nobody had named.
-              count={thread ? data?.entries?.length : undefined}
+              count={thread ? turns?.entries?.length : undefined}
               // WHICH THREAD, named where the turns are: on a phone the list
               // that says it is a screen above.
               subtitle={thread ? conversationLabel(thread) : undefined}
@@ -262,9 +292,11 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                 title="Nothing selected"
                 description="Choose a thread."
               />
-            ) : data?.entries?.length ? (
+            ) : !turns ? (
+              <Skeleton variant="text" rows={3} label="Loading this thread's turns" />
+            ) : turns.entries?.length ? (
               <div className="list">
-                {data.entries.map((entry, i) => (
+                {turns.entries.map((entry, i) => (
                   <ThreadTurn key={entry.turn_id || i} entry={entry} />
                 ))}
               </div>
@@ -285,20 +317,6 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
 
 /** The open thread's heading, which a press [reveal]s and focuses. */
 const THREAD_DETAIL_ID = "prof-thread-turns";
-
-/**
- * Scroll `row` into its list's own view, moving nothing outside the list.
- *
- * NOT `scrollIntoView`, which scrolls every scrollable ancestor to reach the
- * row — the page included, so reopening a profile on a thread near the list's
- * end would open the page there.
- */
-export function keepInView(box: HTMLElement, row: HTMLElement): void {
-  const top = row.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
-  const bottom = top + row.offsetHeight;
-  if (top < box.scrollTop) box.scrollTop = top;
-  else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
-}
 
 /** A counterparty's stable identity, for a key and for a link.
  *

@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // retryNode is one node of a fleet sharing fleet: its own revision, its own
@@ -17,9 +17,9 @@ import (
 func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 	t.Helper()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	// THE ENTRY AS THE REVISION WRITES IT, on a CLI that is not there: a
+	// THE ENTRY AS THE REVISION WRITES IT, on a harness that is not there: a
 	// "retry now" builds its probe from the revision, and a case must never
-	// start a real CLI.
+	// start a real harness.
 	spec := c.Config.Providers.LLM["plan"]
 	spec.StateDir = t.TempDir()
 	spec.Overrides = map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
@@ -34,9 +34,21 @@ func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 // spend sits c's plan entry out on a report made at `at`.
 func spend(t *testing.T, c *Company, at time.Time) {
 	t.Helper()
-	if !planOf(t, c).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm", At: at}) {
+	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Answer: limitReport(at), At: at}) {
 		t.Fatal("the premise: the entry sits out")
 	}
+}
+
+// limitReport is Claude Code's usage-limit sentence as a report made at `at`
+// says it: its window resets on the hour, in UTC, two to three hours later.
+// It is relative to the report because a fixed hour fails at that hour.
+// "resets 5pm" reported at 16:59 is a window over by 17:00, and the harness
+// reads one that passed less than five minutes ago as no reset at all
+// (clockResetGrace). Every case naming it then found no sit-out for five
+// minutes of each day. The zone is named so that the sentence means the same
+// instant under whatever TZ the suite runs.
+func limitReport(at time.Time) string {
+	return "Usage limit reached · resets " + at.UTC().Add(3*time.Hour).Format("3pm") + " (UTC)"
 }
 
 var person = iam.Actor{Name: "jane-doe", Kind: iam.ActorHuman, OperatorID: "session-1"}
@@ -104,11 +116,11 @@ func TestRetryNowWritesNothingUnlessTheProbeAnswered(t *testing.T) {
 	}
 
 	spend(t, c, time.Now().Add(-time.Minute))
-	// The entry's CLI does not exist, so the probe fails for a reason that is
+	// The entry's harness does not exist, so the probe fails for a reason that is
 	// not a limit.
 	result, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
 	if err != nil || result.Cleared || result.Failed == "" {
-		t.Fatalf("RetryModel(probe) on a CLI that cannot answer = %+v, %v; want nothing "+
+		t.Fatalf("RetryModel(probe) on a harness that cannot answer = %+v, %v; want nothing "+
 			"cleared, saying why", result, err)
 	}
 	if _, found, _ := fleet.ModelRetry(t.Context(), "plan"); found {

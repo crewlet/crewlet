@@ -1,0 +1,258 @@
+/**
+ * A server's Overview: what is wrong and its one fix, each instance's
+ * condition (one per agent for a per-agent server, read from the nodes
+ * holding them at query time), when it last answered, and the identity and
+ * instructions the server reports in its handshake.
+ *
+ * THE INSTRUCTIONS ARE NOT THE AGENTS'. A seat's harness is handed the
+ * entry's own `description` as the server's instructions; what the server
+ * says of itself is shown here for the administrator to read, and the card
+ * says so rather than claim a model reads it.
+ */
+
+import {
+  Button,
+  Callout,
+  Card,
+  DescriptionList,
+  RelativeTime,
+  StatusDot,
+  Text,
+  Tooltip,
+} from "@crewlethq/ui";
+import { ActivityGlyph, FileTextGlyph, ShieldCheckGlyph } from "@crewlethq/icons/glyphs";
+import type { McpMemberServerStatus } from "~/contract/mcp.ts";
+import { listed, plural } from "~/lib/format.ts";
+import type { ServerDetail } from "../api.ts";
+import type { McpData } from "../data.ts";
+import type { OnFlow } from "../parts.tsx";
+import { Alarms } from "../servers/Alarms.tsx";
+import { failureWords, INSTANCE } from "../words.ts";
+
+/** The nodes said to hold an instance that did not answer, in a sentence; "" when every one did. */
+function unanswered(detail: ServerDetail): string {
+  const quiet = detail.instance_nodes.filter((n) => !n.answered);
+  if (quiet.length === 0) return "";
+  const held = quiet.reduce((n, q) => n + q.count, 0);
+  return `${listed(quiet.map((q) => q.node))} did not answer, so ${
+    held > 0
+      ? `${plural(held, "instance")} there ${held === 1 ? "is" : "are"}`
+      : "what runs there is"
+  } not listed.`;
+}
+
+export function OverviewTab({
+  server,
+  detail,
+  data,
+  onFlow,
+}: {
+  server: McpMemberServerStatus;
+  detail: ServerDetail;
+  data: McpData;
+  onFlow: OnFlow;
+}) {
+  const admin = detail.reading === "admin" ? detail : null;
+  const quiet = unanswered(detail);
+  return (
+    <div className="mcp-stack">
+      {!server.enabled ? (
+        <Callout
+          variant="neutral"
+          title="Disabled"
+          action={
+            data.admin ? (
+              <Button size="small" variant="secondary" onClick={() => onFlow("disable")}>
+                Enable
+              </Button>
+            ) : undefined
+          }
+        >
+          No agent is offered its tools. Its settings, secrets and grants are kept.
+        </Callout>
+      ) : null}
+      {data.admin ? (
+        <Alarms
+          data={data}
+          onFlow={onFlow}
+          server={server.name}
+          integration={detail.resolved?.binding?.vendor ?? ""}
+        />
+      ) : null}
+      <div className="mcp-grid">
+        <Card padding="none">
+          <Card.Header
+            icon={<ActivityGlyph size="sm" />}
+            count={detail.instances.length || undefined}
+          >
+            <Card.Title>{server.shared ? "Instance" : "One instance per agent"}</Card.Title>
+          </Card.Header>
+          <Card.Body>
+            <div className="mcp-stack">
+              {detail.instances.length === 0 ? (
+                <Text as="p" variant="body" tone="secondary">
+                  {server.enabled ? "Nothing is running." : "Nothing runs while it is disabled."}
+                </Text>
+              ) : (
+                <ul className="mcp-instances">
+                  {detail.instances.map((i) => {
+                    const failure = i.failure
+                      ? failureWords(i.failure.class, "said" in i.failure ? i.failure.said : "")
+                      : null;
+                    return (
+                      <li key={`${i.seat}-${i.node}`}>
+                        {/* An agent's name as the tables set it, its node a
+                            literal; the second lines in one ink. What went
+                            wrong in its few words, the sentence on hover, so
+                            a long error never pushes the node onto two lines. */}
+                        <span className="mcp-instances__who">
+                          <span>{i.seat ? data.seatName(i.seat) : "The company"}</span>
+                          <Text as="span" variant="caption" tone="secondary" mono>
+                            {i.node}
+                          </Text>
+                        </span>
+                        <span className="mcp-instances__state">
+                          <StatusDot tone={INSTANCE[i.state].tone}>
+                            {INSTANCE[i.state].label}
+                          </StatusDot>
+                          {i.state === "running" ? (
+                            <Text as="span" variant="caption" tone="secondary">
+                              {plural(i.tools, "tool")}
+                            </Text>
+                          ) : failure ? (
+                            <Tooltip content={failure.title} placement="top">
+                              <Text
+                                as="span"
+                                variant="caption"
+                                tone="secondary"
+                                truncate
+                                titleWhenCut={false}
+                              >
+                                {failure.short}
+                              </Text>
+                            </Tooltip>
+                          ) : null}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {quiet ? (
+                <Text as="p" variant="caption" tone="tertiary">
+                  {quiet}
+                </Text>
+              ) : null}
+            </div>
+          </Card.Body>
+        </Card>
+        <Card padding="none">
+          <Card.Header
+            icon={<ShieldCheckGlyph size="sm" />}
+            actions={
+              admin && server.configured && server.enabled ? (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => onFlow("test", server.name)}
+                >
+                  Test now
+                </Button>
+              ) : undefined
+            }
+          >
+            <Card.Title>Answers</Card.Title>
+          </Card.Header>
+          <Card.Body>
+            <div className="mcp-stack">
+              <DescriptionList
+                dense
+                items={[
+                  [
+                    "Last answered",
+                    detail.last_success ? <RelativeTime value={detail.last_success} /> : "Not yet",
+                  ],
+                  ...(admin
+                    ? ([
+                        [
+                          "Last test",
+                          admin.last_check ? (
+                            <span>
+                              {admin.last_check.ok ? "Passed" : "Failed"}
+                              {admin.last_check.by ? ` by ${admin.last_check.by}` : ""},{" "}
+                              <RelativeTime value={admin.last_check.at} />
+                            </span>
+                          ) : (
+                            "Not tested yet"
+                          ),
+                        ],
+                      ] as const)
+                    : []),
+                  [
+                    "Last failure",
+                    detail.last_failure ? (
+                      <span>
+                        {
+                          failureWords(
+                            detail.last_failure.class,
+                            "said" in detail.last_failure ? detail.last_failure.said : "",
+                          ).short
+                        }
+                        , <RelativeTime value={detail.last_failure.at} />
+                      </span>
+                    ) : (
+                      "None"
+                    ),
+                  ],
+                  ...(detail.server_info
+                    ? ([
+                        [
+                          "Reported as",
+                          <span className="mono">
+                            {[detail.server_info.name, detail.server_info.version]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </span>,
+                        ],
+                        ...(detail.server_info.protocol
+                          ? ([
+                              [
+                                "Protocol",
+                                <span className="mono">{detail.server_info.protocol}</span>,
+                              ],
+                            ] as const)
+                          : []),
+                      ] as const)
+                    : []),
+                ]}
+              />
+              {admin ? (
+                <Text as="p" variant="caption" tone="tertiary">
+                  A test asks the server who it is and lists its tools. It never calls a tool.
+                </Text>
+              ) : null}
+            </div>
+          </Card.Body>
+        </Card>
+      </div>
+      {admin?.instructions ? (
+        <Card padding="none">
+          <Card.Header icon={<FileTextGlyph size="sm" />}>
+            <Card.Title>Instructions the server reports</Card.Title>
+          </Card.Header>
+          <Card.Body>
+            <div className="mcp-stack">
+              <Text as="p" variant="body" className="mcp-quote">
+                {admin.instructions}
+              </Text>
+              <Text as="p" variant="caption" tone="tertiary">
+                The server's own words from its handshake. The agents are not handed them: its
+                description is what they read.
+              </Text>
+            </div>
+          </Card.Body>
+        </Card>
+      ) : null}
+    </div>
+  );
+}

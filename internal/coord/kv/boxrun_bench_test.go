@@ -221,7 +221,7 @@ func seedBoxRun(b *testing.B, store *sandbox.CoordStore) (turn, launch string) {
 	turn = uuid.NewString()
 	opened, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turn, AgentHandle: "swe", AgentID: uuid.NewString(), Role: "engineer",
-		CodingAgent: "claude-code", TaskDescription: text(r, 2<<10),
+		Harness: "claude-code", TaskDescription: text(r, 2<<10),
 		Repos: []sandbox.RunRepo{{Repo: "web", RepoID: uuid.NewString(),
 			Base: strings.Repeat("a", 40), Branch: "seats/swe/web-1", Access: sandbox.RepoWrite}},
 		CodeFloor: "CREWLET_CODE_LOG@1:1",
@@ -231,7 +231,7 @@ func seedBoxRun(b *testing.B, store *sandbox.CoordStore) (turn, launch string) {
 	}
 	// THE PARKED TURN'S STATE, as the executor's launch writes it: the
 	// turn's bookkeeping and the context it froze at its start, 32 KiB of
-	// it. No conversation: the executor is its coding CLI's own run, and
+	// it. No conversation: the executor is its harness's own run, and
 	// nothing a model said is the engine's to keep.
 	state, err := json.Marshal(map[string]any{
 		"version": 1, "iteration": 1, "task_description": text(r, 2<<10),

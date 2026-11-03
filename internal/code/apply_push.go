@@ -349,11 +349,11 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// WHO PUSHED, AS THE HISTORY NAMES THEM (Principal.Actor): an operator's
 	// credential beside the seat it is bound to, or a seat's own handle as
 	// both — and how the push was built and, for a seat's, the run behind it
-	// (a coding box's naming its run and coding agent too), each written as
+	// (a coding box's naming its run and harness too), each written as
 	// the record carries it.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
-			via, turn_id, work_backend, work_key, model, run_id, coding_agent, node, atomic, commands,
+			via, turn_id, work_backend, work_key, model, run_id, harness, node, atomic, commands,
 			pack_id, pack_bytes, introduced, introduced_count, received_at, row_bytes) VALUES `,
 		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
 		len(pushRows), func(i int) []any {
@@ -365,7 +365,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			run := e.Principal.Run
 			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.Actor(),
 				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
-				run.WorkKey, run.Model, run.RunID, run.CodingAgent, e.Node, e.Atomic, encoded[i], packID, size,
+				run.WorkKey, run.Model, run.RunID, run.Harness, e.Node, e.Atomic, encoded[i], packID, size,
 				introduced[i], e.IntroducedCount, store.EncodeTime(e.ReceivedAt),
 				pushRowBytes(encoded[i], introduced[i], run)}
 		}); err != nil {
@@ -634,7 +634,7 @@ func recordedCommands(cmds []Command) (string, error) {
 // (HorizonBytesPerRecord).
 func pushRowBytes(commands, introduced string, run RunProvenance) int {
 	return len(commands) + len(introduced) + len(run.TurnID) + len(run.WorkBackend) + len(run.WorkKey) +
-		len(run.Model) + len(run.RunID) + len(run.CodingAgent)
+		len(run.Model) + len(run.RunID) + len(run.Harness)
 }
 
 // countSeatDays counts each SEAT'S entry of the record that the apply
@@ -738,7 +738,7 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 // answers how many it removed.
 //
 // OLDEST BY POSITION, STOPPING AT THE FIRST INSIDE THE HORIZON. The rows are
-// read in log order (code_pushes_repo_idx, replicated 0079) and taken while
+// read in log order (code_pushes_repo_idx, replicated 0083) and taken while
 // their instant is before the horizon, and the first row that is not ends the
 // read. NEVER A FILTER ON THE INSTANT: the index orders by position, so `at <
 // ?` seeks nothing there, and over position order it would walk the

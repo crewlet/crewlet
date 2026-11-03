@@ -1254,8 +1254,8 @@ type changeRow struct {
 	// operator is the credential a person opened it with, "" for a seat's.
 	operator string
 	work     types.WorkItem
-	// turn and run are the turn and the sandbox run that opened it, each ""
-	// where there was none.
+	// turn and run are the turn and the executor's launch that opened it,
+	// each "" where there was none.
 	turn, run string
 	// openedAt is the broker instant (store.EncodeTime) the change was opened
 	// at, and opened the packed position of the record that opened it.

@@ -139,6 +139,11 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
+A key's `id` is letters, digits, `.`, `_` and `-`, at most 255 of them: it is
+stamped into every value the key seals, and a sealed stream — the format a
+seat's executor session is kept in — names its key in a one-byte length, so
+`crewlet validate` refuses a longer one rather than the first capture.
+
 ### The engine's own keys share the bucket, and never the namespace
 
 The same bucket holds key material the **engine** keeps for itself: the
@@ -174,10 +179,13 @@ store reached directly, with the engine stopped, holds no identity estate, so
 neither is counted or moved there, and the rekey says so. Through a running
 node it counts Ask Crewlet's sealed conversations per key as well
 (`assistant_values`, each file a conversation keeps counted by the key its
-content is sealed under in the object store), which no rekey moves. A dry run counts whatever it
-reached still under an old key, so an operator is never told "nothing to move"
-while the address index's key, every person's name or somebody's conversation
-is still sealed under the key they are about to retire.
+content is sealed under in the object store), and the seats' executor sessions
+(`executor_values`, each session a turn's row names counted by the key its
+object is sealed under), neither of which a rekey moves. A dry run counts
+whatever it reached still under an old key, so an operator is never told
+"nothing to move" while the address index's key, every person's name,
+somebody's conversation or a seat's session is still sealed under the key they
+are about to retire.
 
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
@@ -207,12 +215,12 @@ store's rows — and a sealed company document is an authenticated one, so a
 node refuses one its peers published unsealed. It **signs** the three per-run tokens a sandbox carries — its telemetry's, its tool bridge's and a coding box's git credential. It
 **signs every record on every state log** — the tracker's, the knowledge
 base's, and any domain a later build registers. The same material also seals a
-person's answer to a parked coding run onto the run's row, in a key domain of
-its own (`seat.run.answer`), which whichever node resumes the run opens before
+person's answer to a parked executor onto the executor's row, in a key domain of
+its own (`seat.run.answer`), which whichever node resumes the executor opens before
 the turn is handed anything of it, signs every box read one node asks of
 the node whose host a `direct` or `container` box is on (`sandbox.box_read`),
-and seals each note a person sends a running coding run's turn onto the run's
-row (`seat.steer.note`) beside an anchor naming the seat the run serves
+and seals each note a person sends a turn whose executor is in its box onto the
+executor's row (`seat.steer.note`) beside an anchor naming the seat it serves
 (`seat.steer.seat`), each in a domain of its own so neither opens as the
 other or as anything else.
 And it **keys an embedded fleet's broker**: a route, a leaf link and the
@@ -240,11 +248,12 @@ whatever it was written to precede.
 The keyring seals the company's secrets and also signs the three **per-run
 tokens** a sandbox carries — the OTLP receiver's, the MCP bridge's and a coding
 box's git credential — every **session cookie** a signed-in browser holds,
-every person's **answer to a parked coding run** while it waits on the run's
-record, and every person's **note to a running coding run** while it waits on
-the run's record. The tokens travel in a URL path or, for the box's git, as
-git's Basic password, are minted on the node that starts a run and verified on whichever node
-the box can reach, and a detached coding run holds one for as long as the run
+every person's **answer to a parked executor** while it waits on the
+executor's record, and every person's **note to a turn whose executor is in
+its box** while it waits on that record. The tokens travel in a URL path or,
+for the box's git, as git's Basic password, are minted on the node that
+launches an executor and verified on whichever node the box can reach, and an
+executor in its box holds one for as long as its launch
 lasts, which outlives a rollout. A cookie is the same shape of problem with a
 longer life and a person on the other end of it.
 
@@ -284,7 +293,15 @@ That makes the rotation a runbook with no window in it:
      `assistant.retention_days` or its owner clears it, so the rekey says how
      many are still under an old key. A conversation still in use keeps what
      it sealed before step 3, so this count can stay above zero for as long
-     as somebody keeps using a conversation started before the flip.
+     as somebody keeps using a conversation started before the flip. **The
+     seats' executor sessions** are counted and left the same way: a session
+     leaves with its row, when a later turn of its conversation ends, when its
+     seat's `turn_engine.conversation_session.max_bytes_per_seat` releases it,
+     or once it is untouched for
+     `turn_engine.conversation_session.retention_days`. A key dropped while
+     sessions are still sealed under it costs no data a person wrote: each of
+     those sessions reads as none, and its conversation's next turn starts its
+     harness fresh.
    - **The company document** — `POST /config/reload` to a node that is up
      stores the fleet's document again, sealed under that node's active key,
      and activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)
@@ -315,13 +332,13 @@ That makes the rotation a runbook with no window in it:
    or lapses within a week of being issued. It must also report no
    Ask Crewlet value under it: dropped while a conversation is still sealed under
    it, that conversation no longer opens for its owner for the rest of its
-   retention. And no answer to a parked coding run recorded before step 3 may
+   retention. And no answer to a parked executor recorded before step 3 may
    still be waiting on its resume — one is resumed within minutes unless its
    seat is paused or held for budget, and a node that cannot open one logs
    `sandbox_answer_key_unknown`: dropped under it, that answer waits, with its
    seat's mail behind it, until the key is back on the ring. Nor may a note to
-   a running coding run filed before step 3 still be waiting on its run's
-   record — a note is read at the run's next step or by its review, so one
+   a turn whose executor is in its box filed before step 3 still be waiting on
+   the executor's record — a note is read at the executor's next step or by its review, so one
    waits for as long as its turn runs — and a node that cannot open one logs
    `steer_note_key_unknown`, naming the keys it holds: dropped under it, the
    note waits until the key is back on the ring, or expires with its turn.
@@ -431,15 +448,33 @@ A model's credentials are `${VAR}` pointers into this store too: a
 `providers.llm` entry's `auth.token`, `auth.api_key` and
 `auth.credential_bundle`, and the keys in its `env`. Settings › **Models &
 keys** (`#/settings/models`) draws each entry off the company document — its
-CLI, model and mode, and how it signs in by the variable its credential names,
-never a value. An entry that names no credential reads its CLI's own variable
+harness, model and mode, and how it signs in by the variable its credential names,
+never a value. An entry that names no credential reads its harness's own variable
 from this store first, then the environment: `CLAUDE_CODE_OAUTH_TOKEN` for a
 Claude Code subscription (which `crewlet llm login <key> -capture-token` writes
-here), and under `auth.mode: api-key` the CLI's key variable —
+here), and under `auth.mode: api-key` the harness's key variable —
 `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex. A variable other
 vendors' keys are kept under too — Qwen Code's `OPENAI_API_KEY` — is never read
 this way: such an entry names its key. One whose named reference resolves to
 nothing runs on nothing rather than borrowing it.
+
+### Write-only values
+
+A value stored from Settings › MCP & tools, a server's header or variable, is
+sealed on a row marked **write-only**
+([Storing a header or variable](../guides/tools-and-mcp.md#storing-a-header-or-variable)).
+The engine's resolver opens it, so the `${VAR}` that names it resolves on every
+node as any stored value does; every read that would hand it to a person or a
+command refuses it, naming why: `GET /secrets/{name}?reveal=true`, `POST
+/secrets/reveal`, `crewlet secrets get -reveal` and a command resolving its
+company document, through a node or with the engine stopped. The listing says
+which rows are write-only (`crewlet secrets list` marks the source
+`(write-only)`).
+
+The mark belongs to the row: storing the same name again, from the page or
+through `PUT /secrets/{name}`, keeps it, since what replaces a write-only
+value is still that server's credential, and a rekey re-seals the row with it.
+Only removing the row clears it.
 
 ### From a provisioner
 
@@ -622,7 +657,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 
 | Site | Source | Why |
 |---|---|---|
-| A `providers.llm` entry's conventional credentials — its CLI's token variable (`CLAUDE_CODE_OAUTH_TOKEN`), under `auth.mode: api-key` its key variable (`ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; never a shared one such as Qwen Code's `OPENAI_API_KEY`), its bundle's `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — and the embeddings key fallback (`OPENAI_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set ANTHROPIC_API_KEY` would work through a config reference but not through the fallback, and the token `crewlet llm login -capture-token` writes into this store would sign nothing in |
+| A `providers.llm` entry's conventional credentials — its harness's token variable (`CLAUDE_CODE_OAUTH_TOKEN`), under `auth.mode: api-key` its key variable (`ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; never a shared one such as Qwen Code's `OPENAI_API_KEY`), its bundle's `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — and the embeddings key fallback (`OPENAI_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set ANTHROPIC_API_KEY` would work through a config reference but not through the fallback, and the token `crewlet llm login -capture-token` writes into this store would sign nothing in |
 | Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`), and everything `crewlet llm` reads | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store, and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the third-party app. Each command takes `-config` for this, and beside a running engine reads the store through its API: it lists the node's names, then reveals the variables that command reads that the node holds, at most 64 to a request; with the engine stopped it reads the same variables from the fleet's store itself, through the node's own broker or the external one, and no node logs those reads |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`secrets.keys[].material`, an external broker's `stream.token`) | **Env/file only** | Root of trust — this is what reaches and decrypts the store |
@@ -671,7 +706,7 @@ outranks](../reference/cli.md#a-sink-the-store-outranks)).
 
 ## Operational notes
 
-- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and a coding run are held to theirs: a tool server whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)); an executor run starts without it and logs `sandbox_env_unresolved` (names only, and nothing for a key under `optional_keys`; [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); and the sandbox credential check refuses to launch a coding agent on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `cli_agent_env_unresolved` warning naming it.
+- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and an executor are held to theirs: a tool server whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)); an executor run starts without it and logs `sandbox_env_unresolved` (names only, and nothing for a key under `optional_keys`; [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); and the sandbox credential check refuses to launch a harness on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `harness_env_unresolved` warning naming it.
 - **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows)).
 - **Key rotation.** Follow [the rotation runbook](#rotating-the-keyring-with-nothing-in-flight-lost): add the new key on every node and restart, flip `active_key_id` and restart again, re-seal both halves (`crewlet secrets rekey`, and the company document with `POST /config/reload` or, on a stopped node, `crewlet config rekey` — which a node booting on another revision than the fleet's needs either way), and only then drop the old key. Flipping `active_key_id` in the same restart that adds the key is safe on a single node and not on a fleet: a node that flips first signs records, cookies and requests under a key its peers do not hold yet. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. Run with this node's engine stopped it reaches the store itself and re-seals every row there, under the keyring in the Tier A it was given. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. Through a running node the same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again; a run made directly cannot reach them, says so, and is run again through a running node.
 - **The `_secrets` bucket is created on demand** by the first process to open the fleet's store — a node at its first boot, or a command that reached a solo node's store, or an external broker, before any engine had, through the same constructor, so the engine adopts it — and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.

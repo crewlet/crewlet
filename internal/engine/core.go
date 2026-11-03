@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -143,6 +144,11 @@ type core struct {
 	assistantReader *assistantdomain.Reader
 	assistantWriter *assistantdomain.Writer
 
+	// executorReader and executorWriter are the executor log's two sides,
+	// built on every data node for the same reason ([core.openExecutor]).
+	executorReader *executordomain.Reader
+	executorWriter *executordomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -237,6 +243,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		return err
 	}
 	if err = c.openAssistant(e, sl); err != nil {
+		return err
+	}
+	if err = c.openExecutor(sl); err != nil {
 		return err
 	}
 
@@ -611,7 +620,7 @@ func (e *Engine) NodeGate() *NodeGate {
 //     node whose copy of a domain that gates seats is WRONG serves no seat
 //     copy ([estate.SeatCopy], [localEstate.For]), so it is answered on a
 //     sound data node's word, like a node holding no data, while a wrong copy
-//     of any other domain withholds nothing (ADR-0072); every half the company
+//     of any other domain withholds nothing (ADR-0079); every half the company
 //     runs natively — the tracker, the knowledge base and chat — must be
 //     served there, since a seat's tools reach each of them, and a company
 //     whose only native half is chat gates on chat alone rather than admitting
@@ -670,7 +679,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
 // problem and not the seats': a domain's wrong copy goes out of service for
-// that domain's operations ([localEstate.For], ADR-0072), so every call this
+// that domain's operations ([localEstate.For], ADR-0079), so every call this
 // node's seats make on that domain is answered by a data node whose copy is
 // sound, exactly as a node holding no data is answered. Moving the seats
 // instead cost each of them its processes and its memory to be served by the

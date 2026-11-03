@@ -55,7 +55,7 @@ func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 			swapModel(t, e, fullBudgetModel{})
 
 			const budget = 4096
-			text := strings.Repeat("the coding agent changed the parser and its tests\n", 400)
+			text := strings.Repeat("the harness changed the parser and its tests\n", 400)
 			cost := map[sandbox.RunPart]sandbox.AuxTokens{}
 			for _, part := range sandbox.RunParts {
 				got, spent, err := runCondenser{engine: e}.Condense(t.Context(), tc.run, part, text, budget)

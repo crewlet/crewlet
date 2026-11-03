@@ -4,7 +4,7 @@
 //
 // # The record a wake derives from
 //
-// ADR-0088. A node's alarm tracker (internal/statelog's Tracker) hands every
+// ADR-0095. A node's alarm tracker (internal/statelog's Tracker) hands every
 // transition it makes — an alarm instance fired, cleared, or found firing by
 // the tracker's first evaluation — to the engine's outbox, which publishes it
 // on the inbound topic as a delivery of this source, retried until the broker
@@ -34,6 +34,13 @@
 // a second node — routes to the same ids, and the inbox's same-id dedupe and
 // the fleet completion ledger collapse it: each granted seat is woken once per
 // transition. A random id would make every copy a fresh wake.
+//
+// # What starts the turn
+//
+// Each wake names its alarm instance as its turn's origin
+// (types.OriginAlarm, [InstanceID]) under what the instance did — fired,
+// cleared or firing_at_boot — so the turns an alarm started are found from it
+// as a chat message's are from the message.
 //
 // # A wake is a pointer
 //
@@ -261,7 +268,34 @@ func inbound(t statelog.AlarmTransition) notify.Inbound {
 		Subject:   subject(t),
 		Body:      t.Detail,
 		Metadata:  meta,
+		// WHAT STARTS THE TURN THIS WAKES: the alarm instance, under what it
+		// did — so the turns an alarm started are found from the alarm
+		// (`GET /turns?origin=alarm:<instance>`), its fire's and its clear's
+		// under one id.
+		Origin: types.TriggerOrigin{Kind: types.OriginAlarm, ID: InstanceID(t), Reason: string(t.Change)},
 	}
+}
+
+// InstanceID is the alarm instance t is a transition of, as a turn's origin
+// names it and as the alarms page names it: the alarm's kind, which is its
+// identity there, and the log a per-log alarm stands on — `<kind>`, or
+// `<kind>:<log>`.
+//
+// THE INSTANCE, NEVER THE TRANSITION: a fire and the clear that ends it are
+// one alarm standing, which is what a person asking "which turns did this
+// alarm start" holds, and the origin's reason ([types.TriggerOrigin]) says
+// which of the two each turn was woken by. Not the raising instant either,
+// which nobody reading the alarm is shown: an alarm that fires again later is
+// the same alarm, and its turns are listed together. NOR THE NODE: every data
+// node evaluates its own table, so one fleet-wide condition fires on each of
+// them, and the page, the wake's conversation ([Prompt.PartitionKey]) and the
+// seat's one look at fleet_health all treat it as one alarm — the node is in
+// the wake's metadata and its prompt's first line.
+func InstanceID(t statelog.AlarmTransition) string {
+	if t.Domain == "" {
+		return string(t.Kind)
+	}
+	return string(t.Kind) + ":" + t.Domain
 }
 
 // subject is the one line an operator sees in the feed: the alarm, where it

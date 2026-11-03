@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -46,7 +46,7 @@ func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, s
 
 // AN EXECUTOR'S BOX IS HANDED ITS ENTRY'S WHOLE ENV, IN EVERY CELL.
 //
-// An entry's env is extra environment for every invocation of its CLI, and
+// An entry's env is extra environment for every invocation of its harness, and
 // the executor's run is one. Built from the entry's sign-in alone, a run on an
 // entry that reaches its model through a company gateway called the vendor's
 // own endpoint with nothing it accepts — the gateway's bearer token is no
@@ -145,7 +145,7 @@ func TestASeatsOwnTokenReplacesTheEntrysSignInAndKeepsItsRoute(t *testing.T) {
 }
 
 // THE PROFILE'S OWN TOKEN VARIABLE IS PART OF THE SIGN-IN, WHATEVER IT IS
-// CALLED. An override names the variable a build of the CLI reads its token
+// CALLED. An override names the variable a build of the harness reads its token
 // from, and a name of no credential's shape is still the entry's sign-in: a
 // seat that signs in itself must not be handed it beside its own.
 //
@@ -154,7 +154,7 @@ func TestASeatsOwnTokenReplacesTheEntrysSignInAndKeepsItsRoute(t *testing.T) {
 func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompanyOverrides(t, "claude-code",
-		cliagent.Auth{Mode: cliagent.AuthSubscription, Token: "sk-ant-oat-entry"},
+		harness.Auth{Mode: harness.AuthSubscription, Token: "sk-ant-oat-entry"},
 		map[string]any{"token_env": "CLAUDE_SESSION_STRING"})
 	if env := runOn(t, c, seat, nil).env; env["CLAUDE_SESSION_STRING"] != "sk-ant-oat-entry" {
 		t.Fatalf("the entry's token under its renamed variable did not reach the box: %v", env)
@@ -165,8 +165,8 @@ func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 	}
 }
 
-// THE NAMES THAT SIGN A CLI IN ARE ITS PROFILE'S LIST, read wherever a box's
-// sign-in is judged: whether a seat already signs the CLI in, so the entry's
+// THE NAMES THAT SIGN A harness IN ARE ITS PROFILE'S LIST, read wherever a box's
+// sign-in is judged: whether a seat already signs the harness in, so the entry's
 // own sign-in stays out ([entryEnv]), and whether a remote run is signed in at
 // all ([entrySignsIn]). The list is the one `auth.mode: env` reads, so a
 // switch an override adds to it counts in both, and one it drops counts in
@@ -175,11 +175,11 @@ func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 // Mutation: judge by a fixed list of Claude Code's names, and the added switch
 // neither keeps the entry's key out nor lets the remote run start, while the
 // dropped Bedrock toggle still keeps the key out.
-func TestTheNamesThatSignACLIInAreItsProfilesList(t *testing.T) {
+func TestTheNamesThatSignAHarnessInAreItsProfilesList(t *testing.T) {
 	t.Parallel()
 	overrides := map[string]any{"sign_in_env": []any{"CLAUDE_CODE_USE_MYCLOUD"}}
 	c, seat := creditedCompanyOverrides(t, "claude-code",
-		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-entry"}, overrides)
+		harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-entry"}, overrides)
 
 	env := runOn(t, c, seat, map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}).env
 	if value, present := env["ANTHROPIC_API_KEY"]; present {
@@ -190,7 +190,7 @@ func TestTheNamesThatSignACLIInAreItsProfilesList(t *testing.T) {
 		t.Errorf("a name the profile no longer lists kept the entry's key out: %v", env)
 	}
 
-	bare, bareSeat := creditedCompanyOverrides(t, "claude-code", cliagent.Auth{}, overrides)
+	bare, bareSeat := creditedCompanyOverrides(t, "claude-code", harness.Auth{}, overrides)
 	if err := guardOn(t, bare, bareSeat, sandbox.E2B,
 		map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}); err != nil {
 		t.Errorf("a remote run signed in by a name the profile lists was refused: %v", err)

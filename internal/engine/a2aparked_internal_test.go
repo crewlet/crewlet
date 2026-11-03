@@ -214,10 +214,10 @@ func (r *runRig) loseRun(t *testing.T, turnID string) {
 	if err := provider.Kill(t.Context(), row.SandboxID); err != nil {
 		t.Fatalf("killing run %s's box: %v", turnID, err)
 	}
-	completion := types.SandboxRunCompleted{
+	completion := types.ExecutorFinished{
 		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
 		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
-		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,
+		SandboxID: row.SandboxID, Harness: row.Harness,
 	}
 	ev := events.New(completion, events.TraceContext{TraceID: row.TraceID, ParentSpanID: row.SpanID})
 	if err := r.engine.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev); err != nil {
@@ -230,7 +230,7 @@ func (r *runRig) loseRun(t *testing.T, turnID string) {
 
 // A TURN LOST WITH ITS RUN TELLS ITS ASKER SO: the run's loss ends the parked
 // turn with no frame of it left to answer, so the run's ending answers — once,
-// as the answering seat and run, saying the coding run was lost and why, the
+// as the answering seat and run, saying the executor's work was lost and why, the
 // question echoed — and closes the channel, rather than leaving the asker to an
 // idle sweep that wakes nobody.
 //
@@ -267,8 +267,8 @@ func TestALostRunsTurnTellsItsAskerItWasLost(t *testing.T) {
 		t.Errorf("the reply is %+v, want swe's, echoing the question", msg)
 	}
 	if !strings.Contains(msg.Content, "was lost") ||
-		!strings.Contains(msg.Content, types.SandboxFailureCollect) {
-		t.Errorf("the asker was told %q, want that the coding run was lost, and why", msg.Content)
+		!strings.Contains(msg.Content, types.ExecutorFailureCollect) {
+		t.Errorf("the asker was told %q, want that the executor's work was lost, and why", msg.Content)
 	}
 	if got[0].ParentTurnID != "run-ask" {
 		t.Errorf("the reply names parent %q, want the answering run", got[0].ParentTurnID)

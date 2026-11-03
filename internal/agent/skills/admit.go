@@ -6,7 +6,7 @@ import "github.com/crewlet/crewlet/internal/logging"
 //
 // The half of the sync that decides WHAT is a skill, kept apart from the
 // half that decides where the pages came from. Two callers need it (the
-// engine's own skill sync and the publishing CLI's `resync`), and a second
+// engine's own skill sync and the publishing harness's `resync`), and a second
 // copy would eventually admit a page one of them rejected, which is the
 // difference between "the operator sees this skill loaded" and "the engine
 // loads it".

@@ -11,7 +11,7 @@ import "context"
 // acked the original. Nothing stopped the consumer, so the copy was the next
 // thing it fetched — immediately, since a pull consumer fetches again the
 // moment its handler returns — and it was parked again. For the length of the
-// run (hours, for a real coding job) every message waiting on a busy seat went
+// run (hours, for a real task) every message waiting on a busy seat went
 // round that loop at whatever rate the broker would serve: a fetch, a
 // screening, a store read for the answer offer, a replicated publish (and the
 // event-store write the publish listener makes for it) and an ack, per message
@@ -48,12 +48,12 @@ import "context"
 //
 // A HELD SEAT RECEIVES NOTHING, a person's answer to ANOTHER of its runs
 // included, until the run holding it settles or parks on its own question.
-// That is the rule rather than a price paid for the hold: an agent in the
-// middle of a coding job is busy with that job, and it takes up the next one —
-// a new task, a colleague's message, the answer that resumes its other run —
-// when this one is done, exactly as a person would. Resuming a second run
-// beside the first would put two of its turns in flight at once, each acting
-// for the seat with no view of the other.
+// That is the rule rather than a price paid for the hold: an agent whose
+// executor is in the middle of a job is busy with that job, and it takes up
+// the next one — a new task, a colleague's message, the answer that resumes
+// its other run — when this one is done, exactly as a person would. Resuming
+// a second run beside the first would put two of its turns in flight at once,
+// each acting for the seat with no view of the other.
 //
 // So a chat reply waits on the inbox with everything else and is offered when
 // the job stops holding the seat. Nothing is lost: the reply keeps its place,

@@ -337,10 +337,10 @@ func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 func TestSeedSetsEachSeatsLastTurnAndAParkedOne(t *testing.T) {
 	t.Parallel()
 	// "Idle · last turn 24m ago" has to survive a restart, and so does a
-	// turn parked on a coding run: the run is a durable record and a box,
-	// not a goroutine, and the turn is still the seat's. Both seats carry
-	// one role name, so a seed grouped by name would file one seat's turns
-	// as the other's.
+	// turn parked on its executor: the executor is a durable record and a
+	// box, not a goroutine, and the turn is still the seat's. Both seats
+	// carry one role name, so a seed grouped by name would file one seat's
+	// turns as the other's.
 	s := seededState(t)
 	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
 	item := &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1"}

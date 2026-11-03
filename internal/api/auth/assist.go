@@ -126,9 +126,9 @@ const assistOperatorMCP = "/operator/mcp"
 //     transports into the tools rather than routes with a row of their own;
 //   - telemetry and webhooks, which authenticate by other means;
 //   - the code host's git transports — a person's (`/git/`), which git
-//     itself drives with the person's own bound token (ADR-0078), and a
+//     itself drives with the person's own bound token (ADR-0085), and a
 //     coding box's (`/box/git/`, `/box/code/`), admitted by its run's
-//     credential (ADR-0086) — which, like the MCP surfaces, are transports
+//     credential (ADR-0093) — which, like the MCP surfaces, are transports
 //     rather than routes with a row of their own, and whose credential is
 //     never a grant;
 //   - the assistant's own routes, so it cannot recurse or approve itself.

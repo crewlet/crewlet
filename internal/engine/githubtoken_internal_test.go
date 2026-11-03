@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -524,7 +525,7 @@ roles:
 
 // A LONG RUN'S TOKEN FILE IS KEPT CURRENT, AND A QUIET POLL WRITES NOTHING.
 //
-// A coding run is never stopped on a clock, so the token it launched with
+// An executor is never stopped on a clock, so the token it launched with
 // expires under it. The poll rewrites the file a credential helper reads when
 // the token behind it is renewed, and leaves it alone otherwise, asking the
 // box rather than remembering, so the fleet waiter's duty can move between
@@ -626,13 +627,13 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		turn := "turn-" + string(cell)
 		if _, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
 			TurnID: turn, AgentHandle: "builder", Role: "Builder",
-			Placement: string(cell), CodingAgent: "claude-code", LaunchNode: e.id,
+			Placement: string(cell), Harness: "claude-code", LaunchNode: e.id,
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch %s: %v", cell, err)
 		}
 		if err := pending.AttachSandbox(ctx, turn, sandbox.BoxRef{
 			SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell), Node: e.id,
-			CodingAgent: "claude-code",
+			Harness: "claude-code",
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox %s: %v", cell, err)
 		}
@@ -725,14 +726,14 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	cell := string(sandbox.Direct)
 	opened, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "turn-1", AgentHandle: "builder", Role: "Builder",
-		Placement: cell, CodingAgent: "claude-code", LaunchNode: e.id,
+		Placement: cell, Harness: "claude-code", LaunchNode: e.id,
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := pending.AttachSandbox(ctx, "turn-1", sandbox.BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-0", Placement: cell, Node: e.id,
-		CodingAgent: "claude-code", SessionID: "sess-ask",
+		Harness: "claude-code", SessionID: "sess-ask",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -752,7 +753,7 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	res, err := rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:     sandbox.TurnRef{TurnID: "turn-1", AgentHandle: "builder", Role: "Builder"},
 		Brief:    "the round's brief, with the question and the answer",
-		Spec:     sandbox.Spec{Placement: sandbox.Direct, CodingAgent: "claude-code"},
+		Spec:     sandbox.Spec{Placement: sandbox.Direct, Harness: "claude-code"},
 		Continue: &sandbox.Continuation{SessionID: "sess-ask", Brief: "the answer: push it"},
 	})
 	if err != nil {
@@ -768,7 +769,7 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	}
 }
 
-// startReader is a coding CLI's runner that reads a box's token file at the
+// startReader is a harness's runner that reads a box's token file at the
 // moment its job starts, which is what the job's first git call would read.
 type startReader struct {
 	*sandbox.FakeRunner
@@ -1007,6 +1008,15 @@ func (b *unwritableBox) WriteFile(ctx context.Context, path string, content []by
 		return b.refuse
 	}
 	return b.FakeSandbox.WriteFile(ctx, path, content)
+}
+
+// WriteStream fails as WriteFile does: a directory made read-only refuses a
+// streamed write as it refuses any other.
+func (b *unwritableBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
+	if b.refuse != nil {
+		return b.refuse
+	}
+	return b.FakeSandbox.WriteStream(ctx, path, content)
 }
 
 // tokenFiles finds only whole references to the seat's own variable: a file

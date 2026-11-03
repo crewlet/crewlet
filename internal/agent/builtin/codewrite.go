@@ -26,7 +26,7 @@ import (
 // company's own repositories, made through a tool rather than a clone — five
 // that change a branch (code_commit_files, code_revert, code_cherry_pick,
 // code_create_branch, code_delete_branch), each an ENGINE WRITE the code host
-// builds on the repository's git node and lands as one push (ADR-0085), and
+// builds on the repository's git node and lands as one push (ADR-0092), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
 // LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
@@ -38,7 +38,7 @@ import (
 //
 // The gate admits every principal (`authz.ClassEverybody`), as it admits a
 // push at the git transport: whether a caller may move a branch or change a
-// repository is its GRANT on that repository (ADR-0081), which the node that
+// repository is its GRANT on that repository (ADR-0088), which the node that
 // decides judges from its own chart — the git node and the repository's
 // committer for an engine write, the data node for a lifecycle request — and
 // which no row keyed on the verb can answer before the repository is read. A
@@ -74,7 +74,7 @@ import (
 // A seat's write names the run behind it on its push (code.RunProvenance):
 // the turn, the work item it is charged to and the model the call was made on
 // ([toolloop.CallModel]) — an engine-driven round's, or the model the seat's
-// coding run's launch pointed its CLI at, so one run's pushes name one model
+// executor's launch pointed its harness at, so one run's pushes name one model
 // whichever path made them.
 //
 // # A scratch repository a turn names is held first
@@ -144,7 +144,7 @@ func CodeWrites() []string {
 // AND NONE IT OFFERS IS REFUSED BY THE TIER: the conversation of a change is
 // judged by access and by what its principal wrote of the change (rule D21),
 // and the access each of them needs of a principal that wrote none of it is
-// the one [belowWriteNeeds] names — the use ADR-0081 left the review tier
+// the one [belowWriteNeeds] names — the use ADR-0088 left the review tier
 // for. A seat whose tier was lowered keeps its authorship of what it pushed
 // before, which would let it ask for reviews of that change or answer its
 // findings at read too; those two stay withheld at read_only anyway, since
@@ -259,7 +259,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // colleague SEAT rides on the write as its ceiling, and on every read the call
 // makes too ([codeCaller.ceiling]), so nothing a write tool reads is shown for
 // a colleague who could not read it; and a PERSON bounds nothing, since a
-// person maintains every repository (ADR-0078).
+// person maintains every repository (ADR-0085).
 //
 // JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
 // request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a

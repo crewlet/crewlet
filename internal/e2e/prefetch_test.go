@@ -78,7 +78,7 @@ func executorPrompt(t *testing.T, n *node) string {
 }
 
 // executorOffered is the tools the request that did the work was offered: the
-// ones its CLI listed from the seat's tool server, which is where a tool the
+// ones its harness listed from the seat's tool server, which is where a tool the
 // seat holds is defined, rather than any list in its system prompt.
 func executorOffered(t *testing.T, n *node) []string {
 	t.Helper()

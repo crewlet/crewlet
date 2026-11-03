@@ -143,7 +143,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's record that removes the anchors below a
-	// floor (ADR-0073), which writes nothing of this domain's anywhere.
+	// floor (ADR-0080), which writes nothing of this domain's anywhere.
 	OpTrimmed OpKind = "trimmed"
 )
 
@@ -1564,7 +1564,7 @@ func (n *Notify) checkSnapshot() error {
 //
 // WHAT A TURN'S TOKENS ARE is the engine's to decide (see ADR-0022): its own
 // phases, the workers it delegated to and the extension judge, plus a
-// collected coding run's tokens on the segment that resumed from it. Workers
+// collected executor's tokens on the segment that resumed from it. Workers
 // and SentBack are COUNTS beside those tokens, not more tokens — how many
 // delegated tasks ran and how many reviews sent the work back — and both are
 // OMITTED AT ZERO, like every counter here, so a turn that delegated nothing
@@ -1623,7 +1623,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0073) as a record this domain's applier decodes.
+// ADR-0080) as a record this domain's applier decodes.
 //
 // The framework owns WHEN one is appended, what it removes and the floor its
 // subject names; the domain owns what a record on its log looks like — the

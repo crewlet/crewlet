@@ -61,8 +61,8 @@ func TestASeatsResyncsAreTheCensussSeatTerm(t *testing.T) {
 // boxes' re-syncs and its turns' tools' draw on one seat bucket of the node's
 // one Resyncs, so a seat whose box spent it finds its turn refused by the
 // SEAT's bucket — while a turn's own bucket stays its own, even one spelled as
-// the run's launch id, and another seat is untouched. A box's draws, a coding
-// run's and a check's, are counted crewlet.code.box.resyncs by outcome; a
+// the run's launch id, and another seat is untouched. A box's draws, an
+// executor's and a check's, are counted crewlet.code.box.resyncs by outcome; a
 // turn's are not a box's.
 //
 // Mutations: Turn drawing on a limiter of its own — the turn is served past

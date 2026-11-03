@@ -5,7 +5,7 @@
       "properties": {
         "deep_work": {
           "$ref": "#/$defs/AssistantDeepWork",
-          "description": "Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
+          "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
         "enabled": {
           "description": "Run Ask Crewlet for this company. Absent or false: off.",
@@ -38,7 +38,7 @@
               "type": "array"
             }
           ],
-          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
+          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
           "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
@@ -161,56 +161,6 @@
             "boolean",
             "null"
           ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "CLIAgentAuth": {
-      "additionalProperties": false,
-      "properties": {
-        "api_key": {
-          "description": "${VAR} holding an API key, read under auth.mode api-key. Empty reads the CLI's own key variable.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
-        "credential_bundle": {
-          "description": "${VAR} holding a bundle exported by crewlet llm export.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
-        "mode": {
-          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway).",
-          "enum": [
-            "subscription",
-            "api-key",
-            "inherit-env",
-            "env",
-            "",
-            null
-          ]
-        },
-        "token": {
-          "description": "${VAR} holding a long-lived subscription token.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -1170,6 +1120,15 @@
             "null"
           ]
         },
+        "max_bytes_per_seat": {
+          "description": "Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released (default 64 MiB, 33 MiB..64 GiB).",
+          "maximum": 68719476736,
+          "minimum": 34603008,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_entries": {
           "description": "Entries kept per conversation.",
           "minimum": 0,
@@ -1843,6 +1802,56 @@
         "null"
       ]
     },
+    "HarnessAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "${VAR} holding an API key, read under auth.mode api-key. Empty reads the harness's own key variable.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "credential_bundle": {
+          "description": "${VAR} holding a bundle exported by crewlet llm export.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "mode": {
+          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the harness in: a cloud provider or a gateway).",
+          "enum": [
+            "subscription",
+            "api-key",
+            "inherit-env",
+            "env",
+            "",
+            null
+          ]
+        },
+        "token": {
+          "description": "${VAR} holding a long-lived subscription token.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "HumanContact": {
       "additionalProperties": false,
       "properties": {
@@ -2108,8 +2117,27 @@
     "LLMProvider": {
       "additionalProperties": false,
       "properties": {
-        "agent": {
-          "description": "Which coding CLI to drive (default claude-code).",
+        "auth": {
+          "$ref": "#/$defs/HarnessAuth"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "x-crewlet-secret": true
+          },
+          "description": "Extra environment for the harness, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "Which harness to drive (default claude-code).",
           "enum": [
             "claude-code",
             "codex",
@@ -2128,27 +2156,8 @@
             null
           ]
         },
-        "auth": {
-          "$ref": "#/$defs/CLIAgentAuth"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ],
-            "x-crewlet-secret": true
-          },
-          "description": "Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "max_concurrent": {
-          "description": "Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
+          "description": "Concurrent harness processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
           "minimum": 0,
           "type": [
             "integer",
@@ -2156,7 +2165,7 @@
           ]
         },
         "model": {
-          "description": "Model id, in the CLI's own grammar (OpenCode: <provider>/<model>).",
+          "description": "Model id, in the harness's own grammar (OpenCode: <provider>/<model>).",
           "type": [
             "string",
             "number",
@@ -2166,7 +2175,7 @@
         },
         "overrides": {
           "additionalProperties": {},
-          "description": "Field-wise overrides of the built-in CLI profile.",
+          "description": "Field-wise overrides of the built-in harness profile.",
           "type": [
             "object",
             "null"
@@ -2183,7 +2192,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login.",
+          "description": "Credential + per-seat home directory, each harness under <state_dir>/<harness>. Entries sharing one and a harness share a login.",
           "type": [
             "string",
             "number",
@@ -2192,7 +2201,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
+          "description": "Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are not on this clock.",
           "minimum": 0,
           "type": [
             "number",
@@ -2254,7 +2263,7 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Container image: with the coding-agent CLI installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
+          "description": "Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
           "type": [
             "string",
             "number",
@@ -2263,7 +2272,7 @@
           ]
         },
         "network": {
-          "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
+          "description": "Container network; setting it to none also cuts off the harness's LLM.",
           "type": [
             "string",
             "number",
@@ -2327,9 +2336,147 @@
         "null"
       ]
     },
+    "MCPAccess": {
+      "additionalProperties": false,
+      "properties": {
+        "except": {
+          "description": "Agent seat handles left out although a unit in units holds them.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "seats": {
+          "description": "Agent seat handles that get this server.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "units": {
+          "description": "Unit keys whose agent seats get this server, the seats of every unit beneath each included.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPOAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "description": "How the engine registers at the authorization server for a person's sign-in (grant authorization_code): cimd (its published client metadata document), dcr (registers when a sign-in starts) or own (a client registered at the vendor beforehand).",
+          "enum": [
+            "cimd",
+            "dcr",
+            "own",
+            "",
+            null
+          ]
+        },
+        "client_id": {
+          "description": "The client id of the company's own client (client: own, or grant: client_credentials).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "description": "The secret of the company's own client: required for grant client_credentials, and for client own where the client has one; ${VAR} supported.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "grant": {
+          "description": "How the engine is granted access: authorization_code (default: a person signs the company in once) or client_credentials (a service identity: the company's own client, with client_id and client_secret, and no person).",
+          "enum": [
+            "authorization_code",
+            "client_credentials",
+            "",
+            null
+          ]
+        },
+        "scopes": {
+          "description": "Scopes the sign-in asks for; absent, a person's sign-in asks for the ones the server lists and a service identity for its client's default.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPRegistry": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "The registry's https address; /v0.1/servers is appended to it. Absent: no community search.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPServer": {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "$ref": "#/$defs/MCPAccess",
+          "description": "Which agent seats get this server: units (every agent seat beneath each), seats, and except. Absent = every agent seat. Not for a server bound to a vendor's per-seat credential, which the integration grants."
+        },
         "args": {
           "description": "Arguments for the executable (stdio).",
           "items": {
@@ -2351,6 +2498,25 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "What this server is for, one line of at most 200 characters; listed beside its name in each agent's prompt.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Run this server (default on). Off keeps the entry and everything that names it, and starts nothing.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
             "null"
           ]
         },
@@ -2387,13 +2553,26 @@
           ]
         },
         "name": {
-          "description": "Server name; the key seats declare credentials under.",
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Server name: lowercase letters, digits and hyphens, at most 32 characters; the key seats declare credentials under.",
           "type": [
             "string",
             "number",
             "boolean",
             "null"
           ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/MCPOAuth",
+          "description": "Sign the company in to this remote server with OAuth (http, shared): the grant (a person's sign-in, or a service identity's client credentials), how the engine registers, and the scopes it asks for."
         },
         "optional_keys": {
           "description": "Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back.",
@@ -2526,13 +2705,26 @@
           ]
         },
         "tool_prefix": {
-          "description": "Prefix applied to this server's tool names.",
+          "anyOf": [
+            {
+              "maxLength": 49,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Prefix put in front of every tool this server serves: letters, digits, _ and -, at most 49 characters.",
           "type": [
             "string",
             "number",
             "boolean",
             "null"
           ]
+        },
+        "tools": {
+          "$ref": "#/$defs/MCPToolPolicy",
+          "description": "The level each tool runs at: default for every tool, levels for one tool by the server's own name. allow offers it; blocked never offers it to an agent. Absent = every tool allowed."
         },
         "transport": {
           "description": "stdio (default) or http.",
@@ -2556,6 +2748,41 @@
       "required": [
         "name"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPToolPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "The level of every tool levels does not name: allow, approve or blocked. Unset, a tool the server marks read-only runs at allow and every other tool at approve.",
+          "enum": [
+            "allow",
+            "approve",
+            "blocked",
+            "",
+            null
+          ]
+        },
+        "levels": {
+          "additionalProperties": {
+            "enum": [
+              "allow",
+              "approve",
+              "blocked",
+              "",
+              null
+            ]
+          },
+          "description": "One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow, approve or blocked.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"
@@ -2690,7 +2917,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/LLMProvider"
           },
-          "description": "Named models, each a coding CLI the engine drives; seats select one by key.",
+          "description": "Named models, each a harness the engine drives; seats select one by key.",
           "type": [
             "object",
             "null"
@@ -3816,7 +4043,7 @@
       "additionalProperties": false,
       "properties": {
         "servers": {
-          "description": "MCP server names this seat's executor box is given, beside its tool bridge.",
+          "description": "MCP servers that run in this seat's executor box; its tool bridge serves every other.",
           "items": {
             "type": [
               "string",
@@ -3877,8 +4104,17 @@
     "SandboxProvider": {
       "additionalProperties": false,
       "properties": {
+        "commit_attribution": {
+          "description": "Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "default_max_turns": {
-          "description": "Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped.",
+          "description": "Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",
@@ -3948,7 +4184,7 @@
       "additionalProperties": false,
       "properties": {
         "brief": {
-          "description": "What this step made true about the box, told to the coding agent.",
+          "description": "What this step made true about the box, told to the harness.",
           "type": [
             "string",
             "number",
@@ -4954,6 +5190,10 @@
     },
     "learning": {
       "$ref": "#/$defs/Learning"
+    },
+    "mcp_registry": {
+      "$ref": "#/$defs/MCPRegistry",
+      "description": "The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."
     },
     "mcp_servers": {
       "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",

@@ -339,7 +339,7 @@ describe("reading order", () => {
 });
 
 // LINKS IN WORDS AN AGENT OR A MODEL WROTE: the assistant's answers read
-// `checked` (ASSISTANT_WORDS), and so do the Inbox and a coding run's question
+// `checked` (ASSISTANT_WORDS), and so do the Inbox and an executor's question
 // (CHECKED_WORDS), and the two are one rule. A link is live only where the
 // dashboard built it, from checked parts, to the company's own place; any
 // other address is its words, readable and copyable, and no control.

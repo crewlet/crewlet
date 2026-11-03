@@ -47,7 +47,7 @@ roles:
 // no node running, as the steps say to leave it:
 //
 //   - a `crewlet config` command RUNS, and a `> FILE` after it is written;
-//   - a `crewlet llm` command loads what it loads before the vendor's CLI
+//   - a `crewlet llm` command loads what it loads before the vendor's harness
 //     starts — the company file, and the entry it names — because the sign-in
 //     and the smoke test are the vendor's, and no test calls a vendor;
 //   - `crewlet run` publishes the revision the import marked active, which the
@@ -236,7 +236,7 @@ func (w *stepWalk) command(line string) {
 }
 
 // llm holds a `crewlet llm SUB KEY ...` step to what the command loads before
-// it starts the vendor's CLI ([runLLM]): the company file it names or
+// it starts the vendor's harness ([runLLM]): the company file it names or
 // defaults to, held to the runnable rules, carrying the entry it names, and
 // that entry built — the one entry the command resolves and builds.
 func (w *stepWalk) llm(line string, args []string) {
@@ -266,7 +266,7 @@ func (w *stepWalk) llm(line string, args []string) {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
 	}
-	if _, err := cliAgents(company, keys, resolver); err != nil {
+	if _, err := harnessProviders(company, keys, resolver); err != nil {
 		w.t.Fatalf("`%s`: %v", line, err)
 	}
 	if !slices.Contains(w.signedIn, key) {

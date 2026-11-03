@@ -1,5 +1,5 @@
 /**
- * Test a model: the engine runs the CLI for it as `crewlet llm doctor` does on
+ * Test a model: the engine runs the harness for it as `crewlet llm doctor` does on
  * the host, with a real call, and the page shows each check in words, the
  * first failure's cause and what to do about it.
  *
@@ -39,7 +39,7 @@ export function signInOf(model: ModelView): SignInFacts {
 /**
  * Why a call failed, by its kind, in the words of the credential the model
  * signs in with (design QA Minor 19): a key is a key and a token a token. An
- * auth failure the CLI reported of a pasted key or token it never used
+ * auth failure the harness reported of a pasted key or token it never used
  * (`meaning` "unread") says so, since the vendor did not refuse it.
  */
 export function failureWords(
@@ -50,27 +50,27 @@ export function failureWords(
   const route = signIn.route;
   switch (kind) {
     case "auth": {
-      // ONLY OF A CREDENTIAL THE ENGINE HANDS THE CLI: a host login that
+      // ONLY OF A CREDENTIAL THE ENGINE HANDS THE HARNESS: a host login that
       // says it is not logged in is not logged in.
-      if (meaning === "unread" && route === "api-key") return "The CLI did not use the API key";
+      if (meaning === "unread" && route === "api-key") return "The harness did not use the API key";
       if (meaning === "unread" && route === "token")
-        return "The CLI did not use the subscription token";
+        return "The harness did not use the subscription token";
       if (route === "token" && signIn.expiresAt && Date.parse(signIn.expiresAt) <= Date.now())
         return "The subscription token expired";
       if (route === "api-key") return "The API key was refused";
       if (route === "token") return "The subscription token was refused";
-      if (route === "credentials") return "The CLI's login on the host was refused";
+      if (route === "credentials") return "The harness's login on the host was refused";
       if (route === "env") return "The cloud provider or gateway refused the sign-in";
       return "The sign-in was refused";
     }
     case "rate_limit":
       return "A usage limit stopped the call";
     case "timeout":
-      return "The CLI did not answer in time";
+      return "The harness did not answer in time";
     case "server":
       return "The vendor's service failed";
     case "fatal":
-      return "The CLI stopped with an error";
+      return "The harness stopped with an error";
     case "config":
       return "A setting needs changing";
     default:
@@ -162,7 +162,7 @@ export function TestDialog({
       open
       onClose={onClose}
       title={`Test ${key}`}
-      subtitle="Runs the CLI once with this model's sign-in and settings, on the node that answers. It costs a few tokens."
+      subtitle="Runs the harness once with this model's sign-in and settings, on the node that answers. It costs a few tokens."
       size="md"
       footer={
         <>
@@ -186,7 +186,7 @@ export function TestDialog({
       ) : reading.kind === "running" ? (
         <div className="models-waiting" role="status">
           <Spinner size="sm" />
-          <Text variant="body">Running the CLI. This can take up to three minutes.</Text>
+          <Text variant="body">Running the harness. This can take up to three minutes.</Text>
         </div>
       ) : (
         <div className="models-stack">

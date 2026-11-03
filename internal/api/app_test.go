@@ -15,18 +15,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -80,7 +89,20 @@ func runSuite(m *testing.M) int {
 type fakeRuntime struct {
 	state api.RuntimeState
 	fleet api.FleetState
-	tools []api.ToolInfo
+	tools []queries.ToolRow
+	// builtins are the engine's own tools as a seat is offered them,
+	// answered as they are set.
+	builtins []queries.ToolRow
+	// listings is the fleet's MCP listings the node holds, nil for a node
+	// that keeps no copy.
+	listings queries.MCPListingReader
+	// instances reads a server's instances, nil for none read; restarter
+	// takes a restart, nil until a case sets one.
+	instances queries.MCPInstanceReader
+	restarter mcpapi.Restarter
+	// alarms is the node's latest alarm evaluation, nil for none run.
+	alarms  []statelog.Alarm
+	checker mcpapi.Checker
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -100,7 +122,117 @@ func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
 	return f.state
 }
 
-func (f *fakeRuntime) Tools() []api.ToolInfo { return f.tools }
+func (f *fakeRuntime) Tools() []queries.ToolRow { return f.tools }
+
+func (f *fakeRuntime) Builtins() []queries.ToolRow { return f.builtins }
+
+func (f *fakeRuntime) Listings() queries.MCPListingReader { return f.listings }
+
+func (f *fakeRuntime) MCPInstances() queries.MCPInstanceReader { return f.instances }
+
+// MCPRestarter is the restarter a case set, else one that records every
+// restart it is asked for: what a restart does is held by mcpapi's own suite
+// and the engine's.
+func (f *fakeRuntime) MCPRestarter() mcpapi.Restarter {
+	if f.restarter == nil {
+		return acceptingRestarter{}
+	}
+	return f.restarter
+}
+
+// LatestAlarms is the evaluation a case set, nil (none has run) otherwise.
+func (f *fakeRuntime) LatestAlarms() []statelog.Alarm { return f.alarms }
+
+// MCPChecker is the checker a case set, else one that finds every server
+// serving: what a test does is held by mcpapi's own suite and the engine's.
+func (f *fakeRuntime) MCPChecker() mcpapi.Checker {
+	if f.checker == nil {
+		return passingChecker{}
+	}
+	return f.checker
+}
+
+// MCPChecks reads no server's latest test.
+func (f *fakeRuntime) MCPChecks() queries.MCPCheckReader { return noChecks{} }
+
+// MCPApprovals holds no run: what an approval does is held by mcpapi's own
+// suite.
+func (f *fakeRuntime) MCPApprovals() mcpapi.Approvals { return nil }
+func (f *fakeRuntime) MCPAccepted() api.AcceptedStore { return nil }
+
+// MCPValues is a secret store over a memory fleet of its own: what a stored
+// value does is held by mcpapi's own suite.
+func (f *fakeRuntime) MCPValues() mcpapi.ValueStore {
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": make([]byte, 32)}})
+	if err != nil {
+		panic(err)
+	}
+	return fleetsecrets.New(coordmemory.NewFleet(), cipher)
+}
+
+// MCPSignIns signs nothing in: what a sign-in does is held by mcpapi's own
+// suite and the engine's.
+func (f *fakeRuntime) MCPSignIns() mcpapi.SignIns { return noSignIns{} }
+
+// MCPGrants reads no server's grant, and no address for a sign-in.
+func (f *fakeRuntime) MCPGrants() queries.MCPGrantReader { return noSignIns{} }
+
+// MCPLanding finishes no sign-in: the callback answers as an engine that
+// finishes none.
+func (f *fakeRuntime) MCPLanding() webhooks.MCPSignIns { return nil }
+
+// noSignIns is an engine nobody has signed in to any server through.
+type noSignIns struct{}
+
+func (noSignIns) StartSignIn(context.Context, string, iam.Actor) (mcpapi.SignInAnswer, error) {
+	return mcpapi.SignInAnswer{}, mcpapi.ErrNoOAuth
+}
+
+func (noSignIns) SignIn(context.Context, uuid.UUID) (mcpapi.SignInAnswer, error) {
+	return mcpapi.SignInAnswer{}, mcpapi.ErrNoSignIn
+}
+
+func (noSignIns) SignOut(context.Context, string, iam.Actor) (mcpapi.SignOutAnswer, error) {
+	return mcpapi.SignOutAnswer{}, mcpapi.ErrNotSignedIn
+}
+
+func (noSignIns) MCPGrants(context.Context) ([]coord.MCPGrant, error) { return nil, nil }
+
+func (noSignIns) MCPSignInAddresses() (string, string) { return "", "" }
+
+func (noSignIns) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
+
+func (noSignIns) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
+// passingChecker finds every server serving on one node, and every address
+// asking for no sign-in.
+type passingChecker struct{}
+
+func (passingChecker) CheckServer(_ context.Context, req mcpapi.CheckRequest) (mcpapi.Check, error) {
+	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft, At: time.Now(),
+		By: req.By.Name, Node: "node-1", OK: true,
+		Nodes: []mcpapi.CheckedNode{{Node: "node-1", Answered: true}}}, nil
+}
+
+func (passingChecker) CheckAddress(context.Context, string) mcp.AddressCheck {
+	return mcp.AddressCheck{Auth: catalogue.AuthNone}
+}
+
+// noChecks reads no server's latest test.
+type noChecks struct{}
+
+func (noChecks) LatestMCPCheck(context.Context, string) (coord.MCPCheck, bool, error) {
+	return coord.MCPCheck{}, false, nil
+}
+
+// acceptingRestarter takes every restart it is asked for.
+type acceptingRestarter struct{}
+
+func (acceptingRestarter) RestartServer(_ context.Context, name, seat string, _ iam.Actor) (mcpapi.Restart, error) {
+	return mcpapi.Restart{Server: name, Seat: seat, At: time.Now(), Node: "node-1"}, nil
+}
 
 // Seats answers from the same state Snapshot does, as ShuttingDown does.
 func (f *fakeRuntime) Seats() []string { return f.state.Seats }

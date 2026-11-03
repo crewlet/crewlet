@@ -983,7 +983,7 @@ names — every one but `code_report_check`, `code_purge_unreachable` and
 none. Every seat reads with thirteen of the tools and comments on a change; a
 `review` seat also asks for reviews, reviews and dismisses the findings it
 raised; a seat whose `role.code.access` is `full_access` changes the
-repositories with all twenty-three others; and a seat's coding run checks a repository out into its
+repositories with all twenty-three others; and a seat's executor checks a repository out into its
 box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
@@ -1177,7 +1177,7 @@ Every push a seat lands names the seat and **the turn that made it**: its
 turn, the work item that turn was charged to and the model it ran on, stamped
 by the engine from the call — never read from the commit, which any client
 could have written. `crewlet code status -repo` prints the turn and the work
-item in `BY`, and for a push from a coding box its run and the coding agent
+item in `BY`, and for a push from a coding box its launch and the harness
 the box ran ([`crewlet code status`](../reference/cli.md#crewlet-code-status)):
 
 ```text
@@ -1190,7 +1190,7 @@ and `GET /code/repos/{name}/pushes` answers each with `actor_kind` `agent`,
 the seat's handle as `actor`, how its pack was built (`via`: `engine` for a
 commit its tools built, `git` for its coding box's push) and the run behind it
 under `run` — `turn_id`, `work_backend` and `work_key`, `model`, and for a
-box's push `run_id` and `coding_agent` ([API
+box's push `run_id` and `harness` ([API
 Endpoints](../reference/api-endpoints.md#the-code-host-git-and-code)). Going
 the other way, from a commit to whoever landed it, `code_landed_in`,
 `code_log` and `code_blame` name the push behind each commit ([Which push
@@ -1201,8 +1201,8 @@ landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
 A seat's executor runs in a [box](../concepts/code-sandbox.md), and there it
 also works in a clone: it is a git user of the code host as you are, with a
 credential of its run's own rather than yours or any token's. The engine
-clones each repository the run is given into the coding box before the coding
-agent starts
+clones each repository the run is given into the coding box before its
+harness starts
 ([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)):
 
 - **on the seat's own branch** for the work item its turn is charged to,
@@ -1220,9 +1220,11 @@ that runs seats is given in `CREWLET_BOX_GIT_URL`
 ([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)), and
 every request it makes is admitted by its run's record, never by its token
 alone ([Coding boxes](../concepts/code-host.md#coding-boxes)). The commits it
-makes carry `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item` trailers by
-convention, which a box can drop or forge and nothing on the code host reads:
-the push's record is what says who pushed a commit ([Commit
+makes as itself carry the `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item`
+trailers of [commit attribution](../concepts/code-sandbox.md#commit-attribution)
+unless `providers.sandbox.commit_attribution` is `false` — a convention, which
+a box can drop or forge and nothing on the code host reads: the push's record
+is what says who pushed a commit ([Commit
 trailers](../concepts/code-sandbox.md#commit-trailers)).
 Its pushes are held to the seat's rules above, and when the run ends, the seat
 is told what it pushed from the code host's own record of its pushes — each
@@ -1243,8 +1245,8 @@ own namespace and nobody has set for 14 days** is deleted by the
 lifecycle](../concepts/code-host.md#the-ref-lifecycle)). A branch a person
 pushed last, the repository's default branch, a live change's source or target
 and a protected branch are never deleted; nor is a branch a seat's work still
-depends on — one a live turn read or wrote with a code tool, one a coding
-run's launch gave its box, or one its box pushed — for as long as that turn,
+depends on — one a live turn read or wrote with a code tool, one an
+executor's launch gave its box, or one its box pushed — for as long as that turn,
 or the run it is waiting on, has not ended, however long the run takes. A
 turn that reads a branch nobody has set for nearly 14 days records its hold
 on the repository, so the read and a deletion already under way are ordered:

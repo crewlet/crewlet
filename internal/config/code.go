@@ -903,7 +903,7 @@ const DefaultCodeBranch = "main"
 
 // CodeVisibility is who among the SEATS may read a repository. A person — a
 // bound or unbound API token — reads every repository whatever it says
-// (ADR-0081): visibility narrows the seats an AI company runs, never the
+// (ADR-0088): visibility narrows the seats an AI company runs, never the
 // people who run it.
 type CodeVisibility string
 
@@ -1746,7 +1746,7 @@ func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *
 }
 
 // mirrorSeatReads reports whether seat reads the repository r, as the code
-// domain grants a read (internal/code's GrantOf, ADR-0081): a PERSON'S seat
+// domain grants a read (internal/code's GrantOf, ADR-0088): a PERSON'S seat
 // reads every repository, and an agent's every one visible to the company —
 // every tier this document can spell reads, so no tier narrows it — and one
 // visible to its owner's unit alone where the chart relates the seat to the
@@ -2259,7 +2259,7 @@ func (c *Company) codeWarnings() []Warning {
 	o, _ := c.organization()
 	units := o.Index()
 	// EVERY HUMAN SEAT IS A PERSON WHO MAY MERGE: a person maintains every
-	// repository (ADR-0078), so the merge-rate advisory counts them on every
+	// repository (ADR-0085), so the merge-rate advisory counts them on every
 	// queue — once, here, rather than once a rule.
 	persons := 0
 	for s := range o.AllRoles() {
@@ -2316,7 +2316,7 @@ func (c *Company) codeWarnings() []Warning {
 // WHAT IT SAYS IS WHAT THE CELL IS: a `direct` box runs as the engine's own
 // user, so it reads every repository a git node's cache holds and, on ANY
 // node, the Tier A keyring every run token's key is derived from — so it can
-// mint the token of any live coding run and push as that run's seat. Neither
+// mint the token of any live executor run and push as that run's seat. Neither
 // a repository's `visibility: unit` nor a run's grants bind it. Said whatever
 // the repositories' visibility, because the impersonation half holds on a
 // company whose every repository is `company`.
@@ -2336,7 +2336,7 @@ func (c *Company) directBoxWarnings() []Warning {
 	}
 	const reads = "a `direct` box runs as the engine's own user: it can read every repository cached on a " +
 		"git node and, on any node, the Tier A keyring that signs run tokens, so it can mint the token of " +
-		"ANY live coding run and push as that run's seat, and a repository's `visibility: unit` and a " +
+		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
 	var out []Warning
@@ -2358,11 +2358,11 @@ func (c *Company) directBoxWarnings() []Warning {
 		}
 		entries[box.Executor] = true
 		out = append(out, advisory(at(entryPath(box.Executor), "run_in"),
-			reads+"the coding runs of the seats this entry launches on"+remedy))
+			reads+"the executors of the seats this entry launches on"+remedy))
 	}
 	if inherited {
 		out = append(out, advisory(field("providers.sandbox.default_run_in"),
-			reads+"the coding runs of the seats that take this default"+remedy))
+			reads+"the executors of the seats that take this default"+remedy))
 	}
 	return out
 }

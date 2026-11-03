@@ -55,7 +55,7 @@ func (c *capture) fallbacks() []*types.ProviderFallback {
 }
 
 // reviewing is a provider whose reviewer answers in prose before it decides,
-// so its phase takes two CLI runs — the prose one and the corrected one — and
+// so its phase takes two harness runs — the prose one and the corrected one — and
 // a chain in front of it is walked on more than one.
 func reviewing(t *testing.T) *scriptedProvider {
 	t.Helper()
@@ -79,7 +79,7 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 	}
 
 	// ONE PER PROVIDER CALL, not one per phase: a chain is walked on every
-	// CLI run, so a benched member is a hand-off on every run. Counting them
+	// harness run, so a benched member is a hand-off on every run. Counting them
 	// per phase would report one flap where there were three, which is the
 	// difference between a blip and a provider to take out of the chain.
 	runs := len(prov.requestsFor("review"))
@@ -281,11 +281,11 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("measured %d/%d bytes, provider received %d/%d",
 			m.SystemBytes, m.UserBytes, system, user)
 	}
-	// AND THE TOOL ARRAY, which the CLI lists over MCP and hands its model
+	// AND THE TOOL ARRAY, which the harness lists over MCP and hands its model
 	// with every request, billed as input. The meter was blind to it: a
 	// measured turn reported ~6,900 tokens against the provider's 205,000,
 	// and this row is what "is the prompt getting smaller" is answered from.
-	// Read off what the CLI LISTED when it opened the run — the array as it
+	// Read off what the harness LISTED when it opened the run — the array as it
 	// reached the model, not as the engine meant to send it.
 	offered := run.offered[0]
 	tools := toolArrayBytes(t, offered)
@@ -312,7 +312,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 }
 
 // toolArrayBytes is the compact JSON the engine measures a tool array as,
-// rebuilt from what the CLI listed.
+// rebuilt from what the harness listed.
 //
 // Restated here rather than reaching for the engine's own unexported helper:
 // this suite is the one thing holding that helper's answer to what the

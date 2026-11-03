@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -80,7 +81,7 @@ func schema(t *testing.T) (columns map[string][]string, leading map[string][]str
 
 // faults is everything the gate finds wrong with one declaration against the
 // schema, as messages naming it: one that does not validate — a missing or
-// unknown standing among the reasons (ADR-0074) — a table the schema lacks, a
+// unknown standing among the reasons (ADR-0081) — a table the schema lacks, a
 // key column not called [references.ObjectColumn], a declared column the table
 // does not have, and no index leading with the key.
 //
@@ -113,7 +114,7 @@ func faults(ref objstore.ReferenceTable, columns, leading map[string][]string) [
 }
 
 // EVERY TABLE THAT NAMES AN OBJECT IS DECLARED, AND EVERY DECLARATION IS A
-// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0074's: every declaration
+// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0081's: every declaration
 // states its standing.
 //
 // The failure it exists for is silent and destroys data: a table naming
@@ -177,7 +178,7 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	}
 }
 
-// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0075). A backup
+// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0082). A backup
 // restores its store copy and replays the declaring domain's log from the
 // copy's position — and a newer build applies what the copy's applier deferred
 // — so it owes every object a record of either names, and it learns how a
@@ -260,6 +261,8 @@ var standings = map[string]standing{
 		"the adopted brand's stylesheet, logos and faces, which a version that pinned it serves"},
 	"assistant_files": {objstore.Required,
 		"an image a person attached to a question or a file a run delivered to them, which nothing builds again"},
+	"executor_sessions": {objstore.Required,
+		"a seat's executor session, the harness's own transcript its next turn continues, which nothing builds again — the run that wrote it is gone"},
 }
 
 // standingFaults is everything wrong with how declared's standings are
@@ -280,7 +283,7 @@ func standingFaults(declared []objstore.ReferenceTable, reviewed map[string]stan
 		case !ok:
 			out = append(out, fmt.Sprintf("%s is declared %s and has no row in standings "+
 				"(internal/objstore/references/references_test.go) — a standing is a reviewed "+
-				"decision (ADR-0074): add the table, the standing it states and why", ref.Table,
+				"decision (ADR-0081): add the table, the standing it states and why", ref.Table,
 				ref.Standing))
 		case r.is != ref.Standing:
 			out = append(out, fmt.Sprintf("%s is declared %s and reviewed as %s (%s) — a "+
@@ -302,7 +305,7 @@ func standingFaults(declared []objstore.ReferenceTable, reviewed map[string]stan
 }
 
 // EVERY DECLARATION STATES ITS STANDING, AND THE STANDING IS A REVIEWED
-// DECISION (ADR-0074). Validate refuses a declaration that states none, but
+// DECISION (ADR-0081). Validate refuses a declaration that states none, but
 // any of the three passes it, and each is a different promise: a Required
 // table's objects are audited and carried by every backup, a Retired one's are
 // kept for its domain's grace and then let go, and a Derived one's are kept
@@ -414,7 +417,8 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 // a part of a published layer of code.LayerPartBytes, a failed check's log of
 // code.MaxCheckLogBytes, an artifact's file or asset of
 // artifacts.MaxTextFileBytes, an assistant conversation's file of
-// wire.FileMaxBytes) at the objstore.MiBPace floor — or a legal
+// wire.FileMaxBytes, a sealed executor session of
+// executordomain.SealedMaxBytes) at the objstore.MiBPace floor — or a legal
 // upload would finish only to be refused.
 //
 // The controls show the first inequality is held to two nodes' clocks: a grace
@@ -448,6 +452,10 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 		{"code.MaxCheckLogBytes", code.MaxCheckLogBytes},
 		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes},
 		{"wire.FileMaxBytes", wire.FileMaxBytes},
+		// A SESSION ON ITS SEALED BYTES: what a capture uploads is the
+		// archive sealed, and its key is minted before the first byte, so
+		// the whole upload has to land inside the bound too.
+		{"executordomain.SealedMaxBytes", executordomain.SealedMaxBytes},
 	} {
 		slowest := objstore.PaceFor(largest.bytes)
 		if slowest >= objstore.RecordWithin {
@@ -474,7 +482,7 @@ func uploadFault(recordWithin, grace time.Duration) string {
 		"name a key the collector deletes", recordWithin, twoClocks, grace)
 }
 
-// retirement is what a RETIRED declaration owes (ADR-0074), reviewed here,
+// retirement is what a RETIRED declaration owes (ADR-0081), reviewed here,
 // beside the gate that holds it: a retired table nobody sweeps keeps its
 // objects for ever, and one whose grace is shorter than the longest read of
 // what its rows name deletes the object under that read. Each field is the
@@ -506,7 +514,7 @@ type retirement struct {
 // declaration matches, so the list can be neither short nor stale.
 var retirements = map[string]retirement{
 	// THE CODE HOST'S RETIRED PACKS: a day, over the 21 h 21 min a clone of
-	// the largest bundle a row can name may read it (ADR-0083), removed by
+	// the largest bundle a row can name may read it (ADR-0090), removed by
 	// the code-retention duty's retire_sweep records and held to that by
 	// internal/engine.TestARetirementIsSweptByARecordTheEngineRuns.
 	code.RetiredPackReferences.Table: {grace: code.RetireGrace, largest: code.MaxPackBytes,
@@ -537,7 +545,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		r, ok := reviewed[ref.Table]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s is declared objstore.Retired and has no entry in "+
-				"retirements (internal/objstore/references/references_test.go) — ADR-0074 holds "+
+				"retirements (internal/objstore/references/references_test.go) — ADR-0081 holds "+
 				"a retired table to a sweep that deletes its rows and a grace that outlasts the "+
 				"longest read of what they name: add its domain's grace, the largest object a "+
 				"row names and what sweeps the rows — a maintenance job, listed in "+
@@ -548,11 +556,11 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		}
 		if strings.TrimSpace(r.sweep) == "" {
 			out = append(out, fmt.Sprintf("%s is retired and names no job that sweeps its rows — "+
-				"a retired row nobody deletes keeps its object for ever (ADR-0074)", ref.Table))
+				"a retired row nobody deletes keeps its object for ever (ADR-0081)", ref.Table))
 		}
 		if r.largest <= 0 {
 			out = append(out, fmt.Sprintf("%s is retired and states no largest object (%d bytes), "+
-				"so nothing bounds the read its grace must outlast (ADR-0074)", ref.Table, r.largest))
+				"so nothing bounds the read its grace must outlast (ADR-0081)", ref.Table, r.largest))
 			continue
 		}
 		if longest := objstore.ReadBudget(r.largest); r.grace <= longest+twoClocks {
@@ -560,7 +568,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 				"largest object (%d bytes) may take objstore.ReadBudget = %v, plus a clock skew "+
 				"of up to %v (twice objstore.AssumedClockSkew) between the broker stamping the "+
 				"row and the node sweeping it — the object can be deleted under a read still "+
-				"fetching it (ADR-0074)", ref.Table, r.grace, r.largest, longest, twoClocks))
+				"fetching it (ADR-0081)", ref.Table, r.grace, r.largest, longest, twoClocks))
 		}
 	}
 	for table := range reviewed {
@@ -574,7 +582,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 }
 
 // A RETIRED TABLE IS SWEPT, AND OUTLIVES ITS LONGEST READ — the two
-// obligations ADR-0074 places on a retired declaration, which no other gate
+// obligations ADR-0081 places on a retired declaration, which no other gate
 // can see: the collector deletes an object the moment nothing names it, so a
 // retired row nobody deletes keeps its object for ever, and one deleted before
 // the longest read of its object ends deletes the object under that read.

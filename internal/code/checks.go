@@ -143,7 +143,7 @@ const CheckBoxGrace = sandbox.DefaultSetupTimeout
 // CheckUser is the HTTP Basic user name a check's box presents on the box
 // routes, its password its check's token: beside internal/code/host's
 // BoxUser, the second of the two a box route reads, and what tells a check's
-// box from a coding run's before either is verified.
+// box from an executor's before either is verified.
 //
 // SPELLED HERE, ONCE, for its two sides: the check runner (internal/code/
 // checkrun), which hands it to the box's git, and the code host, which admits
@@ -617,7 +617,7 @@ type CheckQueued struct {
 	// Invalid records the attempt ERRORED at its dispatch rather than queued
 	// — a check the target's gate requires, which its checks file defines
 	// in no form that runs ([CheckReasonDefsInvalid]), at a change's head
-	// or at a protected target's tip (ADR-0091): the file unparsable,
+	// or at a protected target's tip (ADR-0098): the file unparsable,
 	// or something at its path that is no file — and says why, at most
 	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
 	// carries no definition, there being none that runs.

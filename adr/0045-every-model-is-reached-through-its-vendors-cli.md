@@ -13,7 +13,7 @@
 entry names a coding CLI — Claude Code for Anthropic's models, on a plan or an
 API key; Codex for OpenAI's; OpenCode for open models, on any provider it
 speaks to or a local server — and every model call runs that CLI, through
-`internal/providers/llm/cliagent`. A second vendor or a second model is a
+`internal/providers/llm/harness`. A second vendor or a second model is a
 second entry, never a second backend.
 
 **One vendor SDK stays, for one thing:** `github.com/openai/openai-go` is the
@@ -42,8 +42,8 @@ rest.
 ## What this does not decide
 
 It does not decide **which CLIs are supported**: that is the profile table in
-`internal/providers/llm/cliagent/cliprofile`, and adding one is a profile, not
+`internal/providers/llm/harness/harnessprofile`, and adding one is a profile, not
 a backend. It does not decide **how a CLI is driven** — on this host or in a
-box, the per-seat homes — which is `cliagent`'s own doc, nor how a phase's
+box, the per-seat homes — which is `harness`'s own doc, nor how a phase's
 tools reach it, which is [ADR-0049](0049-a-phases-tools-reach-its-cli-as-one-mcp-server.md). And it does not touch
 **embeddings**, whose client stays an SDK for the reason above.

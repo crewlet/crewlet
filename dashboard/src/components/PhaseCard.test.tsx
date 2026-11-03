@@ -30,6 +30,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     workKey: "wk-1",
     phase: "execute",
     iteration: 1,
+    launch: false,
     role: "Support Engineer",
     agentId: "",
     model: "scripted",
@@ -62,10 +63,10 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     launchId: "",
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -135,7 +136,7 @@ describe("a settled phase's zero is a number", () => {
    * ABSENT AND ZERO ARE DIFFERENT FACTS, and a dash claims the first about the
    * second.
    *
-   * A phase run on a subscription CLI backend reports no usage at all, and one
+   * A phase run on a subscription harness backend reports no usage at all, and one
    * the engine stopped before its first call came back has a `total_tokens` of
    * 0 on a record that is settled. `totalTokens ? … : "—"` printed "not
    * recorded" for both, on the card an operator opens precisely to find out
@@ -515,28 +516,102 @@ describe("a tool call's arguments", () => {
   });
 });
 
-// A CODING RUN IS NOT A MODEL CALL, and its card says what it is. It has no
-// rounds because the engine drove none, so its response is the report the run
-// wrote back — and the run's activity log, the whole account of what an agent
-// with no telemetry did, has to be reachable from the card.
-describe("a coding run's card", () => {
-  const RUN = phase({
-    key: "turn-1|sandbox|1|job-1",
-    phase: "sandbox",
-    backend: "sandbox",
-    codingAgent: "claude-code",
+// A LAUNCH IS NOT A MODEL CALL, and the card says what it is. It has no rounds
+// because the engine drove none, so its response is the report the run wrote
+// back — and the run's activity log, the whole account of what an agent with
+// no telemetry did, has to be reachable from the card. It is the executor
+// round's work, so the round's card draws it INSIDE: one card per round, its
+// launches in it.
+describe("an executor round's launches", () => {
+  const LAUNCH = phase({
+    key: "turn-1|execute|1|job-1",
+    launch: true,
+    harness: "claude-code",
     launchId: "job-1",
+    model: "claude-sonnet-5",
     response: "Fixed the flake and opened the pull request.",
     transcript: "[tool] bash: git clone\n[tool] bash: go test ./...",
+    inputTokens: 9_000,
+    outputTokens: 700,
+    totalTokens: 9_700,
+    harnessTurns: 31,
+    at: "2026-09-02T10:05:00Z",
   });
 
-  test("shows the report and the activity", () => {
-    render(<PhaseCard record={RUN} defaultOpen />);
+  test("the round's card holds its launch's report and activity", () => {
+    render(
+      <PhaseCard record={phase({ harness: "claude-code" })} launches={[LAUNCH]} defaultOpen />,
+    );
     expect(screen.getByText("Report")).toBeDefined();
     expect(screen.getByText(/Fixed the flake/)).toBeDefined();
+    expect(screen.getByText("31 turns")).toBeDefined();
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
+  });
+
+  // THE ROUND'S FIGURE IS WHAT THE ROUND SPENT. The executor's record states
+  // its round with no tokens — the engine made no model call for it — so a
+  // card that printed the record's own figure read 0 over a run that spent
+  // thousands, beside a turn total counting them.
+  //
+  // Mutation: print the record's own `totalTokens` in the header, and the
+  // round reads 0.
+  test("the round's card counts its launches' tokens as the round's", () => {
+    const second = phase({
+      ...LAUNCH,
+      key: "turn-1|execute|1|job-2",
+      launchId: "job-2",
+      totalTokens: 200,
+    });
+    render(<PhaseCard record={phase()} launches={[LAUNCH, second]} />);
+    expect(screen.getByTitle("total tokens, its launches included").textContent).toBe("9,900");
+  });
+
+  // A LAUNCH WHOSE ROUND HAS NO RECORD IN HAND is drawn on its own, and says
+  // the same things: its report and its activity, under its round's phase.
+  test("a launch drawn on its own shows its report and activity", () => {
+    render(<PhaseCard record={LAUNCH} defaultOpen />);
+    expect(screen.getByText("launch job-1")).toBeDefined();
+    expect(screen.getByText(/Fixed the flake/)).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Activity/ })).toBeDefined();
+  });
+
+  // A LAUNCH THAT DID NOT FINISH SAYS HOW: one that failed by its error, and
+  // one that stopped to ask, was stopped or was cut off by its notes — inside
+  // the round, beside the launch it is about.
+  test("a launch that did not finish says why inside its round", () => {
+    const asked = phase({ ...LAUNCH, notes: "stopped to ask: which branch?" });
+    const broke = phase({
+      ...LAUNCH,
+      key: "turn-1|execute|1|job-2",
+      launchId: "job-2",
+      failed: true,
+      error: "the harness exited with status 1",
+      errorKind: "launch_failed",
+    });
+    render(<PhaseCard record={phase()} launches={[asked, broke]} defaultOpen />);
+    expect(screen.getByText("stopped to ask: which branch?")).toBeDefined();
+    expect(screen.getByText("the harness exited with status 1")).toBeDefined();
+  });
+
+  // THE BADGE IS THE RUN'S OWN FACT: the card names the harness wherever the
+  // record names a run — its harness, or the box it ran in — and badges nothing
+  // that ran on the engine host. No field says where a phase ran.
+  //
+  // Mutation: badge only a launch, and the executor that collected a run
+  // loses its badge; drop the box half, and a record naming only its box
+  // does.
+  test("badges the run a record names, and nothing that ran on the host", () => {
+    render(<PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} />);
+    expect(screen.getByText("claude-code")).toBeDefined();
+    cleanup();
+    render(<PhaseCard record={phase({ sandboxId: "box-7" })} />);
+    expect(screen.getByText("sandbox")).toBeDefined();
+    cleanup();
+    render(<PhaseCard record={phase({ key: "turn-1|review|1", phase: "review" })} />);
+    expect(screen.queryByText("sandbox")).toBeNull();
+    expect(screen.queryByText("claude-code")).toBeNull();
   });
 
   // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's
@@ -549,13 +624,16 @@ describe("a coding run's card", () => {
   test("counts what the record left out of a long run's activity", () => {
     render(
       <PhaseCard
-        record={phase({
-          ...RUN,
-          transcript:
-            "[tool] Bash: go test ./...\n(1200 line(s), 380 KiB, left out here)\nAll green.",
-          transcriptElidedLines: 1200,
-          transcriptElidedBytes: 389_120,
-        })}
+        record={phase()}
+        launches={[
+          phase({
+            ...LAUNCH,
+            transcript:
+              "[tool] Bash: go test ./...\n(1200 line(s), 380 KiB, left out here)\nAll green.",
+            transcriptElidedLines: 1200,
+            transcriptElidedBytes: 389_120,
+          }),
+        ]}
         defaultOpen
       />,
     );
@@ -592,11 +670,11 @@ describe("the link to the phase's own event", () => {
   });
 });
 
-// A PARKED TURN'S CALL IS SILENT ON PURPOSE. The executor suspended into a
-// detached coding run, and its round does not move until the run comes back —
-// which can be hours, or days while a question waits on a person. The card
-// used to read only its own `at`, so every legitimately silent run was drawn
-// stalled.
+// A PARKED TURN'S CALL IS SILENT ON PURPOSE. The executor launched in its box,
+// and its round does not move until that launch is collected — which can be
+// hours, or days while a question waits on a person. The card used to read
+// only its own `at`, so every executor legitimately silent in its box was
+// drawn stalled.
 describe("a live call's staleness", () => {
   const OLD = { live: true, at: "2020-01-01T00:00:00Z", startedAt: "2020-01-01T00:00:00Z" };
 
@@ -605,10 +683,10 @@ describe("a live call's staleness", () => {
     expect(screen.getByText("no update in 10m")).toBeDefined();
   });
 
-  test("a call on a turn parked on its coding run is not", () => {
+  test("a call on a turn whose executor is running in its box is not", () => {
     render(<PhaseCard record={phase({ ...OLD, stage: "parked" })} />);
     expect(screen.queryByText(/no update in/)).toBeNull();
-    const tag = screen.getByText("parked on its coding run").closest(".crewlet-tag");
+    const tag = screen.getByText("running in its box").closest(".crewlet-tag");
     // Drawn as the work in progress it is — never the stalled danger, nor the
     // amber that is kept for a seat that needs a person.
     expect(tag?.className).toContain("crewlet-tag--info");
@@ -715,7 +793,7 @@ describe("a round that answered in prose", () => {
 });
 
 /**
- * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, a coding run's
+ * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, an executor's
  * report — read by a model's habits rather than a document's.
  */
 describe("a model's words", () => {
@@ -765,13 +843,12 @@ describe("a model's words", () => {
     expect(ledger.querySelector(".md-heading")?.textContent).toBe("Summary");
   });
 
-  test("a coding run's report renders the same way", () => {
+  test("an executor's report renders the same way", () => {
     render(
       <PhaseCard
         record={phase({
-          key: "turn-1|sandbox|1|job-1",
-          phase: "sandbox",
-          backend: "sandbox",
+          key: "turn-1|execute|1|job-1",
+          launch: true,
           launchId: "job-1",
           response: "Opened **the pull request**.",
         })}
@@ -919,14 +996,14 @@ describe("a failed phase", () => {
         record={phase({
           failed: true,
           errorKind: "rate_limit",
-          error: "cli-agent/claude-code: sitting out until 14:05",
+          error: "harness/claude-code: sitting out until 14:05",
         })}
         defaultOpen
       />,
     );
     expect(container.querySelector(".phase-head")?.textContent).toContain("Rate limited");
     expect(container.querySelector(".phase-body")?.textContent).toContain(
-      "cli-agent/claude-code: sitting out until 14:05",
+      "harness/claude-code: sitting out until 14:05",
     );
     cleanup();
     const { container: whole } = render(<PhaseCard record={phase()} defaultOpen />);
@@ -1043,7 +1120,7 @@ describe("a publishing call", () => {
 
 /**
  * EVERY CALL IN FLIGHT IS IN ITS ROUND, named running, after the calls of that
- * round that have answered. A CLI runs a response's calls side by side, so a
+ * round that have answered. A harness runs a response's calls side by side, so a
  * round can have several out at once; a card that drew none of them showed a
  * model's words and nothing after them for as long as the calls took, which
  * reads as a seat that stalled. And a call that answers is the SAME row, open
@@ -1133,16 +1210,16 @@ describe("the calls a running phase is making", () => {
 });
 
 /**
- * A PHASE'S CLI RUNS HEAD THE ROUNDS EACH MADE: which entry served it, the
+ * A PHASE'S HARNESS RUNS HEAD THE ROUNDS EACH MADE: which entry served it, the
  * rounds it made, how it ended — filed by the round span the run names. A run
- * whose CLI showed no requests says its one round is the whole run; a run that
+ * whose harness showed no requests says its one round is the whole run; a run that
  * made none says so; and on a live phase the rounds past every ended run are
  * the run in flight's.
  *
  * Mutation: file every round under the first run, drop a run that made no
  * request, or stop heading a live phase's rounds, and this fails.
  */
-describe("a phase's CLI runs", () => {
+describe("a phase's harness runs", () => {
   const narrated = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
       round: i + 1,
@@ -1187,11 +1264,11 @@ describe("a phase's CLI runs", () => {
     const runs = [...container.querySelectorAll(".run")];
     expect(runs.map(roundsIn)).toEqual([["1", "2"], [], ["3"], ["4"]]);
     const heads = runs.map((r) => r.querySelector(".run-head")?.textContent ?? "");
-    expect(heads[0]).toMatch(/CLI run 1.*claude-max.*rounds 1–2.*the engine ended it/);
-    expect(heads[1]).toMatch(/CLI run 2.*codex.*no request.*failed/);
-    expect(heads[3]).toMatch(/CLI run 4.*round 4.*turn cap/);
+    expect(heads[0]).toMatch(/Harness run 1.*claude-max.*rounds 1–2.*the engine ended it/);
+    expect(heads[1]).toMatch(/Harness run 2.*codex.*no request.*failed/);
+    expect(heads[3]).toMatch(/Harness run 4.*round 4.*turn cap/);
     expect(runs[2]!.textContent).toContain("the whole run is one round");
-    // THE CONTROL: a run whose CLI showed its requests says nothing of it.
+    // THE CONTROL: a run whose harness showed its requests says nothing of it.
     expect(runs[0]!.textContent).not.toContain("the whole run is one round");
   });
 
@@ -1209,7 +1286,7 @@ describe("a phase's CLI runs", () => {
     );
     const runs = [...container.querySelectorAll(".run")];
     expect(runs.map(roundsIn)).toEqual([["1", "2"], ["3"]]);
-    expect(runs[1]!.querySelector(".run-head")?.textContent).toMatch(/CLI run 2.*running/);
+    expect(runs[1]!.querySelector(".run-head")?.textContent).toMatch(/Harness run 2.*running/);
   });
 
   test("a live phase whose first run has not ended is headed as that run", () => {
@@ -1219,7 +1296,7 @@ describe("a phase's CLI runs", () => {
         defaultOpen
       />,
     );
-    expect(container.querySelector(".run-head")?.textContent).toMatch(/CLI run 1.*running/);
+    expect(container.querySelector(".run-head")?.textContent).toMatch(/Harness run 1.*running/);
   });
 
   // THE CONTROL: a settled phase that recorded no runs draws its rounds as
@@ -1232,13 +1309,13 @@ describe("a phase's CLI runs", () => {
 });
 
 /**
- * A ROUND THE CLI'S OWN TURN CAP ENDED SAYS SO under its words — the one stop
+ * A ROUND THE HARNESS'S OWN TURN CAP ENDED SAYS SO under its words — the one stop
  * reason that ends a round unfinished (`contract/stops.ts`). The CONTROL is a
  * round that ended because its model was done, which says nothing.
  *
  * Mutation: drop the note, or draw it on every round, and this fails.
  */
-describe("a round the CLI's turn cap ended", () => {
+describe("a round the harness's turn cap ended", () => {
   test("says the cap ended its run with the model still working", () => {
     const timed = (round: number, stopReason: string) => ({
       round,
@@ -1263,7 +1340,7 @@ describe("a round the CLI's turn cap ended", () => {
     const [first, second] = [...container.querySelectorAll(".round")];
     expect(first!.querySelector(".round-note")).toBeNull();
     expect(second!.querySelector(".round-note.caution")?.textContent).toMatch(
-      /CLI’s own turn cap ended its run here, with the model still working/,
+      /harness’s own turn cap ended its run here, with the model still working/,
     );
   });
 });

@@ -504,6 +504,18 @@ type ChannelsQuery struct {
 	// is every room of the viewer's; the viewer's own handle is the same.
 	With string
 
+	// Starred is the rooms the viewer starred, from the same read state as
+	// [ChannelsQuery.Cursors]. A star is a person keeping a room in the
+	// list they work out of, so a starred room they may READ and are not in
+	// is listed beside the rooms they are in ([ChannelSummary.Member] says
+	// which): a team's room is readable by every seat and joined only by
+	// being in the team, and before this a star on it kept it nowhere.
+	// A starred room the viewer may not read (a private room they left) is
+	// not listed and not counted, exactly as a room that does not exist.
+	// Ignored with [ChannelsQuery.With], whose rooms are memberships two
+	// seats share.
+	Starred []string
+
 	// Limit is the most rooms the listing answers, the most recently
 	// active first, cut from the one list sorted by activity and never
 	// paged; zero is [MaxRailChannels]. A rail is answered whole, each room
@@ -554,6 +566,12 @@ type ChannelSummary struct {
 	// room reaches them. It is per member rather than per room, which is
 	// why it is here rather than on the channel.
 	FollowAll bool `json:"follow_all,omitempty"`
+
+	// Member says the viewer is in the room. False only for a room listed
+	// because they starred it ([ChannelsQuery.Starred]), which a screen
+	// must not take for a membership: no message reaches them from it
+	// unless it names them.
+	Member bool `json:"member"`
 
 	// Unread is how many room posts sit above this viewer's cursor, counted
 	// to [UnreadLimit]. A reply in a thread is not one: it is read in its
@@ -898,7 +916,16 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	if err != nil {
 		return ChannelListing{}, err
 	}
+	member := make(map[string]bool, len(order))
+	for _, id := range order {
+		member[id] = true
+	}
+	if strings.TrimSpace(q.With) == "" {
+		order = append(order, starredBeside(q.Starred, member)...)
+	}
 	if len(order) > MaxRailChannels {
+		// THE MEMBERSHIPS FIRST: they lead the list, so a cut takes the
+		// rooms only starred before any room the person is in.
 		out.Truncated = true
 		order = order[:MaxRailChannels]
 	}
@@ -912,7 +939,8 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	out.Unreadable = undecodable
 	direct := make([]string, 0, len(rooms))
 	for _, entry := range rooms {
-		if !Visible(who, entry.room, true) {
+		id := entry.room.ID
+		if !entry.room.Kind.Valid() {
 			// A ROOM THIS BUILD CANNOT CLASSIFY IS NOT SHOWN, and it
 			// is counted with the documents it cannot decode: both
 			// are a newer peer's row that this build must not
@@ -920,10 +948,17 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 			out.Unreadable++
 			continue
 		}
-		id := entry.room.ID
+		if !Visible(who, entry.room, member[id]) {
+			// A STARRED ROOM THIS VIEWER MAY NOT READ is not there, and
+			// is not counted: a private room they were taken out of
+			// answers as a room that does not exist, here as in every
+			// read. A membership is always visible, so only a star
+			// reaches this.
+			continue
+		}
 		summary := ChannelSummary{
 			Channel: entry.room, Revision: entry.revision,
-			FollowAll: follow[id],
+			FollowAll: follow[id], Member: member[id],
 		}
 		summary.Last, err = lastMessage(ctx, tx, id)
 		if err != nil {
@@ -1007,6 +1042,28 @@ func railMemberships(ctx context.Context, tx *sql.Tx, who, with string) (
 		return nil, nil, fmt.Errorf("chatlet: read %s's rooms: %w", who, err)
 	}
 	return follow, order, nil
+}
+
+// starredBeside is the starred rooms a rail lists beside the viewer's own: each
+// once, in id order, leaving out the rooms they are already in. At most
+// [MaxRailChannels], which is the most one rail lists at all; the read state
+// that holds the stars bounds them far below the size of a statement.
+func starredBeside(starred []string, member map[string]bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, id := range starred {
+		id = strings.TrimSpace(id)
+		if id == "" || member[id] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	if len(out) > MaxRailChannels {
+		out = out[:MaxRailChannels]
+	}
+	return out
 }
 
 // railRoom is one room's row as the rail read it.
@@ -1598,6 +1655,77 @@ type MessageView struct {
 	// Thread is the replies under a room post, nil on a reply, on a room
 	// event and on a post nobody answered.
 	Thread *ThreadSummary `json:"thread,omitempty"`
+
+	// Answered is which of the seats a person's post reached
+	// ([Message.Reach]) have answered it, in the order they answered:
+	// spoken in its thread, or anywhere after it in a direct
+	// conversation. Empty while nobody has, and on every message with no
+	// reach.
+	//
+	// READ BESIDE THE PAGE from `chat_receipts`, which the applier marks as
+	// the answers land, because whether a seat answered is a fact about
+	// LATER messages and the document is the post's own.
+	Answered []Answer `json:"answered,omitempty"`
+
+	// Delivery is where a PERSON'S post stands with the agents it reached,
+	// read from its reach and its answers: [DeliveryUnknown] for one whose
+	// reach was never recorded, and empty on everything that is not a
+	// person's post (an agent's message, a room event). One word a reader
+	// can filter or badge on, beside the two lists it is read from.
+	Delivery Delivery `json:"delivery,omitempty"`
+}
+
+// Delivery is where a person's post stands with the agents it reached.
+type Delivery string
+
+const (
+	// DeliveryUnknown is a person's post whose reach nobody recorded: one
+	// stored before posts recorded it. NOT [DeliveryNoAgent], which is a
+	// recorded fact that nobody was asked; a reader shows no receipt for
+	// this one rather than claim the post reached nobody.
+	DeliveryUnknown Delivery = "unknown"
+
+	// DeliveryNoAgent is a post that reached no agent: nobody was asked.
+	DeliveryNoAgent Delivery = "no_agent"
+
+	// DeliveryWaiting is a post that reached agents, none of whom has
+	// answered yet.
+	DeliveryWaiting Delivery = "waiting"
+
+	// DeliveryPartlyAnswered is a post some of the agents it reached have
+	// answered, and some have not.
+	DeliveryPartlyAnswered Delivery = "partly_answered"
+
+	// DeliveryAnswered is a post every agent it reached has answered.
+	DeliveryAnswered Delivery = "answered"
+)
+
+// deliveryOf is the state of a message with these answers: a person's post
+// by its reach, and nothing for any other message.
+func deliveryOf(m Message, answered []Answer) Delivery {
+	r := m.Reach
+	switch {
+	case m.AuthorKind != AuthorHuman || m.Event != nil:
+		return ""
+	case r == nil:
+		return DeliveryUnknown
+	case len(r.Recipients) == 0:
+		return DeliveryNoAgent
+	case len(answered) == 0:
+		return DeliveryWaiting
+	case len(answered) < len(r.Recipients):
+		return DeliveryPartlyAnswered
+	}
+	return DeliveryAnswered
+}
+
+// Answer is a seat's answer to a message it was reached by.
+type Answer struct {
+	Handle string `json:"handle"`
+
+	// MessageID is the message that answered, and At its broker instant.
+	MessageID string    `json:"message_id"`
+	At        time.Time `json:"at"`
 }
 
 // ThreadSummary is a root's replies, as a transcript shows them under it.
@@ -2070,7 +2198,58 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	if err := attachReactions(ctx, tx, who, out.views, ids); err != nil {
 		return messagePage{}, err
 	}
+	if err := attachAnswers(ctx, tx, out.views); err != nil {
+		return messagePage{}, err
+	}
+	for i := range out.views {
+		out.views[i].Delivery = deliveryOf(out.views[i].Message, out.views[i].Answered)
+	}
 	return out, attachThreads(ctx, tx, out.views)
+}
+
+// attachAnswers puts on each post with a reach the seats that have answered
+// it, in one statement for the page.
+//
+// ONLY THE POSTS THAT REACHED SOMEBODY ARE ASKED ABOUT, which is a person's
+// posts and nothing else, so a page of agents talking costs no statement at
+// all. The receipts are keyed (message, seat), and a page is at most
+// [MaxLimit] ids, inside the 999 parameters the store guarantees.
+func attachAnswers(ctx context.Context, tx *sql.Tx, views []MessageView) error {
+	at := make(map[string]int, len(views))
+	var ids []any
+	for i, view := range views {
+		if r := view.Message.Reach; r != nil && len(r.Recipients) > 0 {
+			at[view.Message.ID] = i
+			ids = append(ids, view.Message.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT message_id, handle, answer_id, answered_at
+		  FROM chat_receipts
+		 WHERE message_id IN (`+placeholders(len(ids))+`) AND answer_id <> ''
+		 ORDER BY message_id, answered_at, handle`, ids...)
+	if err != nil {
+		return fmt.Errorf("chatlet: read a page's answers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id     string
+			answer Answer
+			when   int64
+		)
+		if err := rows.Scan(&id, &answer.Handle, &answer.MessageID, &when); err != nil {
+			return fmt.Errorf("chatlet: scan an answer: %w", err)
+		}
+		answer.At = store.DecodeTime(when)
+		if i, ok := at[id]; ok {
+			views[i].Answered = append(views[i].Answered, answer)
+		}
+	}
+	return rows.Err()
 }
 
 // attachThreads puts each room post's thread summary on it, in two statements

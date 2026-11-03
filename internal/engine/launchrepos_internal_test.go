@@ -26,12 +26,12 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A CODING RUN GIVEN REPOSITORIES ON THE COMPANY'S OWN CODE HOST (ADR-0086),
+// AN EXECUTOR GIVEN REPOSITORIES ON THE COMPANY'S OWN CODE HOST (ADR-0093),
 // as the engine resolves each checkout ([Engine.resolveRunRepos]): what
 // each repository resolves to, what the seat may be given and the steps its
 // box is given them by — over a code host that answers as the estate's
@@ -208,7 +208,7 @@ func (h *launchHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(30)}, nil
 }
 
-// reposRig is an engine whose coding runs' boxes are in a fake cell, serving a
+// reposRig is an engine whose executors' boxes are in a fake cell, serving a
 // code host its checkouts resolve repositories through.
 type reposRig struct {
 	e        *Engine
@@ -237,12 +237,12 @@ func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) 
 	t.Helper()
 	c := specCompany(t, doc)
 	c.roster = rosterOf(c)
-	jobs := map[string]*sandbox.FakeRunner{codingagent.ClaudeCodeName: sandbox.NewFakeRunner(codingagent.ClaudeCodeName)}
+	jobs := map[string]*sandbox.FakeRunner{executor.ClaudeCodeName: sandbox.NewFakeRunner(executor.ClaudeCodeName)}
 	provider := sandbox.NewFakeProvider()
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers:        map[sandbox.Placement]sandbox.Provider{placement: provider},
 		DefaultPlacement: placement,
-		Runners:          map[string]sandbox.Runner{codingagent.ClaudeCodeName: jobs[codingagent.ClaudeCodeName]},
+		Runners:          map[string]sandbox.Runner{executor.ClaudeCodeName: jobs[executor.ClaudeCodeName]},
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -386,7 +386,7 @@ func TestALaunchResolvesEachRepository(t *testing.T) {
 	}
 }
 
-// A CHECKOUT IS HELD TO THE SEAT'S GRANT (ADR-0086): a read_only seat asking
+// A CHECKOUT IS HELD TO THE SEAT'S GRANT (ADR-0093): a read_only seat asking
 // to write is refused with its grant's sentence and given `read` where it asks
 // nothing; a full_access seat outside the owning unit writes its own namespace
 // and is refused writing main; a `visibility: unit` repository outside the
@@ -460,7 +460,7 @@ func (colleagues) Requester(_ context.Context, handle string) (iam.Principal, er
 }
 
 // A RUN CHECKS OUT FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write
-// half for a coding run): a checkout in a turn a colleague seat woke names that seat
+// half for an executor): a checkout in a turn a colleague seat woke names that seat
 // on the run's row, which the code host's box admission reads back
 // (boxRuns.Run) to hold the box to the colleague's grant beside the seat's;
 // `access: write` on a branch the colleague could not push is refused at
@@ -554,7 +554,7 @@ func TestACheckoutNeedsCodeNative(t *testing.T) {
 // (sandbox.MonitorStep) in a remote box, which owns its kernel's per-user
 // inotify budget — and never in a direct or container box on the engine
 // host, whose every box spends the engine user's, beside the other seats'
-// coding CLIs.
+// harnesses.
 //
 // Mutation: CodingSteps appending the step in every cell → the direct and
 // container rows, red; appending it in none → the remote row, red.
@@ -607,7 +607,7 @@ func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
 	}
 }
 
-// A BOX REACHES ONLY WHAT ITS RUN CHECKED OUT (ADR-0086): a job opens with no
+// A BOX REACHES ONLY WHAT ITS RUN CHECKED OUT (ADR-0093): a job opens with no
 // grant, so the code host's box admission, which reads the row on every
 // request (boxRuns.Run), lets its box reach nothing; each code_checkout adds
 // exactly the repository it named, with its access and its ask to open a
@@ -627,7 +627,7 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 	rig.host.add(project("api", "Engineering", code.VisibilityCompany), map[string]string{"refs/heads/main": mainHead})
 	turn := rig.turn(t, "swe", nil)
 	row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
-		AgentID: "a-1", Role: "SWE", CodingAgent: codingagent.ClaudeCodeName, Placement: string(rig.placement),
+		AgentID: "a-1", Role: "SWE", Harness: executor.ClaudeCodeName, Placement: string(rig.placement),
 		Reply: "tool", CreatedAt: time.Now().UTC()}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("begin the launch: %v", err)
@@ -706,7 +706,7 @@ func TestABoxReachesOnlyWhatItCheckedOut(t *testing.T) {
 }
 
 // A CHECKOUT HOLDS WHAT IT RESOLVES ON ITS JOB'S ROW (M3-decisions M3-O61,
-// M3-O64): a coding run on ENG-42 checks out a scratch repository of its seat
+// M3-O64): an executor on ENG-42 checks out a scratch repository of its seat
 // it never wrote, and web, whose seats/swe/ENG-42 an earlier turn pushed. The
 // row the launch attached the turn's holds to holds the scratch repository
 // and web's branch, and neither a project repository nor a default branch,
@@ -736,7 +736,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-42", Key: "ENG-42"}
 	turn := rig.turn(t, "swe", item)
 	row, err := rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "swe",
-		AgentID: "a-1", Role: "SWE", CodingAgent: codingagent.ClaudeCodeName, Placement: string(rig.placement),
+		AgentID: "a-1", Role: "SWE", Harness: executor.ClaudeCodeName, Placement: string(rig.placement),
 		Reply: "tool", CreatedAt: time.Now().UTC()}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("begin the launch: %v", err)
@@ -777,7 +777,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 }
 
 // A LAUNCH IS GIVEN ITS BOX'S GIT EXACTLY WHERE A CHECKOUT CAN GRANT IT A
-// REPOSITORY (ADR-0086): on a node that serves the company's code host and has
+// REPOSITORY (ADR-0093): on a node that serves the company's code host and has
 // a box base, every launch of an executor gets its run's git environment —
 // its credential, the base its clones dial and git's configuration — and on a
 // node serving no code host, or one with no base, none, since nothing there
@@ -786,7 +786,7 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 //
 // Mutations: gate the launch on Engine.CodeUnserved() == nil, which answers
 // no node that serves code → "serving code" given no git, red (what left the
-// coding run of internal/e2e's A1 case cloning from an empty base); drop the
+// executor of internal/e2e's A1 case cloning from an empty base); drop the
 // served check → "hosting none" given git, red.
 func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 	t.Parallel()
@@ -809,7 +809,7 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 			if seat == nil {
 				t.Fatal("the premise: the company has the seat ceo")
 			}
-			mint := e.launchBoxGit(seat, uuid.NewString(), nil, nil)
+			mint := e.launchBoxGit(seat, uuid.NewString(), nil)
 			if !tc.given {
 				if mint != nil {
 					t.Fatal("a launch on a node that can check nothing out was given the box's git")
@@ -833,16 +833,15 @@ func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
 	}
 }
 
-// A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0086), the one every executor launch
+// A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0093), the one every executor launch
 // on a node serving the code host is given ([Engine.boxGitEnv], its
 // [sandbox.LaunchRequest.RunEnv]): its run's credential — a token the code host
 // verifies for exactly this launch — the code host's base, and git's
 // configuration through the environment: exactly the engine's seven entries,
 // in order, the helper reset first, the seat's identity as an engine-built
 // commit names it (a role with no email on the identity domain), protocol v2,
-// and the index settings a wide checkout's status was measured faster with;
-// and the commit hook's three values for THIS launch — a second launch carries
-// its own id. The variables beyond git's own are exactly the ones config
+// and the index settings a wide checkout's status was measured faster with. A
+// second launch carries its own token. The variables beyond git's own are exactly the ones config
 // reserves, but the check's own, which only a check's box is told.
 //
 // Mutations: drop entry 1 (the helper reset) → the exact-entries assertion,
@@ -861,7 +860,7 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 			turn := rig.turn(t, tc.seat, item)
 			for _, launch := range []string{uuid.NewString(), uuid.NewString()} {
 				ref := host.BoxRunRef{TurnID: turn.RunID, LaunchID: launch}
-				env, err := rig.e.boxGitEnv(turn.Seat, base, ref, item, nil)
+				env, err := rig.e.boxGitEnv(turn.Seat, base, ref, nil)
 				if err != nil {
 					t.Fatalf("boxGitEnv: %v", err)
 				}
@@ -890,26 +889,17 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 						t.Errorf("entry %d is %q=%q, want %q=%q", i, key, value, kv[0], kv[1])
 					}
 				}
-				trailers, err := sandbox.TrailerEnv(tc.seat, launch, item)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for name, value := range trailers {
-					if env[name] != value {
-						t.Errorf("%s=%q, want this launch's %q", name, env[name], value)
-					}
-				}
 			}
 		})
 	}
 
 	// ONE LIST: what the engine sets beyond git's own variables is exactly
 	// what configuration reserves — but the check's own, which a check's box
-	// is told and a coding run's is not — so no operator's value can stand
+	// is told and an executor's is not — so no operator's value can stand
 	// beside it, and configuration reserves no name nothing sets.
 	rig := newReposRig(t, launchReposDoc, base)
 	env, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
-		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil, nil)
+		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -924,7 +914,7 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 		return slices.Contains(config.ReservedCheckEnv(), name)
 	})
 	if !slices.Equal(set, coding) {
-		t.Errorf("a launch sets %v beyond git's own variables, and configuration reserves %v for a coding run",
+		t.Errorf("a launch sets %v beyond git's own variables, and configuration reserves %v for an executor",
 			set, coding)
 	}
 }
@@ -943,7 +933,7 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 	rig := newReposRig(t, launchReposDoc, base)
 	seat := rig.c.Org.AgentSeatByHandle("swe")
 	ref := host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}
-	env, err := rig.e.boxGitEnv(seat, base, ref, nil, map[string]string{"GIT_CONFIG_COUNT": "1",
+	env, err := rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "1",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128"})
 	if err != nil {
 		t.Fatalf("boxGitEnv: %v", err)
@@ -959,7 +949,7 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 		t.Errorf("the box's git configuration adds %v, want the proxy kept at 0 and the engine's seven at 1..7",
 			env)
 	}
-	_, err = rig.e.boxGitEnv(seat, base, ref, nil, map[string]string{"GIT_CONFIG_COUNT": "2",
+	_, err = rig.e.boxGitEnv(seat, base, ref, map[string]string{"GIT_CONFIG_COUNT": "2",
 		"GIT_CONFIG_KEY_0": "http.proxy", "GIT_CONFIG_VALUE_0": "http://proxy.example.com:3128"})
 	if err == nil || !strings.Contains(err.Error(), "GIT_CONFIG_COUNT=2 but no GIT_CONFIG_KEY_1") {
 		t.Errorf("a count past the entries the env sets answered %v, want it refused naming the hole", err)

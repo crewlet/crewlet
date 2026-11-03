@@ -95,6 +95,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
+		{"AReleaseCountsAFailedResumeOntoTheJob", testAReleaseCountsAFailedResumeOntoTheJob},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
@@ -175,6 +176,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}
 	cases = append(cases, noteCases...)
 	cases = append(cases, askCases...)
+	cases = append(cases, heldCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -212,7 +214,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", TaskDescription: "fix the flake",
+		Harness: "claude-code", TaskDescription: "fix the flake",
 		// THE TWO CONVERSATION VALUES OF A DIRECT MESSAGE, which is the
 		// one shape where they differ — a reply in the thread this run's
 		// question was asked in partitions on the thread while the
@@ -399,7 +401,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	first.Placement, first.LaunchNode = "direct", "node-a"
 	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", CodingAgent: "claude-code"},
+		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", Harness: "claude-code"},
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -428,7 +430,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 			got.CommandID, got.SessionID)
 	}
 	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
-		CodingAgent: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
+		Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
 	prior := opened.Prior
 	since := prior.Since
 	prior.Since = time.Time{}
@@ -441,7 +443,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	}
 	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", CodingAgent: "claude-code"},
+		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", Harness: "claude-code"},
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach the relaunch's box: %v", err)
 	}
@@ -453,7 +455,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 // A RELAUNCH'S BOX MOVES THE ROW TO ITS CELL. The next job can land in
 // another cell than the last — a fallback onto a member with a run_in of its
 // own — and every reader reaches the box through the row's cell, so the box,
-// its cell and its CLI move as one write: a row that took the new box and kept
+// its cell and its harness move as one write: a row that took the new box and kept
 // the old cell sent every poll, collection and reclaim of it to a backend that
 // never made it.
 func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore) {
@@ -461,23 +463,23 @@ func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore)
 	first.Placement = "direct"
 	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
-		SandboxID: "box-1", Placement: "direct", CodingAgent: "claude-code",
+		SandboxID: "box-1", Placement: "direct", Harness: "claude-code",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 	next := run("t-cells")
-	next.Placement, next.CodingAgent = "e2b", "opencode"
+	next.Placement, next.Harness = "e2b", "opencode"
 	mustBeginLaunch(t, s, next)
 	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
-		SandboxID: "box-2", Placement: "e2b", CodingAgent: "opencode",
+		SandboxID: "box-2", Placement: "e2b", Harness: "opencode",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
 	got := mustGet(t, s, "t-cells")
-	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.CodingAgent != "opencode" {
+	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.Harness != "opencode" {
 		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in e2b on opencode",
-			got.SandboxID, got.Placement, got.CodingAgent)
+			got.SandboxID, got.Placement, got.Harness)
 	}
 }
 
@@ -1364,9 +1366,44 @@ func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStor
 	}
 }
 
+// A RELEASE COUNTS A FAILED RESUME ONTO THE JOB, dated from the first, so the
+// give-up that bounds a resume which keeps failing holds across nodes and
+// restarts ([sandbox.ResumeGiveUp]). A release that reports no failed resume
+// (one held on a condition) counts nothing, and a relaunch's job starts with
+// no failures of the job before it.
+func testAReleaseCountsAFailedResumeOntoTheJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	for i, at := range []time.Time{base, base.Add(20 * time.Minute)} {
+		release := releaseOf(mustClaim(t, s, "t1"))
+		release.Collected, release.ResumeFailedAt = true, at
+		if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+			t.Fatalf("release t1 failed resume %d = %v, %v", i+1, released, err)
+		}
+	}
+	got := mustGet(t, s, "t1")
+	if got.Launch.ResumeFailures != 2 || !got.Launch.ResumeFailingSince.Equal(base) {
+		t.Fatalf("the job counts %d failed resumes since %v, want 2 since %v",
+			got.Launch.ResumeFailures, got.Launch.ResumeFailingSince, base)
+	}
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Collected, held.Hold = true, &sandbox.Refusal{Condition: "provider", Until: base.Add(time.Hour)}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("release t1 held = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 2 {
+		t.Fatalf("a held resume moved the failed count to %d, want 2", got.Launch.ResumeFailures)
+	}
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 0 ||
+		!got.Launch.ResumeFailingSince.IsZero() {
+		t.Fatal("a relaunch's job inherited the failed resumes of the job before it")
+	}
+}
+
 // A JOB KEEPS THE INSTANT IT WAS FIRST COLLECTED. A later collection of the
 // same job — its resume held by the seat's budget for hours, say — reads the
-// same ending, and a reset its CLI named as a time of day is read against the
+// same ending, and a reset its harness named as a time of day is read against the
 // first collection's instant: read against the later one, a 4:30pm already past
 // was the next day's, and the entry sat out for nothing. So a release that read
 // the box records the instant once, a later one leaves it, a release that did
@@ -2695,7 +2732,7 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
 	if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: "box-" + turnID, CodingAgent: "claude-code", PauseTTLSec: 1800,
+		SandboxID: "box-" + turnID, Harness: "claude-code", PauseTTLSec: 1800,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -2746,7 +2783,7 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 
 // A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. An engine phase's calls sit
 // on a surface in memory and the turn writes them when it ends; a run's are
-// made by its coding CLI, outside the engine, and can outlive the node. A
+// made by its harness, outside the engine, and can outlive the node. A
 // reviewer of a resumed run with no log judges a turn that reads as having
 // acted on nothing.
 func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
@@ -2808,7 +2845,7 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. A coding run's tool
+// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. An executor's tool
 // calls reach its row from as many as twenty subagents at once — Claude Code's
 // default — and the seat's own lease and status writes race them. Each append
 // is a decision the store takes again on a lost race, so none of them is
@@ -2978,7 +3015,7 @@ func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore)
 //
 // BOTH SHAPES, and the second is the one a session that learned its job from
 // the row got wrong: a session whose earlier call landed, and a session whose
-// FIRST call is the late one — a delegated worker the CLI opened with, still
+// FIRST call is the late one — a delegated worker the harness opened with, still
 // running when the reviewer relaunched. Neither may land.
 func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.PendingStore) {
 	for _, tc := range []struct {
@@ -4576,7 +4613,7 @@ func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coo
 }
 
 // runRepo is a repository a run is given, valid by [sandbox.RunRepo.ValidateFor]
-// a coding run ([sandbox.CloneCoding]).
+// an executor ([sandbox.CloneCoding]).
 func runRepo(name, id string) sandbox.RunRepo {
 	return sandbox.RunRepo{
 		Repo: name, RepoID: id, Base: "0123456789abcdef0123456789abcdef01234567",
@@ -4793,7 +4830,7 @@ func grantOf(repo sandbox.RunRepo, floor, ceiling string) sandbox.RepoGrant {
 	return sandbox.RepoGrant{Repo: repo, Floor: floor, Raise: higherFloor(floor), Ceiling: ceiling}
 }
 
-// A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0086), and
+// A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0093), and
 // only while the row holds the job that asked: a launch opens the row with
 // none, the first checkout sets the launch floor once, a later one raises the
 // code floor and never lowers it, a repository asked again on its branch and

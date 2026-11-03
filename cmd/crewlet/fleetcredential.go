@@ -22,7 +22,7 @@ import (
 // # Why a gesture at all
 //
 // Every connection to an embedded broker presents a key derived from
-// secrets.keys (ADR-0087), and the docs prescribe broker gestures no engine
+// secrets.keys (ADR-0094), and the docs prescribe broker gestures no engine
 // verb performs: above all the resize every stream and bucket needs before a
 // raised `stream.replicas` lets a node start, which only `nats stream update`
 // does. So a clustered member's client listener — open on loopback because

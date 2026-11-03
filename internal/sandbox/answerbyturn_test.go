@@ -30,13 +30,13 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 	}
 	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
+		Harness: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
 		Requester: "ada",
 	}, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := rig.pending.AttachSandbox(t.Context(), turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
@@ -62,8 +62,8 @@ func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 
 // givenFor is an operator's answer to one run that names the run alone and no
 // question — which no answer this build delivers does.
-func givenFor(turnID string) (types.SandboxAnswerGiven, *events.Event) {
-	given := types.SandboxAnswerGiven{
+func givenFor(turnID string) (types.ExecutorAnswerGiven, *events.Event) {
+	given := types.ExecutorAnswerGiven{
 		TurnID: turnID, Agent: sweID, AgentHandle: "swe", Answer: "use the release branch",
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 	}
@@ -71,8 +71,8 @@ func givenFor(turnID string) (types.SandboxAnswerGiven, *events.Event) {
 }
 
 // givenAgainst is an operator's answer to the question the run is waiting on
-// now, as answer_run gives it: the run and its question, off the row.
-func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.SandboxAnswerGiven, *events.Event) {
+// now, as answer_executor gives it: the run and its question, off the row.
+func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.ExecutorAnswerGiven, *events.Event) {
 	t.Helper()
 	run := rig.get(turnID)
 	given, _ := givenFor(turnID)
@@ -102,13 +102,13 @@ func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 	}
 }
 
-// answeredRecords is every sandbox_run_answered the coordinator published.
-func (r *coordRig) answeredRecords() []types.SandboxRunAnswered {
+// answeredRecords is every executor_answered the coordinator published.
+func (r *coordRig) answeredRecords() []types.ExecutorAnswered {
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
-	var out []types.SandboxRunAnswered
+	var out []types.ExecutorAnswered
 	for _, p := range r.queue.published {
-		if payload, ok := p.event.Data.(*types.SandboxRunAnswered); ok {
+		if payload, ok := p.event.Data.(*types.ExecutorAnswered); ok {
 			if p.topic != topics.Event(payload.EventType()) {
 				continue
 			}
@@ -119,7 +119,7 @@ func (r *coordRig) answeredRecords() []types.SandboxRunAnswered {
 }
 
 // THE PARK PUTS THE QUESTION TO WHOM THE CHART SAYS, and writes it with the
-// question. The label the coding agent chose is resolved for the run that
+// question. The label the harness chose is resolved for the run that
 // asked — its requester is on the row — and a row read back carries the seats
 // and whether they are a fallback.
 func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
@@ -178,18 +178,18 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 
 	records := rig.answeredRecords()
 	if len(records) != 1 {
-		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
+		t.Fatalf("published %d executor_answered, want one", len(records))
 	}
 	got := records[0]
 	got.AskedAt, got.AudienceHandles, got.LaunchID = time.Time{}, nil, ""
-	want := types.SandboxRunAnswered{
+	want := types.ExecutorAnswered{
 		Agent: sweID, AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
 		Via: types.AnswerViaOperator, Outcome: types.AnswerResumed,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 		Question: "which branch?", Answer: "use the release branch",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("sandbox_run_answered = %+v, want %+v", got, want)
+		t.Errorf("executor_answered = %+v, want %+v", got, want)
 	}
 	if records[0].LaunchID == "" || records[0].AskedAt.IsZero() {
 		t.Errorf("the record names no question it answered: launch %q, asked at %v",
@@ -252,23 +252,23 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 	rig.finished("t1")
 	records := rig.answeredRecords()
 	if len(records) != 1 {
-		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
+		t.Fatalf("published %d executor_answered, want one", len(records))
 	}
 	got := records[0]
 	if got.Outcome != types.AnswerResumed || got.Choice != "release-2" ||
 		got.Answer != "and cut a patch" || got.Decision == nil ||
 		len(got.Decision.Options) != 2 || got.Question != "which branch?" {
-		t.Errorf("sandbox_run_answered = %+v, want the question, its decision, the choice "+
+		t.Errorf("executor_answered = %+v, want the question, its decision, the choice "+
 			"and the person's own words", got)
 	}
 }
 
 // AN ANSWER BY TURN CHOOSING WHAT THE QUESTION DOES NOT OFFER IS SPENT, NOT
-// RECORDED. `answer_run` checks the choice against the same question before it
-// delivers, so one arriving here was checked against another; handed to the
-// run, it would be told it chose something nobody offered. Nothing is resumed,
-// the question stays open for an answer it can take, and the person is told
-// on the record that theirs did not land.
+// RECORDED. `answer_executor` checks the choice against the same question
+// before it delivers, so one arriving here was checked against another;
+// handed to the run, it would be told it chose something nobody offered.
+// Nothing is resumed, the question stays open for an answer it can take, and
+// the person is told on the record that theirs did not land.
 //
 // Mutation: record the answer whatever its choice, and the run resumes on an
 // option it never offered.
@@ -379,7 +379,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 		var wg sync.WaitGroup
 		dispositions := make([]AnswerDisposition, 2)
 		for i, answer := range []struct {
-			given types.SandboxAnswerGiven
+			given types.ExecutorAnswerGiven
 			ev    *events.Event
 		}{{one, oneEv}, {other, otherEv}} {
 			wg.Go(func() {
@@ -641,7 +641,7 @@ func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
 		t.Fatalf("handed back %v, want the answer's copy once", handed)
 	}
 	copied := rig.lastHandedBack(t)
-	answer, ok := events.DataAs[*types.SandboxAnswerGiven](copied)
+	answer, ok := events.DataAs[*types.ExecutorAnswerGiven](copied)
 	if !ok {
 		t.Fatalf("the copy handed back is %T, want the answer by turn it was", copied.Data)
 	}
@@ -700,7 +700,7 @@ func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 	}
 	records := rig.answeredRecords()
 	if len(records) != 1 {
-		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
+		t.Fatalf("published %d executor_answered, want one", len(records))
 	}
 	got := records[0]
 	if got.Via != types.AnswerViaChat || got.Outcome != types.AnswerResumed ||
@@ -777,14 +777,14 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	seat := uuid.MustParse("0198f3a4-1c2b-7d3e-8f40-5a6b7c8d9e0f")
 	opened, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "t9", AgentHandle: "swe", AgentID: seat.String(), Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: rig.now,
+		Harness: "claude-code", CreatedAt: rig.now,
 	}, Fence{})
 	if err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
 
-	given := types.SandboxAnswerGiven{
+	given := types.ExecutorAnswerGiven{
 		TurnID: "t9", Agent: "a-stale", AgentHandle: "old-handle", Answer: "use main",
 		AnsweredBy: "founder", AnsweredByKind: "human", LaunchID: "the-question-the-person-read",
 	}
@@ -796,7 +796,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	defer rig.queue.mu.Unlock()
 	var delivered []publication
 	for _, p := range rig.queue.published {
-		if _, ok := p.event.Data.(*types.SandboxAnswerGiven); ok {
+		if _, ok := p.event.Data.(*types.ExecutorAnswerGiven); ok {
 			delivered = append(delivered, p)
 		}
 	}
@@ -812,7 +812,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 			"inbox it waits behind every job that holds the seat and every message before it",
 			delivered[0].topic, want)
 	}
-	got := delivered[0].event.Data.(*types.SandboxAnswerGiven)
+	got := delivered[0].event.Data.(*types.ExecutorAnswerGiven)
 	if got.Agent != seat.String() {
 		t.Errorf("the answer is stamped for seat %q, want the row's %q", got.Agent, seat)
 	}
@@ -821,7 +821,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 			"current %q", got.LaunchID, given.LaunchID, opened.LaunchID)
 	}
 
-	if _, err := desk.Deliver(t.Context(), types.SandboxAnswerGiven{
+	if _, err := desk.Deliver(t.Context(), types.ExecutorAnswerGiven{
 		TurnID: "gone", Answer: "x", LaunchID: "x",
 	}); err == nil {
 		t.Error("an answer to a run that has no row was delivered somewhere")

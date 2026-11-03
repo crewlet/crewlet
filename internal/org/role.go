@@ -478,7 +478,7 @@ type MattermostIdentity struct {
 // IsZero reports an unconfigured Mattermost identity.
 func (m MattermostIdentity) IsZero() bool { return m == MattermostIdentity{} }
 
-// RoleSandboxMCP is which of the seat's MCP servers the coding agent gets.
+// RoleSandboxMCP is which of the seat's MCP servers the harness gets.
 //
 // Scoping is at the SERVER level only, and that is a platform fact rather
 // than a simplification: OpenCode has no per-tool allowlist flag and Claude
@@ -514,11 +514,11 @@ type SandboxSetupStep struct {
 	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails
-	// the whole acquisition — the coding agent's brief promises this
+	// the whole acquisition — the harness's brief promises this
 	// environment, so a partially provisioned box must never reach a run.
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
 
-	// Env is merged into the coding agent's run environment.
+	// Env is merged into the harness's run environment.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
 	// OptionalKeys names the keys of Env and the paths of Files whose value
@@ -527,7 +527,7 @@ type SandboxSetupStep struct {
 	// resolves to nothing is left out and logged as a gap.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 
-	// Brief is the paragraph handed to the coding agent: what this step
+	// Brief is the paragraph handed to the harness: what this step
 	// made TRUE about its box.
 	Brief string `yaml:"brief,omitempty" json:"brief,omitempty"`
 
@@ -566,9 +566,9 @@ func SetupTimeout(declared float64) float64 {
 // may take. Absent means the seat's box reads only the engine-wide settings.
 //
 // NOT A GATE, and nothing here places the box: every agent seat's executor
-// runs as its coding CLI's own run, in the cell the launching
+// runs as its harness's own run, in the cell the launching
 // providers.llm entry names (its `run_in`, else
-// providers.sandbox.default_run_in), on that entry's own CLI. What is left
+// providers.sandbox.default_run_in), on that entry's own harness. What is left
 // is what differs from one seat's work to another's, which is why it stays
 // on the seat.
 type RoleSandbox struct {
@@ -584,13 +584,13 @@ type RoleSandbox struct {
 
 	// Setup is this seat's OWN provisioning, applied after the engine-wide
 	// steps: files written into the box, commands run over them, the env
-	// they contribute and the paragraph the coding agent is told about
+	// they contribute and the paragraph the harness is told about
 	// what they made true.
 	//
 	// HERE FOR THE REASON MaxTurns IS: read off the document beside the
 	// running seat, a seat's own provisioning is one walk away from being
 	// skipped — and a box that silently skipped its setup is one whose
-	// coding agent was promised an environment it does not have.
+	// harness was promised an environment it does not have.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty"`
 
 	// MaxTurns caps the agentic ROUNDS one of this seat's executor runs may
@@ -699,6 +699,20 @@ type Role struct {
 	// and which the engine derived needs the difference. Not part of the
 	// wire form: it is derived, and a caller building a Role leaves it empty.
 	AutoManaged []string `yaml:"-" json:"-"`
+
+	// UnitKeys is the key of the unit this seat sits in, then the key of each
+	// unit enclosing that one, outward to the top, as [Organization.Normalize]
+	// placed it; empty for a seat at the root. Derived, and not part of the
+	// wire form: it is what an MCP server's grant to a unit is decided from,
+	// since a grant to a unit reaches the seats beneath it at any depth.
+	UnitKeys []string `yaml:"-" json:"-"`
+
+	// AccessLanes is every integration lane this agent seat is on at
+	// (`roles[].integrations.<lane>.enabled`), sorted. Set where the config
+	// layer builds the organization, because the lanes are written on the
+	// authored seat; derived, and not part of the wire form. It is what a
+	// tool server bound to a vendor's per-seat credential is granted by.
+	AccessLanes []string `yaml:"-" json:"-"`
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 

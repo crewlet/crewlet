@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // Kind is what a copied file is, which decides the types the CDN may answer
@@ -104,8 +106,8 @@ type Options struct {
 	// request for any other is refused before it is made.
 	Hosts []string
 
-	// Client makes the requests. Nil is the guarded client ([Guarded]),
-	// which dials no address that is not public.
+	// Client makes the requests. Nil is [httpx.Guarded] bounded by
+	// [FetchTimeout], which dials no address that is not public.
 	Client *http.Client
 
 	// Now is the clock a mutable copy's age is judged by; nil is the wall
@@ -160,7 +162,7 @@ func New(opts Options) (*Cache, error) {
 		c.hosts[i] = strings.ToLower(h)
 	}
 	if c.client == nil {
-		c.client = Guarded()
+		c.client = httpx.Guarded(FetchTimeout)
 	}
 	if c.now == nil {
 		c.now = time.Now

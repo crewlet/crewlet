@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -105,6 +107,7 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 	}
 	surface, err := configapi.New(configapi.Options{
 		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
+		Secrets: fleetsecrets.New(fleet, fixtureCipher), Grants: noGrants{},
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -124,4 +127,13 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 		t.Errorf("the engine's reload is recorded as (%q, %q), want (%q, %q)",
 			active.CreatedBy, active.CreatedByKind, by.Name, by.Kind)
 	}
+}
+
+// noGrants is an engine nobody has signed in to any MCP server through.
+type noGrants struct{}
+
+func (noGrants) HeldMCPGrant(context.Context, string) (bool, error) { return false, nil }
+
+func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string, string, bool, error) {
+	return "", "", false, nil
 }

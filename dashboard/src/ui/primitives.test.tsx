@@ -19,14 +19,13 @@ describe("PhaseTag", () => {
   // A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR. The design system
   // removed its phase family: beside a state badge the state is the one
   // coloured thing on the row, and the phase is the word that says where the
-  // work is. So every phase — the engine's seven and one a later build sends —
+  // work is. So every phase — the engine's six and one a later build sends —
   // is the same neutral pill, and the word is the whole of what it says.
   test("every phase is the neutral pill with its word", () => {
     const drawn = [
       "onboarding",
       "execute",
       "review",
-      "sandbox",
       "subagent",
       "auxiliary",
       "judge",

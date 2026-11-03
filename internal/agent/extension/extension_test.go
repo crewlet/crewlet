@@ -190,7 +190,7 @@ func TestTheJudgeIsToldWhatItMayActuallyGrant(t *testing.T) {
 // pass re-runs on every turn that seat ever takes.
 //
 // AND NO PHASE A NUDGE NEVER REACHES IS GIVEN A WAY OUT. The executor is its
-// CLI's own run and the reviewer runs with no ceiling, so neither is ever
+// harness's own run and the reviewer runs with no ceiling, so neither is ever
 // extended; a worker's loop has no extension at all, and the hint it was once
 // given — stop calling tools, return a plain-text summary — was the opposite
 // of its contract, which ends in a `submit_result` call.

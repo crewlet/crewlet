@@ -36,7 +36,7 @@ func TestACommittedEffectCrossesTheWireWhole(t *testing.T) {
 			MessageID: "m-1", ChannelID: "c-1", ChannelName: "launch",
 			ChannelKind: chatlet.KindPublic, ThreadRoot: "m-0",
 			Author: "ada", AuthorKind: chatlet.AuthorHuman,
-			Excerpt: "ship it", Mentions: []string{"bo"}, Lead: "cy",
+			Excerpt: "ship it", Mentions: []string{"bo"}, Answerer: "cy",
 			Recipients:     []chatlet.Recipient{{Handle: "bo", Reason: chatlet.ReasonMention}},
 			WakesTruncated: true,
 		},

@@ -2,11 +2,18 @@ package mcp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"mime"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +21,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -54,7 +62,8 @@ const maxBufferedErrorBody = 1 << 20
 const protocolVersionHeader = "Mcp-Protocol-Version"
 
 // newHTTPTransport builds the streamable transport and the round tripper that
-// carries the seat's identity.
+// carries the seat's identity, over d's transport ([httpx.Transport] when it
+// names none).
 //
 // DisableStandaloneSSE is on deliberately. The standalone GET stream exists to
 // deliver server-initiated notifications — tools/prompts/resources list
@@ -62,21 +71,116 @@ const protocolVersionHeader = "Mcp-Protocol-Version"
 // stream would carry nothing anyone reads. It is also the other thing the
 // probe's wrapper costs, so leaving it nominally enabled would be a lie about
 // what the connection does.
-func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity) {
+//
+// A REDIRECT IS FOLLOWED WITHIN THE CONFIGURED ORIGIN ALONE ([sameOrigin]):
+// see [httpIdentity.redirect].
+func newHTTPTransport(spec Spec, log *slog.Logger, d dialing) (sdk.Transport, *httpIdentity) {
+	base := d.base
+	if base == nil {
+		base = httpx.Transport()
+	}
 	ident := &httpIdentity{
-		base:    httpx.Transport(),
+		base:    base,
 		headers: maps.Clone(spec.Headers),
+		bearer:  spec.Bearer,
+		origin:  originOf(spec.URL),
 		server:  spec.Name,
 		log:     log,
+		trace:   d.trace,
 	}
 	// Connect runs under the startup budget; everything after it under the
 	// per-call one. See the deadline field.
 	ident.setDeadline(spec.startupTimeout())
 	return &sdk.StreamableClientTransport{
 		Endpoint:             spec.URL,
-		HTTPClient:           &http.Client{Transport: ident},
+		HTTPClient:           &http.Client{Transport: ident, CheckRedirect: ident.redirect},
 		DisableStandaloneSSE: true,
 	}, ident
+}
+
+// dialing is how one connection to a server is made, beyond its spec: the
+// transport an HTTP connection rides and the trace its requests report to,
+// both unset for a server the engine runs (the shared transport, no trace). A
+// test sets them, to time each stage of a connection of its own
+// ([Test]).
+type dialing struct {
+	base  http.RoundTripper
+	trace *httptrace.ClientTrace
+}
+
+// maxRedirects bounds the redirects one request follows within its server's
+// origin: net/http's own default, which no MCP server needs more than one of
+// (a trailing slash, a path the server moved).
+const maxRedirects = 10
+
+// ErrRedirectedAway is a server that answered with a redirect to an address
+// outside its configured origin, which the engine does not follow.
+var ErrRedirectedAway = errors.New("mcp: the server redirected to another origin")
+
+// redirect is the connection's redirect policy: a redirect within the
+// configured origin (scheme, host and port) is followed, and one to anywhere
+// else is refused.
+//
+// REFUSED, NOT FOLLOWED THROUGH THE GUARD. The configured address is the
+// operator's, dialled as it stands whatever network it is on, and carries the
+// headers configured for it; an address a redirect names is the server's
+// (ADR-0072). Followed, a 307 or a 308 would carry the JSON-RPC body to it,
+// and a hop the guard admitted would still reach an origin nobody configured.
+// Refused, the request fails with a sentence naming the origin it was sent
+// to, which an operator who trusts it writes as the server's address. The
+// round tripper sets the configured headers on a request to the configured
+// origin alone ([httpIdentity.RoundTrip]), so no credential leaves it either
+// way.
+func (h *httpIdentity) redirect(req *http.Request, via []*http.Request) error {
+	if !sameOrigin(req.URL, h.origin) {
+		return classify(FailNoEndpoint, fmt.Errorf("%w: it answered with a redirect to %s, which is not "+
+			"the server's address. Set the server's url to that address if it is the one to use",
+			ErrRedirectedAway, redact.URL(req.URL.String())))
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("mcp: the server redirected %d times without answering", len(via))
+	}
+	return nil
+}
+
+// origin is a URL's scheme, host and port, the port written out where the
+// URL leaves it to the scheme.
+type origin struct{ scheme, host, port string }
+
+// originOf is raw's origin, the zero origin for an address that does not
+// parse, which no request's origin equals.
+func originOf(raw string) origin {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return origin{}
+	}
+	return originOfURL(u)
+}
+
+func originOfURL(u *url.URL) origin {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return origin{scheme: strings.ToLower(u.Scheme), host: strings.ToLower(u.Hostname()), port: port}
+}
+
+// SameOrigin reports whether two addresses are on one origin: the same scheme,
+// host and port, the port read from the scheme where an address leaves it
+// out. False for an address that does not parse.
+func SameOrigin(a, b string) bool {
+	u, err := url.Parse(a)
+	return err == nil && u.Host != "" && sameOrigin(u, originOf(b))
+}
+
+// sameOrigin reports whether u is at o: the same scheme, host and port.
+func sameOrigin(u *url.URL, o origin) bool {
+	return o != (origin{}) && originOfURL(u) == o
 }
 
 // httpIdentity is the round tripper for one remote server: it carries the
@@ -85,12 +189,29 @@ func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity
 type httpIdentity struct {
 	base    http.RoundTripper
 	headers map[string]string
-	server  string
-	log     *slog.Logger
+	// bearer answers the access token of a server signed in to with OAuth
+	// ([Spec.Bearer]), nil for any other: set per request, on a request to
+	// the configured origin alone, as the headers are.
+	bearer BearerSource
+	// origin is the configured address's: the one origin a request is sent
+	// the configured headers to.
+	origin origin
+	server string
+	log    *slog.Logger
+	// trace, when set, is told of each request's connection
+	// ([dialing.trace]).
+	trace *httptrace.ClientTrace
 
 	// protocolVersion is set once, after the handshake settles. Atomic
 	// because the session's requests run on their own goroutines.
 	protocolVersion atomic.Pointer[string]
+
+	// failed is the server's latest answer when it was not a success, nil
+	// when its latest answer was one: what a failed start and an ended
+	// session are classed by ([client.startClass], [client.deathClass]).
+	// CLEARED BY A SUCCESS, so a 429 the session rode out an hour ago is not
+	// the class of a session that ends for another reason now.
+	failed atomic.Pointer[answerFailure]
 
 	// deadline bounds ONE HTTP request, and it is here because nothing above
 	// it can do the job.
@@ -128,18 +249,27 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	if d := time.Duration(h.deadline.Load()); d > 0 {
 		ctx, cancel = context.WithTimeout(ctx, d)
 	}
+	if h.trace != nil {
+		ctx = httptrace.WithClientTrace(ctx, h.trace)
+	}
 	// Clone: RoundTrippers must not mutate the request they are handed.
 	req = req.Clone(ctx)
-	for k, v := range h.headers {
-		req.Header.Set(k, v)
+	// THE CONFIGURED HEADERS GO TO THE CONFIGURED ORIGIN ALONE. The redirect
+	// policy refuses every other origin before a request to it is made; this
+	// is the same rule where the headers are set, so no path that reaches
+	// this tripper can carry them elsewhere.
+	configured := sameOrigin(req.URL, h.origin)
+	if configured {
+		for k, v := range h.headers {
+			req.Header.Set(k, v)
+		}
 	}
 	if req.Header.Get(protocolVersionHeader) == "" {
 		if v := h.protocolVersion.Load(); v != nil {
 			req.Header.Set(protocolVersionHeader, *v)
 		}
 	}
-
-	resp, err := h.base.RoundTrip(req)
+	resp, sent, err := h.send(ctx, req, configured)
 	if err != nil {
 		if cancel != nil {
 			cancel()
@@ -154,6 +284,13 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 	}
 	if resp.StatusCode < 400 {
+		if webPage(resp) {
+			// A LOGIN PAGE, A PROXY OR A CAPTIVE PORTAL answers 200 with
+			// HTML, and the SDK's error for it is a parse failure.
+			h.failed.Store(&answerFailure{status: resp.StatusCode, class: FailNotMCP})
+		} else {
+			h.failed.Store(nil)
+		}
 		return resp, nil
 	}
 
@@ -177,14 +314,23 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// One byte over the cap is read on purpose, so a body sitting exactly on
 	// it is not mistaken for an overflowing one.
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody+1))
+	// THE ADDRESS REDACTED: a server's address can carry its key in the query,
+	// which the log's own pass does not recognise by shape.
 	if readErr != nil {
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
-			"method", req.Method, "url", req.URL.String(), "body_error", readErr.Error())
+			"method", req.Method, "url", redact.URL(req.URL.String()), "body_error", readErr.Error())
 	} else {
+		// AN ACCESS TOKEN THE SERVER ECHOED IS WITHHELD from the line: the
+		// engine renews it on its own, and no log is a place to keep one.
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
-			"method", req.Method, "url", req.URL.String(),
-			"response_body", boundedBody(body))
+			"method", req.Method, "url", redact.URL(req.URL.String()),
+			"response_body", withholdToken(boundedBody(body), sent))
 	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	h.failed.Store(&answerFailure{status: resp.StatusCode, class: classOfStatus(resp.StatusCode,
+		bearerChallenge(challenge), req.Header.Get("Authorization") != "",
+		bytes.Contains(bytes.ToLower(body), []byte("protocol version"))),
+		challenge: textcut.Bytes(challenge, maxChallenge)})
 	if len(body) > maxBufferedErrorBody {
 		// NOT CLOSED, and that is what keeps the deadline correct: the
 		// rest of the body is still to be read, and cancelOnClose fires
@@ -203,6 +349,108 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// complete.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
+}
+
+// send carries one request to the server, with the access token of a server
+// signed in to with OAuth where it goes to the configured origin, and answers
+// the response and the token it carried ("" for none).
+//
+// A 401 TO A TOKEN IS ONE RENEWAL AND ONE RETRY. The token may have been
+// revoked or expired before its stated life ran out, so the source is told it
+// was refused ([BearerSource.Rejected]) and the request is sent once more with
+// what it answers; a second refusal is the server's answer, classed as any
+// 401 is. A token the source cannot give classes the server
+// [FailNeedsSignIn] (or what its error says) and sends nothing.
+func (h *httpIdentity) send(ctx context.Context, req *http.Request, configured bool) (
+	*http.Response, string, error) {
+
+	if h.bearer == nil || !configured {
+		resp, err := h.base.RoundTrip(req)
+		return resp, "", err
+	}
+	token, err := h.bearer.Token(ctx)
+	if err != nil {
+		h.failed.Store(&answerFailure{class: cmp.Or(ClassOf(err), FailNeedsSignIn)})
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := h.base.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized ||
+		!bearerChallenge(resp.Header.Get("WWW-Authenticate")) {
+		return resp, token, err
+	}
+	// THE REFUSAL STANDS where no renewed token came back, read and classed
+	// below; why it could not be renewed is the source's to have said.
+	renewed, renewErr := h.bearer.Rejected(ctx, token)
+	retry, ok := replay(ctx, req)
+	if renewErr == nil && ok && renewed != token {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBufferedErrorBody))
+		_ = resp.Body.Close()
+		retry.Header.Set("Authorization", "Bearer "+renewed)
+		resp, err = h.base.RoundTrip(retry)
+		return resp, renewed, err
+	}
+	return resp, token, nil
+}
+
+// replay is req again, with its body read afresh: false for a request whose
+// body cannot be (the SDK sends every POST from a byte slice, which can).
+func replay(ctx context.Context, req *http.Request) (*http.Request, bool) {
+	again := req.Clone(ctx)
+	if req.Body == nil || req.Body == http.NoBody {
+		return again, true
+	}
+	if req.GetBody == nil {
+		return nil, false
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, false
+	}
+	again.Body = body
+	return again, true
+}
+
+// withholdToken is text with every occurrence of token replaced, for a line
+// that quotes what a server answered a request that carried it.
+func withholdToken(text, token string) string {
+	if token == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, token, "[withheld]")
+}
+
+// answerFailure is one answer a remote server gave that was not a success:
+// its status, and the class it is read as.
+type answerFailure struct {
+	status int
+	class  FailureClass
+	// challenge is the answer's WWW-Authenticate header, cut to
+	// [maxChallenge]: where a server that wants a sign-in says where its
+	// protected-resource metadata is (RFC 9728), which an address check
+	// reads ([CheckAddress]).
+	challenge string
+}
+
+// maxChallenge bounds the WWW-Authenticate header kept from a failed answer.
+// REASONED: a Bearer challenge names a realm, a scope list, an error and a
+// metadata address, a few hundred bytes; 2 KiB keeps a long scope list whole
+// and refuses a server's choice of how much this process holds.
+const maxChallenge = 2 << 10
+
+// webPage reports whether resp is an HTML page: what a login page, a proxy or
+// a captive portal answers in front of a server.
+func webPage(resp *http.Response) bool {
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return err == nil && media == "text/html"
+}
+
+// bearerChallenge reports whether a WWW-Authenticate header challenges for a
+// Bearer token: what a server that wants an OAuth sign-in answers a request
+// that carried none (RFC 6750, and the MCP authorization specification).
+func bearerChallenge(header string) bool {
+	scheme, _, _ := strings.Cut(strings.TrimSpace(header), " ")
+	return strings.EqualFold(scheme, "bearer")
 }
 
 // cancelOnClose releases a per-request deadline when the reader is finished

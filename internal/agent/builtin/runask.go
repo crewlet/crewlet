@@ -24,7 +24,7 @@ import (
 // ([sandbox.EndsRun]).
 const AskAndWaitTool = toolname.AskAndWait
 
-// RunAskDesk is the run record a coding run asks through: the write that
+// RunAskDesk is the run record an executor asks through: the write that
 // records its question onto the job's row ([sandbox.PendingStore.RecordAsk])
 // and the read of that row ([sandbox.PendingStore.Get]) a submission is held to
 // ([AskAndWait.Gate]), which the engine hands over through the sandbox runtime
@@ -54,15 +54,16 @@ type RunAskDeps struct {
 //
 // # Why a tool, and why only on the run's surface
 //
-// A coding run cannot wait on a person inside its CLI: a headless run goes on
-// until it ends. So a question the work cannot go on without PARKS the run:
-// the ask is recorded on its row, the run ends, a person answers, and the
-// answer resumes the same run. Asking through a tool over the run's bridge
-// means the ask is validated whole BEFORE anything is written, every fault
-// named at once while the run can still fix it (ADR-0059), and the options a
-// person chooses between are a structure rather than prose: a shell command's
-// one free-text argument carried them as a paragraph, and the person answering
-// got a wall of text with the options somewhere in it.
+// An executor cannot wait on a person inside its harness: a headless run goes on
+// until it ends. So a question the work cannot go on without PARKS the
+// executor: the ask is recorded on its row, the launch ends, a person
+// answers, and the answer resumes the same executor. Asking through a tool
+// over its bridge means the ask is validated whole BEFORE anything is
+// written, every fault named at once while the executor can still fix it
+// (ADR-0059), and the options a person chooses between are a structure rather
+// than prose: a shell command's one free-text argument carried them as a
+// paragraph, and the person answering got a wall of text with the options
+// somewhere in it.
 //
 // It is offered on the executor's run surface alone, beside `submit_work`,
 // because those are the two ways that run ends, and it means something only
@@ -175,12 +176,13 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		runID = turn.RunID
 	}
 	if runID == "" || launch == "" {
-		// NOT A RUN'S CALL: nothing names the job to park. The tool is
-		// offered on an executor run's surface alone, so this is a
-		// wiring fault, said as one rather than as the model's mistake.
+		// NOT AN EXECUTOR'S CALL: nothing names the launch to park. The tool
+		// is offered on the executor's surface alone, so this is a wiring
+		// fault, said as one rather than as the model's mistake.
 		return refusedBy(tools.RefusalUnavailable, waitless(), AskAndWaitTool+
-			" is unavailable here: it parks a coding run, and this call was not made by "+
-			"one. Ask on the work item with `"+CommentOnWorkTool+"` and `ask` instead."), nil
+			" is unavailable here: it parks a seat's executor in its box, and this call "+
+			"was not made by one. Ask on the work item with `"+CommentOnWorkTool+"` and "+
+			"`ask` instead."), nil
 	}
 	ask, refusal := t.readAsk(ctx, args)
 	if refusal != nil {
@@ -290,8 +292,8 @@ func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 // the run on with that answer rather than reporting it, and the work the run
 // goes on to do is what its round submits. A `submit_work` made after the
 // question is a run that did not stop when it was told to, and accepted, it
-// read as success to the CLI that made it, which then ended believing its work
-// was delivered while the turn waited on a person. Refused, the CLI is told
+// read as success to the harness that made it, which then ended believing its work
+// was delivered while the turn waited on a person. Refused, the harness is told
 // what is true: the run is parked, and its next prompt is the answer.
 //
 // The collection never replays such a call either (the replay keeps only the
@@ -341,6 +343,14 @@ func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				return nodeFailure(ctx, g.submit.Name(), err, g.submit.Name()+" could not "+
 					"read whether this run is waiting on a person", "Nothing was submitted: "+
 					"call it again."), nil
+			case found && run.AskedBy(launch) && run.HeldCall != nil:
+				// A CALL HELD FOR APPROVAL parks the job as its own question
+				// does (ADR-0077), and is said as the call it is.
+				return refused(tools.RefusalNotRunning, "Your call to "+run.HeldCall.Tool+
+					" waits for a person's approval, so this run is parked on their answer and "+
+					"takes no submission. END YOUR TURN NOW: their answer, and what the call "+
+					"returned, arrive as your next prompt, and you submit your work once you "+
+					"have finished it."), nil
 			case found && run.AskedBy(launch):
 				return refused(tools.RefusalNotRunning, "You asked a person a question in "+
 					"this run, so it is parked on their answer and takes no submission. "+

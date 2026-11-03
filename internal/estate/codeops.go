@@ -13,10 +13,10 @@ import (
 // REST routes and a seat's tools make of the rows, and the listings a git node
 // finds the repositories a compaction, a publication or an expunge may be due
 // in by — each naming the CODE domain, so the code copy's own verdict — never
-// the tracker's — decides whether a node answers it (ADR-0072), and its floor
+// the tracker's — decides whether a node answers it (ADR-0079), and its floor
 // is on the code log — and a read of a repository's CONTENT by object id and
 // an engine write built beside it, which name no domain's copy and are asked
-// of the repository's home GIT node ([GitCopy], ADR-0082). A push, a
+// of the repository's home GIT node ([GitCopy], ADR-0089). A push, a
 // compaction, an expunge record and a change's write are keyed on their
 // repository's data nodes: see the package doc's "A push is asked of its
 // repository's committer". An operation that JUDGES A GRANT from the serving
@@ -209,7 +209,7 @@ var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 
 // opCodeMerge is a change's MERGE — one record that merges the change and
 // moves its target onto the commit its merge built, decided by its merge gate
-// from one snapshot (ADR-0089) — asked of the repository's COMMITTER exactly
+// from one snapshot (ADR-0096) — asked of the repository's COMMITTER exactly
 // as a write of its queue is: an IDEMPOTENT write keyed by its operation id,
 // which its builder minted once and the domain's operation ledger collapses
 // (the merge's push id is derived from it, so no retry lands a branch twice),
@@ -401,36 +401,35 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 		return out, ranNothing(err)
 	})
 
-// opCodeRead is a read of the code host by its kind (code.ReadKinds): the
-// REST routes' repository listing, one repository's detail and its push
-// history, which the operator's CLI reads too; a coding run's pushes, which
-// the engine reads when it collects the run; a repository's refs; a listing
-// of changes — of a repository, a work item, a state, a reviewer or what its
-// changes wait on — and one change by its number, a part of it a page at a
-// time (its revisions, reviewers, comments, reviews or findings), each held
-// to the grant on the change's repository as a read of the repository is; its
-// pushes in log order, which a git node's index of which push introduced each
-// commit is built from; the repositories a compaction may be due in, most
-// live packs first, which a git node polls for the ones it is home for; the
-// repositories a publication may be due in, least recently published first;
-// the repositories an expunge is owed in, an expunge open or a purge
-// requested; a repository's checks — a change's, a commit's, the
-// repository's newest ended first, or every readable repository's since a
-// moment — and one attempt whole, each held to the grant on its repository;
-// one attempt by its key (check_box), the read a check's box's admission
-// makes on every request the box sends to /box/git/ or /box/code/
-// (internal/code/host's checkadmit.go); the attempts waiting for a runner in
-// one cell, oldest queued first (checks_queued), and those runners hold
-// (checks_running); the change heads a repository's home owes a dispatch of
-// their checks (checks_due); the live entries of a repository's merge queues — of one
-// target, or of every readable repository — with their trains, a target's
-// landings above its green and a repository's green rows, each held to the
-// grant on its repository; and the repositories holding a live entry, or one
-// repository's entries, which its home's queue works from (queue_due); and
+// opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
+// routes' repository listing, one repository's detail and its push history,
+// which the operator's CLI reads too; an executor run's pushes, which the
+// engine reads when it collects the run; a repository's refs; a listing of
+// changes — of a repository, a work item, a state, a reviewer or what its
+// changes wait on — and one change by its number, a part of it a page at a time
+// (its revisions, reviewers, comments, reviews or findings), each held to the
+// grant on the change's repository as a read of the repository is; its pushes
+// in log order, which a git node's index of which push introduced each commit
+// is built from; the repositories a compaction may be due in, most live packs
+// first, which a git node polls for the ones it is home for; the repositories a
+// publication may be due in, least recently published first; the repositories
+// an expunge is owed in, an expunge open or a purge requested; a repository's
+// checks — a change's, a commit's, the repository's newest ended first, or
+// every readable repository's since a moment — and one attempt whole, each held
+// to the grant on its repository; one attempt by its key (check_box), the read
+// a check's box's admission makes on every request the box sends to /box/git/
+// or /box/code/ (internal/code/host's checkadmit.go); the attempts waiting for
+// a runner in one cell, oldest queued first (checks_queued), and those runners
+// hold (checks_running); the change heads a repository's home owes a dispatch
+// of their checks (checks_due); the live entries of a repository's merge queues
+// — of one target, or of every readable repository — with their trains, a
+// target's landings above its green and a repository's green rows, each held to
+// the grant on its repository; and the repositories holding a live entry, or
+// one repository's entries, which its home's queue works from (queue_due); and
 // a repository's push mirror with the green rows it publishes, read in one
-// snapshot by the home that pushes it (mirror_push). A seat's read on a
-// node that holds no chart is that node's code.ErrNotServing — it ran
-// nothing — so the walk asks the next.
+// snapshot by the home that pushes it (mirror_push). A seat's read on a node
+// that holds no chart is that node's code.ErrNotServing — it ran nothing — so
+// the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.JudgeRead) — and the
@@ -438,16 +437,16 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and the engine's own reads name no
-// asker at all — a `run_pushes` page, an `introduced` page, a
-// `branch_changes` read, a repository's `expunge_tips`, the `compaction_due`,
-// `publication_due`, `expunge_due`, `imports_due`, `mirrors_due`, `indexed`,
-// `changes_due`, `checks_due`, `checks_queued`, `checks_running` and
-// `queue_due` listings, a check's box's admission's `check_box` and a push
-// mirror's `mirror_push` — so each is answered there as a last resort: a
-// check's box's admission among them, which a node behind the company's
-// configuration may therefore answer, since the attempt's row it reads is the
-// box's authority and no chart judges it. A push mirror's read is the home's,
-// which judges the seat it pushes as itself (code.MirrorSeatRefusal).
+// asker at all — a `run_pushes` page, an `introduced` page, a `branch_changes`
+// read, a repository's `expunge_tips`, the `compaction_due`, `publication_due`,
+// `expunge_due`, `imports_due`, `mirrors_due`, `indexed`, `changes_due`,
+// `checks_due`, `checks_queued`, `checks_running` and `queue_due` listings, a
+// check's box's admission's `check_box` and a push mirror's `mirror_push` — so
+// each is answered there as a last resort: a check's box's admission among
+// them, which a node behind the company's configuration may therefore answer,
+// since the attempt's row it reads is the box's authority and no chart judges
+// it. A push mirror's read is the home's, which judges the seat it pushes as
+// itself (code.MirrorSeatRefusal).
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {
@@ -498,7 +497,7 @@ var opCodeLifecycle = define("code.lifecycle", opIdempotentWrite, codeDomain, fa
 
 // opCodeGitRead is one server-side read of a repository by object id — a tree,
 // a file's lines, a diff, a comparison — asked of the repository's HOME git
-// node first, then its runner-up (ADR-0082), on the git lane, each attempt
+// node first, then its runner-up (ADR-0089), on the git lane, each attempt
 // stamped with whether the node asked is the walk's effective home
 // (code.GitQuery.Home), the one node a walk lets fill a copy. A git node that
 // cannot answer for a reason about itself (code.ErrGitUnready) ran nothing
@@ -522,7 +521,7 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 // opCodeMergePreview is one MERGE PREVIEW — what merging one commit of a
 // repository into another would do, a comparison's preview
 // (code.MergePreviewQuery) — asked as a read by object id is: of the
-// repository's HOME git node first, then its runner-up (ADR-0082), on the git
+// repository's HOME git node first, then its runner-up (ADR-0089), on the git
 // reads' lane, each attempt stamped with whether the node asked is the walk's
 // effective home (code.MergePreviewQuery.Home), the one node a walk lets fill
 // a copy. The git node answers it by THE merge a repository's home records a
@@ -554,8 +553,8 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // opCodeGitWrite is one ENGINE WRITE — a commit of files, a revert, a
 // cherry-pick, a branch created or deleted, which a seat or a person asks of
 // a repository through a tool and the engine builds beside a copy of it
-// (ADR-0085) — asked of the repository's HOME git node first, then its
-// runner-up (ADR-0082): the home's copy is the one the repository's reads keep
+// (ADR-0092) — asked of the repository's HOME git node first, then its
+// runner-up (ADR-0089): the home's copy is the one the repository's reads keep
 // warm, so a write is built where its objects already are. Each attempt is
 // stamped with whether the node asked is the walk's effective home
 // (code.EngineWrite.Home), the one node a walk lets fill a copy, as a read's

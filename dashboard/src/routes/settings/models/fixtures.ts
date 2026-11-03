@@ -75,7 +75,7 @@ export function signIn(over: Partial<ModelSignIn> = {}): ModelSignIn {
 /** A model's admin reading: a ready Claude Code model on a token, nothing on it, unless the case says otherwise. */
 export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEntry {
   return {
-    agent: "claude-code",
+    harness: "claude-code",
     model: "claude-sonnet-5",
     health: "ready",
     plan: "",
@@ -95,7 +95,7 @@ export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEn
 export function memberEntry(e: ModelEntry): MemberModelEntry {
   return {
     key: e.key,
-    agent: e.agent,
+    harness: e.harness,
     model: e.model,
     health: e.health,
     sign_in: { route: e.sign_in.route, resolves: e.sign_in.resolves },

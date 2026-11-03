@@ -692,7 +692,7 @@ func TestTheClassifierCallIsToollessUnderOneFixedSystemPrompt(t *testing.T) {
 // supposed to catch.
 func TestTheAuxTimeoutStaysInsideTheBandItWasChosenFor(t *testing.T) {
 	t.Parallel()
-	// Under 30s a CLI's cold launch plus an ordinary answer from a small
+	// Under 30s a harness's cold launch plus an ordinary answer from a small
 	// model is cut off and reported as "nothing to persist". Over 5 minutes
 	// it stops being a deadline for a dispatcher that consumes completed
 	// turns one at a time — a hung provider would stall the company's whole

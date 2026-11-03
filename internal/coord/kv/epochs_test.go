@@ -12,9 +12,10 @@ import (
 
 // A SINGLE NODE'S FENCING EPOCH OUTLIVES ITS PROCESS. Its leases are an
 // in-process table that dies with the process, and its counter used to be one
-// too: every boot minted 1 again, under the sandbox runs the previous process
-// had stamped with a later token in the fleet store. Here two processes are
-// two lease tables over one broker, each with its own handle on the counter.
+// too: every boot minted 1 again, under the executors' rows the previous
+// process had stamped with a later token in the fleet store. Here two
+// processes are two lease tables over one broker, each with its own handle on
+// the counter.
 func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
