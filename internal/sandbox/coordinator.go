@@ -834,7 +834,12 @@ type Coordinator struct {
 	// ([relaunchCaptureWait]) — a test's shorter.
 	restore      SessionRestore
 	relaunchWait time.Duration
-	now          func() time.Time
+	// endWait is how long a read waits for a job its script was asked to end
+	// ([JobEndWait]), and endPoll how often it asks whether it is over
+	// ([jobEndPoll]) — a test's shorter.
+	endWait time.Duration
+	endPoll time.Duration
+	now     func() time.Time
 
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
@@ -1009,6 +1014,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		keep:          opts.Keep,
 		restore:       opts.Restore,
 		relaunchWait:  relaunchCaptureWait,
+		endWait:       JobEndWait,
+		endPoll:       jobEndPoll,
 		spoolDir:      opts.SpoolDir,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
@@ -1848,31 +1855,34 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // collection — the box paused and the pause recorded. ENDED is the run its
 // turn's cap ended: see [Coordinator.collect].
 //
-// A STOPPED RUN'S READ ([BoxReadStop]) PAUSES NOTHING: its ending reclaims the
-// box next, and a pause would only be one more call to a box about to go.
+// A STOPPED RUN'S READ ([BoxReadStop]) ENDS ITS JOB FIRST ([Coordinator.endJob]):
+// its script, asked, stops its harness and packs the session as its own exit
+// does, and what is left of the job is killed past the wait — so what the read
+// collects is the job's own end, and the session it takes is final wherever the
+// job ended. And it PAUSES NOTHING: its ending reclaims the box next, and a
+// pause would only be one more call to a box about to go.
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return Result{}, false, err
 	}
-	// WHETHER THE JOB STILL WORKS as its box is read: a stop's always may,
-	// and a collection's only where its turn's cap has passed — ENDED, a job
-	// the cap ended while it ran. A job still working is one whose session
-	// is packed as it stands and is not final ([readCapture]); a poll that
-	// cannot say is taken for one still working, which only packs again —
-	// for the capture alone: ENDED stays a poll that answered, since it
-	// marks the run's result as cut off at the cap, which a poll that did
-	// not answer has not shown.
-	ended, running := false, false
+	// WHETHER THE JOB IS OVER as its box is read: a stop's is ended first,
+	// and a collection's still works only where its turn's cap has passed —
+	// ENDED, a job the cap ended while it ran. A job still working is one
+	// whose session is packed as it stands and is not final
+	// ([readCapture]); a poll that cannot say is taken for one still
+	// working, which only packs again — for the capture alone: ENDED stays a
+	// poll that answered, since it marks the run's result as cut off at the
+	// cap, which a poll that did not answer has not shown.
+	ended, over := false, true
 	switch {
 	case read == BoxReadStop:
-		state, pollErr := runner.Poll(ctx, box, run.Handle())
-		running = pollErr != nil || state == JobRunning
+		over = c.endJob(ctx, run, box, runner)
 	case run.PastDeadline(c.now()):
 		state, pollErr := runner.Poll(ctx, box, run.Handle())
 		ended = pollErr == nil && state == JobRunning
-		running = pollErr != nil || state == JobRunning
+		over = pollErr == nil && state.Over()
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
@@ -1892,7 +1902,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// is gone — whichever node asked for the read, and spooled sealed on this
 	// node; KEPT after the read has answered, off it (session.go). A stop's
 	// read is the last anything makes of the box.
-	spooled, kept := c.takeCapture(ctx, run, box, runner, readCapture(read, result, running))
+	spooled, kept := c.takeCapture(ctx, run, box, runner, readCapture(read, result, over))
 	result.Kept = kept
 	defer c.keepLater(spooled)
 	if read != BoxReadCollect {
@@ -4153,15 +4163,15 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 //  1. a person's reply the run still holds and owes the seat is LET GO
 //     ([Coordinator.letGoAnswer]), its copies recorded on the row as owed;
 //  2. every copy the row owes ([PendingRun.HandBack]) is published and cleared;
-//  3. for a STOP, the run's tool-bridge session is closed, and what the run
-//     spent is read off its box, charged and recorded, its harness session
-//     taken by the read itself ([Coordinator.collectStopped],
-//     [Coordinator.readBox]) — before the box goes, since nothing can read
-//     it after;
-//  4. for a LOSS whose box may still be read, the job's session is taken
-//     before the box goes ([Coordinator.keepLostSession]), here or on the
-//     host the box is on; and the box is reclaimed, where the ending
-//     reclaims it after its decision;
+//  3. for a STOP, the run's tool-bridge session is closed, and the read of the
+//     job's box ENDS THE JOB, reads what the run spent off it, charged and
+//     recorded, and takes its harness session ([Coordinator.collectStopped],
+//     [Coordinator.readBox], [Coordinator.endJob]) — before the box goes,
+//     since nothing can read it after;
+//  4. for a LOSS whose box may still be read, the run's tool-bridge session is
+//     closed, and the job is ended and its session taken before the box goes
+//     ([Coordinator.keepLostSession]), here or on the host the box is on; and
+//     the box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a loss, the run is handed to the engine, which answers the
 //     colleague whose ask its turn took up and says how the turn ended
@@ -4182,12 +4192,15 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 // # Off any frame somebody waits on
 //
 // Steps 3, 4 and 9 wait on what is not the frame's own: another node's host,
-// a box's pack and the scrub of its session, the executor log and a capture
-// being kept. Only where mayAsk says this is the ending's own retry, on the
-// coordinator's lifetime, are they made; anywhere else — the pause watch, a
-// seat's acquisition, a completion's handler — the ending stops there, decided
-// and with its session closed, and is handed to that retry at once
-// ([errAskAway]), the seat's mail held behind it until it lands.
+// a job's end, a box's pack and the scrub of its session, the executor log and
+// a capture being kept. Only where mayAsk says this is the ending's own retry,
+// on the coordinator's lifetime, are they made; anywhere else — the pause
+// watch, a seat's acquisition, a completion's handler — the ending stops
+// there, decided and with its session closed, and is handed to that retry at
+// once ([errAskAway]), the seat's mail held behind it until it lands. Every
+// stop of a job that started in a box is read there, whatever
+// `conversation_session.enabled` says: the switch governs what is kept of a
+// session, not how a stop ends a job, and ending a job is waiting for it.
 //
 // # Across a crash at each step
 //
@@ -4256,7 +4269,9 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if c.ended != nil {
 				c.ended(run.TurnID)
 			}
-			if !mayAsk && (c.readsAway(run) || c.capturesStop(run)) {
+			// A JOB THAT STARTED IN A BOX IS ENDED BY ITS READ, which waits
+			// for it ([Coordinator.endJob]) — never on this frame.
+			if !mayAsk && run.SandboxID != "" && run.CommandID != "" {
 				return errAskAway
 			}
 			collected, err := c.collectStopped(ctx, run)
@@ -4266,6 +4281,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			run = collected
 		}
 		if run.Ending.Reclaim && !reclaimed && c.capturesLoss(run) {
+			// THE SESSION FIRST, as a stop's: a lost job may still be
+			// working, and nothing it does after this acts as the seat —
+			// the read below ends it, and it kept acting as the seat
+			// through its take when the reclaim was the first to close it.
+			if c.ended != nil {
+				c.ended(run.TurnID)
+			}
 			// THE LAST READ OF THE BOX ANYTHING MAKES, before the reclaim
 			// below takes it (session.go).
 			if !mayAsk {

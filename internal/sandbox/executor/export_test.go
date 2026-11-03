@@ -56,8 +56,17 @@ type OpenCodeTimes struct {
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
 	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
-		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, openCodeStopWait),
+		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
 	}))
+}
+
+// ClaudeCodeCommandTimed is [ClaudeCode.Command] with the harness given stop to
+// go once its run is asked to end, rather than [sandbox.JobStopGrace]: for the
+// cases about a harness that outlives its grace, at a length a test can wait
+// out.
+func ClaudeCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, configPath string,
+	stop time.Duration) string {
+	return "sh -c " + shellQuote(claudeScript(req, session, paths, configPath, stop))
 }
 
 // ClaudeProjectDir is the project directory every Claude Code run in a box
@@ -69,11 +78,12 @@ const (
 	OpenCodeArchiveFormat = openCodeArchiveFormat
 )
 
-// OpenCodeStops is a run's script's stops ([openCodeStops]) at stop, and
-// OpenCodeExporter its login exporter ([openCodeExporter]) at sync into file:
-// the two pieces a case about stopping the exporter runs on their own, since
-// no run of the whole script can choose the instant its exporter is stopped.
-func OpenCodeStops(stop time.Duration) string { return openCodeStops(stop) }
+// OpenCodeStops is a run's script's stops ([openCodeStops]) beside the end they
+// stop with ([endFunction]) at stop, and OpenCodeExporter its login exporter
+// ([openCodeExporter]) at sync into file: the two pieces a case about stopping
+// the exporter runs on their own, since no run of the whole script can choose
+// the instant its exporter is stopped.
+func OpenCodeStops(stop time.Duration) string { return endFunction(stop) + openCodeStops() }
 
 // OpenCodeExporter is [OpenCodeStops]' other half.
 func OpenCodeExporter(sync time.Duration, file string) string {

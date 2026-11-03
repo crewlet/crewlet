@@ -19,6 +19,12 @@
 // kernel reports it. It is here for the same reason as the signals: the start
 // time is read differently on every platform, and a second reader is a second
 // definition of "the same process".
+//
+// And how ONE process the caller did not start is signalled: a pid the job
+// itself wrote down — a run's script records its own, so that its end can be
+// asked of it — reaches its process only while that process is a living member
+// of the group the caller recorded ([Leader.SignalMember]), because the job
+// could have written any pid of its user's there.
 package procgroup
 
 import (

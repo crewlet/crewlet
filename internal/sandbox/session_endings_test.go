@@ -136,11 +136,11 @@ func TestATurnsEndIsDecidedOnceEvenAfterItIsRecorded(t *testing.T) {
 }
 
 // TWO ATTEMPTS AT ONE ENDING ON A NODE FINISH IT ONCE. A stop decided on the
-// pause watch while the job it stopped was still launching is finished there,
-// and the launch whose attach it refused finishes the same ending at the same
-// moment: each read the record before either owed the turn's end, each closed
-// the stopped turn, and the colleague whose ask the turn took up was answered
-// twice. The second attempt leaves the ending to the first.
+// pause watch is finished by the ending's own retry, and the launch whose
+// attach it refused finishes the same ending at the same moment: each read the
+// record before either owed the turn's end, each closed the stopped turn, and
+// the colleague whose ask the turn took up was answered twice. The second
+// attempt leaves the ending to the first.
 //
 // Mutation: let a second attempt on the node finish an ending the first is
 // finishing, and the stopped turn is closed twice.
@@ -158,9 +158,19 @@ func TestTwoAttemptsAtOneEndingOnANodeFinishItOnce(t *testing.T) {
 		}
 		return executordomain.Ending{Outcome: executordomain.OutcomeStopped}, nil
 	}
-	stopped := make(chan error, 1)
-	go func() { stopped <- rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}) }()
-	<-entered
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	// THE FIRST ATTEMPT is the stop's own retry, which the pause watch hands
+	// a started job's ending to at once, since ending the job is waiting for
+	// it ([Coordinator.endJob]).
+	stopped := make(chan int, 1)
+	go func() { stopped <- rig.fireRetries() }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stop's retry never reached the stopped turn's close")
+	}
 	// THE SECOND ATTEMPT, as the launch the stop refused makes it.
 	if _, err := rig.coordinator.endRecord(t.Context(), rig.get("t1"), ending{
 		fence: fenceOf(run), whileIn: Active, launch: EveryLaunch, reclaim: true,
@@ -168,8 +178,8 @@ func TestTwoAttemptsAtOneEndingOnANodeFinishItOnce(t *testing.T) {
 		t.Logf("endRecord: %v", err)
 	}
 	close(release)
-	if err := <-stopped; err != nil {
-		t.Logf("StopSeat: %v", err)
+	if fired := <-stopped; fired == 0 {
+		t.Fatal("the stop armed no retry to finish it")
 	}
 	if n := closes.Load(); n != 1 {
 		t.Fatalf("the stopped turn was closed %d times, want once", n)

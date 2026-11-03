@@ -146,3 +146,10 @@ func exitOnly(err error) error {
 	}
 	return err
 }
+
+// askEnd sends script, a pid a direct box's job recorded for itself, the end
+// request — SIGUSR1 — only while it is a living member of the job's recorded
+// group ([procgroup.Leader.SignalMember]).
+func askEnd(job procgroup.Leader, script int) error {
+	return job.SignalMember(script, syscall.SIGUSR1)
+}

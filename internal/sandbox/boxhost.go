@@ -45,13 +45,14 @@ const (
 	// it finished where its turn's cap has passed, its result read back,
 	// and the box paused for whatever comes next ([Coordinator.readBox]).
 	BoxReadCollect BoxRead = "collect"
-	// BoxReadStop is a stopped run's read of what it had spent by then,
-	// with nothing paused: its ending reclaims the box next.
+	// BoxReadStop is a stopped run's read of what it had spent by then, its
+	// job ended first ([Coordinator.endJob]), with nothing paused: its ending
+	// reclaims the box next.
 	BoxReadStop BoxRead = "stop"
 	// BoxReadLoss is a lost run's box, read for the job's harness session
 	// before its ending reclaims it ([Coordinator.keepLostSession]): the box
-	// attached, never woken, and nothing else of it read — the job is gone,
-	// and what it spent is no question a loss asks.
+	// attached, never woken, its job ended where it still works, and nothing
+	// else of it read — what a lost job spent is no question a loss asks.
 	BoxReadLoss BoxRead = "loss"
 )
 
@@ -94,8 +95,9 @@ var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on di
 // in — its row moved on since the asker read it.
 var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run's box in the state the read needs")
 
-// BoxReadBudget is how long a node waits for a box's host to read the box back
-// ([BoxReader]) before taking it for a host that did not answer.
+// BoxReadBudget is how long a node waits for a box's host to make a read of the
+// box ([BoxReader]) — by the kind of read it asks — before taking it for a host
+// that did not answer.
 //
 // [pollBound] — sixty seconds, the control plane's whole-request budget — for
 // the reason the poll is bounded by it: what the host does is the poll's own
@@ -112,14 +114,30 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // and the record are made after the host has answered, off the read
 // ([Coordinator.keepCapture]), so no asker waits on an upload.
 //
+// AND A STOP'S OR A LOSS'S READ HOLDS THE JOB'S END BEFORE ITS TAKE
+// ([JobEndBudget]): it ends the job first ([Coordinator.endJob]), at most the
+// end's wait and the kill past it, and that is counted at the host's share as
+// the take is. The host's share of a stop's or a loss's budget is then the
+// end's 145 seconds, the take's 240 and its two graces, and 45 — the poll's
+// bound at the share — for the read's own steps, so a take after an end at its
+// bound is handed its whole budget all the same ([Coordinator.takeContext]).
+//
 // What that costs is the wait for a host that has truly stopped — about eight
-// minutes before the asker hands the claim back, where it was one — which a host
-// that is only slow, packing a session at its bound, must not be taken for.
-// Ordinary reads answer in seconds, a session of a day's work being a mebibyte
-// or two. A read that has not finished in that is a host that is not
-// answering, and is answered as one ([ErrBoxHostSilent]); it announces the
-// completion again from its own next poll.
-var BoxReadBudget = pollBound + time.Duration(float64(SessionTakeBudget+2*discardGrace)/BoxReadAnswerShare)
+// minutes for a collection before the asker hands the claim back, where it was
+// one, and about eleven for a stop or a loss — which a host that is only slow,
+// ending a job at its bound or packing a session at its bound, must not be
+// taken for. Ordinary reads answer in seconds, a job ending in a few and a
+// session of a day's work being a mebibyte or two. A read that has not
+// finished in that is a host that is not answering, and is answered as one
+// ([ErrBoxHostSilent]); it announces the completion again from its own next
+// poll.
+func BoxReadBudget(read BoxRead) time.Duration {
+	held := SessionTakeBudget + 2*discardGrace
+	if read == BoxReadStop || read == BoxReadLoss {
+		held += JobEndBudget
+	}
+	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
+}
 
 // BoxReadAnswerShare is the part of [BoxReadBudget] a host's read may take,
 // leaving the rest for its answer to cross the broker before the asker stops
@@ -256,7 +274,9 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // session no take has kept whole ([Coordinator.capturesLoss]). So a request —
 // even a replayed or a forged one past the channel's own checks — can make no
 // read the run's own protocol is not making: a running job's box is never
-// paused under it.
+// paused under it, and no job is ended under it that is not already decided
+// stopped or lost — a stop's and a loss's read end the job first
+// ([Coordinator.endJob]), here on its host, the only node that can.
 func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandboxID string,
 	read BoxRead) (Result, bool, error) {
 
@@ -287,7 +307,8 @@ func (c *Coordinator) ReadHostedBox(ctx context.Context, turnID, launchID, sandb
 			ErrBoxNotHosted, turnID)
 	case read == BoxReadLoss:
 		// THE LAST READ OF THE BOX ANYTHING MAKES, licensed by the loss its
-		// ending decided: taken here, and kept off the read.
+		// ending decided: the job ended and its session taken here, and kept
+		// off the read.
 		spooled, kept := c.readLost(ctx, run)
 		c.keepLater(spooled)
 		return Result{Kept: kept}, false, nil

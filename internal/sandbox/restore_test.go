@@ -1180,7 +1180,7 @@ func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
 		defer cancel()
 		began := time.Now()
 		spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
-			readCapture(BoxReadCollect, Result{}, false))
+			readCapture(BoxReadCollect, Result{}, true))
 		if took := time.Since(began); took > 20*time.Second {
 			t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
 				"two seconds off", took)

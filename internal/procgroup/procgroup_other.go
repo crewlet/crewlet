@@ -4,6 +4,7 @@ package procgroup
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 )
 
@@ -38,3 +39,7 @@ func exists(int) bool { return false }
 // signal reports that the platform has no group to signal. The caller logs
 // it; there is nothing else honest to do.
 func signal(int, int) error { return errors.ErrUnsupported }
+
+// signalMember reports that the platform has no group a member could be held
+// to, so no member is signalled.
+func signalMember(Leader, int, os.Signal) error { return errors.ErrUnsupported }

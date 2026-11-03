@@ -82,6 +82,7 @@ func TestAnEndingRecordsItsWaitingNotesBeforeItsDelete(t *testing.T) {
 	}
 
 	rig.stop(t)
+	rig.fireRetries()
 
 	calls := spy.seen()
 	if len(calls) != 1 {
@@ -108,6 +109,7 @@ func TestAnEndingWithNothingWaitingRecordsNothing(t *testing.T) {
 	rig.launch("t1")
 
 	rig.stop(t)
+	rig.fireRetries()
 
 	if calls := spy.seen(); len(calls) != 0 {
 		t.Errorf("an ending with no waiting note handed notes over: %+v", calls)
@@ -130,6 +132,7 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 	spy.mu.Unlock()
 
 	rig.stop(t)
+	rig.fireRetries()
 
 	run, found, err := rig.pending.Get(t.Context(), "t1")
 	if err != nil || !found || run.Ending == nil {

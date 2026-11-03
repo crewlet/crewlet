@@ -29,24 +29,37 @@ import (
 //
 // Finishing it is the ordinary ending's steps with two added for the stop
 // (see [Coordinator.finishEnding]): before the box goes, the run's tool-bridge
-// session is closed and what the run had spent is read off its box, charged to
-// the token counters and published as its launch's record
+// session is closed, its job ENDED — its script asked to stop its harness and
+// pack its session as its own exit does, and what is left of the job killed
+// past the wait ([Coordinator.endJob]) — and what the run had spent read off
+// its box, charged to the token counters and published as its launch's record
 // ([Coordinator.collectStopped]) — a run stopped halfway still spent what it
 // spent, and nothing can read its box once it is reclaimed; and after the
 // announcement, the turn parked on the run is closed on the record as stopped
 // ([CoordinatorOptions.CloseStopped]).
 //
+// # Off the frame that decided it
+//
+// Ending a job is waiting for it — seconds for a harness to go and its session
+// to be packed, at most [JobEndBudget] — so the frame that decides a stop — a
+// pause watch, a seat's acquisition — closes the run's session and goes on,
+// and the ending's own retry, armed at once, makes the read: for every job that
+// started in a box, on this node's host or another's, and whatever
+// `conversation_session.enabled` says, which governs what is kept of a
+// session and not how a stop ends a job.
+//
 // # A box on another node's host
 //
 // A `direct` or `container` box is read on its own host ([BoxReader]), and that
-// node may be draining or restarting while its seat has moved here. So the
-// frame that decides the stop — a pause watch, a seat's acquisition — closes
-// the run's session and goes on; this node's own retry of the kept ending asks
-// the host, at once and then on the hand-back's spacing while the host is
-// silent, and finishes the rest ([Coordinator.endRun]). A silent host is no
-// verdict about the box, and its spend is not written off for it: only a box
-// found gone, or a host silent for as long as the fleet waits before it takes a
-// launch node for gone, is ended with nothing read ([Coordinator.readStopped]).
+// node may be draining or restarting while its seat has moved here. This
+// node's retry of the kept ending asks the host, at once and then on the
+// hand-back's spacing while the host is silent, and the host ends the job and
+// reads it ([Coordinator.ReadHostedBox]), licensed by the stop the run's row
+// records and nothing else; the rest is finished here ([Coordinator.endRun]).
+// A silent host is no verdict about the box, and its spend is not written off
+// for it: only a box found gone, or a host silent for as long as the fleet
+// waits before it takes a launch node for gone, is ended with nothing read
+// ([Coordinator.readStopped]).
 //
 // # Not the seat fence
 //
@@ -79,11 +92,17 @@ import (
 //
 // IDEMPOTENT, which is what lets every way a stop can reach a seat call it — the
 // pause landing, a complete re-read of the pauses, the seat's acquisition while
-// paused: a run already stopped has no row left to list. An ending this node
-// could not finish yet is kept for its retry, with the seat's mail held behind
-// it ([Coordinator.oweEnding]), and reported only in the log; and one whose box
-// is read on another node's host is finished by that retry at once, so no
-// caller's frame waits on another node ([Coordinator.endRun]).
+// paused: a run already stopped has no row left to list.
+//
+// WAITING ON NO JOB: the call decides each stop and closes the run's session,
+// and a run whose job started in a box — on this node's host or another's,
+// whatever `conversation_session.enabled` says — is finished by the ending's
+// own retry, armed at once, which ends the job, reads it, reclaims its box and
+// announces the stop, the seat's mail held behind it until it lands
+// ([Coordinator.oweEnding], [Coordinator.endRun]). Only a stop with no job to
+// end, a launch stopped before its command was recorded, is finished here,
+// its box reclaimed within the teardown grace. An ending that could not be
+// finished yet is kept for the same retry, and reported only in the log.
 func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) error {
 	fence, held := c.leaseOf(handle)
 	if !held {
@@ -202,12 +221,12 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 // the ending for this node's retry.
 //
 // THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
-// The run's harness is still working until its box is reclaimed, and every tool
+// The run's harness is still working until the read ends it, and every tool
 // call it makes through the bridge acts as the seat: closed first, the stop
 // takes effect on the seat's surface at once — no post, no write, no submission
-// after it — rather than after a read of the box that can take as long as the
-// box's host takes to answer. Closing a closed session is nothing, which is
-// what the reclaim that follows does again.
+// after it — rather than after a read of the box that ends the job and can take
+// as long as the box's host takes to answer. Closing a closed session is
+// nothing, which is what the reclaim that follows does again.
 //
 // ONCE PER ENDING, for the reason a release records its charge: the collection
 // is recorded with the charge and the publish it made, so an attempt after a
@@ -249,15 +268,9 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 	return current, nil
 }
 
-// readsAway reports whether a stopped run's read is a question for another
-// node's host: its job is in a box, and the box is not on this node's host
-// ([Coordinator.hosts]).
-func (c *Coordinator) readsAway(run PendingRun) bool {
-	return run.SandboxID != "" && run.CommandID != "" && !c.hosts(run)
-}
-
-// readStopped reads what a stopped run's job had done by now off its box,
-// reporting whether there was anything to read, or why it cannot be read yet.
+// readStopped reads what a stopped run's job had done by now off its box — the
+// job ended first, as the read's own step ([Coordinator.readBox]) — reporting
+// whether there was anything to read, or why it cannot be read yet.
 //
 // NOTHING TO READ, and the stop finishes with nothing charged, where nothing
 // can be read: a job that never started — a launch stopped before its command

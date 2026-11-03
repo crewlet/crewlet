@@ -131,11 +131,15 @@ type SessionTaker interface {
 
 // SessionTake is what a capture asks of a box ([SessionTaker]).
 type SessionTake struct {
-	// Pack says the session is packed NOW, by the runner's own pack, rather
-	// than taken as the run's script left it when its harness exited: a job
-	// that never reached that pack, or one that may have gone on since.
-	// The pack records the archive's digest in the box as the script's
-	// does, so the box never takes its own archive for another box's.
+	// Pack says the session is packed NOW, by the runner's own pack: a job
+	// still working, which its turn's cap ended or a box would not end, and
+	// which may have gone on since anything it packed. False is a job that
+	// is over: the archive its script packed when its harness exited where it
+	// left one — at its own end, or at the end it was asked for — and one
+	// packed now where it left none (a crash before its pack, a job killed
+	// part way through it, a job lost with its engine). Every pack records
+	// the archive's digest in the box as the script's does, so the box never
+	// takes its own archive for another box's.
 	Pack bool
 
 	// Scrub is every secret the engine itself put in the box, by value — its
