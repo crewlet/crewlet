@@ -111,6 +111,19 @@ const (
 // asks afresh. Checked before the mark, so a call not made leaves nothing on
 // the row that would keep a later attempt from making it.
 //
+// AND SO IS THE SURFACE'S SKILL GUARD ([tools.Surface.GuardRefusal]), as the
+// rebuild armed it for the session that asked: the guard the call is made
+// under is that one, and it need not be the guard that held the call. A skill
+// made required, or its trigger widened, while the call waited covers it now;
+// and a job whose box's word on its session never reached its record is
+// rebuilt holding only its own loads ([Resume.parked]), not the skills its
+// launch armed — the safe direction, which asks the run to load them again.
+// Met only as the call ran, after the mark, that refusal was recorded as the
+// call's result: the run told the call was made and failed, and the person's
+// approval used up on a call that never ran. Met here, the call is not made,
+// and the run is told why: it can load the skill and call again, which asks
+// the person afresh.
+//
 // An error is the resume's to retry: the mark could not be written, or the
 // turn's context ended while the call ran.
 func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error {
@@ -132,6 +145,11 @@ func makeHeld(ctx context.Context, surface *tools.Surface, held *HeldCall) error
 		held.outcome = heldOutcome{kind: heldNotMade, why: "the tool's definition changed since " +
 			"the call was held, so it is not the tool the person approved; call it again to ask " +
 			"about the tool as it is now"}
+		return nil
+	}
+	if refused := surface.GuardRefusal(held.Tool); refused != "" {
+		held.outcome = heldOutcome{kind: heldNotMade, why: "the seat's skill guard holds the tool back. " +
+			strings.TrimSuffix(strings.TrimSpace(refused), ".") + "; calling it again asks the person afresh"}
 		return nil
 	}
 	prior, err := held.Commit.Begin(ctx)

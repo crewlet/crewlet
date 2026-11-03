@@ -553,11 +553,14 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// (ADR-0077).
 	//
 	// UNDER THE GUARD OF THE SESSION THAT ASKED IT, as the rebuild armed it:
-	// the job's launch state and its own loads, which is what that session had
-	// read when its call was held. The surface still asks the guard of an
-	// approved call, and a guard emptied for the relaunch first refused a
-	// skill-covered call the person approved, recorded the refusal as the
-	// call's result, and so used up the approval.
+	// the job's own loads, and the skills its launch armed where its box said
+	// it took that session up ([Resume.parked]). The surface still asks the
+	// guard of an approved call, and a guard emptied for the relaunch first
+	// refused a skill-covered call the person approved, recorded the refusal as
+	// the call's result, and so used up the approval. A guard that refuses it
+	// all the same — a skill made required while the call waited, or one the
+	// rebuild cannot hold for want of the box's word — is asked before the call
+	// is marked, which leaves the approval unused ([makeHeld]).
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
