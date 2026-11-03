@@ -356,6 +356,15 @@ type Result struct {
 	// ([SessionCapture.Interrupted]).
 	HarnessCutOff bool
 
+	// JobEnd is how the job was ended on request, as its script recorded it
+	// ([JobEnder], internal/sandbox/executor's Paths.JobEnded): a harness told
+	// to stop, one killed past its grace, or a request that came before the
+	// harness started; "" for a job nobody asked to end, and for a word this
+	// build does not know. A run ended so did not finish, whatever it wrote:
+	// it never reads as a success, and its failure says first that it was
+	// ended.
+	JobEnd JobEnd
+
 	// Kept is what the read that collected this result kept of the job's
 	// session ([Coordinator.takeCapture]), made on the node whose host the
 	// box is on and carried back with the result to whichever node collects,

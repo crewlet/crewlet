@@ -208,9 +208,12 @@ func TestAClaudeRunRecordsItsRelease(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			script := scriptOf(t, commandOf(claude(), req, p, ""))
-			if !strings.HasPrefix(script, "v=$(claude --version < /dev/null 2> /dev/null)") ||
-				strings.Count(script, "--version") != 1 {
-				t.Errorf("the run does not ask its harness's release once, first:\n%s", script)
+			// FIRST, AFTER THE END PROTOCOL alone, which a run's script sets
+			// up before it runs anything (end.go).
+			before, _, asked := strings.Cut(script, "v=$(claude --version < /dev/null 2> /dev/null)")
+			if !asked || strings.Count(script, "--version") != 1 || strings.Contains(before, "claude") ||
+				!strings.Contains(before, "trap endask USR1") {
+				t.Errorf("the run does not ask its harness's release once, first after its end protocol:\n%s", script)
 			}
 			record := strings.Index(script, `"$s" "$k" "$w" "$v" > '`+p.SessionRecord()+"'")
 			start := strings.Index(script, "\nclaude -p ")
