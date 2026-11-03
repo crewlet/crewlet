@@ -1,6 +1,6 @@
 # Cloudflare
 
-Cloudflare gives each agent its **own account API token**, scoped to the zones the company chooses and to the permissions its level allows, and the **Cloudflare API MCP server** to use it through. An agent reads zone analytics, cache status, DNS records, rules and settings as itself and, where you allow it, purges the cache and edits cache rules.
+Cloudflare gives each agent its **own account API token**, scoped to the zones the company chooses and to the permissions its level allows, and the **Cloudflare API MCP server** to use it through. An agent reads zone analytics, cache status, DNS records, rules and settings as itself and, where you allow it, purges the cache, edits cache rules and changes the zones' caching and CDN settings.
 
 The engine mints, narrows, rolls and deletes those tokens itself, through one token you create for it. Nothing here receives events from Cloudflare yet; see [What is not supported yet](#what-is-not-supported-yet).
 
@@ -8,8 +8,11 @@ The engine mints, narrows, rolls and deletes those tokens itself, through one to
 
 | An agent on | Can | Cannot |
 |---|---|---|
-| `read` (the default) | Read zone analytics, account analytics, cache settings and status, DNS records, firewall and WAF rules, SSL and certificate settings and every zone setting, in the company's zones | Change anything |
-| `operate` | Everything `read` can, plus purge the cache and create, edit and delete cache rules | Edit DNS records, WAF rules or any other zone setting |
+| `read` (the default) | Read zone analytics, account analytics, cache rules and status, DNS records, firewall and WAF rules, SSL and certificate settings and every zone setting, in the company's zones | Change anything |
+| `operate` | Everything `read` can, plus purge the cache and create, edit and delete cache rules | Edit DNS records, WAF rules or any zone setting |
+| `configure` | Everything `operate` can, plus change every zone setting (cache level, browser cache TTL, development mode, Always Online, Brotli, HTTP/2 and HTTP/3, early hints, tiered cache and cache reserve among them) and create, edit and delete compression rules | Edit DNS records, WAF rules or certificates |
+
+Cloudflare grants every zone setting as one permission group, so an agent on `configure` can also change a zone's SSL/TLS encryption mode, minimum TLS version and security level. Give it to an agent you trust with those.
 
 Every agent's token is its own, so Cloudflare's audit log names the agent behind each change, and turning one agent off never touches another.
 
@@ -42,17 +45,19 @@ Then add **every permission a level can grant**, so the provisioner holds everyt
 
 | Permission group (API name) | In the dashboard | Granted to |
 |---|---|---|
-| Zone Settings Read | Zone, Zone Settings, Read | `read` and `operate` |
-| Analytics Read | Zone, Analytics, Read | `read` and `operate` |
-| DNS Read | Zone, DNS, Read | `read` and `operate` |
-| Cache Settings Read | Zone, Cache Settings, Read | `read` and `operate` |
-| Firewall Services Read | Zone, Firewall Services, Read | `read` and `operate` |
-| SSL and Certificates Read | Zone, SSL and Certificates, Read | `read` and `operate` |
-| Account Analytics Read | Account, Account Analytics, Read | `read` and `operate` |
-| Cache Purge | Zone, Cache Purge, Purge | `operate` |
-| Cache Settings Write | Zone, Cache Settings, Edit | `operate` |
+| Zone Settings Read | Zone, Zone Settings, Read | `read`, `operate` and `configure` |
+| Analytics Read | Zone, Analytics, Read | `read`, `operate` and `configure` |
+| DNS Read | Zone, DNS, Read | `read`, `operate` and `configure` |
+| Cache Settings Read | Zone, Cache Rules, Read | `read`, `operate` and `configure` |
+| Firewall Services Read | Zone, Firewall Services, Read | `read`, `operate` and `configure` |
+| SSL and Certificates Read | Zone, SSL and Certificates, Read | `read`, `operate` and `configure` |
+| Account Analytics Read | Account, Account Analytics, Read | `read`, `operate` and `configure` |
+| Cache Purge | Zone, Cache Purge, Purge | `operate` and `configure` |
+| Cache Settings Write | Zone, Cache Rules, Edit | `operate` and `configure` |
+| Zone Settings Write | Zone, Zone Settings, Edit | `configure` |
+| Response Compression Write | Zone, Response Compression, Edit | `configure` |
 
-Zone Read and Account Settings Read are granted to both levels as well, which the first table already covers.
+Zone Read and Account Settings Read are granted to every level as well, which the first table already covers. The dashboard names some groups differently from the API (Cache Settings is Cache Rules there), as the Dashboard and API tabs of Cloudflare's [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/) reference show.
 
 Under **Zone resources**, include all zones from the account, or the same zones `provisioning.zones` lists. Leave **Client IP address filtering** empty: the Cloudflare API MCP server refuses a token with IP filtering, and Crewlet never sets it on an agent's token either. An expiry date is your choice; see [The provisioner token's own expiry](#the-provisioner-tokens-own-expiry).
 
@@ -79,7 +84,7 @@ Each agent seat is turned on or off, and given its level, on the integration's *
 | Field | Meaning |
 |---|---|
 | `enabled` | Whether the agent has a Cloudflare token at all. Required in every block. A seat with no block is off, and a new agent seat is off until somebody turns it on. |
-| `level` | `read` or `operate`. Unset is `read`. |
+| `level` | `read`, `operate` or `configure`. Unset is `read`. |
 
 ```yaml
 roles:
@@ -96,14 +101,17 @@ A level is a fixed set of Cloudflare permission groups, the same in every compan
 
 | Level | Permission groups (API names) |
 |---|---|
-| `read` | Zone Read, Zone Settings Read, Analytics Read, DNS Read, Cache Settings Read, Firewall Services Read, SSL and Certificates Read, Account Analytics Read, Account Settings Read |
+| `read` | Zone Read, Zone Settings Read, Analytics Read, DNS Read, Cache Settings Read, Firewall Services Read, SSL and Certificates Read, Account Analytics Read and Account Settings Read |
 | `operate` | Everything in `read`, plus Cache Purge and Cache Settings Write |
+| `configure` | Everything in `operate`, plus Zone Settings Write and Response Compression Write |
 
-Account Settings Read is in both because the Cloudflare API MCP server needs to find the account the token belongs to before it answers anything.
+Account Settings Read is in every level because the Cloudflare API MCP server needs to find the account the token belongs to before it answers anything.
 
 Crewlet looks each group up by its exact name in the account's own list (`GET /accounts/{account_id}/tokens/permission_groups`) on every pass and uses the ID Cloudflare returns, so nothing depends on IDs that could differ between accounts. A name the account does not offer is **a finding, never a fallback**: the token is not minted rather than minted with less, or more, than its level says.
 
-DNS Write, WAF Write and Zone Settings Write are deliberately in no level. An agent that should change DNS or security rules is a decision for a later, separate level.
+`configure` adds what Cloudflare's API reference asks for to change caching and CDN settings: every zone setting, and the tiered cache, cache reserve, cache variants and Argo settings, take Zone Settings Write, and compression rules take Response Compression Write. Page Rules are left out because Cloudflare does not let an account API token use them.
+
+DNS Write, WAF Write and SSL and Certificates Write are deliberately in no level. An agent that should change DNS or security rules is a decision for a later, separate level.
 
 ### What each change does at Cloudflare
 
@@ -204,7 +212,7 @@ A `429` from Cloudflare carries `retry-after`. The engine's own calls honour it,
 
 - **Inbound alerts.** Cloudflare Notifications cannot wake an agent yet: there is no webhook route for them, so an alert reaches nobody. Note that Cloudflare offers several alert types only on paid plans (Health Checks need Pro, and the Origin Error Rate alert needs Enterprise).
 - **A CLI command.** The integration is set up from the dashboard or the company document; there is no `crewlet cloudflare` command.
-- **Write access to DNS, WAF or zone settings.** No level grants it; see [Each agent's access is a level](#each-agents-access-is-a-level).
+- **Write access to DNS, WAF rules or certificates.** No level grants it; see [Each agent's access is a level](#each-agents-access-is-a-level).
 
 ## Troubleshooting
 
@@ -216,7 +224,7 @@ The card's findings, and what clears each:
 | `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or lacks Account API Tokens Write, Account Settings Read or Zone Read | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
 | `credential_expiring` | The provisioner token expires within 14 days | Create a new token and replace it before the date the finding names |
 | `grant_short` | The provisioner token lacks a permission group a level grants | Add the group the finding names to the provisioner token, at Cloudflare |
-| `unknown_tier` | A zone in `provisioning.zones` is not in the account (subject `integrations.cloudflare.provisioning.zones`), or a permission group a level names is not offered to the account (subject `cloudflare level read` or `cloudflare level operate`) | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
+| `unknown_tier` | A zone in `provisioning.zones` is not in the account (subject `integrations.cloudflare.provisioning.zones`), or a permission group a level names is not offered to the account (subject `cloudflare level read`, `cloudflare level operate` or `cloudflare level configure`) | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
 | `registration_orphaned` | Cloudflare holds active account tokens named like this company's agent tokens (`crewlet-<company>-...`) that the engine has no record of | Delete the ones nobody uses at Cloudflare. Crewlet never deletes a token it did not create |
 | `identity_failed` | An agent's token could not be minted, narrowed or rolled; its level names a permission group the account does not offer, so it is not minted; somebody disabled it at Cloudflare; or Cloudflare would not read it back. Cloudflare's reason, or the missing group, is in the detail | Fix what the detail names, then **Retry** on the agent's row. For a token disabled at Cloudflare, choose **Turn back on** or **Keep off** |
 | `identity_missing` | For up to about a minute after you first connect, "access migration has not finished": the one-time step every per-agent integration passes through | Nothing; it clears by itself |

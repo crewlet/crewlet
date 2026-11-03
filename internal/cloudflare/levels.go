@@ -23,7 +23,7 @@ type permission struct {
 	zone    bool
 }
 
-// The permission groups this integration names.
+// The permission groups more than one list here names.
 //
 //nolint:gochecknoglobals // immutable descriptions, not state
 var (
@@ -32,31 +32,55 @@ var (
 	accountTokensWrite = permission{"Account API Tokens Write", "Account API Tokens: Edit", false}
 )
 
-// readPermissions is the read level: everything an agent needs to look at a
-// zone, and Account Settings Read, which Cloudflare's MCP server needs to
-// discover the account at all.
-//
-//nolint:gochecknoglobals // an immutable list, not state
-var readPermissions = []permission{
-	zoneRead,
-	{"Zone Settings Read", "Zone Settings: Read", true},
-	{"Analytics Read", "Analytics: Read", true},
-	{"DNS Read", "DNS: Read", true},
-	{"Cache Settings Read", "Cache Rules: Read", true},
-	{"Firewall Services Read", "Firewall Services: Read", true},
-	{"SSL and Certificates Read", "SSL and Certificates: Read", true},
-	{"Account Analytics Read", "Account Analytics: Read", false},
-	accountSettings,
+// level is one seat level: the ID a document names, how a person reads it,
+// and the groups it grants on top of every level before it.
+type level struct {
+	id, name, note string
+	adds           []permission
 }
 
-// operatePermissions is the operate level: read, plus purging the cache and
-// editing cache rules. DNS, WAF and zone settings writes are deliberately
-// absent.
+// levels is every seat level, least access first, each granting everything
+// the levels before it do. DNS, WAF and SSL writes are in none of them.
 //
-//nolint:gochecknoglobals // an immutable list, not state
-var operatePermissions = append(slices.Clone(readPermissions),
-	permission{"Cache Purge", "Cache Purge: Purge", true},
-	permission{"Cache Settings Write", "Cache Rules: Edit", true})
+//nolint:gochecknoglobals // an immutable table, not state
+var levels = []level{
+	{
+		id: config.CloudflareLevelRead, name: "Read",
+		note: "Reads zones, zone settings, DNS, cache rules, firewall, SSL and analytics",
+		// Account Settings Read is what Cloudflare's MCP server needs to find
+		// the account at all.
+		adds: []permission{
+			zoneRead,
+			{"Zone Settings Read", "Zone Settings: Read", true},
+			{"Analytics Read", "Analytics: Read", true},
+			{"DNS Read", "DNS: Read", true},
+			{"Cache Settings Read", "Cache Rules: Read", true},
+			{"Firewall Services Read", "Firewall Services: Read", true},
+			{"SSL and Certificates Read", "SSL and Certificates: Read", true},
+			{"Account Analytics Read", "Account Analytics: Read", false},
+			accountSettings,
+		},
+	},
+	{
+		id: config.CloudflareLevelOperate, name: "Operate",
+		note: "Everything Read does, plus purging the cache and editing cache rules",
+		adds: []permission{
+			{"Cache Purge", "Cache Purge: Purge", true},
+			{"Cache Settings Write", "Cache Rules: Edit", true},
+		},
+	},
+	{
+		id: config.CloudflareLevelConfigure, name: "Configure",
+		note: "Everything Operate does, plus editing compression rules and every zone setting, " +
+			"the SSL mode and security level included",
+		// Cloudflare grants every zone setting as one group, the cache, tiered
+		// cache, protocol and SSL mode settings alike.
+		adds: []permission{
+			{"Zone Settings Write", "Zone Settings: Edit", true},
+			{"Response Compression Write", "Response Compression: Edit", true},
+		},
+	},
+}
 
 // provisionerOwnPermissions is what the provisioner token needs for itself:
 // to mint and manage tokens, to read the account and to list its zones.
@@ -73,30 +97,28 @@ func names(ps []permission) []string {
 }
 
 // Levels is every seat level, least access first.
-func Levels() []string { return config.CloudflareLevels() }
+func Levels() []string {
+	out := make([]string, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, l.id)
+	}
+	return out
+}
 
 // LevelName is a level as a person reads it.
-func LevelName(level string) string {
-	switch level {
-	case config.CloudflareLevelRead:
-		return "Read"
-	case config.CloudflareLevelOperate:
-		return "Operate"
-	default:
-		return level
+func LevelName(id string) string {
+	if i := slices.IndexFunc(levels, func(l level) bool { return l.id == id }); i >= 0 {
+		return levels[i].name
 	}
+	return id
 }
 
 // LevelNote is the sentence saying what a level grants.
-func LevelNote(level string) string {
-	switch level {
-	case config.CloudflareLevelRead:
-		return "Reads zones, DNS, cache settings, firewall, SSL and analytics"
-	case config.CloudflareLevelOperate:
-		return "Everything Read does, plus purging the cache and editing cache settings"
-	default:
-		return ""
+func LevelNote(id string) string {
+	if i := slices.IndexFunc(levels, func(l level) bool { return l.id == id }); i >= 0 {
+		return levels[i].note
 	}
+	return ""
 }
 
 // Groups is the permission group names a level grants, and false for a level
@@ -106,15 +128,17 @@ func Groups(level string) ([]string, bool) {
 	return names(ps), ok
 }
 
-func levelPermissions(level string) ([]permission, bool) {
-	switch level {
-	case config.CloudflareLevelRead:
-		return readPermissions, true
-	case config.CloudflareLevelOperate:
-		return operatePermissions, true
-	default:
-		return nil, false
+// levelPermissions is everything a level grants: its own groups and those of
+// every level before it.
+func levelPermissions(id string) ([]permission, bool) {
+	var out []permission
+	for _, l := range levels {
+		out = append(out, l.adds...)
+		if l.id == id {
+			return out, true
+		}
 	}
+	return nil, false
 }
 
 // ProvisionerGroups is every permission group the provisioner token has to

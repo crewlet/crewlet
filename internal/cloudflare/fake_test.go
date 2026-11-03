@@ -96,6 +96,7 @@ var (
 	zoneGroups = []string{
 		"Zone Read", "Zone Settings Read", "Analytics Read", "DNS Read", "Cache Settings Read",
 		"Firewall Services Read", "SSL and Certificates Read", "Cache Purge", "Cache Settings Write",
+		"Zone Settings Write", "Response Compression Write",
 	}
 	accountGroups = []string{
 		"Account Analytics Read", "Account Settings Read", "Account API Tokens Write", "Account API Tokens Read",

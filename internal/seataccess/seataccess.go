@@ -208,7 +208,8 @@ type Desired struct {
 	//     sorted and space-separated (`create:page read:space`).
 	//   - mattermost: the roles, space-separated in Mattermost's own order
 	//     ([config.MattermostRoleSets]).
-	//   - cloudflare: `read` or `operate`, an unset level reading as read.
+	//   - cloudflare: `read`, `operate` or `configure`, an unset level reading
+	//     as read.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

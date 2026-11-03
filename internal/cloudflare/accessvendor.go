@@ -172,14 +172,14 @@ func (s *accessSession) catalogue(ctx context.Context) (catalogue, error) {
 	return cat, nil
 }
 
-// Options is Cloudflare's two levels, least access first. Fixed: a level is
+// Options is Cloudflare's levels, least access first. Fixed: a level is
 // this engine's set of permission groups, not something Cloudflare lists.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	levels := make([]seataccess.Level, 0, len(Levels()))
-	for _, id := range Levels() {
-		levels = append(levels, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id)})
+	out := make([]seataccess.Level, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, seataccess.Level{ID: l.id, Name: l.name, Note: l.note})
 	}
-	return seataccess.Options{Lane: lane, Levels: levels, Rotatable: true}, nil
+	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true}, nil
 }
 
 // Observe reads back the token the ledger records for each seat, by ID. A

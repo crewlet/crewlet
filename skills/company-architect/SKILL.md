@@ -359,8 +359,8 @@ and writing the masked value back keeps the stored one.
 **An agent's own account at a managed integration is the engine's.** Turn a
 seat on with `roles[].integrations.<kind>.enabled: true` and its access in
 the vendor's own terms (a Datadog role id, GitLab's `access_level`,
-Mattermost's `roles` and `channels`, Cloudflare's `read` or `operate`
-level, and so on), or on the integration's
+Mattermost's `roles` and `channels`, Cloudflare's `read`, `operate` or
+`configure` level, and so on), or on the integration's
 Agents tab. The engine creates the account and seals its token under a name
 it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
 `MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not

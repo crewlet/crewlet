@@ -12,8 +12,8 @@
  * (a Datadog role id; a GitLab `access_level` such as "30", or
  * "member_role:<id>"; a Jira project role id; a Confluence space role id, or
  * sorted "<op>:<target>" permissions; Mattermost roles such as "system_user
- * system_post_all_public"; Cloudflare's `read` or `operate`, Crewlet's two
- * sets of permission groups) and is drawn under the vendor's exact name, which
+ * system_post_all_public"; Cloudflare's `read`, `operate` or `configure`,
+ * Crewlet's own sets of permission groups) and is drawn under the vendor's exact name, which
  * `options` carries. Datadog's, Jira's and Confluence's lists are read live
  * from the vendor, so no list of them lives here. GitHub has no levels; a
  * seat holds GitHub App permissions.

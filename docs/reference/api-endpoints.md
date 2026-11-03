@@ -4089,7 +4089,7 @@ writes. Each agent seat's setting lives in the company document under
 `roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
 on there, its role or level as the identifier the vendor's API takes (a
 Datadog role id, a GitLab access level, a Jira project role id; Cloudflare's
-`read` or `operate`, each a fixed set of permission groups), GitHub's
+`read`, `operate` or `configure`, each a fixed set of permission groups), GitHub's
 permissions, and the scope it is narrowed to. A lane is the block's key:
 `atlassian` has two, `jira` and `confluence`, over one account per agent, and
 every other integration has one named after itself. Jira and Confluence asked
