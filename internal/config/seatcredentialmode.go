@@ -81,6 +81,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.Cloudflare != nil && in.Cloudflare.Enabled && in.Cloudflare.Provisioning != nil
 	case "expo":
 		engine = in.Expo != nil && in.Expo.Enabled && in.Expo.Provisioning != nil
+	case "digitalocean":
+		engine = in.DigitalOcean != nil && in.DigitalOcean.Enabled && in.DigitalOcean.Provisioning != nil
 	case "scaleway":
 		engine = in.Scaleway != nil && in.Scaleway.Enabled && in.Scaleway.Provisioning != nil
 	}

@@ -165,6 +165,7 @@ func (e *Engine) syncSeatAccess(
 		Vendor: vendor,
 		Open: seataccess.OpenInput{
 			Config: company.Config, Org: company.Org, Env: e.resolver(), Operator: in.operator,
+			Derive: e.deriveKey,
 			// A DRY RUN HANDS NEITHER, so a session rotates and registers
 			// nothing (vendor.go).
 			Sink: in.sink, WebhookBase: in.webhookBase,

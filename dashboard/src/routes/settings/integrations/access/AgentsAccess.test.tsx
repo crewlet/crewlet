@@ -22,6 +22,8 @@ import {
   cloudflareAnswer,
   confluenceAnswer,
   datadogAnswer,
+  digitaloceanAnswer,
+  digitaloceanWaitingAnswer,
   expoAnswer,
   expoRetiredAnswer,
   expoWaitingAnswer,
@@ -863,6 +865,60 @@ test("the table is the kit's: a named table of real rows, with column headers an
 // its one control opens the Set up sheet, which holds Expo's page and the
 // paste, so the row offers no "Done, check again" a paste would make pointless.
 // Mutation: drop the lane's handoff words and the row falls back to Open Expo.
+// A DIGITALOCEAN TOKEN ACTS AS THE PERSON WHO MADE IT: the details say whose
+// it is and never the engine's fingerprint of it, and its tool is either the
+// MCP server or doctl in the box. Mutation: draw `account_id` as the account.
+test("a DigitalOcean seat's details say whose token it is, its level and both routes to its tool", () => {
+  draw(digitaloceanAnswer());
+  details("SRE", "DigitalOcean");
+  const facts = within(
+    document.querySelector<HTMLElement>('dl[aria-label="SRE on DigitalOcean"]')!,
+  );
+  expect(facts.getByText("Miles on gophrase")).toBeTruthy();
+  expect(facts.getByText("Token scopes")).toBeTruthy();
+  expect(facts.getByText("Operate")).toBeTruthy();
+  expect(facts.getByText("DIGITALOCEAN_TOKEN_SRE")).toBeTruthy();
+  expect(
+    facts.getByText(
+      "Live, the DigitalOcean MCP server, or doctl in its box, as DIGITALOCEAN_ACCESS_TOKEN",
+    ),
+  ).toBeTruthy();
+  expect(document.body.textContent).not.toContain("hmac-sre");
+});
+
+// NO TOOL IS EITHER ROUTE MISSING: the MCP server is offered first, then the
+// agent's own doctl line. Mutation: drop tool_server and the server goes unsaid.
+test("a DigitalOcean agent with no tool is offered the MCP server, then doctl's line", () => {
+  draw(digitaloceanAnswer({ tool: "no_server" }));
+  expect(screen.getByText("No DigitalOcean tool for its agents")).toBeTruthy();
+  const advice = screen.getByText(/SRE has an account at DigitalOcean and nothing to use it with/);
+  expect(advice.textContent).toContain("Add the digitalocean tool server");
+  expect(advice.textContent).toContain(
+    'or add DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}" to SRE\'s sandbox.env',
+  );
+});
+
+// CREWLET REVOKES A DIGITALOCEAN TOKEN ITSELF, so turning an agent off asks
+// the person for nothing. Mutation: Expo's words here and the review says to
+// delete something at the vendor.
+test("turning a DigitalOcean seat off says Crewlet revokes its token at once", async () => {
+  draw(digitaloceanAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "SRE on DigitalOcean" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      /Crewlet revokes the agent's token at DigitalOcean, so it stops working at once/,
+    ),
+  ).toBeTruthy();
+});
+
+test("a DigitalOcean agent waiting on its token reads Needs you, with Set up opening the sheet", () => {
+  draw(digitaloceanWaitingAnswer());
+  expect(screen.getByText("Needs you")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+  expect(screen.getByRole("dialog", { name: "Set up PM on DigitalOcean" })).toBeTruthy();
+});
+
 test("an Expo agent waiting on its robot reads Needs you, with Set up opening the sheet", () => {
   draw(expoWaitingAnswer());
   expect(screen.getByText("Needs you")).toBeTruthy();
@@ -1224,7 +1280,9 @@ test("a Scaleway seat's details name its application, its permission sets, its k
   expect(facts.getByText("Operate")).toBeTruthy();
   expect(facts.getByText("SCALEWAY_SECRET_KEY_SRE")).toBeTruthy();
   expect(
-    facts.getByText("Live, Scaleway CLI (scw) in its box, or the Scaleway MCP server"),
+    facts.getByText(
+      "Live, the Scaleway MCP server, or scw in its box, as SCW_SECRET_KEY and SCW_ACCESS_KEY",
+    ),
   ).toBeTruthy();
   expect(
     facts.getByText(

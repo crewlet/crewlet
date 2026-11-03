@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -39,6 +40,22 @@ func (accessVendor) Catalog() seataccess.Catalog {
 			BoxEnv: []seataccess.BoxVar{{Field: TokenField, Env: ToolEnv}},
 		}},
 	}
+}
+
+// HandInName is the name a person gives the seat's robot at Expo.
+func (accessVendor) HandInName(c *config.Company, seat seataccess.SeatRef, _ seataccess.Lane,
+	_ seataccess.Desired) string {
+	return RobotName(c.Name, seat.Handle)
+}
+
+// StepsFor is [accessVendor.Steps] naming the robot to create before any pass
+// has seen it, from the name a person gives it.
+func (v accessVendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	have := in.Have
+	if have.Account == "" {
+		have.Account = in.HandIn
+	}
+	return v.Steps(in.Seat, in.Lane, in.Op, in.Want, have)
 }
 
 // Steps is each op as it is taken, in order. Pure.
@@ -180,7 +197,8 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 	for _, id := range Levels() {
 		out = append(out, seataccess.Level{ID: id, Name: LevelName(id), Note: LevelNote(id)})
 	}
-	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: AccessTokensURL(s.account)}, nil
+	return seataccess.Options{Lane: lane, Levels: out, Rotatable: true, ActionURL: AccessTokensURL(s.account),
+		VendorAccount: s.account}, nil
 }
 
 // Observe reads each seat's robot with the seat's own sealed token. A seat

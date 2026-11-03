@@ -62,7 +62,7 @@ roles:
 		t.Fatalf("the executor chain: %v", err)
 	}
 	agent := member.Provider.(*harness.Provider)
-	executor := newExecutorRun(agent, run.env, nil)
+	executor := newExecutorRun(agent, run)
 	secrets := launchSecrets(agent, run, executor.env)
 
 	for class, want := range map[string]string{

@@ -1795,13 +1795,22 @@ const (
 	// merged tree, taking it from 5488.4 KiB (5,620,173 bytes) to 5486.1 KiB
 	// (5,617,793 bytes). It moved down by main's own 2 KiB, from 5489 KiB to
 	// the measured size's next KiB: 5487 KiB.
+	// DigitalOcean (its catalogue entry, and the Set up sheet taught a token
+	// that is the agent's whole identity: the team to switch to, the name to
+	// type, and a numbered guide to the scope picker derived from the levels'
+	// grants and the lane's refused and unneeded scopes, with Regenerate Token
+	// on a rotate), with Expo's story and builder facts aligned with its
+	// hand-off, took it from 5486.1 KiB (5,617,793 bytes) to 5492.0 KiB
+	// (5,623,824 bytes, +6,031 bytes): the integrations model chunk +5,666
+	// bytes, the catalogue chunk +241 and the org nodes chunk +92, the
+	// initial load unchanged. The measured size's next KiB: 5493 KiB.
 	// The Scaleway integration (its catalogue entry, story and Agents tab
 	// words, a two-route lane's live tool line, and the org builder's Scaleway
-	// facts), merged onto that tree, took it from 5486.1 KiB (5,617,793 bytes)
-	// to 5487.9 KiB (5,619,610 bytes): +1,817 bytes, the same the screens
-	// added on their own branch. The initial load did not grow. It moved up
-	// to the measured size's next KiB: 5488 KiB, 102 bytes clear.
-	treeBudget = 5<<20 + 368<<10
+	// facts), merged onto that tree with its tool named server first as
+	// DigitalOcean's is, took it from 5492.0 KiB (5,623,824 bytes) to 5493.8
+	// KiB (5,625,610 bytes, +1,786 bytes). The initial load did not grow. It
+	// moved up to the measured size's next KiB: 5494 KiB, 246 bytes clear.
+	treeBudget = 5<<20 + 374<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

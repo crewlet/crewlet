@@ -90,6 +90,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&cloudflarePass{engine: e},
 		&scalewayPass{engine: e},
 		&expoPass{engine: e},
+		&digitaloceanPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }

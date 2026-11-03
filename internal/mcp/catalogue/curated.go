@@ -26,6 +26,9 @@ var (
 	// Cloudflare's remote server reads an account API token as a bearer
 	// header, and has no local counterpart this build binds.
 	cloudflareKeys = []SeatKey{{Field: "API_TOKEN", Header: "Authorization", Prefix: "Bearer "}}
+	// DigitalOcean's remote servers, its router and each service's own, read
+	// a personal access token as a bearer header.
+	digitaloceanKeys = []SeatKey{{Field: "TOKEN", Header: "Authorization", Prefix: "Bearer "}}
 	// glab reads GITLAB_TOKEN, the community GitLab servers
 	// GITLAB_PERSONAL_ACCESS_TOKEN: one integration, two spellings.
 	glabKeys         = []SeatKey{{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"}}
@@ -180,6 +183,24 @@ var curated = sync.OnceValue(func() []Entry {
 			Docs:        "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
 			ReadAt:      "2026-11-01",
 			recognise:   []recognition{{match: hostIs("mcp.cloudflare.com"), keys: cloudflareKeys}},
+		},
+		{
+			ID: "digitalocean", Name: "digitalocean", Title: "DigitalOcean", Vendor: "digitalocean",
+			Description: "Droplets, Kubernetes, databases, networking, volumes, apps and monitoring, through " +
+				"DigitalOcean's own MCP router.",
+			Transport: TransportHTTP, URL: "https://mcp.digitalocean.com/mcp",
+			Headers: []Input{{Name: "Authorization", Required: true, Secret: true, FromIntegration: true,
+				Format: "Bearer <personal access token>",
+				Description: "A personal access token: each agent's own where the DigitalOcean integration is on. " +
+					"Its scopes bound every tool the router runs."}},
+			Auth:        []AuthMethod{AuthIntegration, AuthOAuth, AuthHeaders},
+			OAuthClient: ClientDCR,
+			Integration: "digitalocean",
+			Docs:        "https://docs.digitalocean.com/reference/mcp/configure-mcp/",
+			ReadAt:      "2026-11-03",
+			// THE ROUTER AND EVERY SERVICE'S OWN SERVER sit under one domain
+			// and read the same bearer token.
+			recognise: []recognition{{match: hostUnder("mcp.digitalocean.com"), keys: digitaloceanKeys}},
 		},
 		{
 			// OAUTH ONLY, AND NO SEAT BINDING: the server is its own

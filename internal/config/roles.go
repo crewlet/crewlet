@@ -352,10 +352,10 @@ type RoleSandbox struct {
 	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
 	// variable of its own, and only LLM credentials derive automatically —
-	// but for the engine's own code host: a run given repositories on it is
-	// handed its run's git credential and git configuration by the engine
-	// (ADR-0093), whose variables ([ReservedSandboxEnv]) no value here may
-	// set.
+	// but for the engine's own code host: every launch on a node that serves
+	// it is handed the run's git credential and git configuration by the
+	// engine (ADR-0093), whose variables ([ReservedSandboxEnv]) no value here
+	// may set.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's executor run; declare external tokens here."`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,
@@ -437,23 +437,24 @@ func (s *RoleSandbox) EnvValue(key string) (string, bool) {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
-	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
-	Datadog    *RoleDatadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
-	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
-	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
-	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
-	Cloudflare *RoleCloudflare `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
-	Expo       *RoleExpo       `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
-	Scaleway   *RoleScaleway   `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
+	GitHub       *RoleGitHub       `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack        *RoleSlack        `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost   *RoleMattermost   `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog      *RoleDatadog      `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab       *RoleGitLab       `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira         *RoleJira         `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence   *RoleConfluence   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
+	Cloudflare   *RoleCloudflare   `yaml:"cloudflare,omitempty" json:"cloudflare,omitempty" desc:"This seat's own Cloudflare account API token: whether it is on and its level."`
+	Expo         *RoleExpo         `yaml:"expo,omitempty" json:"expo,omitempty" desc:"This seat's own Expo robot user: whether it is on and its level."`
+	DigitalOcean *RoleDigitalOcean `yaml:"digitalocean,omitempty" json:"digitalocean,omitempty" desc:"This seat's own DigitalOcean personal access token: whether it is on and its level."`
+	Scaleway     *RoleScaleway     `yaml:"scaleway,omitempty" json:"scaleway,omitempty" desc:"This seat's own Scaleway IAM application: whether it is on, its level and its projects."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
 		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil &&
-		r.Cloudflare == nil && r.Expo == nil && r.Scaleway == nil
+		r.Cloudflare == nil && r.Expo == nil && r.DigitalOcean == nil && r.Scaleway == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.

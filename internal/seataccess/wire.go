@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -38,6 +39,41 @@ type LaneAnswer struct {
 	// Box is what the seat's executor box holds for a CLI there to use the
 	// lane ([BoxOf]); nil where the lane's tool is a server.
 	Box *Box `json:"box,omitempty"`
+
+	// HandIn is what a person makes at the vendor for this lane, where a
+	// person hands its credential in ([HandsIn]); nil elsewhere.
+	HandIn *HandIn `json:"hand_in,omitempty"`
+}
+
+// HandIn is what a person makes at the vendor for a seat.
+type HandIn struct {
+	// Name is the name to give it at the vendor, at the seat's desired
+	// level. Computed by the engine, never read back from the vendor.
+	Name string `json:"name"`
+}
+
+// HandInNamer is a [Vendor] whose seats' credentials a person makes and names
+// at the vendor: the name to give one seat's, at its desired level. Pure.
+type HandInNamer interface {
+	HandInName(c *config.Company, seat SeatRef, lane Lane, want Desired) string
+}
+
+// HandInOf is the lane's [HandIn] for the seat, or nil where vendor names none.
+func HandInOf(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired) *HandIn {
+	if name := handInName(v, c, seat, lane, want); name != "" {
+		return &HandIn{Name: name}
+	}
+	return nil
+}
+
+// handInName is [HandInNamer]'s name for the seat, "" where v names none or
+// no document was handed.
+func handInName(v Vendor, c *config.Company, seat SeatRef, lane Lane, want Desired) string {
+	namer, ok := v.(HandInNamer)
+	if !ok || c == nil {
+		return ""
+	}
+	return namer.HandInName(c, seat, lane, want)
 }
 
 // Box is a seat's executor box as one lane needs it.

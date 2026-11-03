@@ -38,8 +38,9 @@ export interface LaneWords {
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
   /**
-   * Where only a person can make the agent's account at the vendor, and pastes
-   * its token here (Expo's robots): the vendor's nouns the Set up sheet uses.
+   * Where only a person can make the agent's credential at the vendor, and
+   * pastes it here (Expo's robots, DigitalOcean's tokens): the vendor's nouns
+   * the Set up sheet uses.
    */
   handoff?: HandoffWords;
   /**
@@ -54,22 +55,64 @@ export interface LaneWords {
   release?: string;
 }
 
-/** The vendor's own words for the account a person makes for an agent, and the controls they press. */
+/** The vendor's own words for what a person makes for an agent there, and the controls they press. */
 export interface HandoffWords {
-  /** What the agent's account is called at the vendor, in a sentence: "robot". */
-  account: string;
-  /** The same, as a label: "Robot". */
-  accountLabel: string;
-  /** The control that makes one: "Add robot". */
-  add: string;
-  /** The control on its row that makes its token: "Create token". */
-  mint: string;
-  /** Where its role is changed, in its row's menu: "Edit robot". */
-  edit: string;
   /** Why the agent needs one of its own, under the sheet's title. */
   why: string;
-  /** The role never to pick, said under the role to pick. */
+  /** What never to pick at the vendor, said under what to pick. */
   never: string;
+  /**
+   * Where the agent has an account of its own there, which the person makes
+   * before its token (Expo's robots). Absent where the token is the agent's
+   * whole identity (DigitalOcean's), so the sheet starts at the token.
+   */
+  account?: HandoffAccountWords;
+  /** The token the person makes there and pastes here. */
+  token: HandoffTokenWords;
+}
+
+/** The vendor's words for an agent's own account there. */
+export interface HandoffAccountWords {
+  /** What it is called in a sentence: "robot". */
+  noun: string;
+  /** The same, as a label: "Robot". */
+  label: string;
+  /** The control that makes one: "Add robot". */
+  add: string;
+  /** Where its role is changed, in its row's menu: "Edit robot". */
+  edit: string;
+}
+
+/** The vendor's words for the token a person makes for an agent. */
+export interface HandoffTokenWords {
+  /** The vendor's verb for making one, in the sheet's step: "Create", "Generate". */
+  verb: string;
+  /** The control that makes it: on the account's row ("Create token"), or on the vendor's tokens page ("Generate New Token"). */
+  mint: string;
+  /** Where the vendor renews a token in place, keeping its name and scopes, the control in its row's menu: "Regenerate Token". */
+  regenerate?: string;
+  /** That the vendor shows its value once, and when to copy it. */
+  once: string;
+  /** Where it is made on a form of the vendor's (DigitalOcean's), that form's words. */
+  form?: HandoffFormWords;
+}
+
+/** The fields of a vendor's token form, and the controls of its scope picker. */
+export interface HandoffFormWords {
+  /** Where to switch to what the company connected (`vendor_account`) before making the token. */
+  switchTo: (account: string | undefined) => string;
+  /** The field the token's name goes in: "Token name". */
+  name: string;
+  /** The expiry field, and what to choose in it. */
+  expiry: { label: string; advice: string };
+  /** The scopes field, and the choice that lets a person tick them: "Custom Scopes". */
+  scopes: { label: string; custom: string };
+  /** The picker's bulk control, its every-read choice, and the other choices never to use. */
+  bulk: { control: string; reads: string; others: string };
+  /** The picker's search, which finds a section by its resource. */
+  search: string;
+  /** A dialog the vendor may raise when the token is made, and the right answer to it. */
+  confirm?: string;
 }
 
 /** What an old credential is called on a lane whose words name none. */
@@ -206,7 +249,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       emptyOn: "Not in any project yet, so it can reach nothing. Choose its projects.",
       none: "No projects in the organization",
     },
-    tool: "Scaleway CLI (scw) in its box, or the Scaleway MCP server",
+    tool: "the Scaleway MCP server, or scw in its box",
   },
   expo: {
     name: "Expo",
@@ -219,16 +262,59 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "You create a new token for the same robot at Expo and paste it here. Crewlet checks it is the same robot and seals it, then asks you to delete the old token.",
     tool: "EAS CLI in its box",
     handoff: {
-      account: "robot",
-      accountLabel: "Robot",
-      add: "Add robot",
-      mint: "Create token",
-      edit: "Edit robot",
       why: "Each agent acts at Expo as its own robot, so its builds and updates are attributable to it.",
       never: "Never choose Admin: agents never hold it.",
+      account: { noun: "robot", label: "Robot", add: "Add robot", edit: "Edit robot" },
+      token: {
+        verb: "Create",
+        mint: "Create token",
+        once: "Expo shows the token's value once, so copy it before you close that dialog.",
+      },
     },
     retired: { one: "An old token", many: "old tokens" },
     release: "Keep the robot at Expo",
+  },
+  digitalocean: {
+    name: "DigitalOcean",
+    access: "Token scopes",
+    turnOn:
+      "Turning it on asks you to create a DigitalOcean token for the agent with the chosen level's scopes and paste it here. Crewlet checks the token and keeps it.",
+    off: "Crewlet revokes the agent's token at DigitalOcean, so it stops working at once, and clears its sealed copy. Turning it back on asks you for a new token.",
+    remove:
+      "Crewlet has already revoked the agent's token at DigitalOcean, so removing only stops Crewlet tracking it.",
+    rotate:
+      "You regenerate the agent's token at DigitalOcean, or create a new one, and paste it here. Crewlet checks it, seals it and revokes the old one if it still works.",
+    tool: "the DigitalOcean MCP server, or doctl in its box",
+    handoff: {
+      why: "Each agent gets its own token, so you can cut off one agent without touching the others. DigitalOcean records its actions under the person who created the token; Crewlet records which agent took each one.",
+      never: "Never choose Full Access or Read Only: Crewlet refuses both.",
+      token: {
+        verb: "Generate",
+        mint: "Generate New Token",
+        regenerate: "Regenerate Token",
+        once: "DigitalOcean shows the token once, so copy it before you leave the page.",
+        form: {
+          switchTo: (team) =>
+            `In the team menu at the top of the control panel, switch to ${team ?? "the team Crewlet is connected to"}.`,
+          name: "Token name",
+          expiry: {
+            label: "Expiration",
+            advice:
+              "The longest your policy allows. When it runs out, this agent shows Needs you here and you paste a new token.",
+          },
+          scopes: { label: "Scopes", custom: "Custom Scopes" },
+          bulk: {
+            control: "Quick bulk scope select",
+            reads: "Select all Reads",
+            others: "Select all Creates, Updates or Deletes",
+          },
+          search: "Search by resource type",
+          confirm:
+            "If DigitalOcean shows Required scopes when you generate the token, choose Add scopes and continue.",
+        },
+      },
+    },
+    retired: { one: "An old token", many: "old tokens" },
   },
 };
 

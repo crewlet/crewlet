@@ -73,16 +73,17 @@ type Lane string
 
 // The lanes this build manages.
 const (
-	LaneDatadog    Lane = "datadog"
-	LaneGitHub     Lane = "github"
-	LaneGitLab     Lane = "gitlab"
-	LaneJira       Lane = "jira"
-	LaneConfluence Lane = "confluence"
-	LaneSlack      Lane = "slack"
-	LaneMattermost Lane = "mattermost"
-	LaneCloudflare Lane = "cloudflare"
-	LaneExpo       Lane = "expo"
-	LaneScaleway   Lane = "scaleway"
+	LaneDatadog      Lane = "datadog"
+	LaneGitHub       Lane = "github"
+	LaneGitLab       Lane = "gitlab"
+	LaneJira         Lane = "jira"
+	LaneConfluence   Lane = "confluence"
+	LaneSlack        Lane = "slack"
+	LaneMattermost   Lane = "mattermost"
+	LaneCloudflare   Lane = "cloudflare"
+	LaneExpo         Lane = "expo"
+	LaneDigitalOcean Lane = "digitalocean"
+	LaneScaleway     Lane = "scaleway"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -91,7 +92,7 @@ const (
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneScaleway,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway,
 	}
 }
 
