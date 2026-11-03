@@ -174,7 +174,7 @@ func TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns(t *testing.T) {
 		// FIFTY LEFT: room for the static floor of thirty, and none for a
 		// launch whose session's last request carried fifty beside a brief
 		// of ten.
-		holder.spend(t, 50)
+		holder.spendIn(ctx, t, 50)
 		return turn.Result{}, executorHeadroom(ctx, staticRemaining{left: 50},
 			launchFloor{static: 30}.continuing(50, 10))
 	}

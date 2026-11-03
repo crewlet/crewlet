@@ -211,13 +211,20 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 // spend puts tokens on the Lead's counters in the windows of the rig's clock.
 func (r *parkRig) spend(t *testing.T, tokens int) {
 	t.Helper()
+	r.spendIn(t.Context(), t, tokens)
+}
+
+// spendIn is [parkRig.spend] under ctx, for a caller that holds a context of
+// its own: a turn's frame the rig plays charges under the frame's context.
+func (r *parkRig) spendIn(ctx context.Context, t *testing.T, tokens int) {
+	t.Helper()
 	c := r.e.Company()
 	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle("lead"))
 	if !ok {
 		t.Fatal("the Lead has no agent id")
 	}
 	berlin := c.Config.Location()
-	if _, err := r.fleet.PostCharge(t.Context(), coord.AgentScope(id.String()), tokens,
+	if _, err := r.fleet.PostCharge(ctx, coord.AgentScope(id.String()), tokens,
 		coord.WindowsAt(r.clock(), berlin)); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
