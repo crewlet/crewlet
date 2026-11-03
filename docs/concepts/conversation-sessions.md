@@ -132,7 +132,11 @@ the latest, the last to end among turns that read at one position, and a turn
 whose read failed comes after every turn that read. A turn that read early and
 ended late is told and offered beside the head, never continued, and the next
 turn's end absorbs it. A schedule's fires run beside a parked fire every time
-([Schedules](#schedules)).
+([Schedules](#schedules)). The seat's session budget still releases the oldest
+end first ([`max_bytes_per_seat`](#configuration)), so it can release a head
+before a stale sibling — a turn that read the conversation earlier and ended
+later — and the next turn then continues the newest session the seat still
+keeps and is told every newer ending, the released head's among them.
 
 **A turn's end absorbs what its brief told.** Once a turn of the conversation
 that kept a session of its own ends, the turns its brief told — the head it
@@ -241,9 +245,9 @@ waited in a seat's inbox together run once, on that one key.
 - **A fire parked on a question holds nothing up.** The schedule's next fires
   run beside it, each continuing the one before; when the parked fire is
   answered or stopped and ends after them, the next fire still continues the
-  last of them — the head is the turn that read the conversation last — and is
-  told how the parked one ended
-  ([Read once, frozen, held](#read-once-frozen-held)).
+  last of them, while the seat's session budget keeps its session — the head is
+  the turn that read the conversation last — and is told how the parked one
+  ended ([Read once, frozen, held](#read-once-frozen-held)).
 
 [Scheduling](scheduling.md#each-fire-continues-the-last-fires-session) has the
 whole of it.
@@ -313,10 +317,8 @@ fires come further apart than the retention starts every fire fresh
 ([Schedules](#schedules)).
 
 **`max_bytes_per_seat`** is the most one seat's sessions may hold: past it a
-capture releases the seat's ended sessions, keeping how each turn ended, the
-oldest first by when each turn read its conversation (a turn that read none
-before any that did), so a conversation's head is the last of its sessions to
-go; and a capture the seat's live turns leave no room for is refused, so
+capture releases the seat's oldest ended sessions first, keeping how each turn
+ended, and a capture the seat's live turns leave no room for is refused, so
 that turn's next launch starts fresh. A session a live turn's first launch was
 handed is held until that turn keeps a session of its own or ends, so it
 counts beside the seat's live turns for as long. The default, 64 MiB, holds a

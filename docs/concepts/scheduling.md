@@ -446,10 +446,15 @@ take the line over: a conversation's head is the turn that read it last
 ([Read once, frozen, held](conversation-sessions.md#read-once-frozen-held)), so
 the next fire continues the session the last of those fires left, is told how
 the parked one ended, and its end absorbs the parked fire's session with the
-rest. The person's answer is in that session alone, so no later fire reads it;
-what the parked fire did with it is told in its ending. And the schedule never
-waits for the answer: it fires whatever its last run is doing, as a failing or
-timed-out run never blocks its next tick
+rest. The person's answer is in that session alone, so the fire that continues
+the line does not read it; what the parked fire did with it is told in its
+ending. Under budget pressure the seat's session budget, which releases the
+oldest end first, can release the last of those fires' session before the
+parked fire's; the next fire then continues the newest session the seat still
+keeps, the parked fire's, answer and all, and is told how the later fires ended
+([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)).
+And the schedule never waits for the answer: it fires whatever its last run is
+doing, as a failing or timed-out run never blocks its next tick
 ([Hard wall-clock timeout](#hard-wall-clock-timeout)).
 
 ### Fires that wait for a seat's mailbox

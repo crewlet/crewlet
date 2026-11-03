@@ -246,10 +246,14 @@ func scanSession(row rowScanner) (Session, error) {
 // ending last, it would be continued while their line, which its read never
 // saw, was told and then absorbed by the next end. So the head is the ended
 // turn that read the conversation last, the newest end among turns that read
-// it at one position; and a turn that read nothing — its read failed, so it
-// continued nothing and absorbs nothing — sorts before every turn that did. A
-// turn that read early and ended late is told and offered beside the head, as
-// every other ended turn is, and absorbed by the next end.
+// it at one position, and a turn that read nothing — its read failed, so it
+// continued nothing and absorbs nothing — after every turn that read. A turn
+// that read early and ended late is told and offered beside the head, as every
+// other ended turn is, and absorbed by the next end.
+//
+// The seat's budget releases the oldest END first ([seatPlan]), so it can
+// release a head before such a turn: the head is then the newest session the
+// seat still keeps, and the released head is told among the endings.
 //
 // # What is left of a conversation is what no ended turn was shown
 //
@@ -262,10 +266,10 @@ func scanSession(row rowScanner) (Session, error) {
 // it, beside a turn parked on a person, shown to nobody, and then absorbed by
 // the next end as though it had been.
 type Head struct {
-	// Session is the conversation's HEAD: of its ended turns that left a
-	// session, the one that read the conversation last, which the next turn
-	// continues (see above). Nil where none left one, and the launch starts
-	// fresh.
+	// Session is the conversation's HEAD: of its ended turns whose rows
+	// still name a session, the one that read the conversation last, which
+	// the next turn continues (see above). Nil where none names one, and the
+	// launch starts fresh.
 	Session *Session
 
 	// Endings are the conversation's other ended turns, session or not: how

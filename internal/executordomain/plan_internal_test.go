@@ -46,16 +46,16 @@ import (
 //     in some registered plan, the collector's object index through the
 //     statements the object store builds from [SessionObjectReferences].
 //
-// Mutation: drop `executor_sessions_release_idx` and the budget's release sorts
+// Mutation: drop `executor_sessions_ended_idx` and the budget's release sorts
 // a seat's ended sessions inside the apply; order the head by `read_through
-// DESC, end_seq ASC`, which its index serves in neither direction, and the
-// head sorts a conversation's ended turns; order the endings by `end_seq DESC,
-// turn_id DESC` with no index to serve the second column and the head's
-// endings sort; page by `version` again and the inventory names
-// `executor_sessions_seat_idx` as reached by nothing; drop the bases' partial
-// index's predicate from the hold's point read and it cannot seek the index it
-// names; read a covered table in a new literal anywhere in the module without
-// registering it, and the walk names the file.
+// DESC, end_seq ASC`, which `executor_sessions_line_idx` serves in neither
+// direction, and the head sorts a conversation's ended turns; order the
+// endings by `end_seq DESC, turn_id DESC` with no index to serve the second
+// column and the head's endings sort; page by `version` again and the
+// inventory names `executor_sessions_seat_idx` as reached by nothing; drop the
+// bases' partial index's predicate from the hold's point read and it cannot
+// seek the index it names; read a covered table in a new literal anywhere in
+// the module without registering it, and the walk names the file.
 func TestTheExecutorStatementsArePlanned(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -159,7 +159,7 @@ type executorIndexed struct {
 }
 
 // The indexes the reads are held to, beside the six the statements name
-// themselves (sessionKey, conversationIdx, lineIdx, releaseIdx, seatIdx,
+// themselves (sessionKey, conversationIdx, lineIdx, endedIdx, seatIdx,
 // heldIdx).
 const (
 	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
@@ -221,13 +221,14 @@ func executorReads(t *testing.T) map[string]executorIndexed {
 			indexes:         []string{sessionKey, conversationIdx},
 		},
 
-		// A REMOVED SEAT'S LIVE TURNS, through the key whose order they are
-		// read in.
-		"a removed seat's live turns": seek(sessionKey, seatLiveStatement, seat),
+		// A REMOVED SEAT'S LIVE TURNS, in the order of their key.
+		"a removed seat's live turns": {
+			executorPlanned: executorPlanned{seatLiveStatement, []any{seat}},
+			indexes:         []string{sessionKey, endedIdx},
+		},
 
-		// THE BUDGET'S RELEASE, the oldest read first and the oldest end among
-		// equals, inside the apply.
-		"the seat's ended sessions": inOrder(releaseIdx, seatReleasableStatement, seat, turn),
+		// THE BUDGET'S RELEASE, the oldest end first, inside the apply.
+		"the seat's ended sessions": inOrder(endedIdx, seatReleasableStatement, seat, turn),
 
 		// A LAUNCH'S READ of its conversation: the head, the newest read and
 		// the newest end among equals, and its endings, the newest end first.

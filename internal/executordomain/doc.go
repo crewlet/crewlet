@@ -61,12 +61,10 @@
 //     repeats the deterministic guards. A seat keeps at most the BYTE BUDGET
 //     the record carries (the writer reads it from the fleet's revision,
 //     `turn_engine.conversation_session.max_bytes_per_seat`): past it the
-//     applier releases the objects of the seat's ENDED turns, never a live
-//     one, keeping their endings — the oldest first in the order its
-//     conversations' lines run, by where each turn read its conversation, so
-//     each conversation's head goes last ([seatPlan]) — and a capture that
-//     cannot fit even then is refused. Because a release may reach any
-//     conversation of the seat, a capture's scope is the SEAT.
+//     applier releases the objects of the seat's oldest ENDED turns, never a
+//     live one, keeping their endings, and a capture that cannot fit even
+//     then is refused. Because a release may reach any conversation of the
+//     seat, a capture's scope is the SEAT.
 //   - `end` stamps the turn ended with the engine's account of how it ended
 //     ([Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
@@ -117,9 +115,19 @@
 // sessions those turns left, which each continued the one before. So the head
 // is the turn that read the conversation last, the newest end among turns
 // that read it at one position, and a turn that read nothing (its read
-// failed) after every turn that did ([Head]); the seat budget releases in the
-// same order, the oldest first, so a conversation's head is the last of its
-// sessions to go and a turn that read early never outlives it ([seatPlan]).
+// failed) after every turn that did ([Head]).
+//
+// THE SEAT BUDGET STILL RELEASES THE OLDEST END FIRST ([seatPlan]), so under
+// budget pressure it can release a conversation's head before a STALE SIBLING,
+// a turn that read the conversation earlier and ended later, and the next turn
+// then continues the newest session the seat still keeps and is told every
+// newer ending, the released head's among them. The release does not follow
+// the head's order because the applier decides it: in a rolling upgrade, a
+// node releasing by end beside one releasing by read would release different
+// sessions for one capture, and their copies of the estate would diverge. The
+// head is a read's alone — two builds answering two heads hand two turns two
+// bases, each recorded on the log as that turn's read — so its order moved
+// with nothing to diverge.
 //
 // # A turn's first read holds its base
 //
