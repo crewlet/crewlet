@@ -49,7 +49,11 @@ import (
 //     document of a run's whole conversation for a case that reads one back
 //     — through the server or with `--standalone` beside it, and fails for
 //     any other, recording in `exported` the session and whether the server
-//     was still serving; `session import` keeps the
+//     was still serving; it takes FAKE_SESSION_EXPORT_SLEEP seconds before it
+//     prints where that is set, the file `packing` saying it has begun — a
+//     pack under way that a case can time a signal into, with no stand-in for
+//     a packer such as `gzip`, which a busybox that prefers its own applets
+//     runs past whatever the PATH holds; `session import` keeps the
 //     file it was handed (`imported-session`) and the directory it was told
 //     (`import-directory`), and holds the session the file names and prints
 //     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
@@ -171,6 +175,7 @@ session)
     if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
+    if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then printf '%s\n' "$FAKE_SESSION_EXPORT"; else
       msgs=$(cat "$d/export-messages" 2> /dev/null) || msgs='[{"id":"msg_1","type":"user","text":"fix the flake"}]'
       printf '{"info":{"id":"%s","title":"crewlet"},"messages":%s}\n' "$id" "$msgs"; fi ;;
@@ -1776,8 +1781,8 @@ func TestASecondEndRequestLeavesThePackWhole(t *testing.T) {
 		t.Parallel()
 		forEachShell(t, func(t *testing.T, sh boxShell) {
 			j := startScript(t, scriptOpts{shell: sh,
-				env: []string{"FAKE_RUN_UNTIL=interrupted", "FAKE_RUN_EXIT=7", "FAKE_RUN_TERM_EXIT=7"}})
-			slowPacker(t, filepath.Join(j.dir, "bin"), "gzip", filepath.Join(j.dir, "packing"))
+				env: []string{"FAKE_RUN_UNTIL=interrupted", "FAKE_RUN_EXIT=7", "FAKE_RUN_TERM_EXIT=7",
+					"FAKE_SESSION_EXPORT_SLEEP=1"}})
 			j.await("the run to start", func() bool {
 				_, err := os.Stat(filepath.Join(j.dir, "refreshed"))
 				return err == nil
@@ -1801,18 +1806,4 @@ func TestASecondEndRequestLeavesThePackWhole(t *testing.T) {
 			}
 		})
 	})
-}
-
-// slowPacker installs, as name in bin, a stand-in for the packer a run's script
-// packs its session with (`tar`, `gzip`) that says it has begun in begun and
-// takes a second over its work before it does it — the real one, found off the
-// PATH the stand-in shadows.
-func slowPacker(t *testing.T, bin, name, begun string) {
-	t.Helper()
-	real, err := exec.LookPath(name)
-	if err != nil {
-		t.Fatalf("no %s on this machine's PATH to stand in front of: %v", name, err)
-	}
-	writeStandIn(t, filepath.Join(bin, name), "#!/bin/sh\n: > "+shQuote(begun)+"\nsleep 1\nexec "+
-		shQuote(real)+" \"$@\"\n")
 }
