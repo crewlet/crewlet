@@ -10,7 +10,7 @@ import (
 )
 
 // WHEN A CHANGE LAST MOVED, and the listing narrowed to the changes that moved
-// within a window (replicated 0140).
+// within a window (replicated 0142).
 //
 // A change moves on two subjects (doc.go): its lifecycle and the pushes that
 // move its head on its repository's, which stamp code_changes.updated_at with
@@ -78,7 +78,7 @@ func (w ChangeWindow) Duration() time.Duration {
 
 // changesMovedKey is code_changes_updated_idx, (updated_at, id), and
 // conversationsMovedKey code_conversations_updated_idx, (updated_at,
-// change_id) WHERE updated_at > 0 (replicated 0140): what a window walks.
+// change_id) WHERE updated_at > 0 (replicated 0142): what a window walks.
 const (
 	changesMovedKey       = "code_changes_updated_idx"
 	conversationsMovedKey = "code_conversations_updated_idx"

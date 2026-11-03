@@ -164,7 +164,7 @@ func movesReadiness(payload any) bool {
 // spoken reports a record SOMEBODY WROTE about the change — an ask for
 // review, a comment, a thread resolved, a review, an answer to a finding —
 // which dates its conversation's last move (code_conversations.updated_at,
-// replicated 0140): what a listing says of when the change last moved, and
+// replicated 0142): what a listing says of when the change last moved, and
 // what one narrowed to a window walks. The home's facts and the engine's
 // settling of the asks date nothing: a target branch that moves re-checks
 // every live change into it, and a change listed as moved because its target

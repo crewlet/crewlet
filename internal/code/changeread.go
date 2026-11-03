@@ -50,7 +50,7 @@ import (
 //     0092), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
 //   - a window: code_changes_updated_idx and code_conversations_updated_idx
-//     (replicated 0140) walked in step, the changes that moved within it,
+//     (replicated 0142) walked in step, the changes that moved within it,
 //     each once at its last move (changewindow.go);
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //

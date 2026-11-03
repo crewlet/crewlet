@@ -2741,7 +2741,7 @@ type ChangeSummary struct {
 	// close, a merge, a push that moved its head — and the last one somebody
 	// wrote about it on its own subject — an ask for review, a comment, a
 	// review, an answer to a finding — never the home's facts (replicated
-	// 0140). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
+	// 0142). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
 	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
 	// conversation, and carries its lifecycle's last move alone, and no
 	// count of its findings.
