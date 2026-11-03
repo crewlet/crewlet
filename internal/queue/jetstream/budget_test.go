@@ -335,9 +335,17 @@ func (s ceilingStream) CachedInfo() *jetstream.StreamInfo {
 //
 // A first request dropped, which must be asked again — a read term and a
 // re-ask after it, never on the caller's open-ended context nor at a write's
-// term — and then answered with the ceiling. And every request dropped until the lookup ceiling is
-// spent, which must come back as the silence it is: reported as a missing
-// stream, it would be sized as one and nothing would say so.
+// term — and then answered with the ceiling. And every request dropped until
+// the lookup ceiling is spent, which must come back as the silence it is:
+// reported as a missing stream, it would be sized as one and nothing would say
+// so.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]), where the read's timers fire at exactly
+// their time, so the re-ask is held to its cadence to the nanosecond.
+// On the machine's clock the case allowed a read term of slack instead. That
+// was a bound on how late a loaded race-detector run wakes a timer's goroutine,
+// which the read never promised. Its sibling on the provisioning path failed
+// that way, a re-ask 63 ms behind its 70 ms cadence.
 func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 	t.Parallel()
 	// THE READ TERM AND THE PAUSE SCALED DOWN, and the lookup ceiling with
@@ -354,60 +362,63 @@ func TestADomainStreamsCeilingIsAReadAskedAgainWhenDropped(t *testing.T) {
 
 	t.Run("its first request dropped", func(t *testing.T) {
 		t.Parallel()
-		js := &droppedCeilingJS{ceiling: ceiling, drops: 1}
-		q := &Queue{js: js, timing: timing}
-		held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
-		if err != nil || !found || held != ceiling {
-			t.Fatalf("a stream whose first read was dropped = (%d, %v, %v), want "+
-				"(%d, true, nil) — a request nobody answered is asked again "+
-				"rather than being the answer", held, found, err, ceiling)
-		}
-		js.mu.Lock()
-		defer js.mu.Unlock()
-		if len(js.terms) != 2 {
-			t.Fatalf("the ceiling was asked for %d time(s), want 2: the dropped "+
-				"request and the one that was answered", len(js.terms))
-		}
-		for i, left := range js.terms {
-			switch {
-			case left < 0:
-				t.Errorf("ask %d carried no deadline of its own, so the client's "+
-					"five-second default decided it", i+1)
-			case left > timing.Lookup:
-				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it is "+
-					"bounded as a write", i+1, left, timing.Lookup)
+		inBubble(t, func(t *testing.T) {
+			js := &droppedCeilingJS{ceiling: ceiling, drops: 1}
+			q := &Queue{js: js, timing: timing}
+			held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
+			if err != nil || !found || held != ceiling {
+				t.Fatalf("a stream whose first read was dropped = (%d, %v, %v), want "+
+					"(%d, true, nil) — a request nobody answered is asked again "+
+					"rather than being the answer", held, found, err, ceiling)
 			}
-		}
-		// A READ TERM OF SLACK for a loaded runner, against a write's term
-		// two hundred times as long.
-		if gap, limit := js.sent[1].Sub(js.sent[0]), 2*timing.ReadTerm+timing.ReAsk; gap > limit {
-			t.Errorf("the dropped request was asked again %v later, past %v — a read "+
-				"the server dropped is held for a write's %v term rather than asked "+
-				"again", gap, limit, timing.AskTerm)
-		}
+			js.mu.Lock()
+			defer js.mu.Unlock()
+			if len(js.terms) != 2 {
+				t.Fatalf("the ceiling was asked for %d time(s), want 2: the dropped "+
+					"request and the one that was answered", len(js.terms))
+			}
+			for i, left := range js.terms {
+				switch {
+				case left < 0:
+					t.Errorf("ask %d carried no deadline of its own, so the client's "+
+						"five-second default decided it", i+1)
+				case left > timing.Lookup:
+					t.Errorf("ask %d was given %v, past the %v lookup ceiling — it is "+
+						"bounded as a write", i+1, left, timing.Lookup)
+				}
+			}
+			if gap, want := js.sent[1].Sub(js.sent[0]), timing.ReadTerm+timing.ReAsk; gap != want {
+				t.Errorf("the dropped request was asked again %v later, want its "+
+					"%v read term and %v re-ask — a read the server dropped is held "+
+					"for a write's %v term rather than asked again", gap,
+					timing.ReadTerm, timing.ReAsk, timing.AskTerm)
+			}
+		})
 	})
 
 	t.Run("every request dropped", func(t *testing.T) {
 		t.Parallel()
-		js := &droppedCeilingJS{ceiling: ceiling, drops: -1}
-		q := &Queue{js: js, timing: timing}
-		held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
-		if err == nil || found || held != 0 {
-			t.Fatalf("a stream no request was answered about = (%d, %v, %v), "+
-				"want (0, false, an error) — silence is neither a ceiling nor "+
-				"an absent stream", held, found, err)
-		}
-		if !jsprovision.Unanswered(t.Context(), err) {
-			t.Errorf("the error is not the silence itself, so the caller cannot "+
-				"tell a broker that said nothing from one that refused: %v", err)
-		}
-		js.mu.Lock()
-		defer js.mu.Unlock()
-		if len(js.terms) < 2 {
-			t.Errorf("the ceiling was asked for %d time(s) before the read gave "+
-				"up; the lookup ceiling holds several, and one means it was "+
-				"never asked again", len(js.terms))
-		}
+		inBubble(t, func(t *testing.T) {
+			js := &droppedCeilingJS{ceiling: ceiling, drops: -1}
+			q := &Queue{js: js, timing: timing}
+			held, found, err := q.DomainStreamCeiling(t.Context(), "CREWLET_TRACKER_LOG")
+			if err == nil || found || held != 0 {
+				t.Fatalf("a stream no request was answered about = (%d, %v, %v), "+
+					"want (0, false, an error) — silence is neither a ceiling nor "+
+					"an absent stream", held, found, err)
+			}
+			if !jsprovision.Unanswered(t.Context(), err) {
+				t.Errorf("the error is not the silence itself, so the caller cannot "+
+					"tell a broker that said nothing from one that refused: %v", err)
+			}
+			js.mu.Lock()
+			defer js.mu.Unlock()
+			if len(js.terms) < 2 {
+				t.Errorf("the ceiling was asked for %d time(s) before the read gave "+
+					"up; the lookup ceiling holds several, and one means it was "+
+					"never asked again", len(js.terms))
+			}
+		})
 	})
 }
 
