@@ -220,13 +220,23 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// hand-offs are announced once the seat's budget lets the launch go on.
 	var handoffs []chain.Fallback
 	member, agent, pickErr := l.member(ctx, manager, func(f chain.Fallback) { handoffs = append(handoffs, f) })
+	// THE CELL THE RUN GOES TO ([memberCell]), because it decides which
+	// address its box dials the bridge at ([mcpbridge.Session.OnHost]) — and
+	// whether the launch can continue the job before's session in that job's
+	// box at all, which the floor below is reckoned for.
+	var cell sandbox.Placement
+	inBox := true
+	if pickErr == nil {
+		cell = memberCell(company, manager, member.Key)
+		inBox = l.continuesInItsBox(ctx, pending, manager, agent, cell, req.Continue)
+	}
 	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): a launch that
 	// may continue a session sends its context before its brief, so its floor
 	// is the session's context with the brief that continues it, never the
 	// static one alone — and one no window of the seat's budget can ever
 	// carry continues nothing, its run starting a session of its own on the
 	// static floor ([agentLauncher.continuedFloor]).
-	req, floor := l.continuedFloor(ctx, req, agent)
+	req, floor := l.continuedFloor(ctx, req, agent, inBox)
 	if err := executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
@@ -239,9 +249,6 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, pickErr
 	}
 
-	// THE CELL THE RUN GOES TO ([memberCell]), because it decides which
-	// address its box dials the bridge at ([mcpbridge.Session.OnHost]).
-	cell := memberCell(company, manager, member.Key)
 	// A CELL THAT CANNOT DIAL THE BRIDGE IS REFUSED BY NAME, before the launch
 	// opens a job, for the reason the refusals above are. A direct box is a
 	// process of this host and dials this node's own listener on loopback,
@@ -495,13 +502,16 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // the launch may continue, that session's context with the brief that continues
 // it — the turn's kept capture, in the longer of its two briefs, since which
 // box the launch gets is the launch's to learn, and the job before's own copy
-// in its box with the brief that carries it on. A context no capture measured
-// is unknown, and holds the launch to the static floor.
+// in its box with the brief that carries it on, where inBox says the launch can
+// continue in that box at all ([agentLauncher.continuesInItsBox]). A context no
+// capture measured is unknown, and holds the launch to the static floor.
 //
 // THE KEPT CAPTURE ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
 // ([runner.SessionBasis.Harness]): a session is continued only by its own
 // harness, so a launch on a member running another starts a session of its own,
-// and is held to the static floor rather than to a session it will not send.
+// and is held to the static floor rather than to a session it will not send —
+// as one whose member cannot continue in the job before's box is held to no
+// floor of that box's session.
 //
 // A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]) is not waited
 // for: req goes without the sessions it would continue, its run starts a
@@ -509,7 +519,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // ceiling above, and the line says why. A seat with no capped window carries
 // any session.
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
-	member *harness.Provider) (runner.AgentRunRequest, launchFloor) {
+	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
 	if s := req.Session; s != nil && member != nil && s.Basis.Harness != member.Harness() {
 		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
@@ -525,7 +535,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		floor = floor.atLeast(static.continuing(s.Basis.ContextTokens,
 			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))))
 	}
-	if c := req.Continue; c != nil && c.SessionID != "" {
+	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
 		floor = floor.atLeast(static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief)))
 	}
 	m := l.engine.meterFor(l.company, l.seat.Handle())
@@ -546,6 +556,31 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		req.Continue = &fresh
 	}
 	return req, static
+}
+
+// continuesInItsBox reports whether a launch on agent, its run in cell, could
+// continue the job before's own session in that job's box (c, the session it
+// would carry on there; [runner.Continuation]): the box the turn's run record
+// names, of agent's harness in cell and reached from this node — the launch's
+// own tests of a box it continues in ([sandbox.PriorBox.ContinuesIn],
+// [sandbox.PriorBox.ReachableFrom]), asked of the record as it stands before
+// the launch opens its job, as the launch asks them as it does. True where the
+// launch carries no session on in a box, and where the record cannot be read,
+// which holds it to that session's floor: the safe direction for a floor.
+func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.PendingStore,
+	manager *sandbox.Manager, agent *harness.Provider, cell sandbox.Placement, c *runner.Continuation) bool {
+
+	if c == nil || c.SessionID == "" {
+		return true
+	}
+	run, found, err := pending.Get(ctx, l.turn.RunID)
+	if err != nil || !found {
+		return true
+	}
+	prior := sandbox.PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
+		Status: run.Status, LaunchNode: run.LaunchNode}
+	return prior.ReachableFrom(l.engine.id, manager.DefaultPlacement()) &&
+		prior.ContinuesIn(sandbox.Spec{Placement: cell, Harness: agent.Harness()})
 }
 
 // openBridge opens a job's bridge session under the job's own name, with its

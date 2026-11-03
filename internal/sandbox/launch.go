@@ -822,15 +822,11 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 // The cell is resolved through the newest catalogue first, as the reclaim's is,
 // and the launch's where that one does not name it.
 func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
-	cell := Placement(prior.Placement)
-	if cell == "" {
-		if current := c.mgr(); current != nil {
-			cell = current.DefaultPlacement()
-		} else {
-			cell = m.DefaultPlacement()
-		}
+	cell := m.DefaultPlacement()
+	if current := c.mgr(); current != nil {
+		cell = current.DefaultPlacement()
 	}
-	return !cell.OnEngineHost() || prior.LaunchNode == c.node
+	return prior.ReachableFrom(c.node, cell)
 }
 
 // reclaimPrior kills the turn's previous box through the cell that holds it.

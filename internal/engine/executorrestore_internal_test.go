@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -133,6 +134,30 @@ func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLa
 	return keptLaunch{e: e, l: l, jobs: jobs, kept: kept, ctx: ctx}
 }
 
+// claimed puts the turn's job under the claim that relaunches it, its box held,
+// as a person's answer carries a parked run on: the job's suspension written,
+// and its resume claimed.
+func (k keptLaunch) claimed(t *testing.T) {
+	t.Helper()
+	pending := k.e.sandbox.Load().pending
+	blob, err := execstate.Encode(execstate.State{Version: execstate.Version, Round: 1,
+		Task: "fix the failing test"})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if ok, err := pending.MarkSuspended(k.ctx, "t1", sandbox.Suspension{State: blob, Iteration: 1}); err != nil || !ok {
+		t.Fatalf("MarkSuspended: %v %v", ok, err)
+	}
+	row, _, err := pending.Get(k.ctx, "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, ok, err := pending.ClaimForResume(k.ctx, "t1", sandbox.Tail{Launch: row.LaunchID,
+		From: []string{sandbox.StatusRunning}}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume: %v %v", ok, err)
+	}
+}
+
 // relaunch launches the turn again continuing basis's session, with briefs
 // that say which box they are for, and answers how the launch decided.
 func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *runner.Continuation) (
@@ -227,6 +252,7 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 			if inPlace {
 				basis = runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000}
 				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000}
+				k.claimed(t)
 			}
 			_, err := k.relaunch(t, basis, continued)
 			var refused *floorRefusal
@@ -572,10 +598,13 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 // harness than the one that wrote the session — its plan spent, or another's
 // back, since the probe — it continues none: the launch starts the run fresh,
 // held to the static floor rather than to a session it will not send, and
-// refused only where that floor does not fit.
+// refused only where that floor does not fit. So with the job before's own
+// session in its box, which a member whose run lands in another cell cannot
+// continue there.
 //
 // Mutation: reckon the floor before the pick, for the session the probe
-// answered, and the launch is refused on a floor its run never needed.
+// answered or for the box's whatever the member, and the launch is refused on
+// a floor its run never needed.
 func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 100000, 70000)
@@ -596,6 +625,23 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
 		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own on the "+
 			"fresh brief", last.Resume, last.Brief)
+	}
+
+	// AND THE JOB'S OWN SESSION IN ITS BOX, which a member whose run lands in
+	// another cell cannot continue there: a box lives in one cell's backend.
+	inBox := newKeptLaunch(t, 40000, 100000, 70000)
+	inBox.claimed(t)
+	member := inBox.l.company.Config.Providers.LLM["api"]
+	member.RunIn = config.Placement(sandbox.Container)
+	inBox.l.company.Config.Providers.LLM["api"] = member
+	decided, err = inBox.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept",
+		ContextTokens: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	if err != nil {
+		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on the static "+
+			"floor", err)
+	}
+	if len(decided) != 1 || decided[0].Continues {
+		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
 	}
 }
 

@@ -2530,6 +2530,20 @@ func (p PriorBox) ContinuesIn(spec Spec) bool {
 		p.Placement == string(spec.Placement) && p.Harness == spec.Harness
 }
 
+// ReachableFrom reports whether node can reach the box at all: one in a cell
+// every node reaches, or one in a cell on an engine host that node launched
+// ([PendingRun.LaunchNode]), whose process tree or container no other node
+// touches — defaultCell standing for the cell of a box whose row names none.
+// The launch's own test of a box it continues in ([Coordinator.hostsPrior]),
+// beside [PriorBox.ContinuesIn], and every reader's that asks it.
+func (p PriorBox) ReachableFrom(node string, defaultCell Placement) bool {
+	cell := Placement(p.Placement)
+	if cell == "" {
+		cell = defaultCell
+	}
+	return !cell.OnEngineHost() || p.LaunchNode == node
+}
+
 // Fence is the ownership token a mutation carries.
 //
 // A ZERO FENCE MEANS UNFENCED and is deliberate rather than a default: recovery

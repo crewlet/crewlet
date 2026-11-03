@@ -521,12 +521,12 @@ func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarg
 		return boxNot, ""
 	}
 	prior := PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
-		Status: StatusResumed}
+		Status: StatusResumed, LaunchNode: run.LaunchNode}
 	switch {
 	case !prior.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness}):
 		return boxNot, fmt.Sprintf("the box its run ran in runs %s in the %s cell, and a relaunch is "+
 			"launched on %s in the %s cell", run.Harness, run.Placement, target.Harness, target.Placement)
-	case Placement(run.Placement).OnEngineHost() && run.LaunchNode != target.Node:
+	case !prior.ReachableFrom(target.Node, target.Placement):
 		return boxNot, fmt.Sprintf("the box its run ran in is on the host of %s, and %s, which holds "+
 			"the seat, cannot continue in it", run.LaunchNode, target.Node)
 	}
