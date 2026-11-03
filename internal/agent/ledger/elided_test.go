@@ -149,3 +149,26 @@ func TestAThreadsHistorySaysWhatItsTurnsRecordDidNotKeep(t *testing.T) {
 		t.Errorf("an entry whose record kept no call reads %q, want only what it dropped", none.Calls)
 	}
 }
+
+// A WITHHELD CALL'S ARGUMENTS ARE SAID TO BE SEALED. A call held for a person's
+// approval and the one they approved carry no arguments on any record — they
+// ride the run's row sealed — and drawn as `tool()` the line reads as the tool
+// called with none: a different call, which the reviewer, the prior-work
+// ledger and a thread's history would all take for what the run did. The line
+// says the arguments are sealed instead; any other call with none still reads
+// as one.
+//
+// Mutation: render a withheld call's arguments as the empty map they are, and
+// the approved deletion reads as `gh_delete_repo() → success`.
+func TestAWithheldCallsArgumentsAreSaidToBeSealed(t *testing.T) {
+	t.Parallel()
+	got := FormatCalls([]Call{
+		{Name: "gh_delete_repo", Withheld: true},
+		{Name: "list_repos"},
+	}, FormatOptions{})
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 || lines[0] != "- gh_delete_repo("+withheldArgs+") → success" ||
+		lines[1] != "- list_repos() → success" {
+		t.Errorf("the calls render:\n%s", got)
+	}
+}

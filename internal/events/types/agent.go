@@ -127,6 +127,14 @@ type PromptSection struct {
 // server that was not running), absent on a success and on a third-party
 // server's own failure.
 //
+// `held` marks an executor run's call held for a person's approval — recorded
+// failed, `success: false`, since nothing it asked for happened, and no
+// failure: the run's question for a person — and `approved` the call they let
+// be made. Both WITHHOLD their arguments, which ride the run's record sealed
+// and are never on a record in the clear: `arguments` on either is `{}`, and a
+// reader says they are sealed rather than that the call sent none. Absent on
+// every other call.
+//
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
 // because a hand-maintained field list is how a failed tool call got deleted on

@@ -112,7 +112,8 @@ func visible(calls []Call, opts FormatOptions) []Call {
 // FormatCalls renders an evidence-only summary of tool calls.
 //
 // Each line is `- name(args) → success | error: text`, with a trailing
-// "(read)" when the tool is positively annotated read-only.
+// "(read)" when the tool is positively annotated read-only. A call whose
+// arguments every record withholds says so in their place ([Call.Withheld]).
 //
 // No calls — or none that survive Skip — renders "(none)" rather than an empty
 // string, so a reader sees an explicit "no action taken" signal rather than an
@@ -143,7 +144,15 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 			marker = " (read)"
 			readsShown++
 		}
-		lines = append(lines, "- "+call.Name+"("+renderArgs(call.Args, opts)+") → "+outcome+marker)
+		args := renderArgs(call.Args, opts)
+		if call.Withheld {
+			// SAID, never drawn as `()`: a call whose arguments every record
+			// withholds made a call with arguments, and `tool()` reads as
+			// the tool called with none — a different call, and a repeat a
+			// reader takes for a retry of nothing.
+			args = withheldArgs
+		}
+		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker)
 	}
 	if dropped := readsIn(calls, opts) - readsShown; dropped > 0 {
 		// Only READS are ever omitted, and they are re-runnable by
@@ -156,6 +165,13 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// withheldArgs is what [FormatCalls] renders in place of the arguments of a
+// call whose arguments every record withholds ([Call.Withheld]). ONE WORDING
+// FOR BOTH such calls, which a [Call] does not tell apart: the one the run
+// held, whose arguments wait sealed for a person's approval, and the one the
+// person approved, made off those sealed arguments.
+const withheldArgs = "arguments sealed for a person's approval, kept on no record"
 
 // noCalls is what [FormatCalls] renders for a run of calls that shows none.
 const noCalls = "(none)"

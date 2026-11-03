@@ -443,6 +443,13 @@ type BridgedCall struct {
 	// ([replaySubmission]). A reader that only shows the payload reads the
 	// marker in its text.
 	ArgsBytes, OutputBytes int
+
+	// Held is a call the run held for a person's approval, recorded failed
+	// though nothing failed — it is the run's question for a person — and
+	// Approved the call they let be made (sandbox.BridgeCall): the two calls
+	// whose arguments every record withholds ([ledger.Call.Withheld]), which
+	// the execute phase's record says in place of them.
+	Held, Approved bool
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:

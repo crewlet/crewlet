@@ -171,12 +171,18 @@ func TestWhatARowKeptOfACallIsWhatTheResumedTurnReads(t *testing.T) {
 	}
 	// A CALL WHOSE ARGUMENTS ARE WITHHELD reads as one, so a resumed segment
 	// counts it as a call of its tool whose arguments are not known, never as
-	// the tool called with none.
-	for _, call := range bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
-		{Name: "close_issue", Approved: true}}) {
+	// the tool called with none — and as WHICH of the two it is, which the
+	// execute phase's record says in place of its arguments.
+	withheld := bridgedCalls([]sandbox.BridgeCall{{Name: "close_issue", Held: true, Failed: true},
+		{Name: "close_issue", Approved: true}})
+	for _, call := range withheld {
 		if !call.Withheld || call.Digest != "" || len(call.Args) != 0 {
 			t.Errorf("a held or approved call reads %+v, want it withheld", call.Call)
 		}
+	}
+	if !withheld[0].Held || withheld[0].Approved || withheld[1].Held || !withheld[1].Approved {
+		t.Errorf("the held and approved calls read %+v and %+v, want each marked as the one it is",
+			withheld[0], withheld[1])
 	}
 }
 

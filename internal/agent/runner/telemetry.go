@@ -1411,6 +1411,16 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		if ex.Refusal != "" {
 			row["refusal"] = string(ex.Refusal)
 		}
+		// A CALL WHOSE ARGUMENTS ARE SEALED says which it is: its `arguments`
+		// are `{}` only because no record holds them in the clear, and a held
+		// call's `success: false` is its question for a person, never a tool
+		// that broke (types.ToolExecution).
+		if ex.Held {
+			row["held"] = true
+		}
+		if ex.Approved {
+			row["approved"] = true
+		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a
 			// consumer showing `result ?? error` has something to show.

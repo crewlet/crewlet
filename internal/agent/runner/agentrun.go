@@ -1039,6 +1039,9 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 			StartedAt: call.StartedAt, Duration: call.Duration,
 			Origin: call.Origin, Server: call.Server,
 			Source: call.Source, Refusal: call.Refusal,
+			// WHICH OF THE TWO CALLS WHOSE ARGUMENTS ARE SEALED, so the record
+			// says so in their place rather than drawing a call made with none.
+			Held: call.Held, Approved: call.Approved,
 		})
 	}
 	if strings.TrimSpace(answer) != "" {

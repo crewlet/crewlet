@@ -450,7 +450,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # `calls_elided`, and `elided_calls` by tool
                            # ({name, calls, failed}) — a long run's
                            # dropped middle, counted in its round's
-                           # tool_calls
+                           # tool_calls; a call held for a person's
+                           # approval carries `held` and the one they
+                           # approved `approved`, their `arguments` `{}`
+                           # because both ride the run's record sealed
 executor_collected         # one LAUNCH of an executor's run, as its
                            # collection read it off the box — published once
                            # per launch, a person's stop and a lost host's

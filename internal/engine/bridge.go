@@ -76,6 +76,8 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Refusal:     mcp.Refusal(call.Refusal),
 			ArgsBytes:   call.ArgsBytes,
 			OutputBytes: call.OutputBytes,
+			Held:        call.Held,
+			Approved:    call.Approved,
 		})
 	}
 	return out

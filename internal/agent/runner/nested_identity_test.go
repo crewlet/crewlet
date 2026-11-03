@@ -205,3 +205,34 @@ func TestACollectedRunsRecordSaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
 		t.Errorf("the round counts %+v calls, want the one kept and the 63 dropped", done.Rounds)
 	}
 }
+
+// A HELD CALL AND AN APPROVED ONE ARE RECORDED AS THE CALLS THEY ARE. The two
+// calls whose arguments every record withholds — a call held for a person's
+// approval and the one they let be made — carry `{}` as their arguments on the
+// execute phase's record only because none is kept in the clear, and the held
+// one is recorded failed only because nothing it asked for happened: so the
+// record says which each is, and a reader draws its arguments as sealed and
+// the held call as the run's question, never a call made with nothing or a
+// tool that broke.
+//
+// Mutation: build the execution without the marks, or write the row without
+// them, and the turn's execute card draws `{}` for both and the held call as
+// failed.
+func TestAHeldCallAndAnApprovedOneAreRecordedAsTheCallsTheyAre(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	res := agentRunResult("done", []BridgedCall{
+		{Call: ledger.Call{Name: "gh_delete_repo", Failed: true, Withheld: true}, Seq: 1, Held: true},
+		{Call: ledger.Call{Name: "gh_delete_repo", Withheld: true}, Seq: 2, Approved: true},
+		{Call: ledger.Call{Name: "read_file"}, Seq: 3},
+	}, nil, RunRecord{Harness: "claude-code"}, at, at.Add(time.Hour))
+	rows := toolExecutions(res.Result.Executions)
+	if len(rows) != 3 {
+		t.Fatalf("%d rows, want the three calls", len(rows))
+	}
+	if rows[0]["held"] != true || rows[0]["approved"] != nil || rows[1]["approved"] != true ||
+		rows[1]["held"] != nil || rows[2]["held"] != nil || rows[2]["approved"] != nil {
+		t.Errorf("the rows mark %v, %v and %v; want the held call held, the approved one approved, the "+
+			"third neither", rows[0], rows[1], rows[2])
+	}
+}

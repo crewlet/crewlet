@@ -400,6 +400,15 @@ type Execution struct {
 	// running. Empty on a success and on a third-party server's own
 	// failure, which the engine does not classify.
 	Refusal mcp.Refusal
+
+	// Held is an executor run's call held for a person's approval — recorded
+	// failed, since nothing it asked for happened, and no failure of
+	// anybody's: the run's question for a person — and Approved the call they
+	// let be made. Both WITHHOLD their arguments, which ride the run's record
+	// sealed and are never on a record in the clear: Args is empty on either,
+	// and a reader that draws it says the arguments are sealed rather than
+	// that the call sent none. Never set on a call of the loop's own.
+	Held, Approved bool
 }
 
 // Round is one model request of the loop: when it was made, how long the model
