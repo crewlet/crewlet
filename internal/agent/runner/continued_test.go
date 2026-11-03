@@ -328,6 +328,10 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 // calls, whether that job's box said it took up the session its launch chose
 // (its record's word, [runner.Resume.Continued]), the turn's closed rounds, how
 // the launch decides, and what the relaunched job's own box says it started.
+// carry, where set, makes it a relaunch that carries the job's round on — a
+// person's answer, or the loss of its job — through the resume that would have
+// collected it ([runner.Runner.Resume]); nil relaunches as a review's
+// send-back does, in a segment that collected the job.
 type guarded struct {
 	basis     runner.SessionBasis
 	state     execstate.State
@@ -336,6 +340,7 @@ type guarded struct {
 	history   []ledger.Iteration
 	decides   func(runner.AgentRunRequest) runner.SessionDecision
 	says      *bool
+	carry     func(*runner.Resume)
 }
 
 // loadSkill is a call that loaded the seat's one required skill.
@@ -374,17 +379,27 @@ func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 	launcher.decides, launcher.says = g.decides, g.says
 	state := g.state
 	state.Version, state.Round = execstate.Version, 1
+	resume := &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued}
+	if g.carry != nil {
+		g.carry(resume)
+	}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg, Models: models, Skills: registry,
 		Launcher: launcher, Task: "post the summary",
-		Resume: &runner.Resume{State: state, Bridged: g.bridged, Continued: g.continued},
+		Resume: resume,
 		Turn: runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", Seat: role, Org: organization}},
 		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
+	}
+	if g.carry != nil {
+		if _, _, err := r.Resume(t.Context(), g.history); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return launcher.last(t)
 	}
 	if _, _, err := r.Execute(t.Context(), 2, "thread the reply", g.history); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -657,24 +672,59 @@ func TestAConversationsNextTurnIsToldWhereItBegins(t *testing.T) {
 // which this turn's guard never armed and its lead says were set up anew: so
 // once the launch decides its run takes that session up, the guard holds
 // nothing, and a skill-covered call is refused until the skill is loaded again
-// — the safe direction. A relaunch that continues the turn's own kept session
-// is armed with what that session loaded.
+// — the safe direction. That holds where it matters most: a round a person's
+// answer or a lost job carries on, the turn having kept no session of its own,
+// continues the session its first launch was handed, while the job it follows
+// left a parked state whose box said it took that session up and whose launch
+// armed the guard with what it loaded there — loads in a session the relaunch
+// restores afresh, which read none of them. Such a run is handed the lead, then
+// the carried round's reseed, which says what the round's jobs did. A relaunch
+// that continues the turn's own kept session is armed with what that session
+// loaded, the round's carry or a send-back alike.
 //
-// Mutation: arm a base continuation from the parked state's loads, and the
-// first row goes red.
+// Mutation: drop the base branch of the launch's decision (sessionDecided), so a
+// base continuation is armed from the parked state as a kept one is, and both
+// carried rows on the conversation's session go red; hand such a run the
+// carry's continuation rather than its reseed, and their brief's check does.
 func TestABaseContinuationArmsAnEmptyGuard(t *testing.T) {
 	t.Parallel()
-	loaded := execstate.State{LoadedSkills: []string{"chat-conventions"}}
+	// THE TOOLS THE ROUND'S LAUNCH WAS HANDED, as its parked state records
+	// them: what a relaunch carrying the round on rebuilds its surface from.
+	active := guarded{basis: runner.SessionBasis{Why: "the turn has kept no capture"}}.relaunch(t).Surface.Active()
+	loaded := execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}}
+	lost := func(r *runner.Resume) {
+		r.Lost = &runner.Lost{Why: "its box was lost from the host it ran on", Losses: 1, Limit: 2}
+	}
+	answered := func(r *runner.Resume) {
+		r.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder"}
+	}
 	for name, tc := range map[string]struct {
 		g       guarded
+		told    string
 		refused bool
 	}{
-		"the conversation's session":  {g: guarded{basis: baseBasis, state: loaded}, refused: true},
-		"the turn's own kept session": {g: guarded{basis: keptBasis, continued: true, state: loaded}},
+		"a send-back, on the conversation's session": {g: guarded{basis: baseBasis, state: loaded},
+			refused: true},
+		"a lost job's round, on the conversation's session": {g: guarded{basis: baseBasis, continued: true,
+			state: loaded, carry: lost}, told: "## A run before you on this task was cut off", refused: true},
+		"an answered job's round, on the conversation's session": {g: guarded{basis: baseBasis, continued: true,
+			state: loaded, carry: answered}, told: "use main", refused: true},
+		"a send-back, on the turn's own kept session": {g: guarded{basis: keptBasis, continued: true,
+			state: loaded}},
+		"a lost job's round, on the turn's own kept session": {g: guarded{basis: keptBasis, continued: true,
+			state: loaded, carry: lost}},
+		"an answered job's round, on the turn's own kept session": {g: guarded{basis: keptBasis,
+			continued: true, state: loaded, carry: answered}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			req := tc.g.relaunch(t)
+			if s := req.Session; tc.told != "" && (s == nil || !s.Basis.ContinuesBase() ||
+				!strings.HasPrefix(s.Replaced, "## A new turn of this conversation begins here") ||
+				!strings.HasSuffix(s.Replaced, strings.TrimSpace(req.Brief)) || !strings.Contains(req.Brief, tc.told)) {
+				t.Fatalf("the carried round continues %+v, want the conversation's session, handed the lead and "+
+					"then the round's reseed, which says %q", s, tc.told)
+			}
 			bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 			if bridged[0].Failed != tc.refused {
 				t.Fatalf("slack_post failed %v (%q), want refused %v", bridged[0].Failed, bridged[0].Result,
