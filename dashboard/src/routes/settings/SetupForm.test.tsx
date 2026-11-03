@@ -215,6 +215,61 @@ test("a mintable secret is not on the form at all", () => {
   expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
 });
 
+// A MINTED VALUE WITH A HALF A PERSON CARRIES shows that half, as the engine
+// renders it, and never an input: a signing key minted on the first save has
+// a row that is then the setup block holding its public key, for a person to
+// run at the app. Before it is minted there is nothing to show.
+test("a minted value's public view is shown as the engine renders it, never as an input", () => {
+  const block = "vendor keys upload --account acme <<'EOF'\n{\"keys\": []}\nEOF";
+  const vendor = (minted: boolean): SetupToolState => ({
+    ...tool,
+    key: "vendor",
+    requirements: [
+      req({
+        field: "account",
+        label: "Account",
+        kind: "id",
+        config_path: "integrations.vendor.provisioning.account",
+      }),
+      req({
+        field: "signing_key",
+        label: "Signing key",
+        kind: "secret",
+        mintable: true,
+        present: minted,
+        help: "Run this block in the app's shell.",
+        config_path: "integrations.vendor.provisioning.signing_key",
+        ...(minted ? { public: { text: block, language: "sh" } } : {}),
+      }),
+      req({
+        field: "key_id",
+        label: "Key ID",
+        kind: "id",
+        config_path: "integrations.vendor.provisioning.key_id",
+      }),
+    ],
+  });
+  const form = (minted: boolean) => (
+    <SetupForm
+      sections={[{ name: "The vendor", tool: vendor(minted) }]}
+      title="The vendor"
+      onClose={() => {}}
+      onDone={() => {}}
+    />
+  );
+  const { baseElement, rerender } = render(form(false));
+  expect(screen.queryByText("Signing key")).toBeNull();
+  rerender(form(true));
+  const group = screen.getByRole("group", { name: "Signing key" });
+  expect(group.textContent).toContain("vendor keys upload --account acme");
+  expect(group.textContent).toContain("Run this block in the app's shell.");
+  expect(within(group).getByRole("button", { name: /Copy/ })).toBeTruthy();
+  expect(within(group).queryByRole("textbox")).toBeNull();
+  expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
+  expect(screen.getByLabelText(/Account/)).toBeTruthy();
+  expect(screen.getByLabelText(/Key ID/)).toBeTruthy();
+});
+
 // A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
 //
 // The engine does not send a credential back, so an empty box under a
