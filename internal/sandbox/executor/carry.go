@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -79,7 +78,8 @@ type sessionRecord struct {
 // last, as the harness printed it, and a harness that printed more than one line runs
 // on into lines of its own — an `id` there is the harness's text, never the
 // script's. The script writes `why` on one line, whatever the words it
-// quotes held. An id that is not one a harness mints ([validSessionID]) is no id.
+// quotes held. An id that is not one a harness mints
+// ([sandbox.ValidSessionID]) is no id.
 //
 // READ WHERE IT LIES, AND NO FURTHER THAN ITS FOUR KEYS. The record is a file
 // the run's own agent can write, as long as the 32 MiB the engine reads whole
@@ -107,7 +107,7 @@ func parseSessionRecord(text string) sessionRecord {
 		switch {
 		case key == "id" && !readID:
 			readID = true
-			if validSessionID(value) {
+			if sandbox.ValidSessionID(value) {
 				rec.id = value
 			}
 		case key == "continued" && !readContinued:
@@ -124,17 +124,6 @@ func parseSessionRecord(text string) sessionRecord {
 	return rec
 }
 
-// validSessionID reports whether id has the shape every session id a runner
-// names has — a UUID, `ses_` and hexadecimal digits — loosely: letters,
-// digits, `-` and `_`, at most 128 of them. The record is a file in a box the
-// run's own agent can write, and an id read from it names an archive and is
-// handed to a later run's script.
-func validSessionID(id string) bool {
-	return id != "" && len(id) <= 128 && !strings.ContainsFunc(id, func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
-	})
-}
-
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
 // after a name for OpenCode (`opencode v2.0.32`).
@@ -142,23 +131,23 @@ var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or "" where
 // it printed none this code can read — one longer than the executor log
-// records a release at ([executordomain.HarnessVersionMaxBytes]) among them.
+// records a release at among them.
 //
 // A RELEASE HAS A LENGTH, AND THE PATTERN DOES NOT: its numbers are runs of
 // digits, and what it reads was printed in the box — the session record's
 // `release` line is a file the run's own agent can write, and `--version` is
 // whatever the box's PATH finds — so a run of digits as long as the file read
 // as a release, which the launch's record carried whole and a capture of the
-// session named, for the log to refuse. Past the log's bound it is refused,
-// never cut, because a shortened release names another one; and read as
-// none, it is what every reader takes a release it cannot read for: a
-// current one.
+// session named, for the log to refuse. So what the pattern finds is held to
+// a release's shape ([sandbox.ValidRelease]), the one the launch's record
+// holds it to again: past the log's bound it is refused, never cut, because a
+// shortened release names another one; and read as none, it is what every
+// reader takes a release it cannot read for: a current one.
 func releaseOf(printed string) string {
-	release := releasePattern.FindString(printed)
-	if len(release) > executordomain.HarnessVersionMaxBytes {
-		return ""
+	if release := releasePattern.FindString(printed); sandbox.ValidRelease(release) {
+		return release
 	}
-	return release
+	return ""
 }
 
 // captured describes the session archive the box's last run packed

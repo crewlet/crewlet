@@ -263,9 +263,11 @@ type ExecutorCollected struct {
 	// run's script recorded it — which, for a launch asked to continue a
 	// session its box could not, is the new one it started instead — and
 	// HarnessVersion the harness's release, as its `--version` gave it. Both
-	// are read in the box and held to the shapes a harness gives them: an id
-	// of letters, digits, `-` and `_`, at most 128 of them, and a release of
-	// at most 64 bytes. Absent where the launch recorded none of that shape.
+	// are read in the box and held to the shapes a harness gives them, where
+	// the box is read and again as the record is published (internal/sandbox's
+	// ValidSessionID and ValidRelease): an id of letters, digits, `-` and `_`,
+	// at most 128 of them, and a release of three dotted numbers, at most 64
+	// bytes. Absent where the launch recorded none of that shape.
 	HarnessSession string `json:"harness_session,omitempty"`
 	HarnessVersion string `json:"harness_version,omitempty"`
 	// SessionTakenBytes is the size of the sealed session the read that

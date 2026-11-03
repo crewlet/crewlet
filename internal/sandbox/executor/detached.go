@@ -553,7 +553,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// restores, the archive it packs — and it was read back from a box a run's
 	// own agent could write, so one that is no id a harness mints is refused
 	// rather than handed to the run's script as a path.
-	if req.Resume != "" && !validSessionID(req.Resume) {
+	if req.Resume != "" && !sandbox.ValidSessionID(req.Resume) {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: the session this run continues, %q, is "+
 			"not a session id a harness names", req.Resume)
 	}
@@ -1074,12 +1074,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	rec := parseSessionRecord(recorded)
 	// THE HARNESS'S OWN WORD for its session only where it is an id a harness
-	// mints ([validSessionID]), the record's otherwise: what the harness
+	// mints ([sandbox.ValidSessionID]), the record's otherwise: what the harness
 	// printed is a file in the box as much as the record is, and the id rides
 	// the launch's record and is handed to a later run's script (the
 	// assistant's deep work resumes its run by it), so one that is no id is
 	// none, as the record's is.
-	if !validSessionID(result.SessionID) {
+	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
 	}
 	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)

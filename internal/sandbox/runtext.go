@@ -35,7 +35,8 @@ import (
 // KiB each, why the run started a session of its own ([MaxFellBackBytes])
 // and why its session was not kept ([boundReason]); everything else on it is
 // identifiers and counts, a few KiB, the two a box names among them held to
-// the shapes a harness gives them where its runner reads them — the session
+// the shapes a harness gives them ([ValidSessionID], [ValidRelease]) where
+// its runner reads them and again as the record is published — the session
 // it ran, at most 128 bytes, and its harness's release, at most 64. JSON can
 // grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
 // \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is

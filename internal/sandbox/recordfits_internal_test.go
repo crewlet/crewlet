@@ -78,6 +78,40 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	}
 }
 
+// THE RECORD NAMES A SESSION AND A RELEASE OF A HARNESS'S SHAPES ALONE. Both
+// are the box's words, which a runner holds to those shapes as it reads the
+// box, and the record holds them again as it is published — trusting no
+// runner, nor a host of another build, to have done so, as it holds its two
+// reasons: one of any other shape, or past its bound, is none on the record,
+// never cut, since a shortened id or release names another one.
+//
+// Mutation: carry either as the runner handed it, hold it to its length alone
+// or its characters alone, or cut it to its bound, and a case goes red.
+func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
+	t.Parallel()
+	const uuid = "9a8b7c6d-0000-4000-8000-000000000001"
+	widestID := strings.Repeat("s", executordomain.SessionIDMaxBytes)
+	widestRelease := strings.Repeat("1", executordomain.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
+	for _, tc := range []struct{ session, release, wantSession, wantRelease string }{
+		{uuid, "2.1.310", uuid, "2.1.310"},
+		{"ses_01J9ZQ3W7K", "2.0.32", "ses_01J9ZQ3W7K", "2.0.32"},
+		{widestID, widestRelease, widestID, widestRelease},
+		{widestID + "s", "1" + widestRelease, "", ""},
+		{"../../.credentials.json", "2.1.310 (Claude Code)", "", ""},
+		{"a session", "2.1", "", ""},
+		{"s\n" + uuid, "v2.1.310", "", ""},
+		{"", "2..310", "", ""},
+	} {
+		rec := collectedRecord(PendingRun{}, LaunchRecord{},
+			Result{SessionID: tc.session, HarnessVersion: tc.release}, time.Now())
+		if rec.HarnessSession != tc.wantSession || rec.HarnessVersion != tc.wantRelease {
+			t.Errorf("a box that named session %.40q (%d bytes) and release %.40q (%d bytes) is recorded "+
+				"as %.40q and %.40q; want %.40q and %.40q", tc.session, len(tc.session), tc.release,
+				len(tc.release), rec.HarnessSession, rec.HarnessVersion, tc.wantSession, tc.wantRelease)
+		}
+	}
+}
+
 // THE WHOLE RECORD FITS. Every piece of text a box wrote that rides the
 // launch's own record is at its bound, in the worst bytes JSON can be handed —
 // each one escaped six-fold — and the record still clears the queue's ceiling,
@@ -107,7 +141,11 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	// fall-back reason is read from — and as a runner, or a host of another
 	// build, that did not hold it would hand it over. Held as the record is
 	// published, each is at its widest whatever it came as; carried whole,
-	// either one puts the record past the ceiling.
+	// either one puts the record past the ceiling. AND THE SESSION AND THE
+	// RELEASE THE BOX NAMED, the same MiB each, as such a runner would hand
+	// them over too: identifiers, which the record refuses rather than cuts
+	// when they are not of a harness's shapes; carried whole, either one puts
+	// the record past the ceiling as well.
 	reason := strings.Repeat("\x01", 1<<20)
 	kept := &SessionKept{NotKept: reason}
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
@@ -118,9 +156,9 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		result Result
 	}{
 		"a failed run": {PendingRun{}, Result{Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs,
-			FellBack: reason, Kept: kept}},
+			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
 		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs,
-			FellBack: reason, Kept: kept}},
+			FellBack: reason, Kept: kept, SessionID: reason, HarnessVersion: reason}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
 		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now())
@@ -128,6 +166,10 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 			len(rec.SessionNotKept) > executordomain.UnkeptReasonMaxBytes {
 			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,
 				len(rec.HarnessSessionFellBack), len(rec.SessionNotKept))
+		}
+		if rec.HarnessSession != "" || rec.HarnessVersion != "" {
+			t.Errorf("%s: the record names a session of %d bytes and a release of %d, where neither is "+
+				"of a harness's shape", name, len(rec.HarnessSession), len(rec.HarnessVersion))
 		}
 		raw, err := json.Marshal(rec)
 		if err != nil {
