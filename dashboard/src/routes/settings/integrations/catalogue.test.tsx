@@ -167,6 +167,17 @@ test("every card is one engine tool with its surfaces", () => {
   }
 });
 
+// EVERY SURFACE IS NAMED FOR THIS SCREEN. A surface this screen has no word
+// for falls back to its key, so a sentence would read "cloudflare" where it
+// means Cloudflare. Mutation: drop a SURFACE_NAMES entry and its card goes red.
+test("every surface a card is made of has a name of its own", () => {
+  for (const entry of CATALOG) {
+    for (const surface of entry.surfaces) {
+      expect(surface.name, `${entry.key}: ${surface.key}`).not.toBe(surface.key);
+    }
+  }
+});
+
 // LEARN MORE OPENS A PAGE THE SITE BUILDS. The address is composed from the
 // entry's `doc`, so no grep for a URL can see it: a tool whose page is named
 // wrongly, or a page renamed under the catalogue, is a 404 the reader meets

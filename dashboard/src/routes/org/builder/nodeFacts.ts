@@ -187,7 +187,15 @@ export function unitsLedBy(draft: Draft, handle: string): DraftUnit[] {
 
 /** The tools a seat or unit field depends on, as the company document names their blocks. */
 export type Tool =
-  "github" | "slack" | "mattermost" | "gitlab" | "jira" | "confluence" | "datadog" | "atlassian";
+  | "github"
+  | "slack"
+  | "mattermost"
+  | "gitlab"
+  | "jira"
+  | "confluence"
+  | "datadog"
+  | "atlassian"
+  | "cloudflare";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -199,6 +207,7 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   confluence: "Confluence",
   datadog: "Datadog",
   atlassian: "Atlassian",
+  cloudflare: "Cloudflare",
 };
 
 /**
