@@ -138,46 +138,55 @@ func TestADigitalOceanPasteIsRefusedForASeatNotWaiting(t *testing.T) {
 	}
 }
 
-// THE SEAT'S DIGITALOCEAN TOKEN IS DOCTL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
-// reads DIGITALOCEAN_ACCESS_TOKEN as its DigitalOcean provider's key, so the
-// agent's token, handed to doctl in its box, reaches the box but is judged out
-// of the run's sign-in: an OpenCode seat with no model key of its own is
-// refused a remote box rather than launched on the agent's infrastructure
-// token. Mutation: judge the sign-in on the seat's whole env, and the run is
-// launched.
-func TestADigitalOceanTokenInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
+// A SEAT'S TOOL CREDENTIAL IS ITS TOOL'S, NEVER OPENCODE'S SIGN-IN. OpenCode
+// reads DIGITALOCEAN_ACCESS_TOKEN as its DigitalOcean provider's key and
+// GITLAB_TOKEN as its GitLab provider's, so the agent's own token, handed to
+// doctl or glab in its box, reaches the box but is judged out of the run's
+// sign-in: an OpenCode seat with no model key of its own is refused a remote
+// box rather than launched on the agent's tool token. Mutation: judge the
+// sign-in on the seat's whole env, and both runs are launched.
+func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 	t.Parallel()
-	c := specCompany(t, strings.Replace(digitaloceanRunDoc, "    zulu:\n      model: claude-sonnet-5\n",
-		"    zulu:\n      harness: opencode\n      model: openrouter/qwen\n", 1))
-	e := &Engine{}
-	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"DIGITALOCEAN_TOKEN_SRE": "fake-digitalocean-seat-token"})
-	e.secretsMu.Unlock()
+	const doLine = `        DIGITALOCEAN_ACCESS_TOKEN: "${DIGITALOCEAN_TOKEN_SRE}"`
+	for _, tc := range []struct{ name, env, sealed, line string }{
+		{name: "doctl's DigitalOcean token", env: "DIGITALOCEAN_ACCESS_TOKEN", sealed: "DIGITALOCEAN_TOKEN_SRE",
+			line: doLine},
+		{name: "glab's GitLab token", env: "GITLAB_TOKEN", sealed: "GITLAB_TOKEN_SRE",
+			line: `        GITLAB_TOKEN: "${GITLAB_TOKEN_SRE}"`},
+	} {
+		doc := strings.Replace(digitaloceanRunDoc, "    zulu:\n      model: claude-sonnet-5\n",
+			"    zulu:\n      harness: opencode\n      model: openrouter/qwen\n", 1)
+		c := specCompany(t, strings.Replace(doc, doLine, tc.line, 1))
+		e := &Engine{}
+		e.secretsMu.Lock()
+		e.installSecrets(map[string]string{tc.sealed: "fake-seat-tool-token"})
+		e.secretsMu.Unlock()
 
-	seat := c.Org.AgentSeatByHandle("sre")
-	run := e.runEnvironment(t.Context(), c, seat, seatSandbox(c, "sre"), nil, nil)
-	if !slices.Equal(run.tools, []string{"DIGITALOCEAN_ACCESS_TOKEN"}) {
-		t.Fatalf("tools = %v, want doctl's variable alone", run.tools)
-	}
-	member, err := c.Models.Head(seat, phase.Execute)
-	if err != nil {
-		t.Fatalf("executor chain: %v", err)
-	}
-	agent := member.Provider.(*harness.Provider)
-	if !agent.SignsInThroughEnv() {
-		t.Fatal("the entry is not OpenCode, so this case tests nothing")
-	}
-	coding := newCodingRun(agent, run)
-	if coding.env["DIGITALOCEAN_ACCESS_TOKEN"] != "fake-digitalocean-seat-token" {
-		t.Errorf("doctl's token did not reach the box: %v", coding.env)
-	}
-	if _, present := coding.signIn["DIGITALOCEAN_ACCESS_TOKEN"]; present {
-		t.Error("the agent's DigitalOcean token is judged as part of the run's sign-in")
-	}
-	if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.env); err != nil {
-		t.Fatalf("the token is not credential-named, so this case tests nothing: %v", err)
-	}
-	if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.signIn); err == nil {
-		t.Error("the agent's DigitalOcean token signed OpenCode in to a remote box")
+		seat := c.Org.AgentSeatByHandle("sre")
+		run := e.runEnvironment(t.Context(), c, seat, seatSandbox(c, "sre"), nil, nil)
+		if !slices.Equal(run.tools, []string{tc.env}) {
+			t.Fatalf("%s: tools = %v, want %s alone", tc.name, run.tools, tc.env)
+		}
+		member, err := c.Models.Head(seat, phase.Execute)
+		if err != nil {
+			t.Fatalf("%s: executor chain: %v", tc.name, err)
+		}
+		agent := member.Provider.(*harness.Provider)
+		if !agent.SignsInThroughEnv() {
+			t.Fatalf("%s: the entry is not OpenCode, so this case tests nothing", tc.name)
+		}
+		coding := newCodingRun(agent, run)
+		if coding.env[tc.env] != "fake-seat-tool-token" {
+			t.Errorf("%s: the tool's token did not reach the box: %v", tc.name, coding.env)
+		}
+		if _, present := coding.signIn[tc.env]; present {
+			t.Errorf("%s: the agent's tool token is judged as part of the run's sign-in", tc.name)
+		}
+		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.env); err != nil {
+			t.Fatalf("%s: the token is not credential-named, so this case tests nothing: %v", tc.name, err)
+		}
+		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, coding.signIn); err == nil {
+			t.Errorf("%s: the agent's tool token signed OpenCode in to a remote box", tc.name)
+		}
 	}
 }
