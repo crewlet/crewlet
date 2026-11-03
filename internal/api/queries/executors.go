@@ -41,17 +41,18 @@ import (
 // Declared here rather than imported as a concrete store so this package
 // depends on the shape, and so the memory twin answers it too.
 //
-// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter:
-// a run's record is deleted once its ending is finished, so [sandbox.Active]
-// is every status a record can hold and "every run this store holds" and "the
-// active ones" name one set. A run whose ending is decided and not yet
-// finished — waiting for its turn's captures to settle and the executor log to
-// take its turn's end — is still on the board, saying so (`ending`). A `status=` parameter selecting `done` or
-// `failed` would be a question whose answer is structurally empty — worse than
-// absent, because an empty board reads as "nothing failed" rather than "this
-// is not where that is recorded". How a run ENDED is on the event stream: the
-// resumed turn's own events, an `executor_failed` naming the reason, or a
-// `executor_stopped` naming the person who stopped it.
+// ONE METHOD AND NO STATUS FILTER, because there is nothing left to filter: a
+// run's record is deleted once its ending is finished, so [sandbox.Active] is
+// every status a record can hold and "every run this store holds" and "the
+// active ones" name one set. A run whose ending is decided and not yet finished
+// — waiting for its turn's captures to settle and the executor log to take its
+// turn's end — is still on the board, saying so (`ending`). A `status=`
+// parameter selecting `done` or `failed` would be a question whose answer is
+// structurally empty — worse than absent, because an empty board reads as
+// "nothing failed" rather than "this is not where that is recorded". How a run
+// ENDED is on the event stream: the resumed turn's own events, an
+// `executor_failed` naming the reason, or a `executor_stopped` naming the
+// person who stopped it.
 //
 // AND ONE RUN BY ITS TURN, which `executor_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the
