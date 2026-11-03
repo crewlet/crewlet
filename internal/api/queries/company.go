@@ -364,6 +364,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 				"route_to":   in.Datadog.RouteTo,
 			})
 	}
+	if in.Expo != nil {
+		// PROVISIONING ONLY, like atlassian below: the provisioner token
+		// creates agents' robots and no delivery arrives, so there is no
+		// delivery secret to report. The account is what the row names.
+		var account string
+		if in.Expo.Provisioning != nil {
+			account = in.Expo.Provisioning.AccountName
+		}
+		add("expo", in.Expo.Enabled, nil, map[string]any{"account_name": account})
+	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product. Jira and Confluence are
 		// sites this engine reads as an account; this is where the account

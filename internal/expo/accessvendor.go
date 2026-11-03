@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
@@ -498,10 +497,4 @@ func remedyFor(op seataccess.Op, status int) string {
 	default:
 		return "Settle what Expo names at Expo, then retry"
 	}
-}
-
-// AccessTokensURL is the account's settings page listing its robot users and
-// access tokens, where a person settles what only Expo can.
-func AccessTokensURL(account string) string {
-	return "https://expo.dev/accounts/" + url.PathEscape(strings.TrimSpace(account)) + "/settings/access-tokens"
 }

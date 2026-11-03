@@ -1,6 +1,7 @@
 package expo
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -48,4 +49,17 @@ func engineTokens(robot Robot, handle string) []Token {
 		}
 	}
 	return out
+}
+
+// AccessTokensURL is the account's settings page listing its robot users and
+// access tokens, where a person settles what only Expo can.
+func AccessTokensURL(account string) string { return accountURL(account, "access-tokens") }
+
+// MembersURL is the account's members page, where a person gives a member the
+// Admin role.
+func MembersURL(account string) string { return accountURL(account, "members") }
+
+// accountURL is one of the account's settings pages on expo.dev.
+func accountURL(account, page string) string {
+	return "https://expo.dev/accounts/" + url.PathEscape(strings.TrimSpace(account)) + "/settings/" + page
 }

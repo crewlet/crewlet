@@ -79,6 +79,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&gitlabPass{engine: e},
 		&mattermostPass{engine: e},
 		&datadogPass{engine: e},
+		&expoPass{engine: e},
 		&atlassianPass{engine: e},
 	}
 }
