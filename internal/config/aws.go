@@ -51,6 +51,19 @@ type AWSProvisioning struct {
 	Connection string `yaml:"connection,omitempty" json:"connection,omitempty" desc:"The stack's CrewletConnection output: five ARNs joined by commas, as the last line of the CloudShell block prints them. Until it is set, no agent's role can be made."`
 }
 
+// The levels a seat's role holds, least access first. internal/aws maps each
+// to the customer managed policies it attaches: its own and every lower one.
+const (
+	AWSLevelRead       = "read"
+	AWSLevelOperate    = "operate"
+	AWSLevelAdminister = "administer"
+)
+
+// AWSLevels is every level a seat may name, least access first.
+func AWSLevels() []string {
+	return []string{AWSLevelRead, AWSLevelOperate, AWSLevelAdminister}
+}
+
 // awsGlobalRegion answers AWS's global services, so agents keep it by default.
 const awsGlobalRegion = "us-east-1"
 
