@@ -3072,7 +3072,7 @@ with.
 
 ### The ref lifecycle
 
-A seat that runs coding work leaves a branch in its own namespace,
+A seat's executor leaves a branch in its own namespace,
 `refs/heads/seats/<handle>/`, for every piece of work it does, and nobody else
 deletes them. So a branch **a seat set in its own namespace and nobody has set
 for 14 days** is **deleted** by the `code-retention` duty — its last step, after
