@@ -5,6 +5,7 @@ import (
 	"github.com/crewlet/crewlet/internal/cloudflare"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -34,6 +35,7 @@ func SetupProbes() map[integration.Kind]setup.Probe {
 		integration.KindCloudflare: cloudflare.Probe(nil),
 		integration.KindConfluence: confluence.Probe(nil),
 		integration.KindDatadog:    datadog.Probe(nil),
+		integration.KindExpo:       expo.Probe(nil),
 		integration.KindGitHub:     github.Probe(nil),
 		integration.KindGitLab:     gitlab.Probe(nil),
 		integration.KindJira:       jira.Probe(nil),

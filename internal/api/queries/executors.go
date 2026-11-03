@@ -590,7 +590,7 @@ func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
 		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led
 		// here.
-		"session_id":       run.SessionID,
+		"session_id":       run.SessionRan(),
 		"command_id":       run.CommandID,
 		"delegation_chain": run.DelegationChain,
 		// WHETHER [runKeys]' body was left out for this reader, so a board

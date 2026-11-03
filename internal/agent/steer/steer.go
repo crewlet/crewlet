@@ -221,6 +221,12 @@ func (e *TooLongError) Error() string {
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
 // an executor's read, the launch that read it; At is when.
+//
+// Order is the place of the write that recorded the read among the run's
+// record's reads (sandbox.NoteRead.Order) — what tells a read a saved session
+// accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
+// and zero for a read this segment made, which the record places after every
+// session its run was saved with before the segment began.
 type Reading struct {
 	Phase     types.Phase
 	Iteration int
@@ -228,6 +234,7 @@ type Reading struct {
 	Boundary  types.SteerBoundary
 	Launch    string
 	At        time.Time
+	Order     int
 }
 
 // Read is a note the turn has read, and where: what a turn carries into every

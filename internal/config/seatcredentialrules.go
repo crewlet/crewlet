@@ -70,6 +70,8 @@ func seatFields(kind string) []seatField {
 		return []seatField{{"APP_KEY", false}, {"APP_WEBHOOK_SECRET", false}, {"APP_TOKEN", true}}
 	case "cloudflare":
 		return []seatField{{"API_TOKEN", true}}
+	case "expo":
+		return []seatField{{"TOKEN", true}}
 	default:
 		return nil
 	}

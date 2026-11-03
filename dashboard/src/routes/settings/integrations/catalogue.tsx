@@ -158,6 +158,7 @@ const SURFACE_NAMES: Record<string, string> = {
   gitlab: "GitLab",
   datadog: "Datadog",
   cloudflare: "Cloudflare",
+  expo: "Expo",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -226,6 +227,14 @@ export const CATALOG: Entry[] = [
     vendor: "cloudflare",
     surfaces: surfacesOf("cloudflare"),
     doc: "cloudflare",
+  },
+  {
+    key: "expo",
+    name: "Expo",
+    description: "EAS builds, updates and submissions, a robot per agent.",
+    vendor: "expo",
+    surfaces: surfacesOf("expo"),
+    doc: "expo",
   },
 ];
 

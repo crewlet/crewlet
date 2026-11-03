@@ -96,6 +96,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -996,6 +997,15 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindExpo:
+		// NO ROSTER HERE: no seat names an Expo credential in its document,
+		// and each agent's robot is listed on the integration's Agents tab
+		// from the access ledger.
+		block := company.Integrations.Expo
+		summary = expo.Summary()
+		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

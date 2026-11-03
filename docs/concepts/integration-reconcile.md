@@ -166,6 +166,7 @@ flowchart LR
 | GitLab | `{username_prefix}-{handle}`, and the token name `crewlet-<handle>` | — |
 | Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
 | Cloudflare | the account API token's name, `crewlet-<company>-<handle>` with the company name slugified, beside the token ID the engine records when it mints it | Nothing |
+| Expo | the robot user's name, `crewlet-<company>-<handle>`, beside the robot ID the engine records when it creates it; its tokens carry the note `crewlet seat <handle>` | Nothing |
 | Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 
 ## What the loop does, and what it leaves alone

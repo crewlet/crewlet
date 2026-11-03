@@ -164,6 +164,13 @@ func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
+// FreshBrief is where a run asked to continue a session has the brief written
+// that a session of its own is handed instead ([sandbox.RunRequest.FreshBrief]):
+// its script points its harness's stdin at it where it finds the session
+// neither held by its box nor restorable, and starts a new one — so a new
+// session is never handed a brief written for a model that remembers.
+func (p Paths) FreshBrief() string { return p.WorkDir() + "/brief-fresh.md" }
+
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
 // are written for its harness to add to its own system prompt: named on Claude
 // Code's command line, listed in the configuration an OpenCode run is handed
@@ -226,6 +233,15 @@ func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 
+// MCPConfigFresh is where a Claude Code run that continues a session has the
+// MCP surface rendered under the job's other bridge token, for a session its
+// script starts of its own in that one's place
+// ([sandbox.RunRequest.FreshWiring]): the script moves it over [Paths.MCPConfig]
+// where it starts one, and removes it where it continues, in both cases before
+// the harness starts, so the box holds one token when its model can first read
+// a file. Beside mcp.json for the reason mcp.json is where it is.
+func (p Paths) MCPConfigFresh() string { return p.WorkDir() + "/mcp-fresh.json" }
+
 // ClaudeSettings is where a Claude Code run's own settings file is written —
 // the hooks that hand its main agent a person's notes between its steps
 // ([ClaudeCode.WriteConfig]) — named on its command line with `--settings`.
@@ -259,6 +275,15 @@ func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 // every run ([Runner.ClearArtifacts]), so a run configured with fewer values
 // than the last keeps none of the last one's.
 func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
+
+// OpenCodeValuesFresh is the directory holding an OpenCode run's values as they
+// are under the job's other bridge token, for a session its script starts of
+// its own in place of the one it continues ([sandbox.RunRequest.FreshWiring]):
+// the same files by the same names, so the configuration's references name
+// either set, which the script moves over [Paths.OpenCodeValues] where it
+// starts one and removes where it continues — before the run's server starts,
+// which is what reads them.
+func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-values-fresh" }
 
 // OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
 // into, as index.js ([OpenCode.WriteConfig]), and named by the run's

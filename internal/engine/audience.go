@@ -239,8 +239,9 @@ func askBrief(o *org.Organization, seat *org.Role) string {
 			decision.MinOptions, decision.MaxOptions),
 		"3. End your turn as soon as it is recorded, without calling `" + runner.SubmitWorkTool +
 			"`. When they answer, this session continues where you stopped, with their " +
-			"answer as your next prompt. If this machine is gone by then, a fresh run " +
-			"starts from that branch with your question and their answer.",
+			"answer as your next prompt — on this machine, or on a fresh one from that " +
+			"branch if this one is gone by then. Only where the session cannot be continued " +
+			"does a fresh run start from that branch with your question and their answer.",
 	}
 	if len(roster) > 0 {
 		lines = append(lines, "Teammates you can name: "+strings.Join(roster, ", ")+".")

@@ -31,18 +31,55 @@ type playLauncher struct {
 	// took is how long each launch takes before it returns, as a real one
 	// provisions a box and starts its job.
 	took time.Duration
+	// decides is how each launch decides its run takes up a session, told
+	// to the runner before the run starts as a real launch tells it
+	// ([runner.AgentRunRequest.Decided]); nil decides as a launch whose box
+	// takes up what it was asked to continue ([decidedAsAsked]).
+	decides func(runner.AgentRunRequest) runner.SessionDecision
+	// says is what each launch's box says it started, told to the runner
+	// after the launch decides, as a real box's first request to its bridge
+	// tells it ([runner.AgentRunRequest.Started]): that it continued the
+	// session the launch chose, or started one of its own in that one's
+	// place. Nil says nothing, as a box whose harness has not reached its
+	// bridge yet.
+	says *bool
 }
 
 func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	time.Sleep(l.took)
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.reqs = append(l.reqs, req)
-	if l.err != nil {
-		return runner.Launched{}, l.err
+	err, decides, says, n := l.err, l.decides, l.says, len(l.reqs)
+	l.mu.Unlock()
+	if err != nil {
+		return runner.Launched{}, err
+	}
+	if req.Decided != nil {
+		decided := decidedAsAsked(req)
+		if decides != nil {
+			decided = decides(req)
+		}
+		req.Decided(decided)
+	}
+	if says != nil && req.Started != nil {
+		req.Started(*says)
 	}
 	// EACH LAUNCH A JOB OF ITS OWN, named as a store names one.
-	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", len(l.reqs))}, nil
+	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", n)}, nil
+}
+
+// decidedAsAsked is how a launch whose box takes up what it was asked to
+// continue decides: the turn's kept session where it was handed one — in a new
+// box, as a relaunch after a collection gets — else the job before's own
+// session in its box, else none.
+func decidedAsAsked(req runner.AgentRunRequest) runner.SessionDecision {
+	switch {
+	case req.Session != nil:
+		return runner.SessionDecision{Continues: true, Kept: true, NewBox: true}
+	case req.Continue != nil && req.Continue.SessionID != "":
+		return runner.SessionDecision{Continues: true}
+	}
+	return runner.SessionDecision{}
 }
 
 // launched is how many launches the runner asked for, refused ones included.

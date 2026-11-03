@@ -622,3 +622,57 @@ func TestJiraAndConfluenceSeatsComeOutWithProductAccessOnly(t *testing.T) {
 		}
 	}
 }
+
+// A KIND WITH NO OLD RULES MIGRATES WITH NOTHING TO MOVE: Expo is connected
+// into a document that never had it, so every agent seat that does not say is
+// written off, a seat that says on keeps it, nothing is moved or seeded, and
+// the kind is marked so its access pass may act. Mutation: leave a new kind
+// unmarked and its access sync is gated for ever.
+func TestANewKindMigratesWithNothingToMove(t *testing.T) {
+	t.Parallel()
+	root := gophrase(t)
+	root["integrations"].(map[string]any)["expo"] = map[string]any{
+		"enabled": true,
+		"provisioning": map[string]any{
+			"account_name": "example-org", "access_token": "${EXPO_ACCESS_TOKEN}",
+		},
+	}
+	qa := seat(t, root, "qa")
+	qa["integrations"].(map[string]any)["expo"] = map[string]any{"enabled": true, "level": "runner"}
+	vs := gophraseVendors()
+	m := plan(t, root, vs)
+	if !slices.Contains(m.Migrated, integration.KindExpo) || m.Pending[integration.KindExpo] != nil {
+		t.Fatalf("migrated %v, pending %v; want Expo migrated", m.Migrated, m.Pending)
+	}
+	if !slices.Contains(vs.asked, integration.KindExpo) {
+		t.Errorf("the migration did not read Expo, asked %v", vs.asked)
+	}
+	if got, written := m.Seats["sre"][seataccess.LaneExpo]; !written || got.Enabled {
+		t.Errorf("the SRE's Expo lane = %+v (written %v), want written off", got, written)
+	}
+	if _, written := m.Seats["qa"][seataccess.LaneExpo]; written {
+		t.Error("QA's own Expo block was rewritten")
+	}
+	for _, mv := range append(slices.Clone(m.Moves), m.Kept...) {
+		if mv.Kind == integration.KindExpo {
+			t.Errorf("an Expo credential moved: %+v", mv)
+		}
+	}
+	for _, s := range m.Seeds {
+		if s.Kind == integration.KindExpo {
+			t.Errorf("an Expo robot was seeded: %+v", s)
+		}
+	}
+	if _, err := accessmigrate.Apply(root, m); err != nil {
+		t.Fatal(err)
+	}
+	if got := accessmigrate.Unmigrated(root); slices.Contains(got, integration.KindExpo) {
+		t.Errorf("unmigrated = %v after the migration", got)
+	}
+	if sre := mustJSON(t, seat(t, root, "sre")); !strings.Contains(sre, `"expo":{"enabled":false}`) {
+		t.Errorf("the SRE seat is %s", sre)
+	}
+	if qa := mustJSON(t, seat(t, root, "qa")); !strings.Contains(qa, `"expo":{"enabled":true,"level":"runner"}`) {
+		t.Errorf("the QA seat is %s", qa)
+	}
+}

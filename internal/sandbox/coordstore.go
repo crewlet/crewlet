@@ -349,16 +349,30 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 // THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]), as a bridged
 // call's append is: a capture is a fact about what left the box, and a stop's is
 // stamped once its ending is decided.
+//
+// A STAMP THE ROW ALREADY HOLDS IS ANSWERED TAKEN, writing nothing: decided on
+// the row as it stands, in the same read-decide-write, so its asker learns the
+// place is its own where the store applied an earlier ask and its answer never
+// came back.
 func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
 			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
-	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+	// SET ON EVERY ASK OF decide, which runs again on a lost race: the last
+	// one is the row the answer is about — where the last attempt found one
+	// at all, which a record removed under an earlier attempt's decision is
+	// not ([CoordStore.writeFound]).
+	var held bool
+	_, won, found, err := s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		held = holdsStamp(*run, capture)
 		return stampOnto(run, capture)
 	})
-	return won, err
+	if err != nil {
+		return false, err
+	}
+	return won || (found && held), nil
 }
 
 // OweEnd records the end the run's turn owes the executor log. See the contract
@@ -490,7 +504,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Answer = &answer
 		}
 		// Onto THIS job's record, every fact below: the release names the
-		// job the row holds, or it was refused above.
+		// job the row holds, or it was refused above. And what the claim's
+		// turn said it does with the round is the claim's, which this hands
+		// back: the next claim's turn says it again ([LaunchRecord.ResumeCarry]).
+		run.Launch.ResumeCarry = ""
 		if release.Published {
 			run.Launch.Published = true
 		}
@@ -549,7 +566,6 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Status = StatusAwaiting
 		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
 		run.AudienceFallback = q.Answerers.Fallback
-		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
 		// A NEW QUESTION, measured from its own asking, with nothing yet
@@ -1052,8 +1068,14 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		if box.CommandID != "" {
 			run.Launch.Started = true
 			// AND WHAT THE JOB WAS HANDED, with the job: what a capture
-			// of its box scrubs out ([PendingRun.Handed]).
+			// of its box scrubs out ([PendingRun.Handed]); and which brief
+			// ([LaunchRecord.Brief]).
 			run.Handed = box.Handed
+			run.Launch.Brief = box.Brief
+			// AND THE SESSION ITS SCRIPT STARTS OF ITS OWN in a continued
+			// one's place, for which of the two its box said it ran
+			// ([PendingRun.SessionRan]).
+			run.Launch.FreshSessionID = box.FreshSessionID
 		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
@@ -1263,6 +1285,48 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 		return true
 	})
 	return won, err
+}
+
+// MarkSessionStart records which session a job's box said it started. See the
+// contract on [PendingStore].
+func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error) {
+	if !start.Valid() {
+		return false, fmt.Errorf("sandbox: %q is no session a job's box starts", start)
+	}
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.SessionStart != "" {
+			return false
+		}
+		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
+// MarkResumeBegun records what a claim's resumed turn does with its job's
+// round. See the contract on [PendingStore].
+//
+// THROUGH THE WRITE A LIVE RUN TAKES ([CoordStore.mutate]): a run whose ending
+// is decided is being ended, and no turn of it begins.
+func (s *CoordStore) MarkResumeBegun(ctx context.Context, turnID, launch string, fence Fence,
+	carry ResumeCarry) (bool, error) {
+
+	if !carry.Valid() {
+		return false, fmt.Errorf("sandbox: %q is nothing a resumed turn does with its round; it is one of %s",
+			carry, words.Or(ResumeCarries))
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != launch || outranked(*run, fence) ||
+			run.Launch.ResumeCarry == carry {
+			return false
+		}
+		run.Launch.ResumeCarry = carry
+		return true
+	})
+	return marked, err
 }
 
 // ListActive returns every run that has not finished.

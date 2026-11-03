@@ -282,6 +282,13 @@ type RunHandle struct {
 	// asked to continue a session its box neither held nor could restore
 	// starts a new one instead.
 	SessionID string
+
+	// FreshSessionID is that new one: the session of its own a job asked to
+	// continue SessionID starts in its place, named by the runner before the
+	// harness starts as SessionID is; empty for a job that continues none.
+	// With which of the two its box said it started ([LaunchRecord.SessionStart]),
+	// what names the session the job ran ([PendingRun.SessionRan]).
+	FreshSessionID string
 }
 
 // Result is one launch's outcome.
@@ -337,6 +344,15 @@ type Result struct {
 	// wrote no session, a box without the tools to pack one, which the run's
 	// error stream says.
 	Captured *SessionArchive
+
+	// HarnessCutOff says the run's harness did not exit cleanly: its exit
+	// status was other than 0 — a signal's, its memory limit's, a crash's —
+	// or its box recorded none. The run's script packs the session after the
+	// harness exits whatever its status (Captured), so a session it packed
+	// after a harness that was killed may end mid-record, its last call with
+	// no result, as one the engine packs of a job still working does
+	// ([SessionCapture.Interrupted]).
+	HarnessCutOff bool
 
 	// Kept is what the read that collected this result kept of the job's
 	// session ([Coordinator.takeCapture]), made on the node whose host the
@@ -544,9 +560,15 @@ type Sandbox interface {
 	SetTimeout(ctx context.Context, seconds float64) error
 
 	// Pause snapshots the box for a later resume, holding a run blocked on
-	// a clarification with exact conversational continuity. A provider
-	// without snapshots no-ops, and the engine re-seeds from the pushed
-	// branch instead.
+	// a clarification with its working tree as it left it, uncommitted work
+	// included, and its harness's own copy of the conversation. Where the
+	// turn kept the asking job's session (session.go), the relaunch continues
+	// that in this box or any other (restore.go), so the pause holds only
+	// the working tree; where it kept none — keeping switched off, the
+	// capture refused — the paused box is the one copy of the conversation,
+	// and a relaunch after it is reclaimed starts a session of its own. A
+	// provider without snapshots no-ops, and the relaunch re-seeds its
+	// working tree from the pushed branch instead.
 	Pause(ctx context.Context) error
 
 	Close(ctx context.Context) error
@@ -765,18 +787,18 @@ type RunRequest struct {
 	// the same box reported it ([Result.SessionID]): the conversation, its
 	// tool results and its working files are where that run left them, and
 	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
-	// `--session <id>`. A seat's job sets it where the job before it in this
-	// box parked on a person's question and the answer has come; the
-	// assistant's deep work, where its run parked on a proposal and the
-	// approval has come. Empty starts a new session.
+	// `--session <id>`. A seat's job sets it on every relaunch of its turn that
+	// continues the turn's session — the turn's kept capture, in whatever box
+	// the job gets ([LaunchRequest.Session]), or the session the asking job's
+	// box holds ([LaunchRequest.Continue]); the assistant's deep work, where
+	// its run parked on a proposal and the approval has come. Empty starts a
+	// new session.
 	//
 	// THE HARNESS'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
 	// knew what it had read, tried and decided, and a fresh conversation
 	// told only the question and the answer starts that work again. It holds
-	// in the box the session lives in, which is why a seat's launch sets it
-	// only where the job continues in the asking job's box
-	// ([LaunchRequest.Continue]) — or in a box the session is carried into
-	// ([RunRequest.Carried]). A runner whose harness cannot continue a
+	// in the box the session lives in, or in a box the session is carried
+	// into ([RunRequest.Carried]). A runner whose harness cannot continue a
 	// session refuses a run that asks it to, rather than start a new
 	// conversation its caller believes is the old one; and a run whose box
 	// turns out to hold the session neither way starts a new one and says so
@@ -789,12 +811,25 @@ type RunRequest struct {
 	// run's artefacts are cleared, and restored by the run's own script — or
 	// not, in a box whose own copy of the session already holds this archive
 	// (one the box packed, or restored before), which is never written over:
-	// that copy is the archive's or newer. A box holding a copy that does
-	// not hold the archive has it replaced by the archive. Nil for a run that
+	// that copy is the archive's or newer — unless the archive is one its
+	// harness was cut off in ([CarriedSession.Replace]), which replaces the
+	// copy whatever it holds. A box holding a copy that does not hold the
+	// archive has it replaced by the archive. Nil for a run that
 	// continues a session its box already holds, or none. Its session must
 	// be Resume's, and its harness and format the runner's, or the run is
 	// refused.
 	Carried *CarriedSession
+
+	// FreshBrief is the brief a run asked to continue a session is started
+	// with INSTEAD of Brief where its script finds the session neither held
+	// by its box nor restorable from Carried — an archive that does not
+	// unpack, an import its harness refused, a release that cannot continue
+	// it — and starts a new session in its place ([Result.Continued]): Brief
+	// is then a continuation written for a model that remembers, which a new
+	// session would answer as if it did. So the run carries both, and its
+	// script hands its harness the one its restore's outcome chose. Empty
+	// where Resume is: a run that starts a session is handed Brief.
+	FreshBrief string
 
 	Env    map[string]string
 	Limits Limits
@@ -853,6 +888,21 @@ type RunRequest struct {
 	// see [SkillWiring]. NEVER PERSISTED, for the reason Steer is not: it
 	// names the job's own endpoint.
 	SkillLoads SkillWiring
+
+	// FreshWiring is how the run's harness reaches the seat's tools where its
+	// script starts a session of its own in place of the one Resume names:
+	// MCPServers, Steer and SkillLoads as they are but under the job's OTHER
+	// bridge token, the one the bridge reads as the box having started a
+	// session of its own (internal/api/mcpbridge). The run's script installs
+	// exactly one of the two once its restore has come to whatever it came
+	// to, and removes the other from the box before its harness starts, so the
+	// token its harness dials IS the box's word on which session it started —
+	// one the run's model can neither forge nor take back, holding only the
+	// token of the session it is in. Nil where Resume is empty, which a
+	// runner refuses a run that sets it for, and where the run has no bridge
+	// to tell (the assistant's deep work). NEVER PERSISTED, for the reason
+	// Steer is not.
+	FreshWiring *Wiring
 
 	// Attribution is the credit every commit the run authors as itself
 	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
@@ -970,6 +1020,16 @@ type CommitAttribution struct {
 	// with no page of its own — and the co-author line is credited alone.
 	// One line of printable text, since it becomes a trailer's value.
 	Run string
+}
+
+// Wiring is how a run's harness reaches the seat's tools and the engine's: its
+// MCP servers, the tool bridge among them, where it asks for its turn's notes,
+// and where it reports a skill it loaded — the three parts of a run's request
+// that name the job's bridge endpoint ([RunRequest.FreshWiring]).
+type Wiring struct {
+	MCPServers map[string]MCPServer
+	Steer      SteerWiring
+	SkillLoads SkillWiring
 }
 
 // SteerWiring is where a run's harness asks for its turn's notes: one tool of the
