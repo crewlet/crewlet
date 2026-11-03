@@ -92,7 +92,8 @@ func RaisesBetween(prior, next *config.Company, managed bool, offers Offers) []R
 
 // UnreadOffers is every lane of kind as an offer nobody could read: no levels,
 // so none is vouched for, and the static facts its vendor's catalog holds
-// where this build registers one (GitHub's permissions). What [RaisesBetween]
+// where this build registers one (GitHub's permissions, whether a lane is
+// scoped and requires a scope). What [RaisesBetween]
 // judges by when no vendor is asked, failing closed.
 // external is a company whose credentials for kind are handed in from outside
 // Crewlet ([config.Company.SeatCredentialMode]).
@@ -104,6 +105,7 @@ func UnreadOffers(kind integration.Kind, external bool) map[Lane]Options {
 		if registered {
 			if spec, ok := vendor.Catalog().Lane(lane); ok {
 				o.Permissions = spec.Permissions
+				o.Scoped, o.ScopeRequired = spec.Scoped, spec.ScopeRequired
 			}
 		}
 		if external {

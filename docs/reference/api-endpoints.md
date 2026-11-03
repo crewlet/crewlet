@@ -4145,7 +4145,13 @@ every one of its own lines exactly so.
 the same value quoted. An entry of `options` whose vendor did not answer just
 now carries no levels: which of its levels administers is unknown, so a
 turn-on or a change of level on that lane asks the step-up a raise does, and
-the next read asks the vendor again. Each entry of `options` also says whether a person can
+the next read asks the vendor again. A scoped lane's entry says so (`scoped`)
+whatever its list holds: `scope` is the entries the company's connection
+reaches, or `scope_open` where it does not list them; `scope_names` names an
+entry where the vendor names one apart from its id; and `scope_live` says the
+list was read just now, so an entry without it could not be read and its empty
+`scope` says nothing about the reach. `scope_required` marks a lane whose agent,
+once on, must name at least one scope entry. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
@@ -4203,7 +4209,11 @@ lane the integration does not grant, or a level, permission or scope entry the
 vendor does not offer now, is `400 access_not_offered` with the lane, the value
 and what is offered. A live-listed level (a Datadog role, a Jira project role)
 is judged only when the vendor answered just now; otherwise the sync reports
-an id it does not hold as a finding. A GitLab project is within reach only
+an id it does not hold as a finding. A scope entry is judged the same way, only
+when `scope_live` says the list was read. On a lane with `scope_required`, a
+seat turned on with an empty `scope` is `400 access_not_offered` whatever was
+read; the sync reports a stored one as a finding, and `crewlet validate`
+refuses it in the document at the lane's scope key. A GitLab project is within reach only
 inside the group the company's connection joins agents to, so where the
 connection lists no projects, a project outside that group is
 `400 access_not_offered` too.

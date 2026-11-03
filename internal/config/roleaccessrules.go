@@ -27,7 +27,8 @@ import (
 //     Datadog role, a Jira project role, a Confluence space role, a GitLab
 //     custom role) is checked by the integration's sync against the vendor,
 //     and one that no longer exists is a finding there;
-//   - a scope wider than the company's reach, so a seat cannot widen it;
+//   - a scope wider than the company's reach, so a seat cannot widen it, and
+//     no scope at all on a lane whose agents must name one;
 //   - a seat credential written where the engine owns it, shared with a
 //     company block or another seat, or reading another seat's
 //     (seatcredentialrules.go).
@@ -92,6 +93,9 @@ func (c *Company) validateSeatBlocks() error {
 					"this agent is turned on at %s, which the company has not "+
 						"connected: add integrations.%s first, or turn the agent off",
 					b.lane, b.lane)
+			}
+			if *b.enabled {
+				checkScopeChosen(&p, here, role, b.lane, SeatScopeRequired)
 			}
 		}
 		if role.Kind == org.KindHuman {

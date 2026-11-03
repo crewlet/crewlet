@@ -137,8 +137,26 @@ func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 		`["gitlab"]`)
 	offers = e.seatOffers(t.Context(), q.Kind, q.Company, q.Roster, "rev-external", false)
 	if len(offers) != 1 || offers[0].Managed != seataccess.ManagedExternal ||
-		!cached(integration.KindGitLab, "rev-external") {
+		!offers[0].Scoped || offers[0].ScopeLive || !cached(integration.KindGitLab, "rev-external") {
 		t.Errorf("an external GitLab offers %+v (cached %v), want it external and kept",
 			offers, cached(integration.KindGitLab, "rev-external"))
+	}
+}
+
+// A VENDOR'S ANSWER KEEPS THE CATALOG'S FACTS, and marks a scoped lane's scope
+// as read, so an empty list then means none rather than unread. Mutation: take
+// the vendor's answer whole, and a scoped lane reads as unscoped and unread.
+func TestALiveOfferKeepsTheCatalogsFactsAndMarksItsScopeRead(t *testing.T) {
+	t.Parallel()
+	base := seataccess.Options{Lane: seataccess.LaneGitLab, Rotatable: true, Scoped: true, ScopeRequired: true}
+	live := liveOffer(base, seataccess.Options{Lane: seataccess.LaneGitLab, Live: true,
+		Scope: []string{"acme/api"}, ScopeNames: map[string]string{"acme/api": "API"}})
+	if !live.Rotatable || !live.Scoped || !live.ScopeRequired || !live.ScopeLive || !live.Live ||
+		len(live.Scope) != 1 || live.ScopeNames["acme/api"] != "API" {
+		t.Fatalf("live offer = %+v", live)
+	}
+	unscoped := liveOffer(seataccess.Options{Lane: seataccess.LaneDatadog}, seataccess.Options{Lane: seataccess.LaneDatadog, Live: true})
+	if unscoped.Scoped || unscoped.ScopeLive {
+		t.Errorf("an unscoped lane = %+v, want neither scoped nor read", unscoped)
 	}
 }

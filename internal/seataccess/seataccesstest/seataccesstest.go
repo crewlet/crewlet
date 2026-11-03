@@ -179,6 +179,10 @@ type Vendor struct {
 	// BoxEnv is each lane's box variables ([seataccess.LaneSpec.BoxEnv]).
 	BoxEnv map[seataccess.Lane][]seataccess.BoxVar
 
+	// ScopeRequired is each lane whose agents must name a scope entry
+	// ([seataccess.LaneSpec.ScopeRequired]).
+	ScopeRequired map[seataccess.Lane]bool
+
 	mu       sync.Mutex
 	accounts map[string]*Account
 	next     int
@@ -254,7 +258,7 @@ func (v *Vendor) Catalog() seataccess.Catalog {
 		cat.Lanes = append(cat.Lanes, seataccess.LaneSpec{
 			Lane: lane, Levels: len(v.Levels[lane]) > 0, Scoped: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Rotatable: true,
-			BoxEnv: v.BoxEnv[lane],
+			BoxEnv: v.BoxEnv[lane], ScopeRequired: v.ScopeRequired[lane],
 		})
 	}
 	return cat

@@ -345,6 +345,14 @@ func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desir
 	return in
 }
 
+// liveOffer is what a vendor answered for a lane, with the facts its catalog
+// holds kept as base has them, and a scoped lane's scope marked as read.
+func liveOffer(base, live seataccess.Options) seataccess.Options {
+	live.Rotatable, live.Scoped, live.ScopeRequired = base.Rotatable, base.Scoped, base.ScopeRequired
+	live.ScopeLive = base.Scoped
+	return live
+}
+
 // seatOffers is what each of kind's lanes offers now on company, read live from
 // the vendor and reused for [optionsTTL] per revision: the offer the Agents
 // tab draws its pickers from, and the one every write's raise is judged by
@@ -399,8 +407,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		if session != nil {
 			if live, err := session.Options(openCtx, lane); err == nil {
-				live.Rotatable = o.Rotatable
-				o = live
+				o = liveOffer(o, live)
 			} else {
 				whole = false
 				log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind,
