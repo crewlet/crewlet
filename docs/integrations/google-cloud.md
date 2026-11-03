@@ -161,6 +161,7 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 - An agent's credential is `GOOGLE_CLOUD_ACCESS_TOKEN_<HANDLE>`: a token Crewlet makes for the agent's account by impersonation when a tool needs it, good for one hour.
 - It is held in the engine's memory and renewed before it expires. Nothing is sealed, so there is nothing to rotate.
 - An agent that is off is issued nothing, and disabling its account stops a token already issued at once.
+- Until the agent's account is made and Google has applied Crewlet's grant on it, a tool that names the token waits, and tries again on its own. A refusal after that names what to fix, on the connection or the agent's row of the Agents tab.
 
 ### The agent's Google Cloud tools
 

@@ -78,15 +78,21 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	s := fmt.Sprintf("googlecloud: %s %s: %d", e.Method, e.Path, e.Status)
-	if e.Code != "" {
-		s += " " + e.Code
-	}
-	s += ": " + e.Message
+	s := fmt.Sprintf("googlecloud: %s %s: %s", e.Method, e.Path, e.answer())
 	if len(e.Reasons) > 0 {
 		s += " [" + strings.Join(e.Reasons, ", ") + "]"
 	}
 	return s
+}
+
+// answer is what Google said, without the call it answered: its status,
+// its code and its message.
+func (e *APIError) answer() string {
+	s := strconv.Itoa(e.Status)
+	if e.Code != "" {
+		s += " " + e.Code
+	}
+	return s + ": " + e.Message
 }
 
 // Status reports the HTTP status a call was refused with, or 0 when the
@@ -128,6 +134,10 @@ func reject(err error) error {
 	}
 	return integration.Reject(err, Status(err))
 }
+
+// errUnreached is a call that got no answer from Google: a failure a wait
+// clears.
+var errUnreached = errors.New("no answer from Google")
 
 // gone reports a read or a delete of something Google no longer has.
 func gone(err error) bool { return Status(err) == http.StatusNotFound }
@@ -262,10 +272,16 @@ type heldToken struct {
 	expires time.Time
 }
 
-// held is this client's cache entry: by the provider, the provisioner, the
-// subject and the key, so a changed connection never reuses another's token.
+// connection is what a token this client is handed was issued through: the
+// provider, the provisioner, the subject and the key, so a changed connection
+// never reuses another's token.
+func (c *Client) connection() string {
+	return strings.Join([]string{c.provider, c.provisioner, c.subject, c.kid}, "|")
+}
+
+// held is this client's cache entry for the provisioner's own token.
 func (c *Client) held() *heldToken {
-	id := strings.Join([]string{c.provider, c.provisioner, c.subject, c.kid}, "|")
+	id := c.connection()
 	provisionerTokens.Lock()
 	defer provisionerTokens.Unlock()
 	h, ok := provisionerTokens.held[id]
@@ -428,7 +444,9 @@ func (c *Client) do(ctx context.Context, method, address, bearer string, body, o
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("googlecloud: %s %s: %s", method, pathOf(address), redact(err.Error()))
+		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
+		// was sent.
+		return fmt.Errorf("googlecloud: %s %s: %w: %s", method, pathOf(address), errUnreached, redact(err.Error()))
 	}
 	defer func() { _ = res.Body.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))

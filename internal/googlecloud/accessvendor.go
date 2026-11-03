@@ -36,16 +36,16 @@ type accessVendor struct{}
 func (accessVendor) Kind() integration.Kind { return integration.KindGoogleCloud }
 
 // Catalog is Google Cloud's per-seat offer: three fixed levels on the projects
-// a seat names, which it must name. Nothing is rotatable, since the token is
-// issued for an hour at a time, and no box variable is set: the seat's tools
-// are Google's MCP servers, which take the issued token.
+// a seat names, which it must name. NOTHING IS SEALED: the seat's credential
+// is the access token the engine issues at use for an hour ([AccessTokenField]),
+// so there is nothing to rotate, and no box variable is a person's to set: the
+// seat's tools are Google's MCP servers, which take the issued token.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
-		Kind:        integration.KindGoogleCloud,
-		Credentials: []string{AccessTokenField},
+		Kind: integration.KindGoogleCloud,
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneGoogleCloud, Levels: true, Scoped: true, ScopeRequired: true,
-			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
+			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Issued: AccessTokenField,
 		}},
 	}
 }

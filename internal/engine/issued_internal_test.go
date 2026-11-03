@@ -120,8 +120,9 @@ type issuerRig struct {
 }
 
 // issuerCases is every issuer the shared paths serve, each built fresh by its
-// rig: refused builds it with the vendor refusing every issue. GitHub's runs
-// through its own fakes; the fake cloud's proves no path keys on a kind.
+// rig: refused builds it with the vendor refusing every issue. GitHub's and
+// Google Cloud's run through their own fakes; the fake cloud's proves no path
+// keys on a kind.
 var issuerCases = []struct {
 	name string
 	rig  func(t *testing.T, refused bool) issuerRig
@@ -135,6 +136,7 @@ var issuerCases = []struct {
 		return issuerRig{e: appEngine(t, c), c: c, kind: integration.KindGitHub,
 			ready: "builder", waiting: "planner", says: "403"}
 	}},
+	{"google cloud", googleCloudRig},
 	{"a second issuer", func(t *testing.T, refused bool) issuerRig {
 		// GITHUB OFF, so the fake is the only issuer that issues anything.
 		c := appCompany(t, "https://github.example.com", false)
