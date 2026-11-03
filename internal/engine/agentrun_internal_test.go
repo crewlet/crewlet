@@ -763,6 +763,44 @@ func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
 	refusedCleanly(t, e, "t1", jobs)
 }
 
+// A LAUNCH THE FLOOR REFUSES ANNOUNCES NO HAND-OFF. The launch picks its member
+// before it reckons its floor, and a pick past a spent head is a hand-off the
+// runner publishes against the turn — once the launch goes on: one refused
+// below its floor launched on no member, and a hand-off announced for it
+// reports a fallback to a member that never took a run, and again at every
+// retry the hold makes.
+//
+// Mutation: hand the pick's hand-offs to the request as the pick makes them,
+// and the refused launch announces one.
+func TestALaunchTheFloorRefusesAnnouncesNoHandOff(t *testing.T) {
+	t.Parallel()
+	c, seat := chainCompany(t,
+		chainMember{key: "plan", agent: "claude-code", model: "opus", spent: true},
+		chainMember{key: "spare", agent: "claude-code", model: "haiku"},
+	)
+	seat.TokenBudget = org.TokenCeilings{period.Day: 30000}
+	fleet := coordmemory.NewFleet()
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	e.backends.Fleet = fleet
+	id, _ := c.Org.AgentIDFor(seat)
+	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope(id.String()), 10000,
+		coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	l := launcherOn(e, c, seat, "t1")
+	var handoffs []chain.Fallback
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); !errors.Is(err,
+		toolloop.ErrBudgetExhausted) {
+		t.Fatalf("a launch with 20000 tokens left under a 25000 floor = %v, want a budget refusal", err)
+	}
+	if len(handoffs) != 0 {
+		t.Errorf("a launch the floor refused announced hand-offs %+v, want none", handoffs)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
 // The floor's three answers, at the boundary the launch asks them at.
 func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 	t.Parallel()

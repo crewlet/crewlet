@@ -645,6 +645,82 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	}
 }
 
+// A BOX ON ANOTHER NODE'S HOST ADDS NOTHING TO A LAUNCH'S FLOOR. The job
+// before's own session in its box counts toward a relaunch's floor only where
+// the launch can continue in that box, and a box in a cell on an engine host is
+// continued in by the node that launched it and no other: a seat that moved
+// since leaves the box to that node, and its relaunch here starts a session of
+// its own in a fresh box. So the relaunch is held to the static floor, and is
+// launched, fresh, where the box's session would not have fit.
+//
+// Mutation: drop the host test from the floor's reckoning of the job's box, and
+// the relaunch is refused below a floor its run never needs.
+func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
+	t.Parallel()
+	// A DAY OF 100000 WITH 70000 SPENT: room for the static floor (25000),
+	// and none for the box's session, which sends 40000 first.
+	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k.claimed(t)
+	// THE SEAT MOVED: this node is node-b, whose coordinator launches here,
+	// and the job's direct box is on the host of the node that launched it.
+	rt := k.e.sandbox.Load()
+	moved, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers: testAnswers(), Audience: noAudience{}, Queue: k.e.backends.Queue, Pending: rt.pending,
+		Manager: k.l.company.catalogue, Resume: &resumer{engine: k.e}, Node: "node-b",
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(moved.Stop)
+	k.e.useSandbox(rt.pending, moved)
+	k.e.id = "node-b"
+	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	if err != nil {
+		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on the static floor", err)
+	}
+	if len(decided) != 1 || decided[0].Continues {
+		t.Fatalf("the runner was told %+v, want once: a session of its own", decided)
+	}
+	started := k.jobs.Started()
+	if last := started[len(started)-1]; last.Resume != "" || last.Brief != "the fresh brief" {
+		t.Fatalf("the relaunch started with session %q and brief %q, want a session of its own on the "+
+			"fresh brief", last.Resume, last.Brief)
+	}
+}
+
+// unreadRuns is the run store a launch reads its turn's record from, whose read
+// of a record fails, as a coordination store having a bad moment answers it.
+type unreadRuns struct{ sandbox.PendingStore }
+
+func (unreadRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, errors.New("the coordination store did not answer")
+}
+
+// A JOB'S BOX WHOSE RECORD CANNOT BE READ HOLDS A LAUNCH TO ITS SESSION. Whether
+// a relaunch can continue in the job before's box is read off the run's record,
+// and where that read fails nothing says it cannot: the box's session counts
+// toward the floor, the safe direction for a floor — a launch held back on room
+// it may not need, never one started that its budget cannot carry.
+//
+// Mutation: read an unreadable record as a box the launch cannot continue in,
+// and the launch goes out on the static floor.
+func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T) {
+	t.Parallel()
+	k := newKeptLaunch(t, 40000, 100000, 70000)
+	k.claimed(t)
+	rt := k.e.sandbox.Load()
+	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
+	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+	var refused *floorRefusal
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||
+		refused.floor.context != 40000 {
+		t.Fatalf("a relaunch whose job's record cannot be read = %v, want a budget refusal on the box "+
+			"session's floor", err)
+	}
+}
+
 // A RUN TAKEN OVER IS HELD TO WHAT ITS BOX SAYS, AS ITS RECORD NAMES THE BRIEF.
 // A node that took a run over before its box first reached the bridge hears
 // the box's word on its first request there, and has only the job's record to
