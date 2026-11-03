@@ -129,11 +129,8 @@ func RenderStack(p StackParams) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// cloudShellBlock is what the owner pastes into CloudShell in the target
-// account and region: it writes the template, deploys it and prints the
-// KEY=VALUE lines for probe.env.
 // CloudShellBlock is the paste that deploys the stack from a heredoc and
-// prints its outputs, one KEY=VALUE line each.
+// prints its CrewletConnection value last, the one line to paste back.
 func CloudShellBlock(template []byte, region string, company Company) string {
 	const eof = "CREWLET_TEMPLATE_EOF"
 	stack := stackName(company)

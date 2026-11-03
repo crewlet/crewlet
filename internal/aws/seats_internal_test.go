@@ -2,6 +2,8 @@ package aws
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/sigv4"
 )
 
 // A SEAT'S NAME FITS AWS AND IS ITS OWN: the longest company and handle still
@@ -116,6 +119,9 @@ type fakeIAM struct {
 	mu     sync.Mutex
 	calls  []url.Values
 	answer func(form url.Values) (int, string)
+	// grants decides each CreateSession by the leaf's name and the profile
+	// asked through; nil grants every one.
+	grants func(cn, profile string) bool
 }
 
 func (f *fakeIAM) actions() []string {
@@ -133,6 +139,17 @@ func (f *fakeIAM) client(t *testing.T) *Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if r.URL.Path == "/sessions" {
+			der, _ := base64.StdEncoding.DecodeString(r.Header.Get(sigv4.HeaderX509))
+			leaf, _ := x509.ParseCertificate(der)
+			var in struct {
+				Profile string `json:"profileArn"`
+			}
+			_ = json.Unmarshal(body, &in)
+			if f.grants != nil && (leaf == nil || !f.grants(leaf.Subject.CommonName, in.Profile)) {
+				w.Header().Set("X-Amzn-Errortype", "AccessDeniedException")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{"credentialSet": []any{map[string]any{
 				"credentials": map[string]any{"accessKeyId": "ASIAPROVEXAMPLE00001", "secretAccessKey": "s",
