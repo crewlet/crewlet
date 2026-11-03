@@ -1,8 +1,8 @@
 /**
  * The Agents tab's dialogs.
  *
- * - THE REVIEW, before a save: per agent, what the draft changes as one line
- *   of chips ("Deployments: Read-only → Read and write", in the vendor's
+ * - THE REVIEW, before a save: per agent, what the draft changes as labels
+ *   and values ("Deployments: Read-only → Read and write", in the vendor's
  *   words), what turning an agent off does there, and what the next sync will
  *   do at the vendor because of it: numbered steps, each a short label with
  *   its note beneath and the mark of who takes it, Crewlet's or a person's.
@@ -40,6 +40,7 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
+import { marked } from "~/ui/Problems.tsx";
 import { accessApi, isStale, refusalWords, type AccessDraft } from "./api.ts";
 import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
@@ -107,6 +108,9 @@ const ACTOR_WORDS = { crewlet: "Crewlet", you: "A person" } as const;
 /** The one box both marks are drawn in, so a step's words start in one column. */
 const ACTOR_SIZE = GLYPH_SIZES.md;
 
+/** Crewlet's mark is wider than it is tall, so it is drawn a step larger to read at a glyph's size. */
+const CREWLET_MARK_SIZE = GLYPH_SIZES.lg;
+
 /**
  * The steps a sync takes, in order: each a short label with its note beneath
  * at a quieter step, and the mark of who takes it, Crewlet's own or a person.
@@ -116,6 +120,11 @@ const ACTOR_SIZE = GLYPH_SIZES.md;
  * are drawn in one box, a line tall, beside the words rather than in the row's
  * leading slot, which centres on the whole row and so set a step with a note
  * lower than one without.
+ *
+ * THE MARK IS DRAWN OUT OF FLOW (access.css), so the list's number stands on
+ * the label's baseline. Who takes the step is said inside the words, before
+ * the label, and the mark is hidden from assistive technology. A variable the
+ * step names is drawn as code ([marked]).
  */
 export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) {
   return (
@@ -123,19 +132,19 @@ export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) 
       {steps.map((s, i) => (
         <List.Item key={i}>
           <span className="agent-access-step">
-            <span className="agent-access-actor">
+            <span className="agent-access-actor" aria-hidden="true">
               {s.by === "you" ? (
-                <UserGlyph size={ACTOR_SIZE} aria-hidden />
+                <UserGlyph size={ACTOR_SIZE} />
               ) : (
-                <CrewletIcon width={ACTOR_SIZE} height={ACTOR_SIZE} aria-hidden />
+                <CrewletIcon width={CREWLET_MARK_SIZE} height={CREWLET_MARK_SIZE} />
               )}
-              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
             </span>
             <span className="agent-access-step-words">
-              <Text>{s.text}</Text>
+              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
+              <Text>{marked(s.text)}</Text>
               {s.note && (
                 <Text variant="caption" tone="secondary">
-                  {s.note}
+                  {marked(s.note)}
                 </Text>
               )}
             </span>
@@ -270,7 +279,7 @@ export function ReviewDialog({
                 {seat.name}
                 {lanes.length > 1 ? ` on ${lane.name}` : ""}
               </h3>
-              <ChangeList layout="inline" rows={rows(lane, from, to)} />
+              <ChangeList rows={rows(lane, from, to)} />
               {from.enabled && !to.enabled && <p>{laneWords(lane.key).off}</p>}
               {steps ? (
                 steps.length > 0 ? (

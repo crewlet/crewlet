@@ -62,6 +62,12 @@ vi.mock("./api.ts", async (actual) => {
                   by: "crewlet",
                   text: "Create the service account crewlet-qa@agents.crewlet.invalid",
                 },
+                {
+                  op: "mint",
+                  verb: "mint",
+                  by: "crewlet",
+                  text: "Mint an application key, sealed as DATADOG_APP_KEY_QA",
+                },
               ],
             },
           ],
@@ -177,10 +183,11 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   expect(reload).not.toHaveBeenCalled();
 });
 
-// THE REVIEW, SHORT: the change as one line of chips, then the next sync's
-// steps in order, each said with who takes it before its label, its note at a
-// quieter step, and no lead-in sentence above them.
-test("the review says the change as one line and the steps by who takes them", async () => {
+// THE REVIEW, SHORT: the change as labels and values in one grid, so "On
+// Datadog" and "Role at Datadog" line up, then the next sync's steps in order,
+// each said with who takes it before its label, and no lead-in sentence above
+// them. Mutation: draw the change inline again and the grid goes.
+test("the review lays the change out as labels and values, then the steps by who takes them", async () => {
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
@@ -190,11 +197,32 @@ test("the review says the change as one line and the steps by who takes them", a
     within(steps)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid"]);
+  ).toEqual([
+    "Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid",
+    "Crewlet: Mint an application key, sealed as DATADOG_APP_KEY_QA",
+  ]);
   const review = screen.getByRole("region", { name: "QA on Datadog" });
-  expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
-  expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
+  const change = review.querySelector(".crewlet-change-list")!;
+  expect(change.className).not.toContain("crewlet-change-list--inline");
+  expect(
+    [...change.querySelectorAll(".crewlet-change-list__label")].map((l) => l.textContent),
+  ).toEqual(["On Datadog", "Role at Datadog"]);
   expect(screen.queryByText(/the next sync will:/)).toBeNull();
+});
+
+// A VARIABLE A STEP NAMES IS CODE, the name a reader looks up on the Secrets
+// screen, and the mark beside a step is decoration: who takes it is said in
+// the words. Mutation: render the step's text as plain text and the name is
+// prose again.
+test("a variable a step names is drawn as code, and the mark is hidden", async () => {
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
+  expect(within(steps).getByText("DATADOG_APP_KEY_QA").tagName).toBe("CODE");
+  for (const mark of steps.querySelectorAll(".agent-access-actor")) {
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+  }
 });
 
 // CLOUDFLARE'S ACCOUNT IS THE TOKEN ITSELF: the details name it, the level it
