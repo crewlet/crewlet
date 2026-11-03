@@ -558,25 +558,25 @@ func TestAClaimIsDecidedOnceItsReadOrItsTurnHasSaid(t *testing.T) {
 	refusing := claudeTarget()
 	refusing.Restorer = restoring{harness: executor.ClaudeCodeName, why: "a release no other box resumes"}
 	for name, tc := range map[string]struct {
-		carry  sandbox.ResumeCarry
-		final  bool
-		target sandbox.RelaunchTarget
-		// decided is nil where the row is to be undecided.
-		decided *bool
-		in      sandbox.ContinuesIn
-		why     string
+		carry     sandbox.ResumeCarry
+		final     bool
+		target    sandbox.RelaunchTarget
+		undecided bool
+		continues bool
+		in        sandbox.ContinuesIn
+		why       string
 	}{
 		"its final capture kept, which the relaunch's member restores": {final: true, target: claudeTarget(),
-			decided: ptr(true), in: sandbox.ContinuesInAnyBox},
+			continues: true, in: sandbox.ContinuesInAnyBox},
 		"its turn collecting the job, its capture no other box continues": {final: true, target: refusing,
-			carry: sandbox.ResumeCollects, decided: ptr(false), why: "collects its job"},
+			carry: sandbox.ResumeCollects, why: "collects its job"},
 		"its turn carrying the round on in its box": {final: true, target: refusing,
-			carry: sandbox.ResumeCarriesOn, decided: ptr(true), in: sandbox.ContinuesInParkedBox,
+			carry: sandbox.ResumeCarriesOn, continues: true, in: sandbox.ContinuesInParkedBox,
 			why: "no other box resumes"},
 		"its turn begun, its read having taken no capture": {target: claudeTarget(),
-			carry: sandbox.ResumeCollects, decided: ptr(true), in: sandbox.ContinuesInAnyBox},
+			carry: sandbox.ResumeCollects, continues: true, in: sandbox.ContinuesInAnyBox},
 		"its turn not begun, its capture no other box continues": {final: true, target: refusing,
-			why: "as its turn begins"},
+			undecided: true, why: "as its turn begins"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -593,10 +593,10 @@ func TestAClaimIsDecidedOnceItsReadOrItsTurnHasSaid(t *testing.T) {
 			}
 			got := rowsByTurn(t, page)[row.Turn]
 			switch {
-			case tc.decided == nil && got.Continuable != nil:
+			case tc.undecided && got.Continuable != nil:
 				t.Errorf("the claim's row is %s, want undecided", decided(got))
-			case tc.decided != nil && (got.Continuable == nil || *got.Continuable != *tc.decided):
-				t.Errorf("the claim's row is %s, want continues %v", decided(got), *tc.decided)
+			case !tc.undecided && (got.Continuable == nil || *got.Continuable != tc.continues):
+				t.Errorf("the claim's row is %s, want continues %v", decided(got), tc.continues)
 			case got.ContinuesIn != tc.in:
 				t.Errorf("the claim's row is %s, want it continued in %q", decided(got), tc.in)
 			case !strings.Contains(got.NotContinuable, tc.why):
