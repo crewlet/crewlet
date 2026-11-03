@@ -21,6 +21,7 @@ import type {
 } from "~/contract/access.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
+import { integrationDocHref } from "../docs.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
@@ -346,17 +347,28 @@ export function scopeChoices(lane: Lane, held: string[] | undefined): ScopeChoic
   });
 }
 
+/** What a scope picker says in place of itself, and where a person makes an entry to offer. */
+export interface ScopeUnavailable {
+  words: string;
+  link?: { label: string; href: string };
+}
+
 /**
  * What a scope picker says where it has nothing to offer, or null where it
  * offers something or takes typed entries (`scope_open`): the vendor's list
- * could not be read, or it was read and holds nothing.
+ * could not be read, or it was read and holds nothing, with the lane's docs
+ * section on making one where it names one.
  */
-export function scopeUnavailable(lane: Lane, held: string[] | undefined): string | null {
+export function scopeUnavailable(lane: Lane, held: string[] | undefined): ScopeUnavailable | null {
   if (lane.scope_open || scopeChoices(lane, held).length > 0) return null;
   const words = laneWords(lane.key).scope;
   const noun = (words?.noun ?? "Scope").toLowerCase();
-  if (!lane.scope_live) return `Crewlet could not read your ${noun}`;
-  return words?.none ?? `No ${noun} to choose from`;
+  if (!lane.scope_live) return { words: `Crewlet could not read your ${noun}` };
+  const none = { words: words?.none ?? `No ${noun} to choose from` };
+  const link = words?.noneLink;
+  return link
+    ? { ...none, link: { label: link.label, href: integrationDocHref(link.doc, link.anchor) } }
+    : none;
 }
 
 export interface Status {
