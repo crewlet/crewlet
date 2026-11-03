@@ -118,9 +118,16 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 	}
 }
 
-// workItemNotice is a comment on a work item swe is assigned, written by actor
-// as kind, encoded as the tracker's feed relays it.
-func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, assignee string) []byte {
+// workItemNotice is a comment on a work item recipient is assigned that
+// mentions them, written by actor as kind, encoded as the tracker's feed
+// relays it.
+//
+// MENTIONED, as the page's comment is, because only a comment that names its
+// assignee wakes them whoever wrote it: unnamed, an agent's, a credential's or
+// the engine's comment reaches the assignee's inbox and starts no turn
+// (worklet's ownerAsked), and a notice that wakes nobody has no writer for a
+// turn to read.
+func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, recipient string) []byte {
 	t.Helper()
 	record := worklet.MutationRecord{
 		RecordEnvelope: worklet.RecordEnvelope{
@@ -132,9 +139,11 @@ func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, assigne
 		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind,
 		Notify: &worklet.Notify{
 			Kind: worklet.ChangeComment, Excerpt: "can you read the repository for me",
+			Mentions: []string{recipient},
 			Snapshot: worklet.Snapshot{
 				Key: "ENG-1", Project: "ENG", Title: "wire it",
-				Status: worklet.StatusInProgress, Assignee: assignee,
+				Status: worklet.StatusInProgress, Assignee: recipient,
+				CommentAuthorKind: kind,
 			},
 		},
 	}
