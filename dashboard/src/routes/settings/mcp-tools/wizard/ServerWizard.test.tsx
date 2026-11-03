@@ -12,6 +12,7 @@ import { Store } from "~/protocol/index.ts";
 import { TestClient } from "~/test/client.tsx";
 import { createEntity, dryRunCreate, dryRunEntity, putEntity } from "~/protocol/configWrite.ts";
 import { readCatalogue, storeValue, testDraft } from "../api.ts";
+import type { AccessAnswer } from "~/contract/access.ts";
 import { MCP_ORG, mcpData } from "../fixtures.ts";
 import { ServerWizard, type Saved } from "./ServerWizard.tsx";
 
@@ -52,6 +53,41 @@ const LINEAR: McpCatalogueEntry = {
   version: "",
   updated_at: null,
 };
+
+/** Cloudflare, which its integration signs in for each agent it has turned on. */
+const CLOUDFLARE: McpCatalogueEntry = {
+  ...LINEAR,
+  id: "cloudflare",
+  name: "cloudflare",
+  title: "Cloudflare",
+  vendor: "cloudflare",
+  description: "The Cloudflare API.",
+  url: "https://mcp.cloudflare.com/mcp",
+  headers: [{ ...LINEAR.headers[0]!, from_integration: true, format: "Bearer <token>" }],
+  auth: ["integration", "oauth", "headers"],
+  integration: "cloudflare",
+};
+
+/** Cloudflare's Agents tab with the given seats on, the rest off. */
+function cloudflareAccess(on: readonly string[]): AccessAnswer {
+  const lane = (enabled: boolean) => ({
+    desired: { enabled, level: "read" },
+    observed: { exists: enabled, enabled },
+    plan: [],
+    tool: enabled ? ("live" as const) : ("off" as const),
+  });
+  return {
+    kind: "cloudflare",
+    revision: "rev-1",
+    syncing: false,
+    options: [{ lane: "cloudflare", live: false, levels: [{ id: "read", name: "Read" }] }],
+    seats: ["backend-engineer", "pm"].map((handle) => ({
+      handle,
+      name: handle,
+      lanes: { cloudflare: lane(on.includes(handle)) },
+    })),
+  };
+}
 
 /** Sentry, which the company does not run yet: what the add tests pick. */
 const SENTRY: McpCatalogueEntry = {
@@ -208,6 +244,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   location.hash = "";
 });
 
@@ -595,4 +632,67 @@ test("a service identity is tested with its secret, written without it, then its
     test: true,
   });
   expect(onSaved).toHaveBeenCalledWith("sentry", false);
+});
+
+/** Cloudflare from the catalogue, on its own sign-in, walked to the Test step. */
+async function walkCloudflare() {
+  vi.mocked(readCatalogue).mockResolvedValue({
+    reading: "admin",
+    curated: [LINEAR, SENTRY, CLOUDFLARE],
+    community: [],
+    registry: "",
+    reason: "",
+    left_out: 0,
+  });
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Cloudflare/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  await press("Continue"); // Sign-in, the integration's own
+  await press("Continue"); // Who gets it, which the integration decides
+  await press("Continue"); // Tool approvals
+  await press("Continue"); // Test
+  await settle();
+}
+
+/** Answers the integration's access read, which the Test step lists its agents from. */
+function serveAccess(answer: AccessAnswer) {
+  const fetched = vi.fn(async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://engine.test").pathname;
+    return path.endsWith("/setup/integrations/cloudflare/access")
+      ? new Response(JSON.stringify(answer), { status: 200 })
+      : new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetched);
+  return fetched;
+}
+
+// A SERVER AN INTEGRATION SIGNS IN IS TESTED AS AN AGENT IT HAS ON. The test
+// defaulted to the chart's first agent, which had Cloudflare off, and failed
+// with a refusal that named nothing. Mutation: default to the chart's first
+// agent again and the test runs as backend-engineer.
+test("a server an integration signs in is tested as an agent the integration has on", async () => {
+  const fetched = serveAccess(cloudflareAccess(["pm"]));
+  await walkCloudflare();
+  expect(fetched.mock.calls.map(([input]) => String(input))).toContainEqual(
+    expect.stringContaining("/setup/integrations/cloudflare/access"),
+  );
+  expect(testDraft).toHaveBeenCalled();
+  for (const [, , seat] of vi.mocked(testDraft).mock.calls) expect(seat).toBe("pm");
+  expect(screen.getByRole("combobox", { name: "Test as" }).textContent).toBe("Product Manager");
+});
+
+// AND NOT AT ALL WHILE IT HAS NONE ON: the test could only fail, so the step
+// says where the fix is instead of running it. Mutation: drop the gate and a
+// test runs as an agent with Cloudflare off.
+test("with no agent on at the integration, the test says to turn one on and runs nothing", async () => {
+  serveAccess(cloudflareAccess([]));
+  await walkCloudflare();
+  expect(testDraft).not.toHaveBeenCalled();
+  expect(screen.getByText("No agent has Cloudflare on")).toBeDefined();
+  expect(screen.getByRole("link", { name: "Agents tab" }).getAttribute("href")).toBe(
+    "#/company/integrations/cloudflare?open=agents",
+  );
+  expect(screen.queryByRole("combobox", { name: "Test as" })).toBeNull();
 });

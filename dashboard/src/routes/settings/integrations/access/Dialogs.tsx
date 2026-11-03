@@ -1,8 +1,8 @@
 /**
  * The Agents tab's dialogs.
  *
- * - THE REVIEW, before a save: per agent, what the draft changes as one line
- *   of chips ("Deployments: Read-only → Read and write", in the vendor's
+ * - THE REVIEW, before a save: per agent, what the draft changes as labels
+ *   and values ("Deployments: Read-only → Read and write", in the vendor's
  *   words), what turning an agent off does there, and what the next sync will
  *   do at the vendor because of it: numbered steps, each a short label with
  *   its note beneath and the mark of who takes it, Crewlet's or a person's.
@@ -16,7 +16,7 @@
  *   words, so the row stays at one size.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -40,6 +40,7 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
+import { marked } from "~/ui/Problems.tsx";
 import { accessApi, isStale, refusalWords, type AccessDraft } from "./api.ts";
 import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
@@ -107,6 +108,9 @@ const ACTOR_WORDS = { crewlet: "Crewlet", you: "A person" } as const;
 /** The one box both marks are drawn in, so a step's words start in one column. */
 const ACTOR_SIZE = GLYPH_SIZES.md;
 
+/** Crewlet's mark is wider than it is tall, so it is drawn a step larger to read at a glyph's size. */
+const CREWLET_MARK_SIZE = GLYPH_SIZES.lg;
+
 /**
  * The steps a sync takes, in order: each a short label with its note beneath
  * at a quieter step, and the mark of who takes it, Crewlet's own or a person.
@@ -116,6 +120,11 @@ const ACTOR_SIZE = GLYPH_SIZES.md;
  * are drawn in one box, a line tall, beside the words rather than in the row's
  * leading slot, which centres on the whole row and so set a step with a note
  * lower than one without.
+ *
+ * THE MARK IS DRAWN OUT OF FLOW (access.css), so the list's number stands on
+ * the label's baseline. Who takes the step is said inside the words, before
+ * the label, and the mark is hidden from assistive technology. A variable the
+ * step names is drawn as code ([marked]).
  */
 export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) {
   return (
@@ -123,19 +132,19 @@ export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) 
       {steps.map((s, i) => (
         <List.Item key={i}>
           <span className="agent-access-step">
-            <span className="agent-access-actor">
+            <span className="agent-access-actor" aria-hidden="true">
               {s.by === "you" ? (
-                <UserGlyph size={ACTOR_SIZE} aria-hidden />
+                <UserGlyph size={ACTOR_SIZE} />
               ) : (
-                <CrewletIcon width={ACTOR_SIZE} height={ACTOR_SIZE} aria-hidden />
+                <CrewletIcon width={CREWLET_MARK_SIZE} height={CREWLET_MARK_SIZE} />
               )}
-              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
             </span>
             <span className="agent-access-step-words">
-              <Text>{s.text}</Text>
+              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
+              <Text>{marked(s.text)}</Text>
               {s.note && (
                 <Text variant="caption" tone="secondary">
-                  {s.note}
+                  {marked(s.note)}
                 </Text>
               )}
             </span>
@@ -161,7 +170,10 @@ export function ReviewDialog({
   draft: AccessDraft;
   onClose: () => void;
   onSaved: (answer: AccessAnswer) => void;
-  /** A save refused because somebody saved in between: read again, keeping the draft. */
+  /**
+   * The document moved since the tab read it, said by a refused save or by a
+   * plan drawn from a newer revision: read again, keeping the draft.
+   */
   onStale: () => void;
 }) {
   const [plan, setPlan] = useState<AccessPlanAnswer | null>(null);
@@ -170,13 +182,28 @@ export function ReviewDialog({
 
   // PLANNED AGAIN FOR EVERY REVISION READ, so a review left open across a
   // colleague's save shows what the next sync does now.
+  //
+  // THE PLAN NAMES THE REVISION IT WAS DRAWN FROM, the document as it stands
+  // now. One the tab has not read means the document moved since the tab read
+  // it (the access migration writes one just after a first connect), and a
+  // save sent with the tab's revision would be refused as stale. So the tab
+  // reads again, keeping the draft, once per newer revision, and Save waits
+  // for the plan drawn from the revision read.
   const revision = data.revision;
+  const asked = useRef("");
+  const moved = useEffectEvent((drawnFrom: string) => {
+    if (asked.current === drawnFrom) return;
+    asked.current = drawnFrom;
+    onStale();
+  });
   useEffect(() => {
     let live = true;
     setPlan(null);
     accessApi.plan(kind, draft).then(
       (p) => {
-        if (live) setPlan(p);
+        if (!live) return;
+        setPlan(p);
+        if (p.revision !== revision) moved(p.revision);
       },
       (err: unknown) => {
         if (live) setError(refusalWords(err));
@@ -186,6 +213,7 @@ export function ReviewDialog({
       live = false;
     };
   }, [kind, draft, revision]);
+  const behind = plan !== null && plan.revision !== revision;
 
   const lanes = lanesOf(data);
   const changed = data.seats.flatMap((seat) =>
@@ -225,7 +253,13 @@ export function ReviewDialog({
             size="small"
             variant="primary"
             loading={saving}
-            disabledReason={plan ? undefined : "Reading what the sync will do."}
+            disabledReason={
+              !plan
+                ? "Reading what the sync will do."
+                : behind
+                  ? "Reading the latest settings."
+                  : undefined
+            }
             onClick={async () => {
               setSaving(true);
               setError("");
@@ -270,7 +304,7 @@ export function ReviewDialog({
                 {seat.name}
                 {lanes.length > 1 ? ` on ${lane.name}` : ""}
               </h3>
-              <ChangeList layout="inline" rows={rows(lane, from, to)} />
+              <ChangeList rows={rows(lane, from, to)} />
               {from.enabled && !to.enabled && <p>{laneWords(lane.key).off}</p>}
               {steps ? (
                 steps.length > 0 ? (
