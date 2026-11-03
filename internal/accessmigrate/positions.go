@@ -88,6 +88,7 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneSlack:      {"enabled"},
 	seataccess.LaneCloudflare: {"enabled", "level"},
 	seataccess.LaneExpo:       {"enabled", "level"},
+	seataccess.LaneScaleway:   {"enabled", "level", "projects"},
 }
 
 // position is one place a seat named its credential.

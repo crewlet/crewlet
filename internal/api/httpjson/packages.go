@@ -55,7 +55,7 @@ var goPackages = map[string]bool{
 	"presence": true, "provenance": true,
 	"provision": true, "queries": true, "queue": true, "queuetest": true,
 	"redact": true, "references": true, "runner": true, "runtoken": true,
-	"s3fake": true, "s3obj": true, "sandbox": true, "sandboxtest": true,
+	"s3fake": true, "s3obj": true, "sandbox": true, "scaleway": true, "sandboxtest": true,
 	"schedule": true, "scheduletest": true, "search": true, "seat": true,
 	"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 	"setupapi": true, "setuptest": true, "signedask": true, "skills": true,

@@ -9,6 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
+// ErrNoScalewayLevel refuses keeping a Scaleway policy that is no level's: a
+// seat names a level, and none of them grants what the policy grants.
+var ErrNoScalewayLevel = errors.New("the agent's policy grants what no Scaleway level grants: " +
+	"save the level it should hold here, and Crewlet sets its policy to that")
+
 // ErrNoCloudflareLevel refuses keeping a Cloudflare token whose policy is no
 // level's: a seat names a level, and none of them holds what it holds.
 var ErrNoCloudflareLevel = errors.New("the token's permissions are not those of any Cloudflare level: " +
@@ -60,6 +65,11 @@ func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {
 	case LaneExpo:
 		if !slices.Contains(config.ExpoLevels(), have.Level) {
 			return Desired{}, ErrNoExpoLevel
+		}
+		kept.Level = have.Level
+	case LaneScaleway:
+		if !slices.Contains(config.ScalewayLevels(), have.Level) {
+			return Desired{}, ErrNoScalewayLevel
 		}
 		kept.Level = have.Level
 	default:

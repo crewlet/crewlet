@@ -217,7 +217,7 @@ func (e *Engine) mintedFor(c *Company, handle string) map[string]integration.Kin
 			if seat.Handle != handle {
 				continue
 			}
-			for _, name := range []string{seat.TokenVar, seat.EmailVar} {
+			for _, name := range append([]string{seat.TokenVar}, seat.AlsoVars...) {
 				if name == "" {
 					continue
 				}

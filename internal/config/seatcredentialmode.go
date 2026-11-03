@@ -47,6 +47,8 @@ const (
 //     token mints each agent's account API token.
 //   - expo: an enabled block with `provisioning`, whose Admin token creates
 //     each agent's robot user.
+//   - scaleway: an enabled block with `provisioning`, whose provisioner key
+//     makes each agent's IAM application, policy and API key.
 //   - slack: the sealed app-configuration token
 //     (`integrations.slack.app_config_token`) the engine creates each agent's
 //     app with (D11). The block alone grants no authority: an operator renders
@@ -79,6 +81,8 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 		engine = in.Cloudflare != nil && in.Cloudflare.Enabled && in.Cloudflare.Provisioning != nil
 	case "expo":
 		engine = in.Expo != nil && in.Expo.Enabled && in.Expo.Provisioning != nil
+	case "scaleway":
+		engine = in.Scaleway != nil && in.Scaleway.Enabled && in.Scaleway.Provisioning != nil
 	}
 	if engine {
 		return SeatCredentialEngine

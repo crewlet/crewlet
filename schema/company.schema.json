@@ -1284,6 +1284,10 @@
           "$ref": "#/$defs/Mattermost",
           "description": "Mattermost instance and team. Absent = disabled."
         },
+        "scaleway": {
+          "$ref": "#/$defs/Scaleway",
+          "description": "Scaleway Organization and provisioner key, used to make one IAM application, policy and API key per agent. Absent = disabled."
+        },
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
@@ -3193,6 +3197,10 @@
           "$ref": "#/$defs/RoleMattermost",
           "description": "This seat's Mattermost bot: whether it is on, its roles and its channels."
         },
+        "scaleway": {
+          "$ref": "#/$defs/RoleScaleway",
+          "description": "This seat's own Scaleway IAM application: whether it is on, its level and its projects."
+        },
         "slack": {
           "$ref": "#/$defs/RoleSlack",
           "description": "This seat's own Slack app: whether it is on."
@@ -3457,6 +3465,49 @@
         "null"
       ]
     },
+    "RoleScaleway": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has its own Scaleway IAM application, policy and API key. Off deletes all three.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): servers, storage, networks, DNS and databases in its projects, plus the audit trail. operate: read plus restarting servers and changing firewalls, IPs, load balancers and private networks. administer: operate plus creating and changing servers, disks, databases, Kubernetes and the registry, which can leave access behind; granting it needs a fresh sign-in.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        },
+        "projects": {
+          "description": "Scaleway project IDs this agent's policy grants its level on. Required when enabled: an agent in no project can reach nothing.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleSlack": {
       "additionalProperties": false,
       "properties": {
@@ -3674,6 +3725,65 @@
         "null"
       ]
     },
+    "Scaleway": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "provisioning": {
+          "$ref": "#/$defs/ScalewayProvisioning",
+          "description": "The Scaleway Organization and the provisioner key the engine makes each agent's IAM application, policy and API key with. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ScalewayProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "access_key": {
+          "description": "Access key of the provisioner application's API key: SCW followed by 17 capital letters or digits.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "organization_id": {
+          "description": "Scaleway Organization ID (a UUID) the agents' IAM applications are created in.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "secret_key": {
+          "description": "Secret key of the provisioner API key, whose application holds IAMApplicationManager, IAMPolicyManager and ProjectReadOnly on the Organization. It can mint keys for, and grant anything to, any application in the Organization: give it a short expiry and rotate it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Schedule": {
       "additionalProperties": false,
       "properties": {
@@ -3835,6 +3945,7 @@
             "github",
             "gitlab",
             "mattermost",
+            "scaleway",
             "slack",
             "",
             null

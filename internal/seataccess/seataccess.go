@@ -82,6 +82,7 @@ const (
 	LaneMattermost Lane = "mattermost"
 	LaneCloudflare Lane = "cloudflare"
 	LaneExpo       Lane = "expo"
+	LaneScaleway   Lane = "scaleway"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -90,7 +91,7 @@ const (
 func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
-		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo,
+		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneScaleway,
 	}
 }
 
@@ -213,6 +214,8 @@ type Desired struct {
 	//     as read.
 	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
 	//     unset level reading as viewer.
+	//   - scaleway: `read`, `operate` or `administer`, an unset level
+	//     reading as read.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

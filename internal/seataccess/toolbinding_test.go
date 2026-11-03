@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -99,6 +100,7 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 		"gitlab":     gitlab.CredentialKeys,
 		"github":     github.CredentialKeys,
 		"cloudflare": cloudflare.CredentialKeys,
+		"scaleway":   scaleway.CredentialKeys,
 	}
 	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
@@ -174,7 +176,7 @@ func TestEveryLaneAServerReadsNamesItsEntry(t *testing.T) {
 		seataccess.LaneCloudflare: "cloudflare", seataccess.LaneGitLab: "gitlab",
 		seataccess.LaneSlack: "slack", seataccess.LaneMattermost: "mattermost",
 		seataccess.LaneJira: "atlassian", seataccess.LaneConfluence: "atlassian",
-		seataccess.LaneExpo: "",
+		seataccess.LaneScaleway: "scaleway", seataccess.LaneExpo: "",
 	} {
 		if got := seataccess.ToolServerOf(&config.Company{}, lane); got != want {
 			t.Errorf("%s: %q, want %q", lane, got, want)

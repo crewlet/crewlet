@@ -220,6 +220,7 @@ var replaced = []struct {
 	{"atlassian", "atlassian", []key{{"TOKEN", "JIRA_API_TOKEN", "", ""}, {"EMAIL", "JIRA_USERNAME", "", ""},
 		{"TOKEN", "CONFLUENCE_API_TOKEN", "", ""}, {"EMAIL", "CONFLUENCE_USERNAME", "", ""}}},
 	{"cloudflare", "cloudflare", []key{{"API_TOKEN", "", "Authorization", "Bearer "}}},
+	{"scaleway", "scaleway", []key{{"SECRET_KEY", "SCW_SECRET_KEY", "", ""}, {"ACCESS_KEY", "SCW_ACCESS_KEY", "", ""}}},
 }
 
 func keysOf(in []catalogue.SeatKey) []key {
@@ -281,6 +282,9 @@ func TestRecognitionMatchesTheSeatBindingsItReplaces(t *testing.T) {
 		{"a host under Cloudflare's server", remote("https://docs.mcp.cloudflare.com/mcp"), "", nil},
 		{"a lookalike of Cloudflare's server", remote("https://mcp.cloudflare.com.example.net/mcp"), "", nil},
 		{"Cloudflare's host spelled on stdio", stdio("curl", "https://mcp.cloudflare.com/mcp"), "", nil},
+		{"scw serving MCP", stdio("scw", "mcp", "server", "serve"), "scaleway", bound(8)},
+		{"scw by its path", stdio("/usr/local/bin/scw", "mcp", "server", "serve", "namespaces=instance"), "scaleway", bound(8)},
+		{"scw doing something else", stdio("scw", "instance", "server", "list"), "", nil},
 		{"a server nobody recognises", stdio("uvx", "some-server==1.0.0"), "", nil},
 		{"an address nobody recognises", remote("https://mcp.example.com/"), "", nil},
 		{"an address that does not parse", remote("://mcp.datadoghq.com"), "", nil},

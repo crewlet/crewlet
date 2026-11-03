@@ -74,6 +74,9 @@ func seatFields(kind string) []seatField {
 		// RETIRED_TOKEN is a turned-off seat's token, kept only to see its
 		// robot deleted at Expo, and read by no tool.
 		return []seatField{{"TOKEN", true}, {"RETIRED_TOKEN", false}}
+	case "scaleway":
+		// The secret key first, as the credential; the access key names it.
+		return []seatField{{"SECRET_KEY", true}, {"ACCESS_KEY", true}}
 	default:
 		return nil
 	}
