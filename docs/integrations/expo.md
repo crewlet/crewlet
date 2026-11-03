@@ -59,7 +59,7 @@ A level is one of Expo's robot roles, the same in every company:
 | `developer` | Developer (`DEVELOPER`) |
 | `release_manager` | Release Manager (`RELEASE_MANAGER`) |
 
-Crewlet reads the robot's role on the account with its own token and compares it with the seat's level. It does not compare the permissions behind a role. A robot holding Admin, Owner or a custom role is refused.
+Crewlet reads the robot's role on the account with its own token and compares it with the seat's level. It does not compare the permissions behind a role. A robot holding Admin, Owner or a custom role is refused. Expo carries the role only on its deprecated `viewerUserPermission.role` field, which Crewlet depends on (see [Troubleshooting](#troubleshooting)); where Expo does not say the role, Crewlet refuses rather than guess it from permissions.
 
 ### Setting a robot up
 
@@ -74,7 +74,7 @@ Turning an agent on draws three steps, two of them yours. The agent's row shows 
    - the role is the agent's level, and is not Admin or Owner;
    - the robot is not another agent's.
 
-   A token that passes is sealed as `EXPO_TOKEN_<HANDLE>`, and the robot's ID and name are recorded. A token that fails is refused beside the field with what to do, and nothing is stored.
+   A token that passes is sealed as `EXPO_TOKEN_<HANDLE>`, and the robot's ID and name are recorded. A token that fails is refused beside the field with what to do, and nothing is stored. Pasting a token is a credential write: it needs the `secrets.write` authority and a recent sign-in, and the audit records the robot and the token's visible prefix, never its value.
 
 The name is a label only. Crewlet identifies a robot by the ID its token proves, never by its name.
 
@@ -84,11 +84,14 @@ The name is a label only. Crewlet identifies a robot by the ID its token proves,
 |---|---|
 | Turn a seat on | The three steps above. |
 | Change its level | Crewlet cannot change a robot's role, so the row asks you to change it with **Edit robot** at Expo. The next pass, or **Check now**, reads the role back and the row goes in sync. |
-| Turn it off | Crewlet clears `EXPO_TOKEN_<HANDLE>` at once, so the agent loses Expo straight away. The row then asks you to **Delete robot** at Expo, and goes quiet once Expo stops accepting the old token. |
-| Turn it back on before deleting the robot | Paste a new token for the same robot. |
+| Turn it off | Crewlet clears `EXPO_TOKEN_<HANDLE>` at once, so the agent loses Expo straight away. The row then asks you to **Delete robot** at Expo, and goes quiet once Expo stops accepting the old token. **Done, check again** reads it now; while the robot still exists, the row says so and links to Expo. |
+| Keep the robot at Expo instead | Choose **Keep the robot at Expo** on that row. The step closes, Crewlet stops tracking the robot, and the audit records it as your choice. |
+| Turn it back on before deleting the robot | Crewlet forgets the turned-off robot's token, so it is never reused. Paste a new token, for the same robot or a new one. |
 | Rotate its token | Paste a new token created on the same robot's row. Crewlet checks that it is the same robot, seals it, and asks you to delete the robot's other tokens at Expo. |
 
-Until a turned-off robot is deleted, Crewlet keeps its token sealed where no agent's container reads it, only to see when Expo stops accepting it.
+Until a turned-off robot is deleted, Crewlet keeps its token as `EXPO_RETIRED_TOKEN_<HANDLE>`, only to see when Expo stops accepting it. Nothing hands it to an agent: the company document is refused if a seat names it, in its box, its tools or anywhere else. It is cleared when Expo stops accepting it, when the seat is turned back on, when you keep the robot, and on a disconnect.
+
+**A robot's other tokens are asked for until they are gone.** A robot can hold live tokens besides the one sealed for its agent: one made before the first paste, or the old one after a rotate. Every pass lists them on the row by the prefix Expo shows and when each was created, and asks you to delete them at Expo, until Expo shows them revoked or deleted.
 
 ### The token is named for the seat
 
@@ -180,6 +183,7 @@ A token you paste is refused beside the field, with what to do:
 | This robot is already …'s | Another agent has this robot | Add a robot for this agent |
 | This token belongs to robot …, not to …'s robot | A rotate's token is from another robot | Create the new token on the agent's own robot's row |
 | The token has a space, line break or invisible character | It was wrapped or copied with a hidden character | Copy it again in one piece |
+| Expo did not say this robot's role | Expo answered the robot's membership without its role, or no longer answers the deprecated `viewerUserPermission.role` field Crewlet reads it from | Check the robot's role at Expo and paste again; if it persists, Expo has retired the field and Crewlet needs an update |
 
 The card reports `credential_missing` when `integrations.expo.provisioning.account_name` is missing or resolves to nothing; fill in the account name. An agent's own state is reported on its row on the **Agents** tab, with the control that answers it.
 
