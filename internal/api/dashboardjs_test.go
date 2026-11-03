@@ -1635,6 +1635,10 @@ const (
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
+	// The Agents tab reading an issued credential, a tool's reason and the
+	// box's files, and the connect form's public view of a minted value, took
+	// it from 5454.2 KiB to 5454.8 KiB (+557 bytes), all of it the
+	// integrations model chunk. It stays at 5455 KiB.
 	treeBudget = 5<<20 + 335<<10
 )
 
