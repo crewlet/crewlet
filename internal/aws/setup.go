@@ -83,9 +83,8 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Field: "home_region", Label: "Home Region", Kind: setup.KindChoice,
 			ConfigPath: "integrations.aws.provisioning.home_region", Required: true, Connect: true,
 			Choices: choices,
-			Help: "Where the Crewlet stack and Crewlet's sign-in live. Agents work in this Region and " +
-				"us-east-1 unless the company document lists others.",
-			Blocks: integration.FindingCredentialMissing,
+			Help:    regionsHelp(prov),
+			Blocks:  integration.FindingCredentialMissing,
 		},
 		{
 			Field: "certificate_authority", Label: "Sign-in certificate", Kind: setup.KindSecret,
@@ -152,6 +151,17 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 	return reqs
 }
 
+// regionsHelp says where the stack lives and, once the home Region is saved,
+// the Regions agents work in: a fact the company document sets, shown here.
+func regionsHelp(prov config.AWSProvisioning) string {
+	help := "Where the Crewlet stack and Crewlet's sign-in live."
+	if !config.AWSRegion(strings.TrimSpace(prov.HomeRegion)) {
+		return help + " Agents work in this Region and us-east-1 unless the company document lists others."
+	}
+	return help + " Regions: " + strings.Join(prov.RegionsOrDefault(), ", ") + " (set in the company " +
+		"document; changing them re-renders the CloudShell block)."
+}
+
 // cloudShellView is the CloudShell block for the held certificate authority:
 // the stack rendered with its certificate, never its key, for the slug, home
 // Region and Regions saved. Nil until the slug and the home Region are. A
@@ -182,7 +192,8 @@ func cloudShellText(company Company, home string, regions []string, bundle strin
 	if err != nil {
 		return "", err
 	}
-	return CloudShellBlock(tpl, home, company), nil
+	return "# Agents may work in " + strings.Join(regions, ", ") + " (integrations.aws.provisioning.regions).\n" +
+		CloudShellBlock(tpl, home, company), nil
 }
 
 // Summary is the sentence the connect form opens with.

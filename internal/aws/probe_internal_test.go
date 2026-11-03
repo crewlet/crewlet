@@ -130,7 +130,7 @@ func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 		t.Fatalf("no CloudShell block: %+v", ca.Public)
 	}
 	for _, want := range []string{"--stack-name crewlet-acme", "--region eu-west-1", "BEGIN CERTIFICATE",
-		config.AWSConnectionOutput} {
+		config.AWSConnectionOutput, "# Agents may work in eu-west-1, us-east-1"} {
 		if !strings.Contains(ca.Public.Text, want) {
 			t.Errorf("the block lacks %q", want)
 		}
@@ -140,6 +140,11 @@ func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
 	}
 	if !strings.Contains(ca.VendorURL, "{home_region}") {
 		t.Errorf("the CloudShell link names no home Region: %q", ca.VendorURL)
+	}
+	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
+		if r.Field == "home_region" && !strings.Contains(r.Help, "Regions: eu-west-1, us-east-1 (set in the company document") {
+			t.Errorf("the home Region shows no Regions: %q", r.Help)
+		}
 	}
 	prov.HomeRegion = ""
 	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
