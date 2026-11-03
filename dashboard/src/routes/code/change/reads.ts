@@ -20,9 +20,11 @@
  * ({@link CHANGE_POLL_MS}), and it carries what every part is a function of:
  * the change's `version`, which every record that changes its row counts — a
  * pushed revision, a retarget, its life — and its conversation's, which every
- * record on its conversation counts (`code.ConversationRow.Version`), and
- * beside them its newest revisions, each with the facts its home recorded. A
- * part is asked again, quietly, when what it reads moves, and not otherwise.
+ * record on its conversation counts (`code.ConversationRow.Version`), and when
+ * somebody last wrote on it (`spoken_at`), which the reviews and comments are
+ * keyed on ({@link partMovedBy}), and beside them its newest revisions, each
+ * with the facts its home recorded. A part is asked again, quietly, when what
+ * it reads moves, and not otherwise.
  * The `files` and `diff` parts above all: each is a git read on the
  * repository's home git node, holding a share of its read lane that pushes and
  * clones need too, and its answer is a function of the revision's head and the
@@ -85,12 +87,28 @@ export function changePartParams(
 /**
  * What a part's answer is a function of, as the detail read says it, where its
  * reader names nothing finer: the change's version for `files` and `diff`,
- * which no conversation record moves, and the change's and its conversation's
- * versions for every other part.
+ * which no conversation record moves; for `reviews` and `comments`, when
+ * somebody last wrote on the change (`spoken_at`) beside how many rows the
+ * part holds; and the change's and its conversation's versions for every other
+ * part.
+ *
+ * A REVIEW OR A COMMENT ROW IS WRITTEN ONLY BY A RECORD SOMEBODY WROTE — a
+ * review, a comment, a thread resolved — and every such record moves
+ * `spoken_at` (`code.ConversationRow.SpokenAt`), where the conversation's
+ * version moves with every record on its subject, the home's facts among them:
+ * a revision's, and the mergeability it records again for every live change
+ * into a target branch each time that branch moves. Keyed on the versions, a
+ * reader holding k pages of reviews and comments asked all of them again on
+ * every push to a busy target. The count beside the instant tells two such
+ * records apart that the broker stamped in one microsecond (the resolution an
+ * instant is kept at) where one of them added a row.
  */
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName): string {
   if (part === "files" || part === "diff") return String(change.version);
-  return `${change.version}/${change.conversation?.version ?? 0}`;
+  const conversation = change.conversation;
+  if (part === "reviews") return `${conversation?.spoken_at ?? ""}/${conversation?.reviews ?? 0}`;
+  if (part === "comments") return `${conversation?.spoken_at ?? ""}/${conversation?.comments ?? 0}`;
+  return `${change.version}/${conversation?.version ?? 0}`;
 }
 
 /**

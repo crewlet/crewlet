@@ -7841,7 +7841,12 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   first, so what one page leaves out is the newest: **Load more** under the
   timeline asks each part's page after the cursor its last one ended at, and
   the timeline is built over every page loaded, so a reply on a later page
-  joins its root. **Files** is the revision's files (`rev=`, the
+  joins its root. Every page loaded is asked again only when somebody wrote
+  on the change (the conversation's `spoken_at`, beside the part's count),
+  never on a push or a mergeability its home recorded, which write no review
+  or comment: a busy target branch re-checks every live change into it, and
+  each held page would otherwise be read again on every push to it.
+  **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff), a page at a time — **Load more files** asks the page
   after from the cursor the last one ended at — and one file's patch (`file=`) as git wrote it, read

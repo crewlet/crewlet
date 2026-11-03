@@ -8371,6 +8371,12 @@ export interface CodeConversationRow {
   changes_requested: number;
   version: number;
   position: LogPosition;
+  /**
+   * When somebody last wrote on the change — an ask for review, a comment, a
+   * thread resolved, a review, an answer to a finding — never the home's
+   * facts. Absent until somebody has.
+   */
+  spoken_at?: string;
 }
 
 /**
