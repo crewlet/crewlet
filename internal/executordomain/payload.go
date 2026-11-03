@@ -109,10 +109,10 @@ type Capture struct {
 }
 
 // Begin records a turn's first read of its conversation, and the base that read
-// froze: the session the turn's launches are to continue while it has kept
-// none of its own. A turn's first launch is to publish it once, under
-// [BeginOpID]; no launch publishes one yet, so no row holds a base until one
-// does.
+// froze: the session the turn's launches continue while it has kept none of its
+// own. A turn's first launch publishes it once, under [BeginOpID], as soon as
+// the run's record that froze the read exists (internal/sandbox's
+// Coordinator.recordBegin).
 //
 // THE BASE IS HELD BY THE TURN'S OWN ROW, never by a record about the base: the
 // applier is a pure function of the record and the rows, so the one place a

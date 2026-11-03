@@ -736,8 +736,9 @@ type CoordinatorOptions struct {
 	// the poll tries again. Nil refreshes nothing.
 	Refresh RefreshFunc
 
-	// Sessions is the executor log's writes every capture of a run's harness
-	// session and every turn's end are recorded through: THE ESTATE ROUTER'S
+	// Sessions is the executor log's writes every turn's first read, every
+	// capture of a run's harness session and every turn's end are recorded
+	// through: THE ESTATE ROUTER'S
 	// (internal/estate's ExecutorWrites), never a data node's own writer,
 	// because a seat's box is wherever its seat runs — a seats-only node,
 	// which holds no log, included. See session.go.
@@ -843,13 +844,15 @@ type Coordinator struct {
 	// sessions and keep are [CoordinatorOptions.Sessions] and Keep;
 	// sessionRetry is the first wait between two attempts at one of their
 	// records ([sessionRetryBase]), recordBudget all of a record's attempts
-	// together ([sessionRecordBudget]) and captureTick how often an ending
-	// waiting on a capture of its turn reads the row ([captureWaitTick]) —
-	// a test's shorter.
+	// together ([sessionRecordBudget]), beginBudget all of a begin's, on the
+	// frame that launches ([beginRecordBudget]), and captureTick how often an
+	// ending waiting on a capture of its turn reads the row
+	// ([captureWaitTick]) — a test's shorter.
 	sessions     SessionWrites
 	keep         SessionKeep
 	sessionRetry time.Duration
 	recordBudget time.Duration
+	beginBudget  time.Duration
 	captureTick  time.Duration
 	// restore is [CoordinatorOptions.Restore], and relaunchWait how long a
 	// relaunch waits for the capture of the job it follows to be kept
@@ -1042,6 +1045,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		spoolDir:      opts.SpoolDir,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
+		beginBudget:   beginRecordBudget,
 		captureTick:   captureWaitTick,
 		now:           opts.Now,
 		runs:          map[string]seatRuns{},

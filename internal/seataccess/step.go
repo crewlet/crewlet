@@ -56,12 +56,18 @@ const (
 	// OpRotate mints a new credential, seals it, and revokes the old one, on
 	// request.
 	OpRotate Op = "rotate"
+
+	// OpRetire is a person deleting the credentials an account still holds
+	// besides the sealed one ([Observed.Retired]), planned on every pass
+	// until the vendor no longer shows them.
+	OpRetire Op = "retire"
 )
 
 // Valid reports whether o is an op this build knows.
 func (o Op) Valid() bool {
 	return slices.Contains([]Op{
 		OpCreate, OpEnable, OpLevel, OpScope, OpMint, OpDisable, OpRevoke, OpRemove, OpRotate,
+		OpRetire,
 	}, o)
 }
 
@@ -177,10 +183,18 @@ type Ask struct {
 	// ("Turn back on"), which no pass does unasked (D3).
 	Reenable bool
 
+	// Release closes a step that waits for a person to delete the account at
+	// the vendor: they keep it there, and Crewlet stops tracking it.
+	Release bool
+
 	// Lane is the lane the person asked on. Reenable applies to it alone,
 	// and to every lane where it is empty. Rotate and Remove act on the
 	// ACCOUNT, which every lane of a kind shares, so they are taken once.
 	Lane Lane
+
+	// HandIn is a credential a person pasted for the seat ([HandsIn]),
+	// which the step that checks it seals. Never logged or marshalled.
+	HandIn string `json:"-"`
 }
 
 // Zero reports an ask for nothing.

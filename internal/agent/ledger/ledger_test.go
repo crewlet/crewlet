@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 func TestValuesThatFitKeepTheirNativeType(t *testing.T) {
@@ -211,70 +210,14 @@ func TestAnIterationRoundTripsThroughJSON(t *testing.T) {
 
 func TestARowFromAnOlderEngineDecodesToLessContextNotAnError(t *testing.T) {
 	t.Parallel()
-	// Losing a field costs the next turn some history; raising would cost
-	// it the whole turn.
+	// Losing a field costs the next round some of its account; raising would
+	// cost it the whole turn.
 	var it Iteration
 	if err := json.Unmarshal([]byte(`{"iteration":3}`), &it); err != nil {
 		t.Fatalf("a sparse row failed to decode: %v", err)
 	}
 	if it.Iteration != 3 {
 		t.Errorf("iteration = %d, want 3", it.Iteration)
-	}
-	var s Session
-	if err := json.Unmarshal([]byte(`{"reply":"ok"}`), &s); err != nil {
-		t.Fatalf("a sparse session failed to decode: %v", err)
-	}
-	if s.Reply != "ok" {
-		t.Errorf("reply = %q", s.Reply)
-	}
-}
-
-func TestNoHistoryRendersNothing(t *testing.T) {
-	t.Parallel()
-	if got := RenderHistory(nil, HistoryOptions{}); got != "" {
-		t.Errorf("an empty history rendered %q", got)
-	}
-}
-
-func TestASessionReadsAsTheSeatsOwnPast(t *testing.T) {
-	t.Parallel()
-	got := renderSession(Session{
-		TurnID:  "0189d4c2-aaaa-bbbb-cccc-ddddddddddd0",
-		At:      "2026-08-20T09:00:00Z",
-		Trigger: "@alice: can you repost the summary?",
-		Intent:  "repost with the fixed link",
-		Calls:   "- slack_post({\"channel\":\"C1\"}) → success",
-		Reply:   "Reposted with the corrected link.",
-	})
-	for _, want := range []string{
-		"### 2026-08-20T09:00:00Z (turn 0189d4c2-aaaa-bbbb-cccc-ddddddddddd0)",
-		"Triggered by: @alice",
-		"You set out to: repost",
-		"You called:",
-		"You replied: Reposted",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
-	}
-}
-
-func TestAnUnremarkableEndingIsNotAnnounced(t *testing.T) {
-	t.Parallel()
-	// Saying "Turn ended: done" on every entry trains the reader to skip
-	// the line — which is the line that says a turn FAILED.
-	if got := renderSession(Session{Reply: "hi", Decision: "done"}); strings.Contains(got, "Turn ended") {
-		t.Errorf("a routine ending was announced:\n%s", got)
-	}
-	if got := renderSession(Session{Reply: "hi", Decision: "failed"}); !strings.Contains(got, "Turn ended: failed") {
-		t.Errorf("a failure was not announced:\n%s", got)
-	}
-}
-
-func TestAnEntryWithNoTimeStillHasAHeading(t *testing.T) {
-	t.Parallel()
-	if got := renderSession(Session{Reply: "hi"}); !strings.HasPrefix(got, "### Earlier turn") {
-		t.Errorf("a timeless entry lost its heading:\n%s", got)
 	}
 }
 
@@ -436,101 +379,5 @@ func TestAPriorRoundsOutputIsFittedNotCut(t *testing.T) {
 	}
 	if short := RenderIterations([]Iteration{{Iteration: 1, Text: "short"}}, nil, nil); !strings.Contains(short, "Produced: short") {
 		t.Errorf("a short round was altered: %q", short)
-	}
-}
-
-// THE RECORD IS VERBATIM, apart from the payloads the caller fitted — asserted
-// on the write path, where the distinction is permanent: this row is the
-// store's only record of the turn.
-func TestBuildSessionKeepsStructureWholeAndFitsOnlyPayloads(t *testing.T) {
-	t.Parallel()
-	long := strings.Repeat("z", 6000)
-	in := SessionInput{
-		Trigger: long, Intent: long,
-		Reply: long, Delivered: true, CompletedWork: long,
-		Calls: []Call{{Name: "slack_post", Args: map[string]any{"text": long, "channel": "C1"}}},
-	}
-	pieces := SessionPieces(in)
-	if len(pieces) != 1 || pieces[0].Text != long {
-		t.Fatalf("pieces = %+v", pieces)
-	}
-	in.Fitted = Fitted{pieces[0]: "(condensed) a status update"}
-	got := BuildSession(in)
-	for _, c := range []struct {
-		name  string
-		value string
-	}{
-		{"trigger", got.Trigger},
-		{"intent", got.Intent},
-		{"reply", got.Reply},
-		{"completed work", got.CompletedWork},
-	} {
-		if c.value != long {
-			t.Errorf("%s was cut at write time: %d runes of %d",
-				c.name, utf8.RuneCountInString(c.value), utf8.RuneCountInString(long))
-		}
-	}
-	if !strings.Contains(got.Calls, "(condensed) a status update") || !strings.Contains(got.Calls, "C1") {
-		t.Errorf("the session row lost the rewrite or the identifier:\n%s", got.Calls)
-	}
-	if un := BuildSession(SessionInput{Reply: long}); un.Unsent != long {
-		t.Errorf("unsent was cut at write time: %d runes of %d",
-			utf8.RuneCountInString(un.Unsent), utf8.RuneCountInString(long))
-	}
-}
-
-// THE NEWEST ENTRIES VERBATIM, THE OLDER ONES CONDENSED: a history past its
-// bound keeps the turns a follow-up is answering whole, and gives the rest to
-// the caller as one block to rewrite.
-func TestSplitHistoryKeepsTheNewestWholeAndOverflowsTheOldest(t *testing.T) {
-	t.Parallel()
-	entries := make([]Session, 6)
-	for i := range entries {
-		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat(string(rune('a'+i)), 5000)}
-	}
-	overflow, kept := SplitHistory(entries, InjectedMaxChars)
-	if len(overflow) == 0 || len(kept) == 0 || len(overflow)+len(kept) != len(entries) {
-		t.Fatalf("split %d / %d of %d", len(overflow), len(kept), len(entries))
-	}
-	if kept[len(kept)-1].TurnID != "5" || overflow[0].TurnID != "0" {
-		t.Fatalf("the split is not oldest-overflow, newest-kept")
-	}
-	if len(RenderSessions(kept)) > InjectedMaxChars-InjectedMaxChars/EarlierShare {
-		t.Errorf("the verbatim half took the condensed account's share")
-	}
-	if over, all := SplitHistory(entries[:1], InjectedMaxChars); len(over) != 0 || len(all) != 1 {
-		t.Error("a history within its bound was split")
-	}
-	// The newest always survives whole, however long.
-	solo := []Session{{Reply: strings.Repeat("d", InjectedMaxChars*2)}}
-	if over, all := SplitHistory(solo, InjectedMaxChars); len(over) != 0 || len(all) != 1 {
-		t.Error("the only entry was overflowed, so the turn reads as having no history")
-	}
-}
-
-// A CONDENSED ACCOUNT IS ANNOUNCED AS ONE, and where none could be had the
-// block says how many entries it left out — never silently shorter.
-func TestRenderHistorySaysWhatItCondensedOrLeftOut(t *testing.T) {
-	t.Parallel()
-	entries := make([]Session, 6)
-	for i := range entries {
-		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat("z", 5000)}
-	}
-	overflow, _ := SplitHistory(entries, InjectedMaxChars)
-	condensed := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars, Earlier: "you posted the plan to #eng"})
-	if !strings.Contains(condensed, "Earlier in this conversation ("+itoa(len(overflow))+" turn(s), condensed)") ||
-		!strings.Contains(condensed, "you posted the plan to #eng") {
-		t.Errorf("the condensed account was not rendered as one:\n%s", condensed[:300])
-	}
-	if strings.Contains(condensed, "are not shown") {
-		t.Error("a condensed history also claimed its turns were not shown")
-	}
-	dropped := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars})
-	if !strings.Contains(dropped, itoa(len(overflow))+" earlier turn(s) in this conversation are not shown") {
-		t.Errorf("entries were left out silently:\n%s", dropped[:300])
-	}
-	// WHOLE ENTRIES: nothing inside an entry is ever cut.
-	if strings.Contains(dropped, "…") || strings.Count(dropped, strings.Repeat("z", 5000)) != len(entries)-len(overflow) {
-		t.Error("an entry was cut rather than kept whole")
 	}
 }

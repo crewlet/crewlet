@@ -250,9 +250,10 @@ func paddedTo[T any](t *testing.T, n int, v T, pad func(*T, string)) T {
 // bytes that escape the most and, where a field is sealed or cut by code of
 // this package's, by that code: the bridged log full of the worst calls, both
 // of its tallies at their shares, the parked state at its share, a recorded
-// answer and the copies of a let-go one each at theirs, and a held call
-// carrying its sealed arguments at their share and its result sealed at its
-// widest.
+// answer and the copies of a let-go one each at theirs, a held call carrying
+// its sealed arguments at their share and its result sealed at its widest, and
+// the turn's read of its conversation frozen from the largest read the
+// executor log admits and grown to its bound.
 //
 // A FIELD ADDED TO THE ROW IS SET HERE AT ITS BOUND, in the change that adds it,
 // so the arithmetic stays this test's: a field of the row comes out of the
@@ -334,7 +335,23 @@ func worstRow(t *testing.T) PendingRun {
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}}
+	// THE PARKED STATE AT ITS SHARE, whatever it holds: the park condenses a
+	// state's closed rounds to fit and refuses one still past it
+	// (internal/agent/execstate's EncodeWithin), and what no park condenses —
+	// the turn's own context, how its conversation's earlier turns ended among
+	// it (Frozen.Endings, up to 24,000 bytes as the state holds them) — is
+	// inside this share, never beside it.
 	state := `"` + plain(ExecuteStateBytes-2) + `"`
+	// THE TURN'S READ OF ITS CONVERSATION AS ITS FIRST LAUNCH FREEZES IT
+	// ([NewConversationBase]) off the largest read the log admits, grown to its
+	// bound ([ConversationBaseMaxBytes]) through the section's own carried keys
+	// — the room the bound leaves above that read — so the row's arithmetic
+	// holds any base within its bound, as it does an answer within its share.
+	read, told := largestRead()
+	base := paddedTo(t, ConversationBaseMaxBytes, *NewConversationBase(read, told),
+		func(b *ConversationBase, pad string) {
+			b.Extra = map[string]json.RawMessage{"pad": json.RawMessage(`"` + pad + `"`)}
+		})
 	// THE OWED END AS ITS WRITER PUTS IT ON THE ROW ([owedEnd]): every prose
 	// field past its bound in markup, fitted to the executor log's, and every
 	// other at the log's own bound.
@@ -353,7 +370,7 @@ func worstRow(t *testing.T) PendingRun {
 		AgentHandle: plain(64), AgentID: uuid.NewString(), Role: markup(128),
 		SandboxID: plain(128), Harness: plain(32), Placement: plain(64), CommandID: plain(128),
 		Status: StatusAnswered, LaunchID: uuid.NewString(), LaunchSeq: math.MaxInt64,
-		Capture: capture, Kept: capture, Handed: plain(MaxHandedBytes*4/3 + 1<<10),
+		Capture: capture, Kept: capture, Base: &base, Handed: plain(MaxHandedBytes*4/3 + 1<<10),
 		OwedEnd: end, EndRecorded: true,
 		PriorCalls: make([]string, MaxPriorCalls), PriorCallsElided: true,
 		Launch: launch, Owner: plain(128), OwnerEpoch: math.MaxInt64,
@@ -421,17 +438,17 @@ const elidedWorst = 100
 // row's own encoder. Every field is at its bound in the bytes that escape the
 // most — the three a person or a tool supplies included, a recorded answer and
 // the copies of a let-go one each at its share and a held call's sealed
-// arguments at theirs — the bridged log is two hundred of the worst calls
-// beside both of its tallies at their shares, and the parked state is at its
-// share. The log weighs no more than [BridgeLogBytes], the state no more than
+// arguments at theirs, and the turn's read of its conversation at its bound —
+// the bridged log is two hundred of the worst calls beside both of its tallies
+// at their shares, and the parked state is at its share. The log weighs no more than [BridgeLogBytes], the state no more than
 // [ExecuteStateBytes], and the rest no more than [RestBytes] less the room
 // left for what a later build adds; and the whole, with that room, no more
 // than [RowBytes].
 //
 // Mutation: keep a call's output whole, or raise MaxBridgeCalls, and the log
-// overruns its share; raise MaxAnswerBytes or MaxHeldArgsBytes past what the
-// rest has room for, or let a note's seal or a held call's result grow, and
-// the rest does.
+// overruns its share; raise MaxAnswerBytes, MaxHeldArgsBytes or
+// ConversationBaseMaxBytes past what the rest has room for, or let a note's
+// seal or a held call's result grow, and the rest does.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
@@ -448,16 +465,16 @@ func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	rest := encoded(t, withoutState)
 
 	withoutSource := withoutState
-	withoutSource.Answer, withoutSource.HandBack = nil, nil
+	withoutSource.Answer, withoutSource.HandBack, withoutSource.Base = nil, nil, nil
 	held := *withoutSource.HeldCall
 	held.Arguments = ""
 	withoutSource.HeldCall = &held
 	others := encoded(t, withoutSource)
 	t.Logf("the row weighs %d of its %d: the log %d of %d, the state %d of %d, the rest %d of %d with %d "+
-		"left for a later build — of which a recorded answer, its hand-back and a held call's arguments "+
-		"%d, and every other field %d — and %d to spare", whole, RowBytes, logBytes, BridgeLogBytes,
-		stateBytes, ExecuteStateBytes, rest, RestBytes, ExtraRowBytes, rest-others, others,
-		RestBytes-ExtraRowBytes-rest)
+		"left for a later build — of which a recorded answer, its hand-back, a held call's arguments and "+
+		"the turn's read of its conversation %d, and every other field %d — and %d to spare", whole, RowBytes,
+		logBytes, BridgeLogBytes, stateBytes, ExecuteStateBytes, rest, RestBytes, ExtraRowBytes, rest-others,
+		others, RestBytes-ExtraRowBytes-rest)
 
 	if logBytes > BridgeLogBytes {
 		t.Errorf("the bridged log weighs %d, past its share %d", logBytes, BridgeLogBytes)

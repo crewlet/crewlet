@@ -21,8 +21,9 @@
 //     code it is reasoning about — five more bytes each of the turn's context
 //     and of whatever ceiling the answer is held to;
 //   - a PRIOR-WORK LINE ([github.com/crewlet/crewlet/internal/agent/ledger])
-//     is re-read by the model every round and shown to a person on the seat
-//     screen as the conversation ledger, and is neither kind of document;
+//     is re-read by the model every round and shown to a person in the
+//     prompt the dashboard draws for that round, and is neither kind of
+//     document;
 //   - a harness RUN'S TRANSCRIPT ([github.com/crewlet/crewlet/internal/providers/llm/harness])
 //     shows the model its own earlier calls, which it reads as written:
 //     shown a `<` it typed as an escape, it reads a call it never made;

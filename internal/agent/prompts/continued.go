@@ -2,11 +2,12 @@ package prompts
 
 import (
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// WHAT A RUN THAT CONTINUES ITS TURN'S SESSION IS TOLD.
+// WHAT A RUN THAT CONTINUES A SESSION IS TOLD.
 //
 // A relaunch of a turn continues the session its earlier launches worked in
 // (internal/sandbox, restore.go), so its brief is the session's NEXT MESSAGE,
@@ -15,6 +16,12 @@ import (
 // what changed since its last message — and, where the box it runs in is not
 // the one it was last worked in, what that changes. The fresh brief a run that
 // starts a session of its own is handed is [BuildPhaseUserMessage]'s.
+//
+// A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
+// of its own, and that session holds another turn: none of what this turn was
+// asked, and a turn that ended. So its run is told where the turn boundary is
+// and what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
+// brief, the account of how the conversation's earlier turns ended among it.
 
 // sentBackHeader opens a reviewer's send-back to the session that did the round.
 const sentBackHeader = "## Your work was reviewed and sent back" +
@@ -120,12 +127,68 @@ func BoxReplaced(branch, home string) string {
 		w.WriteString("\n\nCheck out the work-in-progress branch the session pushed, if it" +
 			" pushed one, re-read the code there, and redo what is missing from it.")
 	}
+	w.WriteString("\n\n" + boxPaths(home))
+	return w.String()
+}
+
+// boxPaths is what a run continuing a session in a new box is told of the
+// session's absolute paths: that they were the box it was last worked in's —
+// under home, where the engine knows it, defused by the caller.
+func boxPaths(home string) string {
 	if home != "" {
-		w.WriteString("\n\nAbsolute paths in the session above under `" + home + "` were that" +
-			" box's: this box's home is `$HOME`, and `pwd` says where its checkout is.")
-	} else {
-		w.WriteString("\n\nAbsolute paths in the session above were that box's: `pwd` and" +
-			" `$HOME` say where this box keeps its checkout and its home.")
+		return "Absolute paths in the session above under `" + home + "` were that box's: this" +
+			" box's home is `$HOME`, and `pwd` says where its checkout is."
+	}
+	return "Absolute paths in the session above were that box's: `pwd` and `$HOME` say where" +
+		" this box keeps its checkout and its home."
+}
+
+// NextTurn is where the session a conversation's last turn left ends and the
+// turn that continues it begins, as [BuildNextTurn] tells the run: the ended
+// turn whose session it continues and when it ended, where that session was
+// last worked, and whether its harness was cut off when it was saved. Each is
+// the engine's record of that session, defused by the caller.
+type NextTurn struct {
+	BaseTurn    string
+	EndedAt     time.Time
+	Home        string
+	Interrupted bool
+}
+
+// BuildNextTurn is the lead of a run that continues the session its
+// conversation's last turn left: the turn boundary the transcript cannot know,
+// that what the session read may be stale and what it set up is set up anew,
+// that its box is a new one on a fresh checkout — a session the conversation's
+// last turn left is continued only in a box of its own (internal/sandbox,
+// restore.go) — and, where its harness was cut off, that it may end mid-call.
+// The turn's fresh brief follows it, which tells how the conversation's earlier
+// turns ended and what this turn is asked.
+//
+// NOT THE SAME-TURN LEAD ([BuildContinuedRound]), which says "the same turn,
+// and the same session": the session above is another turn's, which ended, and
+// this turn's task is none of what it read.
+func BuildNextTurn(m NextTurn) string {
+	var w strings.Builder
+	w.WriteString("## A new turn of this conversation begins here" +
+		"\nEverything above is this conversation as your turns left it")
+	if m.BaseTurn != "" {
+		w.WriteString(", through turn `" + m.BaseTurn + "`")
+	}
+	if !m.EndedAt.IsZero() {
+		w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
+	}
+	w.WriteString(". How the conversation's earlier turns ended is told below. A new message has" +
+		" woken you, and the task below is this turn's." +
+		"\n- **What you read above may be stale:** read it again before relying on it." +
+		"\n- **Tools you activated and skills you loaded above were set up anew for this turn:**" +
+		" activate or load them again before relying on them.")
+	w.WriteString("\n\n## This turn is in a new box" +
+		"\nYou are in a new box, on a FRESH checkout of the repository: anything the session above" +
+		" had not committed and pushed went with the box it was worked in, and what it says about" +
+		" files on disk is what that box held, not what this one holds.")
+	w.WriteString("\n\n" + boxPaths(m.Home))
+	if m.Interrupted {
+		w.WriteString("\n\n" + InterruptedSession)
 	}
 	return w.String()
 }

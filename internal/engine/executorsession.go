@@ -289,6 +289,20 @@ func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer
 	return ending
 }
 
+// launchAbandonedEnding is how a dispatched turn whose first launch was
+// abandoned after its run's record was written ended: failed, saying why — the
+// launch's error redacted, since it can quote what a box or a store said —
+// beside whatever its loop had decided and answered by then.
+func launchAbandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer,
+	err error) executordomain.Ending {
+
+	ending := endingOf(res, reply, answered)
+	ending.Outcome = executordomain.OutcomeFailed
+	ending.Failure = redact.Secrets(fmt.Sprintf("the turn's executor launch was abandoned after its run was "+
+		"recorded: %v", err))
+	return ending
+}
+
 // breachAccount is the end's account of the guard that ended a turn, redacted:
 // a guard's detail can be an error's or a panic's text, which quotes what
 // tripped it.

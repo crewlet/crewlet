@@ -53,12 +53,6 @@ var appendOnlyRow = map[string]func(t *testing.T, db *store.DB, id string){
 			archived_at) VALUES (?, 's-wm', ?, 'ship-it', 'how', 'body', 1, 'seed', 0)`,
 			id, seat.Handle)
 	},
-	"conversation_sessions": func(t *testing.T, db *store.DB, id string) {
-		t.Helper()
-		exec(t, db, `INSERT INTO conversation_sessions (entry_id, agent_handle,
-			conversation_key, work_key, turn_id, entry, created_at)
-			VALUES (?, ?, 'slack:C1:1', ?, 't', 'said', 0)`, id, seat.Handle, "wk-"+id)
-	},
 }
 
 func exec(t *testing.T, db *store.DB, statement string, args ...any) {

@@ -190,10 +190,10 @@ func mergeNotifications(prompts notify.Prompts, evs []*events.Event) (*events.Ev
 
 // prompts is the third-party app registry the merge renders with.
 //
-// A FUNCTION on the dispatcher rather than a captured value, for the reason
-// [Dispatcher.Conversation] is one: the dispatcher is built once and the
-// registry belongs to an epoch a live apply replaces. A captured copy would
-// keep merging with the integrations the process started with.
+// A FUNCTION on the dispatcher rather than a captured value: the dispatcher is
+// built once and the registry belongs to an epoch a live apply replaces. A
+// captured copy would keep merging with the integrations the process started
+// with.
 //
 // An empty registry is a working answer rather than a missing one: every
 // source falls back to [notify.Generic], whose DigestBody passes a body

@@ -648,7 +648,7 @@ credentials are written in the configuration document.
 | You can change | Notes |
 |---|---|
 | Name | Prose; two seats may share a name. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
-| Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
+| Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and executor sessions) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
 | Kind | Never. A seat keeps the kind it was added with; see [A seat keeps its kind](#a-seat-keeps-its-kind). |
 | Profile icon: character, color | Agent seats. One of the thirty Crewlet characters and one of six colours, written to the seat's `avatar`. The chosen character and colour are the seat's badge on every screen and its node on both charts. A seat that never chose is drawn as the original Crewlet in purple, and changing only one of the two writes only that one. |
 | Email | The address inbound Jira and GitHub payloads identify the seat by, written as typed. |
@@ -842,7 +842,8 @@ seat goes:
   you decommission them. They are listed by name, never by value, with links to
   **Company › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
   so nothing exists for it outside the chart. An Expo robot is never listed:
-  the engine deletes it once its seat is off or gone.
+  the engine clears its token once its seat is off or gone, and Expo's
+  **Agents** tab asks you to delete the robot at Expo.
 - **The mailbox, executor and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
   the change and then retired, together with its executor on any turn it still has out. Its

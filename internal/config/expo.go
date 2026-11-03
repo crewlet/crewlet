@@ -8,30 +8,25 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Expo gives each agent seat its own Expo robot user and access token on the
-// company's account, kept at the seat's level through the provisioner token.
-// It ingests nothing, so [Expo.validate] requires provisioning when enabled.
+// Expo gives each agent seat its own Expo robot user on the company's account.
+// A person creates each robot at Expo and pastes its token; the engine checks
+// it, seals it and keeps checking it with the seat's own token.
 type Expo struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
 
-	// Provisioning is the account the agents' robots are created on and the
-	// token they are created with.
-	Provisioning *ExpoProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The Expo account and the provisioner token the engine creates each agent's robot user with. Required when enabled."`
+	// Provisioning names the account the agents' robots act for.
+	Provisioning *ExpoProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"The Expo account the agents' robot users act for. Required when enabled."`
 }
 
-// ExpoProvisioning is what the engine needs to create, re-level and delete one
-// Expo robot user per agent seat, and to mint and revoke its token.
+// ExpoProvisioning is the account every seat's robot must hold its role on.
+// It carries no credential: each robot's token is the seat's own.
 type ExpoProvisioning struct {
 	// AccountName is the Expo account or organization the robots act for.
-	AccountName string `yaml:"account_name,omitempty" json:"account_name,omitempty" desc:"Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users are created on."`
-
-	// AccessToken is a robot's or a person's access token holding the Admin
-	// role on the account, which is what manages robots and their tokens.
-	AccessToken string `secret:"true" yaml:"access_token,omitempty" json:"access_token,omitempty" desc:"Expo access token whose user or robot holds the Admin role on the account, so it can manage robot users and their tokens."`
+	AccountName string `yaml:"account_name,omitempty" json:"account_name,omitempty" desc:"Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users act for."`
 }
 
-// The levels a seat's Expo robot is created at, least access first.
-// internal/expo maps each to the Expo permissions it grants.
+// The levels a seat's Expo robot holds, least access first: each is one of
+// Expo's own robot roles, which internal/expo compares by Expo's Role.
 const (
 	ExpoLevelViewer         = "viewer"
 	ExpoLevelRunner         = "runner"
@@ -50,10 +45,10 @@ func ExpoLevels() []string {
 
 // RoleExpo is a seat's own Expo robot user.
 type RoleExpo struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Expo robot user. Off deletes the robot and its token."`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Expo robot user, which a person creates at Expo and pastes the token of. Off clears its sealed token."`
 
-	// Level is what the robot may do on the account; empty is viewer.
-	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=viewer|runner|developer|release_manager" desc:"viewer (the default): reads projects, builds, submissions and updates. runner: viewer plus low-risk actions such as starting builds. developer: runner plus publishing updates. release_manager: developer plus publishing to protected channels."`
+	// Level is the robot's role on the account; empty is viewer.
+	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=viewer|runner|developer|release_manager" desc:"The robot's Expo role. viewer (the default): views all projects. runner: views projects and performs low-risk actions on them. developer: creates builds, publishes updates to unprotected channels and manages credentials. release_manager: developer plus protected channels."`
 }
 
 // LevelOrDefault is the seat's level, [ExpoLevelDefault] where it names none.
@@ -72,7 +67,7 @@ func (e *Expo) validate(path Path) error {
 	if e.Provisioning == nil {
 		p.add(at(path, "provisioning"), ErrMissing,
 			"required when expo is enabled: it names the account the agents' robot "+
-				"users are created on and the token they are created with")
+				"users act for")
 		return p.err()
 	}
 	prov := e.Provisioning
@@ -88,11 +83,6 @@ func (e *Expo) validate(path Path) error {
 		p.add(at(path, "provisioning.account_name"), ErrUnknownValue,
 			"%q is not an Expo account name: give the name alone, as it appears in "+
 				"expo.dev/accounts/<name>, with no @, slash or space", prov.AccountName)
-	}
-	if strings.TrimSpace(prov.AccessToken) == "" {
-		p.add(at(path, "provisioning.access_token"), ErrMissing,
-			"required when expo is enabled: the access token, holding the Admin "+
-				"role on the account, the engine manages the agents' robot users with")
 	}
 	return p.err()
 }

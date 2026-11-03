@@ -634,7 +634,7 @@ func TestANewKindMigratesWithNothingToMove(t *testing.T) {
 	root["integrations"].(map[string]any)["expo"] = map[string]any{
 		"enabled": true,
 		"provisioning": map[string]any{
-			"account_name": "example-org", "access_token": "${EXPO_ACCESS_TOKEN}",
+			"account_name": "example-org",
 		},
 	}
 	qa := seat(t, root, "qa")

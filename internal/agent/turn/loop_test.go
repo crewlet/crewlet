@@ -1461,7 +1461,7 @@ func TestARoundSentBackAfterDeliveringIsNotMadeToDeliverAgain(t *testing.T) {
 	}
 	// THE LAST ROUND'S, deliberately — see Result.Delivered. Round two
 	// delivered nothing of its own, and what the gates ask is a different
-	// question from what the conversation ledger asks.
+	// question from what the turn's end on the executor log records.
 	if res.Delivered {
 		t.Error("Result.Delivered reports the last round as having delivered")
 	}

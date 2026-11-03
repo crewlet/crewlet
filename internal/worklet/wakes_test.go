@@ -162,7 +162,7 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 		// THE OBJECT IS BOTH KEYS: a task (or the object a non-task wake
 		// names) is one thing that is both the merge unit and the durable
 		// thread, so the identity delegates. A divergence would let one
-		// coalesced trigger's ledger entry depend on which constituent
+		// coalesced trigger's conversation depend on which constituent
 		// sorted first.
 		if got := (worklet.Prompt{}).ConversationIdentity(wake.Metadata, ""); got != key {
 			t.Errorf("%q: identity %q diverged from the partition key %q", kind, got, key)

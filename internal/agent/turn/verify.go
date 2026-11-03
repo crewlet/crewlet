@@ -266,10 +266,10 @@ func DeliveredTo(calls []ledger.Call, s Surface, reply Reply) bool {
 //     turn that ends in prose has not failed to reply; it had nobody to reply
 //     to, which is the whole reason triage is cheap.
 //
-// It exists for the record of how a turn ended — the executor log's end,
-// kept on the turn's row beside its session, and the conversation ledger it
-// replaces — which has to tell "the seat said this" from "the seat concluded
-// this and nobody heard it": [Result.Delivered] for a turn whose loop ended
+// It exists for the record of how a turn ended — the executor log's end, kept
+// on the turn's row beside its session, which the conversation's next turn is
+// told — which has to tell "the seat said this" from "the seat concluded this
+// and nobody heard it": [Result.Delivered] for a turn whose loop ended
 // it, and the engine's own reading of a run's bridged calls for one a loss or a
 // person's stop ended with no frame of it left. Asking the tool record on all
 // three filed an A2A answer and an unprompted turn's own notes as things that

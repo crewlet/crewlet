@@ -284,11 +284,12 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
-	// Brief is which of the three briefs the launch handed its run:
+	// Brief is which of the four briefs the launch handed its run:
 	// `continued` (the turn's session, in the box it was last worked in),
 	// `continued_new_box` (the turn's session, restored into a box that
-	// replaced that one) or `fresh` (a session of its own). Absent where the
-	// launch recorded none.
+	// replaced that one), `continued_conversation` (the session the turn's
+	// conversation's last turn left, restored into a box of its own) or
+	// `fresh` (a session of its own). Absent where the launch recorded none.
 	//
 	// HarnessSessionContinued says the run did continue the session it was
 	// asked to — its box held it, or restored the archive carried in — and

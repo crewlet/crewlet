@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -116,9 +115,9 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 //
 // The seat's day was filled by a post-charge — its executor's launch collected,
 // or its turn's auxiliary calls — which refuses nothing and stamps nothing.
-// The gate then turns away the reflection stage's calls before any is made,
-// the pass's and a conversation entry's rewrites alike: unrecorded, a seat
-// declining every pass read, on every screen and in `crewlet budgets show`,
+// The gate then turns away the reflection stage's calls before any is made:
+// unrecorded, a seat declining every pass read, on every screen and in
+// `crewlet budgets show`,
 // as one that had refused nothing. The seat is stamped, not the company,
 // which caps nothing; nothing is counted; a gate with room records nothing;
 // and a counter that cannot be read is not a refusal, so it records nothing
@@ -166,27 +165,13 @@ func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
 		t.Errorf("the company was stamped at %v; it caps nothing and refused nothing", company)
 	}
 
-	// The conversation entry's rewrites ask the same gate, and are a
-	// refusal of their own.
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{
-		NoteDeferred:  func(string) {},
-		Completions:   ledgerstore.NewMemoryCompletions(),
-		Conversations: ledgerstore.NewMemoryConversations(),
-	}}, e.backends)
-	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || ok {
-		t.Fatalf("the entry's gate with the day spent = (%v, %v), want (false, nil)", ok, err)
-	}
-	if got := refusals.refused(); len(got) != 2 {
-		t.Errorf("refusals recorded = %v, want a second for the entry's rewrites", got)
-	}
-
 	// UNKNOWN IS NOT NO: an unreadable counter declines nothing and records
 	// nothing.
 	unread := &Engine{backends: &Backends{Fleet: unreadableCounted{fleet}}}
 	if ok, err := unread.learningBudget(c)(ctx, lead); err == nil || !ok {
 		t.Fatalf("gate over an unreadable counter = (%v, %v), want (true, an error)", ok, err)
 	}
-	if got := refusals.refused(); len(got) != 2 {
+	if got := refusals.refused(); len(got) != 1 {
 		t.Errorf("refusals recorded = %v after an unreadable counter, want no more", got)
 	}
 }
@@ -196,38 +181,4 @@ type unreadableCounted struct{ countedFleet }
 
 func (unreadableCounted) Used(context.Context, string, coord.Windows) (coord.Usage, error) {
 	return coord.Usage{}, errors.New("the coordination store is unreachable")
-}
-
-// A CONVERSATION ENTRY'S REWRITES ASK THE REFLECTION STAGE'S GATE, on the live
-// epoch: they are filed under that stage, and a seat with no room left starts
-// no reflection pass and makes none of them either.
-//
-// Mutation: leave the dispatcher's gate unwired, and a seat whose day is spent
-// still reads as having room.
-func TestTheDispatcherAsksTheReflectionGateBeforeAnEntrysRewrites(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	fleet := coordmem.NewFleet()
-	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
-	c := meteredCompany(config.TokenBudget{}, lead)
-	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
-	e.epoch.current.Store(c)
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{
-		NoteDeferred:  func(string) {},
-		Completions:   ledgerstore.NewMemoryCompletions(),
-		Conversations: ledgerstore.NewMemoryConversations(),
-	}}, e.backends)
-	if d.ReflectionRoom == nil {
-		t.Fatal("the dispatcher has no gate on a conversation entry's rewrites")
-	}
-	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || !ok {
-		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
-	}
-	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, coord.WindowsAt(budgetNow, time.UTC)); err != nil {
-		t.Fatalf("PostCharge: %v", err)
-	}
-	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || ok {
-		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil): the entry's "+
-			"rewrites would be spend past the ceiling", ok, err)
-	}
 }

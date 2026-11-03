@@ -35,7 +35,8 @@ import (
 //
 // IT HOLDS NOTHING: no keyring, no clock and no listener, which is the first
 // rule above made structural. A batch moves nothing another subsystem on this
-// node acts on: a launch reads the conversation's head when it starts.
+// node acts on: a turn's dispatch reads its conversation's head when it
+// starts.
 type Applier struct{}
 
 // NewApplier builds the executor applier.

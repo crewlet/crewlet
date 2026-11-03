@@ -2,6 +2,7 @@ package execstate_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,10 +10,38 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 )
 
 // budget is a parked state's share of its run's row, as the engine passes it.
 const budget = 2 << 20
+
+// worst is a parked state whose own context carries what no park condenses at
+// its worst: how its conversation's earlier turns ended (Frozen.Endings) at the
+// bound its renderer holds the block to as the state encodes it
+// (prompts.EndingsMaxBytes), in the byte that escapes the most — six bytes a
+// `<` — which every park of a conversation's turn carries whole.
+func worst() execstate.State {
+	state := parked()
+	room := prompts.EndingsMaxBytes - len(`""`)
+	state.Context.Endings = strings.Repeat("<", room/6) + strings.Repeat("a", room%6)
+	return state
+}
+
+// endingsKept reports whether got carries want's endings byte for byte, and
+// that they weigh what their bound allows: a park never condenses the block a
+// resumed turn's every brief tells, however far it condenses the rounds.
+func endingsKept(t *testing.T, got, want execstate.State) {
+	t.Helper()
+	encoded, err := json.Marshal(got.Context.Endings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Context.Endings != want.Context.Endings || len(encoded) != prompts.EndingsMaxBytes {
+		t.Errorf("the state came back with %d bytes of endings as it encodes them, want the %d it parked with, "+
+			"whole", len(encoded), prompts.EndingsMaxBytes)
+	}
+}
 
 // rounds is a turn's closed rounds at their heaviest a row keeps them: n
 // rounds of two hundred calls, each call's arguments a body the row kept
@@ -38,16 +67,18 @@ func rounds(n int) []ledger.Iteration {
 // Three closed rounds of two hundred heavy calls weigh several times a parked
 // state's share of the row; condensed, the state fits, and every call keeps
 // its name, its identity and its outcome, every round its intent and the
-// calls its record dropped, and the turn its own task — while a successful
+// calls its record dropped, and the turn its own context — its task, and how
+// its conversation's earlier turns ended, at their bound — while a successful
 // call's output is gone, and an argument body is left out with the marker that
 // says so beside the identifiers that stay.
 //
 // Mutation: condense a call's identity or its round's tally away, and a later
 // segment's call log under-counts; skip the arguments' tier, and the state is
-// refused.
+// refused; cut the turn's endings to make room, and a resumed turn is told its
+// conversation's earlier turns short.
 func TestAStatePastItsShareGivesUpItsClosedRoundsPayloads(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	state.Iterations = rounds(3)
 	raw, _ := execstate.Encode(state)
 	if len(raw) <= budget {
@@ -67,6 +98,7 @@ func TestAStatePastItsShareGivesUpItsClosedRoundsPayloads(t *testing.T) {
 	if got.Task != state.Task || len(got.Iterations) != 3 {
 		t.Fatalf("the condensed state lost the turn's own context: task %q, %d rounds", got.Task, len(got.Iterations))
 	}
+	endingsKept(t, got, state)
 	for i, round := range got.Iterations {
 		want := state.Iterations[i]
 		if round.Intent != want.Intent || len(round.Calls) != len(want.Calls) || len(round.Elided) != 1 ||
@@ -101,7 +133,7 @@ func TestAStatePastItsShareGivesUpItsClosedRoundsPayloads(t *testing.T) {
 // loses them.
 func TestAStateWithinItsShareIsEncodedAsItIs(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	want, err := execstate.Encode(state)
 	if err != nil {
 		t.Fatal(err)
@@ -114,13 +146,14 @@ func TestAStateWithinItsShareIsEncodedAsItIs(t *testing.T) {
 
 // A STATE WHOSE OWN CONTEXT IS PAST ITS SHARE IS REFUSED, never condensed into a
 // different turn: a task of three MiB is what the turn was asked, which no
-// resume can do without and no row can carry.
+// resume can do without and no row can carry — beside endings at their bound,
+// which no park condenses either.
 //
 // Mutation: cut the task to fit, and a resumed turn re-enters with an ask
 // nobody made.
 func TestAStateWhoseOwnContextIsPastItsShareIsRefused(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	state.Task = strings.Repeat("a", 3<<20)
 	_, _, err := execstate.EncodeWithin(state, budget)
 	tooLarge, ok := errors.AsType[*execstate.TooLargeError](err)
@@ -171,7 +204,7 @@ func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t 
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			state := parked()
+			state := worst()
 			state.Iterations = postRounds(tc.rounds)
 			if raw, _ := execstate.Encode(state); len(raw) <= budget {
 				t.Fatalf("the case's state weighs %d, within its share: it needs one past it", len(raw))
@@ -185,6 +218,7 @@ func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t 
 			if err != nil {
 				t.Fatal(err)
 			}
+			endingsKept(t, got, state)
 			for _, round := range got.Iterations {
 				calls, failed, entries := 0, 0, 0
 				for _, e := range round.Elided {
@@ -220,7 +254,7 @@ func TestAStateWhoseClosedRoundsCallsOutgrowItsShareFoldsThemIntoTheirTallies(t 
 // often with long corrections can no longer park.
 func TestAStateWhoseClosedRoundsReviewsOutgrowItsShareCutsThemToTheirOpening(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	state.Iterations = nil
 	for i := range 100 {
 		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
@@ -235,6 +269,7 @@ func TestAStateWhoseClosedRoundsReviewsOutgrowItsShareCutsThemToTheirOpening(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	endingsKept(t, got, state)
 	for _, round := range got.Iterations {
 		if !strings.HasPrefix(round.ReviewNotes, "fix it. ") || !strings.Contains(round.ReviewNotes, "not kept") ||
 			!strings.HasPrefix(round.CompletedWork, "landed. ") || len(round.ReviewNotes) > 5<<10 {
@@ -254,7 +289,7 @@ func TestAStateWhoseClosedRoundsReviewsOutgrowItsShareCutsThemToTheirOpening(t *
 // refused for its rounds sends its reader to a trigger that is a line long.
 func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	state.Iterations = nil
 	for i := range 300 {
 		state.Iterations = append(state.Iterations, ledger.Iteration{Iteration: i + 1,
@@ -281,7 +316,7 @@ func TestAStateWhoseClosedRoundsArePastItsShareCondensedSaysSo(t *testing.T) {
 // reply among its calls is no longer a delivery.
 func TestAStateWhoseClosedRoundsTalliesOutgrowItsShareFoldsThemByTool(t *testing.T) {
 	t.Parallel()
-	state := parked()
+	state := worst()
 	tally := func(round int) []ledger.Elided {
 		out := make([]ledger.Elided, 0, 500)
 		for k := range 500 {
@@ -308,6 +343,7 @@ func TestAStateWhoseClosedRoundsTalliesOutgrowItsShareFoldsThemByTool(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	endingsKept(t, got, state)
 	for _, it := range got.Iterations {
 		calls, failed := 0, 0
 		for _, e := range it.Elided {

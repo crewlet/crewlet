@@ -266,7 +266,7 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 
 // seatRef is one seat, in both spellings the schema uses for it: its handle,
 // which the handle-keyed tables (episodes, counterparty profiles, the two
-// skill tables, the conversation ledger) hold, and the agent id derived from
+// skill tables) hold, and the agent id derived from
 // it, which the changelog's subjects and the id-keyed tables are built from.
 // Both are stable across nodes because a handle is immutable (ADR-0013).
 type seatRef struct {
@@ -328,12 +328,12 @@ func decode(body []byte) (Row, table, bool, error) {
 //
 // The TRAILING BARE CLAUSE is the other half, and it is not decoration.
 // SQLite's upsert only handles the constraint its target names — a carried
-// row that collides on any OTHER unique index RAISES. Three of these tables
-// have one: episodes is unique on (agent_handle, work_key), synthesized_skills
-// on (agent_handle, name), conversation_sessions on its work key. Every one of
-// those collisions is ordinary fleet history — a node that died mid-turn and a
-// peer that re-ran the work record two rows for one work key under two ids,
-// and both reach the changelog. Without this clause a node replaying that seat
+// row that collides on any OTHER unique index RAISES. Two of these tables have
+// one: episodes is unique on (agent_handle, work_key), synthesized_skills on
+// (agent_handle, name). Every one of those collisions is ordinary fleet
+// history — a node that died mid-turn and a peer that re-ran the work record
+// two rows for one work key under two ids, and both reach the changelog.
+// Without this clause a node replaying that seat
 // raises, and because hydration runs inside seat acquisition the raise REFUSES
 // THE SEAT: one duplicated episode would make a seat unplaceable anywhere in
 // the fleet. Skipping is also the right answer on its own terms — the index

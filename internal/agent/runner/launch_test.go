@@ -69,11 +69,14 @@ func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequ
 }
 
 // decidedAsAsked is how a launch whose box takes up what it was asked to
-// continue decides: the turn's kept session where it was handed one — in a new
-// box, as a relaunch after a collection gets — else the job before's own
-// session in its box, else none.
+// continue decides: the session the conversation's last turn left where it was
+// handed that one — always in a new box — the turn's kept session where it was
+// handed one — in a new box, as a relaunch after a collection gets — else the
+// job before's own session in its box, else none.
 func decidedAsAsked(req runner.AgentRunRequest) runner.SessionDecision {
 	switch {
+	case req.Session != nil && req.Session.Basis.ContinuesBase():
+		return runner.SessionDecision{Continues: true, Kept: true, NewBox: true, Base: true}
 	case req.Session != nil:
 		return runner.SessionDecision{Continues: true, Kept: true, NewBox: true}
 	case req.Continue != nil && req.Continue.SessionID != "":
@@ -190,7 +193,7 @@ func collect(t *testing.T, entries []phase.Entry, opts buildOpts, launched *runn
 	// THE PARK'S CONTEXT, not the fixture's: a collecting runner is handed
 	// none, as the engine's is, and builds its prompts from what the turn
 	// froze at its start.
-	opts.context, opts.conversation = prefetch.Blocks{}, ""
+	opts.context, opts.endings = prefetch.Blocks{}, ""
 	opts.resume = &runner.Resume{State: parked.State, Answer: text, Bridged: bridged, Run: record}
 	collector, _ := buildWith(t, entries, opts)
 	work, surface, err := collector.Resume(context.Background(), history)

@@ -42,12 +42,18 @@
 // exists only for a build that never shipped. Versions 1 to 3 are such: this
 // build reads 4 alone and refuses the others as unknown.
 //
-// AND A VERSION NO RELEASE AND NO IMAGE OF MAIN WROTE IS NOT YET A FORMAT: the
-// rule that nothing is removed within a version protects rows some build
-// shipped, and nothing shipped 4 yet, so 4 lost its notes field (`steered`)
-// without a bump. The notes a turn has read are on its run's record now, read
-// there by every segment that resumes it (internal/engine, runsteer.go), and a
-// second copy here would be a second answer to the same question.
+// A FIELD EVERY READER DEFAULTS MAY GO WITHIN A VERSION, as one may come. A
+// bump is for a change some build could MISREAD, and a field gone is read by
+// an older build as the zero it already defaults — the rule that nothing is
+// removed within a version guards a field whose absence some reader would
+// misread, and no other. So 4 lost its notes field (`steered`), whose notes
+// are on the run's record now, read there by every segment that resumes the
+// turn (internal/engine, runsteer.go); and the prior-turns block
+// (`conversation`), which images of main wrote, gave way to how the
+// conversation's earlier turns ended ([Frozen.Endings]): a build that resumes
+// a row the other parked reads none of the block it does not know, and its
+// turn's prompts carry no account of the conversation's earlier turns rather
+// than a wrong one.
 //
 // AND IT IS HELD TO A SHARE OF ITS RUN'S ROW, which is one value in the
 // coordination store and so one broker message: [EncodeWithin] condenses the
@@ -268,8 +274,8 @@ type State struct {
 	Interactions []types.InboundInteraction `json:"interactions,omitempty"`
 
 	// Context is what the turn fetched and rendered ONCE, at its start, that
-	// every launch's prompt is built from: the prefetched blocks and the
-	// prior-turns block.
+	// every launch's prompt is built from: the prefetched blocks, and how the
+	// conversation's earlier turns ended.
 	//
 	// HERE because the turn's later launches are made by the segment that
 	// collected this run, often in another process, and the freeze is the
@@ -283,7 +289,8 @@ type State struct {
 }
 
 // Frozen is a turn's start-of-turn context as a park carries it: each
-// prefetched block's rendered text, and the prior-turns block.
+// prefetched block's rendered text, and how the conversation's earlier turns
+// ended.
 //
 // MIRRORED rather than the prefetch package's own type, for the reason
 // [Uncharged] is: this package is the parked turn's wire format, and a type
@@ -292,8 +299,9 @@ type State struct {
 // launch's prompt reads.
 //
 // BOUNDED where it is rendered, not here: each block by its own source and the
-// conversation by its render budget, so the row carries the strings the first
-// launch's prompt did and nothing more.
+// endings by theirs (internal/agent/prompts' EndingsMaxBytes, which measures
+// the block as [Encode] writes it, escapes included), so the row carries the
+// strings the first launch's prompt did and nothing more.
 type Frozen struct {
 	ThreadContext       string `json:"thread_context,omitempty"`
 	PersonalMemory      string `json:"personal_memory,omitempty"`
@@ -301,7 +309,14 @@ type Frozen struct {
 	EpisodeRecall       string `json:"episode_recall,omitempty"`
 	CounterpartyProfile string `json:"counterparty_profile,omitempty"`
 	SynthesizedSkills   string `json:"synthesized_skills,omitempty"`
-	Conversation        string `json:"conversation,omitempty"`
+
+	// Endings is how the conversation's earlier turns ended, rendered once at
+	// the turn's dispatch under its token (internal/agent/prompts'
+	// BuildConversationEndings): every fresh brief of every later segment
+	// carries these bytes, never a read made again — a sibling turn that ended
+	// since is the next turn's to be told, as the read the turn's end absorbs
+	// is the one these bytes told.
+	Endings string `json:"endings,omitempty"`
 }
 
 // Uncharged is spend carried across a park, in the counters a work item's

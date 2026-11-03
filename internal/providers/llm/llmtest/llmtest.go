@@ -88,8 +88,16 @@ type Call struct {
 	// answer.
 	GiveUp time.Duration
 
-	// Exit makes the harness die once GiveUp has passed instead: it closes its
-	// end of the session — EOF, to the host — and its run fails.
+	// GiveUpOn, when set, is the moment the harness gives up on this call, in
+	// place of GiveUp's clock: when it closes. A case closes it once the host
+	// has begun running the call, which is the order a give-up case is about
+	// and one a short GiveUp only hopes for: on a loaded machine the call can
+	// still be on its way to the tool when the clock runs out.
+	GiveUpOn <-chan struct{}
+
+	// Exit makes the harness die where it would give up instead (GiveUp or
+	// GiveUpOn): it closes its end of the session — EOF, to the host — and
+	// its run fails.
 	Exit bool
 
 	// Wait, when set, holds the call until it is closed (after
@@ -508,7 +516,7 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 			params.Meta = mcp.Meta{CallIDKey: c.ID}
 		}
 		res, err := s.callOne(ctx, cs, conn, c, params)
-		if c.Exit && c.GiveUp > 0 {
+		if c.Exit && c.givesUp() {
 			exitMu.Lock()
 			exited = fmt.Errorf("llmtest: the harness exited during %s: %w", name, err)
 			exitMu.Unlock()
@@ -542,16 +550,32 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 	return exited
 }
 
+// givesUp says whether the harness gives up on the call, by GiveUp's clock or
+// on GiveUpOn, rather than waiting for its answer.
+func (c Call) givesUp() bool { return c.GiveUp > 0 || c.GiveUpOn != nil }
+
 // callOne makes one call, giving up on it — or dying during it — as the call
 // says.
 func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Conn, c Call,
 	params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
-	if c.GiveUp <= 0 {
+	if !c.givesUp() {
 		return cs.CallTool(ctx, params)
 	}
 	if !c.Exit {
-		cctx, cancel := context.WithTimeout(ctx, c.GiveUp)
+		if c.GiveUpOn == nil {
+			cctx, cancel := context.WithTimeout(ctx, c.GiveUp)
+			defer cancel()
+			return cs.CallTool(cctx, params)
+		}
+		cctx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		go func() {
+			select {
+			case <-c.GiveUpOn:
+				cancel()
+			case <-cctx.Done():
+			}
+		}()
 		return cs.CallTool(cctx, params)
 	}
 	// THE HARNESS DIES MID-CALL: its end of the session closes under the call,
@@ -565,10 +589,17 @@ func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Co
 		res, err := cs.CallTool(ctx, params)
 		got <- answer{res, err}
 	}()
+	// A nil channel never fires in a select, so whichever of GiveUp's clock
+	// and GiveUpOn the call does not set ends nothing.
+	var clock <-chan time.Time
+	if c.GiveUpOn == nil {
+		clock = time.After(c.GiveUp)
+	}
 	select {
 	case a := <-got:
 		return a.res, a.err
-	case <-time.After(c.GiveUp):
+	case <-clock:
+	case <-c.GiveUpOn:
 	}
 	_ = conn.Close()
 	a := <-got

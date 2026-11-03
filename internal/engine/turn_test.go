@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,18 +16,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -943,254 +939,6 @@ func typesSeen(evs []*events.Event) []string {
 	return out
 }
 
-// ABANDONING A TURN FILES NO REPLY TO THE THREAD.
-//
-// A broken turn has no answer: its artifact is whichever round closed last, so
-// writing it back as this turn's reply tells the next turn on that thread the
-// work was done. RecordSession's own doc commemorates exactly that bug for the
-// suspended case — which is why the abandon path writes the completion rows
-// itself instead of reusing recordWorked.
-func TestAnAbandonedTurnWritesNoConversationEntry(t *testing.T) {
-	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
-	ctx := context.Background()
-	r := &recorder{
-		result: turn.Result{Acted: true, Decision: phase.Failed, Artifact: "a half-written draft"},
-		err:    errors.New("the reviewer's provider went away"),
-	}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	d.Completions = ledgerstore.NewMemoryCompletions()
-
-	if got := d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("outcome = %v", got.Outcome)
-	}
-	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(after) != 0 {
-		t.Errorf("history = %+v, want nothing — a broken turn said nothing to file", after)
-	}
-}
-
-func TestTheConversationLedgerIsReadInAndWrittenBack(t *testing.T) {
-	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
-	ctx := context.Background()
-	if err := conversations.Append(ctx, "ceo", "slack:C1",
-		ledger.Session{Reply: "said this before"}, "wk-old", clock, 0); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	r := &recorder{result: turn.Result{
-		Decision: phase.Done, Delivered: true, Artifact: "and now this",
-		LastReview: &turn.Review{CompletedWork: "the post landed"},
-	}}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	if got := d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("outcome = %v", got.Outcome)
-	}
-
-	if len(r.reqs) != 1 {
-		t.Fatalf("the turn ran %d times", len(r.reqs))
-	}
-	if r.reqs[0].ConversationKey != "slack:C1" {
-		t.Errorf("conversation = %q", r.reqs[0].ConversationKey)
-	}
-	if len(r.reqs[0].History) != 1 || r.reqs[0].History[0].Reply != "said this before" {
-		t.Errorf("the turn did not receive its conversation history: %+v", r.reqs[0].History)
-	}
-
-	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(after) != 2 {
-		t.Fatalf("history = %d entries, want the turn appended", len(after))
-	}
-	if after[1].Reply != "and now this" || after[1].Decision != "done" {
-		t.Errorf("the appended entry = %+v", after[1])
-	}
-	// The reviewer's own prose about what landed survives a `done` round,
-	// which appends no iteration record of its own.
-	if after[1].CompletedWork != "the post landed" {
-		t.Errorf("completed work = %q", after[1].CompletedWork)
-	}
-}
-
-// A TURN THAT TOLD NOBODY MUST NOT WRITE THAT IT DID.
-//
-// The artifact filed here is the reviewer's prose about the turn, not anything
-// a tool sent, and it was recorded unconditionally as the seat's own "You
-// replied". So a turn that did real work and never reached the person waiting
-// — the round budget ran out, the loop broke, the reviewer closed it anyway —
-// wrote into its own history that it had answered. That record is the one the
-// NEXT turn on the thread reads back, which is what made the failure seal
-// itself: a follow-up asking "did you do it?" is answered against a reply that
-// was never sent.
-func TestAnUndeliveredTurnIsNotRecordedAsAReply(t *testing.T) {
-	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
-	ctx := context.Background()
-
-	// Done, with real work behind it, and nothing delivered.
-	r := &recorder{result: turn.Result{
-		Decision: phase.Done, Delivered: false,
-		Artifact: "Task LEAD-1 was opened and is ready to refine",
-	}}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	if got := d.Dispatch(ctx, "ceo",
-		[]*events.Event{inThread("notification", "slack:C1")}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("outcome = %v", got.Outcome)
-	}
-
-	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(after) != 1 {
-		t.Fatalf("history = %d entries, want the turn's own", len(after))
-	}
-	if after[0].Reply != "" {
-		t.Errorf("reply = %q — the seat recorded an answer it never gave, and "+
-			"its next turn on this thread will read it back as fact", after[0].Reply)
-	}
-	// KEPT, not dropped. The conclusion is real context for the next turn;
-	// what it must not be is a reply.
-	if after[0].Unsent != "Task LEAD-1 was opened and is ready to refine" {
-		t.Errorf("unsent = %q, want the artifact — dropping it trades a wrong "+
-			"answer for a blank one", after[0].Unsent)
-	}
-	// And the rendered block a model actually reads has to SAY so, because
-	// "no reply line" is something the reader must notice while "nobody
-	// received this" is something it must answer.
-	block := ledger.RenderHistory(after, ledger.HistoryOptions{MaxChars: 10_000})
-	if !strings.Contains(block, "did NOT reply") {
-		t.Errorf("the history block does not say the turn reached nobody:\n%s", block)
-	}
-}
-
-// The `enabled` toggle is documented as a live kill switch that "restores the
-// previous prompt exactly". It was read NOWHERE — the dispatcher wired its
-// conversation store whenever a store existed — so the switch did nothing, and
-// nothing noticed.
-func TestTheConversationLedgerKillSwitchActuallyStops(t *testing.T) {
-	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
-	ctx := context.Background()
-	if err := conversations.Append(ctx, "ceo", "slack:C1",
-		ledger.Session{Reply: "said this before"}, "wk-old", clock, 0); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	r := &recorder{result: turn.Result{Decision: phase.Done, Delivered: true, Artifact: "and now this"}}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	d.Conversation = func() config.ConversationSession {
-		return config.ConversationSession{Enabled: org.Off(), MaxEntries: 20, RetentionDays: 30}
-	}
-	d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")})
-
-	if len(r.reqs) != 1 {
-		t.Fatalf("the turn ran %d times", len(r.reqs))
-	}
-	// Neither half: no history read in, no entry written back.
-	if len(r.reqs[0].History) != 0 {
-		t.Errorf("history reached a turn with the ledger switched off: %+v", r.reqs[0].History)
-	}
-	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(after) != 1 {
-		t.Errorf("history = %d entries; the turn wrote one with the ledger off", len(after))
-	}
-}
-
-// max_entries is documented as what bounds a DM, whose conversation key is the
-// whole channel and so never stops receiving entries. It was passed to Append
-// as a literal 0 — "keep everything" — so the table grew for the life of the
-// deployment.
-func TestTheConversationLedgerTrimsToTheConfiguredKeep(t *testing.T) {
-	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
-	ctx := context.Background()
-	for i := range 6 {
-		if err := conversations.Append(ctx, "ceo", "slack:C1",
-			ledger.Session{Reply: "older " + strconv.Itoa(i)},
-			"wk-"+strconv.Itoa(i), clock, 0); err != nil {
-			t.Fatalf("Append: %v", err)
-		}
-	}
-
-	r := &recorder{result: turn.Result{Decision: phase.Done, Delivered: true, Artifact: "newest"}}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	d.Conversation = func() config.ConversationSession {
-		return config.ConversationSession{MaxEntries: 3, RetentionDays: 30}
-	}
-	d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")})
-
-	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(after) != 3 {
-		t.Fatalf("history = %d entries, want the configured keep of 3", len(after))
-	}
-	// The NEWEST survive: a trim that kept the oldest would hand the next
-	// turn a history that stops before the message it is answering.
-	if after[len(after)-1].Reply != "newest" {
-		t.Errorf("the trim dropped the newest entry: %+v", after)
-	}
-}
-
-func TestATriggerWithNoConversationWritesNoConversationEntry(t *testing.T) {
-	t.Parallel()
-	// A scheduled fire, a sub-agent, an internal event. Writing it under an
-	// empty key would collect every such turn into one pseudo-conversation
-	// and feed it back to the next one as history.
-	conversations := ledgerstore.NewMemoryConversations()
-	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "x"}}
-	d := dispatcher(t, r)
-	d.Conversations = conversations
-	ctx := context.Background()
-	d.Dispatch(ctx, "ceo", []*events.Event{ev("notification")})
-
-	got, err := conversations.History(ctx, "ceo", "", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("an unkeyed turn wrote %d conversation entries", len(got))
-	}
-}
-
-func TestAnUnreadableConversationIsLessContextNotAFailedTurn(t *testing.T) {
-	t.Parallel()
-	// The read RAISES rather than returning empty, precisely so this
-	// decision is made here and visibly, instead of a database outage
-	// looking like a first turn.
-	r := &recorder{result: turn.Result{Decision: phase.Done}}
-	d := dispatcher(t, r)
-	d.Conversations = failingConversations{}
-	got := d.Dispatch(context.Background(), "ceo",
-		[]*events.Event{inThread("notification", "slack:C1")})
-
-	if got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want the turn to have run anyway", got.Outcome)
-	}
-	if len(r.reqs) != 1 {
-		t.Fatalf("the turn ran %d times", len(r.reqs))
-	}
-	if len(r.reqs[0].History) != 0 {
-		t.Errorf("history = %+v, want none", r.reqs[0].History)
-	}
-}
-
 func TestOnlyLedgeredTypesAreRecorded(t *testing.T) {
 	t.Parallel()
 	// A type the ledger never writes cannot be looked up by it, so
@@ -1262,28 +1010,6 @@ func TestNothingWiredIsTheEmbeddedSingleNodeCase(t *testing.T) {
 	if len(r.reqs) != 1 {
 		t.Error("a bare dispatcher refused to run a turn")
 	}
-}
-
-type failingConversations struct{}
-
-func (failingConversations) Append(context.Context, string, string, ledger.Session, string, time.Time, int) error {
-	return errors.New("store down")
-}
-
-func (failingConversations) History(context.Context, string, string, int) ([]ledger.Session, error) {
-	return nil, errors.New("store down")
-}
-
-func (failingConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
-	return nil, errors.New("store down")
-}
-
-func (failingConversations) ThreadCount(context.Context, string) (int, error) {
-	return 0, errors.New("store down")
-}
-
-func (failingConversations) Purge(context.Context, time.Time) (int64, error) {
-	return 0, errors.New("store down")
 }
 
 func eventIDs(evs []*events.Event) []string {
@@ -2504,26 +2230,28 @@ func TestARedeliveredTriggerReproducesWhenItsWorkBegan(t *testing.T) {
 	}
 }
 
-// A DIRECT MESSAGE'S TWO TURNS SHARE ONE LEDGER, which is the defect this
-// split exists to fix and the only test that states it end to end inside the
-// dispatcher.
+// A DIRECT MESSAGE'S TWO TURNS SERVE ONE CONVERSATION, which is the defect
+// this split exists to fix and the only test that states it end to end inside
+// the dispatcher.
 //
 // Turn one is a burst of top-level DMs: one partition on the bare channel,
-// filed under the channel. Turn two is the person's reply in the thread the
-// agent opened: a DIFFERENT partition — it must not merge with unrelated
-// top-level pings — and the SAME conversation, so it reads turn one's entry
-// back. While one value answered both questions turn two looked its history up
-// under "chat:D1:root" and found a first turn, every time.
-func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
+// serving the channel's conversation. Turn two is the person's reply in the
+// thread the agent opened: a DIFFERENT partition — it must not merge with
+// unrelated top-level pings — and the SAME conversation, so its dispatch reads
+// turn one as the conversation's head, continues its session and is told how
+// it ended. While one value answered both questions turn two looked its
+// conversation up under "chat:D1:root" and found a first turn, every time.
+//
+// Mutation: have conversationIdentityOf answer partitionKeyOf's value and the
+// reply serves "chat:D1:root-1", which turns this red.
+func TestADirectMessagesThreadReplyServesTheBurstsConversation(t *testing.T) {
 	t.Parallel()
-	conversations := ledgerstore.NewMemoryConversations()
 	ctx := context.Background()
 
 	burst := &recorder{result: turn.Result{
 		Decision: phase.Done, Delivered: true, Artifact: "answered the DM",
 	}}
 	d := dispatcher(t, burst)
-	d.Conversations = conversations
 	if got := d.Dispatch(ctx, "ceo", []*events.Event{
 		notifyStampedIn("chat:D1", "chat:D1"),
 		notifyStampedIn("chat:D1", "chat:D1"),
@@ -2539,7 +2267,6 @@ func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
 
 	reply := &recorder{result: turn.Result{Decision: phase.Done}}
 	d2 := dispatcher(t, reply)
-	d2.Conversations = conversations
 	if got := d2.Dispatch(ctx, "ceo", []*events.Event{
 		inDirectThread("notification", "chat:D1", "root-1"),
 	}); got.Outcome != queue.OutcomeAck {
@@ -2549,13 +2276,9 @@ func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
 		t.Fatalf("the reply ran %d turns", len(reply.reqs))
 	}
 	if reply.reqs[0].ConversationKey != "chat:D1" {
-		t.Fatalf("the reply filed under %q, want the DM line the burst used",
-			reply.reqs[0].ConversationKey)
-	}
-	if len(reply.reqs[0].History) != 1 ||
-		reply.reqs[0].History[0].Reply != "answered the DM" {
-		t.Fatalf("the reply turn read %+v as its history — the seat's own answer of a "+
-			"moment earlier is filed where it cannot see it", reply.reqs[0].History)
+		t.Fatalf("the reply served %q, want the DM line the burst used — the "+
+			"seat's own answer of a moment earlier would be a conversation its "+
+			"next turn never reads", reply.reqs[0].ConversationKey)
 	}
 }
 
@@ -2573,11 +2296,14 @@ func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
 // delivered and the box waited out its pause TTL.
 //
 // THE PARTITION STILL TRAVELS, because it is what tells two runs parked on one
-// DM line apart — see [sandbox.ConversationRef.Best]. The ledger read
-// and the session write take the identity as they already did, which is the
-// second half asserted here: one trigger, and every reader of its conversation
-// answering the same thing.
-func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
+// DM line apart — see [sandbox.ConversationRef.Best]. The turn's read of its
+// conversation's head and its rows on the executor log take the identity as
+// they already did, which is the second half asserted here: one trigger, and
+// every reader of its conversation answering the same thing.
+//
+// Mutation: offer the coordinator the partition as the identity and the first
+// half goes red; serve the partition and the second does.
+func TestADMThreadReplyAnswersAndServesTheWholeDMLine(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -2609,14 +2335,12 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 			offered.Partition)
 	}
 
-	// THE SAME TRIGGER through an ordinary dispatch: the ledger keys on the
-	// DM line rather than on the thread the reply happened to land in.
-	conversations := ledgerstore.NewMemoryConversations()
+	// THE SAME TRIGGER through an ordinary dispatch: the turn serves the DM
+	// line rather than the thread the reply happened to land in.
 	r := &recorder{result: turn.Result{
 		Decision: phase.Done, Delivered: true, Artifact: "done",
 	}}
 	d := dispatcher(t, r)
-	d.Conversations = conversations
 	if got := d.Dispatch(ctx, "ceo", []*events.Event{
 		inDirectThread("notification", "chat:D1", "root-1"),
 	}); got.Outcome != queue.OutcomeAck {
@@ -2624,13 +2348,6 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 	}
 	if len(r.reqs) != 1 || r.reqs[0].ConversationKey != "chat:D1" {
 		t.Fatalf("the turn served conversation %+v, want the whole DM line", r.reqs)
-	}
-	filed, err := conversations.History(ctx, "ceo", "chat:D1", 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(filed) != 1 {
-		t.Fatalf("the ledger holds %d entries under the DM line, want the turn's", len(filed))
 	}
 }
 

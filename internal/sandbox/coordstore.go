@@ -192,9 +192,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // neither.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so does the box reference — its id, its cell, its harness and its
-// host ([PendingRun.LaunchNode]), as one — until the launch attaches a box of
-// its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
+// row's, and so do the turn's read of its conversation ([PendingRun.Base]),
+// which the create alone writes, and the box reference — its id, its cell, its
+// harness and its host ([PendingRun.LaunchNode]), as one — until the launch
+// attaches a box of its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
 // launch as [PendingRun.Prior], which decides whether the new job continues in
 // it or reclaims it through its own cell first; the row naming it meanwhile is
 // what lets recovery reclaim it if the launching node dies before deciding, and

@@ -15,8 +15,9 @@ import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/so
  * `useTail` keeps a following box pinned at its END, which is exactly where
  * containment swallows a wheel-down: the reader scrolled, nothing moved, and
  * half the transcript stayed out of sight until they moved the pointer off the
- * box. "I only get half of the content", in the reader's words. A seat's thread
- * list carried the same pair, with a `100dvh` sum standing in for the literal.
+ * box. "I only get half of the content", in the reader's words. A seat's list
+ * of sessions carried the same pair, with a `100dvh` sum standing in for the
+ * literal.
  *
  * Two rules end it, and both live in the sheets:
  *
@@ -47,7 +48,7 @@ import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/so
 /**
  * Every rule as `file selector -> its body`, rules sharing a selector joined —
  * through the shared walk, which also reads the first rule inside an at-rule
- * (where the thread list's bound sits).
+ * (where the sessions list's bound sits).
  */
 function rules(): Map<string, string> {
   const out = new Map<string, string>();
@@ -153,7 +154,7 @@ const LITERAL_BOUND: Record<string, string> = {
 /** In-page scrollers the scan must find bounded by the view: the control that it read them. */
 const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
-  "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
+  "screens.css .thread-split .thread-list": "a seat's sessions list, beside the sticky transcript",
   "screens.css .work-col-body": "a board lane's body",
 };
 

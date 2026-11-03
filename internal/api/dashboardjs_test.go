@@ -1618,24 +1618,38 @@ const (
 	// word that wraps) took it from 5447.7 KiB to 5449.2 KiB (+1.5 KiB, 1529
 	// bytes): the kit +1467 bytes net across its renamed chunks and its
 	// stylesheet, and the access and settings chunks +62 bytes. 5450 KiB.
+	// The Expo handoff (the Set up sheet a person walks to make each agent's
+	// robot at Expo and paste its token, a rotate through it, the reminder of
+	// an old credential still at the vendor, keeping a turned-off robot, and
+	// the Cloud and Infrastructure group) took it from 5449.2 KiB to 5456.5 KiB
+	// (+7.3 KiB, 7475 bytes): the integrations model chunk +7310 bytes and its
+	// stylesheet +152 bytes, and 13 bytes across the chunks that import them.
+	// The initial load did not grow. 5457 KiB.
+	// A conversation's next turn continuing the session its last turn left —
+	// the Sessions view saying which launch would continue each session
+	// (`continued_by`), naming the session a turn's first launch was handed
+	// (`base_turn`, a link to that session) and whether its reply reached the
+	// party waiting, net of the Memory tab's Conversations section it
+	// replaces, with its thread list and their turns — took it from 5456.5
+	// KiB to 5454.2 KiB (-2.3 KiB, 2367 bytes), all of it the agents chunk
+	// the tab loads in (271 bytes gzipped). The initial load did not grow:
+	// its files are the same bytes but for the chunk names they list. It
+	// moved down to 5455 KiB, the measured size's next KiB.
 	// A bridged call the run's record keeps in part drawn as such on a run's
 	// page (its "partly kept" tag, and over its arguments and its result how
 	// much the call sent and answered), a long log's dropped middle said by
-	// tool in its callout, and a collected run's dropped calls said by tool on
-	// its execute card, the wording in one helper the card and the board's log
-	// share, took it from 5449.2 KiB to 5450.9 KiB (+1.7 KiB, 1696 bytes): the
-	// shared chunk the helper landed in +601 bytes, the Executors chunk +524,
-	// the phases chunk +319 and the settled chunk +252; every other chunk kept
-	// its size. 5451 KiB.
-	// A sealed call drawn as one wherever the turn page draws a call (the
-	// execute card, a call's span and the Tools tab's outcome), and the calls
-	// a collected executor's record did not keep counted in the turn's Tool
-	// calls fact, said on the Tools tab and counted by a call's span and the
-	// executors board's rail, took it from 5450.9 KiB to 5452.1 KiB (+1.2
-	// KiB, 1258 bytes): the live chunk +518 bytes, the settled chunk +248,
-	// the Executors chunk +220, the shared chunk the sealed wording landed in
-	// +193 and the phases chunk +79. The initial load did not grow. 5453 KiB.
-	treeBudget = 5<<20 + 333<<10
+	// tool in its callout, a collected run's dropped calls said by tool on its
+	// execute card, a sealed call drawn as one wherever the turn page draws a
+	// call (the execute card, a call's span and the Tools tab's outcome), and
+	// the calls a collected executor's record did not keep counted in the
+	// turn's Tool calls fact, said on the Tools tab and counted by a call's
+	// span and the executors board's rail, took it from 5454.2 KiB to 5457.1
+	// KiB (+2.9 KiB, 2954 bytes): the shared chunk the wording landed in +794
+	// bytes, the Executors chunk +744, the live chunk +518, the settled chunk
+	// +500 and the phases chunk +398; every other chunk kept its size. The
+	// initial load did not grow: its files are the same bytes but for the
+	// chunk names they list and the order of one preload list. 5458 KiB.
+	treeBudget = 5<<20 + 338<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

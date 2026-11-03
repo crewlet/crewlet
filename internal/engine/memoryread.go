@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 )
@@ -29,12 +28,11 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 	}
 	db := e.backends.Store
 	stores := &memread.Stores{
-		Diary:         learning.NewDiary(db),
-		Episodes:      learning.NewEpisodes(db),
-		Skills:        learning.NewSkills(db),
-		Profiles:      learning.NewCounterparties(db),
-		Onboarding:    learning.NewOnboarding(db),
-		Conversations: ledgerstore.NewConversations(db),
+		Diary:      learning.NewDiary(db),
+		Episodes:   learning.NewEpisodes(db),
+		Skills:     learning.NewSkills(db),
+		Profiles:   learning.NewCounterparties(db),
+		Onboarding: learning.NewOnboarding(db),
 	}
 	owner := e.node.Owner()
 	// BY THE SEAT'S ID, which is how a read names the seat it is about.
@@ -69,7 +67,6 @@ func (e *Engine) stopMemoryReads(ctx context.Context) {
 	e.stopMemoryServe = nil
 }
 
-// MemoryReads is a seat's memory and conversation ledger, answered by the node
-// holding the seat — what the API answers `agent_memory` and `conversations`
-// from. Nil on a node with no store.
+// MemoryReads is a seat's memory, answered by the node holding the seat — what
+// the API answers `agent_memory` from. Nil on a node with no store.
 func (e *Engine) MemoryReads() *memread.Reader { return e.memoryReads }

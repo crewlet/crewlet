@@ -24,11 +24,12 @@ import (
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
 // record's top follows: [RunSteer], [RunNote], [NoteRead], [BridgeCall],
-// [ElidedCall], [SessionCapture], [HeldCall] and [LaunchRecord] — the job's
-// own record, which grows a fact about the job with nearly every piece that
-// touches launching, and which every write but a relaunch's hands back. A section that does not
-// is extended the other way, with a key of its own at the top of the record
-// (as [PendingRun.Stop] is, beside [RecordedEnding]).
+// [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
+// [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
+// record, which grows a fact about the job with nearly every piece that touches
+// launching, and which every write but a relaunch's hands back. A section that
+// does not is extended the other way, with a key of its own at the top of the
+// record (as [PendingRun.Stop] is, beside [RecordedEnding]).
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept

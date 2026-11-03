@@ -311,16 +311,16 @@ func TestEveryHeadingAPromptBuilderEmitsIsASibling(t *testing.T) {
 
 // THE ASK IS A SECTION OF THE MESSAGE, NOT A LINE INSIDE THE BLOCK ABOVE IT.
 //
-// It was "Task:", a bare label, and the conversation ledger above it is a
-// heading — so with history present the newest thing anybody said was filed
-// under "Earlier in this conversation", whose own text calls it "the task
-// below". Every block of this message is a peer, and this is what says so.
+// It was "Task:", a bare label, and the block above it is a heading — so with
+// the conversation's earlier turns told above it, the newest thing anybody said
+// was filed under that account, whose own text calls it "the task below".
+// Every block of this message is a peer, and this is what says so.
 func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 	t.Parallel()
 	msg := BuildPhaseUserMessage(UserMessage{
-		TaskDescription:     "THE-ASK",
-		PriorWork:           "PRIOR-WORK",
-		ConversationHistory: "CONVERSATION-HISTORY",
+		TaskDescription: "THE-ASK",
+		PriorWork:       "PRIOR-WORK",
+		Endings:         endingsHeader + "\n\nHOW-EARLIER-TURNS-ENDED",
 	}).Text
 	var levels []int
 	var texts []string

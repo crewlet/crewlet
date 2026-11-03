@@ -106,27 +106,26 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   judge extends)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
-  conversation_session:                 # what this seat already said in ONE thread / issue / PR,
-                                        #   carried into that conversation's next turn
-                                        #   (see concepts/conversation-sessions.md)
-    enabled: true                       # feature gate — a live kill switch; off restores the
-                                        #   pre-ledger prompt exactly AND keeps no executor
-                                        #   session (none is captured); how each turn ended
-                                        #   is still recorded on the executor log, which is
-                                        #   the turn's account, not its session (see
-                                        #   concepts/code-sandbox.md)
-    max_entries: 20                     # entries KEPT per conversation, trimmed at write
-                                        #   time. A second bound applies at RENDER time:
-                                        #   the injected block drops whole oldest entries,
-                                        #   saying how many, once it would exceed 24k
-                                        #   characters
-    retention_days: 30                  # matches the event store's horizon; applied at next start
-                                        #   (the executor sessions' retention reads it
-                                        #   off the fleet's revision at every pass)
+  conversation_session:                 # each executor launch's session, kept and continued
+                                        #   by the turn's relaunches and by its conversation's
+                                        #   next turn — ONE thread / issue / PR — which is
+                                        #   also told how the conversation's earlier turns
+                                        #   ended (see concepts/conversation-sessions.md)
+    enabled: true                       # a live kill switch; off keeps and continues no
+                                        #   executor session, reads no conversation's head
+                                        #   and tells no turn how its earlier turns ended;
+                                        #   how each turn ended is still recorded on the
+                                        #   executor log, which is the turn's account, not
+                                        #   its session (see concepts/code-sandbox.md)
+    retention_days: 30                  # days a seat's sessions are kept past their turn's
+                                        #   last record — the event store's horizon; read
+                                        #   off the fleet's revision at every reaper pass,
+                                        #   so a change is honoured at the next one
     max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
                                         #   sessions may hold (33 MiB..64 GiB); past it a
                                         #   capture releases the seat's oldest ENDED
-                                        #   turns' sessions, keeping how each ended
+                                        #   turns' sessions, keeping how each ended, never
+                                        #   one a live turn was handed to continue
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary
@@ -1233,9 +1232,9 @@ stream:
                                     #   TAKES 512 MiB, sized by the turns the
                                     #   seats run rather than by the disk, and
                                     #   scaled down as far as 64 MiB where the
-                                    #   broker is short: about eighteen days of
+                                    #   broker is short: about seventeen days of
                                     #   a completely blocked trim at the
-                                    #   reference company's ~29 MB a day, and
+                                    #   reference company's ~32 MB a day, and
                                     #   at 64 MiB about two, short of min_age —
                                     #   past ~30 seats on a small host, set it.
                                     #   Crossing it refuses the append, and the
@@ -2116,7 +2115,7 @@ integrations:
 - **`gitlab`** — webhook config + boot-time identity resolution. `url` and `signing_secret` are both **required** when enabled — inbound webhooks are verified by the GitLab 19.1+ signing-token HMAC only (the plain `X-Gitlab-Token` scheme is unsupported; self-managed < 19.1 is not supported). The optional `token` (a PAT with the `read_api` scope, which you supply: nothing provisions it) enables **participants-based routing** — comments and state changes reach everyone participating in the issue/MR, not just assignees and mentioned users. `webhook_name` (default `crewlet`) names the hooks this deployment owns, so a change of public base re-points them instead of leaving a live orphan at every level; give two deployments watching one instance two names. The GitLab MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry — by default the official `glab mcp serve` (stdio, spawned per-role by the engine, no separate server), whose own `env` sets `GLAB_CHECK_UPDATE`, `GLAB_SHOW_WHATS_NEW` and `GLAB_SEND_TELEMETRY` to `"false"` so that what glab prints on its own never lands in a tool result and no call sends the instance a usage event (a variable set only in the engine host's environment does not reach it: a stdio server is handed an allowlist of that environment plus what its configuration declares; see [MCP tool server](../integrations/gitlab.md#mcp-tool-server)) — and each agent's service-account token is the engine's to mint and seal where it provisions GitLab, bound to the tool by the server's `seat_credentials`; where it does not, the seat's `mcp_env.gitlab` names the token as an exclusive `${VAR}`. The `provisioning:` sub-block is read by `crewlet gitlab provision` **and** by the engine's own reconcile loop; `mode` (`group` by default, or `instance` on a self-managed instance) says where a service account is owned and therefore which route creates it, mints its tokens and deletes it — the CLI's `-mode` overrides it for one run. See [GitLab Integration](../integrations/gitlab.md).
 - **`datadog`** — monitor alerts as inbound events, so a firing monitor wakes a seat the way a comment on a merge request does. `webhook_token` is **required** when enabled and is compared constant-time against `X-Crewlet-Token`: Datadog attaches headers with fixed values only, so nothing varies with the payload to sign and this token is the whole authentication — which is why it must be at least **26 characters**, the length the dashboard's Generate button and `crewlet` itself mint. A route with nothing to compare against answers **503** rather than accepting a delivery. `route_to` is **required** and names an **agent** seat this company declares, or the literal `none` to dismiss alerts nobody owns on purpose; a handle no seat has, or one naming a human seat, is refused, and no seat may itself be handled `none`. `provisioning` is **required** too — `site` (the region the keys were issued in, checked against Datadog's own list), `api_key` and `app_key` — because the engine registers the webhook that makes an alert arrive at all, and an enabled block without it reports itself connected and receives nothing. `webhook_name` (default `crewlet`) is the name of that definition and therefore the handle a monitor writes, `@webhook-crewlet`; give two deployments watching one organization two names. `handle_tag` (default `crewlet`) is the monitor tag key that names a seat, so a monitor tagged `crewlet:sre-lead` reaches that seat. See [Datadog Integration](../integrations/datadog.md).
 - **`cloudflare`**: one account API token per agent seat, which the engine mints, narrows to the seat's level, rolls before it lapses and deletes, through the provisioner token you create for it. `provisioning` is **required** when enabled, since the integration receives nothing and an enabled block without it would do nothing: `account_id` (the account the tokens are minted in, 32 lowercase hexadecimal characters) and `api_token` (the provisioner token, as a `${VAR}`; the dashboard seals it as `CLOUDFLARE_API_TOKEN`) are both required, and `zones` is optional and names the zones every agent's token reaches, empty meaning every zone in the account. Each seat's access is `roles[].integrations.cloudflare`, with `enabled` and `level` (`read`, the default, `operate` or `configure`). See [Cloudflare Integration](../integrations/cloudflare.md).
-- **`expo`**: one Expo robot user per agent seat on the company's Expo account, which the engine creates with the seat's level, gives an access token of its own and deletes, through the provisioner token you create for it. `provisioning` is **required** when enabled, since the integration receives nothing and an enabled block without it would do nothing: `account_name` (the account or organization, as in `expo.dev/accounts/<name>`) and `access_token` (a token whose user or robot holds Expo's Admin role on the account, as a `${VAR}`; the dashboard seals it as `EXPO_ACCESS_TOKEN`) are both required. Each seat's access is `roles[].integrations.expo`, with `enabled` and `level` (`viewer`, the default, `runner`, `developer` or `release_manager`), and the seat's `sandbox.env` hands its token to the EAS CLI as `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"`. See [Expo Integration](../integrations/expo.md).
+- **`expo`**: one Expo robot user per agent seat on the company's Expo account, which a person creates at Expo and pastes the token of on the Agents tab; Crewlet checks the robot's role against the seat's level, seals the token as `EXPO_TOKEN_<HANDLE>` and reads everything after with it. `provisioning` is **required** when enabled, since the integration receives nothing and an enabled block without it would do nothing: `account_name` (the account or organization, as in `expo.dev/accounts/<name>`) is its one field, and it holds no credential. Each seat's access is `roles[].integrations.expo`, with `enabled` and `level` (`viewer`, the default, `runner`, `developer` or `release_manager`, each one of Expo's robot roles), and the seat's `sandbox.env` hands its token to the EAS CLI as `EXPO_TOKEN: "${EXPO_TOKEN_<HANDLE>}"`. See [Expo Integration](../integrations/expo.md).
 - **`transports`** — outbound delivery transports (e.g. `email`). The Mattermost and GitLab transports are auto-derived from the sections above; this list adds any others. Jira is inbound-only by design and has no transport: an agent's writes to an issue go through its own MCP tools under its own credential, never through the engine. Confluence is inbound-only for the same reason — a page an agent writes is written by its own MCP tools. Slack is the exception among the chat backends: its transport is per seat, derived from each role's own app credentials rather than from an org-level block, so it is not listed here either.
 
 ## Knowledge

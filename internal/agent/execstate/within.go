@@ -23,7 +23,10 @@ import (
 // its CLOSED ROUNDS: each round's intent, text and review, and every call its
 // executor's run made — up to two hundred a round, and a turn's rounds are
 // bounded by its company's `max_iterations`, which has no ceiling. Everything
-// else in it is the turn's own context, fixed when the turn began.
+// else in it is the turn's own context, fixed when the turn began — how its
+// conversation's earlier turns ended among it ([Frozen.Endings]), which every
+// brief of the turn tells and its renderer holds to 24,000 bytes as this state
+// encodes them, escapes included (internal/agent/prompts' EndingsMaxBytes).
 //
 // So past its share a state gives up, in this order, what no later segment of
 // the turn needs whole, and never what it does:
@@ -68,11 +71,12 @@ import (
 //
 // PAST THAT THE STATE IS REFUSED ([ErrTooLarge], as a [*TooLargeError] saying
 // which of two things is past the share). The turn's own context — what it was
-// asked, its trigger's words, its turn-start blocks — which no resume can do
-// without and no condensing touches; or its closed rounds, condensed as far as
-// they go, of which a turn whose `max_iterations` has no ceiling can carry more
-// than any share holds. Either way a park that big would be refused by the
-// broker on its write and every write of the row after it.
+// asked, its trigger's words, its turn-start blocks and its conversation's
+// endings — which no resume can do without and no condensing touches; or its
+// closed rounds, condensed as far as they go, of which a turn whose
+// `max_iterations` has no ceiling can carry more than any share holds. Either
+// way a park that big would be refused by the broker on its write and every
+// write of the row after it.
 
 // ErrTooLarge is a parked state past its budget even with its closed rounds
 // condensed ([EncodeWithin]).

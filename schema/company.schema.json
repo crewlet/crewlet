@@ -400,7 +400,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended).",
+          "description": "Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -417,16 +417,8 @@
             "null"
           ]
         },
-        "max_entries": {
-          "description": "Entries kept per conversation.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "retention_days": {
-          "description": "How long a conversation is remembered.",
+          "description": "Days a seat's executor sessions are kept past their turn's last record, read at every reaper pass (default 30).",
           "minimum": 0,
           "type": [
             "integer",
@@ -875,7 +867,7 @@
         },
         "provisioning": {
           "$ref": "#/$defs/ExpoProvisioning",
-          "description": "The Expo account and the provisioner token the engine creates each agent's robot user with. Required when enabled."
+          "description": "The Expo account the agents' robot users act for. Required when enabled."
         }
       },
       "type": [
@@ -886,18 +878,8 @@
     "ExpoProvisioning": {
       "additionalProperties": false,
       "properties": {
-        "access_token": {
-          "description": "Expo access token whose user or robot holds the Admin role on the account, so it can manage robot users and their tokens.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
         "account_name": {
-          "description": "Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users are created on.",
+          "description": "Expo account or organization name, as it appears in expo.dev/accounts/<name>, that the agents' robot users act for.",
           "type": [
             "string",
             "number",
@@ -3005,7 +2987,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Whether this agent has its own Expo robot user. Off deletes the robot and its token.",
+          "description": "Whether this agent has its own Expo robot user, which a person creates at Expo and pastes the token of. Off clears its sealed token.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -3014,7 +2996,7 @@
           ]
         },
         "level": {
-          "description": "viewer (the default): reads projects, builds, submissions and updates. runner: viewer plus low-risk actions such as starting builds. developer: runner plus publishing updates. release_manager: developer plus publishing to protected channels.",
+          "description": "The robot's Expo role. viewer (the default): views all projects. runner: views projects and performs low-risk actions on them. developer: creates builds, publishes updates to unprotected channels and manages credentials. release_manager: developer plus protected channels.",
           "enum": [
             "viewer",
             "runner",

@@ -49,6 +49,18 @@
 .agent-access-menu {
   min-width: 22rem;
 }
+/* The Set up sheet's step under its stepper: the words, the facts and the
+ * vendor's page, stacked; a role over the vendor's own line on what it allows. */
+.agent-access-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.agent-access-handoff-role {
+  display: flex;
+  flex-direction: column;
+}
 /* What a row is waiting on, and a quiet hint, in the row's accessory strip. */
 .agent-access-under {
   display: flex;

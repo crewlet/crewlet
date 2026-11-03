@@ -172,6 +172,55 @@ type ApplyInput struct {
 	// account id for the mint after it, a mint's credential id for the
 	// retire after it ([Minted.CredentialID]). Empty for an op's first step.
 	Prior []StepResult
+
+	// HandIn is the credential a person pasted for this seat ([Ask.HandIn]),
+	// empty where none was. Never logged.
+	HandIn string `json:"-"`
+
+	// Disconnect is a step of the integration's disconnect, after which no
+	// pass reads this seat again ([SyncInput.Disconnect]).
+	Disconnect bool
+
+	// Release is a person keeping the account at the vendor ([Ask.Release]).
+	Release bool
+}
+
+// HandsIn is a session whose seat credential a person creates at the vendor
+// and pastes, because the vendor lets no credential create one: the paste
+// route checks the value with it, and the seat's sync then seals it.
+type HandsIn interface {
+	// CheckHandIn proves value fit for the seat's lane, with reads only. A
+	// [*Refusal] is the person's to fix; any other error is a fault.
+	CheckHandIn(ctx context.Context, in HandInInput) (HandedIn, error)
+}
+
+// HandInInput is one pasted credential and the seat it is for.
+type HandInInput struct {
+	Seat SeatRef
+	Lane Lane
+	Want Desired
+
+	// Record is the seat's ledger record, and Records every seat's of the
+	// kind, so a credential another seat holds is refused.
+	Record  *Record
+	Records map[string]Record
+
+	// Value is the pasted credential. Never logged or echoed.
+	Value string
+}
+
+// HandedIn is a pasted credential that passed its check.
+type HandedIn struct {
+	// Detail is the sentence the person reads.
+	Detail string
+
+	// Rotate reports a replacement for a credential the seat already holds.
+	Rotate bool
+
+	// Account and AccountID are the vendor account the credential proved,
+	// and Label what the vendor shows of the credential (a token's prefix):
+	// what an audit line records in place of the value.
+	Account, AccountID, Label string
 }
 
 // StepResult is what one step did.
@@ -302,6 +351,12 @@ type LaneSpec struct {
 	// reinstall.
 	Rotatable bool
 
+	// Releasable is whether a person may keep at the vendor an account a
+	// step waits for them to delete ([ActionRelease]): an Expo robot keeps
+	// its builds' author. False where what is kept is only a credential,
+	// which would stay live and unwatched.
+	Releasable bool
+
 	// BoxEnv is each variable a CLI in the seat's executor box reads one of
 	// the lane's credentials from, by its sealed field (Expo's EXPO_TOKEN from
 	// TOKEN); empty where its tool is a server. The seat's own box settings
@@ -424,6 +479,14 @@ type Options struct {
 	// lane to be rotated ([LaneSpec.Rotatable]).
 	Rotatable bool `json:"rotatable,omitempty"`
 
+	// Releasable is whether a person may keep the account at the vendor
+	// rather than delete it ([LaneSpec.Releasable]).
+	Releasable bool `json:"releasable,omitempty"`
+
+	// ActionURL is where a person takes the lane's [ByYou] steps at the
+	// vendor, which each such step drawn without one of its own carries.
+	ActionURL string `json:"action_url,omitempty"`
+
 	// Managed is [ManagedExternal] where the engine does not provision this
 	// lane for the company (D4b): a seat's switch still binds its tool to
 	// the credential handed in, and its access is managed outside Crewlet.
@@ -512,10 +575,18 @@ type NamedSteps interface {
 
 // drawSteps is a vendor's steps for one op, named where the vendor can.
 func drawSteps(v Vendor, in StepsInput) []Step {
+	var out []Step
 	if named, ok := v.(NamedSteps); ok {
-		return named.StepsFor(in)
+		out = named.StepsFor(in)
+	} else {
+		out = v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
 	}
-	return v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
+	for i := range out {
+		if out[i].By == ByYou && out[i].ActionURL == "" {
+			out[i].ActionURL = in.Options.ActionURL
+		}
+	}
+	return out
 }
 
 // Level is one level a vendor offers, as the vendor defines it.

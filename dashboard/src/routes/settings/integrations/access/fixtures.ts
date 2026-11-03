@@ -17,7 +17,7 @@ import type {
   AccessSeat,
   AccessSeatLane,
 } from "~/contract/access.ts";
-import { lanesOf, type Lane } from "./logic.ts";
+import { lanesOf, type HandoffStep, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
@@ -105,13 +105,21 @@ const CLOUDFLARE_OPTIONS: AccessOptions = {
 };
 
 /** Expo's four levels, each a set of Expo permissions named for the Expo role that holds them. */
+const EXPO_TOKENS_PAGE = "https://expo.dev/accounts/gophrase/settings/access-tokens";
+
 const EXPO_OPTIONS: AccessOptions = {
   lane: "expo",
   live: false,
   rotatable: true,
+  releasable: true,
+  action_url: EXPO_TOKENS_PAGE,
   levels: [
-    { id: "viewer", name: "Viewer" },
-    { id: "runner", name: "Runner" },
+    { id: "viewer", name: "Viewer", note: "View all projects" },
+    {
+      id: "runner",
+      name: "Runner",
+      note: "View all projects and perform low-risk actions on them",
+    },
     { id: "developer", name: "Developer" },
     { id: "release_manager", name: "Release Manager" },
   ],
@@ -422,4 +430,86 @@ export function expoAnswer(qa?: Partial<AccessSeatLane>): AccessAnswer {
       }),
     ],
   };
+}
+
+const PM_ROBOT = "crewlet-gophrase-pm";
+
+/** The engine's sentence for each wait the Set up sheet opens on, for PM's robot at Runner. */
+const EXPO_WAITS: Record<HandoffStep, string> = {
+  create: `Add a robot named ${PM_ROBOT} with the Runner role at Expo`,
+  mint: `Create a new access token for robot ${PM_ROBOT}, then paste it here`,
+  rerole:
+    "This robot is a Developer on gophrase, and you chose Runner. Change its role with Edit robot at Expo, or choose Developer here",
+};
+
+/**
+ * Expo with PM turned on at Runner and waiting on a person for its robot at
+ * one step, QA as in [expoAnswer]. The robot's name is `observed.account`,
+ * the name to give it while it does not exist yet; `named: false` leaves it
+ * off, as an engine that sends none would.
+ */
+export function expoWaitingAnswer(
+  step: HandoffStep = "create",
+  { renew = step !== "create", named = true }: { renew?: boolean; named?: boolean } = {},
+): AccessAnswer {
+  const answer = expoAnswer();
+  const robot = {
+    ...(named ? { account: PM_ROBOT } : {}),
+    ...(step === "create" ? {} : { account_id: "robot-pm" }),
+  };
+  answer.seats[0] = seat("pm", "PM", {
+    expo: {
+      desired: { enabled: true, level: "runner" },
+      observed:
+        step === "create"
+          ? { exists: false, enabled: false, ...robot }
+          : {
+              exists: step === "rerole",
+              enabled: step === "rerole",
+              ...robot,
+              ...(step === "rerole" ? { level: "developer" } : {}),
+              ...(renew
+                ? {
+                    credential: { variable: "EXPO_TOKEN_PM", minted_at: ago(DAY) },
+                    credential_gone: step === "mint",
+                  }
+                : {}),
+            },
+      sync: {
+        at: ago(MIN),
+        outcome: "waiting",
+        steps: [],
+        error: {
+          step,
+          said: EXPO_WAITS[step],
+          remedy: "",
+          actor: "you",
+          action_url: EXPO_TOKENS_PAGE,
+        },
+      },
+      plan: [],
+      tool: "off",
+    },
+  });
+  return answer;
+}
+
+/** QA's robot in sync and holding old tokens besides the sealed one, which Expo still accepts. */
+export function expoRetiredAnswer(labels: string[] = ["9f3c1a…"]): AccessAnswer {
+  const answer = expoAnswer();
+  const qa = answer.seats[1]!.lanes.expo!;
+  qa.observed.retired = labels.map((label) => ({ label, since: "2026-11-01T09:30:00Z" }));
+  qa.sync = {
+    at: ago(MIN),
+    outcome: "waiting",
+    steps: [],
+    error: {
+      step: "revoke",
+      said: `Delete robot crewlet-gophrase-qa's other tokens ${labels.join(", ")} at Expo`,
+      remedy: "",
+      actor: "you",
+      action_url: EXPO_TOKENS_PAGE,
+    },
+  };
+  return answer;
 }

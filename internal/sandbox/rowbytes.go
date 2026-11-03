@@ -57,35 +57,44 @@ import (
 // [ExecuteStateBytes] the closed rounds' payloads are condensed, and a state
 // still past it is refused ([ErrStateTooLarge]) — see
 // internal/agent/execstate's EncodeWithin. A field the turn's frozen context
-// gains is added inside this share, which the closed rounds give way to.
+// gains is added inside this share, which the closed rounds give way to, as
+// how the turn's conversation's earlier turns ended was (execstate's
+// Frozen.Endings, up to 24,000 bytes as the state holds them, never
+// condensed).
 //
 // THE REST is every other field, each at the bound its own writer holds it to
 // (TestTheWholeRowFitsItsBudget builds every one of them at that bound, through
 // the code that writes it, escaped at its worst), and the shares stated here:
 //
-//	a recorded answer ............... MaxAnswerBytes        524,288  (512 KiB)
-//	the copies one owes back ........ MaxAnswerBytes        524,288  (512 KiB)
-//	a held call's sealed arguments .. MaxHeldArgsBytes      262,144  (256 KiB)
-//	what a later build adds ......... ExtraRowBytes         262,144  (256 KiB)
-//	every other field, measured .....   966,884  (with 274,183 to spare)
+//	a recorded answer ............... MaxAnswerBytes            524,288  (512 KiB)
+//	the copies one owes back ........ MaxAnswerBytes            524,288  (512 KiB)
+//	a held call's sealed arguments .. MaxHeldArgsBytes          262,144  (256 KiB)
+//	the turn's read of its
+//	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
+//	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
+//	every other field, measured .....   966,884  (with 249,586 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; the ask and its
 // decision, and the seats it is put to ([MaxAudienceHandles]); a held call's
 // sealed result; the branch, the handed secrets and the notes
-// ([MaxNoteSealedBytes]); the job's own
-// record; the owed end and the captures; and the earlier rounds' tool names
-// ([MaxPriorCalls]). Every one of them is bounded by THIS ENGINE: a person's
-// reply, a tool's arguments and a box's account of its session are each held
-// to their share by the write that puts them on the row, which refuses one
-// past it by name ([ErrAnswerTooLarge], [ErrHeldCallTooLarge],
-// [ErrCaptureUnbounded]) rather than leave it to the broker.
+// ([MaxNoteSealedBytes]); the job's own record; the owed end and the captures;
+// and the earlier rounds' tool names ([MaxPriorCalls]). Every one of them is
+// bounded by THIS ENGINE: a person's reply, a tool's arguments and a box's
+// account of its session are each held to their share by the write that puts
+// them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
+// [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
+// broker; and the turn's read of its conversation is held to its line by
+// construction, made of a read the executor log bounds field by field
+// ([NewConversationBase]), the largest of which a test holds under it.
 //
 // [ExtraRowBytes] is the room for the keys a LATER BUILD ADDS outside the
 // bridged log — at the top of the row and in its sections (the job's own
 // record, [LaunchRecord], first among them) — which is where the next such
 // field goes; one added to a call, or to an identity, comes out of the log's
-// own share instead.
+// own share instead. A field that lands is moved out of it into a line of its
+// own above, as the turn's read of its conversation was ([PendingRun.Base]),
+// so the room stays whole for the field after it.
 const (
 	// RowBytes is what one run's row may weigh as the coordination store
 	// holds it: the broker's payload bound less the room its headers take
@@ -109,12 +118,14 @@ const (
 	// ExtraRowBytes is the room, inside RestBytes, for keys a later build
 	// adds outside the bridged log, at the top of the row
 	// ([PendingRun.Extra]) or in one of its sections ([LaunchRecord.Extra],
-	// [HeldCall.Extra], [SessionCapture.Extra], [RunSteer.Extra] and its
-	// notes'), and that this build carries without reading: STATED HERE, so
-	// the next field a build
-	// adds is added inside it, and the build that adds it moves its own
+	// [HeldCall.Extra], [SessionCapture.Extra], [ConversationBase.Extra] and
+	// its session's and siblings', [RunSteer.Extra] and its notes'), and that
+	// this build carries without reading: STATED HERE, so the next field a
+	// build adds is added inside it, and the build that adds it moves its own
 	// figure out of this one rather than out of a share somebody else's
-	// arithmetic needs.
+	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
+	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
+	// room: all of it is still a later build's.
 	ExtraRowBytes = 256 << 10
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal

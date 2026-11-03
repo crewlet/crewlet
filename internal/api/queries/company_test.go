@@ -575,7 +575,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
 	for _, what := range []string{
-		"fleet", "schedules", "integrations", "conversations",
+		"fleet", "schedules", "integrations", "executor_sessions",
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
 		if _, err := r.Answer(everyGrant(t), what, nil); err == nil {
@@ -2512,8 +2512,8 @@ func TestEveryIntegrationKindCanBeReported(t *testing.T) {
 // every agent's account. Both are null now: "not applicable", which is what
 // the three-valued contract is for and what the screen already hides.
 //
-// Expo is the same in this build: its provisioner token creates agents' robot
-// users, and nothing arrives from Expo.
+// Expo is the same in this build: its block names the account its agents'
+// robots act for, and nothing arrives from Expo.
 func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -2521,7 +2521,7 @@ func TestTheAtlassianOrganizationClaimsNoIngress(t *testing.T) {
 		OrgID: "f1240761-c455-41b5-a7f5-4a64f9c6e729", APIKey: "${ATLASSIAN_API_KEY}",
 	}
 	cfg.Integrations.Expo = &config.Expo{Enabled: true, Provisioning: &config.ExpoProvisioning{
-		AccountName: "example-org", AccessToken: "${EXPO_ACCESS_TOKEN}",
+		AccountName: "example-org",
 	}}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),

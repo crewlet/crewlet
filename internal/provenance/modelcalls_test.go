@@ -27,12 +27,13 @@ const modulePath = "github.com/crewlet/crewlet"
 // Dashboard Assistant's deep work, so a walk over provider requests alone saw
 // no executor at all.
 //
-// AND WHAT A RUN IS HANDED TO REMEMBER: the session a relaunch continues is a
-// model's context before it reads a word of its brief, so the type that names
-// which kept session is restored into a run (sandbox.CarriedSession, the
-// restore carrier) is an input, and so is the continuation that tells it what
-// it lacks (SessionContinuation): the function that chooses either is listed
-// with the tests that hold whose session it is and what it reads.
+// AND WHAT A RUN IS HANDED TO REMEMBER: the session a relaunch continues, and
+// the one a conversation's next turn continues, is a model's context before it
+// reads a word of its brief, so the type that names which session is restored
+// into a run (sandbox.CarriedSession, the restore carrier) is an input, and so
+// is the continuation that tells it what it lacks (SessionContinuation): each
+// function that chooses either is listed with the tests that hold whose session
+// it is and what it reads.
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
 	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation", "SessionContinuation"},
@@ -148,12 +149,19 @@ var modelCalls = map[string]modelCall{
 	// not to follow the one instruction it waited for. A lost job's reseed,
 	// the question the run's own session asked and the run's standing
 	// framing are the engine's or the seat's own words.
+	//
+	// AND HOW THE CONVERSATION'S EARLIER TURNS ENDED, which every brief of the
+	// turn carries as its dispatch rendered it: every account somebody else
+	// wrote in it — what a turn was asked, its reviewer's and its executor's
+	// words, a stop's reason, the engine's accounts that quote a box — fenced
+	// under that segment's token, and every name and engine word defused.
 	"internal/agent/runner/agentrun.go:executeAsAgentRun": {tests: []string{
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
 		"internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs",
 		"internal/agent/prefetch.TestEveryBlockDefusesWhatItReads",
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
 	"internal/agent/runner/agentrun.go:continueAgentRun": {tests: []string{
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
@@ -162,6 +170,7 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/prefetch.TestEveryBlockDefusesWhatItReads",
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
 	// TRANSPORTS of the runner's launch: the system and the brief it built,
 	// which its entries above hold, the continuation it composed, and the
@@ -187,10 +196,20 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
+	// THE CONTINUATION OF THE SESSION A CONVERSATION'S LAST TURN LEFT: the
+	// engine's own lead — the turn boundary and the new box, the base's turn
+	// and home defused under the launching segment's token — then the
+	// launch's own fresh brief whole, whose fences its own entries hold.
+	"internal/agent/runner/continued.go:baseSession": {tests: []string{
+		"internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins",
+		"internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard",
+		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+	}},
 	// AND ITS TRANSPORT to the sandbox layer: the two briefs the runner
 	// composed, each where the box it was written for gets it.
 	"internal/engine/executorrestore.go:sandboxSession": {tests: []string{
 		"internal/engine.TestARelaunchContinuesItsSessionInTheBoxItGetsWithTheBriefForIt",
+		"internal/engine.TestTheFrozenBaseOutlivesASiblingsEnd",
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 	}},
 	// THE RESTORE CARRIER, built by the one function that chooses it: which
@@ -202,6 +221,18 @@ var modelCalls = map[string]modelCall{
 		"internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn",
 		"internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows",
 		"internal/sandbox.TestTheBriefMatchesWhatTheRunHas",
+		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
+	}},
+	// AND OF THE SESSION A CONVERSATION'S LAST TURN LEFT, the base the turn's
+	// first launch froze: that turn's own object, of the launching seat, read
+	// off that turn's own row only while the turn's row holds it and it still
+	// names the object the read froze, opened against that row's associated
+	// data — never another conversation's, and never one a read made since.
+	"internal/sandbox/restore.go:continueBase": {tests: []string{
+		"internal/sandbox.TestATurnsFirstLaunchContinuesItsConversationsHead",
+		"internal/sandbox.TestARelaunchOnAnotherNodeAfterASiblingEndedContinuesTheFrozenBase",
+		"internal/sandbox.TestARelaunchContinuesTheBaseOnlyWhileTheTurnHasKeptNone",
+		"internal/sandbox.TestABaseIsContinuedOnlyInABoxOfItsOwn",
 		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
 	}},
 	"internal/sandbox/launch.go:Launch": {tests: []string{

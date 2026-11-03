@@ -65,15 +65,22 @@ const ExecutorLogDuplicates = 2 * time.Minute
 // a day each agent seat's executor launches put on it, which is what
 // `census_drift` holds the log to and the barrier term in its ceiling.
 //
-// SIXTY: thirty turns a seat a day — the reference company's 3 000 over its
-// 100 seats — times the two reads a turn makes at the seat's level: its FIRST
-// launch reads the conversation's head once ([Reader.Head]), and a RELAUNCH
-// (a send-back, an answered question, a lost job carried on) reads the turn's
-// own row once ([Reader.Session]), at the reference company's mean of one
-// relaunch a turn — a send-back or an answered question on about half of
-// turns, and a second on some. Past twice it, four reads a turn, seats are
-// relaunching in a loop, which is the drift worth telling an operator about.
-const LinearizableReadsPerSeatDay = 60
+// A HUNDRED AND TWENTY: thirty turns a seat a day — the reference company's
+// 3 000 over its 100 seats — times the four reads a turn makes at the seat's
+// level. Its DISPATCH reads its conversation's head once ([Reader.Head]); its
+// FIRST launch, where it continues the session that head left, reads the base's
+// row once more ([Reader.Session]), to take it up only while it still names the
+// object the read froze — the launch's own begin, read back on the serving
+// node, says whether the turn's row holds it, so that row is not read again;
+// and a RELAUNCH (a send-back, an answered question, a lost job carried on)
+// reads the turn's own row twice, as its runner asks which session it
+// continues and as its launch takes that one up, at the reference company's
+// mean of one relaunch a turn — a send-back or an answered question on about
+// half of turns, and a second on some. A relaunch of a turn that has kept
+// nothing reads the base's row a third time, which few do. Past twice it,
+// eight reads a turn, seats are relaunching in a loop, which is the drift
+// worth telling an operator about.
+const LinearizableReadsPerSeatDay = 120
 
 // Stream is the executor log, at the domain's whole budget.
 func (Domain) Stream() statelog.StreamSpec {

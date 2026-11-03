@@ -366,7 +366,7 @@ func TestGoldenTheLedgerCrossesRoundsWithItsBudgetsApplied(t *testing.T) {
 		t.Errorf("the correction did not reach the next round:\n%s", second)
 	}
 	// The last round survives a `done`, which appends no ledger entry —
-	// without these the conversation ledger loses both.
+	// without these the turn's end on the executor log loses both.
 	if res.LastReview == nil || res.LastWork == nil {
 		t.Error("the last round was not carried out of the turn")
 	}
