@@ -387,12 +387,33 @@ func TestARangedAuditFindsWhatAStatWould(t *testing.T) {
 // so no reference is looked at twice. And since the walk cuts no second range
 // before its first has come back, one range is all a store that keeps no order
 // is ever asked for: its first answer turns the walk before another goes out.
+//
+// THE GOROUTINE THAT ANSWERED THE FIRST RANGE IS HELD as it lets the walk go,
+// until the walk has made its next request of the store — a second range, or
+// the listing's first window — so the walk decides from what that goroutine set
+// before letting it go and from nothing it sets a moment after. Unheld, the
+// order was the scheduler's, and the race came out wrong one CI run in many.
+//
+// Mutation: let the walk go before the audit turns to the listing
+// (auditor.cameBack probing ahead of unordered) — held there, the walk hands on
+// range after range while the mode still says ranges, each listed or asked
+// about by name, red.
 func TestARangeOutOfOrderTurnsTheAuditToTheListing(t *testing.T) {
 	t.Parallel()
 	h, r := newRangedHarness(t)
 	h.c.rangeChunk = 10
 	r.onList = func(context.Context, string, string) error {
 		return fmt.Errorf("%w: a directory bucket", objstore.ErrUnordered)
+	}
+	h.c.atProbe = func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for r.listings() < 2 && h.backend.listings() < 1 {
+			if time.Now().After(deadline) {
+				t.Error("the walk made no request of the store in 30s after the first range let it go")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	// MORE RANGES THAN A RUN OF FAILURES: taken for a failed listing each,
 	// they would stop the audit as a failing store.
