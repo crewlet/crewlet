@@ -453,7 +453,6 @@ function ClientFields({
             aria-invalid={f.invalid || undefined}
             error={f.invalid}
             type="password"
-            autoComplete="new-password"
             spellCheck={false}
             placeholder={draft.secretStored ? "Stored. Type a new secret to replace it" : undefined}
             value={draft.clientSecret}

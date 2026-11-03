@@ -211,15 +211,18 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
 
 // A SECRET IS A PASSWORD FIELD. The type is what keeps the value out of an
 // autofill store and out of a screenshot, and it is the one property of this
-// form that is a security property rather than a nicety.
-test("the value is a password field and the form offers no autofill", async () => {
+// form that is a security property rather than a nicety. And no saved login
+// is offered into it: browsers ignore autocomplete="off" on a password field,
+// so it says "new-password" and carries the password managers' opt-outs.
+test("the value is a password field that refuses every saved login", async () => {
   stubLoaded();
   render(<Secrets />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
   const value = screen.getByLabelText("Value");
   expect(value.getAttribute("type")).toBe("password");
-  expect(value.getAttribute("autocomplete")).toBe("off");
+  expect(value.getAttribute("autocomplete")).toBe("new-password");
+  expect(value.hasAttribute("data-1p-ignore")).toBe(true);
 });
 
 // THE ENGINE JUDGES THE NAME, not a regex written here. A second copy of the

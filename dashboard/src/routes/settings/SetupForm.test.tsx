@@ -567,6 +567,45 @@ test("a literal_in_config refusal is shown against its field", async () => {
   expect(screen.getByText(/integrations.datadog.webhook_token/)).toBeDefined();
 });
 
+// A SAVED LOGIN IS NEVER OFFERED INTO A CREDENTIAL. Chrome ignored
+// autocomplete="off" on the provisioner token's password field and filled the
+// person's own sign-in password, which Connect would then have sealed as the
+// integration's credential. Mutation: pin @crewlethq/ui back to 0.89.1 and the
+// field reads "off" with no password-manager opt-out.
+test("a credential field refuses every saved login", () => {
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Cloudflare",
+          tool: {
+            ...tool,
+            key: "cloudflare",
+            requirements: [
+              req({
+                field: "api_token",
+                label: "Provisioner token",
+                kind: "secret",
+                connect: true,
+                secret_name: "CLOUDFLARE_API_TOKEN",
+                config_path: "integrations.cloudflare.provisioning.api_token",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Cloudflare"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const field = screen.getByLabelText(/Provisioner token/);
+  expect(field.getAttribute("type")).toBe("password");
+  expect(field.getAttribute("autocomplete")).toBe("new-password");
+  expect(field.hasAttribute("data-1p-ignore")).toBe(true);
+  expect(field.getAttribute("data-lpignore")).toBe("true");
+});
+
 // A VALUE THE ENGINE WILL NOT STORE AS TYPED IS SAID BESIDE ITS FIELD, in the
 // engine's words: a line break pasted into a token is invisible in the box,
 // and a banner over the form names no field. Mutation: drop invalid_input from
