@@ -11,7 +11,7 @@
  * prose or inside a control becomes a link at all.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import type { ReactNode } from "react";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -28,6 +28,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { InertWebSocket } from "~/test/client.tsx";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 import type { LinkHost } from "~/contract/integrations.ts";
 
 afterEach(cleanup);
@@ -97,9 +98,10 @@ async function draw(
       </FrameReadings>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  // EVERY READING THE FRAME ASKED HAS LANDED, and every one its answers
+  // asked in turn: what a token becomes is decided by them, and a case
+  // that says a reading was never asked says it once none can be.
+  await settled(() => asked.length);
   return view.container;
 }
 

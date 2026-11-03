@@ -22,6 +22,7 @@ import {
 import { QueryError } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
+import { settled } from "~/test/settle.ts";
 
 afterEach(() => {
   cleanup();
@@ -137,7 +138,7 @@ describe("a write to the code log is read back at its floor", () => {
     const { result } = renderHook(() => useCodeQuery("code_pushes", { name: "web" }));
     await waitFor(() => expect(result.current.data).not.toBeNull());
     act(() => void session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []));
-    await Promise.resolve();
+    await settled(() => sent.length);
     expect(sent).toHaveLength(1);
   });
 
