@@ -153,3 +153,32 @@ func TestARoleSandboxEnvValueLayersAsALaunch(t *testing.T) {
 		t.Error("no box sets anything")
 	}
 }
+
+// A TURNED-OFF ROBOT'S TOKEN REACHES NO BOX: its sealed name is refused in the
+// seat's box, its tools and its settings, while the token itself is the box's.
+func TestAnExpoRetiredTokenIsNamedNowhere(t *testing.T) {
+	t.Parallel()
+	doc := func(env string) string {
+		return "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    fast:\n      model: claude-golden\n" +
+			"integrations:\n  expo:\n" + completeExpo + "\nroles:\n  - name: QA\n    llm: fast\n" +
+			"    integrations: {expo: {enabled: true}}\n    sandbox:\n      env:\n        " + env + "\n"
+	}
+	parse := func(text string) error {
+		c, err := config.ParseCompany([]byte(text))
+		if err != nil {
+			return err
+		}
+		return c.Validate()
+	}
+	if err := parse(doc("EXPO_TOKEN: ${EXPO_TOKEN_QA}")); err != nil {
+		t.Fatalf("the seat's own token in its box was refused: %v", err)
+	}
+	for _, env := range []string{
+		"EXPO_TOKEN: ${EXPO_RETIRED_TOKEN_QA}",
+		"OLD: prefix-${EXPO_RETIRED_TOKEN_QA}",
+	} {
+		if err := parse(doc(env)); err == nil || !strings.Contains(err.Error(), "EXPO_RETIRED_TOKEN_QA") {
+			t.Errorf("%s = %v, want a refusal naming the retired token", env, err)
+		}
+	}
+}

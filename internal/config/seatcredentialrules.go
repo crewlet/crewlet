@@ -128,6 +128,21 @@ func (c *Company) sealedOwners() map[string]string {
 	return out
 }
 
+// engineOnly is handle's sealed names that no tool reads ([seatField.tool]):
+// values the engine reads itself, from the role's credential position where
+// it has one.
+func engineOnly(handle string) map[string]bool {
+	out := map[string]bool{}
+	for _, kind := range SeatCredentialKinds() {
+		for _, f := range seatFields(kind) {
+			if !f.tool {
+				out[envref.SealedName(kind, f.name, handle)] = true
+			}
+		}
+	}
+	return out
+}
+
 // credentialPosition is one role field that names a seat's credential.
 type credentialPosition struct {
 	kind, field, key, value string
@@ -222,6 +237,23 @@ func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 					"${%s} holds this agent's credential and is also named by %s %s: an "+
 						"agent's credential has one reader. Give each agent its own "+
 						"variable", name, seats, words.And(others))
+			}
+		}
+
+		// A VALUE ONLY THE ENGINE READS (a turned-off Expo robot's token) is
+		// named nowhere but its own credential position: never a box, a
+		// tool or a setting.
+		mine, atPosition := engineOnly(own), map[string]int{}
+		for _, pos := range role.credentialPositions() {
+			for _, name := range envref.Names(pos.value) {
+				atPosition[name]++
+			}
+		}
+		for _, name := range sortedKeys(refs.Seats[own]) {
+			if mine[name] && refs.Seats[own][name] > atPosition[name] {
+				p.add(path, ErrConflict,
+					"${%s} is a value the engine holds for this agent and reads only itself, "+
+						"which no box, tool or setting may be handed: remove the reference", name)
 			}
 		}
 
