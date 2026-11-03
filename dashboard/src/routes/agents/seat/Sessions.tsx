@@ -740,8 +740,8 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
 }
 
 /**
- * The session a turn's first launch was handed to continue — the newest its
- * conversation left as the turn's dispatch read it — as a link that opens that
+ * The session a turn's first launch was handed to continue — its
+ * conversation's head as the turn's dispatch read it — as a link that opens that
  * session here, where this seat still keeps it: the chain a conversation's
  * turns make, followed a turn at a time. The engine says whether the session is
  * still kept once it is opened; an absorbed one is gone with the turn that was
