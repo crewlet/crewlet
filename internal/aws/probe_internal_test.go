@@ -111,3 +111,40 @@ func TestTheMintedCertificateAuthoritySignsLeaves(t *testing.T) {
 		t.Fatalf("a leaf of the minted authority: %v", err)
 	}
 }
+
+// ONCE THE CERTIFICATE AUTHORITY IS HELD, THE FORM SHOWS THE CLOUDSHELL BLOCK:
+// the stack rendered with its certificate, never its key, deploying in the
+// home Region and printing the one output to paste.
+func TestTheConnectFormShowsTheCloudShellBlock(t *testing.T) {
+	t.Parallel()
+	bundle := mustBundle(t)
+	resolve := func(ref string) (string, bool) { return bundle, ref != "" }
+	prov := &config.AWSProvisioning{Slug: "acme", HomeRegion: "eu-west-1", CertificateAuthority: "${" + CertificateAuthoritySecret + "}"}
+	var ca setup.Requirement
+	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
+		if r.Field == "certificate_authority" {
+			ca = r
+		}
+	}
+	if ca.Public == nil || ca.Public.Language != "sh" {
+		t.Fatalf("no CloudShell block: %+v", ca.Public)
+	}
+	for _, want := range []string{"--stack-name crewlet-acme", "--region eu-west-1", "BEGIN CERTIFICATE",
+		config.AWSConnectionOutput} {
+		if !strings.Contains(ca.Public.Text, want) {
+			t.Errorf("the block lacks %q", want)
+		}
+	}
+	if strings.Contains(ca.Public.Text, "PRIVATE KEY") {
+		t.Fatal("the block carries the certificate authority's key")
+	}
+	if !strings.Contains(ca.VendorURL, "{home_region}") {
+		t.Errorf("the CloudShell link names no home Region: %q", ca.VendorURL)
+	}
+	prov.HomeRegion = ""
+	for _, r := range Requirements(&config.AWS{Enabled: true, Provisioning: prov}, "Acme", resolve) {
+		if r.Field == "certificate_authority" && r.Public != nil {
+			t.Error("a block was rendered with no home Region")
+		}
+	}
+}

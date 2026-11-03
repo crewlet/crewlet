@@ -97,7 +97,10 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			Mintable: true, Shape: setup.ShapeCertificateAuthority,
 			Help: "Crewlet's own certificate authority, made when you save and sealed as " +
 				CertificateAuthoritySecret + ". The stack's trust anchor holds only its certificate, which " +
-				"the CloudShell block carries. Its key is never shown or exported.",
+				"the block below carries. Its key is never shown or exported. Sign in to the account agents " +
+				"will work in, and run the block in",
+			LinkText:  "CloudShell in the home Region",
+			VendorURL: "https://{home_region}.console.aws.amazon.com/cloudshell/home?region={home_region}",
 			CheckNote: "It is tested with the stack output.",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -134,6 +137,10 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(prov.HomeRegion)
 		case "certificate_authority":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(prov.CertificateAuthority, resolve)
+			if caHeld {
+				bundle, _ := resolve(prov.CertificateAuthority)
+				reqs[i].Public = cloudShellView(prov, bundle)
+			}
 		case "connection":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(prov.Connection)
 		case "iam_read":
@@ -143,6 +150,39 @@ func Requirements(in *config.AWS, company string, resolve func(string) (string, 
 		}
 	}
 	return reqs
+}
+
+// cloudShellView is the CloudShell block for the held certificate authority:
+// the stack rendered with its certificate, never its key, for the slug, home
+// Region and Regions saved. Nil until the slug and the home Region are. A
+// stack that cannot be rendered says why in the block's place.
+func cloudShellView(prov config.AWSProvisioning, bundle string) *setup.PublicView {
+	company, home := Company(strings.TrimSpace(prov.Slug)), strings.TrimSpace(prov.HomeRegion)
+	if !company.Valid() || !config.AWSRegion(home) {
+		return nil
+	}
+	text, err := cloudShellText(company, home, prov.RegionsOrDefault(), bundle)
+	if err != nil {
+		text = "# Crewlet cannot render the stack: " + strings.TrimPrefix(err.Error(), "aws: ") + "\n"
+	}
+	view, err := setup.PublicOf(bundle, text, "sh")
+	if err != nil {
+		return nil
+	}
+	return view
+}
+
+func cloudShellText(company Company, home string, regions []string, bundle string) (string, error) {
+	ca, err := ParseCA(bundle)
+	if err != nil {
+		return "", err
+	}
+	tpl, err := RenderStack(StackParams{Company: company, CAPEM: ca.CertificatePEM(),
+		IssuerCN: ca.Cert.Subject.CommonName, Regions: regions})
+	if err != nil {
+		return "", err
+	}
+	return CloudShellBlock(tpl, home, company), nil
 }
 
 // Summary is the sentence the connect form opens with.
