@@ -408,3 +408,64 @@ func TestAStopOrLossReadIsGivenItsJobsEndOnTopOfTheTake(t *testing.T) {
 		t.Fatalf("a take after an end at its bound is given %v, want its whole %v", left, SessionTakeBudget)
 	}
 }
+
+// A READ CUT SHORT IS NO JOB THAT OUTLIVED ITS END. The read that ends a job
+// waits for it under the read's own context, and a context that ends first —
+// the node draining, the asker no longer waiting — says nothing of the job.
+// The kill still comes, under a context of its own, since the stop or the loss
+// decided the job's end; but it is said as the read cut short, at info, and
+// never as a job that outlived its end — the warning an operator is told to
+// look into — and nothing is read after it, its read being over.
+//
+// Mutation: take the context's end for the wait run out, and the read cut
+// short is said as a job that outlived its end.
+func TestAReadCutShortIsNoJobThatOutlivedItsEnd(t *testing.T) {
+	logs := captureLogs(t)
+	box := NewFakeSandbox("box1")
+	runner := NewFakeRunner("claude-code")
+	ctx, cut := context.WithCancel(t.Context())
+	defer cut()
+	runner.EndFunc = func(context.Context, Sandbox, RunHandle) (EndAsk, error) { return EndAsked, nil }
+	var polls atomic.Int32
+	var killed, readAfterKill atomic.Bool
+	runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+		// THE READ ENDS while it waits, its job still working.
+		if polls.Add(1) == 3 {
+			cut()
+		}
+		if killed.Load() {
+			readAfterKill.Store(true)
+		}
+		return JobRunning, nil
+	}
+	killedLive := make(chan bool, 1)
+	box.KillJobFunc = func(ctx context.Context, _ string) error {
+		killed.Store(true)
+		killedLive <- ctx.Err() == nil
+		return nil
+	}
+	coord := &Coordinator{endWait: time.Hour, endPoll: 10 * time.Millisecond}
+	over := coord.endJob(ctx, PendingRun{TurnID: "t1", SandboxID: "box1", CommandID: "cmd-1"}, box, runner)
+
+	if over {
+		t.Fatal("a read cut short reads its job over")
+	}
+	select {
+	case live := <-killedLive:
+		if !live {
+			t.Fatal("the job of a read cut short was killed under the read's dead context")
+		}
+	default:
+		t.Fatal("the job of a read cut short was not killed")
+	}
+	if readAfterKill.Load() {
+		t.Fatal("a read cut short read its job again after the kill")
+	}
+	said := logs.String()
+	if !strings.Contains(said, "why=read_cut_short") || strings.Contains(said, "outlived_its_end") {
+		t.Fatalf("the kill of a read cut short was said as:\n%s", said)
+	}
+	if strings.Contains(said, "level=WARN") {
+		t.Fatalf("a read cut short was said at warning:\n%s", said)
+	}
+}

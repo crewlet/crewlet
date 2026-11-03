@@ -144,7 +144,11 @@ const jobEndPoll = time.Second
 //
 // THE KILL OUTLIVES THE READ: it runs under a context of its own ([detached]),
 // since the stop or the loss decided the job's end, and a read cut short — its
-// asker gone — must not leave the job running on the strength of the read alone.
+// node draining, its asker gone — must not leave the job running on the
+// strength of the read alone. Such a read is said as cut short ([whyCutShort]),
+// never as a job that outlived its end, and reads nothing after the kill: its
+// context is gone, so it takes no session, and the ending's next read finds
+// the job killed.
 func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, runner Runner) bool {
 	if run.CommandID == "" {
 		// NO JOB WAS STARTED in the box — a launch stopped or lost before its
@@ -166,6 +170,10 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	began := time.Now()
 	var why string
 	switch {
+	case ctx.Err() != nil:
+		// THE READ ENDED as it asked, which is no failure of the box's: an
+		// ask under a dead context fails on that alone.
+		why = whyCutShort
 	case err != nil:
 		why = "ask_failed"
 		log.WarnContext(ctx, "sandbox_job_end_unasked", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
@@ -174,22 +182,34 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 		why = "script_unheard"
 	case ask == EndGone:
 		why = "not_the_jobs"
-	case c.awaitEnd(ctx, box, runner, handle):
-		log.InfoContext(ctx, "sandbox_job_ended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
-			"launch_id", run.LaunchID, "waited_seconds", time.Since(began).Seconds())
-		_ = c.killJob(ctx, run, box, "")
-		return true
 	default:
-		why = "outlived_its_end"
+		switch over, cut := c.awaitEnd(ctx, box, runner, handle); {
+		case over:
+			log.InfoContext(ctx, "sandbox_job_ended", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+				"launch_id", run.LaunchID, "waited_seconds", time.Since(began).Seconds())
+			_ = c.killJob(ctx, run, box, "")
+			return true
+		case cut:
+			why = whyCutShort
+		default:
+			why = "outlived_its_end"
+		}
 	}
-	if why == "outlived_its_end" {
+	switch why {
+	case "outlived_its_end":
 		log.WarnContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
 			"why", why, "waited_seconds", time.Since(began).Seconds())
-	} else {
+	case whyCutShort:
+		log.InfoContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"why", why, "waited_seconds", time.Since(began).Seconds(), "error", context.Cause(ctx).Error())
+	default:
 		log.InfoContext(ctx, "sandbox_job_killed", "turn_id", run.TurnID, "sandbox_id", run.SandboxID,
 			"why", why)
 	}
 	killErr := c.killJob(ctx, run, box, why)
+	if why == whyCutShort {
+		return false
+	}
 	state, err := runner.Poll(ctx, box, handle)
 	if err == nil && state.Over() {
 		return true
@@ -206,22 +226,29 @@ func (c *Coordinator) endJob(ctx context.Context, run PendingRun, box Sandbox, r
 	return false
 }
 
-// awaitEnd waits for an asked job to be over, at most [Coordinator.endWait] and
-// no longer than ctx: whether it was.
-func (c *Coordinator) awaitEnd(ctx context.Context, box Sandbox, runner Runner, handle RunHandle) bool {
+// whyCutShort is the kill's reason ([Coordinator.endJob]) where the read itself
+// ended before the job did — its node draining, its asker no longer waiting —
+// which says nothing about the job: never "outlived_its_end", a wait run out on
+// a stuck pack or a wedged call, which is the one to look into.
+const whyCutShort = "read_cut_short"
+
+// awaitEnd waits for an asked job to be over, at most [Coordinator.endWait]:
+// whether it was, and whether the read's own context ended first — cut short,
+// which is no wait that ran out.
+func (c *Coordinator) awaitEnd(ctx context.Context, box Sandbox, runner Runner, handle RunHandle) (over, cut bool) {
 	deadline := time.NewTimer(c.endWait)
 	defer deadline.Stop()
 	tick := time.NewTicker(c.endPoll)
 	defer tick.Stop()
 	for {
 		if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
-			return true
+			return true, false
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return false, true
 		case <-deadline.C:
-			return false
+			return false, false
 		case <-tick.C:
 		}
 	}
