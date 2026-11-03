@@ -13,8 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -40,13 +38,12 @@ func newNode(t *testing.T, owner string) *node {
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	return &node{owner: owner, db: db, stores: &memread.Stores{
-		Diary:         learning.NewDiary(db),
-		Episodes:      learning.NewEpisodes(db),
-		Skills:        learning.NewSkills(db),
-		Profiles:      learning.NewCounterparties(db),
-		Onboarding:    learning.NewOnboarding(db),
-		Conversations: ledgerstore.NewConversations(db),
-		Now:           func() time.Time { return pinned.Add(time.Hour) },
+		Diary:      learning.NewDiary(db),
+		Episodes:   learning.NewEpisodes(db),
+		Skills:     learning.NewSkills(db),
+		Profiles:   learning.NewCounterparties(db),
+		Onboarding: learning.NewOnboarding(db),
+		Now:        func() time.Time { return pinned.Add(time.Hour) },
 	}}
 }
 
@@ -248,13 +245,6 @@ func TestASeatNobodyHoldsIsAnsweredEmptyAndSaysSo(t *testing.T) {
 	if got.Diary == nil || got.Episodes == nil || got.Skills == nil || got.Counterparties == nil {
 		t.Error("an empty answer omits a list rather than sending it empty")
 	}
-	threads, err := read.Threads(t.Context(), seatOf("swe"), "", 0)
-	if err != nil {
-		t.Fatalf("Threads: %v", err)
-	}
-	if threads.HeldBy != memread.HolderNone || len(threads.Conversations) != 0 {
-		t.Errorf("threads of an unheld seat = %+v, want none and held_by none", threads)
-	}
 }
 
 // A HOLDER THAT DOES NOT ANSWER IS AN UNKNOWN, never an empty memory.
@@ -433,34 +423,6 @@ func TestOnboardedAtIsSetOnlyOnceAPassFinished(t *testing.T) {
 	}
 }
 
-// A CONVERSATION LISTING SAYS WHAT IT WAS CUT FROM, and a named thread's
-// entries come back beside it.
-func TestThreadsCarryTheirTotalAndTheNamedThread(t *testing.T) {
-	t.Parallel()
-	n := newNode(t, "solo:1")
-	for i := range 4 {
-		key := "slack:C" + strconv.Itoa(i)
-		if err := n.stores.Conversations.Append(t.Context(), "swe", key,
-			ledger.Session{Reply: "said in " + key}, key, pinned.Add(time.Duration(i)*time.Minute), 0); err != nil {
-			t.Fatalf("Append: %v", err)
-		}
-	}
-	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Threads(t.Context(), seatOf("swe"), "slack:C2", 2)
-	if err != nil {
-		t.Fatalf("Threads: %v", err)
-	}
-	if len(got.Conversations) != 2 || got.ConversationsTotal != 4 {
-		t.Errorf("%d threads of %d, want 2 of 4", len(got.Conversations), got.ConversationsTotal)
-	}
-	if len(got.Entries) != 1 || got.Entries[0].Reply != "said in slack:C2" {
-		t.Errorf("entries = %+v, want the one recorded in slack:C2", got.Entries)
-	}
-	if got.HeldBy != "solo" {
-		t.Errorf("held_by %q, want solo", got.HeldBy)
-	}
-}
-
 // EVERY KEY ON EVERY ANSWER. A client cannot tell "this seat has learned
 // nothing" from "this answer does not carry that half" if the key is simply
 // not there, and both are ordinary states — so an answer about a seat with no
@@ -595,29 +557,26 @@ func TestAFailedProfileReadIsNotAnEmptyList(t *testing.T) {
 	}
 }
 
-// THE PAGES ARE BOUNDED IN BOTH DIRECTIONS. The ledger applies a LIMIT only
-// when one is positive, so an absent or negative page would read a seat's
-// whole ledger — a thread per channel of a busy workspace — through the
-// process; and a memory page past the limit would carry a store's worth of
-// rows to a panel that draws fifty.
+// THE PAGE IS BOUNDED IN BOTH DIRECTIONS. A store applies a LIMIT only when
+// one is positive, so an absent or negative page would read a seat's whole
+// collection through the process; and a memory page past the limit would carry
+// a store's worth of rows to a panel that draws fifty.
+//
+// Mutation: let Page answer a negative ask as asked, and the second case goes
+// red.
 func TestThePagesAreBoundedInBothDirections(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name        string
-		asked       int
-		memory, led int
+		name          string
+		asked, memory int
 	}{
-		{"absent or zero", 0, memread.PageLimit, memread.DefaultThreadPage},
-		{"negative", -1, memread.PageLimit, memread.DefaultThreadPage},
-		{"inside", 7, 7, 7},
-		{"past the memory page", memread.PageLimit + 1, memread.PageLimit, memread.PageLimit + 1},
-		{"past the ledger's ceiling", memread.MaxThreadPage + 1, memread.PageLimit, memread.MaxThreadPage},
+		{"absent or zero", 0, memread.PageLimit},
+		{"negative", -1, memread.PageLimit},
+		{"inside", 7, 7},
+		{"past the memory page", memread.PageLimit + 1, memread.PageLimit},
 	} {
 		if got := memread.Page(c.asked); got != c.memory {
 			t.Errorf("%s: a memory page of %d, want %d", c.name, got, c.memory)
-		}
-		if got := memread.ThreadPage(c.asked); got != c.led {
-			t.Errorf("%s: a ledger page of %d, want %d", c.name, got, c.led)
 		}
 	}
 }

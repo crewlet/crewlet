@@ -33,14 +33,21 @@ import (
 //     (seatpause.go).
 //   - IN ITS INBOX, PARKED ON ITS BUDGET, until the refusing window turns over
 //     or a revision raises its ceiling (budgetpark.go).
+//   - IN ITS INBOX, HELD BY ANY PARK OF THE NODE HOLDING THE SEAT: the budget's
+//     on the larger floor a first launch that continues its conversation's
+//     session needs, which a window with room for the static floor holds back
+//     all the same, and the models' limit (providerpark.go), which no counter
+//     records.
 //
 // None of those has an end the timeout could be sized to, and each is a fact
-// this engine can read on any node: the run records are the fleet's, every node
-// watches the pauses, and the budget counters are shared. What is left to the
-// timeout is an ask in flight nowhere any of them can see — a dispatch segment
-// before its launch writes the run's record, a delivery a node that died held
-// unacknowledged — which is what internal/maintenance's ChannelIdleTimeout is
-// sized to.
+// this engine can read on any node — which it has to be, since the sweep runs
+// on whichever node holds the maintenance duty: the run records are the
+// fleet's, every node watches the pauses, the budget counters are shared, and
+// a park, which lives in its holder's process alone, is asked of the holder
+// (parkheld.go). What is left to the timeout is an ask in flight nowhere any
+// of them can see — a dispatch segment before its launch writes the run's
+// record, a delivery a node that died held unacknowledged — which is what
+// internal/maintenance's ChannelIdleTimeout is sized to.
 //
 // A SEAT THE RUNNING COMPANY DOES NOT HAVE answers from its run records alone:
 // nobody can have paused it or parked it here, and its mailbox is retired with
@@ -48,10 +55,14 @@ import (
 // judges the same way, as the dispatcher's own pause reading does
 // ([Engine.pauseOfHandle]).
 
-// colleagueOwed is the engine's [a2a.Owed].
+// colleagueOwed is the engine's [a2a.Owed]. parks is whether a park of the
+// node holding a seat holds its inbox ([inboxParks]); nil asks the engine's
+// own ([Engine.heldParks]), built at each question, so the incarnation it asks
+// as is the node's once it has one.
 type colleagueOwed struct {
 	engine *Engine
 	runs   seatRunLister
+	parks  inboxParks
 }
 
 // seatRunLister is the one read colleagueOwed makes of the fleet's executor
@@ -93,7 +104,34 @@ func (o colleagueOwed) AnswerOwed(ctx context.Context, ch a2a.Channel) (bool, er
 		return false, fmt.Errorf("engine: whether %s, which channel %s asked, is parked on its "+
 			"budget: %w", ch.Target, ch.ID, err)
 	}
-	return parked, nil
+	if parked {
+		return true, nil
+	}
+	return o.heldByPark(ctx, ch)
+}
+
+// heldByPark reports whether a park of the node holding the seat ch asked holds
+// the seat's inbox, asked of that node (parkheld.go). A seat the running
+// company does not have is parked by nobody: no node dispatches its mail.
+func (o colleagueOwed) heldByPark(ctx context.Context, ch a2a.Channel) (bool, error) {
+	c := o.engine.Company()
+	if c == nil || c.Org == nil {
+		return false, nil
+	}
+	seat, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(ch.Target))
+	if !ok {
+		return false, nil
+	}
+	parks := o.parks
+	if parks == nil {
+		parks = o.engine.heldParks()
+	}
+	held, err := parks.parked(ctx, seat)
+	if err != nil {
+		return false, fmt.Errorf("engine: whether a park holds the inbox of %s, which channel %s asked: %w",
+			ch.Target, ch.ID, err)
+	}
+	return held, nil
 }
 
 // holdsInbox reports whether a run keeps its seat's inbox held: one the engine
@@ -105,14 +143,23 @@ func holdsInbox(run sandbox.PendingRun) bool {
 }
 
 // budgetParked reports whether handle's seat's mail waits on its budget — the
-// conditions the budget stage parks it on ([meter.parks]). A seat with no
-// counter, or nothing capped, is never parked.
+// conditions the budget stage parks it on ([meter.parks]), on the static floor
+// any delivery's launch needs. A seat with no counter, or nothing capped, is
+// never parked.
+//
+// A RECOUNT OF THE SHARED COUNTERS, which any node reads alike: it answers for
+// the park a seat's next delivery takes wherever it lands — after a restart, or
+// the seat moving, no node holds one until that delivery arrives. A park taken
+// on a larger floor, which a first launch that continues its conversation's
+// session needs, is no recount of anything shared: its floor is the refused
+// launch's, which only the node that parked the seat knows, so it is asked of
+// that node ([colleagueOwed.heldByPark]).
 func (e *Engine) budgetParked(ctx context.Context, c *Company, handle string) (bool, error) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return false, nil
 	}
-	_, refusing, starved, err := m.parks(ctx)
+	_, refusing, starved, err := m.parks(ctx, launchFloor{static: m.basis.floor})
 	if err != nil {
 		return false, err
 	}

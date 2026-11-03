@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -631,10 +630,17 @@ type Engine struct {
 	// is built over one answer.
 	executorLog sandbox.SessionWrites
 
-	// abandonedLaunches are the turns whose executor launch the turn's own
-	// fence refused AFTER the launch wrote its run's record, by run id: the
-	// launch abandoned that record, so no ending of the run owes the turn's
-	// end, and the frame that ends the turn records it ([Engine.runTurn],
+	// executorHeads is the read a turn's dispatch makes of its
+	// conversation's head ([Engine.readConversation]): the router's
+	// (estate.ExecutorReads), set in [New] beside executorLog; nil on an
+	// engine built without one, whose turns read no conversation.
+	executorHeads headReader
+
+	// abandonedLaunches are the turns whose executor launch was abandoned
+	// AFTER the launch wrote its run's record — refused by the turn's own
+	// fence, or failed on its way to its box — by run id: the launch
+	// abandoned that record, so no ending of the run owes the turn's end,
+	// and the frame that ends the turn records it ([Engine.runTurn],
 	// [Engine.resumeTurn] — each takes its own turn's off). Set by the
 	// launcher ([agentLauncher.launch]).
 	abandonedLaunches sync.Map
@@ -1018,6 +1024,10 @@ type Engine struct {
 	// of a seat it holds would be launched on. See relaunchtarget.go.
 	stopRelaunchServe queue.Unsubscribe
 
+	// stopHeldParkServe withdraws this node as an answerer of whether one of
+	// its parks holds the inbox of a seat it holds. See parkheld.go.
+	stopHeldParkServe queue.Unsubscribe
+
 	// boxReads asks a box's host to read it back and answers for the boxes
 	// on this node's host; stopBoxReadServe and stopNudgeListen withdraw this
 	// node as an answerer of those reads and a listener for the nudges its
@@ -1189,8 +1199,8 @@ type Options struct {
 	// Fields left nil on it are FILLED IN from this engine, rather than the
 	// whole dispatcher being replaced or the whole thing being taken as-is.
 	// A test that wants to pin ownership answers supplies Conditions and
-	// still gets the real ledgers; one that wants to observe parks supplies
-	// Park and still gets the real screening.
+	// still gets the real completion ledger; one that wants to observe parks
+	// supplies Park and still gets the real screening.
 	Dispatch *Dispatcher
 
 	// SandboxRuns reports what a seat's detached runs mean for its inbox:
@@ -1652,6 +1662,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// router's, so a seat's capture and its turn's end reach the log from a
 	// node without `data` as from one with it (executorsession.go).
 	e.executorLog = e.router.ExecutorWrites()
+	// AND THE READ A TURN'S DISPATCH MAKES OF ITS CONVERSATION, through the
+	// same router at `linearizable`, so an end another node published is in
+	// the copy that answers (conversation.go).
+	e.executorHeads = e.router.ExecutorReads()
 	// AND A READ OF A BOX ON ANOTHER NODE'S HOST, which that node carries
 	// out — it pauses the box a collection reads — so it is signed like
 	// every other such channel (sandboxhost.go). None without a broker: a
@@ -2144,6 +2158,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armRelaunchTargets(ctx); err != nil {
 		return nil, err
 	}
+	// AND WHETHER ONE OF ITS PARKS HOLDS THE INBOX OF A SEAT IT HOLDS, which
+	// only its own process knows — see parkheld.go.
+	if err = e.armHeldParks(ctx); err != nil {
+		return nil, err
+	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
 	// sandboxhost.go.
 	if err = e.armSandboxHost(ctx); err != nil {
@@ -2342,37 +2361,16 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d.Turn = e.runTurn
 	}
 	if d.Prompts == nil {
-		// Read off the LIVE epoch on each dispatch, like the conversation
-		// policy below: buildDispatcher runs BEFORE startNotifications, so
-		// a captured registry would be the empty one this node booted with
-		// and every merge would supersede nothing for the life of the
-		// process.
+		// Read off the LIVE epoch on each dispatch, never captured here:
+		// buildDispatcher runs BEFORE startNotifications, so a captured
+		// registry would be the empty one this node booted with and every
+		// merge would supersede nothing for the life of the process.
 		d.Prompts = e.notifyPrompts
 	}
 	if d.Parties == nil {
 		// Read off the LIVE registry for the same reason: a reply offered
 		// to a parked run is labelled by who wrote it, as its trigger was.
 		d.Parties = e.liveParties
-	}
-	if d.Conversation == nil {
-		// Read off the LIVE company on each dispatch, not captured here:
-		// buildDispatcher runs once and a config apply replaces the company.
-		d.Conversation = func() config.ConversationSession {
-			return e.Company().Config.TurnEngine.ConversationSession
-		}
-	}
-	if d.Rewriter == nil {
-		d.Rewriter = func(handle string, use auxspend.Use) ledgerfit.Fitter {
-			return e.seatCompactor(e.Company(), handle, use)
-		}
-	}
-	if d.ReflectionRoom == nil {
-		d.ReflectionRoom = func(ctx context.Context, handle string) (bool, error) {
-			return e.reflectionRoom(ctx, e.Company(), handle)
-		}
-	}
-	if d.FlushSpend == nil {
-		d.FlushSpend = e.auxSpend.FlushTurn
 	}
 	if d.Park == nil {
 		d.Park = e.park
@@ -2414,27 +2412,23 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
-		// policies above: the dispatcher is built once and an apply can
+		// registries above: the dispatcher is built once and an apply can
 		// remove the seat after it.
 		d.Identify = func(handle string) (string, string) {
 			return seatIdentity(e.Company(), handle)
 		}
 	}
-	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the
-	// point. Completions must be agreed across the FLEET — a redelivery
-	// that lands on a peer has to find the record, or the turn runs twice
-	// — so it lives on the coordination store. Conversations are a seat's
-	// own history, read only by the node running that seat, so they stay
-	// on the node's local database where a long thread costs nothing to
-	// replicate.
+	// THE COMPLETION LEDGER IS THE FLEET'S. It must be agreed across the
+	// FLEET — a redelivery that lands on a peer has to find the record, or
+	// the turn runs twice — so it lives on the coordination store. What a
+	// conversation's next turn is told of its earlier ones is the fleet's
+	// too, and not this dispatcher's to keep: the executor log, replicated
+	// to every data node, which the turn's dispatch reads (conversation.go).
 	//
-	// Neither is nil-checked: [New] refuses a Backends without a store or a
-	// fleet, so both are always here by the time this runs.
+	// Not nil-checked: [New] refuses a Backends without a fleet, so it is
+	// always here by the time this runs.
 	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
-	}
-	if d.Conversations == nil {
-		d.Conversations = ledgerstore.NewConversations(backends.Store)
 	}
 	return d
 }
@@ -2973,6 +2967,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And what a relaunch of a seat it holds would be launched on, which it
 	// is about to stop holding.
 	e.stopRelaunchTargets(ctx)
+	// And whether one of its parks holds a seat's inbox, which it is about
+	// to stop holding.
+	e.stopHeldParks(ctx)
 	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
@@ -3288,11 +3285,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	//
 	// THE DISPATCH'S WHERE THERE IS ONE, written back onto the local copy of
 	// the request rather than kept beside it: [Dispatcher.Dispatch] mints it
-	// so its own bookkeeping — the conversation entry, the abandon record —
-	// names the run this turn publishes under, and two variables for one
-	// identity is how those two stop agreeing. A Request assembled anywhere
-	// else (a test, a direct driver) carries none, and a turn with no
-	// identity is not an option, so one is minted here.
+	// so its own bookkeeping — the abandon record — names the run this turn
+	// publishes under and its rows on the executor log name, and two
+	// variables for one identity is how those two stop agreeing. A Request
+	// assembled anywhere else (a test, a direct driver) carries none, and a
+	// turn with no identity is not an option, so one is minted here.
 	if req.RunID == "" {
 		req.RunID = newRunID()
 	}
@@ -3375,13 +3372,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// closes it — see [Engine.publishTurnStarted].
 	e.publishTurnStarted(ctx, tel, req.Depth, req.DelegationChain, false)
 	// THE TURN'S METER, BEFORE ITS FIRST MODEL CALL — and the prefetch below
-	// makes several, on the seat's auxiliary chain, as the conversation
-	// block's condensation does after it. Every one is charged through this
-	// meter ([turnTelemetry.aux]), so a window they fill is held before the
-	// executor's first round rather than learned from that round's refusal
-	// once the vendor has billed it. Read off the PINNED epoch, so a revision
-	// that raises a ceiling mid-turn cannot move the limit a round is judged
-	// against.
+	// makes several, on the seat's auxiliary chain. Every one is charged
+	// through this meter ([turnTelemetry.aux]), so a window they fill is
+	// held before the executor's first round rather than learned from that
+	// round's refusal once the vendor has billed it. Read off the PINNED
+	// epoch, so a revision that raises a ceiling mid-turn cannot move the
+	// limit a round is judged against.
 	tel.budget = e.meterFor(company, req.Handle)
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
@@ -3407,11 +3403,17 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// this frame where the turn ends here, and from its run's record where
 	// it parks on the run its executor launches (a2a.go).
 	ask := colleagueAskOf(askOf(req.Events))
+	// THE TURN'S CONVERSATION, READ ONCE, here at its dispatch and under the
+	// turn's token (conversation.go): how its earlier turns ended, which
+	// every brief of the turn tells as the runner freezes it, and the head
+	// the turn's first launch continues and freezes for its relaunches. No
+	// launch of the turn reads it again.
+	conversation := e.readConversation(ctx, company, req, tel.boundary)
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation)
 	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
@@ -3419,18 +3421,17 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
-		// BOUNDED AT RENDER, never at write. The stored row is the only copy
-		// of the turn; what a prompt shows is a display decision, and this
-		// one keeps the newest entries whole and condenses the rest.
-		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
-		Publisher:    e.backends.Queue,
-		Turn:         turnIdentity,
-		Sessions:     e.sessions,
-		Metrics:      e.metrics,
-		Launcher:     launcher,
-		Steer:        box,
-		Markers:      e.markers(),
-		Latch:        e.onboarded,
+		// BOUNDED AT RENDER: the newest endings whole while they fit, the
+		// rest counted ([prompts.EndingsMaxBytes]), and frozen on every park.
+		Endings:   conversation.endingsBlock(),
+		Publisher: e.backends.Queue,
+		Turn:      turnIdentity,
+		Sessions:  e.sessions,
+		Metrics:   e.metrics,
+		Launcher:  launcher,
+		Steer:     box,
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// The meter the context assembly was charged through — see above.
 		Budget: tel.budget.budget(),
 		// The round-cap extension judge, from the same pinned epoch, for
@@ -3596,12 +3597,34 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		return res, err
 	}
 	answered := e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
-	if _, abandoned := e.abandonedLaunches.LoadAndDelete(req.RunID); abandoned && turn.Stopped(err) {
+	_, abandoned := e.abandonedLaunches.LoadAndDelete(req.RunID)
+	switch {
+	case abandoned && turn.Stopped(err):
 		// A LAUNCH THE TURN'S FENCE REFUSED once its run's record was
 		// written: the launch abandoned the record under it, so no ending of
 		// the run owes the turn's end, and this frame records it — stopped,
 		// with nothing captured, since no job ran.
 		e.endTurnNow(ctx, telTurnEnd(tel, stoppedEnding(res, reply, err, answered)))
+	case abandoned:
+		// A FIRST LAUNCH THAT FAILED on its way to its box once its record
+		// was written: abandoned under it as a stopped one is, and ended
+		// here — failed, saying why — so the turn's row on the executor log,
+		// which its begin opened holding the base it froze, ends now and
+		// lets that base go, and the conversation's next turn is told how
+		// this one ended, rather than both waiting a day for the retention
+		// to end it as lost.
+		e.endTurnNow(ctx, telTurnEnd(tel, launchAbandonedEnding(res, reply, answered, err)))
+	case !res.Suspended && err == nil && req.ConversationKey != "":
+		// A TURN OF A CONVERSATION THAT NEVER LAUNCHED its executor and
+		// ended here without an error — refused before its first round, at
+		// the delegation cap — still ends on the executor log, so the
+		// conversation's next turn is told how it ended. With no run, and so
+		// no session and no read held, its row names neither. NOT A TURN OF
+		// NO CONVERSATION, which no later turn is told of, and NOT ONE WHOSE
+		// FRAME FAILED: its delivery is handed back to the dispatcher, to be
+		// parked or run again as a turn of its own, and an ending recorded
+		// for the attempt would tell that turn its own work had failed.
+		e.endTurnNow(ctx, telTurnEnd(tel, endingOf(res, reply, answered)))
 	}
 	return res, err
 }

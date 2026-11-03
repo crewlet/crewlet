@@ -184,9 +184,9 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 // across every event in a partition. A top-level DM burst partitions on the
 // bare channel while its constituents carry different ts values, so an
 // identity of "channel:anchor" would give that ONE partition three different
-// identities and the ledger key would fall to whichever event sorted first.
-// The channel is the only value every constituent of that partition agrees
-// on.
+// identities and the key its turn's rows on the executor log are filed under
+// would fall to whichever event sorted first. The channel is the only value
+// every constituent of that partition agrees on.
 //
 // It is also what a person means. A DM is a 1:1 line that runs for months;
 // the thread a reply hangs off is a formatting detail of the transport, and
@@ -203,8 +203,8 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 // working indicator and what [ChatPrompt.Build] prints as the thread to
 // "reply as a thread" in. Three derivations of one anchor that agree only by
 // inspection is how the spinner a person is watching, the thread the reply
-// lands in and the ledger the seat reads come to name three different
-// threads.
+// lands in and the conversation the seat's next turn continues come to name
+// three different threads.
 //
 // THE DIRECT BRANCH USES NO ANCHOR, deliberately, and that is not a fourth
 // derivation drifting from the other three — it is the answer to a different

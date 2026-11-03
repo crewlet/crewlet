@@ -209,14 +209,14 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // nothing takes spend back off a counter, until the window turns over on the
 // turn's pinned clock ([meter.Refused] names the one edge of that).
 //
-// THE TURN'S AUXILIARY CALLS ARE TWO OF ITS INPUTS. The context assembly, the
-// conversation block's condensation, every rewrite the ledgers, the judge's
-// evidence and the tools ask for: each reaches the same counters, by
-// post-charge, and the meter used to learn only from its own charges' answers
-// — so a window one of them filled was one the turn's next round was sent
-// into, billed, and refused. Charged here, its answer is kept like a round's
-// ([meter.keepFilled]), and every call after it, a round or another auxiliary
-// call ([meter.Held]), is held instead of made.
+// THE TURN'S AUXILIARY CALLS ARE TWO OF ITS INPUTS. The context assembly,
+// every rewrite the prior-work ledger, the judge's evidence and the tools ask
+// for: each reaches the same counters, by post-charge, and the meter used to
+// learn only from its own charges' answers — so a window one of them filled
+// was one the turn's next round was sent into, billed, and refused. Charged
+// here, its answer is kept like a round's ([meter.keepFilled]), and every call
+// after it, a round or another auxiliary call ([meter.Held]), is held instead
+// of made.
 //
 // A HELD CALL IS A REFUSAL, AND IT IS RECORDED AS ONE. The window's refusal
 // stamp on the shared counter (coord.WindowUsage.RefusedAt) is what `refused_at`,
@@ -505,8 +505,7 @@ func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 // answered: work it turned away before any call was made, because a window had
 // no room left for a single token — a delivery the budget park deferred
 // ([Engine.budgetPark]), a person's question refused ([answerBudget.Refusing]),
-// a reflection pass or a conversation entry's rewrites declined
-// ([Engine.reflectionRoom]).
+// a reflection pass declined ([Engine.reflectionRoom]).
 //
 // A REFUSAL LIKE A CHARGE'S, and the charge that would have stamped the window
 // is the one the gate exists not to make. Each of those gates used to turn its

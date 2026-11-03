@@ -538,56 +538,25 @@ func TestStartIsIdempotent(t *testing.T) {
 	}
 }
 
-// A retention of zero means "use the default", never "delete everything on
-// the next tick". The engine's own config validation refuses a value below
-// one day, so this floor is for a caller that built its stores directly.
-func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
-	for name, asked := range map[string]maintenance.Horizon{
-		"zero":     maintenance.Fixed(0),
-		"negative": maintenance.Fixed(-time.Hour),
-		"none":     nil,
-	} {
-		jobs := maintenance.LedgerJobs(stubConversations{}, asked)
-		var found bool
-		for _, j := range jobs {
-			if j.Name != "conversation_sessions" {
-				continue
-			}
-			found = true
-			if got := j.Horizon(); got != maintenance.ConversationRetention {
-				t.Fatalf("a %s retention became %v, want the default %v",
-					name, got, maintenance.ConversationRetention)
-			}
-		}
-		if !found {
-			t.Fatalf("a %s retention dropped the job entirely", name)
-		}
-	}
-	// A real horizon is used as written.
-	jobs := maintenance.LedgerJobs(stubConversations{}, maintenance.Fixed(72*time.Hour))
-	for _, j := range jobs {
-		if got := j.Horizon(); j.Name == "conversation_sessions" && got != 72*time.Hour {
-			t.Fatalf("a configured horizon became %v", got)
-		}
-	}
-}
-
-// THE HORIZON IS ASKED AT EVERY SWEEP. Two of them are the company's, and an
-// apply moves them under a running node: read once when the sweep was built,
-// a shortened retention was honoured only after a restart, and a lengthened
-// one kept deleting rows the company had just asked to keep.
+// THE HORIZON IS ASKED AT EVERY SWEEP. The inbox's is the company's, and an
+// apply moves it under a running node: read once when the sweep was built, a
+// shortened retention was honoured only after a restart, and a lengthened one
+// kept deleting rows the company had just asked to keep.
+//
+// Mutation: have the worker read each job's horizon once, as it is built, and
+// the second sweep cuts off at thirty days again.
 func TestAHorizonThatMovesIsHonouredOnTheNextSweep(t *testing.T) {
 	var r recorder
 	var days atomic.Int64
 	days.Store(30)
-	// The ledger's own job, with the company's horizon read live; what is
-	// under test is the cutoff the worker hands it, so its purge is the
-	// recorder.
-	jobs := maintenance.LedgerJobs(stubConversations{}, func() time.Duration {
+	// A node's own job over a horizon read live, as the inbox's is built
+	// (worklet.InboxJobs); what is under test is the cutoff the worker
+	// hands it, so its purge is the recorder.
+	job := maintenance.Purge("rows", maintenance.NodeLocal, func() time.Duration {
 		return time.Duration(days.Load()) * 24 * time.Hour
-	})
-	jobs[0].Run = r.run
-	w := newWorker(t, maintenance.Options{Now: fixed(base), Jobs: jobs})
+	}, nil)
+	job.Run = r.run
+	w := newWorker(t, maintenance.Options{Now: fixed(base), Jobs: []maintenance.Job{job}})
 
 	if _, err := w.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -678,9 +647,6 @@ func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 // A missing store contributes no job rather than one that fails every tick:
 // a deployment without one is real, and its in-memory twins prune inline.
 func TestAbsentLedgersContributeNoJobs(t *testing.T) {
-	if jobs := maintenance.LedgerJobs(nil, maintenance.Fixed(time.Hour)); len(jobs) != 0 {
-		t.Fatalf("nil stores produced %d jobs", len(jobs))
-	}
 	if jobs := maintenance.StoreJobs(nil); len(jobs) != 0 {
 		t.Fatalf("a nil database produced %d jobs", len(jobs))
 	}

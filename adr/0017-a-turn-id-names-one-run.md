@@ -20,8 +20,7 @@ A turn has **two identities and they are different values**.
   trigger events a dispatch derived it from. It is stable across a re-run and
   across nodes, and it is what a write that must happen once per unit of work
   is keyed on: the completion ledger, the episode row, the counterparty
-  interaction count, the conversation entry, and every derived tracker
-  operation and comment id.
+  interaction count, and every derived tracker operation and comment id.
 
 Both travel together — on `turnctx.Turn`, on `runner.Turn`, on the turn and
 phase events, and as two columns on `crewlet_events`. A leaf takes whichever

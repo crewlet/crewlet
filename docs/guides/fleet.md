@@ -400,7 +400,7 @@ node's seats do, and each of those tools asks a data node over the broker:
 - **Its seats' executor sessions are recorded through a data node too.** The
   engine's record of what each seat's box did (the session it leaves, how its
   turn ended), and the next launch's read of the conversation it continues, go
-  to the [executor log](../concepts/conversation-sessions.md) through the same
+  to the [executor log](../concepts/conversation-sessions.md#where-a-session-lives) through the same
   router. Those writes are the engine's alone: no tool and no person can make
   one, so none of them is a write a seat's tools or your API calls could
   reach.

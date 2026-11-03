@@ -2479,48 +2479,8 @@ export interface FleetAnswer {
 }
 
 // ---------------------------------------------------------------------------
-// Learning, conversations, knowledge
+// Learning, knowledge
 // ---------------------------------------------------------------------------
-
-/** One recorded turn in one conversation, from the conversation ledger. */
-export interface ConversationEntry {
-  turn_id?: string;
-  at?: string;
-  trigger?: string;
-  /** What the turn set out to do, in the seat's own words. */
-  intent?: string;
-  /** PRE-RENDERED tool-call lines, fixed at write time so a later reader
-   *  cannot restate history against a surface that has since changed. */
-  tool_calls?: string;
-  /** `reply` is set ONLY when something actually reached the waiting party,
-   *  and `unsent` carries the same artifact when nothing did. Which of the
-   *  two holds it is the whole record of whether anybody received it — a
-   *  screen that rendered them alike would show work announced to nobody as
-   *  announced. */
-  reply?: string;
-  unsent?: string;
-  decision?: string;
-  completed_work?: string;
-}
-
-export interface ConversationRow {
-  /** The surface-scoped conversation identity — a thread, an issue, a
-   *  channel. OPAQUE: the notification layer owns its grammar. */
-  key: string;
-  turns: number;
-  last_at: string;
-}
-
-export interface ConversationsAnswer {
-  handle: string;
-  /** A page of the threads the seat holds entries in, newest activity
-   *  first — of `conversations_total`. */
-  conversations: ConversationRow[];
-  conversations_total: number;
-  entries: ConversationEntry[];
-  /** The node holding the seat, which answered, or `none`. */
-  held_by: string;
-}
 
 /** One open or closed agent-to-agent channel. */
 export interface A2AChannel {
@@ -7953,7 +7913,6 @@ export interface QueryMap {
   page_activity: PageActivityAnswer;
   page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;
-  conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
   colleague: ColleagueAnswer;

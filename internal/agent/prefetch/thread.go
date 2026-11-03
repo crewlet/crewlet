@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -59,26 +58,28 @@ const (
 	// than dropped, a count bounds nothing the bytes do not, and on a
 	// thread of short replies it threw away messages that would have fit.
 	//
-	// One third of [ledger.InjectedMaxChars] (24000), and anchored there
-	// on purpose: both blocks are frozen into the same system prompt and
-	// re-sent on every round of every phase, and this one must not
-	// dominate the one carrying the seat's own cross-turn history. A third
-	// is roughly 2k tokens — about thirty ordinary chat messages, the count
-	// the bound above replaced — so the ceiling bites on a thread longer
-	// than that or one whose messages are documents rather than replies,
-	// and what it bites is condensed rather than dropped.
+	// ITS OWN MEASURE: roughly 2k tokens — about thirty ordinary chat
+	// messages, the count the bound above replaced — so the ceiling bites on
+	// a thread longer than that or one whose messages are documents rather
+	// than replies, and what it bites is condensed rather than dropped. And
+	// a third of the bound on how the conversation's earlier turns ended
+	// (internal/agent/prompts' EndingsMaxBytes, 24 000): both are handed to
+	// the executor when it launches — the thread with its context, the
+	// endings in its brief — and ride every request of its session after,
+	// and the thread a turn was woken in must not crowd out the account of
+	// what the conversation's turns already did.
 	//
-	// NOT A CONFIG FIELD. config.ConversationSession's doc records what
-	// happened the last time a render bound here was exposed: two knobs
-	// were validated, defaulted and documented for a truncation that never
-	// happened, because neither was threaded to a caller.
+	// NOT A CONFIG FIELD. A render bound exposed as a knob was validated,
+	// defaulted and documented for a truncation that never happened,
+	// because nothing threaded it to a caller; a bound belongs where the
+	// render is.
 	threadMaxChars = 8000
 
 	// threadEarlierShare is the part of threadMaxChars the condensed
-	// account of the middle of a long thread is given — one quarter, the
-	// conversation ledger's own share ([ledger.EarlierShare]) for the same
-	// reason: the messages the trigger is answering keep the most room.
-	threadEarlierShare = ledger.EarlierShare
+	// account of the middle of a long thread is given — one quarter, so
+	// the root and the messages the trigger is answering keep three
+	// quarters of the room.
+	threadEarlierShare = 4
 
 	// ThreadTimeout bounds the read.
 	//
@@ -255,8 +256,9 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 // bot posted as attachments alone promoted the oldest surviving reply into
 // its place and described it to the model as what the thread was about.
 //
-// This is the rule [ledger.RenderHistory] implements, applied to the one block
-// whose items are somebody else's prose.
+// Whole items, the newest kept and the rest accounted for, is also how a turn
+// is told its conversation's earlier endings (internal/agent/prompts); this is
+// the block whose items are somebody else's prose.
 //
 // AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
 // — the ones after this seat's own last reply and before the message that

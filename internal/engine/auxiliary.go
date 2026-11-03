@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -197,8 +196,7 @@ func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Sea
 //
 // THE GATE IS ASKED BEFORE THE CALL, and is the caller's: for the reflection
 // stage, [Engine.reflectionRoom], asked by the pass through
-// [Engine.learningBudget] and by a conversation entry's rewrites through
-// [Dispatcher.ReflectionRoom]; for a person's question, the answer's own; and
+// [Engine.learningBudget]; for a person's question, the answer's own; and
 // for a call a TURN makes, the turn's own meter ([auxspend.Use.Budget]), asked here because
 // this is the one frame every in-turn call passes. That meter holds every
 // window the turn has seen full, its own auxiliary calls' included, so a call
@@ -417,45 +415,4 @@ func (e *Engine) stopAuxSpend(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), auxSpendStopBudget)
 	defer cancel()
 	e.auxSpend.Stop(bounded)
-}
-
-// conversationBlock is the prior turns of this conversation as a turn is given
-// them: the newest whole, and the older ones that will not fit
-// [ledger.InjectedMaxChars] condensed by the seat's auxiliary model into one
-// account — or, where none can be had, left out and counted. use is the turn's
-// attribution: the rewrite is part of its context, so it is part of its cost.
-//
-// A REWRITE WHERE A DROP WAS. The block used to leave its oldest entries out,
-// and the deliveries they recorded with them, so a seat on a long thread was
-// told it had said nothing it could not see. The rewrite keeps them, in fewer
-// words; the drop is now the fallback, and still says so.
-func (e *Engine) conversationBlock(ctx context.Context, c *Company, handle string,
-	history []ledger.Session, use auxspend.Use,
-) string {
-	opts := ledger.HistoryOptions{MaxChars: ledger.InjectedMaxChars}
-	if overflow, _ := ledger.SplitHistory(history, opts.MaxChars); len(overflow) > 0 {
-		res, err := e.seatCompactor(c, handle, use).Fit(ctx, compact.KindConversation,
-			ledger.RenderSessions(overflow), opts.MaxChars/ledger.EarlierShare)
-		switch {
-		case err == nil && !res.Compacted:
-			// THE OLDER TURNS FIT THEIR SHARE AS THEY ARE — the newest
-			// entry alone was what pushed the block over — so every entry
-			// renders verbatim. Labelling them condensed would be a lie
-			// about text nobody rewrote.
-			opts.MaxChars = 0
-		case err == nil:
-			opts.Earlier = res.Text
-		case llm.KindOf(err) == llm.KindRateLimit:
-			// The compactor said why at Info: the model is at a limit
-			// it already reported, which is a wait and not a fault.
-			log.InfoContext(ctx, "conversation_history_not_condensed", "seat", handle,
-				"turns", len(overflow), "reason", "the auxiliary model is at its usage limit",
-				"detail", "the older turns are left out of this turn's block, and it says how many")
-		default:
-			log.WarnContext(ctx, "conversation_history_not_condensed", "seat", handle,
-				"turns", len(overflow), "error", err.Error(),
-				"detail", "the older turns are left out of this turn's block, and it says how many")
-		}
-	}
-	return ledger.RenderHistory(history, opts)
 }

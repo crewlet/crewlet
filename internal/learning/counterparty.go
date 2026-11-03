@@ -365,10 +365,9 @@ func (c *Counterparties) List(ctx context.Context, observer string, limit int) (
 		p.LastUpdatedAt = store.DecodeTime(updated)
 		p.LastCorroboratedAt = store.DecodeTime(corroborated)
 		if err := json.Unmarshal([]byte(traits), &p.Traits); err != nil {
-			// ONE UNREADABLE ROW MUST NOT COST THE LIST, for the reason
-			// the conversation ledger gives for the same choice: the
-			// other profiles are still what the reader asked for. The
-			// traits are dropped rather than the person.
+			// ONE UNREADABLE ROW MUST NOT COST THE LIST: the other
+			// profiles are still what the reader asked for. The traits
+			// are dropped rather than the person.
 			log.WarnContext(ctx, "counterparty_traits_undecodable",
 				"observer", observer, "error", err)
 			p.Traits = map[string]any{}

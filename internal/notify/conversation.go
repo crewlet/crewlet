@@ -38,27 +38,29 @@ import (
 //     broker partitions a seat's inbox by it (internal/node) and the
 //     coalescer merges a partition into one trigger.
 //   - THE CONVERSATION IDENTITY — "which ongoing conversation is this event
-//     part of?" The conversation ledger keys on it, the turn telemetry
-//     carries it into the event store's conversation_key tag and the
-//     episodes column, the API's answerable-in-chat predicate reads it, and
-//     a parked executor matches a person's answer back to the question
-//     that asked it on it — because a person answers on the conversation,
-//     which for a direct message is not the batch their reply lands in.
+//     part of?" The executor log keys a seat's sessions on it — so the
+//     conversation's next turn reads its head and how its earlier turns
+//     ended under it — the turn telemetry carries it into the event store's
+//     conversation_key tag and the episodes column, the API's
+//     answerable-in-chat predicate reads it, and a parked executor matches a
+//     person's answer back to the question that asked it on it — because a
+//     person answers on the conversation, which for a direct message is not
+//     the batch their reply lands in.
 //
 // They were ONE value, and the one case where the two questions have
 // different answers is what that cost: a direct message's top-level burst
 // partitions on the bare channel so a person typing four times costs one turn,
 // while a reply in the thread that burst started partitions on the thread —
 // so a seat's own prior turn on the DM was filed under a key its next turn
-// never looked up, and the ledger read as a first turn every time.
+// never looked up, and read as a first turn every time.
 //
 // THE PARTITION REFINES THE IDENTITY. Every event in one partition carries
 // the SAME identity, and a partition key is either that identity or a finer
 // cut of it — on every source, not just chat. That is the property that makes
-// the ledger well-defined: a turn is a partition and its entry is written
-// once, so if two constituents of one coalesced trigger disagreed about the
-// identity the ledger key would depend on which event sorted first. It is
-// stated and enforced where a source decides both — see
+// a turn's conversation well-defined: a turn is a partition and its rows on
+// the executor log are keyed once, so if two constituents of one coalesced
+// trigger disagreed about the identity the key would depend on which event
+// sorted first. It is stated and enforced where a source decides both — see
 // [Prompt.ConversationIdentity].
 //
 // Both are STAMPED BY THE PRODUCER and read by everyone else. The

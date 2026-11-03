@@ -37,8 +37,7 @@ func (e *Engine) learningBudget(c *Company) func(context.Context, *org.Role) (bo
 // reflectionRoom is the REFLECTION STAGE's gate for one seat: whether it may
 // start auxiliary work filed under that stage, which is everything it spends
 // remembering a turn once the turn is over — the reflection pass
-// ([Engine.learningBudget]) and the rewrites of a conversation entry
-// ([Dispatcher.ReflectionRoom]).
+// ([Engine.learningBudget]).
 //
 // Three-valued: (true, nil) where nothing in the epoch caps the seat or every
 // capped window has room, (false, nil) where one has none, and an error where
@@ -51,12 +50,12 @@ func (e *Engine) learningBudget(c *Company) func(context.Context, *org.Role) (bo
 // with no room for a single token refuses the next token, so no work that
 // needs one may start.
 //
-// A NO IS RECORDED AS THE GATE'S REFUSAL ([meter.turnAway]). Both callers ask
-// immediately before the work and make no call on false, so the refusal is
+// A NO IS RECORDED AS THE GATE'S REFUSAL ([meter.turnAway]). The pass asks
+// immediately before the work and makes no call on false, so the refusal is
 // the reflection stage's auxiliary calls turned away — and the window's
 // `refused_at` says so. Unrecorded, a seat whose day its own executor had
-// filled declined every pass and every rewrite while every screen said
-// nothing had been refused.
+// filled declined every pass while every screen said nothing had been
+// refused.
 func (e *Engine) reflectionRoom(ctx context.Context, c *Company, handle string) (bool, error) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {

@@ -66,10 +66,6 @@ func seedMemory(t *testing.T, db *store.DB) {
 		role, summary, created_at, updated_at)
 		VALUES (?, 'hash', ?, 'Engineer', 'read the docs', ?, ?)`,
 		seat.AgentID, seat.Handle, at, at)
-	exec(`INSERT INTO conversation_sessions (entry_id, agent_handle,
-		conversation_key, work_key, turn_id, entry, created_at)
-		VALUES ('c1', ?, 'slack:C1:123', 'wk1', 't1', 'I said this already', ?)`,
-		seat.Handle, at)
 }
 
 func countRows(t *testing.T, db *store.DB, tableName string) int {
@@ -474,41 +470,6 @@ func TestAnAppendOnlyRowIsNotRewrittenByASecondCarry(t *testing.T) {
 	}
 }
 
-// Two turns with NO ledgerable trigger in one conversation are two entries,
-// and they must still be two after they have travelled. Both carry ” for
-// work_key and for turn_id, so anything that mistakes that quadruple for the
-// row's identity collapses them — which is the same mistake the table's own
-// dedupe index avoids by being partial over `work_key <> ”`.
-func TestTwoUnkeyedTurnsSurviveTheTripAsTwoEntries(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	source := openStore(t)
-	for _, entry := range []struct{ id, said string }{
-		{"u1", "one"}, {"u2", "two"},
-	} {
-		if _, err := source.SQL().ExecContext(ctx,
-			`INSERT INTO conversation_sessions (entry_id, agent_handle,
-			 conversation_key, work_key, turn_id, entry, created_at)
-			 VALUES (?, ?, 'slack:C1:123', '', '', ?, 1)`,
-			entry.id, seat.Handle, entry.said); err != nil {
-			t.Fatalf("seed an unkeyed turn: %v", err)
-		}
-	}
-
-	target := openStore(t)
-	carry(t, source, target)
-
-	if got := countRows(t, target, "conversation_sessions"); got != 2 {
-		t.Fatalf("two unkeyed turns arrived as %d entries", got)
-	}
-	// And a second carry is still idempotent: entry_id is what stops a
-	// re-hydration from duplicating what it already brought.
-	carry(t, source, target)
-	if got := countRows(t, target, "conversation_sessions"); got != 2 {
-		t.Errorf("a second carry left %d entries", got)
-	}
-}
-
 // A carried row that collides on a unique index the import does NOT target
 // must be skipped, not raised.
 //
@@ -594,7 +555,6 @@ func TestCarriedColumnsKeepTheirStorageTypes(t *testing.T) {
 		{"SELECT typeof(started_at) FROM episodes WHERE id = 'e1'", "integer"},
 		{"SELECT typeof(duration_ms) FROM episodes WHERE id = 'e1'", "integer"},
 		{"SELECT typeof(interaction_count) FROM counterparty_profiles", "integer"},
-		{"SELECT typeof(created_at) FROM conversation_sessions", "integer"},
 	} {
 		var got string
 		if err := target.SQL().QueryRowContext(ctx, probe.query).Scan(&got); err != nil {

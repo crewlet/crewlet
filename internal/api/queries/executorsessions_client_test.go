@@ -11,8 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE SESSIONS SCREEN READS WHAT THE ANSWERS SEND.
@@ -21,14 +23,16 @@ import (
 // and this holds it to both answers in both directions: every member it
 // declares is a key some row sends, a required one on every row, and every key
 // sent is declared — over the whole list and a page of it with a page after it,
-// rows whose endings carry every field, a transcript page that is cut and one
-// that could not be read, entries of every optional key (a subagent's, which
-// only Claude Code's archive has, read as the entry type itself encodes), and
-// the bounds, and the log position both answers carry — and a live row a
-// relaunch would continue, which alone says where. And the five closed sets the
-// screen names words for are the engine's: the transcript's states, the
-// entries' kinds, a page's cuts, an ending's outcomes and where a relaunch
-// continues a session.
+// rows whose endings carry every field (a delivery not known, a newest capture
+// not kept), a transcript page that is cut and one that could not be read,
+// entries of every optional key (a subagent's, which only Claude Code's archive
+// has, read as the entry type itself encodes), and the bounds, and the log
+// position both answers carry — and a live row a relaunch would continue, which
+// alone says where, beside the head of a conversation, which the next turn
+// decides, a row whose first launch was handed a session, and one no launch
+// continues. And the six closed sets the screen names words for are the
+// engine's: the transcript's states, the entries' kinds, a page's cuts, an
+// ending's outcomes, where a launch continues a session and which launch.
 //
 // Mutation: rename a JSON key on either answer, add one, or add a state or a
 // kind on one side only, and this names it.
@@ -39,19 +43,32 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	for i := 1; i <= executor.TranscriptMaxEntries; i++ {
 		texts = append(texts, fmt.Sprintf("message %d", i))
 	}
+	// THE CONVERSATION'S HEAD, the newest of its turns that left a session.
 	read := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
+	read.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 2}
 	read.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeStopped, Decision: "done",
 		Delivered: true, DeliveredTo: "chatlet", Answer: "answered", CompletedWork: "Filed ENG-7.",
 		BlockedOn: "the review", StoppedBy: "ana.diaz", StopReason: "wrong branch",
 		Failure: "the round cap ran out"}
 	missing := sealedSession(t, store, "ana", gzipText(t, openCodeExport("fix the flake")))
+	missing.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 1}
 	if err := backend.Delete(t.Context(), missing.Object.Key.Name()); err != nil {
 		t.Fatal(err)
 	}
+	// A TURN WHOSE NEWEST CAPTURE WAS NOT KEPT, and whose reply nobody can
+	// say reached the party waiting.
+	unkept := sealedSession(t, store, "ana", gzipText(t, openCodeExport("look again")))
+	unkept.Object, unkept.LaunchSeq, unkept.CaptureSeq = objstore.Object{}, 1, 1
+	unkept.EndedAtPosition = statelog.Position{Stream: stubAt.Stream, Generation: 1, Seq: 3}
+	unkept.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeFailed, DeliveredTo: "chatlet",
+		DeliveryUnknown: true, Unkept: &executordomain.Unkept{LaunchSeq: 2, CaptureSeq: 1,
+			Reason: "refused: past the seat's budget"}}
 	live := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), Harness: "codex"}
-	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would.
+	// A LIVE TURN A RELAUNCH WOULD CONTINUE, which alone sends where it would,
+	// on the conversation whose head its first launch was handed.
 	continued, continuedRun := liveSession(executor.ClaudeCodeName)
-	reads := &stubSessions{rows: []executordomain.Session{read, missing, live, continued}}
+	continued.ConversationKey, continued.BaseTurn = read.ConversationKey, read.Turn
+	reads := &stubSessions{rows: []executordomain.Session{read, missing, unkept, live, continued}}
 	sources := sessionSources(t, reads, store)
 	sources.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{continuedRun}}
 	sources.RelaunchTargets = targetOf(claudeTarget())
@@ -71,13 +88,17 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	holdShape(t, "ExecutorSessionsAnswer", []map[string]any{list, asMap(t, paged)}, false)
 	rows := rowsOf(t, list["sessions"])
 	holdShape(t, "ExecutorSessionRow", rows, false)
-	var endings []map[string]any
+	var endings, unkepts []map[string]any
 	for _, row := range rows {
 		if ending, ok := row["ending"].(map[string]any); ok {
 			endings = append(endings, ending)
+			if u, ok := ending["unkept"].(map[string]any); ok {
+				unkepts = append(unkepts, u)
+			}
 		}
 	}
 	holdShape(t, "SessionEnding", endings, false)
+	holdShape(t, "SessionUnkept", unkepts, false)
 
 	var answers, entries []map[string]any
 	for _, turn := range []string{read.Turn, missing.Turn} {
@@ -114,6 +135,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		"TranscriptCut":       stringsOf(executor.TranscriptCuts),
 		"SessionOutcome":      stringsOf(executordomain.Outcomes),
 		"SessionContinuesIn":  stringsOf(sandbox.ContinuesIns),
+		"SessionContinuedBy":  stringsOf(sandbox.ContinuedBys),
 	} {
 		got, err := clientsource.Union(clientsource.Tree(t), name)
 		if err != nil {

@@ -195,10 +195,12 @@ func (b ChatBackend) Valid() bool {
 //
 // How much of a thread a woken seat is shown is NOT here, and that is the
 // engine's decision rather than an omission: the turn-start prefetch reads the
-// thread for every chat surface alike and bounds it at one byte ceiling, a
-// third of the conversation ledger's, keeping the root and the newest whole
-// messages and condensing the ones between them — and that bound is
-// deliberately not configuration (see internal/agent/prefetch).
+// thread for every chat surface alike and bounds it at one byte ceiling — about
+// thirty ordinary messages, and a third of the bound on how a conversation's
+// earlier turns ended, which a woken seat is handed beside it — keeping the
+// root and the newest whole messages and condensing the ones between them —
+// and that bound is deliberately not configuration (see
+// internal/agent/prefetch).
 type ChatletConfig struct {
 	// MessageRetentionDays is how long a message lives before the prune
 	// covers it.

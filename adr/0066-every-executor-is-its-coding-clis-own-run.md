@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/runner`
-- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/engine.TestARefusedContinuedLaunchIsHeldOnItsOwnFloor`, `internal/engine.TestASessionNoWindowCanCarryIsNotContinued`, `internal/engine.TestAContinuedLaunchIsHeldToItsSessionsFloor`, `internal/engine.TestASessionNoWindowCanCarryStartsFresh`, `internal/sandbox/executor.TestAContinuedClaudeSessionRunsUnderTheEnginesWindow`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`
+- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/engine.TestARefusedContinuedLaunchIsHeldOnItsOwnFloor`, `internal/engine.TestASessionNoWindowCanCarryIsNotContinued`, `internal/engine.TestAContinuedLaunchIsHeldToItsSessionsFloor`, `internal/engine.TestASessionNoWindowCanCarryStartsFresh`, `internal/sandbox/executor.TestAContinuedClaudeSessionRunsUnderTheEnginesWindow`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`, `internal/engine.TestAFirstLaunchHeldBelowItsContinuedFloorParksTheSeatOnThatFloor`, `internal/engine.TestAConversationNoWindowCanCarryStartsFresh`, `internal/engine.TestEveryFreshFallbackIsToldTheFrozenEndings`, `internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard`, `internal/engine.TestAnAskBehindAParkIsOwedOnWhicheverNodeTheSweepRuns`, `internal/engine.TestWhetherAParkHoldsASeatsInboxIsAskedOfItsHolder`
 - **Measured:** a run's first request alone is the CLI's harness prompt and tool definitions, about 15k input tokens for Claude Code, before the bridged tool array and the seat's system prompt, which sets the launch floor at 25000 tokens
 - **Cost-when-tried:** the executor ran on the engine host as a text phase, its CLI's own shell and editor denied, and code work went through a `run_sandbox` tool that started a second coding agent in a box: two agents and two prompts for one task, a brief the first wrote for the second, the first's whole conversation serialized onto the run's row and re-entered with the second's findings spliced in as a tool reply, and three round caps between them (`max_tool_rounds`, `execute_max_tool_rounds_ceiling` and the box's `max_turns`)
 - **Tag-status:** unreleased
@@ -35,7 +35,8 @@ The run's collection re-enters the same turn for the engine's delivery check
 and the reviewer, whose send-back launches the run again. A person's answer to
 a run that parked on a question launches it again too, and so do a job lost
 with its host and one refused on a sign-in replaced while it ran. Every such
-relaunch continues the turn's own harness session, within the turn: the kept
+relaunch continues the turn's own harness session (and, where the turn has kept
+none, the session its conversation's last turn left: the amendment below): the kept
 capture of the job it follows — never an earlier job's, which holds none of
 what the jobs after it were told — restored into whatever box the launch gets,
 where the harness's runner can take it up and the seat's budget can carry it
@@ -112,3 +113,25 @@ amended by this record), how a box reaches its run's tools through any node
 drives a box in a local cell
 ([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
 Where each cell runs and how a box is provisioned are `internal/sandbox`'s.
+
+## Amendment: a turn's first launch may continue a session, and parks on the floor it was refused below
+
+A conversation's next turn continues the session its last turn left
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)'s
+amendment), so a turn's FIRST launch may continue a session too, and is held
+to that session's floor — its context, as its row recorded it, with the lead
+and the brief that continue it — as a relaunch is. A base past every capped
+window's smallest ceiling is not continued, and its launch starts fresh on the
+static floor. A first launch refused below a continued floor is refused on its
+dispatch, which has mail to park rather than a resume to hold: the dispatcher
+parks the seat's mail on THAT floor, which the refusal hands it, and an ask a
+colleague waits on behind the park is owed for as long as the park holds: the
+idle sweep, which runs on whichever node holds the maintenance duty, asks the
+node holding the seat whether one of its parks holds the seat's inbox, since a
+park lives in its holder's process alone (internal/engine's parkheld.go).
+Parked on the static floor, a window with room for a fresh launch read as not
+starved, the delivery was NAKed into the same refusal until the broker
+dead-lettered it, and the ask read as not owed; recounted on the duty node's
+own parks, it read as not owed on every node but the holder. A run that continues the conversation's session arms an empty
+skill guard: the skills that session loaded were another turn's, which its lead
+says were set up anew.

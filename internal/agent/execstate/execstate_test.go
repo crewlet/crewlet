@@ -57,7 +57,7 @@ func parked() execstate.State {
 			EpisodeRecall:       "- fixed a timing flake before",
 			CounterpartyProfile: "Subject: Ana",
 			SynthesizedSkills:   "- **deflake**: the checklist",
-			Conversation:        "Ana: is the flake fixed yet?",
+			Endings:             "## How this conversation's earlier turns ended\n### Turn t0",
 		},
 	}
 }

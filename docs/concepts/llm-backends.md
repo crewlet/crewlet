@@ -1016,9 +1016,17 @@ calls it was handed to.
 sessions, transcripts, history, todo state. They are deleted whenever none of
 the seat's calls is in flight: as its first call opens a generation and as its
 last one closes it ([Concurrency within a seat](#concurrency-within-a-seat)).
-Crewlet's memory model is the [agent diary](agent-learning.md) and the episode
-store; a second, invisible memory inside the harness would make turns
-non-reproducible and would carry one task's context into the next.
+These are the homes the seat's calls on the engine host run in — its reviewer,
+its delegated workers, its onboarding and the side passes — and none of those
+keeps a session: one kept there would be a second, invisible memory inside the
+harness, making those calls non-reproducible and carrying one task's context
+into the next. Crewlet's memory is the [agent diary](agent-learning.md), the
+episode store and, for a seat's executor, its **sessions, kept per
+conversation**: taken out of the executor's box when its run ends, sealed into
+the object store under the turn's row of the executor log, and continued in the
+open by the turn's relaunches and by its conversation's next turn, whose brief
+says which session it continues and how the earlier turns ended
+([Conversation Sessions](conversation-sessions.md)).
 
 **The temporary directory is the engine's.** `TMPDIR` names `tmp` inside the
 seat's home, so what a harness unpacks or spools there stays with the seat it ran

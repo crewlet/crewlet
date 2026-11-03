@@ -250,7 +250,7 @@ func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
 // [authz.ActionSeatTrailRead] — the seat's, its lead's or an admin's, with no
 // app, since a seat's trail belongs to none. It used to decide every one of
 // them as a person's record, so a reader of the whole audit trail was refused
-// one seat's threads while reading every phase record it had ever written; and
+// one seat's trail while reading every phase record it had ever written; and
 // before that it was "any operator credential for anybody else's", which made
 // every token in Tier A a reader of every seat's inbox.
 //

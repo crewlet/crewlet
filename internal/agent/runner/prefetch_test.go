@@ -142,12 +142,16 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 
 // A LATER LAUNCH IS BUILT FROM THE CONTEXT THE TURN STARTED WITH. A turn sent
 // back for another iteration launches again from the segment that collected
-// its run — a fresh runner, which the engine hands no prefetch — so the freeze
-// has to survive the park, or the second run is briefed without the seat's
-// memory, its company's pages and the conversation it is part of, on a system
-// prompt that moved under work already in hand.
+// its run — a fresh runner, which the engine hands no prefetch and no read of
+// its conversation — so the freeze has to survive the park, or the second run
+// is briefed without the seat's memory, its company's pages and how the
+// conversation's earlier turns ended, on a system prompt that moved under work
+// already in hand. The endings reach the second brief byte for byte as the
+// first launch's carried them: the read the turn's end absorbs is the one its
+// first brief told, and a sibling that ended since is the next turn's.
 //
-// Mutation: leave the context off the park, and the second launch lacks it.
+// Mutation: leave the context or the endings off the park, or render the
+// endings again on the resume, and the second launch lacks them or differs.
 func TestALaterLaunchIsBuiltFromTheContextTheTurnStartedWith(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -156,7 +160,8 @@ func TestALaterLaunchIsBuiltFromTheContextTheTurnStartedWith(t *testing.T) {
 			ThreadContext:  "- **Ana Ruiz (ana)**: staging redirects in a loop",
 			PersonalMemory: "- always use semantic commits",
 		},
-		conversation: "### Turn 1\nYou replied: shipped the proxy fix",
+		endings: "## How this conversation's earlier turns ended\n\n### Turn t-0\nIt completed.\n" +
+			"Its reply reached the party waiting on `slack`.",
 	}
 	launched, first := launch(t, entries, opts, 1, "", nil)
 	bridged := play(t, first, deliver(t, "posted"))
@@ -172,7 +177,8 @@ func TestALaterLaunchIsBuiltFromTheContextTheTurnStartedWith(t *testing.T) {
 	if second.System != first.System {
 		t.Errorf("the second run's system prompt moved:\nfirst:  %q\nsecond: %q", first.System, second.System)
 	}
-	if !strings.Contains(second.Brief, "You replied: shipped the proxy fix") {
-		t.Errorf("the second run's brief lost the conversation the turn is part of:\n%s", second.Brief)
+	if !strings.Contains(first.Brief, opts.endings) || !strings.Contains(second.Brief, opts.endings) {
+		t.Errorf("the second run's brief does not tell the endings the first did, byte for byte:\n%s",
+			second.Brief)
 	}
 }

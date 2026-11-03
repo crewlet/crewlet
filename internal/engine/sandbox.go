@@ -1446,7 +1446,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk, nil),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
@@ -1716,46 +1716,28 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	}
 }
 
-// recordResume files a finished resumed turn against the conversation it was
-// serving when it detached.
+// recordResume owes a finished resumed turn's end to the conversation it was
+// serving when it detached: on its run's record, for the run's ending to
+// record on the executor log once the turn's captures settle
+// ([Engine.oweExecutorEnd]), under the run's own turn and the conversation its
+// row names — the conversation its answer was matched on, never the partition
+// beside it, which for a direct message is another value the conversation's
+// next turn never reads. How it ended — its decision and breach (never the
+// reviewer's last word, which reads `done` after the loop overrode it), whether
+// its reply reached the party waiting and on what, what the reviewer said
+// landed, what stopped a blocked round, and answered, the engine's own answer
+// to a colleague's ask — is what the turn's row on the log keeps beside the
+// session the turn kept ([endingOf]), and what the conversation's next turn is
+// told of it.
 //
-// ONLY THE DISPATCHER WROTE THIS, so a turn that ended here — which is every
-// turn that did code work — left the conversation ledger untouched. The
-// thread's history then stopped at the moment the run detached, and the
-// seat's next turn on it read a conversation in which the coding work had
-// never happened: no record of what was built, and nothing to stop it being
-// planned again.
-//
-// A turn that suspended again records nothing — [Dispatcher.RecordSession]
-// declines it, for both paths and for the same reason: it has not finished,
-// so there is no reply to file. The completion that eventually lands comes
-// back through this same frame and records then.
-//
-// AND THE TURN'S END, owed on its run's record for the run's ending to record
-// on the executor log once the turn's captures settle ([Engine.oweExecutorEnd]):
-// how it ended — its decision and breach (never the reviewer's last word, which
-// reads `done` after the loop overrode it), whether its reply reached the party
-// waiting and on what, what the reviewer said landed, what stopped a blocked
-// round, and answered, the engine's own answer to a colleague's ask — which the
-// turn's row on the log keeps beside the session the turn kept ([endingOf]).
+// A turn that suspended again owes nothing: it has not finished, so there is
+// no end to tell. The end that eventually lands comes back through this same
+// frame and is owed then.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
 		e.oweExecutorEnd(ctx, in.Run, endingOf(res, reply, answered))
 	}
-	// THE RUN THE ROW NAMES, and the work key it rode in on: a resume
-	// re-enters the run that suspended, so the entry names that one rather
-	// than a fresh id, and it dedupes against the same trigger the dispatch
-	// that launched it did.
-	//
-	// AND UNDER THE CONVERSATION IT REPORTS BACK TO, which is the
-	// conversation its answer was matched on and never the partition beside
-	// it: for a direct message those are different values, and filing here
-	// under the batch would put the coding work in a row the seat's next
-	// turn on that DM never looks up — the same silence this frame exists
-	// to end.
-	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
-		in.Run.TurnID, in.Run.WorkKey, resumeTask(in), res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -2067,9 +2049,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 		// BOTH CONVERSATION VALUES, field for field with [turnctx.Turn] so
 		// a swapped pair reads as one. The row has carried a conversation
 		// since it was written and nothing set it: with it empty a resumed
-		// turn had no way to say where its answer belonged, so it left no
-		// conversation entry at all and the next turn on that thread read
-		// history that stopped when the run detached.
+		// turn had no way to say where its answer belonged, and its rows on
+		// the executor log named no conversation, so the conversation's next
+		// turn neither continued its session nor was told how it ended.
 		//
 		// The conversation is where the resume reports and what admits a
 		// person's answer; the partition states the batch this run was
