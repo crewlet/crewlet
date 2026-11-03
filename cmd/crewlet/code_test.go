@@ -995,6 +995,63 @@ func TestCodeStatusSaysWhereAPurgeStands(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S STATUS SAYS WHERE ITS IMPORT AND ITS MIRRORS STAND, which is
+// how a person who ran `code import` learns it is over, and how far it got
+// where it ended short: the import's source and its chunks, still running,
+// done, or ended short with the sentence it ended on; a pull mirror's source
+// with its last sync; a push mirror's target, as which seat and which refs —
+// and a repository with neither prints no such line.
+//
+// Mutation: leave the import line unprinted, or drop an import's error from
+// it → red.
+func TestCodeStatusSaysWhereAnImportStands(t *testing.T) {
+	t.Parallel()
+	const source = `{"url":"https://forge.example.com/up/web.git"}`
+	for _, tc := range []struct {
+		name, remotes string
+		want          []string
+	}{
+		{"no remote", `{}`, nil},
+		{"importing", `{"import":{"source":` + source + `,"chunks":2}}`,
+			[]string{"  import:       from https://forge.example.com/up/web.git, 2 chunks landed, still running\n"}},
+		{"imported", `{"import":{"source":` + source + `,"chunks":5,"done_at":"2026-10-30T08:15:00Z"}}`,
+			[]string{"  import:       from https://forge.example.com/up/web.git, 5 chunks landed; done on " +
+				"2026-10-30 08:15 UTC\n"}},
+		{"ended short", `{"import":{"source":` + source + `,"chunks":3,"done_at":"2026-10-30T08:15:00Z",` +
+			`"error":"blob 0123abcd is 9 bytes, past code.limits.max_blob_bytes (8)"}}`,
+			[]string{"  import:       from https://forge.example.com/up/web.git, 3 chunks landed; ended short on " +
+				"2026-10-30 08:15 UTC, keeping what landed: blob 0123abcd is 9 bytes, past " +
+				"code.limits.max_blob_bytes (8)\n"}},
+		{"mirrored", `{"mirror_from":{"url":"https://forge.example.com/up/web.git","credential":"${WEB_TOKEN}"},` +
+			`"mirror_synced_at":"2026-10-30T08:15:00Z","mirror_to":{"url":"https://forge.example.com/out/web.git",` +
+			`"credential":"${OUT_TOKEN}","as":"agent-cto","refs":["refs/heads/main","refs/tags/*"]}}`,
+			[]string{"  mirror from:  https://forge.example.com/up/web.git, fetched with ${WEB_TOKEN}, last synced " +
+				"2026-10-30 08:15 UTC\n",
+				"  mirror to:    https://forge.example.com/out/web.git as agent-cto, pushed with ${OUT_TOKEN}, " +
+					`pushing "refs/heads/main" and "refs/tags/*"` + "\n"}},
+	} {
+		var r codeRepoView
+		view := `{"name":"web","status":"active","managed_by":"config","kind":"project",` +
+			`"owner":{"kind":"unit","ref":"eng"},"default_branch":"main","remotes":` + tc.remotes + `}`
+		if err := json.Unmarshal([]byte(view), &r); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var out strings.Builder
+		if err := renderCodeRepo(&out, r, nil); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := out.String()
+		if tc.want == nil && (strings.Contains(got, "import:") || strings.Contains(got, "mirror")) {
+			t.Errorf("%s prints an import or mirror line:\n%s", tc.name, got)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s does not say %q:\n%s", tc.name, want, got)
+			}
+		}
+	}
+}
+
 // A PUSH LINE NAMES WHO MADE THE PUSH AS ITS ROW DOES: a person's credential
 // with the seat they hold beside it; a seat by its handle — the actor and the
 // seat at once, so never twice — with the turn that made the push and the work

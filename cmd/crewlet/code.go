@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet code` — the engine's own git host, from the command line.
@@ -324,6 +325,11 @@ type codeRepoView struct {
 		DroppedObjects int64     `json:"dropped_objects"`
 		DroppedBytes   int64     `json:"dropped_bytes"`
 	} `json:"expunge"`
+	// Remotes is where it stands with other hosts: its pull mirror's source
+	// and its push mirror's target, the import its create filled it from and
+	// how that ended, and the pull mirror's last sync. Every credential in it
+	// is a ${VAR} reference, never a value.
+	Remotes code.RemoteState `json:"remotes"`
 }
 
 // codeProtectionView is one protection rule.
@@ -762,6 +768,15 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 			humanBytes(r.Limits.MaxBlobBytes), humanBytes(r.Limits.RepoMaxBytes))
 	}
 	fmt.Fprintf(&b, "  pushes:       %d ever, the last %s\n", r.Pushes, codeTime(r.LastPushAt))
+	if line := importLine(r.Remotes.Import); line != "" {
+		fmt.Fprintf(&b, "  import:       %s\n", line)
+	}
+	if m := r.Remotes.MirrorFrom; m != nil {
+		fmt.Fprintf(&b, "  mirror from:  %s\n", mirrorFromLine(*m, r.Remotes.MirrorSyncedAt))
+	}
+	if m := r.Remotes.MirrorTo; m != nil {
+		fmt.Fprintf(&b, "  mirror to:    %s\n", mirrorToLine(*m))
+	}
 	if line := expungeLine(r); line != "" {
 		fmt.Fprintf(&b, "  expunge:      %s\n", line)
 	}
@@ -797,6 +812,50 @@ func expungeLine(r codeRepoView) string {
 			e.DroppedObjects, humanBytes(e.DroppedBytes)))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// importLine is where the import its create filled a repository from stands,
+// as `status` prints it: its source, how many of its chunks have landed, and
+// how it ended, whole or short with the sentence it ended on, which is how a
+// person who ran `code import` learns it is over — "" for a repository no
+// import filled.
+func importLine(i *code.ImportState) string {
+	if i == nil {
+		return ""
+	}
+	line := fmt.Sprintf("from %s, %d chunks landed", i.Source.URL, i.Chunks)
+	switch {
+	case i.DoneAt.IsZero():
+		return line + ", still running"
+	case i.Error != "":
+		return line + fmt.Sprintf("; ended short on %s, keeping what landed: %s", codeTime(i.DoneAt), i.Error)
+	default:
+		return line + "; done on " + codeTime(i.DoneAt)
+	}
+}
+
+// mirrorFromLine is a pull mirror as `status` prints it: the source it follows,
+// what it fetches with, and when it last synced from it.
+func mirrorFromLine(m code.MirrorSource, synced time.Time) string {
+	line := m.URL + ", fetched anonymously"
+	if m.Credential != "" {
+		line = m.URL + ", fetched with " + m.Credential
+	}
+	if synced.IsZero() {
+		return line + ", not synced yet"
+	}
+	return line + ", last synced " + codeTime(synced)
+}
+
+// mirrorToLine is a push mirror as `status` prints it: the target it pushes
+// to, as which seat and with what, and which refs — its default branch and
+// tags where it names none.
+func mirrorToLine(m code.MirrorTarget) string {
+	refs := "its default branch and its tags"
+	if len(m.Refs) > 0 {
+		refs = words.AndMore(m.Refs, 4)
+	}
+	return fmt.Sprintf("%s as %s, pushed with %s, pushing %s", m.URL, m.As, m.Credential, refs)
 }
 
 // managedLine is who changes a repository and what it is for, as `status`
