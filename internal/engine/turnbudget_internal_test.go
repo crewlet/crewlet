@@ -27,11 +27,11 @@ import (
 // The meter learned only from its own charges' answers, and a turn's auxiliary
 // calls — its context assembly, every rewrite its ledger and tools ask for —
 // reach the same counters by another route, a post-charge that refuses
-// nothing. So a window one of them took past
-// its ceiling was one the turn's next round was sent into, billed by the
-// vendor, and then refused. These cases drive the REAL turn frame, because the
-// property is about the order of its steps: the meter has to exist before the
-// first auxiliary call and be the thing that call is charged through.
+// nothing. So a window one of them took past its ceiling was one the turn's
+// next round was sent into, billed by the vendor, and then refused. These
+// cases drive the REAL turn frame, because the property is about the order of
+// its steps: the meter has to exist before the first auxiliary call and be the
+// thing that call is charged through.
 
 // countedProvider counts its calls and answers each the same way.
 type countedProvider struct {
@@ -108,10 +108,16 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 		id.String(): {"Ana wants the deploy status in one line."},
 	})
 	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet, Store: db}})
+	// NO ONBOARDING PASS: the store that keeps the seat's diary keeps its
+	// onboarding marker too, and a seat with none runs that pass — calls on
+	// its main model — before its executor launches, which is not what these
+	// cases count.
+	noOnboarding := 0
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
 			MaxIterations: 1, DelegationDepthLimit: 3,
+			OnboardingMaxToolRounds: &noOnboarding,
 		}},
 	})
 	return r
