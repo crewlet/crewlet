@@ -93,3 +93,40 @@ func TestAnUnblockedTurnFilesNoBlockedAccount(t *testing.T) {
 		t.Errorf("a delivered turn filed a blocked account: %q", got)
 	}
 }
+
+// A COLLECTED TURN'S HISTORY SAYS WHAT ITS RUN'S RECORD DID NOT KEEP. The entry
+// a seat's next turn on the thread reads is built from the reply's round — its
+// intent and its calls — and a long run's record keeps its calls' head and
+// tail and tallies the middle it dropped, where the reply may well have been:
+// so the entry's calls carry the line that says, by tool, what the record did
+// not keep, from the round's own tally.
+//
+// Mutation: build the entry from the round's kept calls alone, and a run whose
+// reply went out from the dropped middle files a history that never mentions
+// posting it.
+func TestACollectedTurnsHistorySaysWhatItsRunsRecordDidNotKeep(t *testing.T) {
+	t.Parallel()
+	conv := &capturingConversations{}
+	d := &Dispatcher{Conversations: conv}
+	res := turn.Result{
+		Decision: phase.Done,
+		Artifact: "Fixed CI and said so in the thread.",
+		LastWork: &turn.Work{
+			Outcome: turn.OutcomeDelivered, Summary: "fix CI",
+			Calls:  []ledger.Call{{Name: "read_file", Result: "ok"}},
+			Elided: []ledger.Elided{{Name: "post_message", Digest: "d", Calls: 1}, {Name: "read_file", Calls: 58}},
+		},
+		Delivered: true,
+	}
+	d.RecordSession(context.Background(), "ceo", "chan-1", "run-1", "wk-1", "fix CI", res, time.Now())
+
+	if len(conv.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(conv.entries))
+	}
+	calls := conv.entries[0].Calls
+	for _, want := range []string{"read_file", "+59 further call(s)", "post_message ×1", "read_file ×58"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("the entry's calls read %q, missing %q", calls, want)
+		}
+	}
+}

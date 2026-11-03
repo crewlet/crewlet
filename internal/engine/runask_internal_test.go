@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -65,5 +68,33 @@ func TestAResumeIsCutWhereTheAnswerCutTheRound(t *testing.T) {
 	if got.Answered != 2 || len(got.Bridged) != 3 {
 		t.Fatalf("the resume is cut at %d over %d calls, want 2 over the row's 3",
 			got.Answered, len(got.Bridged))
+	}
+}
+
+// A RESUME IS SEEDED WITH WHAT ITS ROW COUNTS WITHOUT LISTING. A long run's row
+// keeps its calls' head and tail and tallies, under the round it kept them
+// for, the middle it dropped and the calls its calls' own work made; the
+// resume is handed both as the round's, which the turn's call log is seeded
+// with beside the listed calls and its delivery checks read — and a count the
+// tally does not account for, an older build's drop, as calls of no known
+// tool.
+//
+// Mutation: hand the resume the row's listed calls alone, and the resumed
+// round's seed is short of every call the row dropped and every worker's call.
+func TestAResumeIsSeededWithWhatItsRowCountsWithoutListing(t *testing.T) {
+	t.Parallel()
+	first := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	got := runnerResume(resumeInput{Run: sandbox.PendingRun{
+		BridgeCalls:       []sandbox.BridgeCall{{Name: "read_file", Seq: 1, At: first}},
+		BridgeCallsElided: 63,
+		ElidedCalls:       []sandbox.ElidedCall{{Name: "post_message", Digest: "d", Calls: 60, Failed: 1}},
+		AbsorbedCalls:     []sandbox.ElidedCall{{Name: "leave_channel", Digest: "w", Calls: 2}},
+		TallyRound:        first,
+	}}, nil, nil)
+	wantElided := []ledger.Elided{{Calls: 3}, {Name: "post_message", Digest: "d", Calls: 60, Failed: 1}}
+	wantAbsorbed := []ledger.Elided{{Name: "leave_channel", Digest: "w", Calls: 2}}
+	if !slices.Equal(got.Elided, wantElided) || !slices.Equal(got.Absorbed, wantAbsorbed) {
+		t.Errorf("the resume is handed %+v dropped and %+v absorbed, want %+v and %+v", got.Elided,
+			got.Absorbed, wantElided, wantAbsorbed)
 	}
 }
