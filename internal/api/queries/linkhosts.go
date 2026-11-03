@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
@@ -195,7 +196,7 @@ func codeOwners(owners, paths []string, expand func(string) string) []string {
 	var out []string
 	keep := func(owner string) {
 		owner = strings.ToLower(owner)
-		if ownerName.MatchString(owner) && !slices.Contains(out, owner) {
+		if ownerName().MatchString(owner) && !slices.Contains(out, owner) {
 			out = append(out, owner)
 		}
 	}
@@ -214,4 +215,8 @@ func codeOwners(owners, paths []string, expand func(string) string) []string {
 // ownerName is a GitHub organization's or a GitLab group's path: GitHub
 // allows letters, digits and hyphens, GitLab also `.` and `_`, and neither
 // starts with punctuation.
-var ownerName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var ownerName = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
+})

@@ -25,6 +25,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { toCsv } from "@crewlethq/ui";
 import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -566,6 +567,42 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
+// A GIT PUSH IS DRAWN AGAINST ITS REPOSITORY. A refused push writes no row in
+// the code domain, so the runtime audit's repository is the only record of
+// where it was refused; every other tool call still records no subject.
+//
+// The row is the one the code host writes: the seat the person pushed as for
+// its author, kind `human`, and the machine token git presented as the
+// credential (`pat:<id>`), in the store's `actor_kind` and `operator_id` tags.
+test("a git push names its repository as what it was done to", async () => {
+  serving({
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-push",
+          summary: "jane ran git_push on nimbus-web: refused (protected_force)",
+          tags: {
+            node: "node-a",
+            actor_kind: "human",
+            operator_id: "pat:0192f0a1",
+            tool: "git_push",
+            repo: "nimbus-web",
+          },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("git push")).toBeTruthy());
+  expect(screen.getByText("nimbus-web")).toBeTruthy();
+  expect(screen.queryByText("Not recorded")).toBeNull();
+  // WHO: the seat, and the token the push came through.
+  expect(screen.getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  expect(screen.getByText("pat:0192f0a1")).toBeTruthy();
+});
+
 // A MODEL GESTURE IS DRAWN AS WHAT WAS DONE TO WHICH MODEL, linked to the
 // models, and the secret names a credential call touched stay in its summary.
 test("a model gesture names its action and its entry", async () => {
@@ -905,6 +942,20 @@ test("a source refused on authority names its grant, and the other sources stand
   await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
   expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
   expect(screen.queryByText(/no access would change that/)).toBeNull();
+});
+
+// TWO SOURCES REFUSED IN THE SAME WORDS ARE ONE SENTENCE: a refusal naming no
+// grant says no access (`lib/refusal.ts`'s `authorityWords`) whichever source
+// it refused, and the notice said it once a source, keyed by the sentence.
+test("two sources refused in the same words are said once", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    config_audit: new QueryError("unauthorized"),
+    artifact_trail: new QueryError("unauthorized"),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getAllByText(ACT_ERRORS.unauthorized)).toHaveLength(1);
 });
 
 // AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken

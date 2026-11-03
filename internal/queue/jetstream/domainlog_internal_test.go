@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -59,19 +60,45 @@ func shortReadBack() jsprovision.Timing {
 // on the provisioning path with no tolerance for a peer-visible-but-not-yet-
 // local create, and a state log that cannot open the stream it just made takes
 // the whole engine down with it.
+//
+// IN A SYNCTEST BUBBLE ([inBubble]): four looks at the placement cadence take
+// fifteen milliseconds of the window's hundred, which is the claim; on the
+// machine's clock a loaded race-detector run delayed the looks' timers past
+// the window, and the case failed on the scheduler's latency.
 func TestALookupWaitsOutACreateThatHasNotPropagated(t *testing.T) {
 	t.Parallel()
-	js := &notYetVisibleJS{}
-	js.notFound.Store(3)
-	q := &Queue{js: js, timing: shortReadBack()}
+	inBubble(t, func(t *testing.T) {
+		js := &notYetVisibleJS{}
+		js.notFound.Store(3)
+		q := &Queue{js: js, timing: shortReadBack()}
 
-	if _, err := q.openProvisioned(t.Context(), "CREWLET_TRACKER_VECTORS"); err != nil {
-		t.Fatalf("a stream that appeared on the fourth look was reported as %v", err)
-	}
-	if got := js.calls.Load(); got != 4 {
-		t.Errorf("the lookup was made %d times, want 4 — three not-founds "+
-			"waited out and the one that answered", got)
-	}
+		if _, err := q.openProvisioned(t.Context(), "CREWLET_TRACKER_VECTORS"); err != nil {
+			t.Fatalf("a stream that appeared on the fourth look was reported as %v", err)
+		}
+		if got := js.calls.Load(); got != 4 {
+			t.Errorf("the lookup was made %d times, want 4 — three not-founds "+
+				"waited out and the one that answered", got)
+		}
+	})
+}
+
+// inBubble runs f in a synctest bubble, where a timer fires at exactly its
+// time and time moves only once every goroutine of the case is blocked.
+//
+// FOR THE CASES THAT HOLD A TIMER-DRIVEN READ TO A WINDOW: what each claims is
+// how many requests the read's own cadence fits inside the caller's budget —
+// two lost requests, their re-asks and the answer inside four terms; a re-ask
+// sent before a late answer arrives — and on the machine's clock that is also
+// a claim about how late a loaded race-detector run wakes a timer's goroutine.
+// Measured so, beside build-and-vet loops on four cores: the never-answered
+// case failed 6 runs in 90 at a load average of 45 to 47, its 200 ms budget
+// holding 110 ms of cadence, and the propagation case 1 in 300 at 25 to 30,
+// its four looks inside a 100 ms window. In the bubble the budgets are
+// unchanged and exact, so a case fails on the read's cadence and on nothing
+// else.
+func inBubble(t *testing.T, f func(*testing.T)) {
+	t.Helper()
+	synctest.Test(t, f)
 }
 
 // AND A STREAM THAT REALLY IS GONE IS STILL REPORTED — with its own error,
@@ -232,13 +259,12 @@ func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
 // and comes back a timeout — with the consumer there all the same.
 type heldCreateJS struct {
 	jetstream.JetStream
-	lookups int
+	lookups atomic.Int32
 	creates atomic.Int32
 }
 
 func (f *heldCreateJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
-	f.lookups++
-	if f.lookups == 1 {
+	if f.lookups.Add(1) == 1 {
 		// The propagation window: this node made it on an earlier boot
 		// and has not been told about it yet.
 		return nil, jetstream.ErrConsumerNotFound
@@ -322,9 +348,9 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 		t.Errorf("the held create was sent %d time(s); an unanswered create is "+
 			"asked again until its budget is spent", got)
 	}
-	if js.lookups < 2 {
+	if got := js.lookups.Load(); got < 2 {
 		t.Errorf("the consumer was looked up %d time(s); the read-back after "+
-			"the timed-out create never ran", js.lookups)
+			"the timed-out create never ran", got)
 	}
 }
 
@@ -335,7 +361,9 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 type unsettledLookupJS struct {
 	jetstream.JetStream
 
-	lookups int
+	// lookups is ATOMIC: a lookup nobody answers stays outstanding while
+	// the next is asked, so two of them can count at once.
+	lookups atomic.Int32
 	creates int
 	// left is the time the create's context had left when the create
 	// arrived — negative for one handed no deadline at all.
@@ -344,7 +372,7 @@ type unsettledLookupJS struct {
 }
 
 func (f *unsettledLookupJS) Consumer(ctx context.Context, _, _ string) (jetstream.Consumer, error) {
-	f.lookups++
+	f.lookups.Add(1)
 	if f.made == nil {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -418,10 +446,10 @@ func TestAnExhaustedLookupLeavesTheCreateItsWholeBudget(t *testing.T) {
 	if js.creates != 1 {
 		t.Errorf("the consumer was created %d time(s), want once", js.creates)
 	}
-	if js.lookups < 2 {
+	if got := js.lookups.Load(); got < 2 {
 		t.Errorf("the consumer was looked up %d time(s) before the create; the "+
 			"lookup is asked again until its ceiling is spent, and once means "+
-			"this case never reached the exhaustion it is about", js.lookups)
+			"this case never reached the exhaustion it is about", got)
 	}
 }
 
@@ -871,6 +899,7 @@ type firstReadJS struct {
 	reads   int
 	had     []bool
 	until   []time.Time
+	at      []time.Time
 	deletes int
 }
 
@@ -881,7 +910,7 @@ func (f *firstReadJS) Consumer(context.Context, string, string) (jetstream.Consu
 func (f *firstReadJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
 	f.reads++
 	until, had := ctx.Deadline()
-	f.until, f.had = append(f.until, until), append(f.had, had)
+	f.until, f.had, f.at = append(f.until, until), append(f.had, had), append(f.at, time.Now())
 	if f.reads == 1 {
 		return nil, nats.ErrTimeout
 	}
@@ -934,36 +963,49 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 
 	t.Run("placed at the first survivor", func(t *testing.T) {
 		t.Parallel()
-		js := &firstReadJS{held: &jetstream.ConsumerInfo{
-			Config:    domainConsumerConfig(name, 2),
-			Delivered: jetstream.SequenceInfo{Stream: 4},
-			AckFloor:  jetstream.SequenceInfo{Stream: 4}}}
-		q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
-		if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 2); err != nil {
-			t.Fatalf("open: %v", err)
-		}
-		if js.reads != 2 {
-			t.Fatalf("the first sequence was asked for %d time(s), want 2 — a "+
-				"dropped request asked again rather than being the whole answer",
-				js.reads)
-		}
-		for i, had := range js.had {
-			if !had {
-				t.Fatalf("ask %d carried no deadline of its own", i+1)
+		// IN A SYNCTEST BUBBLE ([inBubble]), so the re-ask is held to its
+		// cadence exactly: on the machine's clock this was a second of
+		// slack on how late a loaded race-detector run wakes the timer's
+		// goroutine, which the read never promised.
+		inBubble(t, func(t *testing.T) {
+			js := &firstReadJS{held: &jetstream.ConsumerInfo{
+				Config:    domainConsumerConfig(name, 2),
+				Delivered: jetstream.SequenceInfo{Stream: 4},
+				AckFloor:  jetstream.SequenceInfo{Stream: 4}}}
+			q := &Queue{js: js, cfg: cfg, log: slog.Default(), timing: timing}
+			if _, err := q.DomainConsumer(t.Context(), "CREWLET_PAGES_LOG", "node-0", 2); err != nil {
+				t.Fatalf("open: %v", err)
 			}
-			if left := time.Until(js.until[i]); left > ceiling {
-				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
-					"is bounded as a write", i+1, left, ceiling)
-			} else if left > timing.ReadTerm {
-				t.Errorf("ask %d was given %v, past the %v read term — a "+
-					"read the server dropped is held for a write's term "+
-					"rather than asked again", i+1, left, timing.ReadTerm)
+			if js.reads != 2 {
+				t.Fatalf("the first sequence was asked for %d time(s), want 2 — a "+
+					"dropped request asked again rather than being the whole answer",
+					js.reads)
 			}
-		}
-		if js.deletes != 0 {
-			t.Fatal("a consumer the broker placed at the first survivor was " +
-				"rebuilt once its first sequence had been read")
-		}
+			for i, had := range js.had {
+				if !had {
+					t.Fatalf("ask %d carried no deadline of its own", i+1)
+				}
+				if left := time.Until(js.until[i]); left > ceiling {
+					t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
+						"is bounded as a write", i+1, left, ceiling)
+				}
+			}
+			// ASKED AGAIN AT A READ'S CADENCE: the dropped request is told
+			// nothing at once, so it is presumed lost at once and the next
+			// follows a re-ask later — never a write's term, which a read
+			// the server dropped would wait out for a reply nobody will
+			// send.
+			if gap := js.at[1].Sub(js.at[0]); gap != timing.ReAsk {
+				t.Errorf("the dropped ask was asked again %v later, want the %v "+
+					"re-ask after a request told nothing at once — it is held for "+
+					"the %v read term or a write's %v term", gap, timing.ReAsk,
+					timing.ReadTerm, timing.AskTerm)
+			}
+			if js.deletes != 0 {
+				t.Fatal("a consumer the broker placed at the first survivor was " +
+					"rebuilt once its first sequence had been read")
+			}
+		})
 	})
 
 	t.Run("in flight at the checkpoint", func(t *testing.T) {
@@ -987,4 +1029,313 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 				"%d time(s), want it rebuilt once", js.deletes)
 		}
 	})
+}
+
+// silentLeaderStream is a stream handle whose LEADER never answers the first
+// lost requests made of it: each of them waits out its own context, as a
+// request does that reached a member still believing in a leader the cluster
+// has just lost, and every request after them is answered at once — by the
+// leader the cluster elected meanwhile.
+//
+// EMBEDS THE INTERFACE, for [notYetVisibleJS]'s reason.
+type silentLeaderStream struct {
+	jetstream.Stream
+	lost  atomic.Int32
+	calls atomic.Int32
+}
+
+// unanswered counts a request, and makes it one of the lost ones while any
+// are left: it waits out ctx, as a request nobody answers does.
+func (s *silentLeaderStream) unanswered(ctx context.Context) error {
+	s.calls.Add(1)
+	if s.lost.Add(-1) < 0 {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *silentLeaderStream) Info(ctx context.Context, _ ...jetstream.StreamInfoOpt) (*jetstream.StreamInfo, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return leadersInfo(), nil
+}
+
+func (s *silentLeaderStream) GetLastMsgForSubject(ctx context.Context, subject string) (*jetstream.RawStreamMsg, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return leadersLast(subject), nil
+}
+
+func (s *silentLeaderStream) GetMsg(ctx context.Context, seq uint64, _ ...jetstream.GetMsgOpt) (*jetstream.RawStreamMsg, error) {
+	if err := s.unanswered(ctx); err != nil {
+		return nil, err
+	}
+	return leadersRecord(seq), nil
+}
+
+// leadersInfo, leadersLast and leadersRecord are what the leader answers each
+// read with once it answers at all — answers only, so a stream that counts
+// its requests its own way counts each of them once.
+func leadersInfo() *jetstream.StreamInfo {
+	return &jetstream.StreamInfo{State: jetstream.StreamState{FirstSeq: 1, LastSeq: 7, Bytes: 640},
+		Config: jetstream.StreamConfig{Name: "CREWLET_CODE_LOG", MaxBytes: 1 << 20}}
+}
+
+func leadersLast(subject string) *jetstream.RawStreamMsg {
+	return &jetstream.RawStreamMsg{Subject: subject, Sequence: 7}
+}
+
+func leadersRecord(seq uint64) *jetstream.RawStreamMsg {
+	return &jetstream.RawStreamMsg{Subject: "crewlet.code.repo.r", Sequence: seq}
+}
+
+// shortReads is the production timing with a read's term and its re-ask short
+// enough for a case to wait out two lost requests in a fraction of a second.
+func shortReads() jsprovision.Timing {
+	t := jsprovision.Clustered(true).Timing()
+	t.ReadTerm, t.ReAsk = 50*time.Millisecond, 5*time.Millisecond
+	return t
+}
+
+// A READ OF A DOMAIN LOG THAT ITS LEADER NEVER ANSWERED IS ASKED AGAIN, within
+// the caller's budget, rather than waited on for the whole of it.
+//
+// A domain log allows no direct get, so its info, its last message on a
+// subject and its record at a sequence are answered by the stream's leader or
+// by nobody — and a member that still believes in a leader the cluster has
+// just lost stays silent. Held for its caller's whole context, one such
+// request cost the committer's thirty-second budget: the gate reserve's usage
+// reading before a push's record, `context deadline exceeded`, a push nothing
+// decided reported `unknown`, while a request sent a second later was answered
+// by the new leader at once. Each read here is lost twice and then answered,
+// inside a budget a whole-context wait would have spent on the first.
+func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		read func(ctx context.Context, l *DomainLog) error
+	}{
+		{"stats", func(ctx context.Context, l *DomainLog) error {
+			stats, err := l.Stats(ctx)
+			if err == nil && (stats.LastSeq != 7 || stats.MaxBytes != 1<<20) {
+				err = errors.New("the stats are not the answer the leader gave")
+			}
+			return err
+		}},
+		{"last_on_a_subject", func(ctx context.Context, l *DomainLog) error {
+			seq, ok, err := l.LastSeq(ctx, "crewlet.code.repo.r")
+			if err == nil && (!ok || seq != 7) {
+				err = errors.New("the last sequence is not the answer the leader gave")
+			}
+			return err
+		}},
+		{"record_at_a_sequence", func(ctx context.Context, l *DomainLog) error {
+			_, _, _, ok, err := l.At(ctx, 3)
+			if err == nil && !ok {
+				err = errors.New("the record the leader answered with was reported gone")
+			}
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				s := &silentLeaderStream{}
+				s.lost.Store(2)
+				l := logOver(s)
+				// A BUDGET FOUR TERMS LONG: room for two lost requests,
+				// their re-asks and the answer, and none for a wait on
+				// the first.
+				ctx, cancel := context.WithTimeout(t.Context(), 4*shortReads().ReadTerm)
+				defer cancel()
+				if err := c.read(ctx, l); err != nil {
+					t.Fatalf("a read its leader lost twice: %v", err)
+				}
+				if got := s.calls.Load(); got != 3 {
+					t.Fatalf("the read was asked %d times, want 3 — two lost, one answered", got)
+				}
+			})
+		})
+	}
+}
+
+// AND ONE NOBODY EVER ANSWERS ENDS AT THE LOOKUP CEILING, for a caller with no
+// deadline of its own: the trim tick reads every log's state on its node's
+// lifetime, in the loop that also evaluates the node's alarms, and asked until
+// somebody answered, a read of a broker the node could not reach held both for
+// good.
+func TestADomainLogReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
+	t.Parallel()
+	s := &silentLeaderStream{}
+	s.lost.Store(1 << 30)
+	l := logOver(s)
+	// A CEILING OF TWENTY REQUESTS rather than production's thirty seconds,
+	// so the case waits it out in about a second.
+	ceiling := 20 * (l.q.timing.ReadTerm + l.q.timing.ReAsk)
+	l.q.timing.Lookup = ceiling
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		_, err := l.Stats(ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !jsprovision.Unanswered(ctx, err) {
+			t.Errorf("a read nobody answered ended with %v, not as silence", err)
+		}
+	case <-time.After(10 * ceiling):
+		cancel()
+		<-done
+		t.Fatalf("a read nobody answers was still being asked %v later, ten times "+
+			"its %v ceiling (%d requests)", 10*ceiling, ceiling, s.calls.Load())
+	}
+}
+
+// logOver is a domain log over s, read at [shortReads].
+func logOver(s jetstream.Stream) *DomainLog {
+	return &DomainLog{stream: s, name: "CREWLET_CODE_LOG", q: &Queue{timing: shortReads()},
+		info: func(ctx context.Context) (*jetstream.StreamInfo, error) { return s.Info(ctx) }}
+}
+
+// slowLeaderStream is a stream handle whose LEADER answers every request late,
+// after late — the leader alive and only slow, its API queue backed up — and
+// counts the requests made of it, each ONCE: it answered through the silent
+// stream's own reads, which count a request again, so the late-answer case's
+// premise — a second request asked beside the first — held for a read that
+// asked only once.
+type slowLeaderStream struct {
+	silentLeaderStream
+	late time.Duration
+}
+
+func (s *slowLeaderStream) slow(ctx context.Context) error {
+	s.calls.Add(1)
+	select {
+	case <-time.After(s.late):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *slowLeaderStream) Info(ctx context.Context, _ ...jetstream.StreamInfoOpt) (*jetstream.StreamInfo, error) {
+	if err := s.slow(ctx); err != nil {
+		return nil, err
+	}
+	return leadersInfo(), nil
+}
+
+func (s *slowLeaderStream) GetLastMsgForSubject(ctx context.Context, subject string) (*jetstream.RawStreamMsg, error) {
+	if err := s.slow(ctx); err != nil {
+		return nil, err
+	}
+	return leadersLast(subject), nil
+}
+
+func (s *slowLeaderStream) GetMsg(ctx context.Context, seq uint64, _ ...jetstream.GetMsgOpt) (*jetstream.RawStreamMsg, error) {
+	if err := s.slow(ctx); err != nil {
+		return nil, err
+	}
+	return leadersRecord(seq), nil
+}
+
+// A READ OF A DOMAIN LOG THAT ITS LEADER ANSWERS LATE IS STILL ANSWERED: every
+// request it is asked is answered half a read term after the term ends, as a
+// leader whose API queue is backed up answers — slowly, never not at all.
+// Each request is presumed lost at its term and another is asked, and the
+// first one's late answer is taken. Abandoned at its term instead, every
+// request was thrown away before its answer came, so no reading of a leader
+// slower than the term was ever taken — and the gate reserve that admits every
+// append and every barrier through the usage reading failed each of them at
+// its own budget, every write and every linearizable read on the node at once.
+func TestADomainLogReadItsLeaderAnswersLateIsAnswered(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		read func(ctx context.Context, l *DomainLog) error
+	}{
+		{"stats", func(ctx context.Context, l *DomainLog) error {
+			_, err := l.Stats(ctx)
+			return err
+		}},
+		{"last_on_a_subject", func(ctx context.Context, l *DomainLog) error {
+			_, _, err := l.LastSeq(ctx, "crewlet.code.repo.r")
+			return err
+		}},
+		{"record_at_a_sequence", func(ctx context.Context, l *DomainLog) error {
+			_, _, _, _, err := l.At(ctx, 3)
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			// IN A BUBBLE, so the premise below is the cadence's alone: the
+			// second request goes out a re-ask after the first's term, two
+			// fifths of a term before the first's answer, a margin a loaded
+			// run's late timer could cross on the machine's clock.
+			inBubble(t, func(t *testing.T) {
+				term := shortReads().ReadTerm
+				s := &slowLeaderStream{late: term + term/2}
+				// A BUDGET TEN TERMS LONG, which an abandoned request
+				// never reaches the end of with an answer: each is thrown
+				// away half a term before it would have been answered.
+				ctx, cancel := context.WithTimeout(t.Context(), 10*term)
+				defer cancel()
+				if err := c.read(ctx, logOver(s)); err != nil {
+					t.Fatalf("a read its leader answers %v late: %v", s.late, err)
+				}
+				// THE PREMISE: the answer taken came after a request's
+				// term, so a second request was asked beside the first.
+				if got := s.calls.Load(); got < 2 {
+					t.Errorf("the read was asked %d time(s): its answer came inside the term, "+
+						"and the case proves nothing about a late one", got)
+				}
+			})
+		})
+	}
+}
+
+// A LOG'S MEMBER COUNT IS THE STREAM'S OWN, AND EVERY STATE READ KEEPS IT.
+//
+// What a barrier that did not commit means turns on it (statelog's read
+// index): a majority that did not agree where several members store the log,
+// the member's own stalled write where one does. So it is the replication
+// factor the broker reports for the stream — never Tier A's, which the running
+// stream may exceed — and a stream an operator re-replicates under a running
+// node is seen at the next read of its state rather than at the next restart.
+// An answer stating no factor leaves the last one standing, and a log whose
+// state nobody has read is one member, the fewest a stream has.
+func TestALogsMemberCountIsTheStreamsOwnAndEveryStateReadKeepsIt(t *testing.T) {
+	t.Parallel()
+	var replicas atomic.Int32
+	l := &DomainLog{name: "CREWLET_CODE_LOG", q: &Queue{timing: shortReads()},
+		info: func(context.Context) (*jetstream.StreamInfo, error) {
+			return &jetstream.StreamInfo{Config: jetstream.StreamConfig{
+				Replicas: int(replicas.Load())}}, nil
+		}}
+	if got := l.Members(); got != 1 {
+		t.Fatalf("a log whose state nobody read is stored by %d members, want 1", got)
+	}
+	for _, step := range []struct {
+		name     string
+		reported int32
+		want     int
+	}{
+		{"re-replicated to three", 3, 3},
+		{"an answer stating no factor", 0, 3},
+		{"back to one", 1, 1},
+	} {
+		replicas.Store(step.reported)
+		if _, err := l.stateInfo(t.Context()); err != nil {
+			t.Fatalf("%s: read the log's state: %v", step.name, err)
+		}
+		if got := l.Members(); got != step.want {
+			t.Errorf("%s: the log is stored by %d members, want %d", step.name, got, step.want)
+		}
+	}
 }

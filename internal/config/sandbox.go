@@ -103,8 +103,8 @@ type SandboxProvider struct {
 	// thing for every run, which is the limitation this reshape removes.
 	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host as a backend. Absent = run_in: direct|container is refused."`
 
-	// Fake wires the in-process double: no real box and no real coding
-	// agent, every run completed by the double's own runner. For a
+	// Fake wires the in-process double: no real box and no real harness,
+	// every run completed by the double's own runner. For a
 	// deployment demonstrating the flow, and named in config rather than
 	// inferred so nobody runs one by accident.
 	//
@@ -135,8 +135,10 @@ type SandboxProvider struct {
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
 	// limit: an executor is never force-stopped on a timer, and the
 	// waiter refreshes a running box's TTL every tick so the clock never
-	// kills it. Effectively the orphan-reclaim grace — how long a box
-	// outlives an engine that stopped heart-beating.
+	// kills it — as a launch refreshes the box it is still provisioning, so
+	// no sum of setup steps races it either. Effectively the
+	// orphan-reclaim grace — how long a box outlives an engine that stopped
+	// heart-beating.
 	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap: the orphan-reclaim grace."`
 
 	// DefaultPauseTTLSeconds is how long a sandbox blocked on a human's
@@ -181,7 +183,9 @@ type SandboxProvider struct {
 
 	// CommitAttribution says whether every commit an executor authors as
 	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
-	// and `Crewlet-Run:` naming the run's turn. Git adds it, through a hook
+	// `Crewlet-Seat:` naming the seat it is the executor of, `Crewlet-Run:`
+	// naming the run's turn, and `Crewlet-Work-Item:` naming the item that
+	// turn is charged to. Git adds it, through a hook
 	// the run's box is given (internal/sandbox/executor), so it holds
 	// whatever the model remembers, and only on the run's own commits: a
 	// person's commit the run amends, cherry-picks or rebases keeps no
@@ -194,7 +198,7 @@ type SandboxProvider struct {
 	//
 	// A POINTER, because unset is "on": a plain bool's zero would turn the
 	// credit off for every company that said nothing.
-	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing."`
+	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, Crewlet-Seat naming the seat, Crewlet-Run naming the run, and Crewlet-Work-Item naming the item its turn is charged to. Unset = true; false = credit nothing."`
 
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
@@ -362,6 +366,17 @@ func (s *SandboxProvider) RunIn() Placement {
 	return ""
 }
 
+// runInAt is the path of what names [SandboxProvider.RunIn]: its
+// default_run_in where it is written, else the block itself — resolved from
+// the catalogue's own shape rather than written, so a message points at the
+// block, not at a field the operator will not find.
+func (s *SandboxProvider) runInAt() string {
+	if s != nil && s.DefaultRunIn != "" {
+		return "providers.sandbox.default_run_in"
+	}
+	return "providers.sandbox"
+}
+
 func (s *SandboxProvider) validate(path Path) error {
 	var p problems
 	switch {
@@ -486,11 +501,11 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 // the engine's filesystem are different runs on the same machine. A
 // block-level mode could only ever answer for both.
 type LocalSandbox struct {
-	// Image is the container image, required wherever an executor run is
-	// placed in a container, with deliberately no default: a box whose
-	// image lacks the harness fails only once an agent tries to use
-	// it.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the harness installed. Required for run_in: container."`
+	// Image is the container image, required wherever an executor run or a
+	// check is placed in a container, with deliberately no default: a box
+	// whose image lacks the harness fails only once an agent tries to use
+	// it, and a check's box needs git and whatever its checks build with.
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the harness installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
@@ -622,9 +637,13 @@ func (l *LocalSandbox) validate(path Path) error {
 // SandboxSetupStep is one declarative provisioning unit applied to a fresh
 // box.
 //
-// Every provisioning concern — git auth included — goes through this one
-// apply, env-merge and brief pipeline, with no engine special cases. Steps
-// come only from providers.sandbox.setup and role.sandbox.setup.
+// Every provisioning concern — git auth for any other host included — goes
+// through this one apply, env-merge and brief pipeline. Steps come only from
+// providers.sandbox.setup and role.sandbox.setup, but for the one exception:
+// a repository on this company's own code host is a run's GRANT, which the
+// engine clones into the box itself after these steps, with the run's own
+// credential (ADR-0093) — and no step's env may set the variables that
+// credential and its clones read ([ReservedSandboxEnv]).
 type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
 	Name string `yaml:"name" json:"name" js:"required" desc:"Short identifier used in logs and failure messages."`
@@ -720,6 +739,98 @@ func (s *SandboxSetupStep) validate(path Path) error {
 	for file := range s.Files {
 		if strings.TrimSpace(file) == "" {
 			p.add(at(path, "files"), ErrMissing, "a file path must not be empty")
+		}
+	}
+	return p.err()
+}
+
+// ReservedSandboxEnv is every variable the ENGINE sets in a box's environment
+// itself — an executor's or a check's — and so the names no env an operator
+// writes for a box may carry: the box's access to the engine's own code host —
+// its git credential and the base its clones and pushes reach, which an
+// executor's box and a check's are both given — and what a check's box is told
+// of its check ([ReservedCheckEnv]). A closed list, which the validator reads here and the
+// engine's tests hold to the variables each launch sets: every executor
+// launch on a node serving the code host sets every name but the check's own,
+// whatever its run checks out (internal/engine,
+// TestABoxIsConfiguredByEnvironment).
+func ReservedSandboxEnv() []string {
+	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
+}
+
+// ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
+// which check it runs — the repository, the commit it measures and the base
+// that commit is measured against, the check's name and its attempt — where
+// its box reads that commit without a clone, and where its command writes the
+// summary its result is reported with. Beside them a check's box is given the
+// code host's credential and base, as an executor's is; every name of both is
+// in [ReservedSandboxEnv].
+func ReservedCheckEnv() []string {
+	return []string{"CREWLET_CHECK_REPO", "CREWLET_CHECK_SHA", "CREWLET_CHECK_BASE", "CREWLET_CHECK_NAME",
+		"CREWLET_CHECK_ATTEMPT", "CREWLET_CHECK_API", "CREWLET_CHECK_SUMMARY"}
+}
+
+// reservedSandboxEnvReasons is why each of [ReservedSandboxEnv] is the
+// engine's, as a refusal of an operator's value for it says.
+var reservedSandboxEnvReasons = map[string]string{
+	"CREWLET_CHECK_REPO": "it is the repository a check's box checks out, which the engine names for the " +
+		"check it runs, and a value here would tell the check's own command another",
+	"CREWLET_CHECK_SHA": "it is the commit a check measures, checked out in its box, and a value here would " +
+		"tell the check's own command another commit than the one it builds",
+	"CREWLET_CHECK_BASE": "it is the commit a check's commit is measured against, the base its diff is read " +
+		"from, and a value here would have the check compare against another",
+	"CREWLET_CHECK_NAME": "it is the name of the check a box runs, and a value here would tell its command it " +
+		"is another check",
+	"CREWLET_CHECK_ATTEMPT": "it is the attempt of its check a box runs, and a value here would tell its " +
+		"command another attempt than the one its result is recorded under",
+	"CREWLET_CHECK_API": "it is where a check's box reads its commit's files and diff without a clone, with " +
+		"its own credential, and a value here would send those reads, and that credential, elsewhere",
+	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
+		"check ends, and a value here would have the summary written where it is never read",
+	"CREWLET_GIT_TOKEN": "it is the run's own credential on this company's code host, minted for each " +
+		"launch of a run that names repositories, and a value here would break its clones and pushes",
+	"CREWLET_GIT_URL": "it is the base a run that names repositories clones and pushes them from " +
+		"(CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git elsewhere",
+}
+
+// validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
+// any env a box's environment is assembled from: a seat's `sandbox.env`, a
+// seat's setup steps' `env`, `providers.sandbox.setup`'s, and
+// `code.checks.env` — the secrets a check's box is given beside what the
+// engine tells it of its check.
+//
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
+// about running depends on it, since the engine's own value wins over every
+// other source of a box's environment for the names it sets (an executor
+// launch's environment, sandbox.LaunchRequest.RunEnv; a check's, which names
+// its secrets beside them) — so a stored revision carrying one runs as it did, a
+// later build may relax the rule, and this build applies whatever its newer
+// peer admitted. What it refuses is a setting that READS as working: one the
+// engine overwrites on every box it sets the name in, and on every other box a
+// value nothing of the engine's reads.
+func (c *Company) validateReservedSandboxEnv() error {
+	var p problems
+	check := func(path Path, env map[string]string) {
+		for _, name := range ReservedSandboxEnv() {
+			if _, set := env[name]; set {
+				p.add(entry(path, name), ErrConflict, "%s is the engine's: %s. Remove it",
+					name, reservedSandboxEnvReasons[name])
+			}
+		}
+	}
+	steps := func(path Path, list []SandboxSetupStep) {
+		for i := range list {
+			check(at(idx(path, i), "env"), list[i].Env)
+		}
+	}
+	if c.Providers.Sandbox != nil {
+		steps(field("providers.sandbox.setup"), c.Providers.Sandbox.Setup)
+	}
+	check(field("code.checks.env"), c.Code.Checks.Env)
+	for role, path := range c.EachRole() {
+		if gate := role.Sandbox; gate != nil {
+			check(at(path, "sandbox.env"), gate.Env)
+			steps(at(path, "sandbox.setup"), gate.Setup)
 		}
 	}
 	return p.err()

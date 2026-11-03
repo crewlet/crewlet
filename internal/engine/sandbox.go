@@ -30,8 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
-	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -338,14 +337,14 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 // node's resolver by the rule every tool server's values are
 // ([resolveServer]): every reference resolved, or why the run lacks it.
 type runEnv struct {
-	// env is the run environment the box's setup commands and its coding
-	// agent are handed — the engine's own facts and the configuration's —
+	// env is the run environment the box's setup commands and its harness
+	// are handed — the engine's own facts and the configuration's —
 	// before the LLM credentials and the telemetry are laid over it.
 	env map[string]string
 
 	// defaults is the integrations' box settings no layer above sets, each
 	// resolved: laid beneath the entry's env too, and never judged as a
-	// sign-in ([newCodingRun]).
+	// sign-in ([newExecutorRun]).
 	defaults map[string]string
 
 	// setup is the provider-wide steps then the seat's own, every file's
@@ -395,7 +394,17 @@ type runEnv struct {
 // then the setup steps' contributions, then the seat's own env, so an
 // operator's explicit value always beats a step's default. The integrations'
 // defaults are returned apart (runEnv.defaults), for the launch to lay beneath
-// the entry's env as well ([newCodingRun]).
+// the entry's env as well ([newExecutorRun]).
+//
+// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0093): a run given repositories on
+// it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
+// git configuration ([Engine.boxGitEnv]), as an executor's run is given the
+// tool bridge's endpoint — a credential the box acts AS, scoped to the run and
+// dying with it. Added to the LAUNCH's environment once the store has named
+// the job, never here: this environment is the spec's, and the credential
+// names the launch. Every OTHER host's credential is still the operator's to
+// declare, and config refuses the engine's own names in any env it writes
+// (config.ReservedSandboxEnv).
 //
 // RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
 // where an operator declares a code-host token, and Tier B stores its
@@ -431,7 +440,10 @@ type runEnv struct {
 // `${NPM_TOKEN}` in an .npmrc are the box's own, expanded there from the run
 // environment the step's env just filled. A file whose whole reference does
 // not resolve is not written where its step lists the path under
-// `optional_keys`, and is otherwise the run's gap like an env value.
+// `optional_keys`, and is otherwise the run's gap like an env value. The
+// integrations' own files ([seataccess.BoxFile]) are a step of their own,
+// ahead of every other, and never a gap: one that does not resolve is said
+// as a box default is.
 //
 // NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
 // shared by every launch on this node, and a body resolved into them would be
@@ -439,10 +451,10 @@ type runEnv struct {
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	settings *org.RoleSandbox, defaults []sandbox.SetupStep, boxDefaults []seataccess.BoxDefault) runEnv {
 
-	// THE SEAT'S OWN RESOLUTION, so its GitHub App token is answered here
-	// and nowhere else, issued good for [github.RunTokenLife]: a run's
-	// environment is fixed when its box starts. See githubtoken.go.
-	resolver, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	// THE SEAT'S OWN RESOLUTION, so what it is issued at use is answered
+	// here and nowhere else, good for [runTokenLife]: a run's environment is
+	// fixed when its box starts. See issued.go.
+	resolver, token := e.seatResolver(ctx, c, seat, runTokenLife)
 	setup := boxSetup(defaults, settings)
 
 	// THE LAYERS, each value with what declared it.
@@ -532,7 +544,7 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	// layer here sets is that layer's, and one that does not resolve is left
 	// out and said like an identity fact, never a gap.
 	for _, d := range boxDefaults {
-		if _, set := merged[d.Env]; set {
+		if _, set := merged[d.Env]; set || d.File != nil {
 			continue
 		}
 		if missing := resolver.Missing(d.Value); len(missing) > 0 {
@@ -546,6 +558,32 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		out.defaults[d.Env] = resolver.Value(d.Value)
 	}
 
+	// AND THEIR FILES, written ahead of every step as one of their own, never
+	// into the environment, so none is judged as a sign-in. A path a step
+	// writes is that step's, and a file whose reference does not resolve is
+	// left out and said as a default is; the poll writes a rewritten one
+	// once its credential is issued ([Engine.refreshTokenFiles]).
+	var supplied map[string]string
+	for _, d := range suppliedFiles(setup, boxDefaults) {
+		content, unresolved := secrets.ReadContent(d.File.Ref, resolver.LookupOK)
+		if name, whole := envref.Whole(d.File.Ref); whole && content == "" {
+			unresolved = name
+		}
+		if unresolved != "" {
+			facts.hold(d.File.Path, []string{unresolved}, false, "", false)
+			out.facted = append(out.facted, "integrations."+string(d.Kind))
+			continue
+		}
+		if supplied == nil {
+			supplied = map[string]string{}
+		}
+		supplied[d.File.Path] = content
+		out.secrets = append(out.secrets, content)
+	}
+	if supplied != nil {
+		out.setup = append([]sandbox.SetupStep{{Name: integrationFilesStep, Files: supplied}}, out.setup...)
+	}
+
 	out.gap = gap.missing(seat.Handle(), "the run")
 	out.facts = facts.missing(seat.Handle(), "the run")
 	var held []*credentialMissing
@@ -556,6 +594,30 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	}
 	states := e.mintingStates(ctx, held)
 	out.gap, out.facts = out.gap.judged(states), out.facts.judged(states)
+	return out
+}
+
+// integrationFilesStep names the setup step a launch writes the integrations'
+// box files in ([seataccess.BoxFile]), ahead of every step a person writes.
+const integrationFilesStep = "integration-files"
+
+// suppliedFiles are the files among defaults ([seataccess.BoxDefault.File])
+// whose path no step among steps writes: a person's file is theirs, as a
+// person's variable is. ONE ANSWER for the launch that writes them and the
+// poll that keeps the rewritten ones current.
+func suppliedFiles(steps []sandbox.SetupStep, defaults []seataccess.BoxDefault) []seataccess.BoxDefault {
+	written := map[string]bool{}
+	for _, step := range steps {
+		for path := range step.Files {
+			written[path] = true
+		}
+	}
+	var out []seataccess.BoxDefault
+	for _, d := range defaults {
+		if d.File != nil && !written[d.File.Path] {
+			out = append(out, d)
+		}
+	}
 	return out
 }
 
@@ -782,8 +844,8 @@ func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
 // panickedEnding is how a resumed turn that panicked once it had begun ended:
 // failed, saying it panicked and with what — redacted, since a panic's value
 // can quote what a tool or a box said. The stack stays in the log.
-func panickedEnding(panicked *turn.PanicError) executordomain.Ending {
-	return executordomain.Ending{Outcome: executordomain.OutcomeFailed,
+func panickedEnding(panicked *turn.PanicError) executorkeep.Ending {
+	return executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
 		Failure: redact.Secrets(fmt.Sprintf("the resumed turn panicked and was abandoned: %v", panicked.Value))}
 }
 
@@ -824,25 +886,83 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Company:       company,
-		Run:           req.Run,
-		State:         state,
-		Turn:          resumedTurn(req.Run, seat, company.Org),
-		Answer:        req.Answer,
-		Success:       req.Success,
-		Trigger:       req.Trigger,
-		DeliveredRefs: req.DeliveredRefs,
-		RefsElided:    req.DeliveredRefsElided,
-		InputTokens:   req.InputTokens,
-		OutputTokens:  req.OutputTokens,
-		CacheRead:     req.CacheReadTokens,
-		CacheWrite:    req.CacheWriteTokens,
-		Begin:         req.Begin,
-		Engine:        req.Engine,
-		Ended:         req.Ended,
-		Asked:         req.Asked,
-		Lost:          req.Lost,
+		Company:      company,
+		Run:          req.Run,
+		Bridged:      req.Bridged,
+		State:        state,
+		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
+		Answer:       req.Answer,
+		Success:      req.Success,
+		Trigger:      req.Trigger,
+		Account:      accountOf(req),
+		InputTokens:  req.InputTokens,
+		OutputTokens: req.OutputTokens,
+		CacheRead:    req.CacheReadTokens,
+		CacheWrite:   req.CacheWriteTokens,
+		Begin:        req.Begin,
+		Engine:       req.Engine,
+		Ended:        req.Ended,
+		Asked:        req.Asked,
+		Lost:         req.Lost,
 	})
+}
+
+// runAccount is what a resume carries of the collected run's delivery: the
+// refs its report named and what its push record says it pushed — the
+// resumed executor's phase record lists both ([runRecordOf]). Zero when a
+// person's answer resumed a parked clarification: nothing was collected. The
+// run's cost is on its launch's own `executor_collected` record instead — see
+// [sandbox.ResumeRequest.DeliveredRefs].
+type runAccount struct {
+	// DeliveredRefs are what the run reported, and RefsElided how many more
+	// than it lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
+	DeliveredRefs []string
+	RefsElided    int
+	// Pushed, PushedElided and PushedUnread are what the run's push record
+	// says it moved on the code host, as the record carries them — see
+	// [sandbox.ResumeRequest.Pushed].
+	Pushed       []types.PushedRefRecord
+	PushedElided int
+	PushedUnread string
+}
+
+// accountOf is req's account of the run it collected.
+func accountOf(req sandbox.ResumeRequest) runAccount {
+	return runAccount{
+		DeliveredRefs: req.DeliveredRefs, RefsElided: req.DeliveredRefsElided,
+		Pushed: sandbox.PushedRecords(req.Pushed), PushedElided: req.PushedElided,
+		PushedUnread: req.PushedUnread,
+	}
+}
+
+// runRecordOf is the record the resumed executor's phase carries of the run
+// it collected: which box did the work, under which entry — off the run's own
+// row, because this process may not be the one that launched it, and it is
+// the only thing that can say a phase ran in a sandbox rather than in this
+// process's own tool loop — and its account of what it delivered.
+//
+// ONE FUNCTION FROM THE ROW AND THE ACCOUNT TO THE RECORD, so a field the
+// account gains reaches the record or fails a test here
+// (TestAResumedRecordCarriesTheRunsWholeAccount) rather than a reader of the
+// dashboard.
+func runRecordOf(run sandbox.PendingRun, account runAccount) runner.RunRecord {
+	return runner.RunRecord{
+		Harness:   run.Harness,
+		SandboxID: run.SandboxID,
+		// AND WHICH ENTRY RAN IT, as the launch recorded the member it
+		// picked: the executor's record and its spend are charged to
+		// that entry and model, which a fallback makes other than the
+		// chain's head, and which the chain resolved now could name
+		// differently again.
+		ProviderKey:   run.Launch.ProviderKey,
+		Model:         run.Launch.Model,
+		LaunchID:      run.LaunchID,
+		DeliveredRefs: account.DeliveredRefs,
+		RefsElided:    account.RefsElided,
+		Pushed:        account.Pushed,
+		PushedElided:  account.PushedElided,
+		PushedUnread:  account.PushedUnread,
+	}
 }
 
 // resumedTurn is the turn a parked run is re-entered as.
@@ -858,11 +978,18 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // resume that comes longer after this start than the operation ledger
 // remembers mints its writes at the attempt, or at the instant an earlier
 // attempt or an earlier half of the turn recorded, never here.
-func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
+//
+// AND THE SAME HOLDS, read off the row with the row's writer attached
+// ([Engine.rowHolds]): what the turn named before it parked is still what it
+// may come back to, and a hold it takes from here on is on the row before the
+// request it was taken for.
+func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization,
+	holds *turnctx.Holds) *turnctx.Turn {
 	return &turnctx.Turn{
 		RunID: run.TurnID, WorkKey: run.WorkKey, WorkSince: run.WorkSince,
 		Seat: seat, Org: organization,
 		Depth: run.DelegationDepth, Chain: run.DelegationChain,
+		Holds: holds,
 	}
 }
 
@@ -925,22 +1052,19 @@ type resumeInput struct {
 	// may not be in it.
 	Company *Company
 	Run     sandbox.PendingRun
+	// Bridged is the run's bridged tool log as the resume read it
+	// ([sandbox.ResumeRequest.Bridged]); empty on a close that judges no
+	// calls.
+	Bridged sandbox.BridgeLog
 	State   execstate.State
 	Turn    *turnctx.Turn
 	Answer  string
 	Success bool
 	Trigger *events.Event
 
-	// DeliveredRefs are what the collected run reported, for the resumed
-	// phase's own event. Empty when a person's answer resumed a parked
-	// clarification: nothing was collected. The run's cost is on its
-	// launch's own `executor_collected` record — see
-	// [sandbox.ResumeRequest.DeliveredRefs].
-	DeliveredRefs []string
-
-	// RefsElided is how many more the run reported than DeliveredRefs
-	// lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
-	RefsElided int
+	// Account is what the collected run delivered, for the resumed phase's
+	// own event — see [runAccount].
+	Account runAccount
 
 	// InputTokens and OutputTokens are the resumed job's tokens, which this
 	// segment's charge to the turn's work item includes — see
@@ -1137,7 +1261,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
 	input.Resume = runnerResume(in, e.runSteers.carried(in.Run), sandbox.NewCallSeal(e.cipher))
-	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
+	r, err := company.RunnerFor(ctx, in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
 	}
@@ -1176,6 +1300,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// frame makes is paired. A resume gathers no context of its own, so
 	// nothing slow is being skipped by waiting.
 	e.publishTurnStarted(ctx, tel, in.Run.DelegationDepth, in.Run.DelegationChain, true)
+	// AND WHAT IT HOLDS, answered for by this node while the segment runs,
+	// as on the dispatch path — the row carries them too. See codeholds.go.
+	defer e.turnHolds.running(tel.holds)()
 	// THE TURN'S OWN DEADLINE, off the park: the cap bounds the turn a fire
 	// started, so the round this segment collects always runs and no round
 	// after it starts once that instant has passed ([turn.Settings.Deadline]).
@@ -1507,32 +1634,17 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal) 
 		// continues the job's session — holds the skills its launch armed only
 		// where the box took that session up ([runner.Resume.Continued]).
 		Continued: in.Run.Launch.SessionStart == sandbox.SessionStartContinued,
-		// WHICH BOX DID THE WORK. Off the run's own row, because this
-		// process may not be the one that launched it, and it is the only
-		// thing that can say a phase ran in a sandbox rather than in this
-		// process's own tool loop.
-		Run: runner.RunRecord{
-			Harness:   in.Run.Harness,
-			SandboxID: in.Run.SandboxID,
-			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
-			// picked: the executor's record and its spend are charged to
-			// that entry and model, which a fallback makes other than the
-			// chain's head, and which the chain resolved now could name
-			// differently again.
-			ProviderKey:   in.Run.Launch.ProviderKey,
-			Model:         in.Run.Launch.Model,
-			LaunchID:      in.Run.LaunchID,
-			DeliveredRefs: in.DeliveredRefs,
-			RefsElided:    in.RefsElided,
-		},
-		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
+		// WHICH BOX DID THE WORK, and what it delivered — see
+		// [runRecordOf].
+		Run: runRecordOf(in.Run, in.Account),
+		// THE RUN'S OWN TOOL CALLS, off its durable log. The executor called
 		// them over the bridge, possibly in another process, so this list is
 		// the only record of what the phase did, its submission included.
-		Bridged: bridgedCalls(in.Run.BridgeCalls),
-		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the row recorded it
+		Bridged: bridgedCalls(in.Bridged.Calls),
+		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the log recorded it
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
-		Answered: in.Run.AnsweredThrough,
+		Answered: in.Bridged.AnsweredThrough,
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).
@@ -1972,6 +2084,57 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 	}
 }
 
+// launchHold is one executor launch's hand-off of its turn's code holds to the
+// run row it opens ([agentLauncher]).
+//
+// THE SET IS SEALED FROM ITS READ TO THE ROW: the launch reads the turn's set
+// ([turnctx.Holds.Seal]) and hands it to the row it opens
+// ([sandbox.LaunchRequest.CodeHolds]); a hold another call of the turn takes
+// in between waits, and the row's writer is attached the moment the row
+// exists ([sandbox.LaunchRequest.Opened], called after the store opened the
+// job and before any box exists) — from then on every hold is on the row
+// before its request. A RELAUNCH, its row's writer already attached, reads the
+// set unsealed: the row exists, and its reset unions what it is handed with
+// what the row holds. A launch that fails before the row existed unseals the
+// set, and one that fails after it detaches the writer: the coordinator
+// abandons that row, and the turn runs on holding in memory.
+type launchHold struct {
+	set     *turnctx.Holds
+	pending sandbox.PendingStore
+	turnID  string
+	// ids is the set as the launch read it, which the row is opened with.
+	ids []string
+	// rowOpened reports the row's writer attached. Set by the launch's
+	// Opened, which the coordinator calls inline on the launching
+	// goroutine, before the launch returns.
+	rowOpened bool
+}
+
+// launchHolds seals set for a launch of turnID's run on pending.
+func launchHolds(set *turnctx.Holds, pending sandbox.PendingStore, turnID string) *launchHold {
+	return &launchHold{set: set, pending: pending, turnID: turnID, ids: set.Seal()}
+}
+
+// opened attaches the row's writer, ending the seal: the launch's
+// [sandbox.LaunchRequest.Opened].
+func (h *launchHold) opened(string) {
+	h.set.Attach(holdWriter(h.pending, h.turnID))
+	h.rowOpened = true
+}
+
+// settle ends the seal of a launch that failed: unsealed where no row
+// existed, detached where one was opened and is being abandoned. A launch that
+// succeeded leaves the writer attached.
+func (h *launchHold) settle(err error) {
+	switch {
+	case err == nil:
+	case h.rowOpened:
+		h.set.Detach()
+	default:
+		h.set.Unseal()
+	}
+}
+
 // launchFence is the seat lease this node writes on a seat's behalf under —
 // a launch, the record of an answer, the claim of a completion or an answer —
 // which the run's row is stamped with and every later write the node makes on
@@ -2244,14 +2407,14 @@ func sandboxMCP(
 // WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
 // nothing restarts a box's servers, so a server withheld from this run is
 // offered to the first launch after what it waits for arrives
-// ([credentialMissing.arrival]): the seal reaching this node, or the agent's
-// GitHub App being installed.
+// ([credentialMissing.arrival]): the seal reaching this node, or the step an
+// issuer waits on, such as the agent's GitHub App being installed.
 func (e *Engine) boxServers(
 	ctx context.Context, c *Company, seat *org.Role, settings *org.RoleSandbox,
 ) map[string]sandbox.MCPServer {
 	// THE SAME TOKEN LIFE AS THE RUN'S OWN ENVIRONMENT: a server rendered
 	// into the box is started there once, with whatever it is handed now.
-	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	env, token := e.seatResolver(ctx, c, seat, runTokenLife)
 	servers, withheld := sandboxMCP(env, c, seat, settings,
 		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
 	// A SERVER A TOOL OF WHICH CHANGED is not the box's either (ADR-0078):
@@ -2468,6 +2631,9 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// A report, a failure or a question past what the run's record
 		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},
+		// What a run given repositories pushed to the code host is read from
+		// its push rows when it is collected — see runpushes.go.
+		Pushes: e.codeRunPushes(),
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -2504,7 +2670,7 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// box is wherever its seat runs, a seats-only node included, which
 		// holds no log of its own — with the engine's policy, secrets,
 		// minting and sealed upload beside them. See executorsession.go.
-		Sessions: e.executorLog,
+		Sessions: executorRecordsOf(e.executorLog),
 		Keep:     executorKeep{engine: e},
 		// AND A RELAUNCH CONTINUES THE TURN'S KEPT SESSION in whatever box it
 		// gets, its row read through the same router's reads and its object
@@ -2541,11 +2707,11 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		Node:  e.id,
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
-		// A job continued in its turn's kept box starts on a current GitHub
-		// App token file: the hook both waiters run on every poll, run
-		// once more before the job, since no poll reached the box while it
-		// was paused and no setup rewrites it — see
-		// [sandbox.CoordinatorOptions.Refresh] and githubtoken.go.
+		// A job continued in its turn's kept box starts on current token
+		// files: the hook both waiters run on every poll, run once more
+		// before the job, since no poll reached the box while it was
+		// paused and no setup rewrites them (see
+		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
 	})
 	if err != nil {
@@ -2696,8 +2862,8 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 // box by the fleet's, a direct or container box by its launching node's own
 // ([sandbox.Drives]) — so whatever the poll does to a running box has to ride
 // both, or the boxes of the other kind silently go without it. The refresh is
-// the case in point: a long run's GitHub App token, kept current in the files
-// the run was provisioned with (githubtoken.go), is renewed by the poll that
+// the case in point: a long run's issued tokens, kept current in the files
+// the run was provisioned with (issued.go), are renewed by the poll that
 // reaches the box and by nothing else.
 func (e *Engine) sandboxWaiterOptions(
 	rt *sandboxRuntime, drives sandbox.Drives, interval time.Duration,
@@ -3626,7 +3792,7 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// codingRun is what one coding box is handed to reach a model: the model, the
+// executorRun is what one coding box is handed to reach a model: the model, the
 // credential files a local backend seeds, and the whole run environment.
 //
 // THREE things travel, and they travel differently on purpose:
@@ -3644,7 +3810,7 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
-type codingRun struct {
+type executorRun struct {
 	model string
 	files map[string]string
 	env   map[string]string
@@ -3654,7 +3820,7 @@ type codingRun struct {
 	signIn map[string]string
 }
 
-// newCodingRun is the [codingRun] of a box run on agent, the executor-chain
+// newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
 // member the launch picked ([agentLauncher.member]), over seatEnv, the
 // environment the seat's own config assembled ([Engine.runEnvironment]), with
 // boxDefaults, the integrations' box settings, beneath everything.
@@ -3668,7 +3834,7 @@ type codingRun struct {
 // and its env and sign-in, which that harness reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newCodingRun(agent *harness.Provider, seatEnv, boxDefaults map[string]string) codingRun {
+func newExecutorRun(agent *harness.Provider, seatEnv, boxDefaults map[string]string) executorRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
 	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3692,7 +3858,7 @@ func newCodingRun(agent *harness.Provider, seatEnv, boxDefaults map[string]strin
 			defaults[name] = value
 		}
 	}
-	run := codingRun{
+	run := executorRun{
 		model:  agent.ModelArgument(),
 		env:    underlay(maps.Clone(signIn), defaults),
 		signIn: signIn,
@@ -3857,7 +4023,7 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
 //
-// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newCodingRun]):
+// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newExecutorRun]):
 // a guard that asked the chain's head would wave through a fallback launch on a
 // member with no travelling token, and refuse one whose own entry mints one.
 func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
@@ -3901,7 +4067,7 @@ func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
 	// IT JUDGES THE RIGHT HARNESS, and the key it lets through is one the run can
 	// read: the box is handed the entry's model exactly as its runs on this
 	// host name it, so its provider is the one the operator keyed for those,
-	// and the runner is that entry's own harness ([newCodingRun]).
+	// and the runner is that entry's own harness ([newExecutorRun]).
 	// Narrowing it to the variable the model's provider segment "should" use
 	// would need a table of that harness's providers the engine does not ship and
 	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,

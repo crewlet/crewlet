@@ -35,7 +35,16 @@ export interface ToolAnnotations {
 
 /** The shelf of the built-in catalogue a tool is filed on, in the order the engine lists them. */
 type BuiltinGroupKey =
-  "work" | "projects" | "knowledge" | "chat" | "artifacts" | "colleagues" | "memory" | "discovery";
+  | "work"
+  | "projects"
+  | "knowledge"
+  | "chat"
+  | "artifacts"
+  | "code"
+  | "health"
+  | "colleagues"
+  | "memory"
+  | "discovery";
 
 /**
  * Who may call a built-in: what its authority row asks of the caller, named
@@ -46,7 +55,8 @@ type BuiltinGroupKey =
  * open ask on the item names. `project_lead`: the lead of the project the
  * work or file is in. `artifact_viewer`, `artifact_editor`, `artifact_owner`:
  * the least role on the one artifact the call names (an editor also authors
- * artifacts).
+ * artifacts). `health_tools`: an agent whose role carries the `health_tools`
+ * grant, the deployment's health being an admin's read.
  */
 export type BuiltinGate =
   | "everybody"
@@ -59,7 +69,8 @@ export type BuiltinGate =
   | "artifacts"
   | "artifact_viewer"
   | "artifact_editor"
-  | "artifact_owner";
+  | "artifact_owner"
+  | "health_tools";
 
 export interface ToolRow {
   name: string;

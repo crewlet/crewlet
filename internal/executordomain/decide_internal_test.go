@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -78,7 +79,7 @@ func TestACaptureTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 		t.Errorf("a capture at the row's own ordinals: %v, want ErrStaleCapture", err)
 	}
 	e.capture(capturing("ana", "chat:room", ended, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", ended, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", ended, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if err := e.decide(newCapture("ana", "chat:room", ended, 2, 1, 100, monday),
 		monday); !errors.Is(err, ErrTurnEnded) {
 		t.Errorf("a capture of an ended turn: %v, want ErrTurnEnded", err)
@@ -265,7 +266,7 @@ func TestABeginTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 	e := newEstate(t)
 	ended, keyed, begun, absorbed, absorber := newTurn(), newTurn(), newTurn(), newTurn(), newTurn()
 	e.capture(capturing("ana", "chat:room", ended, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:room", ended, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:room", ended, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	work := capturing("ana", "chat:room", keyed, 1, 1, 100, budget)
 	work.WorkKey = "work-1"
 	e.capture(work)
@@ -273,10 +274,10 @@ func TestABeginTheRowsCannotTakeIsRefusedAtTheDecide(t *testing.T) {
 	e.begin(beginning(h, "ana", "chat:room", begun, ""))
 	// A TURN WHOSE ROW A LATER TURN'S END ABSORBED: its tombstone alone stays.
 	e.capture(capturing("ana", "chat:other", absorbed, 1, 1, 100, budget))
-	e.end(ending("ana", "chat:other", absorbed, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:other", absorbed, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	handed := e.head("ana", "chat:other")
 	e.capture(launching(handed, capturing("ana", "chat:other", absorber, 1, 1, 100, budget)))
-	e.end(ending("ana", "chat:other", absorber, "", Ending{Outcome: OutcomeCompleted}))
+	e.end(ending("ana", "chat:other", absorber, "", executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}))
 	if _, found := e.session("ana", absorbed); found {
 		t.Fatal("the premise: the absorbed turn's row is still there")
 	}

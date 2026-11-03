@@ -13,11 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -123,6 +125,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
+		code.Domain{}.Name():      true,
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
@@ -175,9 +178,10 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 //
 // The shipped figures are pinned AS LITERALS, so moving one is a change in this
 // diff and never a constant moved somewhere else: the reference company's 125 a
-// day per seat on the tracker's, the knowledge base's, the artifacts log's and
-// the artifact datastore's logs, chat's own 120 on its log, the executor log's
-// own 120, and zero on the identity estate's and the Dashboard Assistant's.
+// day per seat on the tracker's, the knowledge base's, the artifacts log's, the
+// artifact datastore's and the code host's logs, chat's own 120 on its log, the
+// executor log's own 120, and zero on the identity estate's and the Dashboard
+// Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		worklet.Domain{}.Name():   new(125),
@@ -191,6 +195,8 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		chatlet.Domain{}.Name():         new(120),
 		assistantdomain.Domain{}.Name(): new(0),
 		executordomain.Domain{}.Name():  new(120),
+		// The tracker's figure: a seat's code tools read at linearizable.
+		code.Domain{}.Name(): new(125),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -286,10 +292,11 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 8 {
+	if claims < 9 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
 			"tracker, the pages, the identity estate, the artifacts, the "+
-			"artifact datastore, the assistant, chat and the executor log", claims)
+			"artifact datastore, the assistant, chat, the executor log and the "+
+			"code log", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -338,11 +345,11 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 8 {
+	if claims < 9 {
 		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
 			"generation record, want the tracker, the pages, the identity "+
-			"estate, the artifacts, the artifact datastore, the assistant, chat "+
-			"and the executor log", claims)
+			"estate, the artifacts, the artifact datastore, the assistant, chat, "+
+			"the executor log and the code log", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -518,6 +525,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		assistantdomain.Domain{}.Name(),
 		chatlet.Domain{}.Name(),
 		executordomain.Domain{}.Name(),
+		code.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {
@@ -586,7 +594,7 @@ func (unregisteredDomain) ScopeIndex() string { return "" }
 
 func (unregisteredDomain) OpsTable() string { return "" }
 
-func (unregisteredDomain) ReadinessInput() bool { return false }
+func (unregisteredDomain) GatesSeatAdmission() bool { return false }
 
 func (unregisteredDomain) ClaimsIdentity() bool { return false }
 
@@ -713,7 +721,7 @@ func seamsStateLog(t *testing.T) *stateLog {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
 	return &stateLog{nodeID: "boot-check", db: db,
-		ring: statelog.OneKey("k1", "boot-check-material")}
+		ring: recordseal.OneKey("k1", "boot-check-material")}
 }
 
 // seamsSpec is the stream spec [stateLog.start] hands a domain's seams: the

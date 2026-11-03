@@ -130,6 +130,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/worklet/activity", what: "work_activity"},
 	{method: "GET", pattern: "/worklet/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/worklet/inbox", what: "work_inbox"},
+	// AND THE COMPOSED INBOX, every native domain's notices in one list —
+	// no domain's path, since it is no domain's (queries' composedInbox).
+	{method: "GET", pattern: "/inbox", what: "inbox"},
 	// A TASK'S THREAD, deeper than the detail's own page, with the task as
 	// `item=`. A literal segment rather than /worklet/{id}/comments, which
 	// net/http refuses beside /worklet/projects/{key}: neither is more specific
@@ -267,6 +270,53 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/query", what: "artifact_data_query", path: map[string]string{"id": "id", "collection": "collection"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/{doc}", what: "artifact_data_doc", path: map[string]string{"id": "id", "collection": "collection", "doc": "doc"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
+	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
+	// one repository's push history, each decided per repository by the grant
+	// the serving node derives (code.GrantOf, ADR-0088) — and who read a
+	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
+	// ALONE: they were the code host's own routes, mounted beside git
+	// (code.go), and a question answered there too would be the second
+	// implementation this table exists to prevent. The verify and its read
+	// stay there: they are operations on THIS node's copy, not questions.
+	{method: "GET", pattern: "/code/repos", what: "code_repos"},
+	{method: "GET", pattern: "/code/repos/{name}", what: "code_repo", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/pushes", what: "code_pushes", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/readers", what: "code_repo_readers", path: map[string]string{"name": "name"}},
+	// AND A CHANGE'S ROWS AND ITS ROUTING: the changes, one change a part at
+	// a time, whom its records reached, and one reviewer's reviews — each
+	// decided per repository as the rows are, a change named on its
+	// repository's path by its number.
+	{method: "GET", pattern: "/code/changes", what: "code_changes"},
+	{method: "GET", pattern: "/code/repos/{name}/changes/{n}", what: "code_change", path: map[string]string{"name": "name", "n": "change"}},
+	{method: "GET", pattern: "/code/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
+	{method: "GET", pattern: "/code/reviews", what: "code_reviews"},
+	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
+	// history, a file's blame, a diff, a comparison with its merge preview
+	// and one commit with the changes it belongs to — each read by object id
+	// of the repository's home git node, and decided per repository as the
+	// rows are.
+	{method: "GET", pattern: "/code/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/blob", what: "code_blob", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/log", what: "code_log", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/blame", what: "code_blame", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/diff", what: "code_diff", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
+	// AND ITS MERGE QUEUES AND ITS CHECKS: the live queues, the attempts of
+	// checks — a repository's, a change's, a commit's or every repository's
+	// in a window — one attempt whole on its repository's path, and a page of
+	// the log a failed run kept, each decided per repository as the rows are.
+	// The branch an attempt was checked for rides the query as `target`: a
+	// ref's slashes are no path segment's.
+	{method: "GET", pattern: "/code/queue", what: "code_queue"},
+	{method: "GET", pattern: "/code/checks", what: "code_checks"},
+	{method: "GET", pattern: "/code/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
+	{method: "GET", pattern: "/code/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
+	// AND A SEARCH OF THEIR LINES, across every repository the caller may
+	// read or the ones its repo: filters name, each decided per repository
+	// by the git node that answers it.
+	{method: "GET", pattern: "/code/search", what: "code_search"},
 }
 
 // mountReads registers the named read routes.
@@ -369,6 +419,21 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 	data, err := a.queries.AnswerWith(r.Context(), what, params)
 	if err != nil {
 		writeQueryError(w, r, what, err)
+		return
+	}
+	writeAnswer(w, r, data)
+}
+
+// writeAnswer renders a question's answer, SHARED by every named route and the
+// generic form for [writeQueryError]'s reason: as JSON, and — for an answer
+// that is a function of the object ids its question named
+// ([queries.Immutable]) — with the entity tag and the caching that say it never
+// changes, answered `304` to a caller that already holds it
+// ([httpjson.Immutable]). The socket sends the same answer as JSON alone:
+// [queries.Immutable] encodes as what it wraps.
+func writeAnswer(w http.ResponseWriter, r *http.Request, data any) {
+	if answer, ok := data.(queries.Immutable); ok {
+		httpjson.Immutable(w, r, answer.Answer)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)

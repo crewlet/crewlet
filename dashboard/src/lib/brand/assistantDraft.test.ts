@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 import { parseDraftChange } from "~/app/assistant/draft.ts";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { applyBrandDraft, brandDraftFields, type BrandDraft } from "./assistantDraft.ts";
@@ -62,7 +63,7 @@ describe("a proposed logo", () => {
     applyBrandDraft(EDIT, proposed(), edit.set, report, fetchFile);
     expect(edit.get().document.logos.mark).toBe("logos/mark.svg");
     expect(fetchFile).toHaveBeenCalledWith(REF);
-    await vi.waitFor(() => expect(edit.get().files.get("logos/mark.svg")).toBeDefined());
+    await eventually(() => expect(edit.get().files.get("logos/mark.svg")).toBeDefined());
     const file = edit.get().files.get("logos/mark.svg")!;
     expect([file.name, file.type]).toEqual(["mark.svg", "image/svg+xml"]);
     expect(report).not.toHaveBeenCalled();
@@ -72,7 +73,7 @@ describe("a proposed logo", () => {
     const edit = held(EDIT);
     const report = vi.fn();
     applyBrandDraft(EDIT, proposed(), edit.set, report, () => Promise.reject(new Error("404")));
-    await vi.waitFor(() => expect(report).toHaveBeenCalled());
+    await eventually(() => expect(report).toHaveBeenCalled());
     expect(edit.get().document.logos.mark).toBeUndefined();
     expect(edit.get().files.size).toBe(0);
   });

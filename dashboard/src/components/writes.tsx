@@ -1520,8 +1520,11 @@ const PAUSE_REASON_MAX = 500;
  * is a separate, explicit choice ("Also stop the current turn"), because a
  * turn stopped at its next round — and its executor running in its box, which
  * the stop ends at once with the box — loses what it had not done and is not
- * run again;
- * `stop_running` is sent only when it is ticked.
+ * run again; `stop_running` is sent only when it is ticked. That stop is the
+ * emergency stop of the seat's executors: the one running in its box ends at
+ * once, and the code host refuses every push from the seat's boxes until the
+ * seat is resumed. A pause without it stops new work only, so an executor
+ * already running keeps working and its pushes land.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
  * that waited is delivered first, in order.
@@ -1678,8 +1681,9 @@ function PauseSeatDialog({
           description={
             working
               ? "Otherwise the current turn finishes first. A stop also ends its executor " +
-                "at once, if it is running in its box. Unfinished work is lost."
-              : "It isn’t on a turn now."
+                "at once, if it is running in its box. Unfinished work is lost, and its " +
+                "executors can’t push or change anything until it is resumed."
+              : "It isn’t on a turn now. Its executors can’t push or change anything until it is resumed."
           }
         />
         <RefusalNote write={write} />

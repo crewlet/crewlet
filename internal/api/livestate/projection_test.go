@@ -710,7 +710,7 @@ func TestAReconcileCarriesWhoAParkedQuestionIsPutTo(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
 	parked := func(turnID string, audience []string) livestate.ExecutorRecord {
-		rec := codingRun(turnID, "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour))
+		rec := executorRecord(turnID, "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour))
 		rec.Entry.Question, rec.Entry.Audience = "which branch?", "dana"
 		rec.Entry.AudienceHandles = audience
 		return rec

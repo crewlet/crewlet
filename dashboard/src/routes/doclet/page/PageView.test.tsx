@@ -30,6 +30,7 @@ import type { PageDetail } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { loadRichEditor, readOnly, retype } from "~/test/richEditor.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -176,7 +177,7 @@ function mount(children: ReactNode, answers: Record<string, Answer>) {
     asked.push({ kind: what, params: params ?? {} });
     const all: Record<string, Answer> = {
       viewer: JANE,
-      work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+      inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
       decisions: { handle: "jane", items: [], total: 0, capped: false },
       containers: { containers: [{ key: "ENG", name: "Engineering", pages: 3 }] },
       page_activity: { changes: [] },
@@ -205,9 +206,7 @@ function mount(children: ReactNode, answers: Record<string, Answer>) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const region = (name: string | RegExp) => screen.getByRole("region", { name });

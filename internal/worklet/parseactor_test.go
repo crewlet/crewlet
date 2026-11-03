@@ -85,20 +85,23 @@ func TestABoundOperatorIsNotWokenByTheirOwnWrite(t *testing.T) {
 
 // AND THE ONE REASON THAT REACHES THE ACTOR STILL REACHES THEIR SEAT.
 //
-// An unblocked notice is about ANOTHER task becoming workable, so the person
-// who closed the blocker is exactly who needs to hear it — [Reason.WakesActor]
-// is that exception, and an exclusion that dropped the author without honouring
-// it would take the whole feature away from the one person it is for.
+// That a task of yours became workable is news whoever wrote the record that
+// says so — [Reason.WakesActor] is that exception — and an exclusion that
+// dropped the author without honouring it would silence the notice for the
+// one person it is for whenever they are its writer. The record is the
+// repair's own shape ([worklet.Writer.TellUnblocked]): a late relations commit
+// on the dependent, naming its assignee alone, here written through that
+// person's own credential.
 func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 	t.Parallel()
 	routed, err := worklet.NewParser(worklet.ParserOptions{}).Parse(
 		t.Context(), delivery(t, personRecord(&worklet.Notify{
-			Kind: worklet.ChangeStatus,
+			Kind: worklet.ChangeRelations,
+			Late: true,
 			Snapshot: worklet.Snapshot{
 				Key: "ENG-1", Project: "ENG",
-				StatusGroup: worklet.GroupDone, PrevStatusGroup: worklet.GroupActive,
 				Unblocked: []worklet.TaskParty{
-					{Task: "t-2", Key: "ENG-2", Assignee: "jane-founder"},
+					{Task: "t-1", Key: "ENG-1", Assignee: "jane-founder"},
 				},
 			},
 		}, "jane-founder")), registry(t, "jane-founder"))
@@ -106,9 +109,8 @@ func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(routed) != 1 || routed[0].To.Handle != "jane-founder" {
-		t.Fatalf("the unblocked notice reached %v — it is about the OTHER "+
-			"task, so the person who cleared the blocker is who it is for",
-			routed)
+		t.Fatalf("the unblocked notice reached %v — a task of hers became "+
+			"workable, so she is who it is for, whoever wrote it", routed)
 	}
 	if got := routed[0].Metadata[worklet.MetaVia]; got != string(worklet.ReasonUnblocked) {
 		t.Errorf("the notice was routed via %q, want %q", got, worklet.ReasonUnblocked)

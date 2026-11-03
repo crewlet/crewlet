@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -179,12 +180,12 @@ func TestAFeedRefusesAPositionItCannotUseAsTheRequestsMistake(t *testing.T) {
 			return err
 		}
 	}
-	inbox := func(q worklet.InboxQuery) func() error {
+	inboxRead := func(q worklet.InboxQuery) func() error {
 		return func() error {
 			q.Handle, q.Level = "bob", statelog.ReadStale
 			// THE SCOPE EVERY SURFACE DEFAULTS TO, so the case reaches
 			// the position it is about rather than the absent scope.
-			q.Snoozed = worklet.SnoozeExclude
+			q.Snoozed = inbox.SnoozeExclude
 			_, err := r.reader.Inbox(t.Context(), q, wednesday)
 			return err
 		}
@@ -199,13 +200,13 @@ func TestAFeedRefusesAPositionItCannotUseAsTheRequestsMistake(t *testing.T) {
 		{"an activity search wider than the feed scans",
 			activity(worklet.ActivityQuery{Workspace: true, Q: "deploy"}), false},
 		{"an inbox cursor from another log",
-			inbox(worklet.InboxQuery{Cursor: pages.String()}), true},
+			inboxRead(worklet.InboxQuery{Cursor: pages.String()}), true},
 		{"an inbox since from another log",
-			inbox(worklet.InboxQuery{Since: pages}), true},
+			inboxRead(worklet.InboxQuery{Since: pages}), true},
 		{"an inbox cursor that is not a position",
-			inbox(worklet.InboxQuery{Cursor: "42"}), false},
+			inboxRead(worklet.InboxQuery{Cursor: "42"}), false},
 		{"an unknown wake reason",
-			inbox(worklet.InboxQuery{Reasons: []worklet.Reason{"because-i-said-so"}}), false},
+			inboxRead(worklet.InboxQuery{Reasons: []worklet.Reason{"because-i-said-so"}}), false},
 	} {
 		err := c.run()
 		if !errors.Is(err, worklet.ErrBadQuery) {

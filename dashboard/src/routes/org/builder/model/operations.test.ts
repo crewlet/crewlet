@@ -450,7 +450,7 @@ describe("replacing a saved seat", () => {
     };
     dev.integrations = {
       slack: { bot_token: "__redacted__", signing_secret: "__redacted__" },
-      github: { tier: "review", private_key: "${GH_KEY}" },
+      github: { repos: ["acme/api"], private_key: "${GH_KEY}" },
     };
     const { draft: next } = run(fixture(company), {
       type: "replaceSeat",
@@ -463,7 +463,7 @@ describe("replacing a saved seat", () => {
       ...rest,
       handle: "developer",
       mcp_env: { git: { HOST: "${GIT_HOST}" } },
-      integrations: { github: { tier: "review", private_key: "${GH_KEY}" } },
+      integrations: { github: { repos: ["acme/api"], private_key: "${GH_KEY}" } },
     });
     expect(JSON.stringify(doc(next))).not.toContain("__redacted__");
     expect(withoutMasked(dev).masked).toEqual([
@@ -622,7 +622,7 @@ describe("editing", () => {
       set: [
         { path: ["goal"], value: "Build" },
         { path: ["backstory"], value: "Joined early" },
-        { path: ["integrations", "github", "tier"], value: "developer" },
+        { path: ["code", "access"], value: "review" },
       ],
     });
     expect(op).toEqual({
@@ -630,7 +630,7 @@ describe("editing", () => {
       target: "seat:dev",
       changes: [
         { path: ["backstory"], after: "Joined early" },
-        { path: ["integrations", "github", "tier"], after: "developer" },
+        { path: ["code", "access"], after: "review" },
       ],
       accessLevels: [],
     });

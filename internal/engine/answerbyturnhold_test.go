@@ -60,6 +60,7 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Answers:  fleetAnswers(),
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: q, Pending: s.store, Manager: manager,
 		Resume: resume(s), Hold: inboxHold{q: q}, After: s.retries.after,
 		Spent: d.SpendAnswer, WasSpent: d.AnswerWorked,

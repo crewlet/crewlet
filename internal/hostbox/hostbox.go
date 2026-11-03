@@ -12,17 +12,19 @@
 // The environment had already drifted: the harness backend carried a copy of the
 // allowlist that disagreed with this one about five names, and the MCP client
 // carried none at all and handed every tool server the engine's whole
-// environment — its keyring and its Tier A token values among it. A container runtime's own CLI has a rule
-// of its own ([ContainerRuntime]), held here for the same reason: two callers
-// start one, the sandbox and a tool server declared as `command: docker`.
-// So does where a local box writes a file it is handed ([InHome], [SafeJoin]),
-// which config validation applies to a setup step before any box exists. And
-// so does how a shared login of several files is read and written: as ONE
-// login, journaled under the directory's lock ([ReadCredentials],
-// [WriteCredentials]), because the harness backend's seats and commands and a
-// local box's teardown all write it, and one of them replacing its files a
-// rename at a time is a login half written whenever that writer stops between
-// two of them.
+// environment — its keyring and its Tier A token values among it. A container
+// runtime's own CLI has a rule of its own ([ContainerRuntime]), held here for
+// the same reason: two callers start one, the sandbox and a tool server
+// declared as `command: docker`. So does where a local box writes a file it is
+// handed ([InHome], [SafeJoin]), which config validation applies to a setup
+// step before any box exists. It is also where a freshly written executable is
+// waited for ([Settle]), because the code host's hook script and every test
+// stand-in hit the same window. And so is how a shared login of several files
+// is read and written: as ONE login, journaled under the directory's lock
+// ([ReadCredentials], [WriteCredentials]), because the harness backend's seats
+// and commands and a local box's teardown all write it, and one of them
+// replacing its files a rename at a time is a login half written whenever that
+// writer stops between two of them.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox

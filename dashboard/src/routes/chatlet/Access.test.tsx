@@ -20,6 +20,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 import { ToastProvider } from "@crewlethq/ui";
 
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -166,7 +167,7 @@ function moreItem(row: HTMLElement, name: RegExp): HTMLElement {
  */
 async function saysHeld(control: HTMLElement, reason: string) {
   fireEvent.pointerEnter(control);
-  await vi.waitFor(() => expect(holdOf(control) ?? "").toContain(reason));
+  await eventually(() => expect(holdOf(control) ?? "").toContain(reason));
 }
 
 /** Close every open menu, so the next one read is the only one open. */
@@ -278,7 +279,7 @@ test.each(MESSAGE_CHANGES)(
     fireEvent.change(screen.getByRole("textbox", { name: /^Message/ }), {
       target: { value: "still mine to say" },
     });
-    await vi.waitFor(() => expect(holdOf(send)).toBeNull());
+    await eventually(() => expect(holdOf(send)).toBeNull());
 
     fireEvent.click(control(row));
     await new Promise((r) => setTimeout(r, 20));

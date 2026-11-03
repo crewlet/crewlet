@@ -18,10 +18,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A ROOM CROSSES THE FLEET: two nodes, a socket on each, and each node's
@@ -105,7 +106,7 @@ func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = silent.Stop(context.Background()) })
-	if _, err := silent.Serve(t.Context(), topics.PresenceAsk,
+	if _, err := silent.Serve(t.Context(), topics.PresenceAsk, queue.ConcurrentAnswers,
 		func(ctx context.Context, _ []byte) ([]byte, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -199,7 +200,7 @@ func TestAPresenceFrameTheFleetDidNotSealShowsNobody(t *testing.T) {
 	defer func() { _ = sender.Stop(context.Background()) }()
 	for name, payload := range map[string][]byte{
 		"not sealed at all":          unsealed,
-		"another fleet's key":        sealedFrom(t, statelog.OneKey("k1", "not this fleet's"), forged),
+		"another fleet's key":        sealedFrom(t, recordseal.OneKey("k1", "not this fleet's"), forged),
 		"another channel's domain":   otherDomain,
 		"past its expiry":            sealedFrom(t, fleetRing, expired),
 		"a member no build can show": sealedFrom(t, fleetRing, malformed),

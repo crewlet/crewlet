@@ -31,6 +31,7 @@ import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./MessageRow.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";
+import { WAIT_BOUND_MS } from "~/test/bounds.ts";
 import { Store, type ChatPresencePush, type RoomMember, type QueryName } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
 import { LoneRoom } from "./testkit.tsx";
@@ -466,11 +467,10 @@ test("a post answered pending is asked again under its own key, and its refusal 
   await screen.findByText("line 2");
   await say("anyone there?");
   await screen.findByText(/Waiting for this node to catch up/);
-  await waitFor(
-    () =>
-      expect(screen.getByText(/This room was archived before the message reached it/)).toBeTruthy(),
-    { timeout: PENDING_REASK_MS * 3 },
-  );
+  // The re-ask comes PENDING_REASK_MS after the pending answer, well inside
+  // the suite's one wait bound (test/bounds.ts), which the find is held to.
+  expect(PENDING_REASK_MS * 3).toBeLessThan(WAIT_BOUND_MS);
+  await screen.findByText(/This room was archived before the message reached it/);
   const sent = pressesOf("post_message");
   expect(sent).toHaveLength(2);
   expect(sent[1]!.opId).toBe(sent[0]!.opId);
@@ -1294,7 +1294,9 @@ test("an older page is asked at this tab's read floor", async () => {
     cursor: "2",
     limit: PAGE,
     read_level: "session",
-    min_position: "CREWLET_CHAT_LOG@1:70",
+    // ONE FLOOR PER LOG the question reads (`protocol/session.ts`), so a list
+    // even where the room's messages are read from the chat log alone.
+    min_position: ["CREWLET_CHAT_LOG@1:70"],
   });
 });
 

@@ -417,44 +417,38 @@ func (k *answerLost) Purge(ctx context.Context, key string, opts ...jetstream.KV
 	return errAnswerLost
 }
 
-// A FLUSH STILL LOSING WHEN THE PATIENCE RUNS OUT IS UNAVAILABLE — AND IT
-// SAYS NOTHING LANDED.
+// A FLUSH THAT LOSES EVERY ATTEMPT IS UNAVAILABLE — AND IT SAYS NOTHING
+// LANDED.
 //
 // Every update is refused as one another writer beat ([errWriteLost], the
 // leader's decided refusal), writing nothing. That refusal is a LOST RACE, so
-// the flush races again after a wait rather than answering an outage at once
-// ([lostUpdateRace]), until the store's patience runs out
-// ([FleetStore.retryRaces]). Then it is unavailable, naming the contention —
-// and it is NOT marked [coord.ErrWriteUnknown]: every write it made was
-// answered and refused, so a person told "may have been recorded" would be
-// told something false, which is what the [coord.ChatReads] contract promises
-// an unmarked error never means.
-func TestAFlushStillLosingWhenThePatienceRunsOutSaysNothingLanded(t *testing.T) {
+// the flush races again after a window rather than answering an outage at
+// once ([lostUpdateRace]), up to the bound every fleet key shares
+// ([fleetCASAttempts]). Then it is unavailable, naming the contention — and
+// it is NOT marked [coord.ErrWriteUnknown]: every write it made was answered
+// and refused, so a person told "may have been recorded" would be told
+// something false, which is what the [coord.ChatReads] contract promises an
+// unmarked error never means.
+func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f, _ := chatReadFleet(t, "founder")
-	const patience = 200 * time.Millisecond
-	f.patience = patience
 	refusing := &lostForever{KeyValue: f.chatReads}
 	f.chatReads = refusing
 
-	began := time.Now()
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
 		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
 	})
-	if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "did not land within") {
+	if !errors.Is(err, coord.ErrUnavailable) || !strings.Contains(err.Error(), "lost every compare-and-swap") {
 		t.Fatalf("AdvanceChatRead = %v, want an unavailable store naming the contention", err)
 	}
 	if errors.Is(err, coord.ErrWriteUnknown) {
 		t.Fatalf("AdvanceChatRead = %v: a flush whose every write was refused is marked as "+
 			"one that may have landed", err)
 	}
-	if took := time.Since(began); took < patience {
-		t.Fatalf("the flush gave up after %v, before its %v patience", took, patience)
-	}
-	if n := refusing.refused.Load(); n < 2 {
-		t.Fatalf("the flush was refused %d time(s), want it to have raced again: "+
-			"a write another writer beat is a lost race, not an outage", n)
+	if n := refusing.refused.Load(); n != fleetCASAttempts {
+		t.Fatalf("the flush was refused %d time(s), want every one of its %d attempts: "+
+			"a write another writer beat is a lost race, not an outage", n, fleetCASAttempts)
 	}
 	f.chatReads = refusing.KeyValue
 	state, err := f.ChatRead(ctx, "founder")

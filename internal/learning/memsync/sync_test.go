@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -20,6 +21,14 @@ import (
 // the way the queue provisions it — one message retained per subject, which
 // is what turns the stream from a log into a keyed table.
 func broker(t *testing.T) *nats.Conn {
+	t.Helper()
+	_, conn := brokerServer(t)
+	return conn
+}
+
+// brokerServer is [broker] with the server beside the connection, for a case
+// that stands between a read and the stream's leader ([jsapitest]).
+func brokerServer(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "memsync-test", JetStream: true, Port: -1,
@@ -54,7 +63,7 @@ func broker(t *testing.T) *nats.Conn {
 	}); err != nil {
 		t.Fatalf("provision the memory stream: %v", err)
 	}
-	return conn
+	return ns, conn
 }
 
 // jsOn is a JetStream client over conn in the API this test's broker speaks:
@@ -123,6 +132,98 @@ func TestASeatCarriesItsMemoryToANewNode(t *testing.T) {
 	}
 	if content != "the release train is thursdays" {
 		t.Errorf("the carried diary entry says %q", content)
+	}
+}
+
+// A HYDRATION WHOSE IDENTITY READ A MEMBER DROPS ASKS AGAIN RATHER THAN
+// REFUSING THE SEAT.
+//
+// Before a single row is read the changelog's identity is read from its
+// stream's info, which only the stream's leader answers: a member that still
+// believes in a leader its group has just lost drops the request without a
+// word. Sent once, it waited out the hydration's whole bound and refused the
+// seat for an election a second long.
+func TestAHydrationWhoseIdentityReadAMemberDropsAsksAgain(t *testing.T) {
+	t.Parallel()
+	ns, conn := brokerServer(t)
+	ctx := context.Background()
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	held := jsapitest.DropFirst(t, ns, jsapitest.StreamInfo(topics.MemoryStream), 1)
+
+	carried, err := syncerOn(t, openStore(t), conn).Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("a hydration whose identity read the broker dropped once "+
+			"refused the seat rather than asking again: %v", err)
+	}
+	if carried != len(tables) {
+		t.Errorf("hydrated %d rows, want %d", carried, len(tables))
+	}
+	if n := held.Count(); n != 1 {
+		t.Errorf("the broker held %d stream infos, want the 1 it dropped", n)
+	}
+}
+
+// A HYDRATION WHOSE READ OF THE LEADER'S END A MEMBER DROPS ASKS AGAIN — and
+// that read is the leader's whatever the changelog's allow_direct says.
+//
+// Before the replay is opened, the newest row of the seat's subjects is read
+// from the changelog's leader, so a replay served by a replica that is behind
+// is not taken for the seat's whole memory. Only the leader answers that
+// read, so a member that still believes in a leader its group has just lost
+// drops it without a word. Sent once, it waited out the hydration's whole
+// fifteen-second bound and refused the seat over a reply nobody would send.
+//
+// It is internal/jsapi's leader read, a STREAM.MSG.GET whatever the stream's
+// flag says. The client's own last-message read picks its API from that flag
+// alone — any replica's DIRECT.GET the moment it is on, which proves nothing
+// — and so a changelog that allowed direct gets refused every hydration
+// outright; read through the leader it hydrates like any other, the dropped
+// MSG.GET counted here the proof that the leader was asked.
+func TestAHydrationWhoseLeaderEndReadAMemberDropsAsksAgain(t *testing.T) {
+	t.Parallel()
+	for name, direct := range map[string]bool{
+		"from a changelog with direct gets off": false,
+		"from one that allows them":             true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ns, conn := brokerServer(t)
+			ctx := context.Background()
+			if direct {
+				js := jsOn(t, conn)
+				stream, err := js.Stream(ctx, topics.MemoryStream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg := stream.CachedInfo().Config
+				cfg.AllowDirect = true
+				if _, err := js.UpdateStream(ctx, cfg); err != nil {
+					t.Fatalf("allow direct gets on the changelog: %v", err)
+				}
+			}
+			oldOwner := openStore(t)
+			seedMemory(t, oldOwner)
+			if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+				t.Fatalf("publish: %v", err)
+			}
+			held := jsapitest.DropFirst(t, ns, jsapitest.MsgGet(topics.MemoryStream), 1)
+
+			carried, err := syncerOn(t, openStore(t), conn).Hydrate(ctx, seat.Handle)
+			if err != nil {
+				t.Fatalf("a hydration whose read of the leader's end the broker dropped "+
+					"once refused the seat rather than asking again: %v", err)
+			}
+			if carried != len(tables) {
+				t.Errorf("hydrated %d rows, want %d", carried, len(tables))
+			}
+			if n := held.Count(); n != 1 {
+				t.Errorf("the broker held %d leader message reads, want the 1 it dropped", n)
+			}
+		})
 	}
 }
 
@@ -372,7 +473,7 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 // anywhere — and every seat on the node has silently lost its diary and its
 // episodes, which it reports to a colleague as never having spoken to them.
 //
-// The broker's own creation instant is the only thing that can tell the two
+// The stream's creation instant is the only thing that can tell the two
 // apart. A sequence cannot: a recreated stream's sequences are plausible. A
 // count cannot: an empty stream and an emptied one are the same count.
 func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
@@ -423,6 +524,81 @@ func TestMemoryChangelogRecreationIsDetected(t *testing.T) {
 	}
 	if carried != 0 {
 		t.Errorf("%d rows were carried from a stream that holds none", carried)
+	}
+}
+
+// A RESTORED CHANGELOG IS THE ONE THIS NODE SAW.
+//
+// A snapshot restore of the stream estate makes the changelog again from the
+// configuration its snapshot names, every row back in it — and the broker dates
+// the stream to the restore. Read off the broker, a node restored from a backup
+// refused every seat it ran as hydrating from a recreated changelog, with
+// nothing to do about it but clear its identity row by hand. The changelog
+// carries the instant the create that made it stamped, which the restore hands
+// back with the rest of its configuration.
+func TestARestoredChangelogIsTheOneThisNodeSaw(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+	js := jsOn(t, conn)
+
+	// PROVISIONED AS THE QUEUE PROVISIONS IT: stamped by its create.
+	stamped := jetstream.StreamConfig{
+		Name:              topics.MemoryStream,
+		Subjects:          []string{topics.MemoryPrefix + ">"},
+		Storage:           jetstream.FileStorage,
+		Retention:         jetstream.LimitsPolicy,
+		MaxMsgsPerSubject: 1,
+		Metadata:          statelog.StampCreatedAt(nil, time.Now()),
+	}
+	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+		t.Fatalf("clear the unstamped changelog: %v", err)
+	}
+	if _, err := js.CreateStream(ctx, stamped); err != nil {
+		t.Fatalf("provision the stamped changelog: %v", err)
+	}
+	owner := openStore(t)
+	seedMemory(t, owner)
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	node := openStore(t)
+	if _, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle); err != nil {
+		t.Fatalf("the first hydration failed: %v", err)
+	}
+	original, err := js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		t.Fatalf("read the changelog: %v", err)
+	}
+
+	// RESTORED: made again from its own configuration, every row back.
+	if err := js.DeleteStream(ctx, topics.MemoryStream); err != nil {
+		t.Fatalf("delete the changelog: %v", err)
+	}
+	if _, err := js.CreateStream(ctx, original.CachedInfo().Config); err != nil {
+		t.Fatalf("make the changelog again from its configuration: %v", err)
+	}
+	if _, err := syncerOn(t, owner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("put the rows back: %v", err)
+	}
+	restored, err := js.Stream(ctx, topics.MemoryStream)
+	if err != nil {
+		t.Fatalf("read the restored changelog: %v", err)
+	}
+	if statelog.IdentityOf(original.CachedInfo().Created, restored.CachedInfo().Created, true) !=
+		statelog.StreamRecreated {
+		t.Fatalf("the broker dated the restored changelog %v and the original %v — this "+
+			"case proves nothing unless the broker's own instant moved",
+			restored.CachedInfo().Created, original.CachedInfo().Created)
+	}
+
+	carried, err := syncerOn(t, node, conn).Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("hydrating from the restored changelog was refused: %v — every seat "+
+			"of a node restored from a backup would be", err)
+	}
+	if carried != len(tables) {
+		t.Fatalf("hydrated %d rows from the restored changelog, want %d", carried, len(tables))
 	}
 }
 

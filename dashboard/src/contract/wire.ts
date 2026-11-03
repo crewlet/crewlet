@@ -49,6 +49,39 @@ export type PushKind =
   | "pong";
 
 /**
+ * An `inbox_changed` frame's data: one committed batch of a domain's applier
+ * moved this seat's inbox — or, with no subject and nothing counted, every
+ * watched inbox is to be read again, because the engine switched where that
+ * domain's movements come from.
+ *
+ * EXACTLY THE ENGINE'S `stream.InboxChange`, every key required, held there
+ * by `internal/api/stream`'s
+ * `TestTheDashboardReadsAnInboxFrameAsTheEngineSendsIt`.
+ *
+ * IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame says only that the inbox
+ * should be asked again; what is in it is read through the inbox questions,
+ * which decide who may read it. `unread_delta` is a HINT — it counts the
+ * notices the batch wrote, and a redelivery the engine has already collapsed
+ * may count one twice — so no screen adds it to a badge.
+ */
+export interface InboxChange {
+  /** The domain whose half of the inbox moved — `tracker` or `code` — on a
+   *  movement and on a re-read alike. Either way the screen re-reads the
+   *  composed `inbox` question: `work_inbox` answers the tracker's alone. */
+  source: string;
+  handle: string;
+  unread_delta: number;
+  /** The id of the object the newest of those notices was written on: the
+   *  task for a task commit, the change for a record about a change, the
+   *  PERSON for a `prioritised` notice — whose task the tracker's notice
+   *  names as `task`. Empty on a re-read. */
+  subject: string;
+  /** The reason that notice was routed under, in its domain's own
+   *  vocabulary. Empty on a re-read. */
+  reason: string;
+}
+
+/**
  * A live call's HEAVY fields, by the version that numbers each — the engine's
  * `livestate.CallDetail`, held there both ways by `internal/api/livestate`'s
  * `TestTheDashboardMergesEveryVersionedField`.

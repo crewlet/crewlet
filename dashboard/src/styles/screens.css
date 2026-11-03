@@ -3600,85 +3600,6 @@ a.knowledge-reader-how:hover {
   color: var(--color-feedback-danger-ink);
 }
 
-/* ---- Config ------------------------------------------------------------- */
-
-/* A CONFIGURATION DIFF, ONE CHANGE A ROW: its mark, the path it changed and
-   the value, in three tracks every row shares. Each row is a SUBGRID of the
-   list, so the values start at one edge all the way down rather than wherever
-   each row's own path happened to end.
-
-   ITS OWN CLASS NAMES. The knowledge page's line diff is uilet's `DiffView`
-   now, but while this list once spelled the same class as the local line
-   diff, that rule won the cascade and laid every change out in its
-   line-number tracks: at 1440 a 92px path got 23px and a 931px value 13px.
-   Two components never share a class here.
-
-   NOTHING IS CUT. The path is what a reader looks for in their YAML and the
-   value is the change itself, so both wrap — a path breaks anywhere rather
-   than running under the value, and an object or a list keeps the document's
-   own indented shape (`changeValue`). The path track is its content up to 40%
-   of the row, so a short path leaves the value the rest.
-
-   THE MARK'S TRACK CARRIES THE ROW'S INSET. A subgrid row's own padding comes
-   out of the first and last tracks it spans (styles/subgrid.test.ts), and a
-   bare `2ch` less the row's `--spacing-2` left the mark about five pixels. */
-.config-diff {
-  display: grid;
-  grid-template-columns: calc(2ch + var(--spacing-2)) fit-content(40%) minmax(0, 1fr);
-  column-gap: var(--spacing-2);
-  row-gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-}
-.config-diff-line {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: baseline;
-  padding: 2px var(--spacing-2);
-  border-radius: var(--radius-xs);
-}
-.config-diff-mark {
-  text-align: center;
-  user-select: none;
-}
-.config-diff-path {
-  overflow-wrap: anywhere;
-}
-.config-diff-value {
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-/* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
-   These selectors once read add / remove / replace, which no answer has ever
-   carried, so every diff line rendered unstyled. */
-.config-diff-line[data-kind="added"] {
-  background: var(--color-feedback-success-soft);
-  color: var(--color-feedback-success-ink);
-}
-.config-diff-line[data-kind="removed"] {
-  background: var(--color-feedback-danger-soft);
-  color: var(--color-feedback-danger-ink);
-}
-.config-diff-line[data-kind="changed"] {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
-}
-/* ON A PHONE THE VALUE TAKES THE ROW UNDER ITS PATH: 40% of a 340px card is
-   a path broken over three lines beside a value squeezed into the rest. */
-@container page (width < 640px) {
-  .config-diff {
-    grid-template-columns: calc(2ch + var(--spacing-2)) minmax(0, 1fr);
-  }
-  .config-diff-value {
-    grid-column: 2;
-  }
-}
-
 /* ---- A live screen that stays readable ---------------------------------- */
 
 /* Everything that changes on a timescale of milliseconds is confined here,
@@ -10184,7 +10105,7 @@ a.live-row:focus-visible {
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which
    lays the two sides out itself), across both columns, and the files lens
-   inside it. */
+   inside it, whose diffs are `components/DiffView.tsx`'s. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;
@@ -10206,12 +10127,6 @@ a.live-row:focus-visible {
   margin: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-}
-.artifact-compare-text {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
 }
 
 /* ---- a slide deck (routes/artifacts/SlidesView.tsx) ---------------------- */
@@ -10786,6 +10701,290 @@ a.live-row:focus-visible {
   }
 }
 
+/* CODE › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
+   move on its own, above the grid. A ruled box rather than a callout, since
+   nothing here is a fault: it is a list, read first. */
+.code-person-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-block-end: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-person-band__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A CHANGE'S PAGE (`routes/code/change/`). Its timeline is a plain list of
+   records in log order, each ruled off the next; nothing in it is a state, so
+   nothing in it takes a hue. */
+.code-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-block-end: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-reply {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-carries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* THE FILES TAB: the file list beside the diff, the list a column of its own
+   width on a wide page and above the diff on a narrow one. */
+.code-files {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+@container page (width < 720px) {
+  .code-files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-files__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.code-files__file {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.code-files__file:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-files__file[aria-current="true"] {
+  background: var(--color-surface-pressed);
+}
+
+.code-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-suggestion {
+  margin: 0;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* PROVENANCE: a label and its value a row, the labels one column. */
+.code-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+
+.code-facts > div {
+  display: contents;
+}
+
+.code-facts dt {
+  color: var(--color-text-secondary);
+}
+
+.code-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A REPOSITORY'S PAGE (`routes/code/repo/`). Its listings are plain ruled
+   tables and its file a column of numbered lines in the code face; nothing
+   here is a state, so nothing takes a hue. */
+.code-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-rules > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+.code-tree,
+.code-blame {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.code-tree caption {
+  text-align: start;
+  padding-block-end: var(--spacing-2);
+}
+
+.code-tree th {
+  text-align: start;
+  font-weight: inherit;
+  color: var(--color-text-secondary);
+}
+
+.code-tree th,
+.code-tree td {
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* A FILE'S LINES: the number a button in its own track, the text in the
+   code face at the document's 13px, kept as git wrote it. A line too wide
+   scrolls the file, never the page. */
+.code-source {
+  overflow-x: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+}
+
+.code-source__line {
+  display: grid;
+  grid-template-columns: 6ch max-content;
+  column-gap: var(--spacing-3);
+  padding-inline-end: var(--spacing-3);
+}
+
+/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
+   is the reader's place, not the line's state. */
+.code-source__line[data-picked],
+.code-blame tr[data-picked] {
+  box-shadow: inset 2px 0 0 var(--color-border-strong);
+}
+
+.code-source__number {
+  padding: 0 var(--spacing-2) 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-source__number:hover {
+  color: var(--color-text-primary);
+  text-decoration-line: underline;
+}
+
+.code-source__text {
+  white-space: pre;
+}
+
+.code-blame {
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+}
+
+.code-blame tr[data-run] td {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-blame td {
+  padding: 0 var(--spacing-2);
+  vertical-align: top;
+}
+
+.code-blame__commit {
+  width: 18rem;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-blame__number {
+  width: 6ch;
+  text-align: right;
+}
+
+.code-blame__text {
+  white-space: pre;
+}
+
+.code-readme {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block-start: var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-readme__text {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ---- The Dashboard Assistant (app/assistant) -----------------------------
    The one line under the composer, centred, on one line at every width. */
 .assistant-disclaimer {
@@ -10798,4 +10997,84 @@ a.live-row:focus-visible {
 .assistant-model-notice,
 .assistant-attach-refusal {
   margin: 0 0 var(--spacing-2);
+}
+
+/* Code › Search: the bar's filters, then the lines by repository and file. */
+.code-search-filters {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-search-coverage {
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
+.code-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.code-search-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-search-repo__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+
+.code-search-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-search-file__path {
+  overflow-wrap: anywhere;
+}
+
+/* A result's path, linking to its file: chrome, the heading its lines hang
+   under, drawn in the link ink with no underline. A link inside a sentence
+   takes .prose-link instead. */
+.code-search-file__link {
+  color: var(--color-brand-accent-ink);
+}
+
+.code-search-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.code-search-line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: var(--spacing-2);
+  padding-inline: var(--spacing-2);
+}
+
+/* A line's number is read (and is the link to the line), so it takes the
+   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
+.code-search-line__number {
+  text-align: end;
+  color: var(--color-text-tertiary);
+}
+
+.code-search-line__text {
+  white-space: pre;
 }

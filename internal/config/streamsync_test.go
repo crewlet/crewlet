@@ -57,7 +57,8 @@ func TestStreamSyncRefusals(t *testing.T) {
 	}{
 		"an external cluster stores its own data": {
 			config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222",
-				Replicas: 3, Sync: "30s"},
+				Credentials: "/etc/crewlet/engine.creds",
+				Replicas:    3, Sync: "30s"},
 			"external NATS cluster",
 		},
 		"below three replicas there is no quorum to trade for": {

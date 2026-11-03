@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
-
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -74,7 +72,7 @@ func Stamped(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s supplies no read seam for its write path to "+
 			"decide through", name)
 	}
-	db := openEstate(t, c)
+	node, db := openNodeEstate(t, c)
 	stream := c.spec().Name
 	at := statelog.Position{Stream: stream, Generation: SuiteGeneration}
 	if err := seedCheckpoint(t.Context(), db, at); err != nil {
@@ -84,37 +82,45 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
-	log := &recordingLog{last: map[string]uint64{}}
+	log := newSuiteLog()
 	// SIGNED, as every publisher's records are: the framework refuses a
 	// publisher with no signer, and what the broker holds is the frame.
-	signer, err := statelog.NewSigner(name, suiteRing())
+	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatalf("build a signer for %s: %v", name, err)
 	}
-	verifier, err := statelog.NewVerifier(name, suiteRing())
+	verifier, err := recordseal.NewVerifier(name, suiteRing())
 	if err != nil {
 		t.Fatalf("build a verifier for %s: %v", name, err)
 	}
+	// A NODE WHOSE APPLIER RUNS, over the log the publisher appends to: a write
+	// path of more than one step decides each from the rows the step before it
+	// made, as it does on every node — a rename from the create's row, a
+	// release from the rename's. Over a log nothing applied, every step after
+	// the first was decided from an estate that never held the first, so a
+	// candidate could certify only the first record of a sequence.
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: c.Domain, Spec: c.spec(), Applier: c.Applier, Verifier: verifier,
+		Fetch: log, Log: log, Node: node, DB: db, Checkpoint: at,
+	})
+	if err != nil {
+		t.Fatalf("build %s's applier: %v", name, err)
+	}
+	startLoop(t, runner)
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: c.spec(),
 		Log: log, Signer: signer, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
-		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
+		Waiter: runner, Voids: runner, Identity: runner,
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
 		// THE SAME LOG READ BACK THROUGH THE VERIFIER, because what it
 		// holds is the signed frame and a resolution decodes the body.
 		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
-	}
-	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
-	// is under test is what the decision writes, not the log's room.
-	if statelog.ReservationOf(c.Domain).Kept {
-		reserve, reserveErr := statelog.NewReserve(c.spec(),
-			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
-		if reserveErr != nil {
-			t.Fatalf("build a reserve over %s: %v", name, reserveErr)
-		}
-		deps.Admission = reserve
+		// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps
+		// one: what is under test is what the decision writes, not the
+		// log's room.
+		Admission: admissionFor(t, c),
 	}
 	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
@@ -133,7 +139,7 @@ func Stamped(t *testing.T, new Factory) error {
 	}
 	for _, framed := range records {
 		payload, verdict := verifier.Open(framed)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			return fmt.Errorf("%s's record does not open under the key it was "+
 				"signed with (%s)", name, verdict)
 		}
@@ -217,57 +223,20 @@ func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.
 	})
 }
 
-// recordingLog is a broker that keeps what it was handed: per-subject
-// sequences, the one expectation check a conditional append makes, and every
-// payload in order.
-type recordingLog struct {
-	mu      sync.Mutex
-	seq     uint64
-	last    map[string]uint64
-	records [][]byte
-}
-
-func (l *recordingLog) Append(_ context.Context, subject, _ string, expect *uint64,
-	body []byte) (uint64, bool, error) {
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if expect != nil && *expect != l.last[subject] {
-		// THE BROKER'S OWN REFUSAL, so the publisher classifies it as the
-		// lost race it would be rather than as no answer at all.
-		return 0, false, &jetstream.APIError{
-			ErrorCode:   jetstream.JSErrCodeStreamWrongLastSequence,
-			Description: "wrong last sequence",
-		}
+// admissionFor is a reserve over a log with no ceiling where the candidate's
+// domain keeps one, and none where it keeps none — [statelog.ReservationOf]'s
+// rule, which every publisher, read index and sweep is held to.
+func admissionFor(t *testing.T, c Candidate) statelog.Admission {
+	t.Helper()
+	if !statelog.ReservationOf(c.Domain).Kept {
+		return nil
 	}
-	l.seq++
-	l.last[subject] = l.seq
-	l.records = append(l.records, append([]byte(nil), body...))
-	return l.seq, false, nil
-}
-
-func (l *recordingLog) LastSeq(_ context.Context, subject string) (uint64, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	seq, ok := l.last[subject]
-	return seq, ok, nil
-}
-
-// At is the record appended at seq, which a resolution reads to learn whose a
-// record it did not append itself is.
-func (l *recordingLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if seq == 0 || seq > uint64(len(l.records)) {
-		return "", nil, time.Time{}, false, nil
+	reserve, err := statelog.NewReserve(c.spec(),
+		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
+	if err != nil {
+		t.Fatalf("build a reserve over %s: %v", c.Domain.Name(), err)
 	}
-	return "", l.records[seq-1], time.Time{}, true, nil
-}
-
-func (l *recordingLog) appended() [][]byte {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([][]byte(nil), l.records...)
+	return reserve
 }
 
 // openFence refuses nothing: the suite's node is neither evicted nor below
@@ -293,10 +262,10 @@ var errNoApplier = errors.New("statelogtest: nothing applies what this suite app
 // suiteWaiter is a node whose rows stand at one position, on the live stream.
 type suiteWaiter struct{ at statelog.Position }
 
-func (w suiteWaiter) Committed() statelog.Position                         { return w.at }
-func (suiteWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
-func (suiteWaiter) StreamIdentity() error                                  { return nil }
-func (suiteWaiter) Truncated() error                                       { return nil }
+func (w suiteWaiter) Reached() statelog.Position                         { return w.at }
+func (suiteWaiter) WaitReached(context.Context, statelog.Position) error { return nil }
+func (suiteWaiter) StreamIdentity() error                                { return nil }
+func (suiteWaiter) Truncated() error                                     { return nil }
 
 // Voided voids nothing: no reanchor places a rule on the suite's log.
 func (suiteWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
@@ -306,4 +275,4 @@ func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Posi
 }
 
 // suiteRing is the keyring every record the suite publishes is signed under.
-func suiteRing() statelog.Keyring { return statelog.OneKey("suite", "statelogtest-material") }
+func suiteRing() recordseal.Keyring { return recordseal.OneKey("suite", "statelogtest-material") }

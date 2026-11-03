@@ -14,6 +14,7 @@
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { fromDocument, toDocument, type IndexedDocument } from "./document.ts";
+import { ManualClock } from "./testkit.ts";
 import {
   CHECK_BACKOFF_BASE_MS,
   CHECK_BACKOFF_MAX_MS,
@@ -34,7 +35,6 @@ import {
   etagOfRevision,
   revisionOfEtag,
   saveRequest,
-  type Clock,
   type ConfigRequest,
   type ConfigTransport,
   type HttpAnswer,
@@ -509,34 +509,6 @@ describe("saveRules", () => {
 // The driver
 // ---------------------------------------------------------------------------
 
-class FakeClock implements Clock {
-  time = 0;
-  private timers: { at: number; fn: () => void; id: number }[] = [];
-  private nextId = 0;
-  now() {
-    return this.time;
-  }
-  setTimer(fn: () => void, ms: number) {
-    const id = ++this.nextId;
-    this.timers.push({ at: this.time + ms, fn, id });
-    return () => {
-      this.timers = this.timers.filter((t) => t.id !== id);
-    };
-  }
-  advance(ms: number) {
-    const until = this.time + ms;
-    for (;;) {
-      this.timers.sort((a, b) => a.at - b.at);
-      const next = this.timers[0];
-      if (!next || next.at > until) break;
-      this.timers.shift();
-      this.time = next.at;
-      next.fn();
-    }
-    this.time = until;
-  }
-}
-
 interface Pending {
   request: ConfigRequest;
   signal: AbortSignal;
@@ -560,10 +532,16 @@ class ScriptedTransport implements ConfigTransport {
   }
 }
 
+/**
+ * A TASK BOUNDARY, NOT A WAIT FOR TIME: the scripted transport answers with
+ * resolved promises and the runner's handling of an answer is microtasks, all
+ * of which have run once a zero-delay timer fires; the runner's own timers are
+ * on the harness's ManualClock.
+ */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function harness() {
-  const clock = new FakeClock();
+  const clock = new ManualClock();
   const transport = new ScriptedTransport();
   const settled: SettledCheck[] = [];
   let generation = 0;

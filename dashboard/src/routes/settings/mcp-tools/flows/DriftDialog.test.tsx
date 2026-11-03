@@ -3,11 +3,12 @@
  * said first, and each decision sent by the digest of the definition reviewed.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import type { RestResult } from "~/lib/useRest.ts";
 import { TestClient } from "~/test/client.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { reviewChanges, type ServerDetail } from "../api.ts";
 import { LINEAR_CHANGES, LINEAR_DETAIL, mcpData } from "../fixtures.ts";
 import { DriftDialog } from "./DriftDialog.tsx";
@@ -46,12 +47,6 @@ function mount() {
   );
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
-}
-
 beforeEach(() => {
   detail = { ...LINEAR_DETAIL, changes: LINEAR_CHANGES };
   vi.mocked(reviewChanges).mockReset();
@@ -86,7 +81,7 @@ test("each decision is sent by the digest of the definition reviewed", async () 
   });
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Accept change" }));
-  await settle();
+  await afterMicrotasks();
   expect(reviewChanges).toHaveBeenLastCalledWith(
     "linear",
     { accept: { delete_issue: "c".repeat(64) } },
@@ -94,7 +89,7 @@ test("each decision is sent by the digest of the definition reviewed", async () 
   );
   expect(onDone).toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Keep blocked" }));
-  await settle();
+  await afterMicrotasks();
   expect(reviewChanges).toHaveBeenLastCalledWith(
     "linear",
     { block: { delete_issue: "c".repeat(64) } },
@@ -103,7 +98,7 @@ test("each decision is sent by the digest of the definition reviewed", async () 
   fireEvent.click(screen.getByRole("button", { name: /export_board/ }));
   expect(screen.queryByRole("button", { name: "Keep blocked" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Accept that it went" }));
-  await settle();
+  await afterMicrotasks();
   expect(reviewChanges).toHaveBeenLastCalledWith(
     "linear",
     { accept: { export_board: null } },
@@ -122,7 +117,7 @@ test("a decision refused as stale says so and reads the changes again", async ()
   });
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Accept change" }));
-  await settle();
+  await afterMicrotasks();
   expect(screen.getAllByText(/changed again since it was reviewed/).length).toBeGreaterThan(0);
   expect(reload).toHaveBeenCalled();
   expect(onDone).not.toHaveBeenCalled();

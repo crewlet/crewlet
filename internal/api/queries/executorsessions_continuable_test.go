@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -157,7 +158,7 @@ func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 		LaunchSeq: 2, CaptureSeq: 1}
 	return row, sandbox.PendingRun{TurnID: turn, AgentHandle: "ana", Status: sandbox.StatusAwaiting,
 		SandboxID: "box-1", Placement: string(sandbox.Direct), LaunchNode: holder, Harness: harness,
-		SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+		SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept, BoxSince: at.Add(-time.Hour)}
 }
 
 // continuableSources answers the sessions questions over rows, deciding each
@@ -231,7 +232,7 @@ func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 	over, _ := liveSession(executor.ClaudeCodeName)
 	ended, endedRun := liveSession(executor.ClaudeCodeName)
 	ended.EndedAt = ended.CapturedAt.Add(time.Minute)
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 	runs := &stubRuns{runs: []sandbox.PendingRun{continuesRun, endingRun, stoppingRun, foreignRun, endedRun}}
 	s := continuableSources(t, []executordomain.Session{continues, ending, stopping, foreign, over, ended}, runs)
 
@@ -286,8 +287,8 @@ func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 			"decides and the head the next turn decides", asks)
 	}
 	if !slices.Contains(asks[0], sandbox.RelaunchAsk{Turn: continues.Turn,
-		Archive: sandbox.ArchiveOf(continues)}) ||
-		!slices.Contains(asks[0], sandbox.RelaunchAsk{Archive: sandbox.ArchiveOf(ended)}) {
+		Archive: sandbox.ArchiveOf(continues.Kept())}) ||
+		!slices.Contains(asks[0], sandbox.RelaunchAsk{Archive: sandbox.ArchiveOf(ended.Kept())}) {
 		t.Errorf("a page asked the node holding the seat %v, want a live row by its turn and the head by none",
 			asks[0])
 	}
@@ -306,7 +307,7 @@ func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 			"turn's read %d, want the page's one listing and two turns read alone", listed, got)
 	}
 	if asks := targets.asks(); len(asks) != 2 || len(asks[1]) != 1 ||
-		asks[1][0] != (sandbox.RelaunchAsk{Turn: continues.Turn, Archive: sandbox.ArchiveOf(continues)}) {
+		asks[1][0] != (sandbox.RelaunchAsk{Turn: continues.Turn, Archive: sandbox.ArchiveOf(continues.Kept())}) {
 		t.Errorf("after a page and a session read alone, the holder was asked %v, want the session read "+
 			"alone asking about its own turn's session once", asks)
 	}
@@ -330,7 +331,7 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 	live, liveRun := liveSession(executor.ClaudeCodeName)
 	ended, _ := liveSession(executor.ClaudeCodeName)
 	ended.ConversationKey = ""
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeFailed}
+	ended.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeFailed}
 	down := &stubRuns{runs: []sandbox.PendingRun{liveRun}, err: errors.New("the coordination store is down")}
 	unwired := continuableSources(t, []executordomain.Session{live, ended}, nil)
 	unwired.SessionRuns = nil
@@ -740,7 +741,7 @@ type levelledSessions struct {
 func (l *levelledSessions) Session(ctx context.Context, handle, turn string,
 	fresh statelog.Freshness) (executordomain.SessionRead, error) {
 
-	if fresh.Level == sandbox.RelaunchRead().Level {
+	if fresh.Level == executordomain.RelaunchRead().Level {
 		l.mu.Lock()
 		l.reReads++
 		l.mu.Unlock()
@@ -823,7 +824,7 @@ func TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed(t *testing.T) {
 	ended.CaptureSeq = 2
 	ended.EndedAt = ended.CapturedAt.Add(time.Minute)
 	ended.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: 2}
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, nil, store)
 	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind, before}},
@@ -865,7 +866,7 @@ func TestARowNamingItsRunsKeptCaptureIsNotReadAgain(t *testing.T) {
 	working, workingRun := liveSession(executor.ClaudeCodeName)
 	workingRun.Status, workingRun.LaunchSeq = sandbox.StatusRunning, 3
 	ended, _ := liveSession(executor.ClaudeCodeName)
-	ended.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	ended.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 	store, _ := sessionObjectStore(t)
 	s := sessionSources(t, nil, store)
 	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{kept, working, ended}}}
@@ -937,7 +938,7 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 	row.ConversationKey = conversation
 	row.EndedAt = row.CapturedAt.Add(time.Minute)
 	row.EndedAtPosition = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: seq}
-	row.Ending = &executordomain.Ending{Outcome: executordomain.OutcomeCompleted}
+	row.Ending = &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}
 	return row
 }
 
@@ -966,7 +967,7 @@ func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	older := endedOn("chat:room", 1)
 	unkept := endedOn("chat:room", 2)
 	unkept.Object = objstore.Object{}
-	unkept.Ending.Unkept = &executordomain.Unkept{LaunchSeq: 3, CaptureSeq: 1,
+	unkept.Ending.Unkept = &executorkeep.Unkept{LaunchSeq: 3, CaptureSeq: 1,
 		Reason: "refused: the store answered " + secret}
 	head := endedOn("chat:room", 3)
 	released := endedOn("chat:room", 4)
@@ -1034,7 +1035,7 @@ func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	}
 	targets := s.RelaunchTargets.(*stubTargets)
 	want := []sandbox.RelaunchAsk{{Turn: begun.Turn, Archive: sandbox.SessionArchive{Harness: head.Harness,
-		SessionID: head.SessionID, Format: head.ArchiveFormat}}, {Archive: sandbox.ArchiveOf(head)}}
+		SessionID: head.SessionID, Format: head.ArchiveFormat}}, {Archive: sandbox.ArchiveOf(head.Kept())}}
 	if asks := targets.asks(); len(asks) != 1 || !slices.Equal(asks[0], want) {
 		t.Errorf("a page asked the node holding the seat %v, want once, about the begun turn's base by its "+
 			"turn and the head by none: %v", asks, want)
@@ -1050,7 +1051,7 @@ func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 			decided(rows[head.Turn]))
 	}
 	if asks := targets.asks(); len(asks) != 2 || !slices.Equal(asks[1],
-		[]sandbox.RelaunchAsk{{Archive: sandbox.ArchiveOf(head)}}) {
+		[]sandbox.RelaunchAsk{{Archive: sandbox.ArchiveOf(head.Kept())}}) {
 		t.Errorf("the head read alone asked the node holding the seat %v, want its session by no turn", asks)
 	}
 	none, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": unkept.Turn})

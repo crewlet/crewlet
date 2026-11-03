@@ -127,7 +127,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 	if record == "" {
 		return nil, badParams("record_id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +138,11 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 		// reader takes it rather than holding it. An absent recipient
 		// set is dated against it: older than the horizon and its
 		// absence is not evidence, newer and it is.
-		Retention:   s.inboxRetention(),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Retention: s.inboxRetention(),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	}, s.clock())
 	if err != nil {
 		return nil, err
@@ -154,10 +154,10 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 // cannot say.
 //
 // ZERO IS "I DO NOT KNOW", which the reader answers `unknown` to rather than
-// guessing (see [worklet.DeliveryUnknown]). A registry wired without a company
-// source genuinely cannot say how long this company keeps a notice, and
-// answering with the shipped default would date a set against a retention
-// nobody here is running.
+// guessing — see [github.com/crewlet/crewlet/internal/routing.DeliveryUnknown].
+// A registry wired without a company source genuinely cannot say how long
+// this company keeps a notice, and answering with the shipped default would
+// date a set against a retention nobody here is running.
 func (s Sources) inboxRetention() time.Duration {
 	if s.Company == nil {
 		return 0
@@ -166,5 +166,5 @@ func (s Sources) inboxRetention() time.Duration {
 	if company == nil {
 		return 0
 	}
-	return company.Tracker.Worklet.InboxRetention()
+	return company.Inbox.Retention()
 }

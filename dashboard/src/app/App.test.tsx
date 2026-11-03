@@ -35,6 +35,7 @@ import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 import type { ToolRow } from "~/contract/tools.ts";
 import { ADMIN_STATUS } from "~/routes/settings/mcp-tools/fixtures.ts";
 
@@ -319,7 +320,7 @@ describe("routing", () => {
       const { view } = mount();
       // AWAITED, for the reason the working chip's case gives: what a screen
       // renders after its first pass is flushed only by an awaited act.
-      await act(async () => {});
+      await afterMicrotasks();
       expect(
         view.container.querySelector(".crewlet-app-shell__content")?.children.length,
         hash,
@@ -511,14 +512,21 @@ describe("a section, for a reader holding none of its grants", () => {
     );
   });
 
-  test("every such section draws the one refusal naming its grant, and not a figure", async () => {
-    // `403`, NEVER `401`: this reader is signed in and holds too little, and a
-    // `401` says nobody is — which sends the tab to the sign-in instead.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
-    );
-    for (const section of everywhere) {
+  // ONE CASE A SECTION, for this and for the failed viewer read below. Each
+  // mounted every section in turn inside one case, so one case did a dozen
+  // screens' work inside the runner's per-case bound, and a failure named no
+  // section until its message was read; a section's own case does its own
+  // screen's work. The suite's `afterEach` unmounts the screen and undoes the
+  // stubbed fetch, so a case that fails hands neither on.
+  test.each(everywhere)(
+    "$key draws the one refusal naming its grant, and not a figure",
+    async (section) => {
+      // `403`, NEVER `401`: this reader is signed in and holds too little, and a
+      // `401` says nobody is — which sends the tab to the sign-in instead.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
+      );
       location.hash = buildHash(section.path);
       // HOLDING NO ACCESS AT ALL, which the socket serves the overview: what
       // such a reader lacks is the section's own access, which is what its
@@ -528,27 +536,21 @@ describe("a section, for a reader holding none of its grants", () => {
       // THE CLOSED THING IS NAMED: the section, or — for a section in a
       // workspace the reader cannot open at all — the workspace.
       const closed = closedBy(section.path, [])!;
-      expect(closed, section.key).not.toBeNull();
-      expect(
-        await screen.findByText(`You need ${accessNames(closed.needs)} access`),
-        section.key,
-      ).toBeDefined();
+      expect(closed).not.toBeNull();
+      expect(await screen.findByText(`You need ${accessNames(closed.needs)} access`)).toBeDefined();
       // THE COMMON WAY OUT IS HOME, and switching account the other, never a
       // token; the reader is named, from the reading the refusal was decided on.
       expect(screen.getByRole("link", { name: "Go to Home" })).toBeDefined();
       expect(screen.getByRole("button", { name: "Switch account" })).toBeDefined();
-      expect(content().textContent, section.key).toMatch(/Signed in as reader/);
+      expect(content().textContent).toMatch(/Signed in as reader/);
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
-      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
-      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent, section.key).toBe("");
-      expect(content().textContent, section.key).not.toMatch(/\b0 (nodes?|credentials?)\b/);
-      expect(content().textContent, section.key).not.toMatch(/No nodes are reporting/);
-      view.unmount();
-      cleanup();
-    }
-    vi.unstubAllGlobals();
-  });
+      expect(content().querySelector(".crewlet-statcard")).toBeNull();
+      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
+      expect(content().textContent).not.toMatch(/\b0 (nodes?|credentials?)\b/);
+      expect(content().textContent).not.toMatch(/No nodes are reporting/);
+    },
+  );
 
   // THE FIRST ANSWER IS WAITED FOR. A cold load of a guarded section sent its
   // guarded reads before the frame knew who was asking, was refused, and drew
@@ -570,7 +572,9 @@ describe("a section, for a reader holding none of its grants", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    // Everything the frame asked has been answered (the viewer read never
+    // is), and nothing more was asked: a section that was going to ask has.
+    await settled(() => asked.length);
     expect(screen.getByText("Checking your access to Nodes")).toBeDefined();
     expect(asked).not.toContain("fleet");
   });
@@ -587,14 +591,15 @@ describe("a section, for a reader holding none of its grants", () => {
   // behind a fixed `setTimeout(0)` and the case read the frame still
   // checking: "Checking your access to File storage", on a run whose screen
   // mounted a moment later.
-  test("a viewer read that failed mounts the screen, which counts nothing it was refused", async () => {
-    // `403`: a `401` says nobody is signed in, which sends the tab to the
-    // sign-in rather than leaving the screen to say what it was refused.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
-    );
-    for (const section of guarded) {
+  test.each(guarded)(
+    "$key mounts for a viewer read that failed, and counts nothing it was refused",
+    async (section) => {
+      // `403`: a `401` says nobody is signed in, which sends the tab to the
+      // sign-in rather than leaving the screen to say what it was refused.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
+      );
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
       const content = () =>
@@ -627,16 +632,10 @@ describe("a section, for a reader holding none of its grants", () => {
       expect(within(content()).queryByText(SIGN_IN), section.key).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
-      expect(
-        document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
-        section.key,
-      ).toBeNull();
-      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
-      view.unmount();
-      cleanup();
-    }
-    vi.unstubAllGlobals();
-  });
+      expect(document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag")).toBeNull();
+      expect(content().querySelector(".crewlet-statcard")).toBeNull();
+    },
+  );
 
   // SETTINGS LISTS ONLY WHAT LIVES IN IT, in its four groups, and for a reader
   // holding no permission it is not nothing but locks: Spend's readings are
@@ -764,7 +763,7 @@ describe("chat, for a person", () => {
       withDerived({
         name: "Acme",
         roles: [],
-        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet" },
+        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
       }),
     );
     const socket = new LiveSocket(store);
@@ -1176,9 +1175,10 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
         grants: ["admin", "worklet", "doclet"],
       }),
     );
-  const settle = async () => {
-    for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
-  };
+  // Every read is a settled stub, so the viewer's answer, the frame's
+  // decision on it and the screen's refused reads have all landed, and drawn,
+  // by the next task: what a screen does NOT say is read there.
+  const settle = afterMicrotasks;
   location.hash = "#/settings/nodes/backups";
   const one = operator();
   await settle();
@@ -1255,7 +1255,9 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       </Router>
     </ClientContext.Provider>,
   );
-  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  // THE MENU HOLDS EXACTLY WHAT THE PAGE FOLDED, so it is opened once the
+  // viewer and the project have answered (both settled stubs) and drawn.
+  await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
   expect(names).toEqual(["Edit project"]);
@@ -1289,7 +1291,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       </Router>
     </ClientContext.Provider>,
   );
-  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",
@@ -1319,7 +1321,7 @@ test("a chat address on a company not running Chatlet says where it talks", asyn
     withDerived({
       name: "Acme",
       roles: [],
-      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor" },
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
     }),
   );
   const socket = new LiveSocket(store);
@@ -1368,7 +1370,7 @@ test("a cold load of a service's page asks nothing until the company says what i
       withDerived({
         name: "Acme",
         roles: [],
-        services: { tracker: "worklet", knowledge: "none", chat: "chatlet" },
+        services: { tracker: "worklet", knowledge: "none", chat: "chatlet", code: "none" },
       }),
     ),
   );

@@ -1,6 +1,8 @@
 package artifactsdomain_test
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -339,6 +341,135 @@ func TestASupersededAdoptionIsServedWhileAVersionPinsIt(t *testing.T) {
 	// A CLEAR WHEN NOTHING IS ADOPTED appends nothing and answers success.
 	if _, err := n.writer.ClearBrand(t.Context(), admin()); err != nil {
 		t.Errorf("a second clear: %v", err)
+	}
+}
+
+// lastBrandRecord is the body of the newest brand record on n's log, as a
+// backup opens it before handing it to a declaration's reader: the signed
+// frame verified (ADR-0031, ADR-0082).
+func (n *node) lastBrandRecord(op artifactsdomain.OpKind) []byte {
+	n.t.Helper()
+	records := statelog.VerifiedLog{Log: n.log, Verifier: n.verifier}
+	last, err := n.log.End(n.t.Context())
+	if err != nil {
+		n.t.Fatalf("read the log's end: %v", err)
+	}
+	for seq := last; seq > 0; seq-- {
+		_, payload, _, ok, err := records.At(n.t.Context(), seq)
+		if err != nil || !ok {
+			n.t.Fatalf("read the log at %d: ok %v, %v", seq, ok, err)
+		}
+		env, err := artifactsdomain.DecodeEnvelope(payload)
+		if err == nil && env.Subject.Kind == artifactsdomain.KindBrand && env.Op == op {
+			return payload
+		}
+	}
+	n.t.Fatalf("the log holds no brand %s record", op)
+	return nil
+}
+
+// brandFileRows is every artifact_brand_files row n holds, read by the walk
+// the audit and the backup share and spelled as it spells them.
+func (n *node) brandFileRows() map[string]objstore.Object {
+	n.t.Helper()
+	query, err := artifactsdomain.BrandFileReferences.ReferencesAfter(100)
+	if err != nil {
+		n.t.Fatalf("the brand files' walk: %v", err)
+	}
+	out := map[string]objstore.Object{}
+	err = n.db.Read(n.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(n.t.Context(), query, "")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		return artifactsdomain.BrandFileReferences.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
+			out[namedBy] = obj
+			return nil
+		})
+	})
+	if err != nil {
+		n.t.Fatalf("walk the brand files: %v", err)
+	}
+	return out
+}
+
+// AN ADOPTION NAMES THE FILES ITS ROWS NAME (ADR-0082). A backup reads the
+// artifacts log past its store copy and carries every object a record names,
+// because a restore replays those records into the rows — so what the
+// declaration's reader says an adoption writes has to be what the applier
+// wrote: one row per file it serves, spelled as the walk spells it, each the
+// fresh copy the adoption uploaded. A clear removes rows it does not list and
+// answers none; a record of another kind answers none; and one a newer build
+// wrote, whose scope reaches the brand, is the refusal a backup recognises.
+//
+// Mutation: answer an adoption's files under the kit's id rather than the
+// stylesheet's hash, and the walk and the record disagree on every row.
+func TestAnAdoptionNamesTheFilesItsRowsName(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	index := kitIndex(t, "Acme", "#111111")
+	kit := n.createKit(person("jane", artifacts.RoleOwner), "Acme brand", index)
+	in := adoption(t, kit, 1, index, "named")
+	if _, err := n.writer.AdoptBrand(t.Context(), admin(), in); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	records := artifactsdomain.BrandFileReferences.Records
+	adopted := n.lastBrandRecord(artifactsdomain.OpAdopt)
+	got, err := records(adopted)
+	if err != nil || len(got) != len(in.Files) {
+		t.Fatalf("an adoption: Records = %+v, %v; want one row per file it serves", got, err)
+	}
+	walked := n.brandFileRows()
+	if len(walked) != len(in.Files) {
+		t.Fatalf("the walk finds %d rows after one adoption of %d files: %+v", len(walked), len(in.Files), walked)
+	}
+	for i, f := range in.Files {
+		want := objstore.RecordReference{
+			NamedBy: objstore.JoinOwner(string(in.Files[0].Object.Hash), f.Slot), Object: f.Object, Names: true,
+		}
+		if got[i] != want {
+			t.Errorf("the record says it writes %+v, want %+v", got[i], want)
+		}
+		if obj, ok := walked[want.NamedBy]; !ok || obj != f.Object {
+			t.Errorf("the applied row %s reads as %+v (found %v); the record said %+v",
+				want.NamedBy, obj, ok, f.Object)
+		}
+	}
+
+	if _, err := n.writer.ClearBrand(t.Context(), admin()); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got, err := records(n.lastBrandRecord(artifactsdomain.OpClear)); err != nil || got != nil {
+		t.Errorf("a clear: Records = %+v, %v; want none — it removes rows it does not list", got, err)
+	}
+	if rows := n.brandFileRows(); len(rows) != 0 {
+		t.Errorf("a cleared adoption nothing pins leaves rows %+v", rows)
+	}
+
+	// THE KIT'S CREATE is the log's first record: it names files, in
+	// artifact_objects, and writes no brand file.
+	_, create, _, ok, err := statelog.VerifiedLog{Log: n.log, Verifier: n.verifier}.At(t.Context(), 1)
+	if err != nil || !ok {
+		t.Fatalf("read the log's first record: ok %v, %v", ok, err)
+	}
+	if got, err := records(create); err != nil || got != nil {
+		t.Errorf("the kit's create: Records = %+v, %v; want none", got, err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(adopted, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["v"] = artifactsdomain.RecordVersion + 1
+	newer, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records(newer); !errors.Is(err, objstore.ErrRecordUnreadable) {
+		t.Errorf("an adoption a newer build wrote: %v; want ErrRecordUnreadable", err)
+	}
+	if _, err := records([]byte("not a record")); err == nil {
+		t.Error("bytes no build reads were answered as naming nothing")
 	}
 }
 

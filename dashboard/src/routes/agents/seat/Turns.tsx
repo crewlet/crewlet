@@ -48,7 +48,7 @@ import { href } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/peekAddress.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import {
@@ -408,13 +408,13 @@ export function Turns({
             never reached by a wider page. */}
         {(list.more || list.paging || list.pageError) && (
           <footer className="panel-foot">
-            {list.pageError ? (
-              <QueryState error={list.pageError} refusal={null} loading={false} />
-            ) : (
+            {list.more || list.paging ? (
               <Button size="small" variant="secondary" onClick={list.next} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
               </Button>
-            )}
+            ) : null}
+            {/* BESIDE THE CONTROL, which asks the page again. */}
+            {list.pageError && <PageFailed error={list.pageError} />}
           </footer>
         )}
       </Card>

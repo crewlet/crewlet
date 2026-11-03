@@ -15,6 +15,7 @@ import { templateIntent } from "./model/templates.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { company, EDITOR, Engine, json, mountBuilder } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 /** Somebody else signs in, and the socket comes back — when the frame asks who. */
 function signInAs(store: { setConnected: (up: boolean) => void }, set: () => void) {
@@ -87,13 +88,14 @@ test("an edit is kept as its operation log and nothing of the document", async (
 test("a kept draft of the same revision waits for Keep or Discard, and Keep restores it", async () => {
   keep({});
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
   // Nothing is recorded, and nothing is cleared, while the offer stands.
   expect(screen.getByText("read only")).toBeDefined();
   expect(kept()).not.toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -120,8 +122,9 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   expect(await screen.findByText("The configuration changed")).toBeDefined();
   // The base under the offer is not read again: a Keep pressed while a newer
   // base waited for its first check would be refused, and the kept draft
-  // cleared with the refusal.
-  await new Promise((r) => setTimeout(r, 100));
+  // cleared with the refusal. Asserted once everything the push caused has
+  // landed and nothing more was asked.
+  await settled(() => engine.requests.length);
   expect(engine.sent("GET")).toHaveLength(reads);
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
@@ -148,10 +151,11 @@ test("discarding a kept draft removes it and starts from the saved configuration
 test("a kept draft of an older revision is restored through the update flow", async () => {
   keep({ baseRevision: "r0" });
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checkChange } = mountBuilder({ engine });
   const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Restore the draft" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -239,9 +243,10 @@ test("storage that refuses says the draft will not survive a reload", async () =
     removeItem: () => {},
   };
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: refusing });
+  const { checkChange } = mountBuilder({ engine, storage: refusing });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   expect(
     await screen.findByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
@@ -255,9 +260,10 @@ test("storage that refuses says the draft will not survive a reload", async () =
 // draft on a reload exactly as a refusing one does, so it says so too.
 test("no storage at all says the draft will not survive a reload", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: null });
+  const { checkChange } = mountBuilder({ engine, storage: null });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
@@ -332,7 +338,10 @@ test("coming back to the builder restores this page's own draft without asking",
   await waitFor(() => expect(kept()).not.toBeNull());
   first.view.unmount();
 
-  mountBuilder({ engine });
+  // Restored as a change to the draft the page opened on, so its check
+  // waits out the debounce.
+  const second = mountBuilder({ engine });
+  await second.checkChange();
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );

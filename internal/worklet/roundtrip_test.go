@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -62,7 +63,7 @@ type roundTrip struct {
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
 	// before any domain decodes.
-	verifier *statelog.Verifier
+	verifier *recordseal.Verifier
 
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
@@ -72,6 +73,11 @@ type roundTrip struct {
 	// nodeID is which node this harness is, for the second writer a case
 	// builds over the same store ([roundTrip.lossyWriter]).
 	nodeID string
+
+	// leads is the chart seam the writer resolves a lead through
+	// ([worklet.Writer.Leads]): nil, as most cases want, unless a case is
+	// about who a write's fallback reaches ([roundTrip.ledBy]).
+	leads worklet.Leads
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -228,7 +234,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, worklet.NewApplier(nodeID, nil)
+	r.writer, r.applier = writer, worklet.NewApplier(nil)
 	r.reader, r.waiter = reader, waiter
 	return r
 }
@@ -239,8 +245,8 @@ func (r *roundTrip) writerClaiming(claims coord.Backend) *worklet.Writer {
 	r.t.Helper()
 	writer, err := worklet.NewWriter(worklet.WriterDeps{
 		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
-		Claims: claims,
-		Actor:  "ana", ActorKind: worklet.AuthorHuman,
+		Claims: claims, Leads: r.leads,
+		Actor: "ana", ActorKind: worklet.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
@@ -258,6 +264,15 @@ func (r *roundTrip) claimOn(claims coord.Backend) {
 	r.t.Helper()
 	r.claims = claims
 	r.writer = r.writerClaiming(claims)
+}
+
+// ledBy gives this node's writer a chart to resolve leads through, as the
+// engine's writer holds one: the writer is rebuilt over the same publisher and
+// coordination, so it writes exactly as the one it replaces did.
+func (r *roundTrip) ledBy(leads worklet.Leads) {
+	r.t.Helper()
+	r.leads = leads
+	r.writer = r.writerClaiming(r.claims)
 }
 
 // holdTheAppliersPin takes the pinned writer this harness's replicated estate
@@ -348,7 +363,7 @@ func (r *roundTrip) redeliver(seq uint64) {
 func (r *roundTrip) open(seq uint64, framed []byte) []byte {
 	r.t.Helper()
 	body, verdict := r.verifier.Open(framed)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	return body
@@ -539,12 +554,16 @@ func (w *testWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *testWaiter) Reached() statelog.Position { return w.Committed() }
+
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log, so every position the waiter holds is a sequence on it.
 func (w *testWaiter) StreamIdentity() error { return nil }
 func (w *testWaiter) Truncated() error      { return nil }
 
-func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -602,7 +621,7 @@ func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 		}
 		return context.DeadlineExceeded
 	}
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // A WRITE REACHES THE BROKER, THE APPLIER, AND THE READER.
@@ -961,9 +980,9 @@ func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 // fleet would refuse one at a time, on every node, for ever. The key is a
 // fixture: what these cases are about is what the domain writes, and the
 // signature's own rules are certified in [statelog].
-func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+func testSigner(t *testing.T, d statelog.Domain) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -971,9 +990,9 @@ func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+func testVerifier(t *testing.T, d statelog.Domain) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

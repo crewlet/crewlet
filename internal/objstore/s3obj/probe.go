@@ -249,7 +249,7 @@ func (b *Backend) PresignPut(ctx context.Context, name string, r objstore.Presig
 		ContentType:    aws.String(r.ContentType),
 		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(raw)),
 		IfNoneMatch:    aws.String("*"),
-	}, s3.WithPresignExpires(r.Expires))
+	}, s3.WithPresignExpires(r.Expires), b.withoutAttempts)
 	if err != nil {
 		return objstore.Presigned{}, fmt.Errorf("s3obj: presign a put of %s: %w", name, err)
 	}
@@ -270,6 +270,27 @@ func (b *Backend) PresignPut(ctx context.Context, name string, r objstore.Presig
 	}
 	return objstore.Presigned{Method: out.Method, URL: out.URL, Headers: headers,
 		Expires: time.Now().Add(r.Expires).UTC()}, nil
+}
+
+// withoutAttempts builds a presign from the bucket's client WITHOUT THE
+// CLIENT'S OWN STEPS ([paced]): the gate, the judge and the request they
+// follow are each about an attempt sent to the bucket, and a presign sends
+// none — it signs a URL somebody else sends. Nor could they stand on its
+// stack: the SDK takes the retry step out of a presign's stack before the
+// client's options run, and the gate is placed after that step, so a presign
+// built on the client's options failed — and with it the boot probe, which
+// presigns ([TestAPresignIsNoRequestOfTheClients]).
+//
+// PER PRESIGN, never on [s3.NewPresignClient] at Open: client options given
+// there build a second client from the first one's options, and that client's
+// construction points the S3 Express session provider the two share at
+// itself — every session the bucket's own requests wait for in GetIdentity
+// would then be asked through a client the gate and the judge are not on. Per
+// presign, the options apply to this one operation of the bucket's own client,
+// so a session a presign of a directory bucket needs is asked through that
+// client like any other ([judge]).
+func (b *Backend) withoutAttempts(po *s3.PresignOptions) {
+	po.ClientOptions = append(po.ClientOptions, func(o *s3.Options) { o.APIOptions = b.unpaced })
 }
 
 // DirectUpload implements [objstore.Presigner]: what the boot probe proved.

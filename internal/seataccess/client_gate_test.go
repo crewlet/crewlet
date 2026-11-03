@@ -34,6 +34,7 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessSeatLane", reflect.TypeFor[seataccess.LaneAnswer]()},
 		{"AccessBox", reflect.TypeFor[seataccess.Box]()},
 		{"AccessBoxLine", reflect.TypeFor[seataccess.BoxLine]()},
+		{"AccessBoxFile", reflect.TypeFor[seataccess.BoxFileLine]()},
 		{"AccessDesired", reflect.TypeFor[seataccess.Desired]()},
 		{"AccessObserved", reflect.TypeFor[seataccess.Observed]()},
 		{"AccessCredential", reflect.TypeFor[seataccess.Credential]()},
@@ -147,7 +148,8 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		{"AccessDisabledBy", strs(
 			string(seataccess.DisabledByCrewlet), string(seataccess.DisabledByHand),
 		), nil},
-		{"AccessCredentialSource", strs(seataccess.CredentialMinted, seataccess.CredentialExternal), nil},
+		{"AccessCredentialSource", strs(seataccess.CredentialMinted, seataccess.CredentialExternal,
+			seataccess.CredentialIssued), nil},
 		{"AccessManaged", strs(seataccess.ManagedExternal), nil},
 		{"AccessManagedBy", strs(seataccess.ManagedByOperator), nil},
 	} {

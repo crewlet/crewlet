@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -192,6 +193,9 @@ func (c *chart) LeadsContainer(context.Context, string, string) (bool, error) { 
 func (c *chart) LeadsAnyone(context.Context, string) (bool, error)            { return false, nil }
 func (c *chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
 	return c.answer(c.members, actor+"|"+unit)
+}
+func (c *chart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
 }
 
 // local is this node's copy health.

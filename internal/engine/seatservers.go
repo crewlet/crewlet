@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -204,9 +203,9 @@ type seatChildren struct {
 	// retry is the armed retry, nil when none is due.
 	retry *time.Timer
 
-	// renew is the pass armed to run when the GitHub App token the seat's
-	// children were started with reaches [github.RenewBefore] of life left,
-	// nil when no child holds one ([Engine.armRenewal]).
+	// renew is the pass armed to run at the earliest renew time of the
+	// credentials the seat's children were issued at use, nil when no child
+	// holds one ([Engine.armRenewal]).
 	renew *time.Timer
 }
 
@@ -504,7 +503,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 		// is about to release the seat, and a child left running until
 		// then is an identity the company no longer has.
 		var env *config.Resolver
-		env, token = e.seatResolver(ctx, c, seat, github.ToolTokenLife)
+		env, token = e.seatResolver(ctx, c, seat, toolTokenLife)
 		specs, outcomes = seatSpecs(c, seat, env,
 			&seatMint{kinds: e.mintedFor(c, s.handle), token: token})
 		outcomes = e.withheldForCredentials(ctx, outcomes)
@@ -516,14 +515,14 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	retireUndeclared(ctx, s, specs, outcomes, serversTurnedOff(c.Config))
 	started, retry := bringUp(ctx, s, specs, retryNow)
 	outcomes = append(outcomes, started...)
-	// A TOKEN GITHUB WOULD NOT ISSUE IS RETRIED like a child that would not
-	// start: it is GitHub's answer this time, not the integration's record,
-	// so waiting for a revision or a seal would wait for nothing. A mint
-	// GitHub did not answer passes by itself, and one it refused waits on a
-	// person's step on the agent's app ([mintPasses]), which the retry
+	// A TOKEN ITS VENDOR WOULD NOT ISSUE IS RETRIED like a child that would
+	// not start: it is the vendor's answer this time, not the integration's
+	// record, so waiting for a revision or a seal would wait for nothing. An
+	// issue the vendor did not answer passes by itself, and one it refused
+	// waits on a person's step ([seatIssuer.refusal]), which the retry
 	// notices once it is taken. And a token that WAS issued is renewed
 	// before it runs short ([Engine.armRenewal]).
-	if token != nil && token.unissued(token.name) != "" {
+	if token.refused() {
 		retry = true
 	}
 	e.armRenewal(s, token)
@@ -560,22 +559,23 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	return retry
 }
 
-// armRenewal arms the pass that renews the GitHub App token the seat's
-// children were just started with, or disarms it where none was issued.
+// armRenewal arms the pass that renews the credentials the seat's children
+// were just issued at use, or disarms it where none was issued.
 //
-// AN INSTALLATION TOKEN LIVES AN HOUR and a child holds the one it was
+// AN ISSUED TOKEN LIVES ABOUT AN HOUR and a child holds the one it was
 // started with: a stdio server reads its environment once, and an http one
 // sends the header it was configured with on every request. So the pass runs
-// again at [github.RenewAt] (the moment the issuer stops handing that token
-// out), reads the seat's values afresh, is issued a new token, and the
-// changed value restarts the child that carries it, exactly as a rotated
-// secret does. A child is never left holding a token past its expiry, and
-// nothing renews a seat whose children name no token.
+// again at the EARLIEST renew time across what the resolution issued
+// ([seatToken.renewAt], the moment an issuer stops handing a token out),
+// reads the seat's values afresh, is issued new ones, and a changed value
+// restarts the child that carries it, exactly as a rotated secret does. A
+// child is never left holding a token past its expiry, and nothing renews a
+// seat whose children name none.
 //
 // ON THE LEASE'S CONTEXT, as a retry is, so a renewal that fires as the seat
 // is let go finds its context over and the release disarms it.
 func (e *Engine) armRenewal(s *seatChildren, token *seatToken) {
-	issued, ok := token.issued()
+	at, ok := token.renewAt()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.renew != nil {
@@ -585,7 +585,7 @@ func (e *Engine) armRenewal(s *seatChildren, token *seatToken) {
 	if !ok || s.released {
 		return
 	}
-	wait := max(time.Until(github.RenewAt(issued)), 0)
+	wait := max(time.Until(at), 0)
 	s.renew = time.AfterFunc(wait, func() { e.convergeSeat(s.lease, s, false) })
 }
 

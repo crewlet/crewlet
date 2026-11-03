@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 import type { AssistantProposalCard } from "~/contract/assistant.ts";
 import {
   createAssistantStreamParser,
@@ -99,7 +100,7 @@ test("after a page action this tab applied, the turn is read again from its last
     },
   } as unknown as AssistantNarrowFrame;
   streams[0]!.frame(action);
-  await vi.waitFor(() => expect(streams).toHaveLength(2));
+  await eventually(() => expect(streams).toHaveLength(2));
   expect(streams[1]!.url).toBe("/assistant/conversations/c1/stream?turn=t1");
   expect(streams[1]!.lastEventId).toMatch(/^t1/);
 });

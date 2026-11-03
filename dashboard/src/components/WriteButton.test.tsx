@@ -99,6 +99,7 @@ test("a refusal the node caused offers to try again, under the same request", ()
     refusal: {
       sentence: "This node is shutting down.",
       hint: "",
+      hostRefusal: "",
       retryable: true,
       grants: [],
       reason: "",
@@ -123,6 +124,7 @@ test("a refusal the request caused offers no retry: the same request would be re
         refusal: {
           sentence: "views: v9 is not a view",
           hint: "",
+          hostRefusal: "",
           retryable: false,
           grants: [],
           reason: "",
@@ -145,6 +147,7 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
         refusal: {
           sentence: "`title` is 600 bytes and a task's title holds at most 256.",
           hint: "",
+          hostRefusal: "",
           retryable: false,
           grants: [],
           reason: "",
@@ -163,7 +166,17 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
 
 /** A press the engine refused on authority, by `reason`, naming `grants`. */
 function refusedFor(reason: string, grants: string[], sentence: string) {
-  return write({ refusal: { sentence, hint: "", retryable: false, grants, reason, remedy: null } });
+  return write({
+    refusal: {
+      sentence,
+      hint: "",
+      hostRefusal: "",
+      retryable: false,
+      grants,
+      reason,
+      remedy: null,
+    },
+  });
 }
 
 test("a refusal some access clears names that access, in one sentence", () => {

@@ -98,6 +98,17 @@ import (
 // next request of the consumer instead — measured on a member that serves
 // leaves as well as on one that does not.
 //
+// # And so does a pull that FAILS
+//
+// A status that ends a request as a failure — the consumer deleted under it,
+// its leader moving — is reported by the next fetch, and what the buffer held
+// is handed back with it rather than to the fetch after. The applier reads a
+// failed fetch as the moment from which the log may be another history (a
+// broker restored under a running node ends its pulls), and gives back every
+// record it held from before it ([statelog.Fetcher]); one this buffer kept
+// would reach it after the failure, read as delivered by the broker as it now
+// is when it was delivered by the one before.
+//
 // # A status is matched to the request it NAMES, never to the oldest
 //
 // Every request is answered on the one inbox, but each is sent with a reply
@@ -156,13 +167,18 @@ type puller struct {
 	// settled is the newest delivery having reported nothing pending
 	// behind it: the burst it belonged to is complete.
 	settled bool
+	// behind is what the newest delivery's own metadata counted the
+	// consumer still holding past it, and counted whether that delivery's
+	// metadata could be read — see [puller.undelivered].
+	behind  uint64
+	counted bool
 	// requests are the requests the server may still be serving, oldest
 	// first — the order the server fills them in.
 	requests []*standingRequest
 	// sent numbers the requests, naming each one's reply subject.
 	sent uint64
 	// failure is a status that ended a request as a failure, for the next
-	// fetch to report.
+	// fetch to report — handing back what the buffer held with it.
 	failure error
 	// released is the handle having been given up ([puller.release]): no
 	// fetch will run again, and a record the inbox still hands over is
@@ -243,20 +259,32 @@ func (p *puller) release() {
 //
 // A hand-back that fails leaves the record where an unread delivery always
 // was — in flight until the ack window redelivers it — and says so, since
-// that is thirty seconds of a strict log standing still.
+// that is thirty seconds of a strict log standing still. ONCE FOR THE CALL,
+// naming how many and the first: a failed pull hands back everything it held
+// over the connection that just failed, and a line a record was thousands of
+// lines about one broken connection.
 func (p *puller) handBack(msgs []*nats.Msg) {
+	failed, seq := 0, uint64(0)
+	var first error
 	for _, msg := range msgs {
-		if err := msg.Nak(); err != nil {
-			seq := uint64(0)
+		err := msg.Nak()
+		if err == nil {
+			continue
+		}
+		if failed++; first == nil {
+			first = err
 			if meta, unreadable := msg.Metadata(); unreadable == nil {
 				seq = meta.Sequence.Stream
 			}
-			p.log.Warn("jetstream_pull_handback_failed", "subject", p.subject,
-				"seq", seq, "error", err.Error(),
-				"detail", "a record delivered to a released state-log pull could "+
-					"not be handed back, so the broker redelivers it only once "+
-					"its acknowledgement window passes")
 		}
+	}
+	if first != nil {
+		p.log.Warn("jetstream_pull_handback_failed", "subject", p.subject,
+			"records", failed, "seq", seq, "error", first.Error(),
+			"detail", "records delivered to a state-log pull nobody will read "+
+				"them from could not be handed back, so the broker redelivers "+
+				"them only once their acknowledgement window passes; seq is the "+
+				"first of them")
 	}
 }
 
@@ -308,6 +336,10 @@ func (p *puller) deliver(msg *nats.Msg) {
 		// an answer that will not come.
 		meta, unreadable := msg.Metadata()
 		p.settled = unreadable != nil || meta.NumPending == 0
+		p.behind, p.counted = 0, unreadable == nil
+		if p.counted {
+			p.behind = meta.NumPending
+		}
 		if len(p.requests) > 0 {
 			// A record names no request, and the server fills the
 			// requests it holds in turn, so it is counted against
@@ -378,8 +410,17 @@ func (p *puller) fetch(ctx context.Context, maxMessages, maxBytes int,
 		now := time.Now()
 		p.mu.Lock()
 		if failure := p.failure; failure != nil {
-			p.failure = nil
+			// WHAT THE PULL HELD GOES BACK WITH THE FAILURE, never to the
+			// next fetch: the applier reads a failure as the moment after
+			// which the broker may be another history — a restore under a
+			// running node ends its pulls — and hands back everything it
+			// held from before it, so a record this buffer kept from before
+			// the failure would reach it as though delivered after. Handed
+			// back, the broker delivers it again at once, as it now is.
+			held := p.buffered
+			p.buffered, p.failure = nil, nil
 			p.mu.Unlock()
+			p.handBack(held)
 			return nil, failure
 		}
 		for len(p.requests) > 0 && now.After(p.requests[0].until) {
@@ -446,6 +487,29 @@ func (p *puller) wakeAt(now, deadline time.Time) time.Time {
 		return until
 	}
 	return deadline
+}
+
+// undelivered is how many records of the consumer no fetch has taken yet: what
+// the pull delivered and still holds, and what the newest delivery's own
+// metadata counted behind it — every record the pull delivers carries the
+// consumer's count of what follows it, which is the same count the consumer's
+// info answers, as of that delivery. False until a delivery's metadata could
+// be read, since nothing has counted anything then.
+//
+// IT ASKS THE BROKER NOTHING, which is why it is here rather than a consumer
+// info: the applier asks it on every run it holds records for, and an info is
+// a request only the consumer's leader answers — after its main API queue
+// drains — on the commit path. A record appended after the newest delivery is
+// counted once the request standing delivers it, as it does at once while one
+// stands; with none standing, the next fetch is what finds it, exactly as a
+// count read a moment earlier would have missed it.
+func (p *puller) undelivered() (uint64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.counted {
+		return 0, false
+	}
+	return p.behind + uint64(len(p.buffered)), true
 }
 
 // full reports whether the buffer already holds a whole fetch. Held under p.mu.

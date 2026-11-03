@@ -83,10 +83,13 @@ type objectsFindingView struct {
 	Referenced   int       `json:"referenced"`
 	Missing      int       `json:"missing"`
 	Damaged      int       `json:"damaged"`
+	Unanswered   int       `json:"unanswered"`
 	MissingFiles []struct {
 		Object  string `json:"object"`
 		NamedBy string `json:"named_by"`
-		Damaged bool   `json:"damaged"`
+		// Finding is printed as the node spelled it: a finding a later
+		// build adds reads as itself rather than as one of these.
+		Finding string `json:"finding"`
 	} `json:"missing_files"`
 }
 
@@ -162,22 +165,20 @@ func renderObjects(w io.Writer, v objectsView) error {
 			a.At.Format(time.RFC3339), a.Error)
 	default:
 		f := a.Found
-		fmt.Fprintf(&b, "Last audit:        %s: %d files named, %d missing, %d damaged%s\n",
-			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, passNote(f.Completed, "", ""))
+		fmt.Fprintf(&b, "Last audit:        %s: %d files named, %d missing, %d damaged, %d unanswered%s\n",
+			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, f.Unanswered,
+			passNote(f.Completed, "", ""))
 		if a.Error != "" && a.At.After(f.At) {
 			fmt.Fprintf(&b, "                   a later audit, at %s, stopped: %s\n",
 				a.At.Format(time.RFC3339), a.Error)
 		}
-		if lost := f.Missing + f.Damaged; lost > 0 {
+		if lost := f.Missing + f.Damaged + f.Unanswered; lost > 0 {
 			fmt.Fprintf(&b, "\n%d file(s) cannot be read: the store does not hold their bytes, "+
-				"or holds them wrong. Restore them from a backup (docs/guides/backup.md), or "+
-				"upload them again:\n", lost)
+				"holds them wrong, or would not answer for them while it answered for the "+
+				"rest. Check the store's health, and restore them from a backup "+
+				"(docs/guides/backup.md) or upload them again:\n", lost)
 			for _, m := range f.MissingFiles {
-				what := "missing"
-				if m.Damaged {
-					what = "damaged"
-				}
-				fmt.Fprintf(&b, "  %s (%s, object %s)\n", m.NamedBy, what, m.Object)
+				fmt.Fprintf(&b, "  %s (%s, object %s)\n", m.NamedBy, m.Finding, m.Object)
 			}
 			if shown := len(f.MissingFiles); shown < lost {
 				fmt.Fprintf(&b, "  … and %d more\n", lost-shown)
@@ -238,18 +239,27 @@ type migrateView struct {
 	DirectUpload string `json:"direct_upload"`
 	Next         string `json:"next"`
 	Pass         struct {
-		Referenced  int   `json:"referenced"`
-		Present     int   `json:"present"`
-		Copied      int   `json:"copied"`
-		CopiedBytes int64 `json:"copied_bytes"`
-		Unreadable  int   `json:"unreadable"`
-		Complete    bool  `json:"complete"`
-		Files       []struct {
+		migrateCounts
+		Complete bool `json:"complete"`
+		Files    []struct {
 			Object  string `json:"object"`
 			NamedBy string `json:"named_by"`
 			Damaged bool   `json:"damaged"`
 		} `json:"unreadable_files"`
+		// Derived is the objects derived rows name, counted apart: the
+		// engine can build each again, so one the old store could not give
+		// back is no lost file.
+		Derived migrateCounts `json:"derived"`
 	} `json:"pass"`
+}
+
+// migrateCounts is what a pass found and did for one kind of object.
+type migrateCounts struct {
+	Referenced  int   `json:"referenced"`
+	Present     int   `json:"present"`
+	Copied      int   `json:"copied"`
+	CopiedBytes int64 `json:"copied_bytes"`
+	Unreadable  int   `json:"unreadable"`
 }
 
 // objectsMigrate is `crewlet objects migrate --to s3`: a copy pass on a live
@@ -311,6 +321,10 @@ func renderMigrate(w io.Writer, v migrateView) error {
 	p := v.Pass
 	fmt.Fprintf(&b, "Objects named:     %d (%d already in the bucket, %d copied, %s)\n",
 		p.Referenced, p.Present, p.Copied, humanBytes(p.CopiedBytes))
+	if d := p.Derived; d.Referenced > 0 {
+		fmt.Fprintf(&b, "Derived objects:   %d (%d already in the bucket, %d copied, %s)\n",
+			d.Referenced, d.Present, d.Copied, humanBytes(d.CopiedBytes))
+	}
 	fmt.Fprintf(&b, "Direct uploads:    %s\n", v.DirectUpload)
 	if !p.Complete {
 		fmt.Fprintln(&b, "                   this node holds a record it could not apply, so "+
@@ -329,6 +343,10 @@ func renderMigrate(w io.Writer, v migrateView) error {
 		if shown := len(p.Files); shown < p.Unreadable {
 			fmt.Fprintf(&b, "  and %d more\n", p.Unreadable-shown)
 		}
+	}
+	if n := p.Derived.Unreadable; n > 0 {
+		fmt.Fprintf(&b, "\n%d derived object(s) could not be read from the fleet's own store and were "+
+			"not copied; the engine builds each again, so nothing is lost\n", n)
 	}
 	switch {
 	case v.Moved:

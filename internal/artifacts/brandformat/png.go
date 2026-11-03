@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"sync"
 )
 
 // ---- PNG ------------------------------------------------------------------ //
@@ -32,20 +33,28 @@ import (
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
 
 // pngKept are the ancillary chunks a stored PNG keeps.
-var pngKept = map[string]bool{"tRNS": true, "gAMA": true, "cHRM": true, "sRGB": true, "iCCP": true, "pHYs": true}
+var pngKept = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"tRNS": true, "gAMA": true, "cHRM": true, "sRGB": true, "iCCP": true, "pHYs": true}
+})
 
 // pngAnimated are the chunks of an animated PNG.
-var pngAnimated = map[string]bool{"acTL": true, "fcTL": true, "fdAT": true}
+var pngAnimated = sync.OnceValue(func() map[string]bool {
+	return map[string]bool{"acTL": true, "fcTL": true, "fdAT": true}
+})
 
 // maxICCPBytes bounds the colour profile a stored PNG keeps; a larger one is
 // refused, naming the export that fixes it.
 const maxICCPBytes = 64 << 10
 
 // pngDepths are the bit depths each colour type allows (PNG 11.2.2).
-var pngDepths = map[byte][]byte{0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
+var pngDepths = sync.OnceValue(func() map[byte][]byte {
+	return map[byte][]byte{0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
+})
 
 // pngChannels are the samples per pixel of each colour type.
-var pngChannels = map[byte]int{0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+var pngChannels = sync.OnceValue(func() map[byte]int {
+	return map[byte]int{0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+})
 
 type pngChunk struct {
 	kind string
@@ -79,7 +88,7 @@ func sanitizePNG(data []byte) ([]byte, int, int, error) {
 	case uint64(width)*uint64(height) > MaxImagePixels:
 		return nil, 0, 0, fmt.Errorf("the PNG is %dx%d, more than %d pixels: export it smaller",
 			width, height, MaxImagePixels)
-	case !bytesContain(pngDepths[color], depth):
+	case !bytesContain(pngDepths()[color], depth):
 		return nil, 0, 0, fmt.Errorf("the PNG's colour type %d and bit depth %d are not a PNG's", color, depth)
 	case compression != 0 || filter != 0 || interlace > 1:
 		return nil, 0, 0, errors.New("the PNG's header names a compression, filter or interlace method PNG does not define")
@@ -95,7 +104,7 @@ func sanitizePNG(data []byte) ([]byte, int, int, error) {
 		switch {
 		case i > 0 && c.kind == "IHDR":
 			return nil, 0, 0, errors.New("the PNG holds a second IHDR")
-		case pngAnimated[c.kind]:
+		case pngAnimated()[c.kind]:
 			return nil, 0, 0, errors.New("the PNG is animated (APNG): a logo is one frame, export a still PNG")
 		case c.kind == "IDAT":
 			if inIDAT == 2 {
@@ -116,7 +125,7 @@ func sanitizePNG(data []byte) ([]byte, int, int, error) {
 				"most %d: export it with an sRGB profile", len(c.data), maxICCPBytes)
 		case critical && c.kind != "IHDR" && c.kind != "PLTE" && c.kind != "IDAT" && c.kind != "IEND":
 			return nil, 0, 0, fmt.Errorf("the PNG holds the critical chunk %q, which no decoder draws", c.kind)
-		case !critical && !pngKept[c.kind]:
+		case !critical && !pngKept()[c.kind]:
 			continue
 		}
 		kept = append(kept, c)
@@ -129,7 +138,7 @@ func sanitizePNG(data []byte) ([]byte, int, int, error) {
 	case color == 3 && !palette:
 		return nil, 0, 0, errors.New("the PNG is indexed and holds no palette")
 	}
-	if err := inflatePNG(stream.Bytes(), int(width), int(height), pngChannels[color]*int(depth), interlace == 1); err != nil {
+	if err := inflatePNG(stream.Bytes(), int(width), int(height), pngChannels()[color]*int(depth), interlace == 1); err != nil {
 		return nil, 0, 0, err
 	}
 	var out bytes.Buffer

@@ -8,12 +8,16 @@ version: "2"
 run:
   # A HANG DETECTOR, NOT A BUDGET. ci.yml's jobs set no timeout-minutes, so
   # this is the only bound on the lint short of GitHub's six hours, and a run
-  # that reaches it has to be stuck rather than slow. A change to
-  # internal/engine and internal/sandbox, the two largest packages,
-  # re-analyses both: on 2026-11-02 such a run was cut at the 5m this used to
-  # be (316 s into the step), where a small change's took 106 s, and main's
-  # whole lint job ran 4m12s and 5m11s. Ten minutes is twice the five
-  # minutes the slowest of them reached.
+  # that reaches it has to be stuck rather than slow. Measured, not guessed:
+  # a full lint of the code-host tree took 340.7 s on CI's runner with a warm
+  # analysis cache, and one with a cold cache hit the old 5m limit at 384 s
+  # and reported a partial list as though it were the whole; on main, a
+  # change to internal/engine and internal/sandbox, the two largest packages,
+  # re-analyses both, and on 2026-11-02 such a run was cut at that 5m (316 s
+  # into the step), where a small change's took 106 s and the whole lint job
+  # ran 4m12s and 5m11s. Ten minutes is those runs plus room for a cold cache
+  # and the tree's growth; a run that outgrows it is a fact to measure and
+  # restate here, not a reason to drop the bound.
   timeout: 10m
 
 linters:
@@ -100,12 +104,17 @@ linters:
       #              that proves `typing_status: alwyas` is refused rather
       #              than silently degraded. Correcting it would assert the
       #              validator against a value that was never wrong.
+      #   versoin  — the typo'd key beside a checks file's `checks:` that
+      #              proves `crewlet validate` still tells the file apart
+      #              from both config tiers, and so reports the typo at its
+      #              line. Spelled right it is no typo, and tests nothing.
       ignore-rules:
         - noteable
         - requred
         - reasercher
         - enginer
         - alwyas
+        - versoin
     revive:
       rules:
         - name: exported

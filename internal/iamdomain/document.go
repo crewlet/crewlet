@@ -687,9 +687,12 @@ type Removal struct {
 // than a key every reader has to know to look for — and so the removal that
 // releases them cannot silently miss one it has never heard of.
 //
-// THE JSON KEYS ARE READ BY SQL: a removal's tombstone stores them as
-// `iam_removed.claims_json`, and the seat a removal released is found by
-// `json_extract(claims_json, '$.seat_id')`.
+// THE JSON KEYS ARE STORED: a removal's tombstone holds them as
+// `iam_removed.claims_json`, an operator's answer to "who held this", and the
+// seat a removal released is ALSO its `seat_id` column, written from SeatID by
+// the removal's apply and re-derived from these keys by [Applier.Rederive], so
+// that a seat's removals are found by a seek rather than by reading every
+// tombstone's claims.
 type Identifiers struct {
 	EmailBlind string `json:"email_blind,omitempty"`
 	Login      string `json:"login,omitempty"`

@@ -21,8 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/toolsession/toolsessiontest"
 )
 
@@ -87,7 +87,7 @@ func (f *fleetOf) join(t *testing.T, m *member, holderWait time.Duration) {
 	m.owner = m.node + ":" + uuid.NewString()
 	leave, err := m.bridge.Join(t.Context(), mcpbridge.FleetOptions{
 		Fabric: q, Leases: f.leases, Node: m.node, Owner: m.owner,
-		Keyring: statelog.OneKey("k", "fleet-key"), HolderWait: holderWait,
+		Keyring: recordseal.OneKey("k", "fleet-key"), HolderWait: holderWait,
 	})
 	if err != nil {
 		t.Fatalf("Join: %v", err)

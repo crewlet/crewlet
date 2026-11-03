@@ -288,14 +288,14 @@ func validateColumn(col artifacts.Column) error {
 		ids := map[string]bool{}
 		for _, o := range col.Options {
 			switch {
-			case !optionIDPattern.MatchString(o.ID):
+			case !optionIDPattern().MatchString(o.ID):
 				return fail("option id %q is 1..64 letters, digits, `_` and `-`", o.ID)
 			case ids[o.ID]:
 				return fail("option id %q is offered twice", o.ID)
 			case len(o.Label) > MaxLabelBytes:
 				return fail("option %q's label is %d bytes and the maximum is %d", o.ID,
 					len(o.Label), MaxLabelBytes)
-			case o.Color != "" && !colorPattern.MatchString(o.Color):
+			case o.Color != "" && !colorPattern().MatchString(o.Color):
 				return fail("option %q's color is a design-token hue name such as `green`, "+
 					"never a literal colour", o.ID)
 			case col.Type == artifacts.ColumnStatus && !slices.Contains(StatusCategories, o.Category):

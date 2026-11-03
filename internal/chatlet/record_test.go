@@ -221,6 +221,9 @@ func TestEveryRecordThatDeletesOrFencesInstallsAGate(t *testing.T) {
 			Subject: chatlet.ChannelSubject(room), Op: chatlet.OpPatch}, false},
 		{"a barrier", chatlet.RecordEnvelope{
 			Subject: chatlet.BarrierSubject(), Op: chatlet.OpBarrier}, false},
+		{"a trimmed record", chatlet.RecordEnvelope{
+			Subject: chatlet.Subject{Kind: chatlet.KindTrimmed, ID: "1.2"},
+			Op:      chatlet.OpTrimmed}, false},
 	} {
 		if got := tc.env.InstallsGate(); got != tc.want {
 			t.Errorf("%s: InstallsGate() = %v, want %v", tc.name, got, tc.want)
@@ -630,6 +633,7 @@ func TestEveryOpRidesASubjectAndTheCreateHasTwoAnswers(t *testing.T) {
 		chatlet.OpEviction:   chatlet.KindEviction,
 		chatlet.OpGeneration: chatlet.KindGeneration,
 		chatlet.OpBarrier:    chatlet.KindBarrier,
+		chatlet.OpTrimmed:    chatlet.KindTrimmed,
 	}
 	for _, op := range chatlet.OpKinds {
 		if !op.Valid() {

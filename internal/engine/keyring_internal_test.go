@@ -18,7 +18,7 @@ import (
 // record buys — so it is minted here instead, per call, through the minter
 // `crewlet secrets keygen` uses: the size, the randomness and the encoding are
 // read off the production definition rather than restated in a fixture.
-func testBootstrap(t *testing.T) config.Bootstrap {
+func testBootstrap(t testing.TB) config.Bootstrap {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	key, err := secrets.GenerateKey()

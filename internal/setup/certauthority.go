@@ -8,9 +8,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -75,4 +77,45 @@ func GenerateCertificateAuthority(name string, now time.Time) (string, error) {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})) +
 		string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), nil
+}
+
+// ParseCertificateAuthority reads a minted bundle back: its certificate, a
+// certificate authority's, and its key, which must be the certificate's.
+func ParseCertificateAuthority(bundle string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	var cert *x509.Certificate
+	var key *ecdsa.PrivateKey
+	rest := []byte(bundle)
+	for {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			break
+		}
+		var err error
+		switch block.Type {
+		case "EC PRIVATE KEY":
+			key, err = x509.ParseECPrivateKey(block.Bytes)
+		case "CERTIFICATE":
+			cert, err = x509.ParseCertificate(block.Bytes)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("setup: the certificate authority's %s: %w", strings.ToLower(block.Type), err)
+		}
+	}
+	switch pub, ok := certKey(cert); {
+	case key == nil || cert == nil:
+		return nil, nil, errors.New("setup: a certificate authority bundle holds its key and its certificate")
+	case !cert.IsCA:
+		return nil, nil, errors.New("setup: the certificate is not a certificate authority's")
+	case !ok || !pub.Equal(&key.PublicKey):
+		return nil, nil, errors.New("setup: the certificate is not the key's")
+	}
+	return cert, key, nil
+}
+
+func certKey(cert *x509.Certificate) (*ecdsa.PublicKey, bool) {
+	if cert == nil {
+		return nil, false
+	}
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	return pub, ok
 }

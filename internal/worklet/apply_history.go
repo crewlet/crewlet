@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -139,11 +139,11 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	inbox, err := a.writeInbox(ctx, tx, c, keys.Key)
+	noticed, err := a.writeInbox(ctx, tx, c, keys.Key)
 	if err != nil {
 		return 0, err
 	}
-	return rows + reopens + handOffs + successors + stamped + inbox, nil
+	return rows + reopens + handOffs + successors + stamped + noticed, nil
 }
 
 // stampProjectChange records that this commit changed the project's work, and
@@ -346,20 +346,6 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 	return 1, nil
 }
 
-// InboxRetentionDefaultDays is how long a person's inbox rows are kept.
-//
-// THE ONE HORIZON THAT DELETES A ROW DERIVED FROM A RECORD, and it is a
-// MAILBOX rather than a record: the history those rows were derived from is
-// untouched and answers for ever. A year, against the vendor's three months
-// uncleared, because an inbox row costs almost nothing and a founder scrolling
-// back a year is a thing that happens.
-const InboxRetentionDefaultDays = 365
-
-// EpochInboxRetentionDays is the epoch key the company's
-// `tracker.worklet.inbox_retention_days` reaches the applier under: the
-// setting's own path, which the engine writes and [inboxHorizon] reads.
-const EpochInboxRetentionDays = "tracker.worklet.inbox_retention_days"
-
 // subjectKeys is what the applier already read off the object row, named so
 // the two are not passed as two bare strings a call site can swap.
 //
@@ -400,11 +386,12 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // # BUT NEVER THE PERSON WHO MADE THE CHANGE
 //
 // Except under the one reason that is news to them ([Reason.WakesActor]):
-// the same step [Route] takes, over the record's actor — the seat's identity
-// whenever a person writes as their seat ([iam.ActorFor]), the spelling a
-// candidate is in. It needs no registry — who wrote the record is on the
-// record — so it belongs here rather than only in the routing, and here is
-// the only place it can be kept: this table is what `work_inbox` reads, and a
+// the same step [Route] takes — [routing.Candidate.Hears], one predicate for
+// both — over the record's actor, the seat's identity whenever a person
+// writes as their seat ([iam.ActorFor]), the spelling a candidate is in. It
+// needs no registry — who wrote the record is on the record — so it belongs
+// here rather than only in the routing, and here is the only place it can be
+// kept: this table is what `work_inbox` reads, and a
 // row written for the actor is a notice in their own inbox about what they
 // just did. A founder who commented on her own task through her assistant
 // found it in her inbox, unread, as "assigned to you", and every such row
@@ -429,7 +416,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		// the property lives.
 		return 0, nil
 	}
-	if horizon := inboxHorizon(c.epoch); horizon > 0 && !c.brokerAt.IsZero() {
+	if horizon := inbox.Horizon(c.epoch); horizon > 0 && !c.brokerAt.IsZero() {
 		// A RECORD OLDER THAN THE HORIZON WRITES NO INBOX ROWS AT ALL,
 		// which is what makes a whole-log replay rebuild no expired
 		// inbox — the alternative, sweeping afterwards, means every
@@ -454,7 +441,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		// ([iam.ActorFor]), which is the same spelling a candidate's
 		// handle is in, so one comparison covers a seat, a person at the
 		// dashboard and their own assistant alike.
-		if candidate.Handle == c.record.Actor && !candidate.Reason.WakesActor() {
+		if !candidate.Hears(c.record.Actor, Reason.WakesActor) {
 			continue
 		}
 		res, err := tx.ExecContext(ctx, `
@@ -482,41 +469,16 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		if n > 0 {
 			// A ROW THIS TRANSACTION WROTE, and only then: a redelivery
 			// wrote nothing, so it moved nobody's inbox. See
-			// inboxmove.go for what the movement is for.
-			a.noteInbox(inboxNote{
-				record: historyID(c), handle: candidate.Handle,
-				subject: c.subject().ID, reason: candidate.Reason,
-				position: c.packed, at: c.brokerAt,
+			// [inbox.Movement] for what the movement is for.
+			a.inboxed.Note(inbox.Note{
+				Record: historyID(c), Handle: candidate.Handle,
+				Subject: c.subject().ID, Reason: string(candidate.Reason),
+				Position: c.packed, At: c.brokerAt,
 			})
 		}
 		written += n
 	}
 	return written, nil
-}
-
-// inboxHorizon reads the retention days out of the epoch the framework passed
-// in.
-//
-// FROM THE EPOCH RATHER THAN FROM CONFIG, because the applier reads no
-// configuration at all: two nodes briefly on different epochs may write
-// different inbox rows, which is precisely why that table is classed as
-// diverging rather than compared by the identity claim.
-func inboxHorizon(epoch map[string]any) time.Duration {
-	days := InboxRetentionDefaultDays
-	if raw, held := epoch[EpochInboxRetentionDays]; held {
-		switch v := raw.(type) {
-		case int:
-			days = v
-		case int64:
-			days = int(v)
-		case float64:
-			days = int(v)
-		}
-	}
-	if days <= 0 {
-		return 0
-	}
-	return time.Duration(days) * 24 * time.Hour
 }
 
 // historyID is the history row's key: the record's own operation id when it

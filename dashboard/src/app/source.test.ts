@@ -712,9 +712,10 @@ test("a column with no word in its head declares one", () => {
 /**
  * EVERY READ NAMES ITS QUESTION.
  *
- * The first argument of a call that asks the engine something — `useQuery(`
- * and `query(`, bare or as a method — is a string literal: never a variable,
- * an expression, or a template with something substituted into it.
+ * The first argument of a call that asks the engine something — `useQuery(`,
+ * `useSearchQuery(`, `useCodeQuery(` (a code question, asked over REST) and
+ * `query(`, bare or as a method — is a string literal: never a variable, an
+ * expression, or a template with something substituted into it.
  *
  * THE ENGINE'S GATES READ THESE CALLS BY NAME, and a call they cannot read is
  * one they do not see. `internal/api/queries` holds this tree against the
@@ -755,7 +756,7 @@ test("a column with no word in its head declares one", () => {
  */
 
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
-const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
+const SPELLED = new Set(["useQuery", "query", "useSearchQuery", "useCodeQuery"]);
 /** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
 const BOUND = new Set(["act", "useAct"]);
 
@@ -905,6 +906,9 @@ describe("every read names its question", () => {
     expect(literal("query")).toBeGreaterThanOrEqual(2);
     expect(literal("useAct")).toBeGreaterThanOrEqual(4);
     expect(literal("useSearchQuery")).toBeGreaterThanOrEqual(8);
+    // THE CODE WORKSPACE'S: its Repositories and its Pushes, each asked
+    // through the REST hook.
+    expect(literal("useCodeQuery")).toBeGreaterThanOrEqual(3);
   });
 
   // A RANKED SEARCH IS ASKED THROUGH ITS HOOK, OR NOT AT ALL. The engine
@@ -1153,4 +1157,108 @@ test("every kit button in the page bar is the bar's small size", () => {
     });
   }
   expect(offenders).toEqual([]);
+});
+
+/**
+ * Where a node builds an `Intl` date or number formatter, or a collator: `new
+ * Intl.DateTimeFormat(…)`, `Intl.NumberFormat(…)` or `Intl.Collator(…)` called
+ * bare, a `toLocaleString`, `toLocaleDateString` or `toLocaleTimeString` handed
+ * a locale or options, or a `localeCompare` handed one beside the string it
+ * compares with, each of which builds one on every call. Null for anything
+ * else — a call with no locale and no options reads the runtime's own cached
+ * default and builds nothing.
+ */
+function formatterBuild(node: Node): string | null {
+  if (node.type === "NewExpression" || node.type === "CallExpression") {
+    const callee = node.callee as Node;
+    const name = memberName(callee);
+    if (
+      (name === "DateTimeFormat" || name === "NumberFormat" || name === "Collator") &&
+      (callee.object as Node).type === "Identifier" &&
+      (callee.object as Node).name === "Intl"
+    ) {
+      return `Intl.${name}`;
+    }
+    if (
+      node.type === "CallExpression" &&
+      (name === "toLocaleString" ||
+        name === "toLocaleDateString" ||
+        name === "toLocaleTimeString") &&
+      (node.arguments as Node[]).length > 0
+    ) {
+      return `${name}(…)`;
+    }
+    if (
+      node.type === "CallExpression" &&
+      name === "localeCompare" &&
+      (node.arguments as Node[]).length > 1
+    ) {
+      return "localeCompare(…)";
+    }
+  }
+  return null;
+}
+
+/** Every formatter build in a module's text, as `path:line what`. */
+function formatterBuilds(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const found: string[] = [];
+  walk(parse(text, lang), (node) => {
+    const what = formatterBuild(node);
+    if (what) found.push(`${path}:${line(node.start)} ${what}`);
+  });
+  return found;
+}
+
+// ONE PLACE BUILDS A FORMATTER, `lib/formatters.ts`, once per locale, zone and
+// shape. Building one is the expensive half of writing a date or a number, and
+// a `toLocaleString` with options, or an `Intl.DateTimeFormat` built where it is
+// used, builds one on every call: a list built one or two a row on every
+// render, and reading the zone each was written in built another. A
+// `localeCompare` with options builds a collator on every comparison of a
+// sort. The only other build is `lib/prefs.ts`'s read of the browser's zone,
+// made once and kept. Mutations: a date drawn with `toLocaleDateString(undefined,
+// …)`, or the folders sorted with `localeCompare` and options, in any module is
+// named here.
+test("every date and number formatter, and every collator, is built through lib/formatters.ts", () => {
+  const allowed: Record<string, number> = {
+    // The cache's own three constructions.
+    "lib/formatters.ts": 3,
+    // The browser's zone, read once and kept.
+    "lib/prefs.ts": 1,
+  };
+  const offenders = modules().flatMap(({ path, text, lang }) => {
+    const found = formatterBuilds(path, text, lang);
+    return found.length === (allowed[path] ?? 0) ? [] : found;
+  });
+  expect(
+    offenders,
+    "build a date or number formatter or a collator through dateTimeFormat, numberFormat or collator (lib/formatters.ts)",
+  ).toEqual([]);
+});
+
+test("the formatter reading sees every way to build one, and nothing that builds none", () => {
+  const snippet = [
+    'new Intl.DateTimeFormat("en-US", { timeZone: "UTC" });',
+    "Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });",
+    'at.toLocaleDateString(undefined, { month: "short" });',
+    'at.toLocaleString("en-GB");',
+    "at.toLocaleTimeString(undefined, {});",
+    "new Intl.Collator(undefined, { numeric: true });",
+    'a.localeCompare(b, undefined, { sensitivity: "base" });',
+    "n.toLocaleString();",
+    "at.toLocaleDateString();",
+    "a.localeCompare(b);",
+    "dateTimeFormat(undefined, zone, shape).format(at);",
+    "collator(undefined, order).compare(a, b);",
+  ].join("\n");
+  expect(formatterBuilds("x.ts", snippet, "ts")).toEqual([
+    "x.ts:1 Intl.DateTimeFormat",
+    "x.ts:2 Intl.NumberFormat",
+    "x.ts:3 toLocaleDateString(…)",
+    "x.ts:4 toLocaleString(…)",
+    "x.ts:5 toLocaleTimeString(…)",
+    "x.ts:6 Intl.Collator",
+    "x.ts:7 localeCompare(…)",
+  ]);
 });

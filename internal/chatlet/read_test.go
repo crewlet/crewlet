@@ -162,7 +162,7 @@ func (h *readHarness) reader() *chatlet.Reader {
 func (h *readHarness) readerBehind(lag uint64) *chatlet.Reader {
 	h.t.Helper()
 	authority, err := statelogtest.LocalReaderBehind(chatlet.Domain{},
-		h.db, h.waiter.Committed(), lag)
+		h.db, h.waiter.Reached(), lag)
 	if err != nil {
 		h.t.Fatalf("build the read authority: %v", err)
 	}
@@ -189,15 +189,19 @@ func (w *readWaiter) reach(p statelog.Position) {
 	}
 }
 
-func (w *readWaiter) Committed() statelog.Position {
+// Committed is the checkpoint the fence and the reader are wired to: this
+// harness commits every record it reaches, so it is [readWaiter.Reached].
+func (w *readWaiter) Committed() statelog.Position { return w.Reached() }
+
+func (w *readWaiter) Reached() statelog.Position {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.at
 }
 
-func (w *readWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *readWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		select {
@@ -211,7 +215,7 @@ func (w *readWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 func (w *readWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
 
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // readRecord builds one record with its payload encoded.
@@ -281,7 +285,7 @@ func said(views []chatlet.MessageView) []chatlet.MessageView {
 // which is what every case here wants: the rows it has just applied.
 func (h *readHarness) session() statelog.Freshness {
 	return statelog.Freshness{
-		Level: statelog.ReadSession, MinPosition: h.waiter.Committed(),
+		Level: statelog.ReadSession, Floors: []statelog.Position{h.waiter.Reached()},
 	}
 }
 
@@ -728,7 +732,7 @@ func TestAReadNamesItsOwnWritePositionAsAFloor(t *testing.T) {
 
 	got, err := reader.Messages(t.Context(), "ada",
 		chatlet.TranscriptQuery{ChannelID: "room-1"},
-		statelog.Freshness{Level: statelog.ReadSession, MinPosition: at})
+		statelog.FloorAt(statelog.ReadSession, at))
 	if err != nil {
 		t.Fatalf("a read floored at its own write: %v", err)
 	}
@@ -748,7 +752,7 @@ func TestAReadNamesItsOwnWritePositionAsAFloor(t *testing.T) {
 	ahead := at.At(at.Seq + 1)
 	short, err := reader.Messages(t.Context(), "ada",
 		chatlet.TranscriptQuery{ChannelID: "room-1"},
-		statelog.Freshness{Level: statelog.ReadSession, MinPosition: ahead})
+		statelog.FloorAt(statelog.ReadSession, ahead))
 	var refused *statelog.Refused
 	if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind {
 		t.Fatalf("a read floored past this node answered (%d messages, %v), "+

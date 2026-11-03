@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -207,15 +208,23 @@ func (p Priority) Rank() int { return slices.Index(Priorities, p) }
 // mean either accepting "in-progress" as a status or refusing "v2-api" as a
 // tag, and both have been asked for.
 var (
-	slugPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	tagPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	slugPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	})
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	tagPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+	})
 )
 
 // ValidSlug reports a well-formed status, type or field slug.
-func ValidSlug(s string) bool { return slugPattern.MatchString(s) }
+func ValidSlug(s string) bool { return slugPattern().MatchString(s) }
 
 // ValidTagSlug reports a well-formed tag slug.
-func ValidTagSlug(s string) bool { return tagPattern.MatchString(s) }
+func ValidTagSlug(s string) bool { return tagPattern().MatchString(s) }
 
 // A SLUG IS IMMUTABLE. A rename changes the label and never the slug, because
 // a slug is what a stored value, a saved view's parameters and a year of

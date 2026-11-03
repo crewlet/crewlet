@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -219,16 +220,20 @@ var (
 	// a host with a path (`acme.io/promo`). A link is the cheapest beacon an
 	// injected instruction asks a model for, and a brand's text has no use
 	// for one.
-	linkPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bjavascript:|\bdata:\S|\bwww\.\S|` +
-		`(?:^|[\s(\[{"'])//\S|[^\s@]@[a-z0-9-]+(?:\.[a-z0-9-]+)+|\]\(|` +
-		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/`)
+	linkPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bjavascript:|\bdata:\S|\bwww\.\S|` +
+			`(?:^|[\s(\[{"'])//\S|[^\s@]@[a-z0-9-]+(?:\.[a-z0-9-]+)+|\]\(|` +
+			`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/`)
+	})
 
 	// hostPattern is a bare host (`acme.io`, `evil.example`), which a model
 	// reads as an address too. Refused in every field but the name, and
 	// never the brand's own name ([ownHost]): a company's own name can be a
 	// domain ("Booking.com"), and is what the brand shows as its name.
-	hostPattern = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?` +
-		`(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,24}\b`)
+	hostPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?` +
+			`(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,24}\b`)
+	})
 )
 
 // fields holds every field of a decoded index to its rule.
@@ -274,7 +279,7 @@ func (r *reader) noHost(name, s, brand string) {
 	if s == "" || plainText(s, true) != "" {
 		return
 	}
-	for _, host := range hostPattern.FindAllString(s, -1) {
+	for _, host := range hostPattern().FindAllString(s, -1) {
 		if ownHost(host, brand) {
 			continue
 		}
@@ -347,7 +352,7 @@ func plainText(s string, newlines bool) string {
 		return "begins or ends with white space"
 	case strings.ContainsAny(s, "<>"):
 		return "holds < or >: it is plain text, never markup"
-	case linkPattern.MatchString(s):
+	case linkPattern().MatchString(s):
 		return "holds a link or an address: a brand's text names no link"
 	}
 	for _, c := range s {

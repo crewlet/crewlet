@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -148,7 +149,7 @@ func TestEveryHistoryRowCarriesTheDigestAfterIt(t *testing.T) {
 			t.Fatalf("read record %d: %v", seq, err)
 		}
 		body, verdict := replay.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			t.Fatalf("record %d: %s", seq, verdict)
 		}
 		replay.applyBody(spec, seq, body, storedAt)

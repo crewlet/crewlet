@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -332,9 +333,13 @@ func (e *Engine) armRelaunchTargets(ctx context.Context) error {
 		return nil
 	}
 	answerer := e.relaunchTargets()
-	stop, err := e.backends.Queue.Serve(ctx, topics.HeldRelaunch, func(_ context.Context, raw []byte) ([]byte, error) {
-		return answerer.answer(raw)
-	})
+	// AT THE BOUND OF WORK DONE NOW ([queue.ConcurrentAnswers]): an answer
+	// reads this node's own chain and bench and waits on nothing a later push
+	// brings, so no slot is held through a wait.
+	stop, err := e.backends.Queue.Serve(ctx, topics.HeldRelaunch, queue.ConcurrentAnswers,
+		func(_ context.Context, raw []byte) ([]byte, error) {
+			return answerer.answer(raw)
+		})
 	if err != nil {
 		return fmt.Errorf("engine: answer what a relaunch of a seat's turn is launched on: %w", err)
 	}

@@ -16,6 +16,7 @@ import { ClientContext } from "./store-hooks.ts";
 import { useQuery } from "./useQuery.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import { UNAVAILABLE_RETRY_MS } from "~/contract/retry.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -73,7 +74,7 @@ const answer = () => Promise.resolve({ nodes: [] });
 
 test("an unavailable answer is asked again after the engine's wait, and fills in", async () => {
   const { asked, text } = mount([refuse("unavailable", 3), answer]);
-  await act(async () => {});
+  await afterMicrotasks();
   expect(text()).toBe("unavailable");
   expect(asked).toHaveBeenCalledTimes(1);
 
@@ -95,7 +96,7 @@ test("an unavailable answer is asked again after the engine's wait, and fills in
 // asks for twelve seconds is not asked at five.
 test("a long hint is waited out", async () => {
   const { asked } = mount([refuse("unavailable", 12), answer]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(11_000);
   });
@@ -109,7 +110,7 @@ test("a long hint is waited out", async () => {
 // A slow poll does not hold a recovering screen for its whole interval.
 test("an unavailable answer comes back sooner than a slow poll would", async () => {
   const { asked } = mount([refuse("unavailable", 5), answer], 60_000);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5_000);
   });
@@ -121,7 +122,7 @@ test("an unavailable answer comes back sooner than a slow poll would", async () 
 // or the reader does.
 test("a zero hint is not asked again on its own", async () => {
   const { asked } = mount([refuse("unavailable", 0), answer]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(120_000);
   });
@@ -132,7 +133,7 @@ test("a zero hint is not asked again on its own", async () => {
 // and waits what the engine says when it has nothing better.
 test("an unavailable answer that named no wait is asked again after the default", async () => {
   const { asked } = mount([refuse("unavailable"), answer]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS - 1);
   });
@@ -152,7 +153,7 @@ test.each([
   ["unauthorized", null],
 ] as const)("a %s answer is not asked again", async (code, hint) => {
   const { asked } = mount([refuse(code, hint)]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(120_000);
   });
@@ -184,11 +185,10 @@ test("a refusal's sentence is on the result until an answer replaces it", async 
       <Said />
     </ClientContext.Provider>,
   );
-  await act(async () => {});
+  await afterMicrotasks();
   expect(view.getByTestId("said").textContent).toBe("bad_params|days=91 is too many");
   await act(async () => {
     view.getByTestId("said").click();
   });
-  await act(async () => {});
   expect(view.getByTestId("said").textContent).toBe("ok|");
 });

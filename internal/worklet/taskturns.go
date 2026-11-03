@@ -43,8 +43,8 @@ import (
 //
 // A cursor is the log position of the oldest turn a page returned, and the
 // next page is the turns whose FIRST segment is below it. The first segment
-// and not the newest, because a turn's later segments arrive as its coding
-// runs are collected, and a cursor on the newest would move a turn from one
+// and not the newest, because a turn's later segments arrive as its executor's
+// launches are collected, and a cursor on the newest would move a turn from one
 // page to another while a reader walked them.
 
 // DefaultTaskTurns is the page a task's turn list answers when none is named;

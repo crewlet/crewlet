@@ -10,9 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // THE WAKE PATH, END TO END: a committed record becomes a notification for the
@@ -133,6 +134,44 @@ func TestAMentionAndTheLeadFallbackBothRouteOffTheRelayedRecord(t *testing.T) {
 	}
 }
 
+// A PAGE'S NOTICE SAYS WHO WROTE THE CHANGE, BY THE RECORD'S OWN KIND. A
+// person writes as the seat they hold, an agent as its seat, and a credential
+// acting as no seat under its own login — three actors spelled alike, of
+// which only the kind tells a turn the notice wakes whether a colleague is
+// asking. A wake that named only the actor read every one of them as a vendor
+// id nobody holds, which is a stranger.
+func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	for _, c := range []struct {
+		actor doclet.Actor
+		want  types.NotificationWriter
+	}{
+		{author("jane"), types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
+		{agent("swe"), types.NotificationWriter{Kind: iam.ActorAgent, Seat: "swe"}},
+		{doclet.Actor{Handle: "token:ci", Kind: doclet.AuthorOperator},
+			types.NotificationWriter{Kind: iam.ActorOperator}},
+	} {
+		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
+			doclet.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}); err != nil {
+			t.Fatalf("comment as %s: %v", c.actor.Handle, err)
+		}
+		var wake *notify.Routed
+		for _, routed := range r.route(r.lastRecord(), nil) {
+			if routed.To.Handle == "bob" {
+				wake = &routed
+			}
+		}
+		if wake == nil {
+			t.Fatalf("%s's mention of bob woke nobody", c.actor.Handle)
+		}
+		if got := wake.Writer; got == nil || *got != c.want {
+			t.Errorf("%s's comment names its writer %+v, want %+v", c.actor.Handle, got, c.want)
+		}
+	}
+}
+
 // lastRecord is the newest record on the log, as the feed would receive it.
 func (r *roundTrip) lastRecord() []byte {
 	r.t.Helper()
@@ -156,7 +195,7 @@ func (r *roundTrip) recordAt(seq uint64) []byte {
 		r.t.Fatalf("read record %d: %v (present %v)", seq, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	return body

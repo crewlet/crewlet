@@ -35,6 +35,11 @@ func TestTheDatastoreDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       artifactdata.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
+			EncodeTrimmed: artifactdata.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: artifactdata.EncodeBarrier,
 		}
 	})
 }
@@ -146,6 +151,9 @@ func encodeRecord(kind, id, opID string, version int) ([]byte, error) {
 			artifactdata.Generation{V: 1, Generation: 2, By: "suite", StreamAt: suiteStamped}
 	case artifactdata.KindBarrier:
 		subject, op = artifactdata.BarrierSubject(), artifactdata.OpBarrier
+	case artifactdata.KindTrimmed:
+		subject, op = artifactdata.TrimmedSubject(statelog.Position{Generation: 1, Seq: 2}),
+			artifactdata.OpTrimmed
 	default:
 		subject, op = artifactdata.Subject{Kind: artifactdata.ObjectKind(kind), ID: id},
 			artifactdata.OpWrite

@@ -118,6 +118,14 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/worklet/item/edit.tsx"],
     why: "a task's title and description editors, fields of the one draft its page's edits declare",
   },
+  "routes/code/change/Conversation.tsx": {
+    screen: ["routes/code/change/ChangePage.tsx"],
+    why: "the comment on a change and each thread's reply box, fields of the change page's one draft",
+  },
+  "routes/code/change/Files.tsx": {
+    screen: ["routes/code/change/ChangePage.tsx"],
+    why: "a finding written on picked lines and each finding's reply box, fields of the change page's one draft",
+  },
 };
 
 /** A module with editing marks and no draft the assistant could be asked about, and why. */
@@ -132,6 +140,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
   "routes/chatlet/Attach.tsx":
     "modal: a search for a task, page or artifact to link, in its dialog",
+  "routes/code/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
+  "routes/code/change/Merge.tsx": "modal: an override's reason, in its dialog",
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",

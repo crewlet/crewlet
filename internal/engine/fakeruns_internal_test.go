@@ -180,6 +180,17 @@ func (r *runRig) row(t *testing.T, turnID string) sandbox.PendingRun {
 	return row
 }
 
+// calls is the bridged tool log of turnID's run, as the row's job reads it.
+func (r *runRig) calls(t *testing.T, turnID string) sandbox.BridgeLog {
+	t.Helper()
+	pending := r.engine.sandbox.Load().pending
+	log, err := pending.BridgeLog(t.Context(), r.row(t, turnID))
+	if err != nil {
+		t.Fatalf("the run log of %s: %v", turnID, err)
+	}
+	return log
+}
+
 // collect delivers the completion of turnID's run the way the waiter's poll
 // announces one, to the coordinator that claims it: the run is played if it
 // has not been, collected, charged, and its turn resumed — the reviewer and

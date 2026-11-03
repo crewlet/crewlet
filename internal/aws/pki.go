@@ -9,12 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // The company's certificate authority, minted and sealed by setup
@@ -52,39 +53,13 @@ func randomSerial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 }
 
-// ParseCA reads a sealed bundle back, refusing one whose key is not its
-// certificate's.
+// ParseCA reads a sealed bundle back ([setup.ParseCertificateAuthority]).
 func ParseCA(bundle string) (*CA, error) {
-	var ca CA
-	rest := []byte(bundle)
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		switch block.Type {
-		case "EC PRIVATE KEY":
-			k, err := x509.ParseECPrivateKey(block.Bytes)
-			if err != nil {
-				return nil, fmt.Errorf("aws: the CA key: %w", err)
-			}
-			ca.key = k
-		case "CERTIFICATE":
-			c, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, fmt.Errorf("aws: the CA certificate: %w", err)
-			}
-			ca.Cert = c
-		}
+	cert, key, err := setup.ParseCertificateAuthority(bundle)
+	if err != nil {
+		return nil, fmt.Errorf("aws: %s", strings.TrimPrefix(err.Error(), "setup: "))
 	}
-	if ca.key == nil || ca.Cert == nil {
-		return nil, errors.New("aws: the CA bundle needs its key and its certificate")
-	}
-	if pub, ok := ca.Cert.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&ca.key.PublicKey) {
-		return nil, errors.New("aws: the CA certificate is not the CA key's")
-	}
-	return &ca, nil
+	return &CA{Cert: cert, key: key}, nil
 }
 
 // CertificatePEM is the CA's public half: what the owner registers.

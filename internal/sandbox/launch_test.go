@@ -55,6 +55,7 @@ func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	// AND A LAUNCH THAT FAILS ENDS ITS ROW UNDER IT, rather than unfenced.
 	fenced := &finishFences{PendingStore: rig.pending}
 	c, err := NewCoordinator(CoordinatorOptions{
+		Pushes:  &pushSpy{},
 		Answers: rigAnswers(),
 		Queue:   rig.queue, Pending: fenced, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
@@ -732,14 +733,19 @@ func launchWithoutBrief() LaunchRequest {
 // launchVia launches through a coordinator of its own over the rig's store and
 // queue, for a case about the launch rather than about what a coordinator
 // counts: the rig's own coordinator, where it has one, is left untouched. The
-// seat is held under [rigLease], as a real node's is.
+// seat is held under [rigLease], as a real node's is. On the rig's one clock,
+// as the store is: a launch reads a kept box's age off the date the store gave
+// it ([KeptBoxMaxAge]), and a wall clock read against the rig's fixed instant
+// would find every box months old.
 func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
+		Pushes:  &pushSpy{},
 		Answers: rigAnswers(),
 		Queue:   r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
+		Now:   func() time.Time { return r.now },
 	})
 	if err != nil {
 		r.t.Fatalf("NewCoordinator: %v", err)

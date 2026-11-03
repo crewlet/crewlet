@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // prose is what the person was told: it must cross the broker only encrypted.
@@ -33,7 +33,7 @@ var (
 // fleetKeys is one fleet's keyring, as both halves of every channel derive
 // their keys from it.
 type fleetKeys struct {
-	ring   statelog.Keyring
+	ring   recordseal.Keyring
 	cipher secrets.Cipher
 }
 
@@ -44,7 +44,7 @@ func keysOf(t *testing.T, signing string, aead byte) fleetKeys {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fleetKeys{ring: statelog.OneKey("k1", signing), cipher: cipher}
+	return fleetKeys{ring: recordseal.OneKey("k1", signing), cipher: cipher}
 }
 
 // spy records every payload a node broadcast and every reply it was handed.
@@ -429,7 +429,7 @@ func TestTheRunnerRefusesAnotherPersonsTurn(t *testing.T) {
 	}
 }
 
-func mustOneWay(t *testing.T, ring statelog.Keyring) *signedask.OneWay[Sealed] {
+func mustOneWay(t *testing.T, ring recordseal.Keyring) *signedask.OneWay[Sealed] {
 	t.Helper()
 	w, err := signedask.NewOneWay[Sealed](FrameChannel, ring)
 	if err != nil {

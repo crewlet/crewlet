@@ -14,6 +14,8 @@ package events
 import (
 	"maps"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // RateAuthor names WHO DECIDES HOW OFTEN a type is published — never who
@@ -341,6 +343,58 @@ var categories = map[string]placement{
 	// What the auxiliary model cost, coalesced per key per flush — PERSISTED
 	// and NOT FED: see [unfed].
 	"auxiliary_spend": {"system", RateEngine},
+	// A read of a `visibility: unit` repository's contents — a fetch that
+	// carried a pack, a code tool's answer — PERSISTED, since the usage
+	// domain derives "who read it" from these rows, and NOT FED: see
+	// [unfed]. AUTHENTICATED-rated: every one is a read the guard admitted
+	// and the repository's grant allowed, so its pace is set by the
+	// credentials and seats the company holds — a token's builds, a seat's
+	// turns — never by a stranger.
+	"code_fetched": {"system", RateAuthenticated},
+	// An attempt of a check of a commit ENDED, as its row keeps the ending —
+	// PERSISTED, since a node's day counts it from these rows, and NOT FED:
+	// see [unfed]. AUTHENTICATED-rated: an attempt follows from a push the
+	// guard admitted — a seat's, a person's, a token's — so its pace is set
+	// by the credentials and seats the company holds, bounded by the cells
+	// that run checks.
+	"code_check_finished": {"system", RateAuthenticated},
+	// A change a merge record merged into its branch, its gate held or a
+	// person's override recorded — PERSISTED and FED: a merge is what a
+	// person watching the company's work wants to see happen, one a change.
+	// AUTHENTICATED-rated: every one is a merge a seat's or a person's
+	// credential asked, its pace set by the changes they open.
+	"change_merged": {"system", RateAuthenticated},
+	// A change opened, and a review of one given — PERSISTED, since the
+	// owner's and the reviewer's seat days count them from these rows
+	// (changes_opened, reviews_given, findings_received), and FED: each is
+	// one a change or one a review, a turn's result at most, so fewer than
+	// the turns the feed already carries beside them. AUTHENTICATED-rated:
+	// each is a write a seat's or a person's credential asked.
+	"change_opened":    {"system", RateAuthenticated},
+	"review_submitted": {"system", RateAuthenticated},
+	// An entry a merge queue put out — a failed check, a conflict, a gate no
+	// longer met, a moved head — PERSISTED and FED: an ejection is what the
+	// change's authors and its enqueuer act on, beside the merge it did not
+	// become. AUTHENTICATED-rated: every one ends an enqueue a seat's or a
+	// person's credential asked, at most one ejection an enqueue.
+	"code_queue_ejected": {"system", RateAuthenticated},
+	"code_target_broken": {"system", RateAuthenticated},
+	// A push mirror's push, by the repository's home: PERSISTED, UNFED — the
+	// audit of what the company published to another host, which nobody acts
+	// on. ENGINE-rated: the home pushes on its own schedule, at most one push
+	// a repository at a time.
+	"code_mirror_pushed": {"system", RateEngine},
+	// An import's end, by the repository's home: PERSISTED, UNFED — the audit
+	// of where a repository's contents came from. ENGINE-rated: the home ends
+	// each import once, on its own, at most one import a repository at a
+	// time; a person's import only asks for one, a create of one repository.
+	"code_imported": {"system", RateEngine},
+	// An expunge's commit, by the repository's maintainer: PERSISTED, UNFED —
+	// the audit of what left a repository. ENGINE-rated: the maintainer
+	// commits at most one expunge a repository at a time, weekly on its own
+	// schedule; a person's purge only asks for the next one, and two purges
+	// asked before it begins are one.
+	"code_expunged": {"system", RateEngine},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -447,6 +501,12 @@ var excluded = map[string]Exclusion{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet"},
+	"operator_tools_changed": {Cause: CauseAlreadyRecorded, Reason: "a NUDGE between nodes that one node built its " +
+		"operator catalogue again, so every node tells the MCP clients " +
+		"listening on it to list their tools again. The apply that moved the " +
+		"catalogue is already a row (config_revision_applied), and a durable " +
+		"row per node per rebuild would record one revision once more per " +
+		"member of the fleet"},
 	"executor_answer_given": {Cause: CauseAlreadyRecorded, Reason: "the WAKE an answer by turn puts on the seat's " +
 		"inbox, and never a turn. What the answer became is " +
 		"executor_answered, and that a person gave it is their " +
@@ -499,6 +559,26 @@ var excluded = map[string]Exclusion{
 // (internal/eventfan), and each node leaves the class out of its own listing
 // and its own axis by this list.
 var unfed = map[string]string{
+	"code_mirror_pushed": "AN AUDIT, NOT ACTIVITY: what a repository's home " +
+		"published to its push mirror, as often as once a minute for a busy " +
+		"repository, which went where the repository's " +
+		"settings told it to — nobody acts on one. The event log keeps it " +
+		"for whoever asks what the company published and when; a push that " +
+		"failed is code_mirror_failing's, never an event",
+	"code_imported": "AN AUDIT, NOT ACTIVITY: where a repository's contents " +
+		"came from — the source it was imported from, the chunks, refs and " +
+		"bytes that landed, and why it ended short where it did — whose " +
+		"asking is already in the feed as the person's operator_acted, or is " +
+		"the company document's for a declared import. The repository's row " +
+		"keeps only its latest import, so the event log keeps every one, for " +
+		"whoever asks where a repository came from and when",
+	"code_expunged": "AN AUDIT, NOT ACTIVITY: what an expunge's commit took " +
+		"out of a repository — its objects and bytes, and until when the " +
+		"store still holds them — by the maintainer's weekly housekeeping " +
+		"or serving a person's purge, whose asking is already in the feed " +
+		"as that person's operator_acted. The repository's detail keeps " +
+		"only its latest expunge, so the event log keeps every one, for " +
+		"whoever asks what left the repository and when",
 	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
 		"the auxiliary model cost for one key, several per turn beside the " +
 		"turn's own phases and a burst of them when a compaction runs. In " +
@@ -506,6 +586,25 @@ var unfed = map[string]string{
 		"reader watches out of a ring that holds the whole company's last " +
 		"few hundred events; their spend reaches every spend figure through " +
 		"the rollups, and a turn's page reads them by its turn id",
+	"code_fetched": "AN AUDIT, NOT ACTIVITY: one record per reader of a " +
+		"`visibility: unit` repository's contents per fifteen-second flush, " +
+		"and a busy company's readers — a CI token fetching on every build, " +
+		"seats reading files a line range at a time — write them faster than " +
+		"a person reads a feed, pushing the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last few " +
+		"hundred events. Who read a repository is answered where it is asked: " +
+		"the code host's readers route and `" + toolname.CodeRepoReaders + "`, summed across " +
+		"the fleet from the usage domain these rows are derived into",
+	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
+		"check that ended (a second only as the correction of an ending its " +
+		"row replaced, naming that ending), and every push of every change " +
+		"ends each check its repository's checks file defines — a busy " +
+		"company's faster than a person reads a feed, pushing the turns, " +
+		"failures and deliveries a reader watches out of a ring that holds " +
+		"the whole company's last few hundred events. An attempt's ending is " +
+		"read where it is asked — the change's checks, the repository's — " +
+		"from its row on the code log; these rows are what a node's day " +
+		"counts",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.

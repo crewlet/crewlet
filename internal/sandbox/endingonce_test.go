@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -360,7 +360,7 @@ func TestAnEndingDecidedBeforeTheNextHoldersFenceIsFinishedByIt(t *testing.T) {
 	}
 	rig.finished("t1")
 	ends := writes.endedRecords()
-	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeStopped {
+	if len(ends) != 1 || ends[0].Ending.Outcome != executorkeep.OutcomeStopped {
 		t.Fatalf("recorded %+v, want the stopped turn's one end", ends)
 	}
 	if !slices.Contains(rig.provider.KilledIDs(), launched.SandboxID) {

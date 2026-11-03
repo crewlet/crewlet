@@ -26,7 +26,7 @@ import { withDerived } from "~/test/org.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { loadChunk } from "./lazyScreen.ts";
+import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router } from "./router.tsx";
 import { workspaceRow } from "./nav.ts";
 import { page } from "~/lib/session.ts";
@@ -52,13 +52,14 @@ let reloads: ReturnType<typeof vi.spyOn>;
 /** What `GET /auth/session` says the session holds. */
 let grants: string[];
 
-// THE TWO SCREENS' CHUNKS ARE THE SUITE'S TO LOAD, once: imported cold inside
-// the first case they took two of its five seconds alone, and past five under
-// the full suite's load, so that case timed out on whichever run was busiest.
+// EVERY CHUNK THE FRAME DRAWS FROM IS THE SUITE'S TO LOAD, once, as in
+// `App.test.tsx`: imported cold inside a case, a screen's took seconds of the
+// case's own time under the full suite's load. Loading the three this suite
+// once named left Spend's — the screen "a session holding no app" opens — to
+// suspend inside an act the case never awaited, which React says in the
+// console. The loading path is `lazy.test.tsx`'s.
 beforeAll(async () => {
-  await loadChunk("worklet");
-  await loadChunk("account");
-  await loadChunk("settings");
+  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
 
 beforeEach(() => {
@@ -193,12 +194,14 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   const rows = screen.getByRole("navigation", { name: "Navigation" });
   const row = (name: RegExp) => within(rows).getByRole("link", { name });
   await waitFor(() =>
-    expect(row(/^Inbox/).querySelector("[title='Needs Worklet access']")).not.toBeNull(),
+    expect(row(/^Worklet/).querySelector("[title='Needs Worklet access']")).not.toBeNull(),
   );
-  expect(row(/^Worklet/).querySelector("[title='Needs Worklet access']")).not.toBeNull();
   expect(row(/^Doclet/).querySelector("[title='Needs Doclet access']")).not.toBeNull();
   expect(row(/^Chatlet/).querySelector("[title='Needs Chatlet access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
+  // THE INBOX NAMES NO APP: it is composed from every native domain's
+  // notices, each read under its own permission.
+  expect(row(/^Inbox/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
@@ -247,12 +250,15 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   const sections = new Map(
     (workspaceRow("settings")?.sections ?? []).map((s) => [`#/${s.path.join("/")}`, s.grants]),
   );
-  const rows = within(column).getAllByRole("link");
-  const locked = rows.filter((a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0);
-  expect(locked.length).toBeGreaterThan(5);
-  // THE LOCKS ARE DRAWN ONCE THE SESSION HAS ANSWERED, a commit after the
-  // column itself, so they are waited for rather than read at once.
+  // WAITED FOR, NOT READ OFF THE COLUMN: the column is drawn before the
+  // reading it draws its locks off has landed, and a busy machine reads it
+  // in between.
   await waitFor(() => {
+    const rows = within(column).getAllByRole("link");
+    const locked = rows.filter(
+      (a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0,
+    );
+    expect(locked.length).toBeGreaterThan(5);
     for (const a of rows) {
       const at = a.getAttribute("href") ?? "";
       if (locked.includes(a)) {

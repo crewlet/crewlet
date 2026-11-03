@@ -33,7 +33,8 @@ import (
 // What is left is the surface an operator's assistant actually needs — and
 // the dashboard, which makes every change it makes through this catalogue
 // (ADR-0024): read the board, file and move work, read and write the wiki,
-// search what the company knows, and talk in the company's own chat.
+// search what the company knows, talk in the company's own chat, read and
+// change the company's code, and read the deployment's health.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -45,6 +46,22 @@ type OperatorDeps struct {
 	// dependencies on this surface. Each zero value omits its tools.
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
+
+	// Code is the code tools' — the SAME [CodeTools] list a seat's registry
+	// takes, its Actor the request's principal: the reads, and the writes
+	// where its Writer is set. The zero value omits them: a company that
+	// hosts no code.
+	Code CodeDeps
+
+	// Readers is `code_repo_readers`' half beside Code — who read a
+	// `visibility: unit` repository — served only where Code serves the
+	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
+	Readers ReadersDeps
+
+	// Health is the health tools' — the SAME [HealthTools] list a seat's
+	// registry takes, its code half's Actor the request's principal. The
+	// zero value omits both.
+	Health HealthDeps
 
 	// Chat is the company's own chat. Its [ChatDeps.Actor] is the
 	// request's principal ([PrincipalChatActor]): a person writes as the
@@ -107,13 +124,18 @@ type OperatorDeps struct {
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
-	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
 	// turn to derive one from: every write answers with its `op_id`, and
-	// the call brought back with it is that operation again. See
-	// [WorkDeps.bindOperation] — and this is the only place that says so,
-	// because it is a fact about this surface rather than a setting.
-	work.callerOperations = true
+	// the call brought back with it is that operation again ([operations]).
+	// This is the only place that says so, for every family of write tools
+	// built below — the tracker's here, the artifacts' and the datastore's
+	// from deps.Artifacts, the code host's from deps.Code — because it is a
+	// fact about this surface rather than a setting. The artifacts mint on
+	// their own clock.
+	deps.Work.ops = operations{callerOperations: true}
+	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
+	deps.Code.ops = operations{callerOperations: true}
+	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
@@ -180,6 +202,22 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
+		// NOR THIS: who read a unit's repository names the people, the
+		// credentials and the seats that read its code — an audit, and
+		// admin's (authz.ActionCodeRepoReaders) — and a seat that could
+		// ask it would be a model watching the people it works for. See
+		// codereaders.go. On the code reads' own terms ([CodeDeps.serves]),
+		// never the code host's alone: wired without the requester
+		// ceiling's halves those reads are not offered, and an audit of the
+		// reads beside none of them would be a code tool served where the
+		// rest are not.
+		{&codeRepoReaders{code: deps.Code, deps: deps.Readers},
+			deps.Code.serves() && deps.Readers.Readers != nil},
+		// NOR THIS: a person's marks over their own code notices — a seat
+		// is woken, never shown an inbox, so it has none to mark. See
+		// codemarks.go. Beside the code writes, on their terms: a surface
+		// that changes none of the company's code marks none of it either.
+		{&codeMarkInbox{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
 		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
 		// them through this catalogue (ADR-0024): read the rooms, find
 		// what was said, say something, react, move one's own membership
@@ -212,7 +250,18 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&markChatRead{deps: talk}, talk.Cursors != nil},
 	}
 	candidates = slices.Concat(candidates,
-		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps))
+		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),
+		// THE CODE TOOLS, the list a seat's registry takes whole: a person
+		// reads every repository and maintains every one a tool made, so
+		// their assistant answers the same questions a seat's turn does,
+		// about all of them, and makes the same changes, as the human seat
+		// the person holds. An operator holds no turn, so it holds nothing
+		// from a scratch repository's expiry.
+		codeCandidates(deps.Code),
+		// AND THE HEALTH TOOLS, the list a granted seat's registry takes:
+		// the deployment as an administrator reads it, which the table
+		// keeps an administrator's on this surface.
+		healthCandidates(deps.Health))
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {
@@ -238,7 +287,10 @@ func answerable(deps OperatorDeps) bool {
 
 // newAnswerKnowledge builds the answer tool over the node's ONE cache, which
 // [AnswerDeps.Cache] carries in: the catalogue is built per request, so a cache
-// built here would be one request's.
+// built here would be one request's. A company that moves to another
+// knowledge backend never reads the last one's answers from it, because an
+// answer is keyed on the corpus position and only Doclet has one
+// ([answerKnowledge.cacheKey]).
 func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
 	return &answerKnowledge{
 		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,

@@ -67,7 +67,7 @@ import {
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { tabKey, urlAction } from "~/app/assistant/urlAction.ts";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { PageFailed, QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -354,7 +354,8 @@ export function Activity({
           >
             Earlier activity
           </Button>
-          {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
+          {/* BESIDE THE CONTROL, which asks the page again. */}
+          {pageError && <PageFailed error={pageError} />}
         </div>
       )}
       {loading ? (
@@ -1003,7 +1004,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
   if (answer.delivery === "swept") {
     // THE WINDOW AS A LENGTH. The answer carries the instant the horizon falls
     // on, which the engine sets to its own clock less the company's
-    // `inbox_retention_days`, so the whole days between that instant and now
+    // `inbox.retention_days`, so the whole days between that instant and now
     // are the setting itself.
     const days = answer.retained_from
       ? Math.round((Date.now() - Date.parse(answer.retained_from)) / 86_400_000)

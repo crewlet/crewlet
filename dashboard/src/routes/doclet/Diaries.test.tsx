@@ -10,7 +10,7 @@
  *    than reading as an agent that remembers nothing.
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -23,6 +23,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -109,9 +110,7 @@ function mount(ui: React.ReactNode, answers: Record<string, unknown>) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const rowOf = (text: string) => screen.getByText(text).closest("[data-row-index]") as HTMLElement;

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1094,14 +1095,29 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	instant := store.EncodeTime(planNow)
 	const task, purged, record = "t-0007", "t-0050", "h-00007"
 	kind := string(KindTask)
+	// AN INBOX PAGE RUNS UP TO TWO STATEMENTS ([inboxStatements]), each
+	// joining a notice's history row by its key: the page's range, and —
+	// under `unread`, once the seen-through position raised the range —
+	// the notices an unread mark names below it.
+	page, _, err := inboxStatements("ana", InboxQuery{}, inboxFilter{scope: inbox.SnoozeInclude}, 50)
+	if err != nil || len(page) != 1 {
+		t.Fatalf("a page of every notice is %d statements, %v; want one", len(page), err)
+	}
+	unread := inboxFilter{unread: true, scope: inbox.SnoozeInclude, marked: []string{record},
+		seen: inbox.Position{Stream: historyStream, Generation: 1, Seq: 9_000}}
+	marked, _, err := inboxStatements("ana", InboxQuery{}, unread, 50)
+	if err != nil || len(marked) != 2 {
+		t.Fatalf("an unread page with a mark below the position is %d statements, %v; want two",
+			len(marked), err)
+	}
 	reads := map[string]indexedRead{
-		"a task's own history": seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
-		"a purged task's rows": seek(subject, purgedHistoryStatement, purged),
-		"one change's routing": seek(historyKey, routingRecordStatement, record),
-		"where a change sits":  seek(historyKey, recordPositionStatement, record),
-		"a person's inbox": seek(historyKey, inboxStatement([]string{"n.recipient = ?"}),
-			"ana", 51),
-		"the repair's horizon": seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
+		"a task's own history":          seek(subject, taskHistoryStatement, task, DetailHistoryDefault),
+		"a purged task's rows":          seek(subject, purgedHistoryStatement, purged),
+		"one change's routing":          seek(historyKey, routingRecordStatement, record),
+		"where a change sits":           seek(historyKey, recordPositionStatement, record),
+		"a person's inbox":              seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's unread marks below": seek(historyKey, marked[1].sql, marked[1].args...),
+		"the repair's horizon":          seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,
 			at(9_000), at(9_500), 64),
 		"a subject's effective instant": seek(subject, effectiveAtStatement,
@@ -2537,5 +2553,32 @@ func TestADropReadsTheGapItOpened(t *testing.T) {
 					above, inclusive, shown)
 			}
 		}
+	}
+}
+
+// THE ASKS A PAGE NAMES ARE SOUGHT BY ID, never found by reading every comment.
+//
+// An inbox page and a feed page each resolve their comments to the asks they
+// are about in one statement ([askViewsStatement]), bound to the page's ids as
+// one JSON array. Tested with IN over json_each's own column, the pinned
+// driver's planner cannot seek by the ids and SCANS tracker_comments — every
+// comment the company ever wrote, per page. Planned with no statistics, as a
+// deployment plans it ([seededPlanStore]), and so the same over an empty
+// estate as over a full one.
+//
+// Mutation: bind the ids as `SELECT value FROM json_each(?)` and the plan
+// scans tracker_comments.
+func TestTheAsksAPageNamesAreSoughtByID(t *testing.T) {
+	t.Parallel()
+	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
+	plan := storetest.Plan(t, db, askViewsStatement, []any{`["c-1","c-2"]`})
+	shown := strings.Join(plan, "\n")
+	if storetest.ScansHeap(plan, "tracker_comments") || slices.ContainsFunc(plan, func(line string) bool {
+		return strings.HasPrefix(line, "SCAN tracker_comments")
+	}) {
+		t.Fatalf("the asks a page names read every comment the company wrote:\n%s", shown)
+	}
+	if !slices.Contains(plan, "SEARCH c USING INDEX sqlite_autoindex_tracker_comments_1 (id=?)") {
+		t.Fatalf("the page's comments are not sought by id:\n%s", shown)
 	}
 }

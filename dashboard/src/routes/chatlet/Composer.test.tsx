@@ -13,15 +13,17 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { keyRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES, MAX_MESSAGE_LINKS } from "~/contract/chat.ts";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { QueryName } from "~/protocol/index.ts";
 import { ADA, actEngine, applied, mountChat, type Pressed } from "~/test/chat.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 import { SHORTEN_FIRST, WRITE_FIRST } from "./Composer.tsx";
 import { ReadCursors } from "./cursor.ts";
@@ -319,8 +321,19 @@ describe("whom it will reach", () => {
     };
     mount();
     const field = await box();
-    fireEvent.change(field, { target: { value: "   " } });
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    // ON A FAKED CLOCK, past the quiet the box waits out before it asks, so
+    // the absence is asserted where a reach line would have been drawn, and
+    // never after a guess at the machine's load.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.change(field, { target: { value: "   " } });
+      act(() => {
+        vi.advanceTimersByTime(QUIET_MS);
+      });
+      await afterMicrotasks();
+      expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

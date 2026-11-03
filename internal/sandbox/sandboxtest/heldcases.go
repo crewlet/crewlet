@@ -222,17 +222,20 @@ func testAHeldCallIsMarkedOnlyByTheClaimOfItsAnswer(t *testing.T, s sandbox.Pend
 	}
 }
 
-// THE CALL A PERSON APPROVED IS A CALL OF ITS ROUND, ON THE ROW: the write that
-// records what it returned records the call beside every call the job made over
-// its bridge — answered as the tool answered it, its arguments and output left
-// sealed on the held call — so the job that carries the work on keeps it in its
-// round's log, a later round finds it among the turn's earlier calls, and every
-// reader of whether the turn replied reads it. It was made on the engine host
-// and recorded nowhere a reader looked: a reply that went out read as one that
-// did not.
+// THE CALL A PERSON APPROVED IS A CALL OF ITS ROUND, IN ITS LOG: recording what
+// it returned on the row appends the call to the run's log beside every call
+// the job made over its bridge — answered as the tool answered it, its
+// arguments and output left sealed on the held call, named by the held call's
+// id — so the job that carries the work on keeps it in its round's log, a later
+// round finds it among the turn's earlier calls, and every reader of whether
+// the turn replied reads it. It was made on the engine host and recorded
+// nowhere a reader looked: a reply that went out read as one that did not. And
+// ONCE, though answered twice: the retry that finds the result recorded
+// appends only a call the log lacks.
 //
 // Mutation: record the result alone in RecordHeldResult, and the round's log
-// holds nothing the approved call came to.
+// holds nothing the approved call came to; append without the held call's id,
+// and the second answer puts it in the log twice.
 func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := heldParked(t, s, "t1")
@@ -255,31 +258,31 @@ func testTheCallAPersonApprovedIsACallOfItsRound(t *testing.T, s sandbox.Pending
 	if ok, err := s.RecordHeldResult(ctx, "t1", launch, heldMade("again"), sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("a second RecordHeldResult = %v, %v, want it answered as recorded", ok, err)
 	}
-	approved := func(r sandbox.PendingRun) []sandbox.BridgeCall {
+	approved := func(r loggedRun) []sandbox.BridgeCall {
 		var out []sandbox.BridgeCall
-		for _, call := range r.BridgeCalls {
+		for _, call := range r.Log.Calls {
 			if call.Name == "tr_close_issue" && !call.Failed {
 				out = append(out, call)
 			}
 		}
 		return out
 	}
-	row := mustGet(t, s, "t1")
+	row := mustLogged(t, s, "t1")
 	got := approved(row)
 	if len(got) != 1 || !got[0].Approved || got[0].Args != "" || got[0].Output != "" ||
 		got[0].Origin != "mcp:tracker" || got[0].Server != "tracker" || got[0].At.IsZero() ||
-		got[0].Seq != row.LastBridgeSeq() {
+		got[0].Seq != row.Log.LastSeq() || got[0].HeldID != row.HeldCall.ID {
 		t.Fatalf("the round's log holds %+v of the approved call, want it once, approved, last, named "+
-			"the held call's tool, answered by its server, and its arguments and output left sealed", got)
+			"the held call's tool and id, answered by its server, and its arguments and output left sealed", got)
 	}
 	carried := run("t1")
 	carried.Continues = true
 	mustBeginLaunch(t, s, carried)
-	if again := approved(mustGet(t, s, "t1")); len(again) != 1 {
+	if again := approved(mustLogged(t, s, "t1")); len(again) != 1 {
 		t.Fatalf("the job carrying the work on keeps %+v of the approved call, want it in its round", again)
 	}
 	mustBeginLaunch(t, s, run("t1"))
-	if prior := mustGet(t, s, "t1").PriorCalls; !slices.Contains(prior, "tr_close_issue") {
+	if prior := mustLogged(t, s, "t1").Log.PriorCalls; !slices.Contains(prior, "tr_close_issue") {
 		t.Fatalf("a later round finds %v of the turn's earlier calls, want the approved call among them", prior)
 	}
 }

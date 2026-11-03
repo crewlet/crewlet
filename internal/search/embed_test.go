@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1490,7 +1491,7 @@ type embedHarness struct {
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
 	// before any domain decodes.
-	verifier *statelog.Verifier
+	verifier *recordseal.Verifier
 
 	// refusals is the memory every duty this harness builds shares, held
 	// across ticks as the engine holds it.
@@ -1899,7 +1900,7 @@ func (h *embedHarness) applyRecord(tx *sql.Tx, rec logRecord) error {
 	// log has to get right. Refused as an error rather than a Fatalf, since
 	// this runs inside the drain's transaction.
 	body, verdict := h.verifier.Open(rec.payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		return fmt.Errorf("record %d did not verify: %s", seq, verdict)
 	}
 	env, err := search.Domain{}.Envelope(body)
@@ -1936,7 +1937,7 @@ func (h *embedHarness) vectors() int {
 func (h *embedHarness) open(seq uint64, framed []byte) []byte {
 	h.t.Helper()
 	body, verdict := h.verifier.Open(framed)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		h.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	return body
@@ -2124,7 +2125,7 @@ func nan() float64 { var zero float64; return zero / zero }
 // domain nothing waits on.
 type embedWaiter struct{}
 
-func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
+func (embedWaiter) Reached() statelog.Position { return statelog.Position{} }
 
 // Voided voids nothing: no reanchor places a rule on this harness's log.
 func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
@@ -2133,7 +2134,7 @@ func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", f
 // log.
 func (embedWaiter) StreamIdentity() error { return nil }
 func (embedWaiter) Truncated() error      { return nil }
-func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
+func (embedWaiter) WaitReached(context.Context, statelog.Position) error {
 	return nil
 }
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
@@ -2147,9 +2148,9 @@ func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Posi
 // fleet would refuse one at a time, on every node, for ever. The key is a
 // fixture: what these cases are about is what the domain writes, and the
 // signature's own rules are certified in [statelog].
-func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+func testSigner(t *testing.T, d statelog.Domain) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -2157,9 +2158,9 @@ func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+func testVerifier(t *testing.T, d statelog.Domain) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

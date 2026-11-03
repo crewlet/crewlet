@@ -605,7 +605,7 @@ function landedSentence(landed: Landed): string {
  * once unless the region is emptied first; a few frames apart is enough for
  * every screen reader to observe the empty state.
  */
-const ANNOUNCE_DELAY_MS = 50;
+export const ANNOUNCE_DELAY_MS = 50;
 
 /**
  * What the live region says about the last change to the draft.

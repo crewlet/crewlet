@@ -575,12 +575,12 @@ func (s Sources) mcpActivity(ctx context.Context, server string) (MCPServerUsage
 	window := tokens.LastDays(MCPUsageDays, s.clock(), s.zone())
 	usageOut := MCPServerUsage{Since: window.First.Label, Until: window.Last.Label,
 		Days: window.Days(), Tools: []MCPToolUsage{}}
-	rows, err := usage.ServerToolCalls(ctx, s.Usage, usage.ServerToolCallsQuery{
+	rows, err := s.Usage.ServerToolCalls(ctx, usage.ServerToolCallsQuery{
 		From: window.First.Label, To: window.Last.Label, Server: server})
 	if err != nil {
 		return MCPServerUsage{}, MCPServerCalls{}, usageErr(err)
 	}
-	if usageOut.Elided, err = usage.ToolsElided(ctx, s.Usage, window.First.Label, window.Last.Label); err != nil {
+	if usageOut.Elided, err = s.Usage.ToolsElided(ctx, window.First.Label, window.Last.Label); err != nil {
 		return MCPServerUsage{}, MCPServerCalls{}, usageErr(err)
 	}
 	chart := s.chartHandles()

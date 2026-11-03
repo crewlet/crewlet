@@ -210,7 +210,7 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // its MCP servers starts no run. A SIGTERM, SIGINT or SIGHUP is a teardown's,
 // as it always was.
 func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: sandbox.JobStopGrace,
 	}))
 }
@@ -292,11 +292,11 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // OpenCode crashed. Read as "no session", such a probe recorded a session the
 // box held as none, and the turn's end named an older capture as its last.
 func (OpenCode) Pack(paths Paths, session string) string {
-	return "sid=" + shellQuote(session) + " packed=\n" +
+	return "sid=" + sandbox.ShellQuote(session) + " packed=\n" +
 		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
 		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
 			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
-			shellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
+			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
 		openCodePack(paths, paths.SessionPackStaging(), "--standalone") +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
@@ -358,12 +358,12 @@ func (OpenCode) Continues(box, writer string) (bool, string) {
 // stops, the session is exported to be carried to another box
 // ([openCodeCapture]).
 func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times openCodeTimes) string {
-	doc := shellQuote(paths.CredentialDocument())
-	next := shellQuote(paths.CredentialDocument() + ".next")
-	loop := shellQuote(paths.CredentialDocument() + ".sync")
-	srv := shellQuote(paths.WorkDir() + "/opencode-server")
-	vrr := shellQuote(paths.WorkDir() + "/opencode-version")
-	cfg := shellQuote(paths.OpenCodeConfig())
+	doc := sandbox.ShellQuote(paths.CredentialDocument())
+	next := sandbox.ShellQuote(paths.CredentialDocument() + ".next")
+	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
+	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
+	vrr := sandbox.ShellQuote(paths.WorkDir() + "/opencode-version")
+	cfg := sandbox.ShellQuote(paths.OpenCodeConfig())
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
 		"--title", "crewlet", "--session", `"$sid"`}
@@ -375,7 +375,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// the provider it names. A launch passes over every other harness's entry,
 	// so none reaches here.
 	if req.Model != "" {
-		run = append(run, "--model", shellQuote(req.Model))
+		run = append(run, "--model", sandbox.ShellQuote(req.Model))
 	}
 
 	var b strings.Builder
@@ -443,7 +443,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// up, and why it began again where it did. The release last, as the
 	// harness printed it ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
-		shellQuote(paths.SessionRecord()))
+		sandbox.ShellQuote(paths.SessionRecord()))
 	// A REQUEST BEFORE THE SERVER LISTENS starts no server and no run: the
 	// job is recorded as ended before its harness started, and the script
 	// goes, the server it started stopped by its EXIT trap. There is nothing
@@ -604,7 +604,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := shellQuote
+	q := sandbox.ShellQuote
 	if !session.Continues {
 		line(`sid=%s k=no w=`, q(session.ID))
 		return b.String()
@@ -704,7 +704,7 @@ func openCodeCapture(paths Paths) string {
 func openCodePack(paths Paths, staged, server string) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := shellQuote
+	q := sandbox.ShellQuote
 	line(`if command -v gzip > /dev/null 2>&1; then`)
 	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
 		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), q(staged+"/capture"),
@@ -853,7 +853,7 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 		present := `"name":` + jsonStringify(name)
 		pending := present + `,"status":{"status":"pending"`
 		fmt.Fprintf(&b, "  case \"$s\" in *%s*) case \"$s\" in *%s*) ready=0;; esac;; *) ready=0;; esac\n",
-			shellQuote(present), shellQuote(pending))
+			sandbox.ShellQuote(present), sandbox.ShellQuote(pending))
 	}
 	return b.String()
 }

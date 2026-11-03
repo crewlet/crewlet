@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // A stream's byte ceiling is a RESERVATION, and this file is what the broker
@@ -128,6 +130,70 @@ var BudgetSources = []BudgetSource{
 // Valid reports whether a source is one this build knows.
 func (s BudgetSource) Valid() bool { return slices.Contains(BudgetSources, s) }
 
+// VolumeClaim is how much of its store directory's volume this node's EMBEDDED
+// broker may hold: the limit its server enforces on what its streams STORE, and
+// what they store there now.
+//
+// # Bytes stored, never reservations
+//
+// [StorageBudget] is the other question — what a new stream may RESERVE — and
+// it counts ceilings, because that is what a create is compared against. A
+// neighbour on the same disk asks what the broker can still WRITE, and that is
+// bounded by bytes: the server refuses a message that would take what its
+// streams store past this limit (nats-server's limitsExceeded), whatever
+// their ceilings add up to, and a stream with no ceiling — the files bucket,
+// a seat's mailbox — grows into it like any other. So the room the broker may
+// yet take from the volume is the limit less what it stores, which no budget
+// in ceiling units says.
+type VolumeClaim struct {
+	// Dir is the store directory the broker's files live under — the
+	// volume a neighbour compares its own with.
+	Dir string
+
+	// Limit is the server's limit in force: stream.store_max_bytes where
+	// one was declared, and otherwise nats-server's own derivation, three
+	// quarters of the volume's free space when its JetStream came up plus
+	// what it already stored there. -1 is a server holding to none, which
+	// may take the whole volume.
+	Limit int64
+
+	// Stored is what the broker's streams occupy on the volume now.
+	Stored int64
+}
+
+// Unclaimed is what the broker may still write to its volume: its limit less
+// what it stores, never below zero, and -1 for a server holding to no limit —
+// the whole volume, whatever that is.
+func (c VolumeClaim) Unclaimed() int64 {
+	if c.Limit < 0 {
+		return -1
+	}
+	return max(c.Limit-c.Stored, 0)
+}
+
+// VolumeClaim is this node's embedded broker's claim on the volume its streams
+// are stored on, and false where there is no such volume: a broker holding its
+// streams in memory, a leaf (whose streams are its members'), and an external
+// cluster (whose disks are its operator's).
+//
+// READ FROM THE SERVER IN THIS PROCESS — a struct field, never a round trip —
+// for [Queue.budget]'s reason: the number is the server's own, declared or
+// derived, so a reader cannot model it differently from the server that
+// enforces it.
+func (q *Queue) VolumeClaim() (VolumeClaim, bool, error) {
+	if !q.embedded.holdsStreams() || q.storage() != jetstream.FileStorage {
+		return VolumeClaim{}, false, nil
+	}
+	info, err := q.embedded.ns.Jsz(nil)
+	if err != nil {
+		return VolumeClaim{}, false, fmt.Errorf("jetstream: read the embedded server's store limit: %w", err)
+	}
+	if info.Disabled {
+		return VolumeClaim{}, false, errors.New("jetstream: the embedded server reports JetStream disabled, so it states no store limit")
+	}
+	return VolumeClaim{Dir: q.cfg.StoreDir, Limit: info.Config.MaxStore, Stored: int64(info.Store)}, true, nil
+}
+
 // StreamBudget is what the broker will let this node reserve for a new stream
 // of the storage class this queue creates, and how much of that is taken.
 //
@@ -190,7 +256,19 @@ func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, err
 			return StorageBudget{}, err
 		}
 	}
-	info, err := q.js.AccountInfo(ctx)
+	// ASKED AS A METADATA READ ([jsprovision.ReadBoundedWith]): only the
+	// metadata leader answers an account's info, so a member that still
+	// believes in a leader the group has just lost drops it without a word,
+	// and one request held for the client's five-second default read an
+	// account limit that was there all along as one nobody could read. A
+	// boot with no deadline keeps those five seconds, asked again inside
+	// them — the bound a data pod's startup window counts this read at —
+	// rather than [askRead]'s lookup ceiling, which bounds the reads that
+	// were asked again from the start.
+	info, err := jsprovision.ReadBoundedWith(ctx, q.provisioning(), q.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.AccountInfo, error) {
+			return q.js.AccountInfo(ctx)
+		}, nil)
 	switch {
 	case err != nil && !withServer:
 		return StorageBudget{}, fmt.Errorf("jetstream: read the account's storage limits: %w", err)
@@ -377,11 +455,8 @@ var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve th
 // every log's at once, and the sizing costs one ceiling rather than one per
 // log.
 func (q *Queue) DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error) {
-	var s jetstream.Stream
-	err := q.askRead(ctx, func(ctx context.Context) error {
-		var e error
-		s, e = q.js.Stream(ctx, stream)
-		return e
+	s, err := askRead(ctx, q, func(ctx context.Context) (jetstream.Stream, error) {
+		return q.js.Stream(ctx, stream)
 	})
 	switch {
 	case errors.Is(err, jetstream.ErrStreamNotFound):

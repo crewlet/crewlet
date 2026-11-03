@@ -83,6 +83,16 @@ const History = lazyScreen("worklet", (m) => m.History);
 const WorkSearch = lazyScreen("worklet", (m) => m.WorkSearch);
 const Project = lazyScreen("worklet", (m) => m.Project);
 const WorkItem = lazyScreen("worklet", (m) => m.WorkItem);
+const Changes = lazyScreen("code", (m) => m.Changes);
+const ChangePage = lazyScreen("code", (m) => m.ChangePage);
+const Repositories = lazyScreen("code", (m) => m.Repositories);
+const CodeSearch = lazyScreen("code", (m) => m.Search);
+const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
+const CommitPage = lazyScreen("code", (m) => m.CommitPage);
+const ComparePage = lazyScreen("code", (m) => m.ComparePage);
+const Pushes = lazyScreen("code", (m) => m.Pushes);
+const Queue = lazyScreen("code", (m) => m.Queue);
+const Checks = lazyScreen("code", (m) => m.Checks);
 const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
 const Roster = lazyScreen("agents", (m) => m.People);
 const Teams = lazyScreen("agents", (m) => m.Teams);
@@ -141,6 +151,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
+const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -178,6 +189,28 @@ export function screenFor(route: Resolved): ReactNode {
       return <Project key={route.key} projectKey={route.key} />;
     case "item":
       return <WorkItem key={route.id} id={route.id} />;
+    case "code-changes":
+      return <Changes />;
+    case "code-change":
+      return (
+        <ChangePage key={`${route.repo}!${route.number}`} repo={route.repo} number={route.number} />
+      );
+    case "code-repos":
+      return <Repositories />;
+    case "code-search":
+      return <CodeSearch />;
+    case "code-repo":
+      return <RepositoryPage key={route.repo} repo={route.repo} />;
+    case "code-commit":
+      return <CommitPage key={`${route.repo}/${route.sha}`} repo={route.repo} sha={route.sha} />;
+    case "code-compare":
+      return <ComparePage key={route.repo} repo={route.repo} />;
+    case "code-pushes":
+      return <Pushes />;
+    case "code-queue":
+      return <Queue />;
+    case "code-checks":
+      return <Checks />;
     case "org-chart":
       return <OrgChart />;
     case "roster":
@@ -303,6 +336,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "storage":
       return <FileStoragePage />;
+    case "code-settings":
+      return <CodeSettings />;
     case "audit":
       return <Audit />;
     case "account":

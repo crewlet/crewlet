@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { eventually } from "~/test/settle.ts";
 
 import { repoRoot } from "~/test/engineFiles.ts";
 import {
@@ -313,7 +314,7 @@ describe("a turn's stream", () => {
   test("closing it ends the read and dials nothing more", async () => {
     const sent = serve(() => sse(body(FIRST.slice(0, 1), "hang")));
     const w = watch(URL_);
-    await vi.waitFor(() => expect(w.frames).toHaveLength(1));
+    await eventually(() => expect(w.frames).toHaveLength(1));
     w.stream.close();
     await w.ended;
     expect(sent).toHaveLength(1);

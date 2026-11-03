@@ -22,9 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A person's note to a turn whose executor is out: it waits sealed on the
@@ -131,16 +131,16 @@ var _ builtin.RunSteers = (*runSteers)(nil)
 
 // sealPair is one key domain's seal and its opener.
 type sealPair struct {
-	signer   *statelog.Signer
-	verifier *statelog.Verifier
+	signer   *recordseal.Signer
+	verifier *recordseal.Verifier
 }
 
-func newSealPair(domain string, ring statelog.Keyring) (*sealPair, error) {
-	signer, err := statelog.NewSigner(domain, ring)
+func newSealPair(domain string, ring recordseal.Keyring) (*sealPair, error) {
+	signer, err := recordseal.NewSigner(domain, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the seal on %s: %w", domain, err)
 	}
-	verifier, err := statelog.NewVerifier(domain, ring)
+	verifier, err := recordseal.NewVerifier(domain, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the seal on %s: %w", domain, err)
 	}
@@ -151,7 +151,7 @@ func newSealPair(domain string, ring statelog.Keyring) (*sealPair, error) {
 // fleet keyring before anything is opened, as every channel's are.
 type steerSeals struct{ note, seat *sealPair }
 
-func newSteerSeals(ring statelog.Keyring) (steerSeals, error) {
+func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	note, err := newSealPair(SteerNoteDomain, ring)
 	if err != nil {
 		return steerSeals{}, err
@@ -222,8 +222,8 @@ func (s *runSteers) seal(turnID string, note steer.Note) (sandbox.RunNote, error
 func (s *runSteers) open(turnID string, n sandbox.RunNote) (steer.Note, bool) {
 	body, verdict := s.note.verifier.Open(n.Sealed)
 	switch verdict {
-	case statelog.Verified:
-	case statelog.KeyUnknown:
+	case recordseal.Verified:
+	case recordseal.KeyUnknown:
 		s.warnOnce(turnID, n.ID, func() {
 			log.Warn("steer_note_key_unknown", "turn_id", turnID, "note_id", n.ID,
 				"held_keys", s.note.verifier.KeyIDs(),
@@ -294,8 +294,8 @@ func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	}
 	body, verdict := s.seat.verifier.Open(run.Steer.Seat)
 	switch verdict {
-	case statelog.Verified:
-	case statelog.KeyUnknown:
+	case recordseal.Verified:
+	case recordseal.KeyUnknown:
 		log.Warn("steer_seat_key_unknown", "turn_id", run.TurnID,
 			"held_keys", s.seat.verifier.KeyIDs(),
 			"detail", "the seat its run's record names is sealed under a key this node does not "+

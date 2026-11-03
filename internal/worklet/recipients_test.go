@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -11,7 +12,7 @@ import (
 func everyone(string) bool { return true }
 
 // reasonOf finds the reason a handle appears under, or "".
-func reasonOf(cands []worklet.Candidate, handle string) worklet.Reason {
+func reasonOf(cands []routing.Candidate[worklet.Reason], handle string) worklet.Reason {
 	for _, c := range cands {
 		if c.Handle == handle {
 			return c.Reason
@@ -20,7 +21,7 @@ func reasonOf(cands []worklet.Candidate, handle string) worklet.Reason {
 	return ""
 }
 
-func handles(cands []worklet.Candidate) []string {
+func handles(cands []routing.Candidate[worklet.Reason]) []string {
 	out := make([]string, 0, len(cands))
 	for _, c := range cands {
 		out = append(out, c.Handle)
@@ -198,47 +199,72 @@ func TestTheNewUnitsLeadHearsEvenOnAWatchedTask(t *testing.T) {
 	}
 }
 
-// THE ACTOR IS DROPPED, WITH EXACTLY ONE EXCEPTION.
+// THE ACTOR IS DROPPED, WITH EXACTLY ONE EXCEPTION — on the record the
+// unblocked repair actually writes.
 //
-// Telling somebody what they just did is a round a model spends on nothing.
-// An unblocked notice is the exception because it is about somebody ELSE's
-// task becoming workable, so the person who closed the blocker is exactly who
-// needs to hear it.
+// Telling somebody what they just did is a round a model spends on nothing,
+// so a person's own change reaches nobody under any other reason. `unblocked`
+// is the exception: that a task of yours became workable is news whoever
+// wrote the record saying so. That record is [worklet.Writer.TellUnblocked]'s
+// — a relations commit on the DEPENDENT naming its assignee and nobody else —
+// and this case takes it off the log as the repair publishes it, rather than
+// building a notification shape no writer produces.
 func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 	t.Parallel()
-	cands := worklet.Candidates(&worklet.Notify{
+	r := newRoundTrip(t)
+	blocker, dependent := newTask("t-1"), newTask("t-2")
+	dependent.Relations = []worklet.Relation{{
+		Kind: worklet.RelationWaitingOn, Other: "t-1",
+	}}
+	// THE HARNESS WRITES AS ANA, and the dependent is hers: the one record on
+	// which the exception decides anything. The engine's own repair writes
+	// as its node, so its notice never meets its author.
+	dependent.Assignee = "ana"
+	for _, task := range []worklet.Task{blocker, dependent} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", task.ID, err)
+		}
+		r.drain()
+	}
+	done := worklet.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "t-1", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{Status: &done}, worklet.ChangeStatus,
+		&worklet.Notify{Kind: worklet.ChangeStatus}); err != nil {
+		t.Fatalf("close the blocker: %v", err)
+	}
+	r.drain()
+	scan := scanUnblocked(t, r, 0)
+	if len(scan.Pending) != 1 {
+		t.Fatalf("the repair found %+v, want the one dependent", scan.Pending)
+	}
+	if _, err := r.writer.TellUnblocked(t.Context(), "op-tell", scan.Pending[0]); err != nil {
+		t.Fatalf("TellUnblocked: %v", err)
+	}
+
+	// THE REPAIR'S RECORD CONCERNS ITS ASSIGNEE ALONE, under `unblocked` and
+	// UNADDRESSED: a turn that cannot start yet would otherwise be forced to
+	// post something on every unblock.
+	want := []routing.Candidate[worklet.Reason]{{Handle: "ana", Reason: worklet.ReasonUnblocked, Wakes: true}}
+	cands := worklet.Candidates(r.lastWake())
+	if !slices.Equal(cands, want) {
+		t.Fatalf("the repair's record concerns %+v, want %+v", cands, want)
+	}
+	// AND IT REACHES HER THOUGH SHE WROTE IT...
+	if got := worklet.Route(cands, everyone, "ana"); !slices.Equal(got, want) {
+		t.Fatalf("ana's own unblocked record woke %+v, want %+v — a task of "+
+			"hers becoming workable is news whoever writes it down", got, want)
+	}
+	// ...WHERE HER OWN CHANGE UNDER EVERY OTHER REASON REACHES NOBODY.
+	own := worklet.Candidates(&worklet.Notify{
 		Kind: worklet.ChangeStatus,
 		Snapshot: worklet.Snapshot{
-			Assignee:        "ana",
-			PrevStatusGroup: worklet.GroupActive,
-			StatusGroup:     worklet.GroupDone,
-			Unblocked:       []worklet.TaskParty{{Task: "t-2", Assignee: "ana"}},
+			Assignee: "ana", Reporter: "ana", Watchers: []string{"ana"},
+			PrevStatusGroup: worklet.GroupActive, StatusGroup: worklet.GroupDone,
 		},
 	})
-	// ANA APPEARS TWICE, and that is the point: one commit legitimately
-	// tells her "your task is done" and "this other one is now workable".
-	// Deduping the second away under the first is how the person who
-	// closed the blocker never learns what they unblocked.
-	if len(cands) != 2 {
-		t.Fatalf("ana is a candidate %d time(s); the unblocked notice is about "+
-			"another task and is not deduped against reasons about this one: %+v",
-			len(cands), cands)
-	}
-	routed := worklet.Route(cands, everyone, "ana")
-	if len(routed) != 1 {
-		t.Fatalf("routed to %v, want ana alone under unblocked", handles(routed))
-	}
-	if routed[0].Handle != "ana" || routed[0].Reason != worklet.ReasonUnblocked {
-		t.Fatalf("routed to %s under %q", routed[0].Handle, routed[0].Reason)
-	}
-	// And an unblocked notice is never ADDRESSED: a turn that cannot start
-	// yet would otherwise be forced to post something on every unblock.
-	if routed[0].Addressed {
-		t.Error("an unblocked notice is addressed")
-	}
-	if routed[0].Task != "t-2" {
-		t.Errorf("the unblocked notice names task %q; it is about the task that "+
-			"became workable, not the one that closed", routed[0].Task)
+	if got := worklet.Route(own, everyone, "ana"); len(got) != 0 {
+		t.Fatalf("ana's own close woke %v — she is told nothing she just did",
+			handles(got))
 	}
 }
 

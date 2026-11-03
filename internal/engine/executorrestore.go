@@ -8,10 +8,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A SESSION, CONTINUED BY A TURN'S NEXT LAUNCH, as the engine wires it
@@ -47,37 +47,59 @@ type executorRestore struct{ engine *Engine }
 
 var _ sandbox.SessionRestore = executorRestore{}
 
-// Session reads one turn's row through the estate router's reads. Where it was
-// read is the read surface's to state, not a restore's: a point read never
-// answers a row a record it could not decode may be missing from, since such a
-// record covering the turn refuses the read instead.
-func (r executorRestore) Session(ctx context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
-
+// Session reads one turn's row through the estate router's reads, at the level
+// a relaunch reads it ([executordomain.RelaunchRead]), as the sandbox's view of
+// it ([executordomain.Session.Kept]), the log's not-found as
+// [sandbox.ErrTurnRowNotFound]. Where it was read is the read surface's
+// to state, not a restore's: a point read never answers a row a record it
+// could not decode may be missing from, since such a record covering the turn
+// refuses the read instead.
+func (r executorRestore) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
 	if r.engine.router == nil {
-		return executordomain.Session{}, errors.New("this node has no estate router to read the " +
+		return executorkeep.TurnRow{}, errors.New("this node has no estate router to read the " +
 			"executor log through")
 	}
-	read, err := r.engine.router.ExecutorReads().Session(ctx, handle, turn, fresh)
-	return read.Session, err
+	read, err := r.engine.router.ExecutorReads().Session(ctx, handle, turn, executordomain.RelaunchRead())
+	return restoreRow(read.Session, err)
+}
+
+// restoreRow is a point read of a turn's row as the sandbox's restore takes it:
+// the row made its view ([executordomain.Session.Kept]), and the log's
+// not-found as [sandbox.ErrTurnRowNotFound] — IN THE SANDBOX'S WORDS, since it
+// links no state log to compare against the log's own refusal.
+func restoreRow(row executordomain.Session, err error) (executorkeep.TurnRow, error) {
+	switch {
+	case errors.Is(err, executordomain.ErrNotFound):
+		return executorkeep.TurnRow{}, fmt.Errorf("%w: %w", sandbox.ErrTurnRowNotFound, err)
+	case err != nil:
+		return executorkeep.TurnRow{}, err
+	}
+	return row.Kept(), nil
 }
 
 // Fetch copies the sealed object row names into dst.
-func (r executorRestore) Fetch(ctx context.Context, row executordomain.Session, dst io.Writer) error {
+func (r executorRestore) Fetch(ctx context.Context, row executorkeep.TurnRow, dst io.Writer) error {
 	store, err := r.engine.executorSessionStore()
 	if err != nil {
 		return err
 	}
-	return store.Fetch(ctx, row, dst)
+	return store.Fetch(ctx, storedSession(row), dst)
 }
 
 // OpenSpooled opens a spool Fetch wrote.
-func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reader) (io.Reader, error) {
+func (r executorRestore) OpenSpooled(row executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
 	store, err := r.engine.executorSessionStore()
 	if err != nil {
 		return nil, err
 	}
-	return store.OpenSpooled(row, sealed)
+	return store.OpenSpooled(storedSession(row), sealed)
+}
+
+// storedSession is the row the session store fetches and opens by: whose turn
+// it is, which names the seal's associated data, and the object it names. The
+// store reads nothing else of a row.
+func storedSession(row executorkeep.TurnRow) executordomain.Session {
+	return executordomain.Session{Handle: row.Handle, Turn: row.Turn, Object: row.Object}
 }
 
 // ProbeSession answers which session a launch of the turn continues

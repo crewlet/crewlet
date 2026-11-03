@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,12 +15,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -46,6 +49,13 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 		{Domain: "readmitted", Generation: 3, TrimTo: 700, Floor: 3_000},
 		{Domain: "vectors", Generation: 5, TrimTo: 90, Floor: 90},
 	}
+	// ONE READ OF EACH DOMAIN'S KEY, as every reader holds it: each row its
+	// own domain's, one domain asked about and found absent, and one the read
+	// never asked about at all.
+	read := publishedFloors{domains: map[string]domainFloor{"other": {}}, at: time.Now()}
+	for _, f := range floors {
+		read.domains[f.Domain] = domainFloor{row: f, found: true}
+	}
 	for name, tc := range map[string]struct {
 		domain string
 		gen    uint32
@@ -56,11 +66,12 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 		"a blocked trim keeps what it licensed":    {domain: "pages", gen: 3, want: 3_000},
 		"a conclusion the counted minimum dragged": {domain: "readmitted", gen: 3, want: 3_000},
 		"a domain the trim never reached":          {domain: "other", gen: 3, want: 0},
+		"a domain the read never asked about":      {domain: "unasked", gen: 3, err: true},
 		"a floor from a previous generation":       {domain: "tracker", gen: 4, want: 0},
 		"a floor from a generation ahead":          {domain: "vectors", gen: 3, err: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := floorFor(floors, tc.domain, tc.gen)
+			got, err := read.floor(tc.domain, tc.gen)
 			if (err != nil) != tc.err {
 				t.Fatalf("err = %v, want error=%v", err, tc.err)
 			}
@@ -104,7 +115,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -151,7 +162,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	}
 	health := func() statelog.Health {
 		t.Helper()
-		h, err := s.health(t.Context(), running)
+		h, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}
@@ -169,7 +180,17 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// THE TRIM LICENSES REMOVING RECORDS THIS NODE HAS NOT APPLIED — which
 	// is what a node that was away finds when its peers were counted
 	// without it — and publishes that before it purges them.
+	//
+	// THE CHECKPOINT IS READ AGAIN ONCE THE APPLIERS HAVE STOPPED, because the
+	// node goes on writing its own log while it runs — a barrier record for
+	// a linearizable read lands on it at boot — and its appliers apply what
+	// lands. Read before the halt, a record that landed and was applied in
+	// between left the node one record further on than the floors and the
+	// purge below are counted from: the purge then removed only a record the
+	// node had applied, and the node was rightly replaying rather than below
+	// (eight runs in thirty, measured).
 	s.haltAppliers()
+	at = running.runner.Committed()
 	for range 5 {
 		barrierOn(t, running)
 	}
@@ -236,15 +257,23 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatal("the node admits seats while below the log")
 	}
 	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE, and the node keeps its
-	// seats: every call they make goes to a data node whose copy is sound —
-	// on this node alone there is none, so it is refused as an estate
-	// nobody serves — and moving them would hand them to a peer asking the
-	// same data nodes.
+	// seats: every call they make on the tracker goes to a data node whose
+	// copy is sound — on this node alone there is none, so it is refused as
+	// an estate nobody serves — and moving them would hand them to a peer
+	// asking the same data nodes. ONLY THE TRACKER'S: the knowledge base's
+	// copy has no hole and keeps serving, while the seat copy — which the
+	// tracker is part of — goes with it (ADR-0079).
 	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
-			_, serves := e.local.For(t.Context())
+			_, serves := e.local.For(t.Context(), worklet.Domain{}.Name())
 			return !serves
 		})
+	if _, serves := e.local.For(t.Context(), doclet.Domain{}.Name()); !serves {
+		t.Fatal("a tracker copy below its log took the knowledge base's copy out of service")
+	}
+	if _, serves := e.local.For(t.Context(), estate.SeatCopy); serves {
+		t.Fatal("a tracker copy below its log left the seat copy in service")
+	}
 	if ok, reason := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
 			"wrong copy goes out of service, and the seats stay", reason)
@@ -307,7 +336,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -363,7 +392,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
-		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
 	})
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
@@ -402,7 +431,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	// exercises.
 	floorOf := func(checkpoint uint64) statelog.FloorState {
 		t.Helper()
-		h, err := s.health(t.Context(), running)
+		h, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}
@@ -597,11 +626,11 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	// and writes each, and a case naming two of them left the identity
 	// estate's unasked.
 	identity := identityLogs(t, s)
-	if identity[0] != running || len(identity) < 8 {
+	if identity[0] != running || len(identity) < 9 {
 		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
 			"at least the knowledge base's, the identity estate's, the artifacts "+
-			"log's, the artifact datastore's, the assistant's, chat's and the "+
-			"executor log's after it", logNames(identity))
+			"log's, the artifact datastore's, the assistant's, chat's, the "+
+			"executor log's and the code log's after it", logNames(identity))
 	}
 	others := identity[1:]
 
@@ -893,6 +922,23 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
 			return err
 		},
+		// AN EVICTION ON THE CODE LOG'S OWN GATE SUBJECT, through a store
+		// over the running log's write authority rather than the native
+		// runtime's, which a company hosting no repositories builds none of:
+		// the code log is reserved and runs whether or not it hosts code.
+		code.Domain{}.Name(): func(ctx context.Context, key string) error {
+			store, err := code.NewStore(code.StoreOptions{
+				Publisher: s.Domain(code.Domain{}.Name()).publisher,
+				DB:        s.estate().Reader(), NodeID: c.nodeID,
+			})
+			if err != nil {
+				return err
+			}
+			_, err = store.EvictNode(ctx,
+				code.Actor{ID: "ops-1", Kind: code.ActorOperator, OperatorID: "ops-1"},
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
 		// A CONVERSATION NOBODY HAS STARTED is a subject nobody has written,
 		// so a person starting one through the writer the dashboard's
 		// assistant records with is a write at zero.
@@ -909,7 +955,7 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 			}, executordomain.NewEnd{
 				Handle: "ceo", Turn: statelog.NewOpID(time.Now(), ""),
 				ConversationKey: "chat:floor-" + key,
-				Ending:          executordomain.Ending{Outcome: executordomain.OutcomeCompleted},
+				Ending:          executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted},
 			})
 			return err
 		},
@@ -981,4 +1027,65 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 				"published floor licenses removing was refused: %v", tc.domain, err)
 		}
 	}
+}
+
+// ONE DOMAIN'S UNREADABLE FLOOR REFUSES THAT DOMAIN ALONE.
+//
+// Each domain's floor is its own key, and a row that does not decode — or a
+// read of it that timed out under load — is that key's fault. Read as a
+// whole, any one of them refused every domain: every health, every copy's
+// verdict and, once the memo aged, every read of every domain on the node.
+// Each domain answers from its own key now, so the tracker's floor reads, its
+// fence clears, and only the knowledge base's own refuse.
+func TestOneDomainsUnreadableFloorRefusesThatDomainAlone(t *testing.T) {
+	t.Parallel()
+	const generation = 1
+	fleet := &oneFloorUnread{fleetRegister: coordmem.NewFleet(), domain: doclet.Domain{}.Name()}
+	if err := fleet.PutFloor(t.Context(), coord.TrimFloor{
+		Domain: trackerName, Generation: generation, TrimTo: 500, Floor: 500,
+		At: time.Now().UTC(), By: "peer",
+	}); err != nil {
+		t.Fatalf("publish the tracker's floor: %v", err)
+	}
+	s := &stateLog{fleet: fleet}
+
+	read := s.readFloors(t.Context())
+	if floor, err := read.floor(trackerName, generation); err != nil || floor != 500 {
+		t.Fatalf("the tracker's floor read (%d, %v) beside a knowledge base floor "+
+			"that does not read, want its own 500", floor, err)
+	}
+	if _, err := read.floor(doclet.Domain{}.Name(), generation); err == nil {
+		t.Fatal("the knowledge base's floor does not read, and its floor was answered")
+	}
+	if floor, err := s.trimFloor(t.Context(), trackerName, generation); err != nil || floor != 500 {
+		t.Fatalf("the tracker's fence read (%d, %v), want its own 500", floor, err)
+	}
+	_, err := s.trimFloor(t.Context(), doclet.Domain{}.Name(), generation)
+	if err == nil {
+		t.Fatal("the knowledge base's fence cleared over a floor nobody could read")
+	}
+	// AND ITS CLASS REACHES THE FENCE through the engine's wrapping: the
+	// row's fault, whose refusal names the row's removal, never a store that
+	// did not answer.
+	if !errors.Is(err, coord.ErrFloorUnreadable) || errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("the knowledge base's fence read %v, want the row's fault "+
+			"(coord.ErrFloorUnreadable)", err)
+	}
+}
+
+// oneFloorUnread is a fleet whose one domain's floor does not read — a row
+// the store refuses as it refuses one that does not decode, in the class the
+// register's contract gives that refusal ([coord.ErrFloorUnreadable]) — while
+// every other domain's answers.
+type oneFloorUnread struct {
+	fleetRegister
+	domain string
+}
+
+func (u *oneFloorUnread) Floor(ctx context.Context, domain string) (coord.TrimFloor, bool, error) {
+	if domain == u.domain {
+		return coord.TrimFloor{}, false, fmt.Errorf("%w: the trim floor at floor.%s "+
+			"does not decode", coord.ErrFloorUnreadable, domain)
+	}
+	return u.fleetRegister.Floor(ctx, domain)
 }

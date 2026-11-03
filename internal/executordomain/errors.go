@@ -52,11 +52,6 @@ var (
 	// launch.
 	ErrUnreadable = errors.New("executordomain: the session's object cannot be read")
 
-	// ErrSessionTooLarge reports an archive past [SessionMaxBytes]: nothing
-	// is recorded, and the turn's next launch starts from the session the
-	// row already names, or fresh.
-	ErrSessionTooLarge = errors.New("executordomain: the session is over its size bound")
-
 	// ErrConflict reports a write that lost its compare-and-set every round:
 	// something kept changing the conversation.
 	ErrConflict = errors.New("executordomain: the conversation kept changing under " +

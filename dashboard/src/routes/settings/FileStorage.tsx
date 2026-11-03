@@ -81,11 +81,12 @@ export function collectSummary(c: ObjectCollect): string {
 export function auditSummary(f: ObjectFindings): string {
   const asked = `${fmtCount(f.referenced)} named`;
   const lost =
-    f.missing === 0 && f.damaged === 0
+    f.missing === 0 && f.damaged === 0 && f.unanswered === 0
       ? "none missing"
       : [
           f.missing > 0 ? `${fmtCount(f.missing)} missing` : "",
           f.damaged > 0 ? `${fmtCount(f.damaged)} damaged` : "",
+          f.unanswered > 0 ? `${fmtCount(f.unanswered)} unanswered` : "",
         ]
           .filter(Boolean)
           .join(", ");
@@ -134,10 +135,10 @@ function passRows(r: ReportedObjects): PassRow[] {
  * collector's last collection and audit.
  *
  * FILES THAT CANNOT BE READ ARE WHAT AN OPERATOR OPENS THIS FOR. Each is a
- * file whose bytes the store lost, or holds wrong, after acknowledging them,
- * so the page names the first of them (the ones to restore from a backup)
- * from the last audit to run to its end, which an audit that failed after it
- * does not clear.
+ * file whose bytes the store lost, holds wrong or will not answer for, after
+ * acknowledging them, so the page names the first of them (the ones to
+ * restore from a backup) from the last audit to run to its end, which an
+ * audit that failed after it does not clear.
  *
  * TWO CARDS, EACH NAMED BY ITS SUBJECT: where the files are kept, and the
  * collector's passes. One card titled "File storage" under a page of that
@@ -313,7 +314,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
 
   const reported = objects;
   const found = reported.audit?.found;
-  const lost = (found?.missing ?? 0) + (found?.damaged ?? 0);
+  const lost = (found?.missing ?? 0) + (found?.damaged ?? 0) + (found?.unanswered ?? 0);
   const shown = found?.missing_files ?? [];
   return (
     <div className="col gap-4">
@@ -337,16 +338,16 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
             <Callout variant="danger" role="alert">
               <div className="col gap-2">
                 <span>
-                  {plural(lost, "file")} {lost === 1 ? "is" : "are"} missing or damaged. Restore{" "}
-                  {lost === 1 ? "it" : "them"} from a backup or upload {lost === 1 ? "it" : "them"}{" "}
-                  again.
+                  {plural(lost, "file")} can’t be read: missing, damaged or unanswered by the store.
+                  Check its health, then restore {lost === 1 ? "it" : "them"} from a backup or
+                  upload {lost === 1 ? "it" : "them"} again.
                 </span>
                 <ul className="col gap-1">
                   {shown.map((m) => (
                     <li key={m.object}>
                       <InlineCode>{m.named_by}</InlineCode>{" "}
                       <span className="secondary">
-                        {m.damaged ? "damaged" : "missing"} · {m.object}
+                        {m.finding} · {m.object}
                       </span>
                     </li>
                   ))}

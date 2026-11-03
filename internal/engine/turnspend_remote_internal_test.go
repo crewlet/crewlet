@@ -154,7 +154,7 @@ type servedEstate struct {
 	backend estate.Backend
 }
 
-func (s *servedEstate) For(context.Context) (estate.Backend, bool) {
+func (s *servedEstate) For(context.Context, string) (estate.Backend, bool) {
 	return s.backend, true
 }
 
@@ -187,7 +187,9 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	q := start()
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Queue: q, Placement: placement, Self: "agent-1", Session: estate.NewSession(),
+		Queue: q, Placement: placement, Git: noGitNodes{}, Self: "agent-1",
+		Session:   estate.NewSession(),
+		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	})
 	if err != nil {
@@ -197,7 +199,11 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
 	models := runnable(t, []phase.Entry{{Key: "only", Provider: billingModel()}}, seat)
-	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, router: router})
+	// IN NORMAL MODE, as [New] starts a node unless told otherwise: the mode
+	// is what decides whether this node hands out a writer at all, a routed
+	// one included ([Engine.writers]), and the charge is a write.
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()},
+		router: router, mode: statelog.ModeNormal})
 	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),

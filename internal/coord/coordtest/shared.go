@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -46,6 +47,7 @@ var sharedCases = []struct {
 	fn   func(t *testing.T, handles []coord.Backend)
 }{
 	{"a_claim_that_won_is_never_answered_as_lost", testAClaimThatWonIsNeverAnsweredAsLost},
+	{"a_watch_hears_a_claim_made_through_any_handle", testAWatchHearsAClaimMadeThroughAnyHandle},
 }
 
 // sharedClaims is how many fresh resources each handle claims, and
@@ -152,5 +154,65 @@ func testAClaimThatWonIsNeverAnsweredAsLost(t *testing.T, handles []coord.Backen
 		t.Fatalf("only %d of %d uncontended claims won (%d unknown) — too few "+
 			"answered for the case to have judged anything", won.Load(), total,
 			unknown.Load())
+	}
+}
+
+// A WATCH HEARS A CLAIM MADE THROUGH ANY HANDLE, which is what it is for: a
+// node's view of the fleet hears a PEER join, and a peer writes through its
+// own handle on whichever member it is connected to. A watch that heard only
+// its own handle's writes would pass every case in [Run] and hear nobody.
+//
+// Every handle watches; then every handle claims a presence lease of its own,
+// one after another; and every watch must hear every claim with its holder
+// and epoch. The order ACROSS resources is not judged, so the case does not
+// depend on how the claims interleave with the deliveries.
+func testAWatchHearsAClaimMadeThroughAnyHandle(t *testing.T, handles []coord.Backend) {
+	ctx, cancel := context.WithTimeout(t.Context(), stallBudget)
+	defer cancel()
+	watches := make([]<-chan coord.LeaseWrite, len(handles))
+	for i, b := range handles {
+		writes, err := b.WatchLive(ctx, coord.ClassNode)
+		if err != nil {
+			t.Fatalf("WatchLive through handle %d: %v", i, err)
+		}
+		watches[i] = writes
+	}
+	want := map[string]coord.LeaseWrite{}
+	for j, b := range handles {
+		resource := coord.NodeResource(fmt.Sprintf("watched-%d", j))
+		owner := fmt.Sprintf("handle-%d", j)
+		lease, refused, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+			Owner: owner, TTL: LongTTL, Ungated: true,
+		})
+		if err != nil || lease == nil {
+			t.Fatalf("claim of %s through handle %d: lease %v, refused %q, error %v",
+				resource, j, lease, refused, err)
+		}
+		want[resource] = coord.LeaseWrite{Resource: resource, Owner: owner, Epoch: lease.Epoch}
+	}
+	for i, writes := range watches {
+		heard := map[string]coord.LeaseWrite{}
+		deadline := time.After(watchBound)
+		for len(heard) < len(want) {
+			select {
+			case w, open := <-writes:
+				if !open {
+					t.Fatalf("the watch through handle %d closed having heard %v of %v",
+						i, heard, want)
+				}
+				if _, claimed := want[w.Resource]; claimed {
+					heard[w.Resource] = w
+				}
+			case <-deadline:
+				t.Fatalf("the watch through handle %d heard %v of %v within %v",
+					i, heard, want, watchBound)
+			}
+		}
+		for resource, w := range want {
+			if heard[resource] != w {
+				t.Errorf("the watch through handle %d heard %+v, want %+v",
+					i, heard[resource], w)
+			}
+		}
 	}
 }

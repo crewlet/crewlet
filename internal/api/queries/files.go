@@ -20,7 +20,7 @@ func (s Sources) workFiles(ctx context.Context, p Params) (any, error) {
 	if project == "" {
 		return nil, badParams("project", "", []string{"<KEY>"})
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

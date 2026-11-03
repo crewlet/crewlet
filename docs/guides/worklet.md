@@ -1828,8 +1828,10 @@ seat since removed — is stored and shown exactly as written.
 ### Dependencies, and the set-valued arguments
 
 A **dependency** is the one relation with two ends. `waiting_on` is authored on
-the task that is blocked; the blocker carries the dependent's id, so closing it
-can say who it unblocks without scanning every task in the company.
+the task that is blocked; the blocker carries the dependent's id, so the record
+that closes it names every task whose edge it clears without scanning every
+task in the company. That record tells nobody they are unblocked:
+[what wakes a seat](#what-wakes-a-seat) says what does.
 
 Both ends are written, and in that order: the blocker's row is read first, so a
 blocker that is gone, tombstoned or already at its 64 dependents refuses the
@@ -2083,9 +2085,12 @@ same handle as the watch it leaves and the assignment it names — and a founder
 filing work through their assistant is not woken by every item they filed and
 every comment they left.
 
-The single exception is **`unblocked`**, and it is the exception because it is
-about a *different* task: closing a blocker is exactly the moment to be told
-that your own other work became workable.
+The single exception is **`unblocked`**, because it is about a *different*
+task: that your own other work became workable is news however it came about,
+your own close of its blocker included. The close itself does not carry that
+news. The tracker's unblocked repair tells each dependent's assignee in a
+record of its own, on its next pass after the close (every fifteen minutes),
+and the wake says it comes from a repair.
 
 Every wake names its author under the actor key every integration stamps, so
 the notification service applies the same rule a second time before it wakes
@@ -2252,6 +2257,7 @@ person actually says about their inbox, naming each notice by the `record_id`
 | `unsnooze` | Brings snoozed notices back now. |
 | `read_through` | Reads everything up to a log position, `<stream>@<generation>:<sequence>` — the newest notice you have seen. It only ever moves **forward**: a position at or behind the one you have read to changes nothing, so "mark all read" from yesterday's tab cannot un-read what today's read. |
 | `primary_reasons` | Which wake reasons are yours to act on — see below. Omitted, your choice stands; an empty list takes the default back. |
+| `seen` | How far you have read the tracker's log, `<stream>@<generation>:<sequence>` — the `position` of the newest notice you were shown. Optional, and it changes nothing on your record: it is what the mark waits for. A mark is decided by whichever node holding the company's records is asked, which may not yet have applied a notice your inbox page was read with elsewhere; held to `seen`, that node waits for it, and one that cannot reach it in time answers that it is behind, which the same call clears, rather than refusing a notice you were shown as no change the company recorded. A position on another log is refused. |
 
 Everything you do not name stays exactly as it was — every other mark, every
 snooze, and how far you have read. The engine applies the move to your record
@@ -2269,7 +2275,7 @@ tomorrow, it is offered once), or a moment you pick, and only the ones inside
 the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
 the write would refuse is never shown. *Mark all read* is `read_through` at the
 newest notice the screen LOADED, so a notice that arrived after you looked is
-still unread. A question, a parked executor, a stopped seat and a condition
+still unread. Every one of these sends the notices' own position as `seen`. A question, a parked executor, a stopped seat and a condition
 carry none of these: each leaves the list when it is answered or cleared, and
 answering a question in the Inbox marks the notices that asked it read, so it
 does not come back as an update.
@@ -2332,8 +2338,9 @@ which snoozes are due and your next inbox write is what moves them.
 reason it reached you under, the subject, who made it, and an excerpt. A
 change **you** made is never one of them — your assistant writes as your seat,
 so the work it files on your behalf is not waiting for you in your own inbox —
-except for the one reason that is news to its author: `unblocked`, a
-blocker of yours that you finished yourself. It is
+except under the one reason that is news to its author, `unblocked`. Finishing
+a blocker of your own still tells you that the task it held up is workable,
+because that notice is the repair's change rather than your close. It is
 written by the applier when the change lands — so it is there whether or not
 anybody was online, and a person who has marked nothing still has an inbox.
 `get_person` is your own *marks over that feed*: what you have read, what you
@@ -2512,8 +2519,10 @@ notification, never that anybody was woken — the applier deliberately holds
 no roster, because two nodes briefly on different epochs would then write
 different rows for one record.
 
-**Inbox rows age out; the history does not.** `tracker.worklet.inbox_retention_days`
-(default 365, 30..3650) is how long an entry lives. A sweep on every data node
+**Inbox rows age out; the history does not.** The company's
+`inbox.retention_days` (default 365, 30..3650) is how long an entry lives — a
+setting at the top of the company document rather than Worklet's, because
+a person's inbox is every native domain's notices under one horizon. A sweep on every data node
 deletes what is past the horizon — per data node rather than once across the fleet,
 because each data node applies the log into its own copy. It is **live**: a
 revision that changes it reaches every data node's applier at its next batch and its
@@ -2621,6 +2630,7 @@ hash.
 | Path | up to 1 024 bytes, `/` between folders; no empty folder, no `.` or `..`, no backslash or control character. A leading `/` and surrounding spaces are dropped |
 | Version | every write moves it; `if_version` (tools) or `If-Match` (REST) refuses a write when the file has changed since it was read |
 | Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage by the object store's [hourly collection](../concepts/object-store.md#collection-and-audit) once no file names it and it was last written more than a day ago, so write it again to bring it back |
+| A full store | a write whose content the object store has no room for — the fleet's own NATS bucket holding as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation), or an S3-compatible bucket whose provider [refuses the write for room](../concepts/object-store.md#an-s3-bucket--s3) — is refused `store_full` — over REST [`507`](../reference/api-endpoints.md#project-files) — and nothing is written. The same write is refused the same until an operator makes room, so a seat says so rather than trying again |
 
 A file's changes are history rows like any other — `file_written` and
 `file_removed` — naming who made them. They wake nobody: a file is read from its

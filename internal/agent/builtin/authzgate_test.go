@@ -286,6 +286,24 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
+		// THE CODE TOOLS, over the seams the seat's registry is built with —
+		// the code host, its writes, and the requester ceiling's halves —
+		// read as the request's principal as the surface reads them.
+		Code: builtin.CodeDeps{Code: full.Code.Code, Writer: full.Code.Writer, Holder: full.Code.Holder,
+			Searcher: full.Code.Searcher, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
+			Actor: builtin.PrincipalActor},
+		// WHO READ A UNIT REPOSITORY, an admin's read beside the code
+		// reads it stands with: left nil, it is a verb no seat holds and
+		// this walk would never see.
+		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
+		// THE HEALTH TOOLS, over the seams the seat's registry is built with —
+		// fleet_health's requester ceiling and code_status's code half the
+		// code reads' own, the requester ceiling's halves included — read as
+		// the request's principal as the surface reads them.
+		Health: builtin.HealthDeps{Leases: full.Health.Leases, Requesters: full.Health.Requesters,
+			Chart: full.Health.Chart, Status: full.Health.Status,
+			Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters,
+				Chart: full.Code.Chart, Actor: builtin.PrincipalActor}},
 		// THE CHAT, its read-state store included, which only this surface
 		// is given — left nil, mark_chat_read is a verb no walk sees.
 		Chat: func() builtin.ChatDeps {
