@@ -1,9 +1,12 @@
 package sandbox
 
 import (
+	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -267,9 +270,10 @@ func worstRow(t *testing.T) PendingRun {
 		}
 		return out
 	}
+	// EVERY OPTION'S ID AT THE THIRTY-TWO BYTES ITS PATTERN ALLOWS.
 	options := make([]decision.Option, decision.MaxOptions)
 	for i := range options {
-		options[i] = decision.Option{ID: fmt.Sprintf("option-%02d", i), Label: markup(decision.MaxOptionLabel),
+		options[i] = decision.Option{ID: fmt.Sprintf("option-%025d", i), Label: markup(decision.MaxOptionLabel),
 			Detail: markup(decision.MaxOptionDetail)}
 	}
 	evidence := make([]decision.Evidence, decision.MaxEvidence)
@@ -290,7 +294,8 @@ func worstRow(t *testing.T) PendingRun {
 		BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt, ContextTokens: math.MaxInt64,
 		At: worstAt, Harness: plain(32), HarnessVersion: plain(64), SessionID: plain(128), ArchiveFormat: 99,
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
-		Home: markup(1024), Workspace: markup(1024)}
+		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
+		SeatBudget: math.MaxInt64, Minted: worstAt}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -358,7 +363,8 @@ func worstRow(t *testing.T) PendingRun {
 		Question: markup(decision.MaxQuestion), QuestionContext: markup(MaxAskContextBytes),
 		Decision: &decision.Decision{Question: markup(decision.MaxQuestion), Options: options,
 			Recommended: options[0].ID, Rationale: markup(decision.MaxRationale), Evidence: evidence,
-			Role: decision.RoleApprover},
+			Role: decision.RoleApprover, Inform: &decision.Inform{Surface: decision.InformMattermost,
+				Channel: markup(decision.MaxInformChannel)}},
 		Audience:          markup(MaxAskToBytes),
 		HeldCall:          held,
 		ParkedInputTokens: math.MaxInt, ParkedOutputTokens: math.MaxInt,
@@ -367,8 +373,12 @@ func worstRow(t *testing.T) PendingRun {
 		Ending: &RecordedEnding{ID: uuid.NewString(), At: worstAt, Reason: plain(64), Detail: markup(1 << 10),
 			Returned: true, Unused: true, Reclaim: true},
 		Stop: &RunStop{By: markup(128), ByKind: plain(32), OperatorID: plain(64), Reason: markup(4 * 500),
-			Collected: true, InputTokens: math.MaxInt, OutputTokens: math.MaxInt},
-		WorkItem:        &types.WorkItem{ID: plain(64), Key: plain(64), Project: plain(64)},
+			Collected: true, InputTokens: math.MaxInt, OutputTokens: math.MaxInt, CacheReadTokens: math.MaxInt,
+			CacheWriteTokens: math.MaxInt, Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt,
+				CacheRead: math.MaxInt, CacheWrite: math.MaxInt}},
+		// THE LONGEST TRACKER A WORK ITEM LIVES IN, `github` and `gitlab`.
+		WorkItem: &types.WorkItem{Backend: types.WorkGitHub, ID: plain(64), Key: plain(64),
+			Project: plain(64)},
 		AudienceHandles: handles(MaxAudienceHandles), AudienceFallback: true, Requester: plain(64),
 		ColleagueAsk: &ColleagueAsk{ChannelID: plain(64), Question: keptTitle(markup(1 << 20)),
 			Chain: handles(32), TraceID: plain(32), SpanID: plain(16), ParentSpanID: plain(16)},
@@ -521,4 +531,46 @@ func TestAnAnswerByTurnAtItsSourcesBoundFitsARecordedAnswersShare(t *testing.T) 
 	}
 	raw, _ := json.Marshal(answer)
 	t.Logf("an answer by turn at its bound weighs %d of the %d a recorded answer may", len(raw), MaxAnswerBytes)
+}
+
+// AN ANSWER IS MEASURED AS THE ROW WILL HOLD IT. The record and the steps after
+// it write onto a recorded answer the status it took the run out of and the
+// claims that take it or lose it — when it was taken, when it was first lost
+// and how many times — none of which the reply handed over carries: so the
+// share is judged with each of them at its widest. An answer at its share with
+// all four written fits it; one at its share without any ONE of them is past
+// it once the row writes that one, and is refused before it is recorded.
+//
+// Mutation: measure the answer without any one of the four, and an answer at
+// its share without that one is recorded, to outgrow the share when the step
+// that writes it lands.
+func TestAnAnswerIsMeasuredAsTheRowWillHoldIt(t *testing.T) {
+	t.Parallel()
+	pad := func(a *RecordedAnswer, pad string) { a.Events = []json.RawMessage{json.RawMessage(`"` + pad + `"`)} }
+	handed := RecordedAnswer{Sealed: []byte("words"), Via: types.AnswerViaChat, EventIDs: []string{"e1"},
+		PostedAt: worstAt, RecordedAt: worstAt}
+	// EACH AT ITS WIDEST: the longest status an answer takes a run out of, an
+	// instant at its widest and the largest count.
+	written := func() RecordedAnswer {
+		a := handed
+		a.From = slices.MaxFunc(Awaiting, func(x, y string) int { return cmp.Compare(len(x), len(y)) })
+		a.TakenAt, a.FirstLostAt, a.LostClaims = widestInstant, widestInstant, math.MaxInt
+		return a
+	}
+	if err := answerFits("t1", paddedTo(t, MaxAnswerBytes, written(), pad)); err != nil {
+		t.Errorf("an answer at its share with every one of them written = %v, want it to fit", err)
+	}
+	for name, unset := range map[string]func(*RecordedAnswer){
+		"the status it took the run out of": func(a *RecordedAnswer) { a.From = "" },
+		"when it was taken":                 func(a *RecordedAnswer) { a.TakenAt = time.Time{} },
+		"when it was first lost":            func(a *RecordedAnswer) { a.FirstLostAt = time.Time{} },
+		"how many times it was lost":        func(a *RecordedAnswer) { a.LostClaims = 0 },
+	} {
+		short := written()
+		unset(&short)
+		if err := answerFits("t1", paddedTo(t, MaxAnswerBytes, short, pad)); !errors.Is(err, ErrAnswerTooLarge) {
+			t.Errorf("an answer at its share without %s = %v, want ErrAnswerTooLarge: the row writes it later",
+				name, err)
+		}
+	}
 }

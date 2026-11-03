@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -66,7 +67,7 @@ import (
 //	the copies one owes back ........ MaxAnswerBytes        524,288  (512 KiB)
 //	a held call's sealed arguments .. MaxHeldArgsBytes      262,144  (256 KiB)
 //	what a later build adds ......... ExtraRowBytes         262,144  (256 KiB)
-//	every other field, measured ..... 1,028,166  (with 212,901 to spare)
+//	every other field, measured .....   966,884  (with 274,183 to spare)
 //
 // — the identity, status and time fields; the title a launch keeps
 // ([MaxRunTitleBytes], twice) and a colleague's question; the ask and its
@@ -635,6 +636,10 @@ func (r PendingRun) ElisionKnown() bool {
 	return true
 }
 
+// widestInstant is an instant at the widest the row's encoder writes one: nine
+// digits of fraction and a zone of its own, never `Z`.
+var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
+
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
 // as the row holds it, the cut said.
 func keptTitle(s string) string {
@@ -646,7 +651,16 @@ func keptTitle(s string) string {
 // ([MaxAnswerBytes]), nil where it is within it: as the row holds it, and as
 // the copies letting it go of would owe the seat ([handBackOf]), which the
 // share bounds as well, since a decline cannot refuse to hand a reply back.
+//
+// AS THE ROW WILL HOLD IT, not as it is handed over: the record and the steps
+// after it add the status it took the run out of ([RecordedAnswer.From]), and
+// the claims that take it or lose it ([RecordedAnswer.TakenAt],
+// [RecordedAnswer.LostClaims], [RecordedAnswer.FirstLostAt]), each measured
+// here at its widest, so an answer that fits its share now still fits it
+// once every one of them is written.
 func answerFits(turnID string, answer RecordedAnswer) error {
+	answer.From = slices.MaxFunc(Awaiting, func(a, b string) int { return cmp.Compare(len(a), len(b)) })
+	answer.TakenAt, answer.FirstLostAt, answer.LostClaims = widestInstant, widestInstant, math.MaxInt
 	raw, err := json.Marshal(answer)
 	if err != nil {
 		return fmt.Errorf("sandbox: encoding the answer to run %s: %w", turnID, err)
