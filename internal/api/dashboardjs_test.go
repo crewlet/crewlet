@@ -1635,6 +1635,20 @@ const (
 	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
+	// A schedule's next fire continuing the session its last fire left — the
+	// Sessions view's words for the launch that continues a fire's session
+	// (`continued_by: next_fire`), and a schedule's conversation key printed
+	// with its parts decoded by a conversation label that moved out of
+	// lib/format.ts, which the shell loads first, into lib/conversationKey.ts,
+	// which only the Memory tab's lists import — took it from 5454.2 KiB to
+	// 5454.6 KiB (+0.3 KiB, 340 bytes): the agents chunk +220 bytes (25
+	// gzipped) and the memory chunk +278 (157 gzipped), less the 138 the label
+	// took out of the shared chunk the shell loads and another 20 across the
+	// chunks whose imports the bundler renamed. The initial load carries
+	// 138 bytes less: what its gzipped size gained, a single byte at zlib's
+	// level 9, is the chunk names it lists and the export names the bundler
+	// gave its shared chunk anew, not anything it loads. It stays at 5455
+	// KiB, the measured size's next KiB.
 	treeBudget = 5<<20 + 335<<10
 )
 
