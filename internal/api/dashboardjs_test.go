@@ -1631,8 +1631,8 @@ const (
 	// (`base_turn`, a link to that session) and whether its reply reached the
 	// party waiting, net of the Memory tab's Conversations section it
 	// replaces, with its thread list and their turns — took it from 5456.5
-	// KiB to 5454.2 KiB (-2.3 KiB, 2378 bytes), all of it the agents chunk
-	// the tab loads in (268 bytes gzipped). The initial load did not grow:
+	// KiB to 5454.2 KiB (-2.3 KiB, 2367 bytes), all of it the agents chunk
+	// the tab loads in (271 bytes gzipped). The initial load did not grow:
 	// its files are the same bytes but for the chunk names they list. It
 	// moved down to 5455 KiB, the measured size's next KiB.
 	treeBudget = 5<<20 + 335<<10

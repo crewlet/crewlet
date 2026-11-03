@@ -746,7 +746,7 @@ function HandedSession({ turn }: { turn: string }) {
   return (
     <p className="t-caption">
       Its first launch was handed turn{" "}
-      <a className="t-link mono" href={opens}>
+      <a className="t-link mono prose-link" href={opens}>
         {turn}
       </a>
       's session to continue.
