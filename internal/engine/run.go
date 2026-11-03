@@ -631,10 +631,17 @@ type Engine struct {
 	// is built over one answer.
 	executorLog sandbox.SessionWrites
 
-	// abandonedLaunches are the turns whose executor launch the turn's own
-	// fence refused AFTER the launch wrote its run's record, by run id: the
-	// launch abandoned that record, so no ending of the run owes the turn's
-	// end, and the frame that ends the turn records it ([Engine.runTurn],
+	// executorHeads is the read a turn's dispatch makes of its
+	// conversation's head ([Engine.readConversation]): the router's
+	// (estate.ExecutorReads), set in [New] beside executorLog; nil on an
+	// engine built without one, whose turns read no conversation.
+	executorHeads headReader
+
+	// abandonedLaunches are the turns whose executor launch was abandoned
+	// AFTER the launch wrote its run's record — refused by the turn's own
+	// fence, or failed on its way to its box — by run id: the launch
+	// abandoned that record, so no ending of the run owes the turn's end,
+	// and the frame that ends the turn records it ([Engine.runTurn],
 	// [Engine.resumeTurn] — each takes its own turn's off). Set by the
 	// launcher ([agentLauncher.launch]).
 	abandonedLaunches sync.Map
@@ -1652,6 +1659,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// router's, so a seat's capture and its turn's end reach the log from a
 	// node without `data` as from one with it (executorsession.go).
 	e.executorLog = e.router.ExecutorWrites()
+	// AND THE READ A TURN'S DISPATCH MAKES OF ITS CONVERSATION, through the
+	// same router at `linearizable`, so an end another node published is in
+	// the copy that answers (conversation.go).
+	e.executorHeads = e.router.ExecutorReads()
 	// AND A READ OF A BOX ON ANOTHER NODE'S HOST, which that node carries
 	// out — it pauses the box a collection reads — so it is signed like
 	// every other such channel (sandboxhost.go). None without a broker: a
@@ -3407,11 +3418,17 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// this frame where the turn ends here, and from its run's record where
 	// it parks on the run its executor launches (a2a.go).
 	ask := colleagueAskOf(askOf(req.Events))
+	// THE TURN'S CONVERSATION, READ ONCE, here at its dispatch and under the
+	// turn's token (conversation.go): how its earlier turns ended, which
+	// every brief of the turn tells as the runner freezes it, and the head
+	// the turn's first launch continues and freezes for its relaunches. No
+	// launch of the turn reads it again.
+	conversation := e.readConversation(ctx, company, req, tel.boundary)
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
 	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation)
 	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
@@ -3419,18 +3436,17 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
-		// BOUNDED AT RENDER, never at write. The stored row is the only copy
-		// of the turn; what a prompt shows is a display decision, and this
-		// one keeps the newest entries whole and condenses the rest.
-		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
-		Publisher:    e.backends.Queue,
-		Turn:         turnIdentity,
-		Sessions:     e.sessions,
-		Metrics:      e.metrics,
-		Launcher:     launcher,
-		Steer:        box,
-		Markers:      e.markers(),
-		Latch:        e.onboarded,
+		// BOUNDED AT RENDER: the newest endings whole while they fit, the
+		// rest counted ([prompts.EndingsMaxBytes]), and frozen on every park.
+		Endings:   conversation.endingsBlock(),
+		Publisher: e.backends.Queue,
+		Turn:      turnIdentity,
+		Sessions:  e.sessions,
+		Metrics:   e.metrics,
+		Launcher:  launcher,
+		Steer:     box,
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// The meter the context assembly was charged through — see above.
 		Budget: tel.budget.budget(),
 		// The round-cap extension judge, from the same pinned epoch, for
@@ -3596,12 +3612,30 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		return res, err
 	}
 	answered := e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
-	if _, abandoned := e.abandonedLaunches.LoadAndDelete(req.RunID); abandoned && turn.Stopped(err) {
+	_, abandoned := e.abandonedLaunches.LoadAndDelete(req.RunID)
+	switch {
+	case abandoned && turn.Stopped(err):
 		// A LAUNCH THE TURN'S FENCE REFUSED once its run's record was
 		// written: the launch abandoned the record under it, so no ending of
 		// the run owes the turn's end, and this frame records it — stopped,
 		// with nothing captured, since no job ran.
 		e.endTurnNow(ctx, telTurnEnd(tel, stoppedEnding(res, reply, err, answered)))
+	case abandoned:
+		// A FIRST LAUNCH THAT FAILED on its way to its box once its record
+		// was written: abandoned under it as a stopped one is, and ended
+		// here — failed, saying why — so the turn's row on the executor log,
+		// which its begin opened holding the base it froze, ends now and
+		// lets that base go, and the conversation's next turn is told how
+		// this one ended, rather than both waiting a day for the retention
+		// to end it as lost.
+		e.endTurnNow(ctx, telTurnEnd(tel, launchAbandonedEnding(res, reply, answered, err)))
+	case !res.Suspended && err == nil && req.ConversationKey != "":
+		// A TURN THAT NEVER LAUNCHED its executor and ended here — refused
+		// before its first round, at the delegation cap — still ends on the
+		// executor log, so the conversation's next turn is told how it
+		// ended, as every turn of a conversation leaves its ending. With no
+		// run, and so no session and no read held, its row names neither.
+		e.endTurnNow(ctx, telTurnEnd(tel, endingOf(res, reply, answered)))
 	}
 	return res, err
 }

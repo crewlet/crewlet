@@ -14,7 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A TURN'S OWN SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS.
+// A TURN'S SESSION, CONTINUED IN WHICHEVER BOX ITS NEXT LAUNCH GETS — AND A
+// CONVERSATION'S, BY ITS NEXT TURN.
 //
 // Every launch of a turn keeps its harness's session in the object store
 // (session.go), named by the turn's row on the executor log. So a relaunch of
@@ -24,8 +25,11 @@ import (
 // capture holds it, in whatever box and cell the relaunch gets: the box the
 // session was last worked in, its own copy kept, or any other, the archive
 // restored there before its harness takes the session up ([RunRequest.Carried]).
+// And a conversation's NEXT TURN continues the session its last turn left — the
+// conversation's head, read once at the turn's dispatch and frozen by its first
+// launch (conversationbase.go) — in a box of its own.
 //
-// # Which session: the job before's own, or none
+// # Which session: the job before's own, the conversation's, or none
 //
 // A relaunch follows one job — the one its reviewer collected, the one whose
 // question was answered, the one lost or refused — and only that job's session
@@ -35,15 +39,32 @@ import (
 // and the calls a continuation lists after it would be numbered in another
 // round's order where a send-back began one. So a relaunch whose job before
 // left no kept capture — its box went with its host, its take or its keep was
-// refused, its record was never answered — continues none: it starts a
-// session of its own, told what the jobs before it did. And only that job's
-// NEWEST capture: a later one that was not kept is a session that went further
-// than the kept one, and a run continued from the older would believe it knew
-// everything it did.
+// refused, its record was never answered — continues none of the turn's own:
+// it starts a session of its own, told what the jobs before it did. And only
+// that job's NEWEST capture: a later one that was not kept is a session that
+// went further than the kept one, and a run continued from the older would
+// believe it knew everything it did.
 //
-// ONE DECISION, [ContinuityOf]: the turn live and not ending, the job before's
-// newest capture kept and named by the turn's row on the executor log, in a
-// format and by a release a runner restores ([ArchiveRestorer]). The launch's
+// EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
+// box before any capture of it landed, its captures refused or unanswered. Then
+// the relaunch continues the session the turn's first launch froze — the one
+// the conversation's last turn left — told where this turn begins and then
+// handed its own fresh brief or reseed, which say what the turn's jobs did:
+// otherwise a first job lost with its box would end the conversation's session
+// line for good. The turn's row on the log HOLDS that base while the turn is
+// live and has kept nothing (its `begin`), so a sibling's end, the seat's
+// budget and the retention pass it over; and once the turn keeps any session
+// of its own, that one holds the base and everything after, and only the rule
+// above applies. A base is continued ONLY IN A BOX OF ITS OWN: a box the turn's
+// earlier job ran in holds that job's working tree and session, which are the
+// rule above's to continue in place.
+//
+// ONE DECISION EACH, [ContinuityOf] and [BaseContinuityOf]. The first: the turn
+// live and not ending, the job before's newest capture kept and named by the
+// turn's row on the executor log, in a format and by a release a runner
+// restores ([ArchiveRestorer]). The second: a base the turn froze, the turn
+// live, not ending and having kept nothing, its row holding that base, and a
+// runner that restores it. The launch's
 // caller asks it before it builds the run's surface and briefs
 // ([Coordinator.ContinuedCapture]), of every member of the seat's chain, since
 // which of them takes the launch is the launch's to pick; the launch asks it
@@ -170,8 +191,9 @@ func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
 
 	switch {
 	case run == nil || row.Ended():
-		return SessionContinuity{Why: "the turn has ended, and no later turn continues its session yet, " +
-			"since a session is continued only by a relaunch of the turn that kept it"}
+		return SessionContinuity{Why: "the turn has ended, so no relaunch of it continues its session: a " +
+			"session its turn ended with is continued only by its conversation's next turn, where it is the " +
+			"conversation's newest"}
 	case run.endDecided():
 		return SessionContinuity{Why: "the turn is ending: its run's ending is decided, and no relaunch " +
 			"of it follows to continue its session"}
@@ -587,13 +609,20 @@ func inParkedBox(run PendingRun, row executordomain.Session, target RelaunchTarg
 	return carried, undecided
 }
 
-// ContinuedSession is the kept session a relaunch of a turn continues: the
-// run's record's stamp of the capture — what it accounts for, where it was
-// worked, what its last request carried — and the turn's row on the executor
-// log that names its object.
+// ContinuedSession is the session a relaunch of a turn continues: the kept
+// capture of the job it follows — the run's record's stamp of it, what it
+// accounts for, where it was worked, what its last request carried, and the
+// turn's row on the executor log that names its object — or, where the turn has
+// kept none, the session its conversation's last turn left, as its first
+// launch froze it (Base).
 type ContinuedSession struct {
 	Capture SessionCapture
 	Row     executordomain.Session
+
+	// Base is the session the conversation's last turn left, which the
+	// relaunch continues in place of a kept capture of the turn's own; nil
+	// where it continues none, or a kept capture.
+	Base *BaseSession
 
 	// Context is what the last request of the session of the job the
 	// relaunch follows carried, as that job's newest capture measured it,
@@ -626,18 +655,23 @@ func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statel
 // ([SessionCaptureBudget]) — which the frame does not wait out.
 const relaunchCaptureWait = 15 * time.Second
 
-// ContinuedCapture is the kept capture a relaunch of turnID continues — the
-// session of the job the relaunch follows, as [ContinuityOf] decides for
+// ContinuedCapture is the session a relaunch of turnID continues — the kept
+// capture of the job the relaunch follows, as [ContinuityOf] decides for
 // restorer, read once that job's capture is no longer being kept, for at most
-// [relaunchCaptureWait] — or why there is none, in words for the log; and
+// [relaunchCaptureWait]; else, where that job left no kept capture and the turn
+// has kept none at all, the session its conversation's last turn left as its
+// first launch froze it, as [BaseContinuityOf] decides of the turn's own row
+// ([ContinuedSession.Base]) — or why there is none, in words for the log; and
 // either way what that job's session's last request carried
 // ([ContinuedSession.Context]).
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
-// exactly the capture this answered ([SessionContinuation]), or none, as the
+// exactly the session this answered ([SessionContinuation]), or none, as the
 // runner of the member it picks restores it. Never an error: every reason a
-// session cannot be continued is a launch that starts one of its own.
+// session cannot be continued is a launch that starts one of its own. NEVER A
+// READ OF THE CONVERSATION'S HEAD: the base is the one the turn froze, however
+// the conversation moved since.
 func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	restorer ArchiveRestorer) (ContinuedSession, string) {
 
@@ -670,6 +704,14 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 			run.Capture.LaunchSeq, run.Capture.CaptureSeq, c.relaunchWait)
 	}
 	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
+		base, baseWhy := c.frozenBase(ctx, run, restorer)
+		if base != nil {
+			answer.Base = base
+			return answer, ""
+		}
+		if baseWhy != "" {
+			why += "; " + baseWhy
+		}
 		return answer, why
 	}
 	row, err := c.restore.Session(ctx, run.AgentHandle, turnID, RelaunchRead())
@@ -683,12 +725,41 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	return answer, ""
 }
 
+// frozenBase is the session run's turn froze at its first launch, where a
+// relaunch of a turn that has kept nothing continues it ([BaseContinuityOf] of
+// the turn's own row, read at the level a relaunch reads it), or why not; nil
+// and "" where the turn froze none, which says nothing more than the kept
+// capture's absence did.
+func (c *Coordinator) frozenBase(ctx context.Context, run PendingRun, restorer ArchiveRestorer) (*BaseSession, string) {
+	if run.Base == nil || run.Base.Session == nil {
+		return nil, ""
+	}
+	base := *run.Base.Session
+	if run.Kept != nil {
+		return nil, BaseContinuityOf(base, nil, &run, restorer).Why
+	}
+	own, err := c.restore.Session(ctx, run.AgentHandle, run.TurnID, RelaunchRead())
+	switch {
+	case errors.Is(err, executordomain.ErrNotFound):
+		return nil, fmt.Sprintf("the turn's row on the executor log holds nothing: its begin never landed, so "+
+			"turn %s's session is held against no release", base.Turn)
+	case err != nil:
+		return nil, fmt.Sprintf("the turn's row on the executor log could not be read to see whether it holds "+
+			"turn %s's session: %v", base.Turn, err)
+	}
+	if continuity := BaseContinuityOf(base, &own, &run, restorer); !continuity.Continues {
+		return nil, continuity.Why
+	}
+	return &base, ""
+}
+
 // continuesNoKept is why this coordinator continues no kept session at all,
 // "" where it may: a node built with nothing to restore one from, or a company
 // that keeps no session as this node's revision says ([SessionKeep.Keeps]) —
 // `turn_engine.conversation_session.enabled: false`, under which no session is
-// kept and a relaunch continues at most the one its own box holds, whatever a
-// capture kept while the switch was on.
+// kept, a relaunch continues at most the one its own box holds, whatever a
+// capture kept while the switch was on, and no turn continues the one its
+// conversation's last turn left.
 func (c *Coordinator) continuesNoKept() string {
 	switch {
 	case c.restore == nil:
@@ -699,10 +770,11 @@ func (c *Coordinator) continuesNoKept() string {
 	return ""
 }
 
-// NoKeptSession is why a relaunch continues no kept session in a company that
+// NoKeptSession is why a launch continues no kept session in a company that
 // keeps none: what a launch logs and a reader of a session is told.
 const NoKeptSession = "the company keeps no executor session (turn_engine.conversation_session.enabled " +
-	"is false), so a relaunch continues at most the session its own box holds"
+	"is false), so a relaunch continues at most the session its own box holds, and a conversation's next " +
+	"turn continues none"
 
 // followedContext is what the last request of the session of run's current
 // job carried, as that job's newest capture measured it, kept or not; zero
@@ -727,14 +799,21 @@ func unkeptWhy(c SessionCapture) string {
 	return string(c.State)
 }
 
-// SessionContinuation is the turn's kept session a launch continues, as its
-// caller chose it ([Coordinator.ContinuedCapture]), and the briefs that tell its
-// run so: in the box the session was last worked in, and in any other.
+// SessionContinuation is the session a launch continues, as its caller chose it
+// ([Coordinator.ContinuedCapture]), and the briefs that tell its run so: in the
+// box the session was last worked in, and in any other.
 type SessionContinuation struct {
 	// LaunchSeq and CaptureSeq are the capture's place: the launch takes up
 	// exactly that capture, which the run's record must still keep as the
 	// newest of the job this launch follows, or none.
 	LaunchSeq, CaptureSeq int64
+
+	// Base says the session is the one the turn's conversation's last turn
+	// left, as the turn's first launch froze it ([PendingRun.Base]), in place
+	// of a capture of the turn's own: continued only in a box of its own, so
+	// Brief is empty and Replaced is what the run is handed
+	// ([Coordinator.continueBase]).
+	Base bool
 
 	// Brief is the run's prompt where the box is the one the session was
 	// last worked in, its working tree as the job before left it.
@@ -747,48 +826,54 @@ type SessionContinuation struct {
 	Replaced string
 }
 
-// BriefKind is which of the three briefs a launch handed its run: a run
-// that continues the turn's session in the box it was last worked in, one
-// that continues it in a box that replaced that one, and one that starts a
-// session of its own.
+// BriefKind is which of the four briefs a launch handed its run: a run that
+// continues the turn's session in the box it was last worked in, one that
+// continues it in a box that replaced that one, one that continues the session
+// its conversation's last turn left, and one that starts a session of its own.
 type BriefKind string
 
-// The three briefs, as a launch's record and its collection name them: the
+// The four briefs, as a launch's record and its collection name them: the
 // turn's session in the box it was last worked in, the turn's session restored
-// into another box, and a session of the run's own.
+// into another box, the session the conversation's last turn left, restored
+// into a box of the launch's own, and a session of the run's own.
 const (
-	BriefContinued       BriefKind = "continued"
-	BriefContinuedNewBox BriefKind = "continued_new_box"
-	BriefFresh           BriefKind = "fresh"
+	BriefContinued             BriefKind = "continued"
+	BriefContinuedNewBox       BriefKind = "continued_new_box"
+	BriefContinuedConversation BriefKind = "continued_conversation"
+	BriefFresh                 BriefKind = "fresh"
 )
 
-// Valid reports whether k is one of the three briefs. A record a newer build
-// wrote may name one this build does not know, which is read as the value it
-// is rather than refused.
-func (k BriefKind) Valid() bool {
-	switch k {
-	case BriefContinued, BriefContinuedNewBox, BriefFresh:
-		return true
-	}
-	return false
-}
+// BriefKinds are the four.
+var BriefKinds = []BriefKind{BriefContinued, BriefContinuedNewBox, BriefContinuedConversation, BriefFresh}
+
+// Valid reports whether k is one of [BriefKinds]. A record a newer build wrote
+// may name one this build does not know, which is read as the value it is
+// rather than refused.
+func (k BriefKind) Valid() bool { return slices.Contains(BriefKinds, k) }
 
 // Continues reports whether k is a brief that continues a session: a run handed
 // one takes the session up where its box can, wired beside it for a session of
 // its own where its box cannot ([RunRequest.FreshWiring]). A brief this build
 // does not know continues nothing it can tell.
-func (k BriefKind) Continues() bool { return k == BriefContinued || k == BriefContinuedNewBox }
+func (k BriefKind) Continues() bool {
+	return k == BriefContinued || k == BriefContinuedNewBox || k == BriefContinuedConversation
+}
 
 // LaunchDecision is how a launch decided its run takes up a session, told to
 // its caller before the run starts ([LaunchRequest.Decided]).
 type LaunchDecision struct {
-	// Brief is which of the three briefs the launch hands the run.
+	// Brief is which of the four briefs the launch hands the run.
 	Brief BriefKind
 
-	// Kept says the session the run continues is the turn's kept capture
-	// ([LaunchRequest.Session]); false where it is the job before's own copy
-	// in its box ([LaunchRequest.Continue]), or none.
+	// Kept says the session the run continues is the one the launch was
+	// asked to continue in any box ([LaunchRequest.Session]); false where it
+	// is the job before's own copy in its box ([LaunchRequest.Continue]), or
+	// none.
 	Kept bool
+
+	// Base says that session is the one the conversation's last turn left
+	// ([SessionContinuation.Base]): always in a box of the launch's own.
+	Base bool
 }
 
 // continuedLaunch is how one launch continues the turn's session, if it does:
@@ -808,7 +893,7 @@ type continuedLaunch struct {
 
 // decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
 func (l continuedLaunch) decision() LaunchDecision {
-	return LaunchDecision{Brief: l.kind, Kept: l.kept}
+	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation}
 }
 
 // freshLaunch is a launch that continues no session.
@@ -817,18 +902,29 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 }
 
 // continueSession is how the launch req continues its turn's session in box —
-// see the file comment — given the run's record as the launch opened it and
-// whether box is the one the job before used (reused).
+// see the file comment — given the run's record as the launch opened it,
+// whether box is the one the job before used (reused), and whether this
+// launch's own begin was read back holding the base its read froze (begun,
+// [Coordinator.recordBegin]).
 //
-// IN THIS ORDER: the turn's kept capture its caller chose ([LaunchRequest.Session]),
-// in any box; else, where the box is the job before's own, that job's session
-// as the box holds it ([Continuation.SessionID]), as a run always could; else
-// a session of its own.
+// IN THIS ORDER: the session its caller chose ([LaunchRequest.Session]) — the
+// turn's kept capture, in any box, or the session its conversation's last turn
+// left, in a box of its own ([Coordinator.continueBase]); else, where the box is
+// the job before's own, that job's session as the box holds it
+// ([Continuation.SessionID]), as a run always could; else a session of its own.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
-	box Sandbox, runner Runner, reused bool) continuedLaunch {
+	box Sandbox, runner Runner, reused, begun bool) continuedLaunch {
 
 	if want := req.Session; want != nil {
-		launch, why := c.continueKept(ctx, req, opened, box, runner, reused, *want)
+		var (
+			launch continuedLaunch
+			why    string
+		)
+		if want.Base {
+			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
+		} else {
+			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
+		}
 		if why == "" {
 			return launch
 		}
@@ -910,6 +1006,101 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 		kept: true, carried: carried,
+		release: func() {
+			_ = body.Close()
+			fetched.remove()
+		}}, ""
+}
+
+// continueBase continues, in box, the session the turn's conversation's last
+// turn left, as the turn's first launch froze it ([PendingRun.Base]) — or says
+// why it cannot.
+//
+// IN THIS ORDER, each before anything the next one costs: the company keeps
+// sessions; the turn froze a base, has kept no session of its own, and this box
+// is a box of its own — a box the turn's earlier job ran in holds that job's
+// working tree and session, which are [Coordinator.continueSession]'s to
+// continue in place; the turn's own row on the executor log HOLDS the base —
+// its begin landed, naming it, and no capture of the turn's has landed since:
+// as this launch's own begin was read back where begun says so, which nothing
+// can have changed before the run starts, and otherwise as a read of the row
+// says — and the base's row still names the object the read froze, a point read
+// of that one row, never a read of the conversation's head again, which guards
+// against a hold that failed and is the row the fetch is checked against; the
+// runner restores it ([BaseContinuityOf]); the box's harness takes it up
+// ([SessionRestorer.CheckCarry]); and its object, fetched sealed onto this
+// node's disk, opens whole.
+//
+// THE RESTORE CARRIER, chosen here and in [Coordinator.continueKept] and
+// nowhere else: the base turn's own object, read off that turn's own row under
+// the launching seat, and opened against that row's associated data — its
+// handle, its turn and its conversation's key — so no other seat's or
+// conversation's session opens into the run.
+func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opened PendingRun,
+	box Sandbox, runner Runner, reused, begun bool, want SessionContinuation) (continuedLaunch, string) {
+
+	if why := c.continuesNoKept(); why != "" {
+		return continuedLaunch{}, why
+	}
+	switch {
+	case opened.Base == nil || opened.Base.Session == nil:
+		return continuedLaunch{}, "the turn froze no session of its conversation to continue"
+	case opened.Kept != nil:
+		return continuedLaunch{}, "the turn has kept a session of its own, which its relaunches continue " +
+			"instead of the one its conversation's last turn left"
+	case reused:
+		return continuedLaunch{}, "the launch reuses the box the turn's job before ran in, and the session " +
+			"its conversation's last turn left is continued only in a box of its own"
+	case want.Replaced == "":
+		return continuedLaunch{}, "the launch was given no brief that continues its conversation's session"
+	}
+	base := *opened.Base.Session
+	var own *executordomain.Session
+	if !begun {
+		read, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, RelaunchRead())
+		switch {
+		case errors.Is(err, executordomain.ErrNotFound):
+			return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log holds nothing: its "+
+				"begin never landed, so turn %s's session is held against no release", base.Turn)
+		case err != nil:
+			return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v",
+				err)
+		}
+		own = &read
+	}
+	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, base.Turn, RelaunchRead())
+	if err != nil {
+		return continuedLaunch{}, fmt.Sprintf("turn %s's row on the executor log could not be read: %v",
+			base.Turn, err)
+	}
+	if why := base.namedBy(row); why != "" {
+		return continuedLaunch{}, why
+	}
+	restorer, _ := runner.(SessionRestorer)
+	if continuity := BaseContinuityOf(base, own, &opened, restorer); !continuity.Continues {
+		return continuedLaunch{}, continuity.Why
+	}
+	archive := base.archive()
+	check, err := restorer.CheckCarry(ctx, box, archive)
+	switch {
+	case err != nil:
+		return continuedLaunch{}, fmt.Sprintf("the box could not be asked whether its harness continues "+
+			"the session: %v", err)
+	case !check.Continues:
+		return continuedLaunch{}, check.Why
+	}
+	fetched, err := c.fetchSession(ctx, row)
+	if err != nil {
+		return continuedLaunch{}, fmt.Sprintf("the session could not be fetched: %v", err)
+	}
+	body, err := fetched.open(c.restore)
+	if err != nil {
+		fetched.remove()
+		return continuedLaunch{}, fmt.Sprintf("the session's spool could not be opened: %v", err)
+	}
+	carried := &CarriedSession{Archive: archive, Body: body, Replace: base.Interrupted}
+	return continuedLaunch{brief: want.Replaced, fresh: req.Brief, session: base.SessionID,
+		kind: BriefContinuedConversation, kept: true, carried: carried,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()

@@ -818,6 +818,17 @@ type PendingRun struct {
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
+	// Base is the read the turn's FIRST launch made of its conversation —
+	// where its head was read, the turns it handed out that the brief told,
+	// and the head itself, which the turn's launches continue while the turn
+	// has kept no session of its own (conversationbase.go). The TURN'S,
+	// written by [PendingStore.BeginLaunch] on the write that creates the
+	// record ([LaunchRequest.Base]) and by no other, so every relaunch reads
+	// the read the first launch made and never makes one again; deleted with
+	// the record. Nil for a turn that read no conversation. A section of its
+	// own with an Extra (wirekeys.go).
+	Base *ConversationBase `json:"conversation_base,omitempty"`
+
 	// Handed is every secret the job's box was handed, SEALED under the fleet
 	// keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a capture of
 	// the box's session takes out by value. Written with the job's command
@@ -1600,6 +1611,11 @@ type PendingStore interface {
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
 	// it can land ahead of a note the box took first.
+	//
+	// THE TURN'S READ OF ITS CONVERSATION ([PendingRun.Base]) IS WRITTEN BY
+	// THE CREATE ALONE and kept by every reset, whatever the reset's run
+	// carries: the turn's first launch made the read, and a relaunch
+	// continues the base that read named, never one read again.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)

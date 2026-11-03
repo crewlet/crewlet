@@ -503,8 +503,7 @@ func decideCapture(ctx context.Context, tx *sql.Tx, n NewCapture, at time.Time) 
 // ---- begin -------------------------------------------------------------- //
 
 // NewBegin is a turn's first read of its conversation, and the base that read
-// froze: what the turn's first launch is to publish once its run is recorded.
-// No launch publishes one yet, so no row holds a base until one does.
+// froze: what the turn's first launch publishes once its run is recorded.
 type NewBegin struct {
 	Handle          string
 	Turn            string

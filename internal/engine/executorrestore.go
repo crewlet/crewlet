@@ -14,27 +14,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A TURN'S KEPT SESSION, CONTINUED BY ITS NEXT LAUNCH, as the engine wires it
-// (internal/sandbox's restore.go has the mechanism).
+// A SESSION, CONTINUED BY A TURN'S NEXT LAUNCH, as the engine wires it
+// (internal/sandbox's restore.go has the mechanism): the turn's own kept
+// session, by its relaunches, and the session its conversation's last turn
+// left, by its first launch and by a relaunch of a turn that has kept none.
 //
-// THE TURN'S ROW IS READ THROUGH THE ESTATE ROUTER'S READS, wherever the seat
-// runs: a seats-only node holds no log, and the capture it continues may be one
+// THE ROWS ARE READ THROUGH THE ESTATE ROUTER'S READS, wherever the seat runs: a
+// seats-only node holds no log, and the capture a relaunch continues may be one
 // another node's keep recorded, which a read at `linearizable` waits for or asks
 // a data node for. The session's sealed object is fetched and opened through
 // the domain's session store, over the Tier A keyring, on whichever node
 // launches.
 //
-// WHICH SESSION A RELAUNCH CONTINUES is asked before its runner builds the run's
-// surface and briefs ([agentLauncher.ProbeSession]): the kept capture of the job
-// the relaunch follows, where the runner of a member of the seat's chain restores
-// it. WHICH MEMBER TAKES IT, AND WHETHER THE SEAT'S BUDGET CAN CARRY IT, are the
-// launch's to decide, once the briefs that continue it exist
-// ([agentLauncher.launch], [launchFloor]): the member is picked once, as it
-// launches, and the context the session sends first is known here, the brief
-// beside it only once the runner has written it.
+// WHICH SESSION A LAUNCH CONTINUES is asked before its runner builds the run's
+// surface and briefs ([agentLauncher.ProbeSession]): a turn's first launch, the
+// head its dispatch read (conversation.go), answered with no read at all; a
+// relaunch, the kept capture of the job it follows, else the base the turn's
+// first launch froze where the turn has kept nothing — each where the runner of
+// a member of the seat's chain restores it. WHICH MEMBER TAKES IT, AND WHETHER
+// THE SEAT'S BUDGET CAN CARRY IT, are the launch's to decide, once the briefs
+// that continue it exist ([agentLauncher.launch], [launchFloor]): the member is
+// picked once, as it launches, and the context the session sends first is known
+// here, the brief beside it only once the runner has written it.
 //
 // WHAT A READER OF A SESSION IS TOLD A RELAUNCH WOULD DO is asked of the node
-// holding the seat ([Engine.RelaunchTarget]): the member that node would launch
+// holding the seat ([Engine.RelaunchTargets]): the member that node would launch
 // a relaunch on now, as its own bench of spent plans has it.
 
 // executorRestore is the engine's part of continuing a turn's kept session
@@ -76,12 +80,16 @@ func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reade
 	return store.OpenSpooled(row, sealed)
 }
 
-// ProbeSession answers which kept session of the turn a relaunch continues
-// ([runner.SessionProber]): the kept capture of the job the relaunch follows,
-// as [sandbox.Coordinator.ContinuedCapture] decides it for the seat's chain —
-// where the runner of a member that could take the launch restores it — or why
-// it continues none, which is logged; and either way what that job's session's
-// last request carried, which the launch's floor is made of.
+// ProbeSession answers which session a launch of the turn continues
+// ([runner.SessionProber]): on the turn's FIRST launch, the head its dispatch
+// read and the turn will freeze, answered from that read with no other
+// ([conversationRead.basis]); on a relaunch, the kept capture of the job it
+// follows, else the base the turn's first launch froze where the turn has kept
+// nothing, as [sandbox.Coordinator.ContinuedCapture] decides it for the seat's
+// chain — where the runner of a member that could take the launch restores it —
+// or why it continues none, which is logged, but for a conversation's first
+// turn, which had nothing to continue; and either way what the job before's
+// session's last request carried, which the in-place floor is made of.
 //
 // ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
 // once, as it launches ([agentLauncher.member]), and a member's plan can be
@@ -94,10 +102,10 @@ func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reade
 // session ([SessionBasis.Harness], [agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
-	if !basis.Continues() {
+	if !basis.Continues() && !basis.ContinuesBase() && !l.conversation.leftNone() {
 		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
 			"turn_id", l.turn.RunID, "detail", basis.Why,
-			"outcome", "the relaunch starts a session of its own, or continues the one its box holds")
+			"outcome", "the launch starts a session of its own, or continues the one its box holds")
 	}
 	return basis
 }
@@ -119,7 +127,17 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		return runner.SessionBasis{Why: "no member of the seat's executor chain continues a session " +
 			"carried between boxes"}
 	}
+	if l.conversation != nil {
+		// THE TURN'S FIRST LAUNCH: the head its dispatch read, which no
+		// record or row of the turn exists yet to say anything more of.
+		return l.conversation.basis(restores)
+	}
 	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, restores)
+	if base := continued.Base; base != nil {
+		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
+		// froze, which its row still holds.
+		return baseBasis(*base, continued.Context)
+	}
 	if why != "" {
 		return runner.SessionBasis{Why: why, ContextTokens: continued.Context}
 	}
@@ -205,7 +223,7 @@ func (c chainRestorers) Restores(archive sandbox.SessionArchive) (bool, string) 
 //
 // THIS NODE'S PICK, and so the one a reader of a relaunch is handed only where
 // this node holds the seat: which members sit out is this node's own bench, and
-// the relaunch is decided on the node holding the seat ([Engine.RelaunchTarget]
+// the relaunch is decided on the node holding the seat ([Engine.RelaunchTargets]
 // asks that node).
 func (c *Company) relaunchTarget(seat *org.Role, manager *sandbox.Manager, node string) sandbox.RelaunchTarget {
 	members, err := executorRunners(c, seat, manager)
@@ -278,11 +296,20 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 	return e.Company()
 }
 
-// sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil
-// where it continues none: the brief for the box the session was last worked
-// in, and the one for any other, each where the sandbox layer hands it.
+// sandboxSession is the session a launch continues in the sandbox layer's
+// terms, nil where it continues none: a relaunch's kept capture, with the brief
+// for the box the session was last worked in and the one for any other, each
+// where the sandbox layer hands it; or the session the turn's conversation's
+// last turn left, which the sandbox layer reads off the turn's record as its
+// first launch froze it and continues only in a box of its own, with the one
+// brief for that.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
-	if s == nil || !s.Basis.Continues() {
+	switch {
+	case s == nil:
+		return nil
+	case s.Basis.ContinuesBase():
+		return &sandbox.SessionContinuation{Base: true, Replaced: s.Replaced}
+	case !s.Basis.Continues():
 		return nil
 	}
 	return &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
@@ -290,8 +317,9 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 }
 
 // sessionDecision is how the launch decided its run takes up a session, in the
-// runner's terms ([runner.SessionDecision]).
+// runner's terms ([runner.SessionDecision]): a session its conversation's last
+// turn left is always continued in a new box.
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
-	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept,
-		NewBox: d.Brief == sandbox.BriefContinuedNewBox}
+	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
+		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation}
 }

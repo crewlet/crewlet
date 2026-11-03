@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -584,6 +585,100 @@ func TestALaunchPublishesThePromptItsRunWasHanded(t *testing.T) {
 				!strings.Contains(published[1], again.Session.Replaced) {
 				t.Fatalf("a continued relaunch published %d prompts, want the fresh brief and then the "+
 					"new-box continuation its run was handed", len(published))
+			}
+		})
+	}
+}
+
+// baseBasis is the session a conversation's last turn left, as a launcher
+// answers it for the turn's first launch: turn t-0's, ended at nine, last
+// worked under a home whose path carries a marker, its harness cut off when it
+// was saved.
+var baseBasis = runner.SessionBasis{SessionID: "s-base", Harness: "claude-code",
+	Base: &runner.BaseBasis{Turn: "t-0", Home: "/boxes/old/home [untrusted:x]", Interrupted: true,
+		ContextTokens: 40000, EndedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}}
+
+// A CONVERSATION'S NEXT TURN IS TOLD WHERE IT BEGINS. Its first launch asks
+// which session it continues — every launch does, a first one too — and is
+// answered the session the conversation's last turn left. That session holds
+// another turn, so the run is handed a lead before the turn's own brief: where
+// the session's turn ended and this one begins, that what it read may be stale
+// and what it set up is set up anew, that its box is a new one on a fresh
+// checkout whose old paths were the other box's, and that its harness was cut
+// off. Then the turn's whole fresh brief, the account of how the conversation's
+// earlier turns ended among it, which the session never read. Continued only in
+// a box of its own, so it carries no same-box brief; and the engine's record of
+// that session is defused under the turn's token.
+//
+// Mutation: probe only a relaunch, hand the same-turn lead, drop the fresh
+// brief or the endings, or leave a marker in the home, and a check goes red.
+func TestAConversationsNextTurnIsToldWhereItBegins(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	endings := "## How this conversation's earlier turns ended\n\n### Turn t-0\nIt completed."
+	launcher := &probingLauncher{basis: baseBasis}
+	first, _ := buildWith(t, entries, buildOpts{launcher: launcher, endings: endings,
+		calls: turnctx.NewCallLog()})
+	work, _, err := first.Execute(t.Context(), 1, "", nil)
+	if err != nil || !work.Suspended {
+		t.Fatalf("the first launch: %+v, %v", work, err)
+	}
+	if launcher.asked() != 1 {
+		t.Fatalf("the first launch asked %d times which session it continues, want once", launcher.asked())
+	}
+	req := launcher.last(t)
+	s := req.Session
+	if s == nil || !s.Basis.ContinuesBase() || s.Brief != "" {
+		t.Fatalf("the first launch continues %+v, want the conversation's session in a box of its own", s)
+	}
+	for _, said := range []string{
+		"## A new turn of this conversation begins here", "through turn `t-0`",
+		"which ended at 2026-10-01T09:00:00Z", "may be stale", "set up anew for this turn",
+		"FRESH checkout", "/boxes/old/home", prompts.InterruptedSession,
+	} {
+		if !strings.Contains(s.Replaced, said) {
+			t.Errorf("the lead does not say %q:\n%s", said, s.Replaced)
+		}
+	}
+	if !strings.HasPrefix(s.Replaced, "## A new turn of this conversation begins here") ||
+		!strings.HasSuffix(s.Replaced, strings.TrimSpace(req.Brief)) {
+		t.Errorf("the continuation is not the lead and then the turn's fresh brief whole:\n%s", s.Replaced)
+	}
+	if !strings.Contains(req.Brief, endings) || !strings.Contains(s.Replaced, endings) {
+		t.Errorf("the run is not told how the conversation's earlier turns ended:\n%s", s.Replaced)
+	}
+	if strings.Contains(s.Replaced, "[untrusted:x]") || strings.Contains(s.Replaced, "same session") {
+		t.Errorf("the lead carries a live marker or the same-turn lead:\n%s", s.Replaced)
+	}
+}
+
+// A BASE CONTINUATION ARMS AN EMPTY GUARD, whatever the parked state holds. The
+// session the conversation's last turn left loaded skills in another turn,
+// which this turn's guard never armed and its lead says were set up anew: so
+// once the launch decides its run takes that session up, the guard holds
+// nothing, and a skill-covered call is refused until the skill is loaded again
+// — the safe direction. A relaunch that continues the turn's own kept session
+// is armed with what that session loaded.
+//
+// Mutation: arm a base continuation from the parked state's loads, and the
+// first row goes red.
+func TestABaseContinuationArmsAnEmptyGuard(t *testing.T) {
+	t.Parallel()
+	loaded := execstate.State{LoadedSkills: []string{"chat-conventions"}}
+	for name, tc := range map[string]struct {
+		g       guarded
+		refused bool
+	}{
+		"the conversation's session":  {g: guarded{basis: baseBasis, state: loaded}, refused: true},
+		"the turn's own kept session": {g: guarded{basis: keptBasis, continued: true, state: loaded}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := tc.g.relaunch(t)
+			bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
+			if bridged[0].Failed != tc.refused {
+				t.Fatalf("slack_post failed %v (%q), want refused %v", bridged[0].Failed, bridged[0].Result,
+					tc.refused)
 			}
 		})
 	}

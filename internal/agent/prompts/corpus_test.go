@@ -154,8 +154,9 @@ func richSubagentInput() SubagentInput {
 
 func richUserMessage() UserMessage {
 	return UserMessage{
-		TaskDescription:     chatTrigger,
-		PriorWork:           iterationLedger,
-		ConversationHistory: "### Turn 1 — 2026-10-01\nYou said: \"## Done ✅\"",
+		TaskDescription: chatTrigger,
+		PriorWork:       iterationLedger,
+		Endings: endingsHeader + "\n\n### Turn t-1, which ended 2026-10-01T09:00:00Z\nIt completed.\n" +
+			"What its reviewer said landed:\n\"## Done ✅\"",
 	}
 }

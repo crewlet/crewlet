@@ -235,24 +235,31 @@ type Continuation struct {
 // before the run starts ([AgentRunRequest.Decided]).
 type SessionDecision struct {
 	// Continues says the run continues a session rather than starting one
-	// of its own; Kept that the session is the turn's kept capture
-	// ([AgentRunRequest.Session]) rather than the job before's own copy in
-	// its box ([AgentRunRequest.Continue]); and NewBox that the box is not
-	// the one the session was last worked in, so the run is handed the
-	// continuation that says so ([SessionContinuation.Replaced]).
+	// of its own; Kept that the session is the one the launch was asked to
+	// continue in any box ([AgentRunRequest.Session]) rather than the job
+	// before's own copy in its box ([AgentRunRequest.Continue]); and NewBox
+	// that the box is not the one the session was last worked in, so the run
+	// is handed the continuation that says so ([SessionContinuation.Replaced]).
 	Continues, Kept, NewBox bool
+
+	// Base says the session is the one the conversation's last turn left
+	// ([SessionBasis.Base]) — always in a new box, and never one whose
+	// skills this turn's guard holds, so the guard is armed empty.
+	Base bool
 }
 
-// SessionContinuation is how a relaunch continues the turn's kept session — see
-// [AgentRunRequest.Session].
+// SessionContinuation is how a launch continues a session in whatever box it
+// gets — the turn's kept capture, or the session its conversation's last turn
+// left — see [AgentRunRequest.Session].
 type SessionContinuation struct {
-	// Basis is the kept capture the launch continues, as the launcher
-	// answered it ([SessionProber]); the launch takes up exactly that one.
+	// Basis is the session the launch continues, as the launcher answered it
+	// ([SessionProber]); the launch takes up exactly that one.
 	Basis SessionBasis
 
 	// Brief is the run's prompt in the box the session was last worked in,
 	// and Replaced in any other — Brief and what a box that replaced that
-	// one changes (continued.go).
+	// one changes (continued.go). A session the conversation's last turn
+	// left is continued only in a box of its own, so its Brief is empty.
 	Brief, Replaced string
 }
 
@@ -295,25 +302,52 @@ type SessionBasis struct {
 	// Zero where no capture measured any.
 	ContextTokens int64
 
-	// Why is why the relaunch continues no kept session, "" where it
-	// continues one.
+	// Base is the session the conversation's last turn left, which the launch
+	// continues where it names no kept capture of the turn's own: on a
+	// turn's first launch, the head its dispatch read, and on a relaunch of a
+	// turn that has kept nothing yet, the one its first launch froze. Nil
+	// where it continues none. SessionID and Harness are then that session's.
+	Base *BaseBasis
+
+	// Why is why the launch continues no kept session of the turn's own, ""
+	// where it continues one; beside a Base, why the turn's own is not it.
 	Why string
 }
 
-// Continues reports whether the basis names a kept session to continue.
+// Continues reports whether the basis names a kept session of the turn's own to
+// continue.
 func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
 
-// SessionProber is an [AgentLauncher] that says, before a relaunch writes its
-// run's briefs, which kept session of the turn the launch may continue: the
-// kept capture of the job the relaunch follows where its harness and format let
-// a runner the launch can pick restore it, or why not. Which member the launch
-// picks, and whether the seat's budget can carry the session, are the launch's
-// to decide, once the briefs exist.
+// ContinuesBase reports whether the basis names, in place of a kept session of
+// the turn's own, the session its conversation's last turn left.
+func (b SessionBasis) ContinuesBase() bool { return b.CaptureSeq == 0 && b.Base != nil }
+
+// BaseBasis is the session a conversation's last turn left, as a launch that
+// continues it tells its run: the ended turn it is, where that session was last
+// worked, whether its harness was cut off when it was saved, what its last
+// request carried — which the launch's floor is made of — and when that turn
+// ended, which is where the new turn begins.
+type BaseBasis struct {
+	Turn          string
+	Home          string
+	Interrupted   bool
+	ContextTokens int64
+	EndedAt       time.Time
+}
+
+// SessionProber is an [AgentLauncher] that says, before a launch writes its
+// run's briefs, which session the launch may continue: on a relaunch, the kept
+// capture of the job it follows where its harness and format let a runner the
+// launch can pick restore it; else, and on a turn's first launch, the session
+// the conversation's last turn left, where the turn froze one and has kept none
+// of its own; or why neither. Which member the launch picks, and whether the
+// seat's budget can carry the session, are the launch's to decide, once the
+// briefs exist.
 //
-// ASKED FIRST because what the run is told depends on it: a continued session
-// is told what it lacks rather than everything. OPTIONAL: a launcher without
-// it continues no kept session, which every relaunch then starts fresh, or in
-// place.
+// ASKED FIRST, by every launch, because what the run is told depends on it: a
+// continued session is told what it lacks rather than everything. OPTIONAL: a
+// launcher without it continues no session, which every launch then starts
+// fresh, or in place.
 type SessionProber interface {
 	ProbeSession(ctx context.Context) SessionBasis
 }
@@ -361,17 +395,17 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	fresh := r.steerBrief(ctx)
 	user := r.executorBrief(ctx, notes, history, fresh)
 
-	// A RELAUNCH CONTINUES THE SESSION OF THE JOB IT FOLLOWS where its
-	// launcher says it can (continued.go) — a reviewer's send-back, in a
-	// segment that collected the turn's last run — asked before the
-	// continuation is written, which is built from what that session lacks.
-	// THE SURFACE'S GUARD STARTS EMPTY either way: it holds what the session
-	// the launch decides its run takes up holds, and the launch decides that
-	// once it has its box ([Runner.sessionDecided]).
-	var basis SessionBasis
-	if r.cfg.Resume != nil {
-		basis = r.sessionBasis(ctx)
-	}
+	// EVERY LAUNCH ASKS WHICH SESSION IT CONTINUES (continued.go): a
+	// relaunch — a reviewer's send-back, in a segment that collected the
+	// turn's last run — the session of the job it follows where its launcher
+	// says it can, else the one the conversation's last turn left where the
+	// turn has kept none; and a turn's first launch the one its conversation's
+	// last turn left. Asked before the continuation is written, which is built
+	// from what that session lacks. THE SURFACE'S GUARD STARTS EMPTY either
+	// way: it holds what the session the launch decides its run takes up
+	// holds, and the launch decides that once it has its box
+	// ([Runner.sessionDecided]).
+	basis := r.sessionBasis(ctx)
 	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
 		executorActive(snapshot, r.boxServers()))
 	if err != nil {
@@ -380,12 +414,19 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 	briefs := launchBriefs{fresh: user, freshReported: true}
-	if basis.Continues() {
+	switch {
+	case basis.Continues() && r.cfg.Resume != nil:
 		briefs.kept = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
 		briefs.state, briefs.bridged = r.cfg.Resume.parked(), r.cfg.Resume.Bridged
+	case basis.ContinuesBase():
+		// THE SESSION THE CONVERSATION'S LAST TURN LEFT, told where this turn
+		// begins and then handed this launch's own fresh brief — the turn's
+		// task, its earlier rounds and notes, and how the conversation's
+		// earlier turns ended — which that session never read.
+		briefs.kept = r.baseSession(basis, user.Text)
 	}
 	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
@@ -601,7 +642,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	briefs := launchBriefs{fresh: reseed, state: state, bridged: bridgedCalls}
 	if carry.keeps() {
 		basis = r.sessionBasis(ctx)
-		briefs.kept = r.keptSession(basis, carry.continuation(fence), bridgedCalls, fresh, carry.branch())
+		switch {
+		case basis.Continues():
+			briefs.kept = r.keptSession(basis, carry.continuation(fence), bridgedCalls, fresh, carry.branch())
+		case basis.ContinuesBase():
+			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
+			// its box before anything of it was kept — continues the one its
+			// first launch froze, handed the reseed, which says what the
+			// round's jobs did and what became of the last.
+			briefs.kept = r.baseSession(basis, reseed.Text)
+		}
 	} else {
 		inPlace = ""
 	}
@@ -685,7 +735,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 		Task:       r.cfg.Task,
 		// AND WHAT THE TURN STARTED WITH, for the launches after it. See
 		// [execstate.State.Context].
-		Context: frozen(r.cfg.Context, r.cfg.Conversation),
+		Context: frozen(r.cfg.Context, r.cfg.Endings),
 	}
 	if err := state.Validate(); err != nil {
 		// Not recorded, and the absence is what the engine reports: a run
@@ -846,9 +896,10 @@ func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
 }
 
 // frozen is the turn-start context a runner builds every launch's prompt from,
-// as a park carries it: the blocks' rendered text and the prior-turns block —
-// what [Runner.executorPrompt] reads of them, and nothing else.
-func frozen(blocks prefetch.Blocks, conversation string) execstate.Frozen {
+// as a park carries it: the blocks' rendered text and how the conversation's
+// earlier turns ended — what [Runner.executorPrompt] reads of them, and
+// nothing else.
+func frozen(blocks prefetch.Blocks, endings string) execstate.Frozen {
 	return execstate.Frozen{
 		ThreadContext:       blocks.ThreadContext,
 		PersonalMemory:      blocks.PersonalMemory,
@@ -856,7 +907,7 @@ func frozen(blocks prefetch.Blocks, conversation string) execstate.Frozen {
 		EpisodeRecall:       blocks.EpisodeRecall,
 		CounterpartyProfile: blocks.CounterpartyProfile,
 		SynthesizedSkills:   blocks.SynthesizedSkills,
-		Conversation:        conversation,
+		Endings:             endings,
 	}
 }
 
@@ -870,7 +921,7 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 		EpisodeRecall:       f.EpisodeRecall,
 		CounterpartyProfile: f.CounterpartyProfile,
 		SynthesizedSkills:   f.SynthesizedSkills,
-	}, f.Conversation
+	}, f.Endings
 }
 
 // resumeAgentRun turns a finished agentic run into the turn's Work.

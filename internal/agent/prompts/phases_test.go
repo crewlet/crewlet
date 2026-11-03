@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // -- Onboarding ----------------------------------------------------------
@@ -143,16 +145,16 @@ func TestPhaseUserMessageWithoutLedgersIsJustTheTask(t *testing.T) {
 func TestPhaseUserMessageReadsChronologically(t *testing.T) {
 	t.Parallel()
 	msg := BuildPhaseUserMessage(UserMessage{
-		TaskDescription:     "THE-ASK",
-		PriorWork:           "PRIOR-WORK",
-		ConversationHistory: "CONVERSATION-HISTORY",
+		TaskDescription: "THE-ASK",
+		PriorWork:       "PRIOR-WORK",
+		Endings:         endingsHeader + "\n\nHOW-EARLIER-TURNS-ENDED",
 	}).Text
-	// Earlier turns of this conversation, then the ask, then earlier rounds
-	// of THIS turn — which happened after the ask arrived. The newest thing
-	// said sits nearest the model's answer.
-	order(t, msg, "CONVERSATION-HISTORY", "THE-ASK", "PRIOR-WORK")
-	if !strings.HasPrefix(msg, ConversationHistoryHeader) {
-		t.Error("conversation history must lead the message")
+	// How this conversation's earlier turns ended, then the ask, then
+	// earlier rounds of THIS turn — which happened after the ask arrived. The
+	// newest thing said sits nearest the model's answer.
+	order(t, msg, "HOW-EARLIER-TURNS-ENDED", "THE-ASK", "PRIOR-WORK")
+	if !strings.HasPrefix(msg, endingsHeader) {
+		t.Error("how the conversation's earlier turns ended must lead the message")
 	}
 }
 
@@ -225,19 +227,18 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	// The rule that actually prevents the double-post.
 	contains(t, withPrior, "Already done earlier in this turn", "### Iteration 1", "ALREADY RAN")
 
-	withHistory := BuildPhaseUserMessage(UserMessage{
-		TaskDescription:     "any update?",
-		ConversationHistory: "### 2026-08-20T09:30\nYou replied: shipped it",
-	}).Text
-	contains(t, withHistory,
-		"You replied: shipped it",
+	endings, _ := BuildConversationEndings(provenance.NewBoundary(), ConversationEndings{Seat: "cto", Head: "t-1",
+		Turns: []TurnEnding{{Turn: "t-1", Outcome: "completed", Delivered: true, DeliveredTo: "slack"}}})
+	withEndings := BuildPhaseUserMessage(UserMessage{TaskDescription: "any update?", Endings: endings}).Text
+	contains(t, withEndings,
+		"Its reply reached the party waiting on `slack`.",
 		// The block is worse than absent if the model reads it as a script
-		// to re-run rather than as what it already said.
-		"Do not repeat a reply you already gave",
-		// Across turns this warning is stronger than within one: a read
-		// from last Tuesday is stale by construction.
-		"may be stale", "history, not the current state", "the task wins")
-	if !strings.HasSuffix(strings.TrimRight(withHistory, "\n"), "## Task\nany update?") {
+		// to re-run rather than as what already happened.
+		"do not say it again", "may still be owed", "already took effect",
+		// Across turns the state has moved on by construction: the task
+		// below is the word that counts.
+		"history, not the current state", "the task wins")
+	if !strings.HasSuffix(strings.TrimRight(withEndings, "\n"), "## Task\nany update?") {
 		t.Error("the ask must sit last when there is no prior work")
 	}
 }

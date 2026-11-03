@@ -202,8 +202,8 @@ func decided(row queries.SessionRow) string {
 // owed, are ending; a session another harness wrote, which the member's runner
 // does not take up, is not continued from its capture — and, its parked box of
 // that other harness, nowhere; a live turn whose run is over continues nothing,
-// and an ended turn's session no later turn continues yet — each not
-// continuable, saying why. A whole page reads the coordination store ONCE, and
+// and an ended turn's session no relaunch continues, only its conversation's
+// next turn — each not continuable, saying why. A whole page reads the coordination store ONCE, and
 // once more for the one live row the listing does not hold, and asks the node
 // holding the seat ONCE, about every live row's turn and session at once; one
 // session read alone reads its own turn's record and asks about its own turn's
@@ -246,7 +246,7 @@ func TestASessionsRowSaysWhetherARelaunchWouldContinueIt(t *testing.T) {
 		"a session another harness wrote": {turn: foreign.Turn,
 			why: "written by " + executor.OpenCodeName + ", and this runner drives " + executor.ClaudeCodeName},
 		"a live turn whose run is over": {turn: over.Turn, why: "has ended"},
-		"an ended turn's session":       {turn: ended.Turn, why: "no later turn continues its session yet"},
+		"an ended turn's session":       {turn: ended.Turn, why: "continued only by its conversation's next turn"},
 	} {
 		row, ok := rows[tc.turn]
 		switch {
@@ -331,7 +331,7 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 				}
 			case ended.Turn:
 				if row.Continuable == nil || *row.Continuable ||
-					!strings.Contains(row.NotContinuable, "no later turn continues") {
+					!strings.Contains(row.NotContinuable, "no relaunch of it continues") {
 					t.Errorf("%s: the ended turn's row is %s, want no, off the log alone", name, decided(row))
 				}
 			}
